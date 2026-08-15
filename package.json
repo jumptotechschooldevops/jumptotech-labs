@@ -1,0 +1,33 @@
+{
+  "name": "jumptotech-labs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JumpToTech Labs — interactive DevOps lab platform (PLATFORM-001 MVP)",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=20 <25"
+  },
+  "workspaces": [
+    "apps/*",
+    "services/*"
+  ],
+  "scripts": {
+    "cluster:up": "bash scripts/cluster-up.sh",
+    "cluster:down": "bash scripts/cluster-down.sh",
+    "cluster:status": "bash scripts/cluster-status.sh",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:integration": "RUN_INTEGRATION_TESTS=1 npm run test --workspaces --if-present",
+    "dev:api": "npm run dev --workspace @jumptotech/api",
+    "dev:terminal": "npm run dev --workspace @jumptotech/terminal",
+    "dev:web": "npm run dev --workspace @jumptotech/web"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

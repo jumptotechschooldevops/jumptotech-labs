@@ -1,0 +1,22 @@
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Local environment
+.env
+.env.local
+.env.*.local
+
+# Generated kubeconfigs — contain client certificates for the local throwaway
+# kind cluster. Never commit credentials, even development ones.
+infrastructure/kind/generated/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.log
+npm-debug.log*

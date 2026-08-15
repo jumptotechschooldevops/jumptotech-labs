@@ -1,0 +1,26 @@
+{
+  "name": "@jumptotech/lab-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Lab environment lifecycle: LabProvider abstraction, lab definition registry, Kubernetes access.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./session-token": "./src/session-token.ts",
+    "./testing": "./test/fakes.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kubernetes/client-node": "^1.0.0",
+    "yaml": "^2.6.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

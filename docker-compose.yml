@@ -1,0 +1,137 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — local development stack (PLATFORM-001)
+#
+# Prerequisite: the Kubernetes substrate must exist first.
+#
+#   npm run cluster:up      # creates the kind cluster + generated kubeconfigs
+#   docker compose up --build
+#
+# The api and terminal services join the `kind` Docker network so they can
+# reach the cluster's API server directly at
+# https://jumptotech-labs-control-plane:6443 — that is exactly the address in
+# the generated `kubeconfig-internal.yaml`.
+#
+# No container here gets the Docker socket. Cluster creation happens on the
+# host, deliberately outside any web-facing process.
+# ---------------------------------------------------------------------------
+
+name: jumptotech-labs
+
+x-kubeconfig: &kubeconfig
+  # Read-only. Contains client credentials for the local throwaway cluster.
+  type: bind
+  source: ./infrastructure/kind/generated/kubeconfig-internal.yaml
+  target: /etc/jumptotech/kubeconfig.yaml
+  read_only: true
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api.Dockerfile
+    container_name: jumptotech-api
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      LAB_PROVIDER: ${LAB_PROVIDER:-kind}
+      LAB_CLUSTER_NAME: ${LAB_CLUSTER_NAME:-jumptotech-labs}
+      KUBECONFIG: /etc/jumptotech/kubeconfig.yaml
+      LABS_DIR: /app/labs
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      TERMINAL_SESSION_SECRET: ${TERMINAL_SESSION_SECRET:?set TERMINAL_SESSION_SECRET in .env (copy from .env.example)}
+      TERMINAL_SESSION_TTL_SECONDS: ${TERMINAL_SESSION_TTL_SECONDS:-3600}
+      VITE_TERMINAL_WS_URL: ${VITE_TERMINAL_WS_URL:-ws://localhost:4001}
+    ports:
+      - "${API_PORT:-4000}:4000"
+    volumes:
+      - <<: *kubeconfig
+      # Lab definitions are data, mounted read-only so a running service can
+      # never rewrite them.
+      - type: bind
+        source: ./labs
+        target: /app/labs
+        read_only: true
+    networks:
+      - default
+      - kind
+
+  terminal:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/terminal.Dockerfile
+    container_name: jumptotech-terminal
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Student shells create files; give them a bounded, non-persistent HOME.
+    tmpfs:
+      - /home/student:size=64m,mode=0700,uid=1001,gid=1001
+      - /tmp:size=64m,mode=1777
+    pids_limit: 256
+    mem_limit: 512m
+    environment:
+      NODE_ENV: production
+      TERMINAL_PORT: 4001
+      KUBECONFIG: /etc/jumptotech/kubeconfig.yaml
+      TERMINAL_WORKDIR: /home/student
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      TERMINAL_SESSION_SECRET: ${TERMINAL_SESSION_SECRET:?set TERMINAL_SESSION_SECRET in .env (copy from .env.example)}
+      TERMINAL_MAX_SESSIONS: ${TERMINAL_MAX_SESSIONS:-16}
+      TERMINAL_IDLE_TIMEOUT_SECONDS: ${TERMINAL_IDLE_TIMEOUT_SECONDS:-1800}
+      TERMINAL_MAX_SESSION_SECONDS: ${TERMINAL_MAX_SESSION_SECONDS:-7200}
+    ports:
+      - "${TERMINAL_PORT:-4001}:4001"
+    volumes:
+      - <<: *kubeconfig
+    networks:
+      - default
+      - kind
+
+  web:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/web.Dockerfile
+    container_name: jumptotech-web
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      WEB_PORT: 3000
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
+      VITE_TERMINAL_WS_URL: ${VITE_TERMINAL_WS_URL:-ws://localhost:4001}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    volumes:
+      # Source bind mount for hot reload during development. `node_modules` is
+      # kept inside the image so the host's platform build is not shadowed in.
+      - type: bind
+        source: ./apps/web/src
+        target: /app/apps/web/src
+        read_only: true
+      - type: bind
+        source: ./apps/web/index.html
+        target: /app/apps/web/index.html
+        read_only: true
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - default
+
+networks:
+  default:
+    name: jumptotech-labs
+  # Created by `kind`. `npm run cluster:up` must run first.
+  kind:
+    external: true
+    name: kind

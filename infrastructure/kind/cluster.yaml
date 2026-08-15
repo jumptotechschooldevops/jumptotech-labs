@@ -1,0 +1,24 @@
+# JumpToTech Labs — local Kubernetes sandbox (kind)
+#
+# This is the *substrate* for lab sandboxes during local development.
+# It is provisioned once on the host by `scripts/cluster-up.sh` (never from
+# inside an application container, so we never have to mount the Docker
+# socket into a web-facing process).
+#
+# Docs: https://kind.sigs.k8s.io/docs/user/configuration/
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: jumptotech-labs
+
+nodes:
+  # Story PLATFORM-001 only requires a control-plane node.
+  - role: control-plane
+    image: kindest/node:v1.34.0
+    labels:
+      jumptotech.io/role: control-plane
+
+networking:
+  # Deterministic host port so the developer's kubeconfig is stable across
+  # re-creations of the cluster.
+  apiServerAddress: "127.0.0.1"
+  apiServerPort: 16443

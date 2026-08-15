@@ -1,0 +1,95 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# This file is the single source of truth for the lab. The API loads it at
+# runtime and serves it to the frontend; nothing about this task is hardcoded
+# in React or in the verifier.
+#
+# Content is written from the official Kubernetes documentation only.
+# ---------------------------------------------------------------------------
+id: K8S-001
+slug: k8s-001-pods
+title: Create Your First Pod
+track: kubernetes
+difficulty: beginner
+duration_minutes: 30
+
+environment:
+  provider: kubernetes
+  # Namespace the student works in. Also the namespace `Reset Lab` restores.
+  namespace: default
+
+task:
+  summary: Create a Kubernetes Pod named nginx using the nginx:stable image.
+  description: >
+    A Pod is the smallest deployable unit in Kubernetes. It groups one or more
+    containers that share storage and network resources, and a specification
+    for how to run those containers.
+
+    In this lab you will create a single-container Pod in the default
+    namespace and confirm that it reaches the Running state.
+
+requirements:
+  pod_name: nginx
+  namespace: default
+  image: nginx:stable
+  status: Running
+
+# Rendered as the "REQUIREMENTS" checklist in the UI.
+requirement_labels:
+  - Pod name must be nginx
+  - Image must be nginx:stable
+  - Pod must be in the default namespace
+  - Pod must be Running with its container Ready
+
+hint: >
+  A Pod can be created either using a Kubernetes manifest or an appropriate
+  kubectl command.
+
+  Consult the official Kubernetes Pod and kubectl documentation if needed.
+
+documentation:
+  - title: Kubernetes Pods
+    url: https://kubernetes.io/docs/concepts/workloads/pods/
+  - title: kubectl
+    url: https://kubernetes.io/docs/reference/kubectl/
+
+# Verification is state-based: the verifier reads the live Kubernetes API and
+# never inspects the student's command history.
+verification:
+  checks:
+    - id: pod-exists
+      type: pod_exists
+      label: Pod nginx exists
+    - id: namespace-correct
+      type: pod_namespace
+      label: Namespace is correct
+    - id: image-correct
+      type: container_image
+      label: Image nginx:stable is correct
+    - id: pod-running
+      type: pod_phase
+      label: Pod is Running
+    - id: container-ready
+      type: container_ready
+      label: Container is Ready
+
+# `Reset Lab` restores the namespace to this baseline. For K8S-001 the
+# baseline is an empty default namespace: every workload-ish resource the
+# student created is removed, and nothing is applied back.
+reset:
+  purge_namespaced_resources:
+    - pods
+    - deployments
+    - replicasets
+    - statefulsets
+    - daemonsets
+    - jobs
+    - cronjobs
+    - services
+    - configmaps
+  # Cluster-managed objects that always exist in a namespace and must survive.
+  protected_resources:
+    - services/kubernetes
+    - configmaps/kube-root-ca.crt
+  apply_manifests: []
