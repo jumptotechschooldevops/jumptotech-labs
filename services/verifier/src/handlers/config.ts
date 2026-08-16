@@ -52,3 +52,38 @@ export const secretExists: VerifierHandler<'secret_exists'> = {
     return secret ? pass() : missing('Secret', r.name, reader.namespace);
   },
 };
+
+/**
+ * A Secret carries a key.
+ *
+ * Only key *names* are compared. There is no `value` on this requirement type
+ * and no code path that decodes `data`, so a Secret's contents never enter the
+ * platform, the logs, or a check result.
+ */
+export const secretKey: VerifierHandler<'secret_key'> = {
+  type: 'secret_key',
+  label: (r) => `Secret ${r.name} contains the key ${r.key}`,
+  async run(r, reader) {
+    const secret = await reader.secret(r.name);
+    if (!secret) return missing('Secret', r.name, reader.namespace);
+
+    if (secret.keys.includes(r.key)) return pass();
+    return fail(
+      secret.keys.length === 0
+        ? `Secret '${r.name}' has no data keys`
+        : `Secret '${r.name}' has no key '${r.key}' — it defines ${secret.keys.map((k) => `'${k}'`).join(', ')}`,
+    );
+  },
+};
+
+export const secretType: VerifierHandler<'secret_type'> = {
+  type: 'secret_type',
+  label: (r) => `Secret ${r.name} is of type ${r.expected}`,
+  async run(r, reader) {
+    const secret = await reader.secret(r.name);
+    if (!secret) return missing('Secret', r.name, reader.namespace);
+    return secret.type === r.expected
+      ? pass()
+      : fail(`Secret '${r.name}' is of type '${secret.type}', expected '${r.expected}'`);
+  },
+};

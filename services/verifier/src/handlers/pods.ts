@@ -77,6 +77,26 @@ export const podRunning: VerifierHandler<'pod_running'> = {
   },
 };
 
+/**
+ * Any phase, not only Running.
+ *
+ * A one-shot Pod that did its job ends `Succeeded`, and asserting `Running` on
+ * it would be wrong — so labs about completion check the phase they mean.
+ */
+export const podPhase: VerifierHandler<'pod_phase'> = {
+  type: 'pod_phase',
+  label: (r) => `Pod ${r.name} is ${r.phase}`,
+  async run(r, reader) {
+    const pod = await reader.pod(r.name);
+    if (!pod) return missing('Pod', r.name, reader.namespace);
+    if (pod.phase === r.phase) return pass();
+
+    const blocked = pod.containers.find((c) => c.reason);
+    const suffix = blocked ? ` (${blocked.name}: ${blocked.reason})` : '';
+    return fail(`Pod phase is '${pod.phase}', expected '${r.phase}'${suffix}`);
+  },
+};
+
 export const podReady: VerifierHandler<'pod_ready'> = {
   type: 'pod_ready',
   label: (r) => `Pod ${r.name} is Ready`,

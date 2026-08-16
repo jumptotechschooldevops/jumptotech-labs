@@ -27,6 +27,22 @@ environment:
   provider: kubernetes
   isolation: namespace
 
+prerequisites: []
+
+story: >
+  You have joined the platform team at JumpToTech Bank. Every service the bank
+  runs — the customer frontend, the accounts API, the overnight reconciliation
+  jobs — eventually runs as a container on Kubernetes.
+
+  Before you are handed anything that customers depend on, your team lead wants
+  to see you run a single container in the cluster yourself and confirm it is
+  actually healthy. That is the whole task today.
+
+objectives:
+  - Explain what a Pod is and why it is the unit Kubernetes schedules
+  - Create a single-container Pod in your own namespace
+  - Confirm a Pod is both Running and Ready using kubectl
+
 task:
   summary: Create a Kubernetes Pod named nginx using the nginx:stable image.
   description: >
@@ -88,6 +104,13 @@ hints:
       Consult the official Kubernetes Pod and kubectl documentation. Your
       terminal already defaults to your lab namespace, so you do not need to
       pass a namespace flag.
+  - level: 3
+    text: >
+      The Pod must end up named exactly `nginx` and running the `nginx:stable`
+      image. After creating it, watch it settle with `kubectl get pods`: a Pod
+      reports Running before its container reports Ready, and this lab checks
+      both. If it never becomes Ready, `kubectl describe pod nginx` shows the
+      events explaining why.
 
 references:
   - title: Kubernetes Pods

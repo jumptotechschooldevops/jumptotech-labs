@@ -1,0 +1,135 @@
+id: K8S-008
+slug: k8s-008-probes
+title: Signal Readiness with a Probe
+track: kubernetes
+topic: reliability
+difficulty: intermediate
+level: practice
+duration_minutes: 30
+order: 8
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-003
+
+story: >
+  Every time the notifications service at JumpToTech Bank is redeployed, a
+  handful of customer alerts fail with connection errors for a few seconds and
+  then recover on their own.
+
+  The cause is that Kubernetes has no way of knowing when the service is
+  actually able to serve. The container process starts, Kubernetes marks the
+  Pod ready, and the Service immediately begins sending it traffic — several
+  seconds before the application has finished starting up.
+
+  The service needs to tell Kubernetes when it is genuinely ready.
+
+objectives:
+  - Explain the difference between a Pod being Running and being Ready
+  - Configure a readiness probe on a container
+  - Describe when a liveness or startup probe is the right tool instead
+
+task:
+  summary: Add a readiness probe to the notifications Deployment so it only receives traffic once it can serve.
+  description: >
+    The kubelet uses probes to decide the state of a container. A readiness
+    probe decides whether the container should receive traffic: while it fails,
+    the Pod is removed from the endpoints of every Service that selects it, but
+    the Pod is left running.
+
+    That is the distinction this lab turns on. Running means the container
+    process started. Ready means it is willing to serve. Without a readiness
+    probe, Kubernetes has nothing to go on and assumes the two are the same
+    thing.
+
+    The `notifications` Deployment and its Service are already running in your
+    namespace, with no probes configured.
+
+    Add a readiness probe to the `notifications` container that performs an HTTP
+    GET on path `/` against port 80, then let the rollout finish and confirm
+    both replicas are registered as ready endpoints behind the Service.
+
+    The other two probe types are worth knowing even though this lab does not
+    require them. A liveness probe restarts a container that has deadlocked —
+    use it carefully, because a liveness probe that is too aggressive will
+    restart a healthy but slow application in a loop. A startup probe protects
+    a slow-starting container by holding the other probes off until it has
+    booted.
+
+setup:
+  manifests:
+    - setup/notifications.yaml
+  verify:
+    - type: deployment_exists
+      name: notifications
+    - type: service_exists
+      name: notifications
+    - type: deployment_available
+      name: notifications
+      min_available: 2
+  verify_timeout_seconds: 180
+
+requirements:
+  - type: deployment_probe
+    name: notifications
+    container: notifications
+    probe: readiness
+    handler: httpGet
+    path: /
+    port: 80
+    label: Container declares an HTTP readiness probe on / port 80
+  - type: deployment_rollout_complete
+    name: notifications
+    label: The updated Deployment has rolled out
+  - type: deployment_available
+    name: notifications
+    min_available: 2
+    label: Both replicas are available
+  - type: service_endpoints
+    name: notifications
+    min_ready: 2
+    label: Both replicas are ready endpoints behind the Service
+
+hints:
+  - level: 1
+    text: >
+      The setting belongs on the container inside the Deployment's Pod
+      template, not on the Deployment or the Service. Changing the Pod template
+      triggers a new rollout.
+  - level: 2
+    text: >
+      A probe needs a handler that says how to test the container. The HTTP
+      handler asks for a path and a port, and Kubernetes considers any 2xx or
+      3xx response a success.
+  - level: 3
+    text: >
+      Add a `readinessProbe` with an `httpGet` handler on path `/` and port 80
+      to the `notifications` container. `kubectl edit deployment
+      notifications`, a patch, or re-applying an edited manifest all work.
+      Then watch `kubectl get pods` — the READY column shows containers ready
+      over total — and confirm the backends with
+      `kubectl get endpoints notifications`.
+
+references:
+  - title: Configure Liveness, Readiness and Startup Probes
+    url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+  - title: Pod Lifecycle — Container Probes
+    url: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/
+  - title: Service — Endpoints
+    url: https://kubernetes.io/docs/concepts/services-networking/service/
+
+skills:
+  - kubernetes.probes.readiness
+  - kubernetes.probes.liveness
+  - kubernetes.probes.startup
+  - kubernetes.reliability.health
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling
+      - troubleshooting

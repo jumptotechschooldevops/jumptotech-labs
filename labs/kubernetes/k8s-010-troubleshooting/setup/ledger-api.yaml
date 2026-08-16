@@ -1,0 +1,57 @@
+# Initial state for K8S-010 — deliberately broken.
+#
+# This file is the injected fault. It is applied into the student's own session
+# namespace at Start Lab and re-applied by Reset Lab, so the scenario can be
+# replayed from the beginning as many times as the student wants.
+#
+# Two independent faults, both discoverable with ordinary kubectl commands and
+# both repairable from inside the namespace:
+#
+#   1. The container image tag is misspelled, so the image cannot be pulled and
+#      no replica ever becomes available.
+#   2. The Service selector does not match the Pod labels, so even once the
+#      Deployment is healthy the Service has no endpoints.
+#
+# Nothing here requires host access, privileged operations, or anything outside
+# the session namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-api
+  labels:
+    app: ledger-api
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ledger-api
+  template:
+    metadata:
+      labels:
+        app: ledger-api
+    spec:
+      containers:
+        - name: ledger-api
+          # FAULT 1: misspelled tag — the correct image is nginx:stable.
+          image: nginx:stabel
+          ports:
+            - name: http
+              containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger-api
+  labels:
+    app: ledger-api
+    jumptotech.io/lab-fixture: "true"
+spec:
+  type: ClusterIP
+  # FAULT 2: selects app=ledger, but the Pods are labelled app=ledger-api.
+  selector:
+    app: ledger
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP

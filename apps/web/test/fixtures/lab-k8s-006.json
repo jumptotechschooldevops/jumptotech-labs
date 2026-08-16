@@ -1,0 +1,76 @@
+{
+  "id": "K8S-006",
+  "slug": "k8s-006-jobs",
+  "title": "Run a One-Time Task with a Job",
+  "track": "kubernetes",
+  "topic": "batch",
+  "topicTitle": "Batch",
+  "difficulty": "beginner",
+  "level": "practice",
+  "durationMinutes": 30,
+  "environment": {
+    "provider": "kubernetes",
+    "isolation": "namespace"
+  },
+  "story": "The ledger database at JumpToTech Bank needs a one-off migration run before the next release: a schema change that must execute exactly once, report whether it succeeded, and then stop.\nSomeone suggested running it as a Deployment. That is the wrong tool — a Deployment's whole purpose is to keep restarting a Pod that exits, so a migration that finished successfully would be run again, and again. You need the workload type that is allowed to finish.\n",
+  "objectives": [
+    "Explain when a Job is the right workload type instead of a Deployment",
+    "Create a Job that runs a task to completion",
+    "Inspect a Job's completion status and its Pod's logs"
+  ],
+  "task": {
+    "summary": "Create a Job named ledger-migration that runs a task to successful completion.",
+    "description": "A Job creates one or more Pods and keeps retrying them until a specified number of them terminate successfully. When the completion count is reached, the Job is finished — it does not restart the Pods, which is the difference from a Deployment.\nCreate a Job named `ledger-migration` in your namespace that runs any command which exits successfully, and let it run to completion.\nYou choose the image and the command. The verifier checks that the Job reached its Complete condition, not what it did. The `nginx:stable` image is already cached in this cluster and contains a shell, so it starts immediately; any other image works too but may need to be pulled first.\nNote what happens on failure: a container that exits non-zero is retried up to the Job's backoff limit, and only then is the Job marked Failed. A Job that is still retrying has neither succeeded nor failed yet.\n"
+  },
+  "requirements": [
+    "Job ledger-migration exists",
+    "Job completed successfully"
+  ],
+  "hints": [
+    {
+      "level": 1,
+      "text": "Deployments keep Pods running forever. Look for the workload type in the batch API group whose Pods are expected to terminate.\n"
+    },
+    {
+      "level": 2,
+      "text": "A Job's Pod template must set a restart policy that allows termination — the default `Always` is not valid for a Job. The container also needs a command that actually exits rather than staying in the foreground.\n"
+    },
+    {
+      "level": 3,
+      "text": "The Job must be named `ledger-migration`. Its Pod template needs `restartPolicy: Never` or `OnFailure`, and a command that returns exit code 0. Watch it with `kubectl get jobs` — the COMPLETIONS column shows progress — and read what it printed with `kubectl logs job/ledger-migration`.\n"
+    }
+  ],
+  "references": [
+    {
+      "title": "Jobs",
+      "url": "https://kubernetes.io/docs/concepts/workloads/controllers/job/"
+    },
+    {
+      "title": "Pod Lifecycle — Restart Policy",
+      "url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+    }
+  ],
+  "skills": [
+    "kubernetes.jobs.create",
+    "kubernetes.jobs.completion",
+    "kubernetes.jobs.troubleshoot",
+    "kubernetes.workloads.batch"
+  ],
+  "certifications": [
+    {
+      "certification": "CKA",
+      "domains": [
+        "workloads-and-scheduling"
+      ]
+    }
+  ],
+  "prerequisites": [
+    {
+      "id": "K8S-002",
+      "title": "Run an Application with a Deployment",
+      "available": true
+    }
+  ],
+  "prerequisitesEnforced": false,
+  "hasSetup": false
+}

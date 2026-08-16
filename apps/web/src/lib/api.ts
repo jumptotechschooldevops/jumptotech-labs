@@ -64,9 +64,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
  */
 const session = (id: string) => `/api/sessions/${encodeURIComponent(id)}`;
 
+/** Serialise catalog filters, omitting empty ones. */
+function query(filters: LabFilters = {}): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) params.set(key, value);
+  }
+  const encoded = params.toString();
+  return encoded ? `?${encoded}` : '';
+}
+
+export interface LabFilters {
+  track?: string | undefined;
+  topic?: string | undefined;
+  difficulty?: string | undefined;
+  level?: string | undefined;
+  q?: string | undefined;
+  [key: string]: string | undefined;
+}
+
 export const api = {
-  listLabs: () =>
-    request<{ labs: LabSummary[]; tracks: TrackSummary[]; count: number }>('/api/labs'),
+  listLabs: (filters: LabFilters = {}) =>
+    request<{ labs: LabSummary[]; tracks: TrackSummary[]; count: number }>(
+      `/api/labs${query(filters)}`,
+    ),
+
+  listTracks: () => request<{ tracks: TrackSummary[]; count: number }>('/api/tracks'),
+
+  listTrackLabs: (trackId: string, filters: LabFilters = {}) =>
+    request<{ track: string; labs: LabSummary[]; count: number }>(
+      `/api/tracks/${encodeURIComponent(trackId)}/labs${query(filters)}`,
+    ),
 
   getLab: (id: string) => request<LabDetail>(`/api/labs/${encodeURIComponent(id)}`),
 

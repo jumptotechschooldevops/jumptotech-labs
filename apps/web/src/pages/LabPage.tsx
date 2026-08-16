@@ -31,7 +31,16 @@ function toApiError(error: unknown): ApiError {
   return { code: 'UNEXPECTED_ERROR', message: error instanceof Error ? error.message : String(error) };
 }
 
-export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }) {
+export function LabPage({
+  labId,
+  onBack,
+  onOpenLab,
+}: {
+  labId: string;
+  onBack: () => void;
+  /** Lets the brief link to a prerequisite lab. */
+  onOpenLab?: (labId: string) => void;
+}) {
   const [lab, setLab] = useState<LabDetail | null>(null);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
 
@@ -358,7 +367,7 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
       )}
 
       <main className="workspace">
-        <LabBrief lab={lab} />
+        <LabBrief lab={lab} {...(onOpenLab ? { onOpenLab } : {})} />
 
         <section className="terminal-pane" aria-label="Lab terminal">
           <div className="terminal-pane__header">

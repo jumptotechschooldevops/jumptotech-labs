@@ -24,6 +24,17 @@ import {
 } from './lab-definition.js';
 import { assertValidLabId } from './validation.js';
 
+/**
+ * A prerequisite, resolved against the registry so the UI can render a title
+ * rather than a bare id.
+ */
+export interface PrerequisiteSummary {
+  id: string;
+  title: string;
+  /** False when the prerequisite id does not resolve to a registered lab. */
+  available: boolean;
+}
+
 /** Catalog card data. Everything the list view needs, nothing it does not. */
 export interface LabSummary {
   id: string;
@@ -41,6 +52,9 @@ export interface LabSummary {
   /** True when the lab pre-creates resources the student starts from. */
   hasSetup: boolean;
   certifications: string[];
+  prerequisites: PrerequisiteSummary[];
+  /** How many progressive hints exist. The text itself is not in the catalog. */
+  hintCount: number;
 }
 
 export interface TopicSummary {
@@ -147,7 +161,87 @@ export class LabRegistry {
       this.#slugs.set(def.slug, def.id);
     }
 
+    // Prerequisites can only be checked once every lab is known, so this is a
+    // second pass rather than part of per-file validation.
+    this.#validatePrerequisites();
+
     this.#loaded = true;
+  }
+
+  /**
+   * Reject prerequisite graphs that cannot be satisfied.
+   *
+   * Two failure modes, both authoring bugs that would otherwise surface as a
+   * confusing catalog: a prerequisite naming a lab that does not exist, and a
+   * cycle, which would describe a lab that can never be reached.
+   *
+   * The offending lab is *unregistered*, matching how an invalid definition is
+   * treated — a lab whose stated path into it is broken should not be offered.
+   */
+  #validatePrerequisites(): void {
+    /*
+     * Iterate to a fixed point.
+     *
+     * Unregistering one lab can invalidate another: removing a cycle
+     * participant leaves the labs that depended on it with a prerequisite that
+     * no longer resolves. A single pass would leave those behind pointing at a
+     * lab the catalog does not contain, so the checks re-run until a pass
+     * removes nothing.
+     */
+    for (;;) {
+      let removedAny = false;
+
+      for (const def of [...this.#labs.values()]) {
+        const missing = def.prerequisites.filter((id) => !this.#labs.has(id));
+        if (missing.length === 0) continue;
+        this.#loadErrors.push(
+          `LAB_DEFINITION_INVALID\n\n${def.id}:\nprerequisites reference unknown lab(s): ${missing.join(', ')}\n(${def.sourcePath})`,
+        );
+        this.#unregister(def);
+        removedAny = true;
+      }
+
+      for (const def of [...this.#labs.values()]) {
+        const cycle = this.#findPrerequisiteCycle(def.id);
+        if (!cycle) continue;
+        this.#loadErrors.push(
+          `LAB_DEFINITION_INVALID\n\n${def.id}:\nprerequisites form a cycle: ${cycle.join(' → ')}\n(${def.sourcePath})`,
+        );
+        this.#unregister(def);
+        removedAny = true;
+      }
+
+      if (!removedAny) return;
+    }
+  }
+
+  #unregister(def: LoadedLabDefinition): void {
+    this.#labs.delete(def.id);
+    this.#slugs.delete(def.slug);
+  }
+
+  /** Depth-first walk from one lab, returning the cycle path if it loops back. */
+  #findPrerequisiteCycle(start: string): string[] | null {
+    const path: string[] = [];
+    const onPath = new Set<string>();
+
+    const walk = (id: string): string[] | null => {
+      if (onPath.has(id)) return [...path.slice(path.indexOf(id)), id];
+      const def = this.#labs.get(id);
+      if (!def) return null;
+
+      path.push(id);
+      onPath.add(id);
+      for (const prerequisite of def.prerequisites) {
+        const found = walk(prerequisite);
+        if (found) return found;
+      }
+      path.pop();
+      onPath.delete(id);
+      return null;
+    };
+
+    return walk(start);
   }
 
   async #findLabFiles(dir: string): Promise<string[]> {
@@ -190,7 +284,33 @@ export class LabRegistry {
         }
         return true;
       })
-      .map(toSummary);
+      .map((def) => this.summarise(def));
+  }
+
+  /** Every lab in one track, in catalog order. */
+  labsForTrack(track: string): LabSummary[] {
+    return this.list({ track });
+  }
+
+  /** Catalog projection for one definition, with prerequisites resolved. */
+  summarise(def: LoadedLabDefinition): LabSummary {
+    return { ...toSummary(def), prerequisites: this.prerequisitesOf(def) };
+  }
+
+  /**
+   * Resolve a lab's prerequisite ids to titles.
+   *
+   * `available: false` cannot occur for a registered lab — `#validatePrerequisites`
+   * unregisters labs with dangling prerequisites — but the field is carried so
+   * callers holding an unregistered definition still render something honest.
+   */
+  prerequisitesOf(def: LoadedLabDefinition): PrerequisiteSummary[] {
+    return def.prerequisites.map((id) => {
+      const found = this.#labs.get(id);
+      return found
+        ? { id, title: found.title, available: true }
+        : { id, title: id, available: false };
+    });
   }
 
   tracks(): TrackSummary[] {
@@ -268,6 +388,14 @@ function topicsOf(labs: LoadedLabDefinition[]): TopicSummary[] {
   }));
 }
 
+/**
+ * Catalog-safe projection.
+ *
+ * Deliberately excludes `requirements`, `setup`, and `reset`: the catalog is a
+ * public listing, and the expected end state of a lab — especially a
+ * troubleshooting lab's injected fault — is not something a student should be
+ * able to read before starting.
+ */
 function toSummary(def: LoadedLabDefinition): LabSummary {
   return {
     id: def.id,
@@ -284,6 +412,8 @@ function toSummary(def: LoadedLabDefinition): LabSummary {
     skills: def.skills,
     hasSetup: def.setup.manifests.length > 0,
     certifications: def.certification.filter((c) => c.relevant).map((c) => c.certification),
+    prerequisites: def.prerequisites.map((id) => ({ id, title: id, available: false })),
+    hintCount: def.hints.length,
   };
 }
 

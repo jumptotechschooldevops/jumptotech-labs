@@ -12,8 +12,10 @@ import type {
   ClusterEndpoint,
   ClusterVersion,
   ConfigMapSnapshot,
+  CronJobSnapshot,
   DeploymentSnapshot,
   EndpointsSnapshot,
+  JobSnapshot,
   KubernetesManifestObject,
   KubernetesPort,
   NamespaceSnapshot,
@@ -31,6 +33,8 @@ export interface FakeK8sOptions {
   services?: Record<string, ServiceSnapshot[]>;
   configMaps?: Record<string, ConfigMapSnapshot[]>;
   secrets?: Record<string, SecretSnapshot[]>;
+  jobs?: Record<string, JobSnapshot[]>;
+  cronJobs?: Record<string, CronJobSnapshot[]>;
   resources?: Record<string, NamespacedResourceRef[]>;
   nodes?: NodeInfo[];
   /** Pre-existing namespaces, as `name` or `[name, labels]`. */
@@ -53,6 +57,8 @@ export class FakeKubernetes implements KubernetesPort {
   services: Map<string, ServiceSnapshot[]>;
   configMaps: Map<string, ConfigMapSnapshot[]>;
   secrets: Map<string, SecretSnapshot[]>;
+  jobs: Map<string, JobSnapshot[]>;
+  cronJobs: Map<string, CronJobSnapshot[]>;
   resources: Map<string, NamespacedResourceRef[]>;
   nodes: NodeInfo[];
   namespaces = new Map<string, FakeNamespace>();
@@ -73,6 +79,8 @@ export class FakeKubernetes implements KubernetesPort {
     this.services = new Map(Object.entries(options.services ?? {}));
     this.configMaps = new Map(Object.entries(options.configMaps ?? {}));
     this.secrets = new Map(Object.entries(options.secrets ?? {}));
+    this.jobs = new Map(Object.entries(options.jobs ?? {}));
+    this.cronJobs = new Map(Object.entries(options.cronJobs ?? {}));
     this.resources = new Map(Object.entries(options.resources ?? {}));
     this.nodes = options.nodes ?? [
       { name: 'jumptotech-labs-control-plane', ready: true, roles: ['control-plane'], version: 'v1.34.0' },
@@ -137,7 +145,15 @@ export class FakeKubernetes implements KubernetesPort {
     if (!this.namespaces.has(namespace)) return;
     this.deletedNamespaces.push(namespace);
     this.namespaces.delete(namespace);
-    for (const map of [this.pods, this.deployments, this.services, this.configMaps, this.secrets]) {
+    for (const map of [
+      this.pods,
+      this.deployments,
+      this.services,
+      this.configMaps,
+      this.secrets,
+      this.jobs,
+      this.cronJobs,
+    ]) {
       (map as Map<string, unknown>).delete(namespace);
     }
     this.applied.delete(namespace);
@@ -202,6 +218,16 @@ export class FakeKubernetes implements KubernetesPort {
     return (this.secrets.get(namespace) ?? []).find((s) => s.name === name) ?? null;
   }
 
+  async getJob(namespace: string, name: string): Promise<JobSnapshot | null> {
+    this.#guard();
+    return (this.jobs.get(namespace) ?? []).find((j) => j.name === name) ?? null;
+  }
+
+  async getCronJob(namespace: string, name: string): Promise<CronJobSnapshot | null> {
+    this.#guard();
+    return (this.cronJobs.get(namespace) ?? []).find((c) => c.name === name) ?? null;
+  }
+
   // --- writes ---------------------------------------------------------------
 
   async applyObjects(
@@ -260,6 +286,72 @@ export class FakeKubernetes implements KubernetesPort {
       expirationTimestamp: new Date(1_000_000 + expirationSeconds * 1000).toISOString(),
     };
   }
+}
+
+/** Convenience builder for a healthy 3-replica Deployment snapshot. */
+export function deploymentSnapshot(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapshot {
+  const desired = overrides.desiredReplicas ?? 3;
+  return {
+    name: 'frontend',
+    namespace: 'lab-000000000001',
+    desiredReplicas: desired,
+    readyReplicas: desired,
+    availableReplicas: desired,
+    updatedReplicas: desired,
+    currentReplicas: desired,
+    labels: {},
+    selector: { app: 'frontend' },
+    podLabels: { app: 'frontend' },
+    containers: [
+      { name: 'web', image: 'nginx:stable', ready: true, restartCount: 0, state: 'running' },
+    ],
+    conditions: [{ type: 'Available', status: 'True' }],
+    generation: 1,
+    observedGeneration: 1,
+    deleting: false,
+    configRefs: [],
+    ...overrides,
+  };
+}
+
+/** Convenience builder for a Job that ran to completion. */
+export function jobSnapshot(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
+  return {
+    name: 'ledger-migration',
+    namespace: 'lab-000000000001',
+    completions: 1,
+    parallelism: 1,
+    succeeded: 1,
+    failed: 0,
+    active: 0,
+    complete: true,
+    failedCondition: false,
+    labels: {},
+    containers: [
+      { name: 'task', image: 'nginx:stable', ready: false, restartCount: 0, state: 'terminated' },
+    ],
+    deleting: false,
+    configRefs: [],
+    ...overrides,
+  };
+}
+
+export function cronJobSnapshot(overrides: Partial<CronJobSnapshot> = {}): CronJobSnapshot {
+  return {
+    name: 'reconciliation',
+    namespace: 'lab-000000000001',
+    schedule: '*/5 * * * *',
+    suspend: false,
+    concurrencyPolicy: 'Allow',
+    activeJobs: 0,
+    labels: {},
+    containers: [
+      { name: 'task', image: 'nginx:stable', ready: false, restartCount: 0, state: 'waiting' },
+    ],
+    deleting: false,
+    configRefs: [],
+    ...overrides,
+  };
 }
 
 /** Convenience builder for a healthy nginx Pod snapshot. */

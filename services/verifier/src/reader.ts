@@ -13,8 +13,10 @@
  */
 import type {
   ConfigMapSnapshot,
+  CronJobSnapshot,
   DeploymentSnapshot,
   EndpointsSnapshot,
+  JobSnapshot,
   KubernetesPort,
   PodSnapshot,
   SecretSnapshot,
@@ -61,6 +63,14 @@ export class VerifyReader {
 
   secret(name: string): Promise<SecretSnapshot | null> {
     return this.#once(`secret/${name}`, () => this.k8s.getSecret(this.namespace, name));
+  }
+
+  job(name: string): Promise<JobSnapshot | null> {
+    return this.#once(`job/${name}`, () => this.k8s.getJob(this.namespace, name));
+  }
+
+  cronJob(name: string): Promise<CronJobSnapshot | null> {
+    return this.#once(`cronjob/${name}`, () => this.k8s.getCronJob(this.namespace, name));
   }
 
   pods(labelSelector?: string): Promise<PodSnapshot[]> {

@@ -32,7 +32,7 @@ export function App() {
   }, []);
 
   return labId ? (
-    <LabPage key={labId} labId={labId} onBack={goHome} />
+    <LabPage key={labId} labId={labId} onBack={goHome} onOpenLab={openLab} />
   ) : (
     <CatalogPage onOpenLab={openLab} />
   );

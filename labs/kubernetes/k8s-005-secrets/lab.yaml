@@ -1,0 +1,125 @@
+id: K8S-005
+slug: k8s-005-secrets
+title: Hold Sensitive Configuration in a Secret
+track: kubernetes
+topic: configuration
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 5
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-004
+
+story: >
+  A code review at JumpToTech Bank flagged the payments service: its provider
+  API token is sitting in the Deployment manifest in plain text, which means it
+  is also sitting in the git history, in every CI log that printed the
+  manifest, and in the output of `kubectl get deployment -o yaml` for anyone
+  with read access.
+
+  Rotating that token today would mean a pull request. Your task is to move the
+  credential into a Secret so it can be managed and rotated independently of
+  the workload.
+
+objectives:
+  - Distinguish a Secret from a ConfigMap and know when each applies
+  - Create a Secret and reference it from a workload
+  - Explain why base64 encoding is not encryption
+
+task:
+  summary: Create a Secret named payments-api and make the payments Deployment read the credential from it.
+  description: >
+    A Secret is the Kubernetes object for small amounts of sensitive data such
+    as tokens, passwords, and keys. Keeping that data in a Secret rather than in
+    the Pod specification means the credential can be rotated, and access to it
+    controlled, without editing or redeploying the workload.
+
+    The `payments` Deployment is already running in your namespace with its
+    token pasted directly into the Pod template.
+
+    Create a Secret named `payments-api` containing a key called `api-token`,
+    then change the Deployment to read the credential from that Secret instead
+    of from the literal value. You choose the token value — nothing checks it.
+
+    Be clear about what a Secret is and is not. Secret data is base64-encoded,
+    and base64 is an encoding, not encryption: anyone who can read the Secret
+    can decode it instantly. A Secret is safer than a literal in the manifest
+    because it is a separate object with its own access control and its own
+    lifecycle, and because the cluster can be configured to encrypt Secrets at
+    rest — not because base64 protects anything.
+
+    This lab checks only that the key `api-token` exists and that the workload
+    references it. The platform never reads Secret values.
+
+setup:
+  manifests:
+    - setup/payments-deployment.yaml
+  verify:
+    - type: deployment_exists
+      name: payments
+    - type: deployment_available
+      name: payments
+      min_available: 1
+  verify_timeout_seconds: 180
+
+requirements:
+  - type: secret_exists
+    name: payments-api
+    label: Secret payments-api exists
+  - type: secret_key
+    name: payments-api
+    key: api-token
+    label: Secret contains the key api-token
+  - type: deployment_uses_secret
+    name: payments
+    secret: payments-api
+    key: api-token
+    label: Deployment payments reads the credential from the Secret
+  - type: deployment_available
+    name: payments
+    min_available: 1
+    label: payments is still running after the change
+
+hints:
+  - level: 1
+    text: >
+      A Secret is consumed almost exactly like a ConfigMap. The difference is
+      what belongs in it, and how carefully the object itself is treated.
+  - level: 2
+    text: >
+      kubectl can create a Secret from a literal value, from a file, or from a
+      manifest. If you write the manifest by hand, note that `data` expects
+      base64-encoded values while `stringData` accepts plain text and encodes
+      it for you.
+  - level: 3
+    text: >
+      The Secret must be named `payments-api` and carry the key `api-token`.
+      Update the Pod template of the `payments` Deployment to source the
+      environment variable from that Secret key rather than from a literal.
+      Confirm with `kubectl describe secret payments-api`, which lists key
+      names and value sizes but never prints the values themselves.
+
+references:
+  - title: Secrets
+    url: https://kubernetes.io/docs/concepts/configuration/secret/
+  - title: Distribute Credentials Securely Using Secrets
+    url: https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/
+  - title: Encrypting Confidential Data at Rest
+    url: https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/
+
+skills:
+  - kubernetes.secrets.create
+  - kubernetes.secrets.consume
+  - kubernetes.configuration.externalize
+  - kubernetes.security.credentials
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling

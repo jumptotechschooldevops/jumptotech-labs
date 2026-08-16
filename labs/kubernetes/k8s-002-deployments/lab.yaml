@@ -1,0 +1,119 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Adding this file is the entire process for adding a lab. Nothing in React,
+# the API, the orchestrator, or the verifier knows that K8S-002 exists.
+#
+# There is deliberately no `namespace:` field: each session gets its own
+# generated namespace, and both the terminal and the verifier are scoped to it
+# by the session record.
+#
+# Content is written from the official Kubernetes documentation only.
+# ---------------------------------------------------------------------------
+id: K8S-002
+slug: k8s-002-deployments
+title: Run an Application with a Deployment
+track: kubernetes
+topic: workloads
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 2
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-001
+
+story: >
+  The JumpToTech Bank customer frontend currently runs as a single Pod. Last
+  Tuesday the node it was scheduled on was drained during a routine upgrade,
+  the Pod went with it, and nothing brought it back — the bank's sign-in page
+  was down for eleven minutes.
+
+  The platform team's post-incident action is short: the frontend must be
+  managed by a controller that keeps a stated number of copies running, and it
+  must run more than one of them.
+
+objectives:
+  - Describe what a Deployment adds on top of a bare Pod
+  - Create a Deployment with a chosen image and replica count
+  - Read rollout and availability status with kubectl
+
+task:
+  summary: Create a Deployment named frontend running 3 replicas of nginx:stable.
+  description: >
+    A Deployment describes a desired state for a set of Pods and asks the
+    Deployment controller to maintain it. If a Pod is deleted, evicted, or lost
+    with its node, the controller creates a replacement, which is exactly the
+    property the frontend was missing.
+
+    Create a Deployment named `frontend` that runs three replicas of the
+    `nginx:stable` image, and wait until all three are actually available.
+
+    Note the difference between the two numbers Kubernetes reports: the desired
+    replica count is what you asked for, and the available count is what is
+    genuinely running and ready to serve. This lab checks both, so a Deployment
+    that requests three replicas but only has two running will not pass.
+
+# Verification is state-based: the verifier reads the live Kubernetes API in
+# this session's namespace and never inspects the student's command history.
+# Creating this from a manifest, from `kubectl create deployment`, or by
+# scaling an existing one all pass identically.
+requirements:
+  - type: deployment_exists
+    name: frontend
+    label: Deployment frontend exists
+  - type: deployment_image
+    name: frontend
+    image: nginx:stable
+    label: Image nginx:stable is correct
+  - type: deployment_replicas
+    name: frontend
+    replicas: 3
+    label: Deployment requests 3 replicas
+  - type: deployment_available
+    name: frontend
+    min_available: 3
+    label: All 3 replicas are available
+  - type: deployment_rollout_complete
+    name: frontend
+    label: Rollout is complete
+
+hints:
+  - level: 1
+    text: >
+      A Deployment is a controller: you describe the end state you want and it
+      works to maintain it. Start by listing what is already in your namespace.
+  - level: 2
+    text: >
+      A Deployment can be created from a YAML manifest or directly with
+      kubectl. The replica count can be set when you create it, or changed
+      afterwards on an existing Deployment.
+  - level: 3
+    text: >
+      The Deployment must be named `frontend` and use the `nginx:stable` image.
+      Check your progress with `kubectl get deployments` — the READY column
+      shows available replicas over desired. `kubectl rollout status` waits
+      until the rollout finishes, and `kubectl describe deployment frontend`
+      explains any replica that is not coming up.
+
+references:
+  - title: Deployments
+    url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+  - title: kubectl Quick Reference
+    url: https://kubernetes.io/docs/reference/kubectl/quick-reference/
+
+skills:
+  - kubernetes.deployments.create
+  - kubernetes.deployments.scale
+  - kubernetes.deployments.rollout
+  - kubernetes.workloads.inspect
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling

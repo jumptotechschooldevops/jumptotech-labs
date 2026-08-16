@@ -14,13 +14,17 @@ import {
   type ClusterEndpoint,
   type ClusterVersion,
   type ConfigMapSnapshot,
+  type ConfigReference,
+  type CronJobSnapshot,
   type DeploymentSnapshot,
   type EndpointsSnapshot,
+  type JobSnapshot,
   type KubernetesManifestObject,
   type KubernetesPort,
   type NamespaceSnapshot,
   type NamespacedResourceRef,
   type PodSnapshot,
+  type ProbeSnapshot,
   type SecretSnapshot,
   type ServiceSnapshot,
 } from './port.js';
@@ -475,6 +479,28 @@ export class KubernetesClient implements KubernetesPort {
     }
   }
 
+  async getJob(namespace: string, name: string): Promise<JobSnapshot | null> {
+    let job: k8s.V1Job;
+    try {
+      job = await this.#batch.readNamespacedJob({ name, namespace });
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading job ${namespace}/${name}`, error);
+    }
+    return toJobSnapshot(job, namespace, name);
+  }
+
+  async getCronJob(namespace: string, name: string): Promise<CronJobSnapshot | null> {
+    let cronJob: k8s.V1CronJob;
+    try {
+      cronJob = await this.#batch.readNamespacedCronJob({ name, namespace });
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading cronjob ${namespace}/${name}`, error);
+    }
+    return toCronJobSnapshot(cronJob, namespace, name);
+  }
+
   async getConfigMap(namespace: string, name: string): Promise<ConfigMapSnapshot | null> {
     try {
       const cm = await this.#core.readNamespacedConfigMap({ name, namespace });
@@ -655,6 +681,140 @@ function pluralise(kind: string): string {
   return `${lower}s`;
 }
 
+/** Normalise one probe, recording the handler the student actually chose. */
+function toProbeSnapshot(kind: ProbeSnapshot['kind'], probe: k8s.V1Probe): ProbeSnapshot {
+  let handler: ProbeSnapshot['handler'] = 'unknown';
+  let path: string | undefined;
+  let port: number | string | undefined;
+
+  if (probe.httpGet) {
+    handler = 'httpGet';
+    path = probe.httpGet.path ?? '/';
+    port = probe.httpGet.port as number | string | undefined;
+  } else if (probe.tcpSocket) {
+    handler = 'tcpSocket';
+    port = probe.tcpSocket.port as number | string | undefined;
+  } else if (probe.exec) {
+    handler = 'exec';
+  } else if (probe.grpc) {
+    handler = 'grpc';
+    port = probe.grpc.port;
+  }
+
+  return {
+    kind,
+    handler,
+    ...(path !== undefined ? { path } : {}),
+    ...(port !== undefined ? { port } : {}),
+    ...(probe.initialDelaySeconds !== undefined
+      ? { initialDelaySeconds: probe.initialDelaySeconds }
+      : {}),
+    ...(probe.periodSeconds !== undefined ? { periodSeconds: probe.periodSeconds } : {}),
+    ...(probe.timeoutSeconds !== undefined ? { timeoutSeconds: probe.timeoutSeconds } : {}),
+    ...(probe.failureThreshold !== undefined ? { failureThreshold: probe.failureThreshold } : {}),
+    ...(probe.successThreshold !== undefined ? { successThreshold: probe.successThreshold } : {}),
+  };
+}
+
+function probesOf(container: k8s.V1Container): ProbeSnapshot[] {
+  const probes: ProbeSnapshot[] = [];
+  if (container.livenessProbe) probes.push(toProbeSnapshot('liveness', container.livenessProbe));
+  if (container.readinessProbe) probes.push(toProbeSnapshot('readiness', container.readinessProbe));
+  if (container.startupProbe) probes.push(toProbeSnapshot('startup', container.startupProbe));
+  return probes;
+}
+
+/**
+ * Every ConfigMap / Secret a Pod spec consumes, from all three mechanisms:
+ * `envFrom`, a single-key `env[].valueFrom`, and volumes.
+ *
+ * Secret *values* are never touched — only names and key names, which is all a
+ * lab needs in order to check that configuration was externalised correctly.
+ */
+export function configReferencesOf(spec: k8s.V1PodSpec | undefined): ConfigReference[] {
+  if (!spec) return [];
+  const refs: ConfigReference[] = [];
+
+  for (const container of spec.containers ?? []) {
+    for (const source of container.envFrom ?? []) {
+      if (source.configMapRef?.name) {
+        refs.push({
+          source: 'configmap',
+          name: source.configMapRef.name,
+          via: 'envFrom',
+          container: container.name,
+        });
+      }
+      if (source.secretRef?.name) {
+        refs.push({
+          source: 'secret',
+          name: source.secretRef.name,
+          via: 'envFrom',
+          container: container.name,
+        });
+      }
+    }
+
+    for (const variable of container.env ?? []) {
+      const configMapKeyRef = variable.valueFrom?.configMapKeyRef;
+      if (configMapKeyRef?.name) {
+        refs.push({
+          source: 'configmap',
+          name: configMapKeyRef.name,
+          key: configMapKeyRef.key,
+          via: 'env',
+          container: container.name,
+        });
+      }
+      const secretKeyRef = variable.valueFrom?.secretKeyRef;
+      if (secretKeyRef?.name) {
+        refs.push({
+          source: 'secret',
+          name: secretKeyRef.name,
+          key: secretKeyRef.key,
+          via: 'env',
+          container: container.name,
+        });
+      }
+    }
+  }
+
+  for (const volume of spec.volumes ?? []) {
+    if (volume.configMap?.name) {
+      const items = volume.configMap.items ?? [];
+      if (items.length === 0) {
+        refs.push({ source: 'configmap', name: volume.configMap.name, via: 'volume' });
+      } else {
+        for (const item of items) {
+          refs.push({
+            source: 'configmap',
+            name: volume.configMap.name,
+            key: item.key,
+            via: 'volume',
+          });
+        }
+      }
+    }
+    if (volume.secret?.secretName) {
+      const items = volume.secret.items ?? [];
+      if (items.length === 0) {
+        refs.push({ source: 'secret', name: volume.secret.secretName, via: 'volume' });
+      } else {
+        for (const item of items) {
+          refs.push({
+            source: 'secret',
+            name: volume.secret.secretName,
+            key: item.key,
+            via: 'volume',
+          });
+        }
+      }
+    }
+  }
+
+  return refs;
+}
+
 function toContainerSnapshots(
   containers: k8s.V1Container[],
   statuses: k8s.V1ContainerStatus[] = [],
@@ -676,6 +836,7 @@ function toContainerSnapshots(
     }
 
     const resources = container.resources;
+    const probes = probesOf(container);
     return {
       name: container.name,
       image: container.image ?? '',
@@ -692,8 +853,71 @@ function toContainerSnapshots(
             },
           }
         : {}),
+      ...(probes.length > 0 ? { probes } : {}),
     };
   });
+}
+
+/** Normalise a V1Job around the `Complete` / `Failed` conditions. */
+export function toJobSnapshot(job: k8s.V1Job, namespace: string, name: string): JobSnapshot {
+  const status = job.status ?? {};
+  const conditions = status.conditions ?? [];
+  const complete = conditions.some((c) => c.type === 'Complete' && c.status === 'True');
+  const failedCondition = conditions.find((c) => c.type === 'Failed' && c.status === 'True');
+
+  return {
+    name: job.metadata?.name ?? name,
+    namespace: job.metadata?.namespace ?? namespace,
+    completions: job.spec?.completions ?? 1,
+    parallelism: job.spec?.parallelism ?? 1,
+    succeeded: status.succeeded ?? 0,
+    failed: status.failed ?? 0,
+    active: status.active ?? 0,
+    complete,
+    failedCondition: Boolean(failedCondition),
+    ...(failedCondition?.reason ? { failureReason: failedCondition.reason } : {}),
+    labels: job.metadata?.labels ?? {},
+    containers: toContainerSnapshots(job.spec?.template?.spec?.containers ?? []),
+    deleting: Boolean(job.metadata?.deletionTimestamp),
+    configRefs: configReferencesOf(job.spec?.template?.spec),
+  };
+}
+
+export function toCronJobSnapshot(
+  cronJob: k8s.V1CronJob,
+  namespace: string,
+  name: string,
+): CronJobSnapshot {
+  const spec = cronJob.spec;
+  const podSpec = spec?.jobTemplate?.spec?.template?.spec;
+  const lastScheduleTime = cronJob.status?.lastScheduleTime;
+
+  return {
+    name: cronJob.metadata?.name ?? name,
+    namespace: cronJob.metadata?.namespace ?? namespace,
+    schedule: spec?.schedule ?? '',
+    suspend: spec?.suspend ?? false,
+    concurrencyPolicy: spec?.concurrencyPolicy ?? 'Allow',
+    activeJobs: cronJob.status?.active?.length ?? 0,
+    ...(lastScheduleTime
+      ? {
+          lastScheduleTime:
+            lastScheduleTime instanceof Date
+              ? lastScheduleTime.toISOString()
+              : String(lastScheduleTime),
+        }
+      : {}),
+    ...(spec?.successfulJobsHistoryLimit !== undefined
+      ? { successfulJobsHistoryLimit: spec.successfulJobsHistoryLimit }
+      : {}),
+    ...(spec?.failedJobsHistoryLimit !== undefined
+      ? { failedJobsHistoryLimit: spec.failedJobsHistoryLimit }
+      : {}),
+    labels: cronJob.metadata?.labels ?? {},
+    containers: toContainerSnapshots(podSpec?.containers ?? []),
+    deleting: Boolean(cronJob.metadata?.deletionTimestamp),
+    configRefs: configReferencesOf(podSpec),
+  };
 }
 
 /** Normalise a V1Pod into the minimal snapshot the lab engine reasons about. */
@@ -707,6 +931,7 @@ export function toPodSnapshot(pod: k8s.V1Pod, namespace: string, name: string): 
     containers,
     deleting: Boolean(pod.metadata?.deletionTimestamp),
     ready: containers.length > 0 && containers.every((c) => c.ready),
+    configRefs: configReferencesOf(pod.spec),
   };
 }
 
@@ -739,5 +964,6 @@ export function toDeploymentSnapshot(
     generation: deployment.metadata?.generation ?? 0,
     observedGeneration: status.observedGeneration ?? 0,
     deleting: Boolean(deployment.metadata?.deletionTimestamp),
+    configRefs: configReferencesOf(deployment.spec?.template?.spec),
   };
 }

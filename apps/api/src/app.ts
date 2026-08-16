@@ -6,6 +6,7 @@ import { sendError, sendOk } from './http.js';
 import { createLabRoutes } from './routes/labs.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createInternalRoutes } from './routes/internal.js';
+import { createTrackRoutes } from './routes/tracks.js';
 
 export interface CreateAppDeps {
   registry: LabRegistry;
@@ -44,6 +45,7 @@ export function createApp(deps: CreateAppDeps): Express {
   });
 
   app.use('/api/labs', browserCors, createLabRoutes(deps));
+  app.use('/api/tracks', browserCors, createTrackRoutes(deps));
   app.use('/api/sessions', browserCors, createSessionRoutes(deps));
   app.use('/internal', createInternalRoutes(deps));
 

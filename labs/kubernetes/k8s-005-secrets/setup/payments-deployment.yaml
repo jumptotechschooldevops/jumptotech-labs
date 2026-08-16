@@ -1,0 +1,31 @@
+# Initial state for K8S-005: the payments service with its provider
+# credential pasted into the manifest in plain text. This is the anti-pattern
+# the lab asks the student to remove.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+  labels:
+    app: payments
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments
+  template:
+    metadata:
+      labels:
+        app: payments
+    spec:
+      containers:
+        - name: payments
+          image: nginx:stable
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            # Not a real credential — a placeholder standing in for one, so the
+            # lab can be about removing it. Never commit a live token anywhere.
+            - name: PAYMENTS_API_TOKEN
+              value: "placeholder-not-a-real-token"

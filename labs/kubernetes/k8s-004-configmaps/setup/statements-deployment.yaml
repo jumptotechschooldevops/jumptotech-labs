@@ -1,0 +1,32 @@
+# Initial state for K8S-004: the statements service as it exists today, with
+# its configuration baked in as literal environment variables.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: statements
+  labels:
+    app: statements
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: statements
+  template:
+    metadata:
+      labels:
+        app: statements
+    spec:
+      containers:
+        - name: statements
+          image: nginx:stable
+          ports:
+            - name: http
+              containerPort: 80
+          # The problem this lab fixes: shipping a config change means editing
+          # the workload itself, and every environment needs a different edit.
+          env:
+            - name: STATEMENT_FORMAT
+              value: pdf
+            - name: RETENTION_DAYS
+              value: "90"

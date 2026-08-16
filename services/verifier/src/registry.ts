@@ -24,6 +24,7 @@ import {
   podExists,
   podImage,
   podLabel,
+  podPhase,
   podReady,
   podResources,
   podRunning,
@@ -32,8 +33,13 @@ import {
   deploymentAvailable,
   deploymentExists,
   deploymentImage,
+  deploymentProbe,
   deploymentReplicas,
+  deploymentResources,
   deploymentRolloutComplete,
+  deploymentSelector,
+  deploymentUsesConfigMap,
+  deploymentUsesSecret,
 } from './handlers/deployments.js';
 import {
   serviceEndpoints,
@@ -42,7 +48,22 @@ import {
   serviceSelector,
   serviceType,
 } from './handlers/services.js';
-import { configMapExists, configMapKey, secretExists } from './handlers/config.js';
+import {
+  configMapExists,
+  configMapKey,
+  secretExists,
+  secretKey,
+  secretType,
+} from './handlers/config.js';
+import {
+  cronJobExists,
+  cronJobSchedule,
+  cronJobSuspended,
+  jobCompleted,
+  jobExists,
+  jobImage,
+} from './handlers/batch.js';
+import { resourceAbsent } from './handlers/generic.js';
 
 /** Raised when a requirement names a type with no registered handler. */
 export class UnsupportedRequirementError extends Error {
@@ -65,6 +86,7 @@ const HANDLERS: { [K in RequirementType]: VerifierHandler<K> } = {
   pod_exists: podExists,
   pod_image: podImage,
   pod_running: podRunning,
+  pod_phase: podPhase,
   pod_ready: podReady,
   pod_label: podLabel,
   pod_resources: podResources,
@@ -74,6 +96,11 @@ const HANDLERS: { [K in RequirementType]: VerifierHandler<K> } = {
   deployment_replicas: deploymentReplicas,
   deployment_available: deploymentAvailable,
   deployment_rollout_complete: deploymentRolloutComplete,
+  deployment_selector: deploymentSelector,
+  deployment_resources: deploymentResources,
+  deployment_probe: deploymentProbe,
+  deployment_uses_configmap: deploymentUsesConfigMap,
+  deployment_uses_secret: deploymentUsesSecret,
 
   service_exists: serviceExists,
   service_type: serviceType,
@@ -84,6 +111,17 @@ const HANDLERS: { [K in RequirementType]: VerifierHandler<K> } = {
   configmap_exists: configMapExists,
   configmap_key: configMapKey,
   secret_exists: secretExists,
+  secret_key: secretKey,
+  secret_type: secretType,
+
+  job_exists: jobExists,
+  job_completed: jobCompleted,
+  job_image: jobImage,
+  cronjob_exists: cronJobExists,
+  cronjob_schedule: cronJobSchedule,
+  cronjob_suspended: cronJobSuspended,
+
+  resource_absent: resourceAbsent,
 };
 
 /** Requirement types that currently have a handler. */

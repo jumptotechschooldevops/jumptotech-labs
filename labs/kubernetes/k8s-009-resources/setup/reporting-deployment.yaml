@@ -1,0 +1,30 @@
+# Initial state for K8S-009: the reporting service with no resource requests
+# or limits declared on its container.
+#
+# The namespace LimitRange will still default the *Pod's* resources, which is
+# exactly the subtlety the lab teaches — the workload itself declares nothing,
+# so the scheduler has no per-workload information to act on and the platform
+# team has nothing to review.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reporting
+  labels:
+    app: reporting
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reporting
+  template:
+    metadata:
+      labels:
+        app: reporting
+    spec:
+      containers:
+        - name: reporting
+          image: nginx:stable
+          ports:
+            - name: http
+              containerPort: 80

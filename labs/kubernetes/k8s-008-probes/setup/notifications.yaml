@@ -1,0 +1,42 @@
+# Initial state for K8S-008: the notifications service and its Service, with
+# no readiness probe on the container. Kubernetes therefore treats each Pod as
+# ready the moment its container starts, which is the fault the student fixes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifications
+  labels:
+    app: notifications
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: notifications
+  template:
+    metadata:
+      labels:
+        app: notifications
+    spec:
+      containers:
+        - name: notifications
+          image: nginx:stable
+          ports:
+            - name: http
+              containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notifications
+  labels:
+    app: notifications
+    jumptotech.io/lab-fixture: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app: notifications
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP

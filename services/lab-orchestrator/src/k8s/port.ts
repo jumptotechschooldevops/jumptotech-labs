@@ -12,6 +12,48 @@
  */
 import type { NodeInfo } from '../types.js';
 
+/**
+ * One configured probe.
+ *
+ * Probes are read from the *spec*, not from status: a lab that teaches
+ * readiness asks whether the student configured a probe, and the answer must
+ * not depend on whether the probe happens to be passing at the instant of the
+ * check.
+ */
+export interface ProbeSnapshot {
+  kind: 'liveness' | 'readiness' | 'startup';
+  /** Which handler the probe uses. `unknown` when the spec sets none. */
+  handler: 'httpGet' | 'tcpSocket' | 'exec' | 'grpc' | 'unknown';
+  /** `httpGet.path`. */
+  path?: string;
+  /** `httpGet.port` / `tcpSocket.port` / `grpc.port` — a number or a port name. */
+  port?: number | string;
+  initialDelaySeconds?: number;
+  periodSeconds?: number;
+  timeoutSeconds?: number;
+  failureThreshold?: number;
+  successThreshold?: number;
+}
+
+/**
+ * A ConfigMap or Secret a workload consumes.
+ *
+ * Records *that* configuration is externalised and how, which is the thing the
+ * ConfigMap and Secret labs teach. Secret **values are never read** — only the
+ * object name and, where the reference names one, the key.
+ */
+export interface ConfigReference {
+  source: 'configmap' | 'secret';
+  /** Name of the referenced ConfigMap / Secret. */
+  name: string;
+  /** Set for single-key references (`env.valueFrom`, volume `items`). */
+  key?: string;
+  /** How the workload consumes it. */
+  via: 'env' | 'envFrom' | 'volume';
+  /** Container carrying the reference. Absent for volume-level references. */
+  container?: string;
+}
+
 export interface ContainerSnapshot {
   name: string;
   /** Image as declared in `spec.containers[].image`. */
@@ -26,6 +68,8 @@ export interface ContainerSnapshot {
   reason?: string;
   /** `spec.containers[].resources`, verbatim quantity strings. */
   resources?: ResourceRequirementsSnapshot;
+  /** Probes declared on this container. Optional so older fixtures stay valid. */
+  probes?: ProbeSnapshot[];
 }
 
 export interface ResourceRequirementsSnapshot {
@@ -44,6 +88,8 @@ export interface PodSnapshot {
   deleting: boolean;
   /** True when every container reports Ready. */
   ready: boolean;
+  /** ConfigMaps / Secrets this Pod consumes. */
+  configRefs?: ConfigReference[];
 }
 
 export interface DeploymentSnapshot {
@@ -64,6 +110,61 @@ export interface DeploymentSnapshot {
   generation: number;
   observedGeneration: number;
   deleting: boolean;
+  /**
+   * ConfigMaps / Secrets the Pod template consumes.
+   *
+   * Read from the template rather than from running Pods, so the check reflects
+   * what the student declared.
+   */
+  configRefs?: ConfigReference[];
+}
+
+/**
+ * A Job, normalised around the question labs actually ask: did it finish?
+ *
+ * `complete` mirrors the `Complete` condition, which is the authoritative
+ * signal — `succeeded` alone can be non-zero while a multi-completion Job is
+ * still running.
+ */
+export interface JobSnapshot {
+  name: string;
+  namespace: string;
+  /** `spec.completions`, defaulting to 1 — the Kubernetes default. */
+  completions: number;
+  parallelism: number;
+  succeeded: number;
+  failed: number;
+  active: number;
+  /** The `Complete` condition is True. */
+  complete: boolean;
+  /** The `Failed` condition is True. */
+  failedCondition: boolean;
+  /** Reason from the `Failed` condition, e.g. `BackoffLimitExceeded`. */
+  failureReason?: string;
+  labels: Record<string, string>;
+  containers: ContainerSnapshot[];
+  deleting: boolean;
+  configRefs?: ConfigReference[];
+}
+
+export interface CronJobSnapshot {
+  name: string;
+  namespace: string;
+  /** `spec.schedule`, verbatim — e.g. `*​/5 * * * *`. */
+  schedule: string;
+  suspend: boolean;
+  /** `Allow` | `Forbid` | `Replace`. */
+  concurrencyPolicy: string;
+  /** Jobs the CronJob controller currently owns. */
+  activeJobs: number;
+  lastScheduleTime?: string;
+  successfulJobsHistoryLimit?: number;
+  failedJobsHistoryLimit?: number;
+  labels: Record<string, string>;
+  /** Containers from `spec.jobTemplate.spec.template.spec.containers`. */
+  containers: ContainerSnapshot[];
+  deleting: boolean;
+  configRefs?: ConfigReference[];
 }
 
 export interface ServiceSnapshot {
@@ -190,6 +291,8 @@ export interface KubernetesPort {
   getEndpoints(namespace: string, serviceName: string): Promise<EndpointsSnapshot | null>;
   getConfigMap(namespace: string, name: string): Promise<ConfigMapSnapshot | null>;
   getSecret(namespace: string, name: string): Promise<SecretSnapshot | null>;
+  getJob(namespace: string, name: string): Promise<JobSnapshot | null>;
+  getCronJob(namespace: string, name: string): Promise<CronJobSnapshot | null>;
 
   // --- writes used by setup / reset / isolation ---------------------------
 

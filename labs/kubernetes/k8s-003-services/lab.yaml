@@ -1,0 +1,126 @@
+id: K8S-003
+slug: k8s-003-services
+title: Expose a Workload with a Service
+track: kubernetes
+topic: networking
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 3
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-002
+
+story: >
+  The accounts service at JumpToTech Bank is already running — two replicas,
+  healthy, serving on port 80 inside the cluster. The problem is that nothing
+  else can reach it reliably.
+
+  The statements service currently hardcodes a Pod IP address, which changes
+  every time a Pod is rescheduled. Your job is to give the accounts service a
+  stable internal address that other services in the namespace can use, without
+  exposing it outside the cluster.
+
+objectives:
+  - Explain why Pod IPs are not a usable address for another service
+  - Create a ClusterIP Service that selects Pods by label
+  - Confirm a Service has healthy endpoints behind it
+
+task:
+  summary: Create a ClusterIP Service named accounts that routes port 80 to the accounts Pods.
+  description: >
+    A Service defines a stable network identity for a logical set of Pods. It
+    chooses those Pods with a label selector, not by name and not by address,
+    so Pods can come and go while the Service address stays the same.
+
+    The `accounts` Deployment is already running in your namespace with two
+    replicas. Its Pods carry the label `app=accounts` and listen on container
+    port 80.
+
+    Create a Service named `accounts` of type ClusterIP that accepts traffic on
+    port 80 and forwards it to port 80 on those Pods.
+
+    A Service with a selector that matches nothing is still created quite
+    happily by the API server — it simply has no endpoints and silently drops
+    traffic. This lab therefore checks that real, ready backends are registered
+    behind your Service, not merely that the Service object exists.
+
+setup:
+  manifests:
+    - setup/accounts-deployment.yaml
+  # Confirms the starting condition materialised before the student is handed
+  # the environment. A student must never be given a lab whose premise —
+  # "the accounts Deployment is already running" — was never checked.
+  verify:
+    - type: deployment_exists
+      name: accounts
+    - type: deployment_available
+      name: accounts
+      min_available: 2
+  verify_timeout_seconds: 180
+
+requirements:
+  - type: service_exists
+    name: accounts
+    label: Service accounts exists
+  - type: service_type
+    name: accounts
+    expected: ClusterIP
+    label: Service type is ClusterIP
+  - type: service_selector
+    name: accounts
+    selector:
+      app: accounts
+    label: Service selects the accounts Pods
+  - type: service_port
+    name: accounts
+    port: 80
+    target_port: 80
+    label: Service accepts port 80 and forwards to container port 80
+  - type: service_endpoints
+    name: accounts
+    min_ready: 2
+    label: Both accounts Pods are registered as ready endpoints
+
+hints:
+  - level: 1
+    text: >
+      A Service does not know anything about Deployments. It finds Pods the
+      only way Kubernetes ever finds a set of objects — by matching labels.
+  - level: 2
+    text: >
+      Look at the labels on the running Pods before you write the selector, and
+      note the distinction between the port the Service listens on and the port
+      it forwards to on the Pod.
+  - level: 3
+    text: >
+      The Service must be named `accounts`, be of type ClusterIP, and select
+      `app=accounts`. Inspect the Pod labels with
+      `kubectl get pods --show-labels`. Once created, `kubectl get endpoints
+      accounts` (or `kubectl describe service accounts`) shows which Pod
+      addresses are actually registered — an empty list means the selector does
+      not match.
+
+references:
+  - title: Service
+    url: https://kubernetes.io/docs/concepts/services-networking/service/
+  - title: Connecting Applications with Services
+    url: https://kubernetes.io/docs/tutorials/services/connect-applications-service/
+  - title: Labels and Selectors
+    url: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+
+skills:
+  - kubernetes.services.create
+  - kubernetes.services.clusterip
+  - kubernetes.services.selectors
+  - kubernetes.networking.discovery
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - services-and-networking

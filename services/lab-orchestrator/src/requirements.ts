@@ -65,6 +65,40 @@ const common = {
   label: z.string().min(1).max(160).optional(),
 };
 
+/** Kubernetes object kinds a requirement may name generically. */
+const CHECKABLE_KINDS = [
+  'pod',
+  'deployment',
+  'service',
+  'configmap',
+  'secret',
+  'job',
+  'cronjob',
+] as const;
+
+/**
+ * A cron schedule, e.g. `*​/5 * * * *`.
+ *
+ * Deliberately a permissive character class rather than a full cron grammar:
+ * the check compares the student's schedule to the lab's expected one after
+ * whitespace normalisation, so this only has to exclude obvious nonsense.
+ */
+const cronSchedule = z
+  .string()
+  .min(1)
+  .max(120)
+  .regex(/^[-*/,?\dA-Za-z\s]+$/, 'must be a cron schedule such as */5 * * * *');
+
+/** A port number, or the name of a named container port. */
+const portValue = z.union([
+  z.number().int().min(1).max(65535),
+  z
+    .string()
+    .min(1)
+    .max(15)
+    .regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, 'must be a named port'),
+]);
+
 const requirementSchemas = {
   // --- Pods --------------------------------------------------------------
   pod_exists: z.object({ type: z.literal('pod_exists'), name: resourceName, ...common }).strict(),
@@ -83,6 +117,22 @@ const requirementSchemas = {
   pod_running: z.object({ type: z.literal('pod_running'), name: resourceName, ...common }).strict(),
 
   pod_ready: z.object({ type: z.literal('pod_ready'), name: resourceName, ...common }).strict(),
+
+  /**
+   * Any Pod phase, not only Running.
+   *
+   * `pod_running` stays as the readable form of the common case; this covers
+   * `Succeeded` (a completed one-shot Pod) and `Pending`/`Failed` for labs that
+   * deliberately teach an unschedulable or crashing workload.
+   */
+  pod_phase: z
+    .object({
+      type: z.literal('pod_phase'),
+      name: resourceName,
+      phase: z.enum(['Pending', 'Running', 'Succeeded', 'Failed', 'Unknown']),
+      ...common,
+    })
+    .strict(),
 
   pod_label: z
     .object({ type: z.literal('pod_label'), name: resourceName, labels: labelMap, ...common })
@@ -138,6 +188,81 @@ const requirementSchemas = {
 
   deployment_rollout_complete: z
     .object({ type: z.literal('deployment_rollout_complete'), name: resourceName, ...common })
+    .strict(),
+
+  deployment_selector: z
+    .object({
+      type: z.literal('deployment_selector'),
+      name: resourceName,
+      selector: labelMap,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * Resource requests/limits on the Deployment's **Pod template**.
+   *
+   * Deliberately not `pod_resources`: a namespace LimitRange injects defaults
+   * into every Pod, so a Pod always reports requests and limits whether or not
+   * the student declared any. The template shows only what was actually
+   * written, which is what a resource-management lab must grade.
+   */
+  deployment_resources: z
+    .object({
+      type: z.literal('deployment_resources'),
+      name: resourceName,
+      container: resourceName.optional(),
+      requests: resourceList.optional(),
+      limits: resourceList.optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.requests !== undefined || v.limits !== undefined, {
+      message: 'must specify requests, limits, or both',
+    }),
+
+  /** A probe of the given kind is configured, optionally with a given handler. */
+  deployment_probe: z
+    .object({
+      type: z.literal('deployment_probe'),
+      name: resourceName,
+      container: resourceName.optional(),
+      probe: z.enum(['readiness', 'liveness', 'startup']),
+      handler: z.enum(['httpGet', 'tcpSocket', 'exec', 'grpc']).optional(),
+      path: z.string().min(1).max(255).optional(),
+      port: portValue.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The Deployment consumes a ConfigMap.
+   *
+   * Any mechanism counts — `envFrom`, a single-key `env.valueFrom`, or a
+   * volume — unless the lab pins one with `via`. The point of a ConfigMap lab
+   * is that configuration left the image, not that one syntax was used.
+   */
+  deployment_uses_configmap: z
+    .object({
+      type: z.literal('deployment_uses_configmap'),
+      name: resourceName,
+      configmap: resourceName,
+      /** Require a specific key to be referenced. */
+      key: z.string().min(1).max(253).regex(/^[-._a-zA-Z0-9]+$/, 'invalid ConfigMap key').optional(),
+      via: z.enum(['env', 'envFrom', 'volume']).optional(),
+      ...common,
+    })
+    .strict(),
+
+  deployment_uses_secret: z
+    .object({
+      type: z.literal('deployment_uses_secret'),
+      name: resourceName,
+      secret: resourceName,
+      key: z.string().min(1).max(253).regex(/^[-._a-zA-Z0-9]+$/, 'invalid Secret key').optional(),
+      via: z.enum(['env', 'envFrom', 'volume']).optional(),
+      ...common,
+    })
     .strict(),
 
   // --- Services ----------------------------------------------------------
@@ -198,6 +323,95 @@ const requirementSchemas = {
 
   secret_exists: z
     .object({ type: z.literal('secret_exists'), name: resourceName, ...common })
+    .strict(),
+
+  /**
+   * A Secret carries a given key.
+   *
+   * There is deliberately **no `value` field**, unlike `configmap_key`. Secret
+   * values are never read into the platform, never logged, and never compared —
+   * so a lab cannot be written that would require the verifier to hold one.
+   */
+  secret_key: z
+    .object({
+      type: z.literal('secret_key'),
+      name: resourceName,
+      key: z.string().min(1).max(253).regex(/^[-._a-zA-Z0-9]+$/, 'invalid Secret key'),
+      ...common,
+    })
+    .strict(),
+
+  secret_type: z
+    .object({
+      type: z.literal('secret_type'),
+      name: resourceName,
+      expected: z.string().min(1).max(253),
+      ...common,
+    })
+    .strict(),
+
+  // --- Batch workloads ---------------------------------------------------
+  job_exists: z.object({ type: z.literal('job_exists'), name: resourceName, ...common }).strict(),
+
+  /**
+   * The Job finished successfully.
+   *
+   * Checks the `Complete` condition rather than a non-zero `succeeded` count,
+   * because a Job asking for several completions can report successes while
+   * still running.
+   */
+  job_completed: z
+    .object({
+      type: z.literal('job_completed'),
+      name: resourceName,
+      /** Require at least this many successful completions. Defaults to all. */
+      min_succeeded: z.number().int().min(1).max(50).optional(),
+      ...common,
+    })
+    .strict(),
+
+  job_image: z
+    .object({
+      type: z.literal('job_image'),
+      name: resourceName,
+      container: resourceName.optional(),
+      image: imageReference,
+      ...common,
+    })
+    .strict(),
+
+  cronjob_exists: z
+    .object({ type: z.literal('cronjob_exists'), name: resourceName, ...common })
+    .strict(),
+
+  cronjob_schedule: z
+    .object({ type: z.literal('cronjob_schedule'), name: resourceName, schedule: cronSchedule, ...common })
+    .strict(),
+
+  /** A CronJob must not be left suspended, or it never runs. */
+  cronjob_suspended: z
+    .object({
+      type: z.literal('cronjob_suspended'),
+      name: resourceName,
+      expected: z.boolean(),
+      ...common,
+    })
+    .strict(),
+
+  // --- Generic -----------------------------------------------------------
+  /**
+   * A named object must NOT exist.
+   *
+   * Used by clean-up and troubleshooting labs ("the failed Job was removed"),
+   * and by labs whose point is that a resource was replaced rather than added.
+   */
+  resource_absent: z
+    .object({
+      type: z.literal('resource_absent'),
+      kind: z.enum(CHECKABLE_KINDS),
+      name: resourceName,
+      ...common,
+    })
     .strict(),
 } as const;
 

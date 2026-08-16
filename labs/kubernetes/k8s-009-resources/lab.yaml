@@ -1,0 +1,130 @@
+id: K8S-009
+slug: k8s-009-resources
+title: Declare Resource Requests and Limits
+track: kubernetes
+topic: scheduling
+difficulty: intermediate
+level: practice
+duration_minutes: 30
+order: 9
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-002
+
+story: >
+  The reporting service at JumpToTech Bank generates end-of-day summaries. On
+  the last day of the month it does far more work than usual, and last month it
+  consumed enough CPU on its node that unrelated services scheduled alongside
+  it became slow.
+
+  The reporting Deployment declares no resource requests or limits at all. The
+  scheduler has no idea how much room to leave for it, and nothing caps how
+  much it can take once it is running. The platform team wants both stated
+  explicitly on the workload.
+
+objectives:
+  - Explain how requests affect scheduling and limits affect runtime
+  - Declare CPU and memory requests and limits on a container
+  - Recognise that a namespace LimitRange default is not a workload declaration
+
+task:
+  summary: Declare CPU and memory requests and limits on the reporting Deployment.
+  description: >
+    A request is what the scheduler reserves: it will only place the Pod on a
+    node with that much capacity free. A limit is what the kubelet enforces at
+    runtime: a container exceeding its memory limit is terminated, and one
+    exceeding its CPU limit is throttled rather than killed.
+
+    Update the `reporting` Deployment so its container declares exactly:
+
+      requests:  cpu 100m,  memory 128Mi
+      limits:    cpu 250m,  memory 256Mi
+
+    There is a subtlety here worth understanding, and it is the reason this lab
+    reads the Deployment rather than the running Pod. Your namespace has a
+    LimitRange that supplies default requests and limits to any container that
+    declares none. Inspect a Pod today and you will see resources on it — but
+    they came from the namespace default, not from the workload. The Deployment
+    itself still says nothing, so no reviewer can tell what the service
+    actually needs, and the default follows the namespace rather than the
+    application.
+
+    This lab therefore checks the Deployment's Pod template, which contains
+    only what you declare.
+
+setup:
+  manifests:
+    - setup/reporting-deployment.yaml
+  verify:
+    - type: deployment_exists
+      name: reporting
+    - type: deployment_available
+      name: reporting
+      min_available: 1
+  verify_timeout_seconds: 180
+
+requirements:
+  - type: deployment_resources
+    name: reporting
+    container: reporting
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    label: Container requests 100m CPU and 128Mi memory
+  - type: deployment_resources
+    name: reporting
+    container: reporting
+    limits:
+      cpu: 250m
+      memory: 256Mi
+    label: Container is limited to 250m CPU and 256Mi memory
+  - type: deployment_rollout_complete
+    name: reporting
+    label: The updated Deployment has rolled out
+  - type: deployment_available
+    name: reporting
+    min_available: 1
+    label: reporting is still running after the change
+
+hints:
+  - level: 1
+    text: >
+      Resources are declared per container, inside the Deployment's Pod
+      template — the same place you would add a probe or an environment
+      variable.
+  - level: 2
+    text: >
+      CPU is measured in cores, where `100m` means one tenth of a core. Memory
+      is measured in bytes with binary suffixes, where `128Mi` is 128 mebibytes.
+      Requests and limits are two separate blocks under the same key.
+  - level: 3
+    text: >
+      Add a `resources` block to the `reporting` container with both `requests`
+      (cpu 100m, memory 128Mi) and `limits` (cpu 250m, memory 256Mi). Verify
+      what the workload declares — not what the Pod inherited — with
+      `kubectl get deployment reporting -o jsonpath='{.spec.template.spec.containers[0].resources}'`.
+      Your namespace's defaults are visible with `kubectl describe limitrange`.
+
+references:
+  - title: Resource Management for Pods and Containers
+    url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+  - title: Assign Memory Resources to Containers and Pods
+    url: https://kubernetes.io/docs/tasks/configure-pod-container/assign-memory-resource/
+  - title: Limit Ranges
+    url: https://kubernetes.io/docs/concepts/policy/limit-range/
+
+skills:
+  - kubernetes.resources.requests
+  - kubernetes.resources.limits
+  - kubernetes.scheduling.capacity
+  - kubernetes.resources.quota
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling

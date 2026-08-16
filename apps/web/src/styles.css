@@ -255,6 +255,8 @@ code {
 }
 
 .brief__heading {
+  display: flex;
+  align-items: baseline;
   margin: 0 0 10px;
   font-size: 11px;
   font-weight: 600;
@@ -315,6 +317,104 @@ code {
 }
 .doclinks a:hover { text-decoration: underline; }
 .doclinks__arrow { font-size: 10px; opacity: 0.7; }
+
+/* --- progressive hints ---------------------------------------------------- */
+
+.hints__count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.hints__intro { margin: 0 0 10px; font-size: 12.5px; color: var(--text-faint); }
+
+.hints__list { margin: 0 0 10px; padding: 0; list-style: none; display: grid; gap: 8px; }
+.hints__item {
+  padding: 11px 13px;
+  background: rgba(77, 171, 247, 0.07);
+  border: 1px solid #24405f;
+  border-left: 2px solid var(--info);
+  border-radius: var(--radius-sm);
+}
+.hints__level {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--info);
+  margin-bottom: 5px;
+}
+.hints__text { margin: 0; font-size: 13px; color: #bcd6f2; line-height: 1.55; }
+
+.hints__reveal { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.hints__remaining { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+.hints__exhausted { margin: 0; font-size: 12.5px; color: var(--text-faint); font-style: italic; }
+
+/* --- prerequisites, objectives, skills ------------------------------------ */
+
+.prereqs { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.prereqs li { font-size: 13px; color: var(--text-dim); }
+.prereqs__link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.prereqs__link:hover { color: var(--text); text-decoration: underline; }
+.prereqs__id {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-right: 8px;
+}
+.prereqs__note { margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint); font-style: italic; }
+
+.brief__section--story {
+  background: rgba(255, 209, 102, 0.05);
+  border-left: 2px solid #7a6120;
+  padding-left: 13px;
+}
+.brief__story { margin: 0 0 10px; font-size: 13.5px; color: #e2d5b4; line-height: 1.6; }
+.brief__story:last-child { margin-bottom: 0; }
+
+.objectives { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.objectives li {
+  position: relative;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.objectives li::before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.skills { display: flex; flex-wrap: wrap; gap: 5px; }
+.skills__tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+}
+.skills__tag--more { color: var(--text-dim); }
+
+.chip--cert { color: var(--info); border-color: #24557e; text-transform: none; }
 
 .hint__toggle {
   display: inline-flex;
@@ -596,10 +696,12 @@ code {
   gap: 14px;
 }
 
+/* A card is an article, not a button: it carries several distinct pieces of
+   information and exactly one action, which is the "Open lab" button. */
 .labcard {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 9px;
   text-align: left;
   padding: 18px;
   background: var(--bg-panel);
@@ -607,26 +709,100 @@ code {
   border-radius: var(--radius);
   color: var(--text);
   font-family: var(--sans);
-  cursor: pointer;
   transition: border-color 0.14s ease, transform 0.14s ease;
 }
 .labcard:hover { border-color: var(--accent-dim); transform: translateY(-1px); }
 
-.labcard__top { display: flex; align-items: center; justify-content: space-between; }
+.labcard__top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .labcard__id { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--accent); }
+.labcard__badges { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
 .labcard__title { margin: 0; font-size: 16px; font-weight: 600; }
-.labcard__summary { margin: 0; font-size: 13px; color: var(--text-dim); flex: 1; }
+.labcard__summary { margin: 0; font-size: 13px; color: var(--text-dim); }
+
+.labcard__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 8px 14px;
+  margin: 2px 0 0;
+  flex: 1;
+}
+.labcard__facts div { display: flex; flex-direction: column; gap: 2px; }
+.labcard__facts dt {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.labcard__facts dd { margin: 0; font-size: 12.5px; color: var(--text-dim); font-family: var(--mono); }
+
+.labcard__skills { display: flex; flex-wrap: wrap; gap: 5px; }
+
 .labcard__footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 6px;
-  padding-top: 10px;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
   font-size: 12px;
   color: var(--text-faint);
 }
-.labcard__cta { color: var(--accent); }
+.labcard__note {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.labcard__cta { margin-left: auto; padding: 6px 14px; font-size: 12.5px; }
+
+/* --- catalog filters ------------------------------------------------------ */
+
+.catalog__filters {
+  max-width: 1080px;
+  margin: 0 auto 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.filterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.filterrow__label {
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  min-width: 46px;
+}
+.filterchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  text-transform: capitalize;
+  cursor: pointer;
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+.filterchip:hover { border-color: var(--border-strong); color: var(--text); }
+.filterchip[aria-pressed="true"] {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(61, 220, 151, 0.07);
+}
+.filterchip__count { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+.filterchip[aria-pressed="true"] .filterchip__count { color: var(--accent); }
+
+.catalog__track-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.catalog__track-count { font-family: var(--mono); font-size: 11.5px; color: var(--text-faint); }
 
 /* --- message card --------------------------------------------------------- */
 

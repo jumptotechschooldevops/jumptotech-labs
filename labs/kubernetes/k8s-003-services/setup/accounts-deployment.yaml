@@ -1,0 +1,29 @@
+# Initial state for K8S-003.
+#
+# Applied into the student's own session namespace before the terminal opens.
+# `metadata.namespace` is deliberately absent and is rejected by the loader if
+# present — the platform places setup resources in the session namespace, so a
+# lab can never seed resources into someone else's sandbox.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: accounts
+  labels:
+    app: accounts
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: accounts
+  template:
+    metadata:
+      labels:
+        app: accounts
+    spec:
+      containers:
+        - name: accounts
+          image: nginx:stable
+          ports:
+            - name: http
+              containerPort: 80

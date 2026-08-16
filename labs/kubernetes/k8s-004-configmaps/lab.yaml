@@ -1,0 +1,128 @@
+id: K8S-004
+slug: k8s-004-configmaps
+title: Move Configuration into a ConfigMap
+track: kubernetes
+topic: configuration
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 4
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-002
+
+story: >
+  The statements service at JumpToTech Bank has its settings written directly
+  into the Deployment as literal environment variables. Every time the
+  operations team wants to change the retention window, someone edits the
+  workload definition and re-rolls the service.
+
+  The platform team wants that configuration held as a separate object, so it
+  can be reviewed, changed, and reused without touching the workload that
+  consumes it.
+
+objectives:
+  - Explain why configuration should live outside the container image
+  - Create a ConfigMap holding key/value settings
+  - Wire a Deployment to read its configuration from a ConfigMap
+
+task:
+  summary: Create a ConfigMap named statements-config and make the statements Deployment read its configuration from it.
+  description: >
+    A ConfigMap stores non-confidential configuration as key/value pairs. Pods
+    can consume it as environment variables or as files in a volume, which
+    decouples the settings from the workload and from the container image.
+
+    The `statements` Deployment is already running in your namespace with its
+    settings hardcoded in the Pod template.
+
+    Create a ConfigMap named `statements-config` containing exactly these two
+    entries, then change the Deployment so it takes its configuration from that
+    ConfigMap instead of from literal values:
+
+      STATEMENT_FORMAT = pdf
+      RETENTION_DAYS   = 90
+
+    Any documented mechanism is accepted — a whole-ConfigMap reference, a
+    single-key reference per variable, or a mounted volume. This lab checks
+    that the configuration was externalised and that the workload still runs,
+    not which syntax you chose.
+
+    ConfigMaps are not secret. They are stored and displayed in plain text, and
+    anything sensitive belongs in a Secret instead — which is the next lab.
+
+setup:
+  manifests:
+    - setup/statements-deployment.yaml
+  verify:
+    - type: deployment_exists
+      name: statements
+    - type: deployment_available
+      name: statements
+      min_available: 1
+  verify_timeout_seconds: 180
+
+requirements:
+  - type: configmap_exists
+    name: statements-config
+    label: ConfigMap statements-config exists
+  - type: configmap_key
+    name: statements-config
+    key: STATEMENT_FORMAT
+    value: pdf
+    label: ConfigMap sets STATEMENT_FORMAT=pdf
+  - type: configmap_key
+    name: statements-config
+    key: RETENTION_DAYS
+    value: "90"
+    label: ConfigMap sets RETENTION_DAYS=90
+  - type: deployment_uses_configmap
+    name: statements
+    configmap: statements-config
+    label: Deployment statements reads its configuration from the ConfigMap
+  - type: deployment_available
+    name: statements
+    min_available: 1
+    label: statements is still running after the change
+
+hints:
+  - level: 1
+    text: >
+      Configuration and workload are two separate objects. Create the
+      configuration object first — a workload that references a ConfigMap which
+      does not exist yet will not start.
+  - level: 2
+    text: >
+      A ConfigMap can be created from literal key/value pairs or from a
+      manifest. On the consuming side, a container can pull in every key at
+      once, or reference individual keys one at a time.
+  - level: 3
+    text: >
+      The ConfigMap must be named `statements-config` and hold
+      `STATEMENT_FORMAT` and `RETENTION_DAYS`. Update the Pod template of the
+      `statements` Deployment to source those values from it — editing the
+      Deployment triggers a new rollout automatically. Confirm the result with
+      `kubectl get configmap statements-config -o yaml` and
+      `kubectl describe deployment statements`.
+
+references:
+  - title: ConfigMaps
+    url: https://kubernetes.io/docs/concepts/configuration/configmap/
+  - title: Configure a Pod to Use a ConfigMap
+    url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/
+
+skills:
+  - kubernetes.configmaps.create
+  - kubernetes.configmaps.consume
+  - kubernetes.configuration.externalize
+  - kubernetes.workloads.update
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling

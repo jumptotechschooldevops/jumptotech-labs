@@ -1,0 +1,106 @@
+id: K8S-007
+slug: k8s-007-cronjobs
+title: Schedule Recurring Work with a CronJob
+track: kubernetes
+topic: batch
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 7
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-006
+
+story: >
+  JumpToTech Bank reconciles its internal ledger against the payment
+  provider's records on a fixed cadence. Today that reconciliation runs from a
+  cron entry on a single engineer's virtual machine — a machine that is not
+  monitored, not in version control, and was the reason reconciliation silently
+  stopped for two days last quarter.
+
+  The team wants the schedule to live in the cluster alongside everything else,
+  so it is visible, reviewable, and survives the loss of any one machine.
+
+objectives:
+  - Explain how a CronJob relates to the Jobs it creates
+  - Write a Kubernetes cron schedule expression
+  - Understand why a suspended CronJob never fires
+
+task:
+  summary: Create a CronJob named reconciliation that runs every 5 minutes.
+  description: >
+    A CronJob creates Jobs on a repeating schedule. The CronJob is the
+    schedule; each firing produces a Job, and each Job produces Pods. That
+    layering is why troubleshooting a CronJob usually means looking at the Jobs
+    it created rather than at the CronJob itself.
+
+    Create a CronJob named `reconciliation` that runs on the schedule
+    `*/5 * * * *` — that is, every five minutes — and leave it active.
+
+    You choose the image and the command, exactly as in the previous lab. The
+    `nginx:stable` image is already cached in this cluster if you want a
+    container that starts immediately.
+
+    This lab checks the schedule you configured, not that a run has already
+    happened: you should not have to sit and wait five minutes for correct work
+    to be marked correct. It does check that the CronJob is not suspended,
+    because a suspended CronJob is configured perfectly and never runs.
+
+    The schedule is interpreted in the time zone of the kube-controller-manager
+    unless the CronJob sets one explicitly, which is a common source of
+    surprise when a nightly job fires at the wrong hour.
+
+requirements:
+  - type: cronjob_exists
+    name: reconciliation
+    label: CronJob reconciliation exists
+  - type: cronjob_schedule
+    name: reconciliation
+    schedule: "*/5 * * * *"
+    label: Schedule runs every 5 minutes
+  - type: cronjob_suspended
+    name: reconciliation
+    expected: false
+    label: CronJob is active, not suspended
+
+hints:
+  - level: 1
+    text: >
+      A CronJob wraps the workload type you used in the previous lab. Its
+      specification therefore contains a template for a Job, which in turn
+      contains a template for a Pod.
+  - level: 2
+    text: >
+      The schedule uses standard cron syntax with five fields: minute, hour,
+      day of month, month, day of week. The step syntax expresses "every N" for
+      a field.
+  - level: 3
+    text: >
+      The CronJob must be named `reconciliation` with the schedule
+      `*/5 * * * *`. As with a Job, the Pod template needs a restart policy of
+      `Never` or `OnFailure`. Check your work with
+      `kubectl get cronjob reconciliation` — the SCHEDULE and SUSPEND columns
+      are what this lab reads — and `kubectl get jobs` will show the Jobs it
+      creates once a scheduled time passes.
+
+references:
+  - title: CronJob
+    url: https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/
+  - title: Running Automated Tasks with a CronJob
+    url: https://kubernetes.io/docs/tasks/job/automated-tasks-with-cron-jobs/
+
+skills:
+  - kubernetes.cronjobs.create
+  - kubernetes.cronjobs.schedule
+  - kubernetes.workloads.batch
+  - kubernetes.jobs.history
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling

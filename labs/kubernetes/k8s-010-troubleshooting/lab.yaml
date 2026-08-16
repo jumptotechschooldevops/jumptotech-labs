@@ -1,0 +1,143 @@
+id: K8S-010
+slug: k8s-010-troubleshooting
+title: Repair a Broken Deployment
+track: kubernetes
+topic: troubleshooting
+difficulty: intermediate
+level: challenge
+duration_minutes: 45
+order: 10
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-003
+  - K8S-008
+
+story: >
+  You are on call. The ledger API at JumpToTech Bank is down: no replica is
+  serving, and the internal clients that depend on it are timing out.
+
+  The last change was deployed by someone who has since gone off shift, and
+  there is no useful description on the pull request. Nobody has told you what
+  is wrong — finding that out is the job.
+
+  Investigate the live cluster state, work out why the service is not serving,
+  and restore it. There is more than one thing wrong.
+
+objectives:
+  - Investigate a failing workload from cluster state alone
+  - Read Pod status, container state, and events to locate a fault
+  - Repair a workload and confirm the service is genuinely serving again
+
+task:
+  summary: Investigate the ledger-api workload and restore it to a healthy, serving state.
+  description: >
+    The `ledger-api` Deployment and its Service already exist in your
+    namespace. Neither is working.
+
+    Your task is to find out why and fix it, so that two replicas are running
+    the correct application image and the Service actually routes traffic to
+    them.
+
+    The correct application image for this service is `nginx:stable`. Every
+    other detail you need is discoverable from the cluster.
+
+    Start by looking at what is there and what state it is in. `kubectl get`
+    shows you the shape of the problem; `kubectl describe` shows you the events
+    behind it; a Service with no endpoints is telling you something specific
+    about how it is finding Pods.
+
+    How you repair it is up to you. `kubectl edit`, `kubectl patch`,
+    `kubectl set`, or re-applying a corrected manifest are all accepted — this
+    lab checks the state of the cluster at the end, never the commands you
+    typed to get there.
+
+setup:
+  manifests:
+    - setup/ledger-api.yaml
+  # Only that the broken fixture landed. Deliberately NOT a health check: this
+  # lab's starting condition is a workload that cannot become available, so
+  # requiring availability here would fail every provision.
+  verify:
+    - type: deployment_exists
+      name: ledger-api
+    - type: service_exists
+      name: ledger-api
+  verify_timeout_seconds: 120
+
+# Requirements state the goal, never the injected fault. Each `label` is
+# written so that reading the checklist before starting does not give away
+# what is broken — the student is told what "working" looks like, and has to
+# discover for themselves why it currently is not.
+requirements:
+  - type: deployment_exists
+    name: ledger-api
+    label: Deployment ledger-api exists
+  - type: deployment_image
+    name: ledger-api
+    image: nginx:stable
+    label: Deployment runs the correct application image
+  - type: deployment_available
+    name: ledger-api
+    min_available: 2
+    label: Both replicas are available
+  - type: service_exists
+    name: ledger-api
+    label: Service ledger-api exists
+  - type: service_selector
+    name: ledger-api
+    selector:
+      app: ledger-api
+    label: Service selects the ledger-api Pods
+  - type: service_endpoints
+    name: ledger-api
+    min_ready: 2
+    label: Service has two ready endpoints behind it
+
+hints:
+  - level: 1
+    text: >
+      Work outside in. First establish which objects exist and what state they
+      report, then narrow down to the one that is not doing its job. Do not
+      change anything until you can say what is wrong.
+  - level: 2
+    text: >
+      There are two separate problems, and fixing only one will not restore the
+      service. One of them stops the Pods from ever running; the other means
+      that even healthy Pods would receive no traffic. A Service finds Pods by
+      matching labels, so compare the two sides of that match.
+  - level: 3
+    text: >
+      For the first fault, `kubectl describe pod` on a failing replica shows a
+      container that never started and an event explaining why the image could
+      not be fetched — compare the tag against `nginx:stable`. For the second,
+      compare `kubectl get service ledger-api -o yaml` (its selector) with
+      `kubectl get pods --show-labels` (the Pod labels); `kubectl get endpoints
+      ledger-api` will stay empty until they agree.
+
+references:
+  - title: Troubleshooting Applications
+    url: https://kubernetes.io/docs/tasks/debug/debug-application/
+  - title: Debug Pods
+    url: https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/
+  - title: Debug Services
+    url: https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/
+  - title: Images and Image Pull Policy
+    url: https://kubernetes.io/docs/concepts/containers/images/
+
+skills:
+  - kubernetes.troubleshooting.pods
+  - kubernetes.troubleshooting.services
+  - kubernetes.troubleshooting.events
+  - kubernetes.workloads.update
+  - kubernetes.services.selectors
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - troubleshooting
+      - services-and-networking

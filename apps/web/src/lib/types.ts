@@ -9,6 +9,12 @@ export interface ApiError {
 
 export type ApiEnvelope<T> = { ok: true; data: T } | { ok: false; error: ApiError };
 
+export interface PrerequisiteSummary {
+  id: string;
+  title: string;
+  available: boolean;
+}
+
 export interface LabSummary {
   id: string;
   slug: string;
@@ -24,6 +30,9 @@ export interface LabSummary {
   skills: string[];
   hasSetup: boolean;
   certifications: string[];
+  prerequisites: PrerequisiteSummary[];
+  /** How many progressive hints exist. The hint text is not in the catalog. */
+  hintCount: number;
 }
 
 export interface TrackSummary {
@@ -44,21 +53,41 @@ export interface LabHint {
   text: string;
 }
 
+export interface LabCertification {
+  certification: string;
+  domains: string[];
+}
+
 export interface LabDetail {
   id: string;
   slug: string;
   title: string;
   track: string;
   topic: string;
+  topicTitle: string;
   difficulty: string;
   level: string;
   durationMinutes: number;
   environment: { provider: string; isolation: string };
+  /** The realistic scenario the lab is set in. Optional in the schema. */
+  story?: string;
+  objectives: string[];
   task: { summary: string; description: string };
+  /**
+   * Student-facing checklist labels only.
+   *
+   * The API deliberately does not serve the requirement objects themselves —
+   * their expected values are the solution.
+   */
   requirements: string[];
   hints: LabHint[];
   references: DocumentationLink[];
   skills: string[];
+  certifications: LabCertification[];
+  prerequisites: PrerequisiteSummary[];
+  /** False in PLATFORM-003: prerequisites are guidance, not a gate. */
+  prerequisitesEnforced: boolean;
+  hasSetup: boolean;
 }
 
 export interface ProvisionStep {

@@ -61,6 +61,14 @@ const referenceSchema = z
   })
   .strict();
 
+/**
+ * One step of the progressive hint ladder.
+ *
+ * Level is the *order in which hints unlock*, not a severity: a student opens
+ * level 1 before level 2 becomes available. Level 1 is conceptual, level 2
+ * points at where to look, level 3 names the objects and documentation. No
+ * level may contain a copy-pasteable solution — see `checkHints`.
+ */
 const hintSchema = z
   .object({
     /** 1 = nudge, 2 = where to look, 3 = concrete guidance. Never a full solution. */
@@ -155,6 +163,29 @@ const labDefinitionSchema = z
         isolation: z.enum(['namespace']).default('namespace'),
       })
       .strict(),
+
+    /**
+     * The realistic situation the student is dropped into.
+     *
+     * Labs are written as small DevOps scenarios on the JumpToTech banking
+     * platform, not as exam questions. The story is what makes "scale to three
+     * replicas" mean something; it is original JumpToTech content built on
+     * documented Kubernetes behaviour.
+     */
+    story: z.string().min(1).max(2000).optional(),
+
+    /** What the student should be able to do afterwards. Rendered as a list. */
+    objectives: z.array(z.string().min(1).max(300)).max(8).default([]),
+
+    /**
+     * Labs that should come first, by id.
+     *
+     * PLATFORM-003 exposes this as guidance only. There are no authenticated
+     * users and no stored progress yet, so nothing is *enforced* per student —
+     * see `prerequisitesEnforced` on the catalog payload, which reports `false`
+     * rather than letting the UI imply a guarantee that does not exist.
+     */
+    prerequisites: z.array(z.string().regex(LAB_ID_PATTERN, 'prerequisite must be a lab id like K8S-001')).max(10).default([]),
 
     task: z
       .object({
@@ -337,6 +368,35 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
   }
   if (hintLevels.some((level, i) => i > 0 && level <= (hintLevels[i - 1] ?? 0))) {
     issues.push('hints must be ordered by ascending level');
+  }
+  // The ladder has to start at the top rung, or the UI's "reveal the next hint"
+  // affordance would begin part-way through a sequence the author intended.
+  if (def.hints.length > 0 && def.hints[0]?.level !== 1) {
+    issues.push('hints must start at level 1');
+  }
+
+  /*
+   * Every student-visible requirement needs its own wording.
+   *
+   * `toLabDetail` renders `requirements[]` as the student's checklist. Without
+   * a label it would have to fall back to the raw requirement type, which both
+   * reads like an internal identifier and leaks how the check is implemented —
+   * exactly what a troubleshooting lab must not reveal.
+   */
+  def.requirements.forEach((requirement, index) => {
+    if (!requirement.label) {
+      issues.push(
+        `requirements[${index}].label is required — it is the student-facing text for this check`,
+      );
+    }
+  });
+
+  const duplicatePrerequisites = def.prerequisites.filter((id, i, all) => all.indexOf(id) !== i);
+  if (duplicatePrerequisites.length > 0) {
+    issues.push(`prerequisites contains duplicates: ${[...new Set(duplicatePrerequisites)].join(', ')}`);
+  }
+  if (def.prerequisites.includes(def.id)) {
+    issues.push(`prerequisites must not include the lab's own id (${def.id})`);
   }
 
   // A lab whose setup declares manifests but no verification would hand the

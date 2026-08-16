@@ -1,0 +1,367 @@
+{
+  "labs": [
+    {
+      "id": "K8S-001",
+      "slug": "k8s-001-pods",
+      "title": "Create Your First Pod",
+      "track": "kubernetes",
+      "topic": "pods",
+      "topicTitle": "Pods",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 1,
+      "summary": "Create a Kubernetes Pod named nginx using the nginx:stable image.",
+      "skills": [
+        "kubernetes.pods.create",
+        "kubernetes.pods.inspect"
+      ],
+      "hasSetup": false,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [],
+      "hintCount": 3
+    },
+    {
+      "id": "K8S-002",
+      "slug": "k8s-002-deployments",
+      "title": "Run an Application with a Deployment",
+      "track": "kubernetes",
+      "topic": "workloads",
+      "topicTitle": "Workloads",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 2,
+      "summary": "Create a Deployment named frontend running 3 replicas of nginx:stable.",
+      "skills": [
+        "kubernetes.deployments.create",
+        "kubernetes.deployments.scale",
+        "kubernetes.deployments.rollout",
+        "kubernetes.workloads.inspect"
+      ],
+      "hasSetup": false,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [
+        {
+          "id": "K8S-001",
+          "title": "Create Your First Pod",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "K8S-003",
+      "slug": "k8s-003-services",
+      "title": "Expose a Workload with a Service",
+      "track": "kubernetes",
+      "topic": "networking",
+      "topicTitle": "Networking",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 3,
+      "summary": "Create a ClusterIP Service named accounts that routes port 80 to the accounts Pods.",
+      "skills": [
+        "kubernetes.services.create",
+        "kubernetes.services.clusterip",
+        "kubernetes.services.selectors",
+        "kubernetes.networking.discovery"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [
+        {
+          "id": "K8S-002",
+          "title": "Run an Application with a Deployment",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "K8S-004",
+      "slug": "k8s-004-configmaps",
+      "title": "Move Configuration into a ConfigMap",
+      "track": "kubernetes",
+      "topic": "configuration",
+      "topicTitle": "Configuration",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 4,
+      "summary": "Create a ConfigMap named statements-config and make the statements Deployment read its configuration from it.",
+      "skills": [
+        "kubernetes.configmaps.create",
+        "kubernetes.configmaps.consume",
+        "kubernetes.configuration.externalize",
+        "kubernetes.workloads.update"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [
+        {
+          "id": "K8S-002",
+          "title": "Run an Application with a Deployment",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "K8S-005",
+      "slug": "k8s-005-secrets",
+      "title": "Hold Sensitive Configuration in a Secret",
+      "track": "kubernetes",
+      "topic": "configuration",
+      "topicTitle": "Configuration",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 5,
+      "summary": "Create a Secret named payments-api and make the payments Deployment read the credential from it.",
+      "skills": [
+        "kubernetes.secrets.create",
+        "kubernetes.secrets.consume",
+        "kubernetes.configuration.externalize",
+        "kubernetes.security.credentials"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [
+        {
+          "id": "K8S-004",
+          "title": "Move Configuration into a ConfigMap",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "K8S-006",
+      "slug": "k8s-006-jobs",
+      "title": "Run a One-Time Task with a Job",
+      "track": "kubernetes",
+      "topic": "batch",
+      "topicTitle": "Batch",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 6,
+      "summary": "Create a Job named ledger-migration that runs a task to successful completion.",
+      "skills": [
+        "kubernetes.jobs.create",
+        "kubernetes.jobs.completion",
+        "kubernetes.jobs.troubleshoot",
+        "kubernetes.workloads.batch"
+      ],
+      "hasSetup": false,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [
+        {
+          "id": "K8S-002",
+          "title": "Run an Application with a Deployment",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "K8S-007",
+      "slug": "k8s-007-cronjobs",
+      "title": "Schedule Recurring Work with a CronJob",
+      "track": "kubernetes",
+      "topic": "batch",
+      "topicTitle": "Batch",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 7,
+      "summary": "Create a CronJob named reconciliation that runs every 5 minutes.",
+      "skills": [
+        "kubernetes.cronjobs.create",
+        "kubernetes.cronjobs.schedule",
+        "kubernetes.workloads.batch",
+        "kubernetes.jobs.history"
+      ],
+      "hasSetup": false,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [
+        {
+          "id": "K8S-006",
+          "title": "Run a One-Time Task with a Job",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "K8S-008",
+      "slug": "k8s-008-probes",
+      "title": "Signal Readiness with a Probe",
+      "track": "kubernetes",
+      "topic": "reliability",
+      "topicTitle": "Reliability",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 8,
+      "summary": "Add a readiness probe to the notifications Deployment so it only receives traffic once it can serve.",
+      "skills": [
+        "kubernetes.probes.readiness",
+        "kubernetes.probes.liveness",
+        "kubernetes.probes.startup",
+        "kubernetes.reliability.health"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [
+        {
+          "id": "K8S-003",
+          "title": "Expose a Workload with a Service",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "K8S-009",
+      "slug": "k8s-009-resources",
+      "title": "Declare Resource Requests and Limits",
+      "track": "kubernetes",
+      "topic": "scheduling",
+      "topicTitle": "Scheduling",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 9,
+      "summary": "Declare CPU and memory requests and limits on the reporting Deployment.",
+      "skills": [
+        "kubernetes.resources.requests",
+        "kubernetes.resources.limits",
+        "kubernetes.scheduling.capacity",
+        "kubernetes.resources.quota"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [
+        {
+          "id": "K8S-002",
+          "title": "Run an Application with a Deployment",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "K8S-010",
+      "slug": "k8s-010-troubleshooting",
+      "title": "Repair a Broken Deployment",
+      "track": "kubernetes",
+      "topic": "troubleshooting",
+      "topicTitle": "Troubleshooting",
+      "difficulty": "intermediate",
+      "level": "challenge",
+      "durationMinutes": 45,
+      "order": 10,
+      "summary": "Investigate the ledger-api workload and restore it to a healthy, serving state.",
+      "skills": [
+        "kubernetes.troubleshooting.pods",
+        "kubernetes.troubleshooting.services",
+        "kubernetes.troubleshooting.events",
+        "kubernetes.workloads.update",
+        "kubernetes.services.selectors"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "CKA"
+      ],
+      "prerequisites": [
+        {
+          "id": "K8S-003",
+          "title": "Expose a Workload with a Service",
+          "available": true
+        },
+        {
+          "id": "K8S-008",
+          "title": "Signal Readiness with a Probe",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    }
+  ],
+  "tracks": [
+    {
+      "track": "kubernetes",
+      "title": "Kubernetes",
+      "labCount": 10,
+      "topics": [
+        {
+          "topic": "pods",
+          "title": "Pods",
+          "labCount": 1
+        },
+        {
+          "topic": "workloads",
+          "title": "Workloads",
+          "labCount": 1
+        },
+        {
+          "topic": "networking",
+          "title": "Networking",
+          "labCount": 1
+        },
+        {
+          "topic": "configuration",
+          "title": "Configuration",
+          "labCount": 2
+        },
+        {
+          "topic": "batch",
+          "title": "Batch",
+          "labCount": 2
+        },
+        {
+          "topic": "reliability",
+          "title": "Reliability",
+          "labCount": 1
+        },
+        {
+          "topic": "scheduling",
+          "title": "Scheduling",
+          "labCount": 1
+        },
+        {
+          "topic": "troubleshooting",
+          "title": "Troubleshooting",
+          "labCount": 1
+        }
+      ],
+      "difficulties": [
+        "beginner",
+        "intermediate"
+      ]
+    }
+  ],
+  "count": 10,
+  "prerequisitesEnforced": false
+}
