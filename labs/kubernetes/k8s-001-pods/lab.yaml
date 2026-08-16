@@ -5,19 +5,27 @@
 # runtime and serves it to the frontend; nothing about this task is hardcoded
 # in React or in the verifier.
 #
+# PLATFORM-002 note: there is deliberately no `namespace:` field anywhere in
+# this file. Each student session gets its own generated namespace, and both
+# the terminal and the verifier are scoped to it by the session record. A lab
+# can no longer name the namespace it runs in — that is what stops one
+# student's lab content from reaching another student's sandbox.
+#
 # Content is written from the official Kubernetes documentation only.
 # ---------------------------------------------------------------------------
 id: K8S-001
 slug: k8s-001-pods
 title: Create Your First Pod
 track: kubernetes
+topic: pods
 difficulty: beginner
+level: practice
 duration_minutes: 30
+order: 1
 
 environment:
   provider: kubernetes
-  # Namespace the student works in. Also the namespace `Reset Lab` restores.
-  namespace: default
+  isolation: namespace
 
 task:
   summary: Create a Kubernetes Pod named nginx using the nginx:stable image.
@@ -26,57 +34,31 @@ task:
     containers that share storage and network resources, and a specification
     for how to run those containers.
 
-    In this lab you will create a single-container Pod in the default
-    namespace and confirm that it reaches the Running state.
+    In this lab you will create a single-container Pod in your own private lab
+    namespace and confirm that it reaches the Running state. Your terminal is
+    already pointed at that namespace, so plain `kubectl get pods` shows your
+    work and nothing else.
 
+# Verification is state-based: the verifier reads the live Kubernetes API in
+# this session's namespace, and never inspects the student's command history.
 requirements:
-  pod_name: nginx
-  namespace: default
-  image: nginx:stable
-  status: Running
+  - type: pod_exists
+    name: nginx
+    label: Pod nginx exists
+  - type: pod_image
+    name: nginx
+    image: nginx:stable
+    label: Image nginx:stable is correct
+  - type: pod_running
+    name: nginx
+    label: Pod is Running
+  - type: pod_ready
+    name: nginx
+    label: Container is Ready
 
-# Rendered as the "REQUIREMENTS" checklist in the UI.
-requirement_labels:
-  - Pod name must be nginx
-  - Image must be nginx:stable
-  - Pod must be in the default namespace
-  - Pod must be Running with its container Ready
-
-hint: >
-  A Pod can be created either using a Kubernetes manifest or an appropriate
-  kubectl command.
-
-  Consult the official Kubernetes Pod and kubectl documentation if needed.
-
-documentation:
-  - title: Kubernetes Pods
-    url: https://kubernetes.io/docs/concepts/workloads/pods/
-  - title: kubectl
-    url: https://kubernetes.io/docs/reference/kubectl/
-
-# Verification is state-based: the verifier reads the live Kubernetes API and
-# never inspects the student's command history.
-verification:
-  checks:
-    - id: pod-exists
-      type: pod_exists
-      label: Pod nginx exists
-    - id: namespace-correct
-      type: pod_namespace
-      label: Namespace is correct
-    - id: image-correct
-      type: container_image
-      label: Image nginx:stable is correct
-    - id: pod-running
-      type: pod_phase
-      label: Pod is Running
-    - id: container-ready
-      type: container_ready
-      label: Container is Ready
-
-# `Reset Lab` restores the namespace to this baseline. For K8S-001 the
-# baseline is an empty default namespace: every workload-ish resource the
-# student created is removed, and nothing is applied back.
+# `Reset Lab` restores this session's namespace to its baseline: every
+# workload-ish resource the student created is removed, and nothing is applied
+# back. The session, its namespace, and its guardrails all survive.
 reset:
   purge_namespaced_resources:
     - pods
@@ -88,8 +70,37 @@ reset:
     - cronjobs
     - services
     - configmaps
+    - secrets
   # Cluster-managed objects that always exist in a namespace and must survive.
+  # The platform's own guardrails (quota, limits, RBAC, network policy) are
+  # protected unconditionally in code and do not need listing here.
   protected_resources:
     - services/kubernetes
     - configmaps/kube-root-ca.crt
-  apply_manifests: []
+
+hints:
+  - level: 1
+    text: >
+      A Pod can be created either from a Kubernetes manifest or with an
+      appropriate kubectl command.
+  - level: 2
+    text: >
+      Consult the official Kubernetes Pod and kubectl documentation. Your
+      terminal already defaults to your lab namespace, so you do not need to
+      pass a namespace flag.
+
+references:
+  - title: Kubernetes Pods
+    url: https://kubernetes.io/docs/concepts/workloads/pods/
+  - title: kubectl
+    url: https://kubernetes.io/docs/reference/kubectl/
+
+skills:
+  - kubernetes.pods.create
+  - kubernetes.pods.inspect
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling

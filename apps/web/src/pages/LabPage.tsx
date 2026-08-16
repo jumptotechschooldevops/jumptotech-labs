@@ -4,12 +4,15 @@ import type {
   ApiError,
   LabDetail,
   ProvisionStep,
+  SessionInfo,
   VerificationResult,
 } from '../lib/types';
 import { LabBrief } from '../components/LabBrief';
 import { LabTimer } from '../components/LabTimer';
 import { CheckPanel } from '../components/CheckPanel';
 import { StartOverlay, type StartPhase } from '../components/StartOverlay';
+import { EndLabDialog } from '../components/EndLabDialog';
+import { IdleWarning } from '../components/IdleWarning';
 import { LabTerminal, type LabTerminalHandle, type TerminalStatus } from '../components/LabTerminal';
 
 const TERMINAL_STATUS_LABEL: Record<TerminalStatus, string> = {
@@ -19,6 +22,9 @@ const TERMINAL_STATUS_LABEL: Record<TerminalStatus, string> = {
   closed: 'Disconnected',
   error: 'Connection error',
 };
+
+/** How often the browser asks the server for session state. */
+const POLL_INTERVAL_MS = 15_000;
 
 function toApiError(error: unknown): ApiError {
   if (error instanceof ApiRequestError) return error.error;
@@ -33,12 +39,13 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
   const [steps, setSteps] = useState<ProvisionStep[]>([]);
   const [startError, setStartError] = useState<ApiError | null>(null);
 
+  const [session, setSession] = useState<SessionInfo | null>(null);
   const [terminalUrl, setTerminalUrl] = useState<string | null>(null);
   const [terminalToken, setTerminalToken] = useState<string | null>(null);
   const [terminalStatus, setTerminalStatus] = useState<TerminalStatus>('idle');
   const [terminalDetail, setTerminalDetail] = useState<string | undefined>();
 
-  const [timerStartedAt, setTimerStartedAt] = useState<number | null>(null);
+  const [timerSeededAt, setTimerSeededAt] = useState<number | null>(null);
   const [timeExpired, setTimeExpired] = useState(false);
 
   const [checking, setChecking] = useState(false);
@@ -46,11 +53,21 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
   const [checkError, setCheckError] = useState<ApiError | null>(null);
 
   const [resetting, setResetting] = useState(false);
+  const [continuing, setContinuing] = useState(false);
+  const [endDialogOpen, setEndDialogOpen] = useState(false);
+  const [ending, setEnding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const [envSummary, setEnvSummary] = useState<string | null>(null);
 
   const terminalRef = useRef<LabTerminalHandle | null>(null);
+
+  /** Adopt a session payload and re-seed the countdown from the server. */
+  const adoptSession = useCallback((next: SessionInfo) => {
+    setSession(next);
+    setTimerSeededAt(Date.now());
+    setTimeExpired(next.secondsRemaining <= 0);
+  }, []);
 
   // --- load the lab definition -------------------------------------------
   useEffect(() => {
@@ -69,6 +86,34 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
       cancelled = true;
     };
   }, [labId]);
+
+  // --- poll session state -------------------------------------------------
+  // Polling does NOT count as activity server-side, by design: leaving this tab
+  // open must not keep an abandoned environment alive.
+  useEffect(() => {
+    if (!session) return;
+    if (session.status !== 'ACTIVE' && session.status !== 'RESETTING') return;
+
+    let cancelled = false;
+    const poll = () => {
+      api
+        .getSession(session.sessionId)
+        .then((response) => {
+          if (cancelled) return;
+          setSession(response.session);
+          if (response.session.secondsRemaining <= 0) setTimeExpired(true);
+        })
+        .catch(() => {
+          /* a transient poll failure is not worth showing the student */
+        });
+    };
+
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [session]);
 
   // --- terminal status ----------------------------------------------------
   const handleTerminalStatus = useCallback((status: TerminalStatus, detail?: string) => {
@@ -127,7 +172,7 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
       setSteps(response.steps);
       setTerminalUrl(response.terminal.url);
       setTerminalToken(response.terminal.token);
-      setTimerStartedAt(new Date(response.session.startedAt).getTime());
+      adoptSession(response.session);
       const nodeCount = response.environment.nodes?.length ?? 0;
       setEnvSummary(
         `${response.environment.provider} · ${response.environment.kubernetesVersion ?? 'k8s'} · ${nodeCount} node${nodeCount === 1 ? '' : 's'}`,
@@ -139,29 +184,33 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
       const details = (apiError.details ?? {}) as { steps?: ProvisionStep[] };
       if (Array.isArray(details.steps)) setSteps(details.steps);
     }
-  }, [labId]);
+  }, [labId, adoptSession]);
 
   const handleCheck = useCallback(async () => {
+    if (!session) return;
     setChecking(true);
     setCheckResult(null);
     setCheckError(null);
     setNotice(null);
     try {
-      setCheckResult(await api.checkSolution(labId));
+      const result = await api.checkSolution(session.sessionId);
+      setCheckResult(result);
+      if (result.session) setSession(result.session);
     } catch (error) {
       setCheckError(toApiError(error));
     } finally {
       setChecking(false);
     }
-  }, [labId]);
+  }, [session]);
 
   const handleReset = useCallback(async () => {
+    if (!session) return;
     setResetting(true);
     setCheckResult(null);
     setCheckError(null);
     setNotice(null);
     try {
-      const response = await api.resetLab(labId);
+      const response = await api.resetLab(session.sessionId);
       if (response.clearTerminal) {
         terminalRef.current?.clear();
         terminalRef.current?.writeNotice('Lab reset. Press Enter for a fresh prompt.');
@@ -171,19 +220,54 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
           ? ` Removed: ${response.removed.join(', ')}.`
           : ' Nothing needed removing.';
       setNotice(`${response.message}${removedNote}`);
-      setTimerStartedAt(Date.now());
-      setTimeExpired(false);
+      // Reset keeps the session: the absolute deadline deliberately does NOT
+      // move, so the countdown is re-seeded from the server, not restarted.
+      adoptSession(response.session);
     } catch (error) {
       setCheckError(toApiError(error));
     } finally {
       setResetting(false);
     }
-  }, [labId]);
+  }, [session, adoptSession]);
+
+  const handleContinue = useCallback(async () => {
+    if (!session) return;
+    setContinuing(true);
+    try {
+      const response = await api.recordActivity(session.sessionId);
+      setSession(response.session);
+    } catch (error) {
+      setCheckError(toApiError(error));
+    } finally {
+      setContinuing(false);
+    }
+  }, [session]);
+
+  const handleEnd = useCallback(async () => {
+    if (!session) return;
+    setEnding(true);
+    try {
+      const response = await api.endLab(session.sessionId);
+      setSession(response.session);
+      setEndDialogOpen(false);
+      setStartPhase('idle');
+      setTerminalUrl(null);
+      setTerminalToken(null);
+      setTimerSeededAt(null);
+      setNotice(response.message);
+    } catch (error) {
+      setEndDialogOpen(false);
+      setCheckError(toApiError(error));
+    } finally {
+      setEnding(false);
+    }
+  }, [session]);
 
   const handleExpire = useCallback(() => setTimeExpired(true), []);
 
   const labReady = startPhase === 'ready' || startPhase === 'active';
-  const durationSeconds = useMemo(() => (lab?.durationMinutes ?? 30) * 60, [lab]);
+  const sessionLive = session?.status === 'ACTIVE' || session?.status === 'RESETTING';
+  const busy = checking || resetting || ending;
 
   // --- render -------------------------------------------------------------
   if (loadError) {
@@ -222,6 +306,11 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
 
         <div className="topbar__center">
           {envSummary && <span className="topbar__env" title="Live environment">{envSummary}</span>}
+          {session && (
+            <span className={`statuspill statuspill--session-${session.status.toLowerCase()}`}>
+              {session.status}
+            </span>
+          )}
           <span className={`statuspill statuspill--${terminalStatus}`}>
             {TERMINAL_STATUS_LABEL[terminalStatus]}
           </span>
@@ -229,17 +318,33 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
 
         <div className="topbar__right">
           <LabTimer
-            startedAt={timerStartedAt}
-            durationSeconds={durationSeconds}
+            startedAt={timerSeededAt}
+            durationSeconds={session?.secondsRemaining ?? lab.durationMinutes * 60}
             onExpire={handleExpire}
           />
           <span className="topbar__track">{lab.track}</span>
         </div>
       </header>
 
+      {session?.idleWarning && sessionLive && (
+        <IdleWarning
+          secondsUntilIdle={session.secondsUntilIdle}
+          busy={continuing}
+          onContinue={handleContinue}
+        />
+      )}
+
       {timeExpired && (
         <div className="banner banner--warning" role="alert">
-          <strong>Time expired.</strong> You may reset the lab and try again.
+          <strong>Time expired.</strong> This environment has reached its maximum lifetime and is
+          being released. Start the lab again for a fresh one.
+        </div>
+      )}
+
+      {session && !sessionLive && session.status !== 'CREATING' && (
+        <div className="banner banner--info" role="status">
+          <strong>Session {session.status}.</strong>{' '}
+          {session.statusReason ?? 'This environment has been released.'}
         </div>
       )}
 
@@ -258,8 +363,11 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
         <section className="terminal-pane" aria-label="Lab terminal">
           <div className="terminal-pane__header">
             <span className="terminal-pane__title">Terminal</span>
+            {/* Developer detail. The namespace is not a student-facing concept
+                and possessing it grants nothing — every API call is addressed
+                by session id. */}
             <span className="terminal-pane__meta">
-              {labReady ? `namespace: ${lab.environment.namespace}` : 'not started'}
+              {labReady && session ? `namespace: ${session.namespace}` : 'not started'}
             </span>
           </div>
 
@@ -296,9 +404,20 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
           type="button"
           className="btn btn--ghost"
           onClick={handleReset}
-          disabled={!labReady || resetting || checking}
+          disabled={!labReady || !sessionLive || busy}
+          title="Remove your resources and start this lab over. Keeps your environment."
         >
           {resetting ? 'Resetting…' : 'Reset Lab'}
+        </button>
+
+        <button
+          type="button"
+          className="btn btn--danger-ghost"
+          onClick={() => setEndDialogOpen(true)}
+          disabled={!labReady || !sessionLive || busy}
+          title="Delete this environment and release it. Cannot be undone."
+        >
+          End Lab
         </button>
 
         <div className="actionbar__spacer" />
@@ -307,11 +426,18 @@ export function LabPage({ labId, onBack }: { labId: string; onBack: () => void }
           type="button"
           className="btn btn--primary"
           onClick={handleCheck}
-          disabled={!labReady || checking || resetting}
+          disabled={!labReady || !sessionLive || busy}
         >
           {checking ? 'Checking…' : 'Check Solution'}
         </button>
       </footer>
+
+      <EndLabDialog
+        open={endDialogOpen}
+        busy={ending}
+        onCancel={() => setEndDialogOpen(false)}
+        onConfirm={handleEnd}
+      />
     </div>
   );
 }

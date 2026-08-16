@@ -1,11 +1,22 @@
+/**
+ * Composition root.
+ *
+ * Assembles the object graph — registry, Kubernetes client, provider, session
+ * manager, reaper — and starts the HTTP server. Everything that varies between
+ * environments is decided here and nowhere else.
+ */
 import {
+  InMemorySessionStore,
   KubernetesClient,
   LabRegistry,
+  SessionManager,
+  SessionReaper,
   createLabProvider,
 } from '@jumptotech/lab-orchestrator';
+import { waitForRequirements } from '@jumptotech/verifier';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
-import { InMemoryLabSessionStore } from './session-store.js';
+import { HttpTerminalControl, noopTerminalControl } from './terminal-control.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -34,22 +45,55 @@ async function main(): Promise<void> {
     clusterName: config.clusterName,
     ...(config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {}),
     k8s,
+    waitForRequirements: (input) => waitForRequirements({ k8s, ...input }),
   });
 
-  const app = createApp({
+  const terminal = config.terminalControlUrl
+    ? new HttpTerminalControl({
+        baseUrl: config.terminalControlUrl,
+        secret: config.internalServiceSecret,
+      })
+    : noopTerminalControl;
+
+  const sessions = new SessionManager({
     registry,
     provider,
-    k8s,
-    sessions: new InMemoryLabSessionStore(),
-    config,
+    store: new InMemorySessionStore(),
+    policy: config.policy,
+    lifetimes: config.lifetimes,
+    namespaceSecret: config.namespaceSecret,
+    terminal,
+    logger: (message) => console.log(`[sessions] ${message}`),
   });
 
-  app.listen(config.port, '0.0.0.0', () => {
+  // Students are never responsible for cleanup. The reaper reclaims expired,
+  // idle, and orphaned sandboxes; see services/lab-orchestrator/src/session/reaper.ts.
+  const reaper = new SessionReaper({
+    sessions,
+    provider,
+    intervalMs: config.reaperIntervalSeconds * 1000,
+    retentionMs: config.sessionRetentionMinutes * 60_000,
+  });
+  reaper.start();
+
+  const app = createApp({ registry, sessions, k8s, config });
+
+  const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[api] listening on :${config.port}`);
     console.log(`[api] provider=${provider.name} cluster=${config.clusterName}`);
     console.log(`[api] labs=${registry.size} from ${config.labsDir}`);
     console.log(`[api] kubernetes=${k8s.serverUrl}`);
+    console.log(
+      `[api] sessions: max=${config.lifetimes.maxActiveSessions} lifetime=${config.lifetimes.maxSessionSeconds / 60}m idle=${config.lifetimes.idleTimeoutSeconds / 60}m warn=${config.lifetimes.warningSeconds / 60}m`,
+    );
   });
+
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, () => {
+      reaper.stop();
+      server.close(() => process.exit(0));
+    });
+  }
 }
 
 main().catch((error: unknown) => {

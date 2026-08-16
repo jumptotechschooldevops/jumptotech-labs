@@ -1,9 +1,14 @@
 /**
- * Countdown for the lab session.
+ * Countdown to the session's absolute deadline.
  *
- * Story 1 scope: frontend-only. It is a pacing aid, not an exam control —
- * nothing server-side enforces it, and the README says so. Persistent
- * server-side timers are deferred to a later story.
+ * PLATFORM-002 made this real. It is no longer a frontend-only pacing aid: the
+ * caller seeds it from `session.secondsRemaining`, which the API derives from
+ * the session's server-side `expires_at`, and the reaper deletes the namespace
+ * when that deadline passes whatever the browser believes. Reloading the page
+ * re-reads the deadline from the server; closing the tab does not stop it.
+ *
+ * The component itself stays a dumb countdown so it can be tested without a
+ * clock, a session, or a network.
  */
 import { useEffect, useState } from 'react';
 

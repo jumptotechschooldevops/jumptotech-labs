@@ -3,8 +3,25 @@
  *
  * This is the ONLY place in the platform that runs a shell, and it is a
  * separate process from the REST API on purpose (see README → Security).
- * Every connection must present a valid, unexpired session token minted by
- * the API before a PTY is spawned.
+ *
+ * PLATFORM-002 changed what a shell is given. Previously every PTY inherited
+ * the process-wide `KUBECONFIG`, which was the cluster-admin one. Now:
+ *
+ * ```text
+ *   auth frame ──► verify HMAC token ──► claims.sid
+ *                                        └─► API: credentials for THAT session
+ *                                            └─► kubeconfig, 1 namespace, 0600
+ *                                                └─► spawn PTY with KUBECONFIG
+ * ```
+ *
+ * Two consequences worth stating plainly:
+ *
+ *   - **No cluster-admin credential exists in this process.** There is nothing
+ *     for a shell to inherit, so a bug in the spawn path cannot leak one.
+ *   - **A socket cannot change which session it is.** The session id comes from
+ *     the signed token and is read exactly once, at authentication. No later
+ *     frame — and no field in the auth frame — can name a session, a namespace,
+ *     or a kubeconfig path. A second `auth` frame is rejected outright.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import * as pty from 'node-pty';
@@ -16,6 +33,12 @@ import {
 } from '@jumptotech/lab-orchestrator/session-token';
 import type { TerminalConfig } from './config.js';
 import {
+  CredentialsUnavailableError,
+  fetchStudentCredentials,
+  removeSessionKubeconfig,
+  writeSessionKubeconfig,
+} from './credentials.js';
+import {
   MAX_FRAME_BYTES,
   ProtocolError,
   clampCols,
@@ -24,16 +47,22 @@ import {
   type ServerMessage,
 } from './protocol.js';
 
-const AUTH_GRACE_MS = 5_000;
+const AUTH_GRACE_MS = 10_000;
 
 interface Session {
   claims: TerminalSessionClaims;
+  namespace: string;
+  kubeconfigPath: string;
   term: pty.IPty;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
 }
 
 export function createTerminalServer(config: TerminalConfig): Server {
+  const sessions = new Map<WebSocket, Session>();
+  /** sessionId → socket, so the API can close one specific student's shell. */
+  const bySessionId = new Map<string, WebSocket>();
+
   const httpServer = createServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -45,9 +74,58 @@ export function createTerminalServer(config: TerminalConfig): Server {
       );
       return;
     }
+
+    // Internal control: the API closes a shell when its session ends.
+    if (req.url === '/internal/terminate' && req.method === 'POST') {
+      handleTerminate(req, res);
+      return;
+    }
+
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: { code: 'NOT_FOUND', message: 'No such endpoint' } }));
   });
+
+  function handleTerminate(req: IncomingMessage, res: import('node:http').ServerResponse): void {
+    if (req.headers['x-internal-secret'] !== config.internalServiceSecret) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Internal use only.' } }));
+      return;
+    }
+
+    let body = '';
+    req.on('data', (chunk: Buffer) => {
+      body += chunk.toString();
+      if (body.length > 4096) req.destroy();
+    });
+    req.on('end', () => {
+      let sessionId: unknown;
+      try {
+        sessionId = (JSON.parse(body) as { sessionId?: unknown }).sessionId;
+      } catch {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: { code: 'MALFORMED', message: 'Expected JSON.' } }));
+        return;
+      }
+
+      const closed = typeof sessionId === 'string' ? closeSession(sessionId) : false;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, data: { terminated: closed } }));
+    });
+  }
+
+  /** Close the shell belonging to one session. Idempotent. */
+  function closeSession(sessionId: string): boolean {
+    const ws = bySessionId.get(sessionId);
+    if (!ws) return false;
+    send(ws, {
+      type: 'error',
+      code: 'SESSION_ENDED',
+      message: 'This lab session has ended. The environment has been released.',
+    });
+    endSession(ws);
+    if (ws.readyState === ws.OPEN) ws.close(4410, 'session ended');
+    return true;
+  }
 
   const wss = new WebSocketServer({
     server: httpServer,
@@ -64,8 +142,6 @@ export function createTerminalServer(config: TerminalConfig): Server {
     },
   });
 
-  const sessions = new Map<WebSocket, Session>();
-
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     if (sessions.size >= config.maxSessions) {
       send(ws, { type: 'error', code: 'CAPACITY', message: 'Too many active terminal sessions.' });
@@ -74,6 +150,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
     }
 
     let authenticated = false;
+    let authenticating = false;
 
     // A socket that never authenticates is dropped quickly.
     const authTimer = setTimeout(() => {
@@ -108,6 +185,9 @@ export function createTerminalServer(config: TerminalConfig): Server {
           ws.close(4401, 'unauthenticated');
           return;
         }
+        // Credential fetch is asynchronous; ignore duplicate auth frames that
+        // arrive while it is in flight rather than starting a second PTY.
+        if (authenticating) return;
 
         let claims: TerminalSessionClaims;
         try {
@@ -121,9 +201,19 @@ export function createTerminalServer(config: TerminalConfig): Server {
           return;
         }
 
-        authenticated = true;
-        clearTimeout(authTimer);
-        startSession(ws, claims, message.cols ?? 80, message.rows ?? 24);
+        authenticating = true;
+        const cols = message.cols ?? 80;
+        const rows = message.rows ?? 24;
+        void startSession(ws, claims, cols, rows)
+          .then((started) => {
+            if (started) {
+              authenticated = true;
+              clearTimeout(authTimer);
+            }
+          })
+          .finally(() => {
+            authenticating = false;
+          });
         return;
       }
 
@@ -148,6 +238,8 @@ export function createTerminalServer(config: TerminalConfig): Server {
           send(ws, { type: 'pong' });
           break;
         case 'auth':
+          // Re-authenticating would be the only way to move a live socket to a
+          // different session. It is refused unconditionally.
           send(ws, {
             type: 'error',
             code: 'ALREADY_AUTHENTICATED',
@@ -168,15 +260,51 @@ export function createTerminalServer(config: TerminalConfig): Server {
     });
   });
 
-  function startSession(
+  async function startSession(
     ws: WebSocket,
     claims: TerminalSessionClaims,
     cols: number,
     rows: number,
-  ): void {
+  ): Promise<boolean> {
+    // One shell per session. A second connection for the same session replaces
+    // the first rather than running two shells against one sandbox.
+    closeSession(claims.sid);
+
+    let kubeconfigPath: string;
+    let namespace: string;
+    try {
+      const credentials = await fetchStudentCredentials({
+        apiInternalUrl: config.apiInternalUrl,
+        secret: config.internalServiceSecret,
+        sessionId: claims.sid,
+      });
+      namespace = credentials.namespace;
+      kubeconfigPath = await writeSessionKubeconfig(
+        config.credentialsDir,
+        claims.sid,
+        credentials.kubeconfig,
+      );
+      log(
+        `session ${claims.sid}: issued namespace-scoped credentials (ns=${namespace} sa=${credentials.serviceAccountName} expires=${credentials.expiresAt})`,
+      );
+    } catch (error) {
+      const code = error instanceof CredentialsUnavailableError ? error.code : 'CREDENTIALS_UNAVAILABLE';
+      const msg = error instanceof Error ? error.message : String(error);
+      log(`session ${claims.sid}: credential issue failed — ${msg}`);
+      send(ws, { type: 'error', code, message: msg });
+      ws.close(4403, 'no credentials');
+      return false;
+    }
+
+    if (ws.readyState !== ws.OPEN) {
+      await removeSessionKubeconfig(kubeconfigPath);
+      return false;
+    }
+
     const env: Record<string, string> = {
       // A deliberately minimal environment: nothing from the host process
-      // leaks into the student shell except what is listed here.
+      // leaks into the student shell except what is listed here. In
+      // particular, no inherited KUBECONFIG — this one is session-scoped.
       PATH: '/usr/local/bin:/usr/bin:/bin',
       HOME: config.workDir,
       TERM: 'xterm-256color',
@@ -185,11 +313,13 @@ export function createTerminalServer(config: TerminalConfig): Server {
       USER: config.promptUser,
       HOSTNAME: config.promptHost,
       PS1: `\\[\\e[32m\\]${config.promptUser}@${config.promptHost}\\[\\e[0m\\]:\\[\\e[34m\\]\\w\\[\\e[0m\\]$ `,
-      // Scope the student to their lab namespace by default.
+      KUBECONFIG: kubeconfigPath,
+      // The kubeconfig's context already defaults to this namespace, so plain
+      // `kubectl get pods` is scoped correctly without any -n flag. These are
+      // exported for prompts and scripts that want to display it.
       JTT_LAB_ID: claims.labId,
-      JTT_NAMESPACE: claims.namespace,
+      JTT_NAMESPACE: namespace,
     };
-    if (config.kubeconfigPath) env.KUBECONFIG = config.kubeconfigPath;
 
     let term: pty.IPty;
     try {
@@ -203,25 +333,32 @@ export function createTerminalServer(config: TerminalConfig): Server {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`failed to spawn PTY: ${message}`);
+      await removeSessionKubeconfig(kubeconfigPath);
       send(ws, {
         type: 'error',
         code: 'PTY_SPAWN_FAILED',
         message: `Could not start a shell: ${message}`,
       });
       ws.close(1011, 'pty spawn failed');
-      return;
+      return false;
     }
 
     const session: Session = {
       claims,
+      namespace,
+      kubeconfigPath,
       term,
-      idleTimer: setTimeout(() => closeFor(ws, 'IDLE_TIMEOUT', 'Terminal closed after inactivity.'), config.idleTimeoutMs),
+      idleTimer: setTimeout(
+        () => closeFor(ws, 'IDLE_TIMEOUT', 'Terminal closed after inactivity.'),
+        config.idleTimeoutMs,
+      ),
       maxTimer: setTimeout(
         () => closeFor(ws, 'SESSION_EXPIRED', 'Terminal session reached its maximum duration.'),
         config.maxSessionMs,
       ),
     };
     sessions.set(ws, session);
+    bySessionId.set(claims.sid, ws);
 
     term.onData((data) => send(ws, { type: 'output', data }));
     term.onExit(({ exitCode, signal }) => {
@@ -234,9 +371,10 @@ export function createTerminalServer(config: TerminalConfig): Server {
       type: 'ready',
       sessionId: claims.sid,
       labId: claims.labId,
-      namespace: claims.namespace,
+      namespace,
     });
-    log(`session ${claims.sid} started (lab=${claims.labId} ns=${claims.namespace})`);
+    log(`session ${claims.sid} started (lab=${claims.labId} ns=${namespace})`);
+    return true;
   }
 
   function touch(session: Session): void {
@@ -253,6 +391,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
     const session = sessions.get(ws);
     if (!session) return;
     sessions.delete(ws);
+    if (bySessionId.get(session.claims.sid) === ws) bySessionId.delete(session.claims.sid);
     clearTimeout(session.idleTimer);
     clearTimeout(session.maxTimer);
     try {
@@ -260,6 +399,8 @@ export function createTerminalServer(config: TerminalConfig): Server {
     } catch {
       /* already dead */
     }
+    // The credential file dies with the shell that used it.
+    void removeSessionKubeconfig(session.kubeconfigPath);
     log(`session ${session.claims.sid} ended (${sessions.size} active)`);
   }
 

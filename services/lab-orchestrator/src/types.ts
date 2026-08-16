@@ -1,13 +1,17 @@
 /**
  * Core contracts for the lab engine.
  *
- * The `LabProvider` interface is the seam that keeps the rest of the platform
- * independent of *how* a sandbox is produced. PLATFORM-001 ships a single
- * implementation backed by a local `kind` cluster; a future story can add an
- * EKS / Firecracker / gVisor provider by implementing this interface only.
- * Nothing above this interface (API routes, verifier, frontend) knows that
- * kind exists.
+ * `LabProvider` is the seam that keeps the rest of the platform independent of
+ * *how* a sandbox is produced. Today one implementation backs it — a namespace
+ * inside a shared kind cluster. A future EKS / Firecracker / gVisor provider
+ * implements this interface and nothing above it changes: not the API routes,
+ * not the verifier, not React.
+ *
+ * The unit of isolation is a **session**, not a lab. Two students on the same
+ * lab get two namespaces; one student cannot see, name, or reach the other's.
  */
+import type { LoadedLabDefinition } from './lab-definition.js';
+import type { SessionPolicy } from './session/types.js';
 
 export type ProvisionStepStatus = 'pending' | 'ok' | 'failed';
 
@@ -29,13 +33,13 @@ export type EnvironmentPhase =
   | 'error';
 
 export interface EnvironmentInfo {
-  /** Opaque handle for this sandbox, e.g. the cluster/namespace pair. */
+  /** Opaque handle for this sandbox: provider, cluster, and namespace. */
   environmentId: string;
   provider: string;
   phase: EnvironmentPhase;
-  /** Namespace the student works in. */
+  /** The session's private namespace. */
   namespace: string;
-  /** Populated once the environment is reachable. */
+  sessionId?: string;
   kubernetesVersion?: string;
   nodes?: NodeInfo[];
   message?: string;
@@ -60,6 +64,8 @@ export interface ResetResult {
   ok: boolean;
   /** Resources actually removed, as `kind/name`. */
   removed: string[];
+  /** Setup manifests re-applied to restore the lab's starting condition. */
+  restored: string[];
   steps: ProvisionStep[];
   environment: EnvironmentInfo;
   error?: LabError;
@@ -77,9 +83,11 @@ export type LabErrorCode =
   | 'ENVIRONMENT_NOT_CREATED'
   | 'KUBECTL_UNAVAILABLE'
   | 'PROVISION_FAILED'
+  | 'SETUP_FAILED'
   | 'RESET_FAILED'
   | 'DESTROY_FAILED'
   | 'EXEC_FAILED'
+  | 'CREDENTIALS_FAILED'
   | 'LAB_NOT_FOUND'
   | 'INVALID_LAB_ID'
   | 'VERIFICATION_FAILED';
@@ -99,41 +107,109 @@ export interface ExecResult {
 }
 
 /**
- * The provider abstraction required by PLATFORM-001.
+ * Everything a provider needs to act on one student's sandbox.
  *
- * Implementations must be idempotent: `create()` on an already-running
- * sandbox initialises it back to the lab's baseline rather than failing.
+ * Carrying the whole lab definition (rather than a handful of copied fields)
+ * is what keeps providers data-driven: setup manifests, reset policy, and the
+ * namespace all come from the definition the registry loaded.
+ */
+export interface LabSessionContext {
+  sessionId: string;
+  labId: string;
+  /** Private namespace for this session. Derived, never client-supplied. */
+  namespace: string;
+  /** ServiceAccount the student's kubectl authenticates as. */
+  serviceAccountName: string;
+  lab: LoadedLabDefinition;
+  /** Epoch ms after which the reaper may delete this sandbox. */
+  expiresAtMs: number;
+  /** Quota / LimitRange / NetworkPolicy shape for this session. */
+  policy: SessionPolicy;
+}
+
+/**
+ * Namespace-scoped credentials handed to the terminal service, never to the
+ * browser.
+ *
+ * This is the *only* credential a student shell is ever given. It authenticates
+ * as the session's ServiceAccount, whose rights stop at the namespace edge, and
+ * it carries a bound, short-lived token rather than a long-lived secret.
+ */
+export interface StudentCredentials {
+  /** A complete kubeconfig YAML document scoped to the session namespace. */
+  kubeconfig: string;
+  namespace: string;
+  serviceAccountName: string;
+  /** ISO-8601 expiry of the embedded ServiceAccount token. */
+  expiresAt: string;
+}
+
+/** Outcome of tearing a sandbox down. */
+export interface DestroyResult {
+  ok: boolean;
+  /**
+   * True only when the namespace is *verifiably* absent from the cluster.
+   *
+   * Namespace deletion is asynchronous, so a successful delete call is not the
+   * same as a deleted namespace. Session teardown only reaches ENDED/EXPIRED
+   * once this is true, which is what makes the reaper safe to re-enter.
+   */
+  namespaceGone: boolean;
+  steps: ProvisionStep[];
+  error?: LabError;
+}
+
+/** A sandbox namespace as seen by the cleanup reaper. */
+export interface ManagedNamespace {
+  namespace: string;
+  sessionId: string;
+  labId: string;
+  /** Epoch ms, parsed from the namespace label the provider wrote at creation. */
+  expiresAtMs: number;
+  phase: string;
+}
+
+/**
+ * The sandbox lifecycle.
+ *
+ * Implementations must be idempotent: creating an already-existing sandbox
+ * initialises it back to the lab's baseline rather than failing.
  */
 export interface LabProvider {
   readonly name: string;
 
-  /** Create or initialise the sandbox for a lab, returning step-by-step progress. */
-  create(context: LabContext): Promise<CreateResult>;
+  /** Create the session sandbox: namespace, guardrails, lab initial state. */
+  create(context: LabSessionContext): Promise<CreateResult>;
 
   /** Current health of the sandbox. Cheap enough to poll. */
-  status(context: LabContext): Promise<EnvironmentInfo>;
+  status(context: LabSessionContext): Promise<EnvironmentInfo>;
 
-  /** Restore the sandbox to the lab's baseline state. */
-  reset(context: LabContext): Promise<ResetResult>;
+  /** Restore the sandbox to the lab's starting condition. */
+  reset(context: LabSessionContext): Promise<ResetResult>;
 
-  /** Tear the sandbox down entirely. */
-  destroy(context: LabContext): Promise<{ ok: boolean; error?: LabError }>;
+  /** Tear the sandbox down entirely, and confirm the namespace is gone. */
+  destroy(context: LabSessionContext): Promise<DestroyResult>;
 
   /**
-   * Run a single non-interactive command inside the sandbox context.
+   * Run a single non-interactive command in the sandbox context.
    *
-   * Used by internal health checks (e.g. "does kubectl work?"). It is
-   * deliberately NOT wired to any REST endpoint — student commands travel
-   * through the separate terminal service over an authenticated WebSocket.
+   * Used by internal health checks ("does kubectl work?"). Deliberately NOT
+   * wired to any REST endpoint — student commands travel through the separate
+   * terminal service over an authenticated WebSocket.
    */
-  execute(context: LabContext, request: ExecRequest): Promise<ExecResult>;
-}
+  execute(context: LabSessionContext, request: ExecRequest): Promise<ExecResult>;
 
-/** Everything a provider needs to act on a specific lab. */
-export interface LabContext {
-  labId: string;
-  namespace: string;
-  /** Resources the reset routine is allowed to purge. */
-  purgeResources: string[];
-  protectedResources: string[];
+  /** Mint namespace-scoped credentials for the student's shell. */
+  issueCredentials(context: LabSessionContext): Promise<StudentCredentials>;
+
+  /** Every sandbox this platform owns, for expiry and orphan cleanup. */
+  listManagedNamespaces(): Promise<ManagedNamespace[]>;
+
+  /**
+   * Delete one sandbox namespace by name. Used by the reaper for orphans.
+   *
+   * Implementations MUST refuse any namespace that is not both name-shaped like
+   * a lab sandbox and labelled as managed by this platform.
+   */
+  destroyNamespace(namespace: string, expectedSessionId?: string): Promise<DestroyResult>;
 }

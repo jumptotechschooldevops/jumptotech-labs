@@ -8,7 +8,7 @@
 import { KubernetesClient } from '../k8s/client.js';
 import type { KubernetesPort } from '../k8s/port.js';
 import type { LabProvider } from '../types.js';
-import { KindLabProvider } from './kind-provider.js';
+import { KindLabProvider, type RequirementWaiter } from './kind-provider.js';
 
 export const SUPPORTED_PROVIDERS = ['kind'] as const;
 export type SupportedProvider = (typeof SUPPORTED_PROVIDERS)[number];
@@ -19,6 +19,8 @@ export interface ProviderFactoryOptions {
   kubeconfigPath?: string;
   /** Injected in tests to avoid touching a real cluster. */
   k8s?: KubernetesPort;
+  /** Confirms a lab's declared initial state actually materialised. */
+  waitForRequirements?: RequirementWaiter;
 }
 
 export function isSupportedProvider(value: string): value is SupportedProvider {
@@ -44,6 +46,7 @@ export function createLabProvider(options: ProviderFactoryOptions): LabProvider 
         k8s,
         clusterName: options.clusterName,
         ...(options.kubeconfigPath ? { kubeconfigPath: options.kubeconfigPath } : {}),
+        ...(options.waitForRequirements ? { waitForRequirements: options.waitForRequirements } : {}),
       });
     default: {
       const exhaustive: never = options.provider;

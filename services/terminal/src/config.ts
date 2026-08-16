@@ -2,7 +2,18 @@ export interface TerminalConfig {
   port: number;
   sessionSecret: string;
   allowedOrigins: string[];
-  kubeconfigPath: string | undefined;
+  /**
+   * Base URL of the API's internal credential endpoint.
+   *
+   * PLATFORM-002 removed the mounted kubeconfig from this service entirely. The
+   * shell no longer inherits *any* ambient cluster credential: it is handed a
+   * namespace-scoped ServiceAccount kubeconfig fetched from here, per session.
+   */
+  apiInternalUrl: string;
+  /** Shared secret authenticating this service to the API. */
+  internalServiceSecret: string;
+  /** Where per-session kubeconfigs are written (0600, deleted on disconnect). */
+  credentialsDir: string;
   /** Working directory + HOME for the student shell. */
   workDir: string;
   /** Hard cap on concurrent PTYs, so a stuck browser cannot exhaust the host. */
@@ -16,8 +27,8 @@ export interface TerminalConfig {
   promptHost: string;
 }
 
-function intFromEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
+function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const raw = env[name];
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -33,20 +44,23 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
       'TERMINAL_SESSION_SECRET must be set to at least 8 characters and must match the API.',
     );
   }
+
   return {
-    port: intFromEnv('TERMINAL_PORT', 4001),
+    port: intFromEnv(env, 'TERMINAL_PORT', 4001),
     sessionSecret,
     allowedOrigins: (env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
       .split(',')
       .map((o) => o.trim())
       .filter(Boolean),
-    kubeconfigPath: env.KUBECONFIG || undefined,
+    apiInternalUrl: env.API_INTERNAL_URL ?? 'http://localhost:4000',
+    internalServiceSecret: env.INTERNAL_SERVICE_SECRET || sessionSecret,
+    credentialsDir: env.TERMINAL_CREDENTIALS_DIR ?? '/tmp/jumptotech-credentials',
     workDir: env.TERMINAL_WORKDIR ?? '/home/student',
-    maxSessions: intFromEnv('TERMINAL_MAX_SESSIONS', 16),
-    idleTimeoutMs: intFromEnv('TERMINAL_IDLE_TIMEOUT_SECONDS', 1800) * 1000,
-    maxSessionMs: intFromEnv('TERMINAL_MAX_SESSION_SECONDS', 7200) * 1000,
+    maxSessions: intFromEnv(env, 'TERMINAL_MAX_SESSIONS', 16),
+    idleTimeoutMs: intFromEnv(env, 'TERMINAL_IDLE_TIMEOUT_SECONDS', 1800) * 1000,
+    maxSessionMs: intFromEnv(env, 'TERMINAL_MAX_SESSION_SECONDS', 7200) * 1000,
     shell: env.TERMINAL_SHELL ?? '/bin/bash',
     promptUser: env.TERMINAL_PROMPT_USER ?? 'student',
-    promptHost: env.TERMINAL_PROMPT_HOST ?? 'controlplane',
+    promptHost: env.TERMINAL_PROMPT_HOST ?? 'lab',
   };
 }

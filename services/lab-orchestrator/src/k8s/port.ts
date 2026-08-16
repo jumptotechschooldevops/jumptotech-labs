@@ -1,9 +1,14 @@
 /**
  * The narrow Kubernetes surface the lab engine needs.
  *
- * Defining a port (rather than passing `@kubernetes/client-node` around)
- * means the verifier and reset logic can be unit-tested against fakes with no
- * cluster, while production code talks to a real API server.
+ * Defining a port (rather than passing `@kubernetes/client-node` around) means
+ * the verifier registry, the session lifecycle, and the cleanup reaper can all
+ * be unit-tested against an in-memory fake with no cluster, while production
+ * code talks to a real API server.
+ *
+ * Every reader below returns a *snapshot*: a normalised, minimal view of the
+ * object's spec and status. Verifier handlers reason about snapshots only, so
+ * they cannot accidentally depend on client library shapes.
  */
 import type { NodeInfo } from '../types.js';
 
@@ -19,6 +24,13 @@ export interface ContainerSnapshot {
   state: string;
   /** e.g. `ImagePullBackOff`, `CrashLoopBackOff`. */
   reason?: string;
+  /** `spec.containers[].resources`, verbatim quantity strings. */
+  resources?: ResourceRequirementsSnapshot;
+}
+
+export interface ResourceRequirementsSnapshot {
+  requests?: Record<string, string>;
+  limits?: Record<string, string>;
 }
 
 export interface PodSnapshot {
@@ -26,9 +38,72 @@ export interface PodSnapshot {
   namespace: string;
   /** `Pending` | `Running` | `Succeeded` | `Failed` | `Unknown`. */
   phase: string;
+  labels: Record<string, string>;
   containers: ContainerSnapshot[];
   /** Set while the Pod is terminating. */
   deleting: boolean;
+  /** True when every container reports Ready. */
+  ready: boolean;
+}
+
+export interface DeploymentSnapshot {
+  name: string;
+  namespace: string;
+  /** `spec.replicas`, defaulting to 1 when unset — the Kubernetes default. */
+  desiredReplicas: number;
+  readyReplicas: number;
+  availableReplicas: number;
+  updatedReplicas: number;
+  /** `status.replicas` — total pods owned, including old ones mid-rollout. */
+  currentReplicas: number;
+  labels: Record<string, string>;
+  selector: Record<string, string>;
+  podLabels: Record<string, string>;
+  containers: ContainerSnapshot[];
+  conditions: Array<{ type: string; status: string; reason?: string; message?: string }>;
+  generation: number;
+  observedGeneration: number;
+  deleting: boolean;
+}
+
+export interface ServiceSnapshot {
+  name: string;
+  namespace: string;
+  /** `ClusterIP` | `NodePort` | `LoadBalancer` | `ExternalName`. */
+  type: string;
+  clusterIP?: string;
+  selector: Record<string, string>;
+  ports: Array<{
+    name?: string;
+    port: number;
+    targetPort?: number | string;
+    protocol: string;
+    nodePort?: number;
+  }>;
+}
+
+/** Ready/not-ready backend addresses behind a Service. */
+export interface EndpointsSnapshot {
+  serviceName: string;
+  namespace: string;
+  readyAddresses: number;
+  notReadyAddresses: number;
+  /** Pod names behind the Service, where the API reports them. */
+  targets: string[];
+}
+
+export interface ConfigMapSnapshot {
+  name: string;
+  namespace: string;
+  data: Record<string, string>;
+}
+
+export interface SecretSnapshot {
+  name: string;
+  namespace: string;
+  type: string;
+  /** Key names only. Secret *values* are never read into the platform. */
+  keys: string[];
 }
 
 export interface NamespacedResourceRef {
@@ -37,10 +112,36 @@ export interface NamespacedResourceRef {
   name: string;
 }
 
+export interface NamespaceSnapshot {
+  name: string;
+  phase: string;
+  labels: Record<string, string>;
+}
+
 export interface ClusterVersion {
   gitVersion: string;
   major: string;
   minor: string;
+}
+
+/** Enough of the API server's identity to build a kubeconfig. */
+export interface ClusterEndpoint {
+  server: string;
+  /** PEM certificate authority data, base64-encoded as kubeconfig expects. */
+  certificateAuthorityData?: string;
+  /** Set only when the cluster is contacted without CA verification. */
+  insecureSkipTlsVerify?: boolean;
+}
+
+/** A Kubernetes object as parsed from a manifest, before it is applied. */
+export interface KubernetesManifestObject {
+  apiVersion: string;
+  kind: string;
+  metadata: { name: string; namespace?: string; labels?: Record<string, string> } & Record<
+    string,
+    unknown
+  >;
+  [key: string]: unknown;
 }
 
 export class KubernetesUnreachableError extends Error {
@@ -51,18 +152,54 @@ export class KubernetesUnreachableError extends Error {
   }
 }
 
+/** A manifest the API server rejected — a lab authoring bug, not an outage. */
+export class ManifestApplyError extends Error {
+  readonly code = 'SETUP_FAILED';
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = 'ManifestApplyError';
+  }
+}
+
 export interface KubernetesPort {
+  // --- cluster ------------------------------------------------------------
+
   /** Cheap liveness probe against the API server. Throws when unreachable. */
   ping(): Promise<void>;
-
   version(): Promise<ClusterVersion>;
-
   listNodes(): Promise<NodeInfo[]>;
+  /** Server address + CA, for minting namespace-scoped kubeconfigs. */
+  clusterEndpoint(): ClusterEndpoint;
+
+  // --- namespaces ---------------------------------------------------------
 
   namespaceExists(namespace: string): Promise<boolean>;
+  getNamespace(namespace: string): Promise<NamespaceSnapshot | null>;
+  createNamespace(namespace: string, labels: Record<string, string>): Promise<void>;
+  deleteNamespace(namespace: string): Promise<void>;
+  /** Namespaces carrying a label selector, e.g. the platform's ownership label. */
+  listNamespaces(labelSelector?: string): Promise<NamespaceSnapshot[]>;
 
-  /** Returns `null` when the Pod does not exist (404). */
+  // --- reads used by the verifier registry --------------------------------
+
+  /** Returns `null` when the object does not exist (404). */
   getPod(namespace: string, name: string): Promise<PodSnapshot | null>;
+  listPods(namespace: string, labelSelector?: string): Promise<PodSnapshot[]>;
+  getDeployment(namespace: string, name: string): Promise<DeploymentSnapshot | null>;
+  getService(namespace: string, name: string): Promise<ServiceSnapshot | null>;
+  getEndpoints(namespace: string, serviceName: string): Promise<EndpointsSnapshot | null>;
+  getConfigMap(namespace: string, name: string): Promise<ConfigMapSnapshot | null>;
+  getSecret(namespace: string, name: string): Promise<SecretSnapshot | null>;
+
+  // --- writes used by setup / reset / isolation ---------------------------
+
+  /**
+   * Create-or-replace a set of objects in a namespace.
+   *
+   * Objects are forced into the target namespace by the caller, so a lab
+   * manifest cannot place resources in someone else's sandbox.
+   */
+  applyObjects(namespace: string, objects: KubernetesManifestObject[]): Promise<NamespacedResourceRef[]>;
 
   /**
    * List objects of a supported plural resource in a namespace.
@@ -70,9 +207,15 @@ export interface KubernetesPort {
    * lab definition naming an unknown kind degrades gracefully.
    */
   listNamespacedResources(namespace: string, resource: string): Promise<NamespacedResourceRef[]>;
-
   deleteNamespacedResource(namespace: string, resource: string, name: string): Promise<void>;
 
   /** Pods still present in the namespace, used to wait out termination. */
   countPods(namespace: string): Promise<number>;
+
+  /** Mint a short-lived bound token for a ServiceAccount (TokenRequest API). */
+  requestServiceAccountToken(
+    namespace: string,
+    serviceAccount: string,
+    expirationSeconds: number,
+  ): Promise<{ token: string; expirationTimestamp: string }>;
 }

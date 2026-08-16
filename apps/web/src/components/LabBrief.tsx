@@ -16,7 +16,7 @@ export function LabBrief({ lab }: { lab: LabDetail }) {
         <div className="brief__meta">
           <span className={`chip chip--${lab.difficulty}`}>{lab.difficulty}</span>
           <span className="chip chip--muted">{lab.durationMinutes} min</span>
-          <span className="chip chip--muted">ns: {lab.environment.namespace}</span>
+          <span className="chip chip--muted">{lab.topic}</span>
         </div>
       </header>
 
@@ -32,21 +32,6 @@ export function LabBrief({ lab }: { lab: LabDetail }) {
               {paragraph}
             </p>
           ))}
-
-        <dl className="spec">
-          <div className="spec__row">
-            <dt>Pod name</dt>
-            <dd><code>{lab.target.podName}</code></dd>
-          </div>
-          <div className="spec__row">
-            <dt>Image</dt>
-            <dd><code>{lab.target.image}</code></dd>
-          </div>
-          <div className="spec__row">
-            <dt>Namespace</dt>
-            <dd><code>{lab.target.namespace}</code></dd>
-          </div>
-        </dl>
       </section>
 
       <section className="brief__section">
@@ -61,7 +46,7 @@ export function LabBrief({ lab }: { lab: LabDetail }) {
       <section className="brief__section">
         <h2 className="brief__heading">Documentation</h2>
         <ul className="doclinks">
-          {lab.documentation.map((doc) => (
+          {lab.references.map((doc) => (
             <li key={doc.url}>
               <a href={doc.url} target="_blank" rel="noreferrer noopener">
                 {doc.title}
@@ -84,13 +69,9 @@ export function LabBrief({ lab }: { lab: LabDetail }) {
         </button>
         {hintOpen && (
           <div className="hint__body">
-            {lab.hint
-              .split(/\n\s*\n/)
-              .map((paragraph) => paragraph.trim())
-              .filter(Boolean)
-              .map((paragraph, i) => (
-                <p key={i}>{paragraph}</p>
-              ))}
+            {lab.hints.map((hint) => (
+              <p key={hint.level}>{hint.text}</p>
+            ))}
           </div>
         )}
       </section>

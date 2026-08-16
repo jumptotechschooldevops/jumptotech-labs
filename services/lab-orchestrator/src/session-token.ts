@@ -10,10 +10,18 @@
  * Intentionally dependency-free (node:crypto only) so the terminal service can
  * import it without pulling in the Kubernetes client.
  */
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export interface TerminalSessionClaims {
-  /** Session identifier, unique per Start Lab click. */
+  /**
+   * The lab session this terminal is bound to.
+   *
+   * Always a real session id minted by the session manager — never generated
+   * here. The terminal service resolves credentials from this claim alone, so a
+   * socket authenticated for session A has no way to address session B: there
+   * is no client-supplied field anywhere in the handshake that names a session,
+   * a namespace, or a kubeconfig.
+   */
   sid: string;
   /** Lab this session may operate on. */
   labId: string;
@@ -41,16 +49,13 @@ function sign(payload: string, secret: string): string {
   return createHmac('sha256', secret).update(payload).digest('base64url');
 }
 
-export function newSessionId(): string {
-  return randomUUID();
-}
-
 export interface IssueOptions {
+  /** The lab session this token authorises. Required — see `sid` above. */
+  sessionId: string;
   labId: string;
   namespace: string;
   secret: string;
   ttlSeconds: number;
-  sessionId?: string;
   now?: () => number;
 }
 
@@ -62,8 +67,11 @@ export function issueSessionToken(options: IssueOptions): {
     throw new Error('TERMINAL_SESSION_SECRET must be set and at least 8 characters long');
   }
   const nowSeconds = Math.floor((options.now?.() ?? Date.now()) / 1000);
+  if (!options.sessionId) {
+    throw new Error('issueSessionToken requires the lab session id to bind the token to');
+  }
   const claims: TerminalSessionClaims = {
-    sid: options.sessionId ?? newSessionId(),
+    sid: options.sessionId,
     labId: options.labId,
     namespace: options.namespace,
     iat: nowSeconds,

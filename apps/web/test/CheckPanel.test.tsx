@@ -5,6 +5,7 @@ import type { VerificationResult } from '../src/lib/types';
 
 const PASSED: VerificationResult = {
   labId: 'K8S-001',
+  namespace: 'lab-3f9c1a7b2d40',
   passed: true,
   summary: 'LAB PASSED',
   checkedAt: new Date(0).toISOString(),

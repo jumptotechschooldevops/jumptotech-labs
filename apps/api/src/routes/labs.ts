@@ -1,10 +1,17 @@
 /**
- * Lab REST routes.
+ * Lab catalog + Start Lab.
  *
  * Security note: none of these endpoints execute student-supplied commands.
- * `POST /start` mints a short-lived terminal session token; the actual shell
- * lives behind the separate terminal WebSocket service, which verifies that
- * token before spawning a PTY.
+ * `POST /:id/start` provisions an isolated session sandbox and mints a
+ * short-lived terminal session token bound to that session; the actual shell
+ * lives behind the separate terminal WebSocket service, which verifies the
+ * token and resolves credentials from the session id inside it.
+ *
+ * Everything that acts on a *running* environment (check, reset, activity, end)
+ * lives under `/api/sessions/:sessionId` instead — see `sessions.ts`. That
+ * split is the PLATFORM-002 change: an operation is addressed by the session
+ * that owns the sandbox, never by the lab id, because two students on the same
+ * lab now have two different sandboxes.
  */
 import { Router, type Request, type Response } from 'express';
 import {
@@ -12,46 +19,30 @@ import {
   LabNotFoundError,
   assertValidLabId,
   issueSessionToken,
-  labContextFor,
-  type LabDefinition,
-  type LabProvider,
-  type LabRegistry,
+  type LoadedLabDefinition,
 } from '@jumptotech/lab-orchestrator';
-import { verifyLab, type VerificationResult } from '@jumptotech/verifier';
-import type { KubernetesPort } from '@jumptotech/lab-orchestrator';
-import type { ApiConfig } from '../config.js';
 import { sendError, sendOk } from '../http.js';
-import type { LabSession, LabSessionStore } from '../session-store.js';
-
-export interface LabRoutesDeps {
-  registry: LabRegistry;
-  provider: LabProvider;
-  k8s: KubernetesPort;
-  sessions: LabSessionStore;
-  config: ApiConfig;
-}
+import { sessionErrorResponse, toSessionPayload, type SessionRoutesDeps } from './sessions.js';
 
 /** Public shape of a lab — everything the UI renders comes from lab.yaml. */
-function toLabDetail(def: LabDefinition) {
+export function toLabDetail(def: LoadedLabDefinition) {
   return {
     id: def.id,
     slug: def.slug,
     title: def.title,
     track: def.track,
+    topic: def.topic,
     difficulty: def.difficulty,
+    level: def.level,
     durationMinutes: def.duration_minutes,
-    environment: { provider: def.environment.provider, namespace: def.environment.namespace },
+    environment: { provider: def.environment.provider, isolation: def.environment.isolation },
     task: { summary: def.task.summary, description: def.task.description },
-    requirements: def.requirement_labels,
-    // The literal expectations, so the UI can show them without duplicating them.
-    target: {
-      podName: def.requirements.pod_name,
-      namespace: def.requirements.namespace,
-      image: def.requirements.image,
-      status: def.requirements.status,
-    },
-    hint: def.hint,
-    documentation: def.documentation,
+    // Student-facing checklist, derived from the same requirements the verifier
+    // executes — so the UI and the verifier can never drift apart.
+    requirements: def.requirements.map((r) => r.label ?? r.type),
+    hints: def.hints,
+    references: def.references,
+    skills: def.skills,
   };
 }
 
@@ -72,12 +63,12 @@ function handleDomainError(res: Response, error: unknown): boolean {
   return false;
 }
 
-export function createLabRoutes(deps: LabRoutesDeps): Router {
-  const { registry, provider, k8s, sessions, config } = deps;
+export function createLabRoutes(deps: SessionRoutesDeps): Router {
+  const { registry, sessions, config } = deps;
   const router = Router();
 
   /** Resolve `:id` → definition, replying with the right error if it fails. */
-  function resolveLab(req: Request, res: Response): LabDefinition | null {
+  function resolveLab(req: Request, res: Response): LoadedLabDefinition | null {
     try {
       const labId = assertValidLabId(req.params.id);
       return registry.get(labId);
@@ -90,8 +81,7 @@ export function createLabRoutes(deps: LabRoutesDeps): Router {
   // GET /api/labs ----------------------------------------------------------
   router.get('/', (_req, res) => {
     const labs = registry.list();
-    const tracks = [...new Set(labs.map((l) => l.track))].sort();
-    sendOk(res, { labs, tracks, count: labs.length });
+    sendOk(res, { labs, tracks: registry.tracks(), count: labs.length });
   });
 
   // GET /api/labs/:id ------------------------------------------------------
@@ -106,134 +96,37 @@ export function createLabRoutes(deps: LabRoutesDeps): Router {
     const def = resolveLab(req, res);
     if (!def) return;
 
-    const context = labContextFor(def);
-    const result = await provider.create(context);
-
-    if (!result.ok) {
-      // Report the real failure. Never claim the lab is ready.
-      sendError(res, 503, {
-        code: result.error?.code ?? 'PROVISION_FAILED',
-        message: result.error?.message ?? 'Failed to create the lab environment',
-        ...(result.error?.remediation ? { remediation: result.error.remediation } : {}),
-        details: { steps: result.steps, environment: result.environment },
-      });
+    let started;
+    try {
+      started = await sessions.start(def.id);
+    } catch (error) {
+      sessionErrorResponse(res, error);
       return;
     }
 
-    const { token, claims } = issueSessionToken({
+    // The token is bound to this session id. The browser never sees the
+    // namespace as a credential, and never sees a kubeconfig at all.
+    const { token } = issueSessionToken({
+      sessionId: started.session.sessionId,
       labId: def.id,
-      namespace: def.environment.namespace,
+      namespace: started.session.namespace,
       secret: config.terminalSessionSecret,
-      ttlSeconds: config.terminalSessionTtlSeconds,
+      ttlSeconds: Math.min(
+        config.terminalSessionTtlSeconds,
+        Math.max(60, Math.ceil((Date.parse(started.session.expiresAt) - Date.now()) / 1000)),
+      ),
     });
 
-    const session: LabSession = {
-      sessionId: claims.sid,
-      labId: def.id,
-      namespace: def.environment.namespace,
-      environmentId: result.environment.environmentId,
-      startedAt: new Date(claims.iat * 1000).toISOString(),
-      expiresAt: new Date(claims.exp * 1000).toISOString(),
-      durationSeconds: def.duration_minutes * 60,
-    };
-    await sessions.put(session);
-
     sendOk(res, {
-      session: {
-        sessionId: session.sessionId,
-        startedAt: session.startedAt,
-        expiresAt: session.expiresAt,
-        durationSeconds: session.durationSeconds,
-      },
-      environment: result.environment,
-      steps: result.steps,
+      session: toSessionPayload(sessions, started.session),
+      environment: started.environment,
+      steps: started.steps,
       terminal: {
         url: config.terminalWsUrl,
         // Presented to the terminal service over the WebSocket handshake.
         token,
       },
     });
-  });
-
-  // GET /api/labs/:id/status ----------------------------------------------
-  router.get('/:id/status', async (req, res) => {
-    const def = resolveLab(req, res);
-    if (!def) return;
-
-    const environment = await provider.status(labContextFor(def));
-    const session = await sessions.getByLabId(def.id);
-    sendOk(res, {
-      environment,
-      session: session
-        ? {
-            sessionId: session.sessionId,
-            startedAt: session.startedAt,
-            expiresAt: session.expiresAt,
-            durationSeconds: session.durationSeconds,
-          }
-        : null,
-    });
-  });
-
-  // POST /api/labs/:id/check ----------------------------------------------
-  router.post('/:id/check', async (req, res) => {
-    const def = resolveLab(req, res);
-    if (!def) return;
-
-    const result: VerificationResult = await verifyLab({ k8s, lab: def });
-    if (result.error) {
-      sendError(res, 503, {
-        code: result.error.code,
-        message: result.error.message,
-        remediation: 'Start the lab environment before checking your solution.',
-        details: { checks: result.checks },
-      });
-      return;
-    }
-    // A failing lab is a successful *check*: HTTP 200 with passed:false.
-    sendOk(res, result);
-  });
-
-  // POST /api/labs/:id/reset ----------------------------------------------
-  router.post('/:id/reset', async (req, res) => {
-    const def = resolveLab(req, res);
-    if (!def) return;
-
-    const result = await provider.reset(labContextFor(def));
-    if (!result.ok) {
-      sendError(res, 503, {
-        code: result.error?.code ?? 'RESET_FAILED',
-        message: result.error?.message ?? 'Failed to reset the lab environment',
-        details: { steps: result.steps, removed: result.removed },
-      });
-      return;
-    }
-
-    sendOk(res, {
-      message: 'Lab reset successfully.',
-      removed: result.removed,
-      steps: result.steps,
-      environment: result.environment,
-      /** Tells the UI it is safe to clear the terminal scrollback. */
-      clearTerminal: true,
-    });
-  });
-
-  // DELETE /api/labs/:id/environment --------------------------------------
-  router.delete('/:id/environment', async (req, res) => {
-    const def = resolveLab(req, res);
-    if (!def) return;
-
-    const result = await provider.destroy(labContextFor(def));
-    if (!result.ok) {
-      sendError(res, 503, {
-        code: result.error?.code ?? 'DESTROY_FAILED',
-        message: result.error?.message ?? 'Failed to destroy the lab environment',
-      });
-      return;
-    }
-    await sessions.delete(def.id);
-    sendOk(res, { message: 'Lab environment released.', labId: def.id });
   });
 
   return router;

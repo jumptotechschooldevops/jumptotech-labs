@@ -2,7 +2,7 @@
   "name": "jumptotech-labs",
   "version": "0.1.0",
   "private": true,
-  "description": "JumpToTech Labs — interactive DevOps lab platform (PLATFORM-001 MVP)",
+  "description": "JumpToTech Labs \u2014 interactive DevOps lab platform (multi-student isolated Kubernetes sandboxes)",
   "license": "UNLICENSED",
   "type": "module",
   "engines": {
@@ -19,10 +19,11 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "test:integration": "RUN_INTEGRATION_TESTS=1 npm run test --workspaces --if-present",
+    "test:integration": "RUN_INTEGRATION_TESTS=1 vitest run test/integration.test.ts --root services/lab-orchestrator",
     "dev:api": "npm run dev --workspace @jumptotech/api",
     "dev:terminal": "npm run dev --workspace @jumptotech/terminal",
-    "dev:web": "npm run dev --workspace @jumptotech/web"
+    "dev:web": "npm run dev --workspace @jumptotech/web",
+    "test:integration:terminal": "RUN_INTEGRATION_TESTS=1 vitest run test/terminal-integration.test.ts --root services/terminal"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

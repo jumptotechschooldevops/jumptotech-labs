@@ -1,11 +1,14 @@
 import type {
   ApiEnvelope,
   ApiError,
+  EndLabResponse,
   LabDetail,
   LabSummary,
   ResetResponse,
+  SessionInfo,
+  SessionStatusResponse,
   StartLabResponse,
-  StatusResponse,
+  TrackSummary,
   VerificationResult,
 } from './types';
 
@@ -52,21 +55,38 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body.data;
 }
 
+/**
+ * Everything that acts on a running environment is addressed by session id, not
+ * by lab id — two students on the same lab have two different sandboxes.
+ *
+ * The browser never sees, sends, or stores a namespace or a kubeconfig. The
+ * session id is the only handle it holds.
+ */
+const session = (id: string) => `/api/sessions/${encodeURIComponent(id)}`;
+
 export const api = {
-  listLabs: () => request<{ labs: LabSummary[]; tracks: string[]; count: number }>('/api/labs'),
+  listLabs: () =>
+    request<{ labs: LabSummary[]; tracks: TrackSummary[]; count: number }>('/api/labs'),
 
   getLab: (id: string) => request<LabDetail>(`/api/labs/${encodeURIComponent(id)}`),
 
   startLab: (id: string) =>
     request<StartLabResponse>(`/api/labs/${encodeURIComponent(id)}/start`, { method: 'POST' }),
 
-  getStatus: (id: string) => request<StatusResponse>(`/api/labs/${encodeURIComponent(id)}/status`),
+  getSession: (sessionId: string) => request<SessionStatusResponse>(session(sessionId)),
 
-  checkSolution: (id: string) =>
-    request<VerificationResult>(`/api/labs/${encodeURIComponent(id)}/check`, { method: 'POST' }),
+  /** Backs "Continue Lab". Moves the idle deadline; never the absolute one. */
+  recordActivity: (sessionId: string) =>
+    request<{ session: SessionInfo }>(`${session(sessionId)}/activity`, { method: 'POST' }),
 
-  resetLab: (id: string) =>
-    request<ResetResponse>(`/api/labs/${encodeURIComponent(id)}/reset`, { method: 'POST' }),
+  checkSolution: (sessionId: string) =>
+    request<VerificationResult>(`${session(sessionId)}/check`, { method: 'POST' }),
+
+  resetLab: (sessionId: string) =>
+    request<ResetResponse>(`${session(sessionId)}/reset`, { method: 'POST' }),
+
+  endLab: (sessionId: string) =>
+    request<EndLabResponse>(session(sessionId), { method: 'DELETE' }),
 };
 
 export { API_URL };

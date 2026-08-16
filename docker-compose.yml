@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# JumpToTech Labs — local development stack (PLATFORM-001)
+# JumpToTech Labs — local development stack (PLATFORM-002)
 #
 # Prerequisite: the Kubernetes substrate must exist first.
 #
@@ -13,6 +13,11 @@
 #
 # No container here gets the Docker socket. Cluster creation happens on the
 # host, deliberately outside any web-facing process.
+#
+# PLATFORM-002: only the `api` service holds a cluster credential. The terminal
+# no longer mounts a kubeconfig at all — it fetches a namespace-scoped
+# ServiceAccount kubeconfig per session from the API, over the internal Docker
+# network, authenticated with INTERNAL_SERVICE_SECRET.
 # ---------------------------------------------------------------------------
 
 name: jumptotech-labs
@@ -49,6 +54,33 @@ services:
       TERMINAL_SESSION_SECRET: ${TERMINAL_SESSION_SECRET:?set TERMINAL_SESSION_SECRET in .env (copy from .env.example)}
       TERMINAL_SESSION_TTL_SECONDS: ${TERMINAL_SESSION_TTL_SECONDS:-3600}
       VITE_TERMINAL_WS_URL: ${VITE_TERMINAL_WS_URL:-ws://localhost:4001}
+      # Lets the API close a student's shell the moment their session ends.
+      TERMINAL_CONTROL_URL: http://terminal:4001
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
+      NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:-${TERMINAL_SESSION_SECRET}}
+      # --- session lifetimes (PLATFORM-002) ---
+      MAX_SESSION_MINUTES: ${MAX_SESSION_MINUTES:-60}
+      IDLE_TIMEOUT_MINUTES: ${IDLE_TIMEOUT_MINUTES:-20}
+      WARNING_MINUTES: ${WARNING_MINUTES:-5}
+      MAX_ACTIVE_SESSIONS: ${MAX_ACTIVE_SESSIONS:-20}
+      CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-60}
+      SESSION_RETENTION_MINUTES: ${SESSION_RETENTION_MINUTES:-15}
+      # --- per-session guardrails ---
+      QUOTA_PODS: ${QUOTA_PODS:-15}
+      QUOTA_SERVICES: ${QUOTA_SERVICES:-10}
+      QUOTA_PVCS: ${QUOTA_PVCS:-5}
+      QUOTA_REQUESTS_CPU: ${QUOTA_REQUESTS_CPU:-2}
+      QUOTA_REQUESTS_MEMORY: ${QUOTA_REQUESTS_MEMORY:-2Gi}
+      QUOTA_LIMITS_CPU: ${QUOTA_LIMITS_CPU:-4}
+      QUOTA_LIMITS_MEMORY: ${QUOTA_LIMITS_MEMORY:-4Gi}
+      LIMITS_DEFAULT_REQUEST_CPU: ${LIMITS_DEFAULT_REQUEST_CPU:-50m}
+      LIMITS_DEFAULT_REQUEST_MEMORY: ${LIMITS_DEFAULT_REQUEST_MEMORY:-64Mi}
+      LIMITS_DEFAULT_CPU: ${LIMITS_DEFAULT_CPU:-500m}
+      LIMITS_DEFAULT_MEMORY: ${LIMITS_DEFAULT_MEMORY:-512Mi}
+      NETWORK_POLICY_ENABLED: ${NETWORK_POLICY_ENABLED:-true}
+      CLUSTER_POD_CIDR: ${CLUSTER_POD_CIDR:-10.244.0.0/16}
+      CLUSTER_SERVICE_CIDR: ${CLUSTER_SERVICE_CIDR:-10.96.0.0/16}
+      STUDENT_CREDENTIAL_TTL_SECONDS: ${STUDENT_CREDENTIAL_TTL_SECONDS:-3600}
     ports:
       - "${API_PORT:-4000}:4000"
     volumes:
@@ -77,12 +109,18 @@ services:
     tmpfs:
       - /home/student:size=64m,mode=0700,uid=1001,gid=1001
       - /tmp:size=64m,mode=1777
+      # Per-session kubeconfigs (0600) live here and vanish with the container.
+      - /run/jumptotech:size=8m,mode=0700,uid=1001,gid=1001
     pids_limit: 256
     mem_limit: 512m
     environment:
       NODE_ENV: production
       TERMINAL_PORT: 4001
-      KUBECONFIG: /etc/jumptotech/kubeconfig.yaml
+      # NOTE: no KUBECONFIG. This service holds no ambient cluster credential;
+      # each PTY gets a namespace-scoped kubeconfig fetched per session.
+      API_INTERNAL_URL: http://api:4000
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
+      TERMINAL_CREDENTIALS_DIR: /run/jumptotech
       TERMINAL_WORKDIR: /home/student
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       TERMINAL_SESSION_SECRET: ${TERMINAL_SESSION_SECRET:?set TERMINAL_SESSION_SECRET in .env (copy from .env.example)}
@@ -91,8 +129,9 @@ services:
       TERMINAL_MAX_SESSION_SECONDS: ${TERMINAL_MAX_SESSION_SECONDS:-7200}
     ports:
       - "${TERMINAL_PORT:-4001}:4001"
-    volumes:
-      - <<: *kubeconfig
+    depends_on:
+      api:
+        condition: service_healthy
     networks:
       - default
       - kind

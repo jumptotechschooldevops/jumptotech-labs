@@ -14,9 +14,24 @@ export interface LabSummary {
   slug: string;
   title: string;
   track: string;
+  topic: string;
+  topicTitle: string;
   difficulty: string;
+  level: string;
   durationMinutes: number;
+  order: number;
   summary: string;
+  skills: string[];
+  hasSetup: boolean;
+  certifications: string[];
+}
+
+export interface TrackSummary {
+  track: string;
+  title: string;
+  labCount: number;
+  topics: Array<{ topic: string; title: string; labCount: number }>;
+  difficulties: string[];
 }
 
 export interface DocumentationLink {
@@ -24,19 +39,26 @@ export interface DocumentationLink {
   url: string;
 }
 
+export interface LabHint {
+  level: number;
+  text: string;
+}
+
 export interface LabDetail {
   id: string;
   slug: string;
   title: string;
   track: string;
+  topic: string;
   difficulty: string;
+  level: string;
   durationMinutes: number;
-  environment: { provider: string; namespace: string };
+  environment: { provider: string; isolation: string };
   task: { summary: string; description: string };
   requirements: string[];
-  target: { podName: string; namespace: string; image: string; status: string };
-  hint: string;
-  documentation: DocumentationLink[];
+  hints: LabHint[];
+  references: DocumentationLink[];
+  skills: string[];
 }
 
 export interface ProvisionStep {
@@ -59,16 +81,47 @@ export interface EnvironmentInfo {
   provider: string;
   phase: 'not_created' | 'provisioning' | 'ready' | 'degraded' | 'error';
   namespace: string;
+  sessionId?: string;
   kubernetesVersion?: string;
   nodes?: NodeInfo[];
   message?: string;
 }
 
+/**
+ * The session lifecycle, mirrored from the orchestrator.
+ *
+ * Explicit states, never an `active: true` boolean — the UI has to distinguish
+ * "still provisioning" from "being torn down" from "gone", and a boolean
+ * cannot.
+ */
+export type SessionStatus =
+  | 'CREATING'
+  | 'ACTIVE'
+  | 'RESETTING'
+  | 'EXPIRING'
+  | 'EXPIRED'
+  | 'ENDING'
+  | 'ENDED'
+  | 'FAILED';
+
 export interface SessionInfo {
   sessionId: string;
-  startedAt: string;
+  labId: string;
+  status: SessionStatus;
+  /** Shown only in the developer panel; it is not a student-facing concept. */
+  namespace: string;
+  createdAt: string;
+  lastActivityAt: string;
   expiresAt: string;
-  durationSeconds: number;
+  endedAt?: string;
+  statusReason?: string;
+  /** Seconds until the absolute deadline. Activity never raises this. */
+  secondsRemaining: number;
+  /** Seconds until the idle deadline. "Continue Lab" resets this. */
+  secondsUntilIdle: number;
+  idleWarning: boolean;
+  idleTimeoutSeconds: number;
+  warningSeconds: number;
 }
 
 export interface StartLabResponse {
@@ -78,9 +131,9 @@ export interface StartLabResponse {
   terminal: { url: string; token: string };
 }
 
-export interface StatusResponse {
-  environment: EnvironmentInfo;
-  session: SessionInfo | null;
+export interface SessionStatusResponse {
+  session: SessionInfo;
+  environment: EnvironmentInfo | null;
 }
 
 export interface CheckResult {
@@ -92,16 +145,26 @@ export interface CheckResult {
 
 export interface VerificationResult {
   labId: string;
+  namespace: string;
   passed: boolean;
   summary: 'LAB PASSED' | 'LAB NOT COMPLETE';
   checks: CheckResult[];
   checkedAt: string;
+  session?: SessionInfo;
 }
 
 export interface ResetResponse {
   message: string;
   removed: string[];
+  restored: string[];
   steps: ProvisionStep[];
   environment: EnvironmentInfo;
+  session: SessionInfo;
   clearTerminal: boolean;
+}
+
+export interface EndLabResponse {
+  message: string;
+  session: SessionInfo;
+  steps: ProvisionStep[];
 }

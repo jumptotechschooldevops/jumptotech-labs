@@ -642,3 +642,56 @@ code {
 .message-card h2 { margin: 0 0 10px; font-family: var(--mono); font-size: 13px; color: var(--danger); letter-spacing: 0.08em; }
 .message-card p { margin: 0 0 8px; color: var(--text-dim); font-size: 13.5px; }
 .message-card__hint { color: var(--text-faint) !important; font-size: 12.5px !important; }
+
+/* --- session lifecycle (PLATFORM-002) ------------------------------------- */
+
+/* Explicit lifecycle states, colour-coded by what the student can still do:
+   green = working, amber = in transition, red = gone. */
+.statuspill--session-active { color: var(--accent); border-color: var(--accent-dim); }
+.statuspill--session-creating,
+.statuspill--session-resetting,
+.statuspill--session-expiring,
+.statuspill--session-ending { color: var(--warn); border-color: #7a6120; }
+.statuspill--session-expired,
+.statuspill--session-ended,
+.statuspill--session-failed { color: var(--danger); border-color: #7a2b2b; }
+
+.btn--small { padding: 4px 12px; font-size: 12px; }
+
+.btn--danger-ghost { color: var(--danger); border-color: #7a2b2b; }
+.btn--danger-ghost:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.08);
+  border-color: var(--danger);
+}
+
+.btn--danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #1a0d0d;
+  font-weight: 600;
+}
+.btn--danger:hover:not(:disabled) { background: #ff8585; border-color: #ff8585; }
+
+/* --- End Lab confirmation ------------------------------------------------- */
+
+.modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 20px;
+}
+
+.modal {
+  width: min(420px, 100%);
+  background: var(--panel, #121722);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 22px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+.modal__title { margin: 0 0 10px; font-size: 16px; }
+.modal__body { margin: 0 0 20px; font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+.modal__actions { display: flex; justify-content: flex-end; gap: 10px; }

@@ -14,7 +14,9 @@ function main(): void {
   server.listen(config.port, '0.0.0.0', () => {
     console.log(`[terminal] websocket listening on :${config.port}/terminal`);
     console.log(`[terminal] shell=${config.shell} cwd=${config.workDir}`);
-    console.log(`[terminal] kubeconfig=${config.kubeconfigPath ?? '<default>'}`);
+    // Deliberately no cluster credential to print: each PTY gets a
+    // namespace-scoped kubeconfig fetched per session from the API.
+    console.log(`[terminal] credentials: per-session, from ${config.apiInternalUrl}`);
     console.log(`[terminal] allowed origins: ${config.allowedOrigins.join(', ')}`);
   });
 
