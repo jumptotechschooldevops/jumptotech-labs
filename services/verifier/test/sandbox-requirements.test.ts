@@ -22,7 +22,7 @@ import { verifyLab, type SandboxPort } from '../src/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const LABS_DIR = path.resolve(here, '../../../labs');
-const LINUX_001 = path.join(LABS_DIR, 'linux', 'linux-001-files-permissions', 'lab.yaml');
+const LINUX_002 = path.join(LABS_DIR, 'linux', 'linux-002-permissions', 'lab.yaml');
 const TF_001 = path.join(LABS_DIR, 'terraform', 'tf-001-init-plan-apply', 'lab.yaml');
 
 /** An in-memory sandbox filesystem, keyed by path relative to the home. */
@@ -61,38 +61,46 @@ function failures(checks: Array<{ status: string; label: string; detail?: string
   return checks.filter((c) => c.status !== 'pass');
 }
 
-// --- LINUX-001 --------------------------------------------------------------
+// --- the filesystem family --------------------------------------------------
 
-/** The state a student reaches by doing the lab correctly. */
+/**
+ * The state a student reaches by doing LINUX-002 correctly.
+ *
+ * LINUX-002 is the permissions lab, so it exercises every handler in this
+ * family: a directory, a regular file, modes, and an owner. The per-lab
+ * fail-then-pass coverage for all ten Linux labs lives in
+ * `linux-verifier.test.ts`; what this file pins is how each *handler* behaves
+ * at the edges — symlinks, mode normalisation, and read memoisation.
+ */
 function solvedLinuxSandbox(): FakeSandbox {
   return new FakeSandbox({
-    deploy: { type: 'directory', mode: '750', owner: 'student', group: 'deployers' },
-    'deploy/releases': { type: 'directory', mode: '755', owner: 'student', group: 'student' },
-    'deploy/release.txt': {
+    '/srv/jumptotech/reports/daily-balance.csv': { type: 'file', mode: '640', owner: 'reports' },
+    '/srv/jumptotech/reports/collect-balances.sh': { type: 'file', mode: '750', owner: 'reports' },
+    '/home/student/secure': { type: 'directory', mode: '700', owner: 'student', group: 'student' },
+    '/home/student/secure/api-token.txt': {
       type: 'file',
-      mode: '640',
+      mode: '600',
       owner: 'student',
-      group: 'deployers',
-      content: 'service=ledger-api\nversion=4.2.0\n',
+      group: 'student',
+      content: 'token=abc123\n',
     },
   });
 }
 
-describe('LINUX-001 (test requirements 12–13)', () => {
+describe('LINUX-002 — the filesystem family end to end', () => {
   it('fails on an untouched sandbox, and says what is missing', async () => {
-    const lab = await loadLabDefinition(LINUX_001);
+    const lab = await loadLabDefinition(LINUX_002);
     const result = await verifyLab({ lab, sandbox: new FakeSandbox(), namespace: 'jtt-lab-000000000001' });
 
     expect(result.passed).toBe(false);
     expect(result.summary).toBe('LAB NOT COMPLETE');
     expect(failures(result.checks)).toHaveLength(lab.requirements.length);
-    expect(result.checks[0]?.detail).toMatch(/No directory found at 'deploy'/);
     // The failure detail describes the observed state, never the fix.
-    expect(JSON.stringify(result.checks)).not.toMatch(/chmod|chgrp|mkdir/);
+    expect(JSON.stringify(result.checks)).not.toMatch(/chmod|chgrp|chown|mkdir/);
   });
 
   it('passes once the filesystem is in the state the lab describes', async () => {
-    const lab = await loadLabDefinition(LINUX_001);
+    const lab = await loadLabDefinition(LINUX_002);
     const result = await verifyLab({
       lab,
       sandbox: solvedLinuxSandbox(),
@@ -105,89 +113,86 @@ describe('LINUX-001 (test requirements 12–13)', () => {
   });
 
   it('fails one check at a time, independently', async () => {
-    const lab = await loadLabDefinition(LINUX_001);
+    const lab = await loadLabDefinition(LINUX_002);
 
-    const wrongMode = solvedLinuxSandbox().put('deploy', {
-      type: 'directory',
-      mode: '755',
+    const wrongMode = solvedLinuxSandbox().put('/home/student/secure/api-token.txt', {
+      type: 'file',
+      mode: '644',
       owner: 'student',
-      group: 'deployers',
+      group: 'student',
+      content: 'token=abc123\n',
     });
     const result = await verifyLab({ lab, sandbox: wrongMode, namespace: 'jtt-lab-000000000001' });
 
     const failed = failures(result.checks);
     expect(failed).toHaveLength(1);
-    expect(failed[0]?.detail).toBe("'deploy' has permissions 755, expected 750");
+    expect(failed[0]?.detail).toBe(
+      "'/home/student/secure/api-token.txt' has permissions 644, expected 600",
+    );
   });
 
-  it('rejects a symlink standing in for the release file', async () => {
-    const lab = await loadLabDefinition(LINUX_001);
-    const sandbox = solvedLinuxSandbox().put('deploy/release.txt', {
+  it('rejects a symlink standing in for the file the lab grades', async () => {
+    const lab = await loadLabDefinition(LINUX_002);
+    const sandbox = solvedLinuxSandbox().put('/home/student/secure/api-token.txt', {
       type: 'symlink',
       mode: '777',
       owner: 'student',
-      group: 'deployers',
-      content: 'service=ledger-api\nversion=4.2.0\n',
+      group: 'student',
+      content: 'token=abc123\n',
     });
 
     const result = await verifyLab({ lab, sandbox, namespace: 'jtt-lab-000000000001' });
     const failed = failures(result.checks);
 
+    // `stat` runs without `-L`, so a link reports as a link. Otherwise a
+    // student could satisfy a permissions check by pointing at another file.
     expect(failed.some((c) => c.detail?.includes('is a symbolic link, not a regular file'))).toBe(true);
     expect(result.passed).toBe(false);
   });
 
-  it('is not fooled by the wrong group or the wrong owner', async () => {
-    const lab = await loadLabDefinition(LINUX_001);
+  it('is not fooled by the wrong owner', async () => {
+    const lab = await loadLabDefinition(LINUX_002);
 
-    const wrongGroup = solvedLinuxSandbox().put('deploy', {
-      type: 'directory',
-      mode: '750',
-      owner: 'student',
-      group: 'student',
+    const wrongOwner = solvedLinuxSandbox().put('/home/student/secure/api-token.txt', {
+      type: 'file',
+      mode: '600',
+      owner: 'root',
+      group: 'root',
+      content: 'token=abc123\n',
     });
-    const result = await verifyLab({ lab, sandbox: wrongGroup, namespace: 'jtt-lab-000000000001' });
+    const result = await verifyLab({ lab, sandbox: wrongOwner, namespace: 'ns' });
 
     expect(failures(result.checks)[0]?.detail).toBe(
-      "'deploy' belongs to group 'student', expected 'deployers'",
+      "'/home/student/secure/api-token.txt' is owned by 'root', expected 'student'",
     );
   });
 
-  it('accepts a trailing newline difference but not different content', async () => {
-    const lab = await loadLabDefinition(LINUX_001);
+  it('compares mode as permission bits, not as a string', async () => {
+    const lab = await loadLabDefinition(LINUX_002);
 
-    const noTrailingNewline = solvedLinuxSandbox().put('deploy/release.txt', {
+    // `0600` and `600` are the same permission; both must pass.
+    const paddedMode = solvedLinuxSandbox().put('/home/student/secure/api-token.txt', {
       type: 'file',
-      mode: '640',
+      mode: '0600',
       owner: 'student',
-      group: 'deployers',
-      content: 'service=ledger-api\nversion=4.2.0',
+      group: 'student',
+      content: 'token=abc123\n',
     });
-    expect(
-      (await verifyLab({ lab, sandbox: noTrailingNewline, namespace: 'ns' })).passed,
-    ).toBe(true);
 
-    const wrongVersion = solvedLinuxSandbox().put('deploy/release.txt', {
-      type: 'file',
-      mode: '640',
-      owner: 'student',
-      group: 'deployers',
-      content: 'service=ledger-api\nversion=4.1.0\n',
-    });
-    const result = await verifyLab({ lab, sandbox: wrongVersion, namespace: 'ns' });
-    expect(result.passed).toBe(false);
-    expect(failures(result.checks)[0]?.detail).toContain('does not contain the expected text');
-    // What was found is quoted; what was expected is not.
-    expect(failures(result.checks)[0]?.detail).not.toContain('4.2.0');
+    expect((await verifyLab({ lab, sandbox: paddedMode, namespace: 'ns' })).passed).toBe(true);
   });
 
   it('reads each path once, however many checks ask about it', async () => {
-    const lab = await loadLabDefinition(LINUX_001);
+    const lab = await loadLabDefinition(LINUX_002);
     const sandbox = solvedLinuxSandbox();
     await verifyLab({ lab, sandbox, namespace: 'ns' });
 
-    // `deploy` is named by four requirements — directory, owner, group, mode.
-    expect(sandbox.reads.filter((p) => p === 'deploy')).toHaveLength(1);
+    // The token file is named by three requirements — exists, mode, owner.
+    const token = '/home/student/secure/api-token.txt';
+    expect(sandbox.reads.filter((p) => p === token)).toHaveLength(1);
+    // …and the collector script by two.
+    const script = '/srv/jumptotech/reports/collect-balances.sh';
+    expect(sandbox.reads.filter((p) => p === script)).toHaveLength(1);
   });
 });
 
@@ -338,7 +343,7 @@ describe('TF-001 (test requirements 19–20)', () => {
 
 describe('the engine dispatches by requirement family', () => {
   it('skips, rather than fails, a check whose reader is not available', async () => {
-    const lab = await loadLabDefinition(LINUX_001);
+    const lab = await loadLabDefinition(LINUX_002);
     // No sandbox reader supplied at all — a platform problem, not the student's.
     const result = await verifyLab({ lab, namespace: 'jtt-lab-000000000001' });
 
@@ -348,7 +353,7 @@ describe('the engine dispatches by requirement family', () => {
   });
 
   it('reports the sandbox it checked', async () => {
-    const lab = await loadLabDefinition(LINUX_001);
+    const lab = await loadLabDefinition(LINUX_002);
     const result = await verifyLab({
       lab,
       sandbox: solvedLinuxSandbox(),
@@ -356,6 +361,6 @@ describe('the engine dispatches by requirement family', () => {
     });
 
     expect(result.sandboxRef).toBe('jtt-lab-000000000001');
-    expect(result.labId).toBe('LINUX-001');
+    expect(result.labId).toBe('LINUX-002');
   });
 });

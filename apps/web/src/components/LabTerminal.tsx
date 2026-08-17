@@ -182,6 +182,16 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
           term.focus();
           break;
 
+        case 'reattached':
+          // A Linux reset replaces the sandbox container, so the shell inside
+          // it is a new one. Deliberately not a second `ready`: the input
+          // handler and keep-alive are already wired to this socket and must
+          // not be attached twice.
+          term.writeln('\r\n\x1b[36mEnvironment reset — reconnected to a fresh shell.\x1b[0m');
+          statusCbRef.current('connected');
+          term.focus();
+          break;
+
         case 'output':
           term.write(String(msg.data ?? ''));
           break;

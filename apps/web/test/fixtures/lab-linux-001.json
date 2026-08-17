@@ -1,75 +1,66 @@
 {
   "id": "LINUX-001",
-  "slug": "linux-001-files-permissions",
-  "title": "Files, Directories & Permissions",
+  "slug": "linux-001-files",
+  "title": "Files and Directories",
   "track": "linux",
-  "topic": "permissions",
-  "topicTitle": "Permissions",
+  "topic": "linux-fundamentals",
+  "topicTitle": "Linux Fundamentals",
   "difficulty": "beginner",
   "level": "practice",
-  "durationMinutes": 30,
+  "durationMinutes": 20,
   "environment": {
     "provider": "linux",
     "isolation": "container"
   },
-  "story": "You have joined the operations team at JumpToTech Bank. Tomorrow morning the team ships a new build of the ledger API, and the deployment runs as your account on the release host.\nYour team lead has one rule about release directories: the people who deploy can read and enter them, and nobody else can. Before the change window opens, she wants the directory laid out, the release recorded, and the permissions correct \u2014 checked, not assumed.\n",
+  "story": "Your first week on the JumpToTech Bank platform team, and you have been given a shell on a build host. Before anyone hands you a production system, your team lead wants to see that you can move around a filesystem and put files where they belong without asking which button to press.\nThe task is small on purpose. Everything that follows in this track — reading logs, fixing permissions, writing scripts — assumes you can do this without thinking about it.\n",
   "objectives": [
-    "Create directories and files from the shell",
-    "Read the ownership and permission bits that ls and stat report",
-    "Set permissions with chmod using octal notation",
-    "Change a file's group to a group you belong to"
+    "Find out where you are in the filesystem and list what is there",
+    "Create directories and empty files from the command line",
+    "Move a file into another directory and confirm it is no longer in the old one"
   ],
   "task": {
-    "summary": "Prepare a deploy directory in your home directory with the correct contents, group and permissions.\n",
-    "description": "Working in your home directory, create a directory named `deploy`, and inside it a directory named `releases`.\nRecord the release in a file at `deploy/release.txt`. It must contain exactly two lines \u2014 `service=ledger-api` on the first and `version=4.2.0` on the second.\nThen fix the permissions. The `deploy` directory must be owned by you, belong to the `deployers` group, and be readable, writable and enterable by its owner and readable and enterable by that group \u2014 and nothing for anyone else. The release file must be readable and writable by its owner and readable by the group, and nothing for anyone else.\nYou are an ordinary unprivileged user here, exactly as you would be on the real release host. There is no root and no sudo, and you do not need either: you are already a member of the `deployers` group.\n"
+    "summary": "Build a small project directory tree and move a log file into an archive.",
+    "description": "Your shell starts in the `student` account's home directory. Everything in this task happens inside it, and you already own it, so nothing here needs elevated privileges.\nCreate a directory called `project` in your home directory. Inside it, create two empty files, `app.log` and `config.txt`. Then create an `archive` directory inside `project`, and move `app.log` into it.\nWhen you are done, `project` should contain `config.txt` and the `archive` directory, and `archive` should contain `app.log`. Note the word \"move\": a copy that leaves the original behind is not the same thing, and this lab checks for that.\n"
   },
   "requirements": [
-    "Directory deploy exists",
-    "Directory deploy/releases exists",
-    "File deploy/release.txt exists",
-    "deploy/release.txt records the service and version",
-    "deploy is owned by your account",
-    "deploy belongs to the deployers group",
-    "deploy permissions are rwxr-x---",
-    "deploy/release.txt permissions are rw-r-----"
+    "The project directory exists",
+    "config.txt is in the project directory",
+    "The archive directory exists inside project",
+    "app.log is in the archive directory",
+    "app.log was moved, not copied"
   ],
   "hints": [
     {
       "level": 1,
-      "text": "A directory and a file are created with different commands, and the permission bits on each are set separately afterwards. Start by getting the layout right, then look at what `ls -l` reports about it.\n"
+      "text": "Two of these steps make something that did not exist before, and one moves something that did. Think about which command family each belongs to, and remember that a directory and a file are created by different commands.\n"
     },
     {
       "level": 2,
-      "text": "`ls -l` prints permissions as ten characters, and `stat` prints the same information as an octal number \u2014 which is the form `chmod` accepts. Compare what `stat -c '%a %U %G' deploy` reports with what the task asks for. Group ownership is changed by a different command than permissions.\n"
+      "text": "The GNU Coreutils manual documents the commands for creating directories and empty files, and for renaming or relocating them. `man mkdir`, `man touch`, and `man mv` are also available right there in your terminal. If you are unsure where you are, there is a command that prints the working directory.\n"
     },
     {
       "level": 3,
-      "text": "`rwxr-x---` is 750 and `rw-r-----` is 640; `chmod` takes either the symbolic or the octal form. `chgrp` changes a file's group, and you may set it to any group you are a member of \u2014 `id` lists yours. Read `man chmod`, `man chgrp` and `man stat` in your terminal if you want the details.\n"
+      "text": "The final layout must be exactly `~/project/config.txt`, `~/project/archive/`, and `~/project/archive/app.log`. Check your work with `ls -R ~/project`. If `app.log` still appears directly under `project` as well as under `archive`, you copied it instead of moving it — the last check exists precisely to catch that.\n"
     }
   ],
   "references": [
     {
-      "title": "chmod(1) \u2014 Linux manual page",
-      "url": "https://man7.org/linux/man-pages/man1/chmod.1.html"
+      "title": "GNU Coreutils — Directory listing and file creation",
+      "url": "https://www.gnu.org/software/coreutils/manual/html_node/index.html"
     },
     {
-      "title": "chgrp(1) \u2014 Linux manual page",
-      "url": "https://man7.org/linux/man-pages/man1/chgrp.1.html"
+      "title": "mkdir(1) — Linux manual page",
+      "url": "https://man7.org/linux/man-pages/man1/mkdir.1.html"
     },
     {
-      "title": "stat(1) \u2014 Linux manual page",
-      "url": "https://man7.org/linux/man-pages/man1/stat.1.html"
-    },
-    {
-      "title": "GNU coreutils \u2014 File permissions",
-      "url": "https://www.gnu.org/software/coreutils/manual/html_node/File-permissions.html"
+      "title": "mv(1) — Linux manual page",
+      "url": "https://man7.org/linux/man-pages/man1/mv.1.html"
     }
   ],
   "skills": [
-    "linux.filesystem.create",
-    "linux.permissions.modes",
-    "linux.permissions.ownership",
-    "linux.filesystem.inspect"
+    "linux.files.navigate",
+    "linux.files.create",
+    "linux.files.move"
   ],
   "certifications": [
     {

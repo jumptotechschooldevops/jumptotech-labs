@@ -78,9 +78,9 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    // Catalog order is by track, then by each lab's `order`. PLATFORM-004
-    // added two tracks; the Kubernetes ten are unchanged and still first.
-    expect(res.body.data.count).toBe(12);
+    // Catalog order is by track, then by each lab's `order`. The Kubernetes
+    // ten are unchanged and still first; Linux is a full ten-lab track.
+    expect(res.body.data.count).toBe(21);
     expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual([
       'K8S-001',
       'K8S-002',
@@ -93,9 +93,22 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
       'K8S-009',
       'K8S-010',
       'LINUX-001',
+      'LINUX-002',
+      'LINUX-003',
+      'LINUX-004',
+      'LINUX-005',
+      'LINUX-006',
+      'LINUX-007',
+      'LINUX-008',
+      'LINUX-009',
+      'LINUX-010',
       'TF-001',
     ]);
-    expect(res.body.data.tracks[0]).toMatchObject({ track: 'kubernetes', labCount: 10 });
+    expect(res.body.data.tracks).toEqual([
+      expect.objectContaining({ track: 'kubernetes', title: 'Kubernetes', labCount: 10 }),
+      expect.objectContaining({ track: 'linux', title: 'Linux', labCount: 10 }),
+      expect.objectContaining({ track: 'terraform', title: 'Terraform', labCount: 1 }),
+    ]);
   });
 
   it('gives a card everything it needs to render', async () => {
@@ -126,7 +139,13 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
     const byTopic = await request(app).get('/api/labs?topic=batch');
     expect(byTopic.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-006', 'K8S-007']);
 
-    const byDifficulty = await request(app).get('/api/labs?difficulty=intermediate');
+    const byLinuxTrack = await request(app).get('/api/labs?track=linux');
+    expect(byLinuxTrack.body.data.count).toBe(10);
+
+    // Difficulty is orthogonal to track, so it is asserted within one.
+    const byDifficulty = await request(app).get(
+      '/api/labs?track=kubernetes&difficulty=intermediate',
+    );
     expect(byDifficulty.body.data.count).toBe(3);
 
     const byQuery = await request(app).get('/api/labs?q=secret');
@@ -307,6 +326,18 @@ describe('GET /api/tracks', () => {
       labCount: 10,
     });
     expect(res.body.data.tracks[0].topics.map((t: { topic: string }) => t.topic)).toContain('batch');
+
+    // The Linux track carries the five topic groups the catalog navigates by.
+    const linux = res.body.data.tracks[1];
+    expect(linux).toMatchObject({ track: 'linux', title: 'Linux', labCount: 10 });
+    expect(linux.tagline).toBeTruthy();
+    expect(linux.topics.map((t: { topic: string }) => t.topic)).toEqual([
+      'linux-fundamentals',
+      'linux-administration',
+      'linux-networking',
+      'shell-scripting',
+      'troubleshooting',
+    ]);
   });
 
   it('returns one track with its labs', async () => {

@@ -35,22 +35,25 @@ import { AttemptClosingListener } from '../src/progress.js';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'integration-test-secret-value';
 
-/** The Linux lab's expected end state, so a check can be made to pass. */
+/**
+ * The end state LINUX-001 asks for, so a check can be made to pass.
+ *
+ * This mirrors `labs/linux/linux-001-files/lab.yaml` and nothing else: the
+ * tree is built, and `app.log` lives *only* under `archive`. The lab's last
+ * requirement is `path_absent` on `/home/student/project/app.log` — the log
+ * had to be moved, not copied — so that path is deliberately never written.
+ */
+const LINUX_001_SOLUTION: Record<string, Parameters<FakeContainerRuntime['put']>[2]> = {
+  '/home/student/project': { type: 'directory', mode: '755' },
+  '/home/student/project/config.txt': { type: 'file', mode: '644' },
+  '/home/student/project/archive': { type: 'directory', mode: '755' },
+  '/home/student/project/archive/app.log': { type: 'file', mode: '644', content: 'boot\n' },
+};
+
 function completeLinuxLab(runtime: FakeContainerRuntime, sandbox: string): void {
-  runtime.put(sandbox, '/home/student/deploy', {
-    type: 'directory',
-    mode: '750',
-    owner: 'student',
-    group: 'deployers',
-  });
-  runtime.put(sandbox, '/home/student/deploy/releases', { type: 'directory', mode: '755' });
-  runtime.put(sandbox, '/home/student/deploy/release.txt', {
-    type: 'file',
-    mode: '640',
-    owner: 'student',
-    group: 'deployers',
-    content: 'service=ledger-api\nversion=4.2.0\n',
-  });
+  for (const [pathName, entry] of Object.entries(LINUX_001_SOLUTION)) {
+    runtime.put(sandbox, pathName, entry);
+  }
 }
 
 let registry: LabRegistry;
@@ -58,7 +61,29 @@ let registry: LabRegistry;
 beforeAll(async () => {
   registry = new LabRegistry(path.join(repoRoot, 'labs'));
   await registry.load();
+  expect(registry.loadErrors).toEqual([]);
+
+  /*
+   * Pin the helper above to the lab on disk.
+   *
+   * A completion test that silently stops completing anything fails eight
+   * assertions away from the cause — an attempt that reads IN_PROGRESS, then
+   * ENDED, then EXPIRED, none of which is a progress bug. If LINUX-001's
+   * requirements move, this is the assertion that should break.
+   */
+  const requirements = registry.get('LINUX-001').requirements;
+  const pathOf = (r: (typeof requirements)[number]) => ('path' in r ? r.path : r.type);
+  expect(requirements.filter((r) => r.type !== 'path_absent').map(pathOf).sort()).toEqual(
+    Object.keys(LINUX_001_SOLUTION).sort(),
+  );
+  for (const requirement of requirements.filter((r) => r.type === 'path_absent')) {
+    expect(Object.keys(LINUX_001_SOLUTION)).not.toContain(pathOf(requirement));
+  }
 });
+
+/** Catalog totals come from the labs on disk, never from a remembered number. */
+const catalogTotal = (): number => registry.tracks().reduce((sum, t) => sum + t.labCount, 0);
+const trackTotal = (track: string): number => registry.labsForTrack(track).length;
 
 interface Harness {
   app: Express;
@@ -186,7 +211,7 @@ describe('starting a lab records an attempt', () => {
     const kubernetes = response.body.data.tracks.find(
       (track: { track: string }) => track.track === 'kubernetes',
     );
-    expect(kubernetes.total).toBe(10);
+    expect(kubernetes.total).toBe(trackTotal('kubernetes'));
     expect(kubernetes.completed).toBe(0);
     expect(kubernetes.inProgress).toBe(1);
     expect(
@@ -626,8 +651,12 @@ describe('progress works for every track', () => {
         `${track.completed}/${track.total}`,
       ]),
     );
-    expect(byTrack).toEqual({ kubernetes: '1/10', linux: '1/1', terraform: '1/1' });
-    expect(progress.body.data.overall).toMatchObject({ completed: 3, total: 12 });
+    expect(byTrack).toEqual({
+      kubernetes: `1/${trackTotal('kubernetes')}`,
+      linux: `1/${trackTotal('linux')}`,
+      terraform: `1/${trackTotal('terraform')}`,
+    });
+    expect(progress.body.data.overall).toMatchObject({ completed: 3, total: catalogTotal() });
   });
 });
 
@@ -655,8 +684,12 @@ describe('the progress API', () => {
     const response = await request(app).get('/api/me/progress');
 
     expect(response.status).toBe(200);
-    expect(response.body.data.overall).toMatchObject({ completed: 0, total: 12, percent: 0 });
-    expect(response.body.data.tracks).toHaveLength(3);
+    expect(response.body.data.overall).toMatchObject({
+      completed: 0,
+      total: catalogTotal(),
+      percent: 0,
+    });
+    expect(response.body.data.tracks).toHaveLength(registry.tracks().length);
     expect(
       (await request(app).get('/api/me/attempts')).body.data.attempts,
     ).toEqual([]);

@@ -5,13 +5,15 @@
  *                      requirement
  *                           │
  *                    requirement family
- *          ┌────────────────┼─────────────────┐
- *     kubernetes        filesystem         terraform
- *          │                │                  │
- *     VerifyReader      SandboxReader     SandboxReader
- *          │                │                  │
- *   Kubernetes API    the sandbox's real filesystem
- *          └────────────────┴──────────────────┘
+ *          ┌────────────┬───┴────────┬──────────────┐
+ *     kubernetes    filesystem   terraform        linux
+ *          │            │            │              │
+ *     VerifyReader  SandboxReader SandboxReader SandboxReader
+ *          │            │            │              │
+ *   Kubernetes API      the sandbox's real filesystem, and — for the
+ *          │            linux family — its process table, listening
+ *          │            sockets and account databases
+ *          └────────────┴────────────┴──────────────┘
  *                           │
  *                    PASS / FAIL + observed detail
  * ```
@@ -97,6 +99,21 @@ import {
   terraformOutputEquals,
   terraformResourceExists,
 } from './handlers/terraform.js';
+import {
+  commandExitCode,
+  commandOutput,
+  fileContentAbsent,
+  groupExists,
+  pathAbsent,
+  portListening,
+  portNotListening,
+  processNotRunning,
+  processRunning,
+  scriptExecutable,
+  scriptRuns,
+  userExists,
+  userInGroup,
+} from './handlers/linux.js';
 
 /** Raised when a requirement names a type with no registered handler. */
 export class UnsupportedRequirementError extends Error {
@@ -175,6 +192,20 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_initialized: terraformInitialized,
   terraform_resource_exists: terraformResourceExists,
   terraform_output_equals: terraformOutputEquals,
+
+  path_absent: pathAbsent,
+  file_content_absent: fileContentAbsent,
+  script_executable: scriptExecutable,
+  script_runs: scriptRuns,
+  process_running: processRunning,
+  process_not_running: processNotRunning,
+  port_listening: portListening,
+  port_not_listening: portNotListening,
+  user_exists: userExists,
+  group_exists: groupExists,
+  user_in_group: userInGroup,
+  command_exit_code: commandExitCode,
+  command_output: commandOutput,
 };
 
 /** Requirement types that currently have a handler. */
@@ -260,6 +291,30 @@ export async function verifyRequirement(
       label,
       status: 'skipped',
       detail: 'This lab environment has no sandbox filesystem to check against',
+    };
+  }
+  /*
+   * A `linux` check needs more than a path read: a process table, a socket
+   * list, an account database. A sandbox that offers reads but not inspection
+   * cannot answer one, and saying so is the honest outcome — the platform could
+   * not look, so the student is not told they failed. The lab loader already
+   * refuses a lab whose provider cannot verify its family, so this is a
+   * backstop rather than a routine path.
+   */
+  if (requirement.type === 'script_runs' && !available.sandbox.canRunScripts) {
+    return {
+      id,
+      label,
+      status: 'skipped',
+      detail: 'This lab environment cannot run scripts',
+    };
+  }
+  if (family === 'linux' && !available.sandbox.canInspect) {
+    return {
+      id,
+      label,
+      status: 'skipped',
+      detail: 'This lab environment cannot be inspected for system state',
     };
   }
   const outcome = await handler.run(requirement as never, available.sandbox);

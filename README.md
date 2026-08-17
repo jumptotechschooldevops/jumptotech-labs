@@ -2,13 +2,15 @@
 
 Interactive DevOps practice environments in the browser.
 
-A student opens the site, launches a disposable Kubernetes environment, runs
-real `kubectl` commands in a browser terminal, and has their work verified
-against live cluster state.
+A student opens the site, launches a disposable environment — a private
+Kubernetes namespace or their own Linux container — runs real commands in a
+browser terminal, and has their work verified against the live state they
+actually left behind.
 
 Nothing in this repository simulates a terminal or hardcodes command output.
-The terminal is a real PTY, the cluster is a real Kubernetes cluster, and the
-verifier reads the real Kubernetes API.
+The terminal is a real PTY, the cluster is a real Kubernetes cluster, the Linux
+sandbox is a real container running a real Debian userland, and the verifier
+reads the real Kubernetes API and the real filesystem.
 
 **PLATFORM-001** built that loop. **PLATFORM-002** made it safe for more than
 one student at a time: every lab session now gets its own namespace, its own
@@ -42,6 +44,13 @@ completed**. The dividing line is the whole design:
 
 See [Persistent progress](#persistent-progress).
 
+**The Linux track is the proof.** Ten Linux labs — files, permissions, users
+and groups, processes, services, networking, logs, storage, shell scripting and
+troubleshooting — run on that second substrate through the same catalog, the
+same session lifecycle, the same terminal, and the same verifier. Adding them
+added a provider, a requirement family and lab content; it added no second
+state machine. See [The Linux track](#the-linux-track).
+
 ---
 
 ## Contents
@@ -62,6 +71,7 @@ See [Persistent progress](#persistent-progress).
   - [Adding a provider](#adding-a-provider)
   - [Adding a lab to an existing provider](#adding-a-lab-to-an-existing-provider)
 - [The lab catalog](#the-lab-catalog)
+- [The Linux track](#the-linux-track)
 - [Persistent progress](#persistent-progress)
   - [Why progress is its own package](#why-progress-is-its-own-package)
   - [Database schema](#database-schema)
@@ -193,6 +203,34 @@ Added by PLATFORM-005:
 - **PostgreSQL in the compose stack** with a health check, a named volume, and
   forward-only, checksum-verified migrations that never drop anything.
 
+Added by PLATFORM-LINUX-001:
+
+- **A second track.** Ten Linux labs, from files and permissions through
+  services, networking, logs, storage, shell scripting, and a troubleshooting
+  lab that seeds a real fault. The catalog, the API, and the React pages gained
+  no knowledge of either track's name.
+- **A second substrate.** `LinuxLabProvider` gives each session its own
+  container — resource-limited, capability-bounded, with no network and no host
+  mounts — behind the same `LabProvider` interface the Kubernetes provider
+  implements, and on top of the same `ContainerLabProvider` that backs
+  Terraform.
+- **A provider registry.** `ProviderRegistry` resolves each lab to the
+  substrate its own `environment.provider` names, and routes cleanup back to
+  the provider that created each sandbox by its ownership label.
+- **A seeding mechanism for system state.** `setup.seed_scripts` runs
+  platform-authored baseline scripts as the sandbox's root, then deletes them —
+  the only way to stage a lab about accounts, services or `/var/log`.
+- **State-based Linux verification.** 18 further requirement types covering
+  files, modes, ownership, content, processes, listening ports, accounts and
+  groups, and scripts — graded by behaviour, never by command history.
+- **A shell in the student's own container.** The terminal gateway gained a
+  second shell implementation and still holds no container-runtime access: a
+  Linux shell is a PTY inside the session's container, reached through the
+  broker.
+- **Terminal reattach on reset.** A Linux reset replaces the container, so the
+  shell inside it dies; the browser is reconnected to a fresh one on the same
+  socket instead of being left with a dead terminal.
+
 Deliberately **not** in scope: authentication, payments, subscriptions, AI,
 certificates, AWS, an instructor portal, the JumpToBank application. Sandbox
 session state is still in memory — it describes disposable environments and the
@@ -257,6 +295,36 @@ is a **development identity**, not a login — see
                         │ (never from a container — see Security)
 ```
 
+Since PLATFORM-004 there is a second substrate under the same seam. The
+right-hand half of the picture is new; nothing above `LabProvider` changed:
+
+```text
+        ┌──────────────────┐          ┌────────────────────────────┐
+        │ lab-orchestrator │          │ services/terminal          │
+        │ ProviderRegistry │          │  one SpawnPlan, two shapes │
+        └───┬──────────┬───┘          └───────┬────────────┬───────┘
+            │          │                      │            │
+   environment.provider│               kubeconfig PTY      docker exec PTY
+      kubernetes │     │ linux / terraform     │            │
+                 ▼     ▼                       ▼            ▼
+     ┌────────────────┐ ┌──────────────────────────────────────────┐
+     │ KindLabProvider│ │ ContainerLabProvider                     │
+     │ namespace per  │ │  LinuxLabProvider · TerraformLabProvider │
+     │ session        │ │  container per session                   │
+     └───────┬────────┘ └───────────────────┬──────────────────────┘
+             │                              │ ContainerRuntimePort
+             ▼ Kubernetes API               ▼ (DockerCliRuntime)
+    lab-3f9c1a7b2d40 …            jtt-lab-3f9c1a7b2d40
+                                  ├ 0.5 CPU / 512MB / 128 pids
+                                  ├ --network none, no bind mounts
+                                  └ caps dropped, then a narrow set added back
+                                    (Linux only — see The Linux track)
+                        ▲                              ▲
+                        │ created on the HOST by       │ image built on the
+                        │ scripts/cluster-up.sh        │ HOST by
+                        │                              │ npm run sandbox:build
+```
+
 ### Key design decisions
 
 **`LabProvider` is the seam.** Everything above it — API routes, verifier,
@@ -264,10 +332,23 @@ React — is unaware of *how* a sandbox is produced. See
 [Multi-track architecture](#multi-track-architecture) for the contract and the
 registry that resolves it.
 
+**The seam held.** The Linux track was added by implementing that interface a
+second time, not by widening it. `SessionManager`, `SessionReaper`, every REST
+route, and every React component work through `ProviderRegistry`, which resolves
+each call to the provider named by the lab's own `environment.provider`. The two
+operations that carry no lab are the interesting ones: listing sandboxes is a
+union across providers, and deleting a bare handle is routed by its name shape
+and then re-checked against the *live* ownership label before anything is
+removed — which is why providers on different substrates must never share a
+name prefix.
+
 **The unit of isolation is a session, not a lab.** Two students on the same lab
-get two sandboxes. Nothing above the provider ever names one: the API, the
-verifier, and the terminal all work from a session id and look the sandbox up
-server-side.
+get two sandboxes — two namespaces, or two containers. Nothing above the
+provider ever names one: the API, the verifier, and the terminal all work from a
+session id and look the sandbox up server-side. `EnvironmentInfo.sandboxRef`
+carries whichever kind of handle this session has, because it plays the same
+role in both, and `sandboxKind` says which kind it is so the UI can label it
+honestly.
 
 **Learning state is not sandbox state.** They have different lifetimes, so they
 live in different places and in different packages. `services/lab-orchestrator`
@@ -284,10 +365,26 @@ process, the cluster is provisioned once on the host by `npm run cluster:up`,
 and `create()` builds one namespace inside it — quota, limits, network policy,
 ServiceAccount, RBAC, then the lab's initial state.
 
+**The container runtime is a substrate too, and building its images happens on
+the host.** Building a sandbox image needs the Docker socket, so it is done once
+by `npm run sandbox:build` — the same placement, and for the same reason, as
+`scripts/cluster-up.sh`. The orchestrator never builds an image; it only starts
+containers from one that already exists, and reports the provider unavailable
+with the exact command to fix it when the image is missing.
+
+**The Docker socket never reaches the browser or the student's shell.** No
+container in `docker-compose.yml` is given it, the sandbox image contains no
+Docker client, and the terminal's container-exec path is switched off inside the
+Compose stack for exactly that reason. Honest limitation, stated here and in
+[Security model](#security-model): outside Compose the orchestrator process does
+drive the host's daemon, which is a development arrangement — production would
+put a rootless, per-tenant daemon behind a dedicated broker service.
+
 **Verification is state-based.** The verifier never inspects what the student
-typed. It reads `spec` and `status` from the Kubernetes API. Solving the lab
-with `kubectl run`, with `kubectl apply -f`, or with a manifest piped from
-`heredoc` all pass identically — because all three produce the same desired
+typed. It reads `spec` and `status` from the Kubernetes API, or the filesystem,
+process table and accounts inside the session's own container. Solving a lab
+with `kubectl run` or `kubectl apply -f`, with `mkdir` or an editor or a script
+the student wrote, all pass identically — because all of them produce the same
 state.
 
 **Verification is session-scoped.** The namespace the verifier reads comes from
@@ -372,6 +469,10 @@ jumptotech-labs/
 │   │   │   │   └── container/
 │   │   │   │       ├── runtime.ts         ContainerRuntimePort + docker CLI
 │   │   │   │       └── sandbox-provider.ts  the shared container lifecycle
+│   │   │   ├── session/
+│   │   │   │   ├── setup-files.ts  starter files, bounded and non-executable
+│   │   │   │   ├── seed-scripts.ts lab baseline scripts, bounded + transient
+│   │   │   │   └── sandbox-paths.ts  the two-gate path rule
 │   │   │   ├── session-token.ts    HMAC terminal session tokens
 │   │   │   ├── types.ts            LabProvider + result contracts
 │   │   │   └── validation.ts       lab id allow-list
@@ -397,17 +498,33 @@ jumptotech-labs/
 │   │   │   ├── credentials.ts      per-session terminal binding fetch
 │   │   │   ├── spawn-plan.ts       the closed set of things it may spawn
 │   │   │   └── {config,index,protocol,server}.ts
-│   │   └── test/                   protocol, credentials, live-cluster E2E
+│   │   └── test/                   protocol, credentials, shells, live E2E
 │   └── verifier/                   state-based verification
 │       ├── src/
 │       │   ├── handlers/           one handler per requirement type
 │       │   │   ├── filesystem.ts   sandbox files, modes, owners, groups
+│       │   │   ├── linux.ts        processes, ports, accounts, scripts
 │       │   │   └── terraform.ts    state, resources, outputs
-│       │   ├── sandbox-reader.ts   memoised reads inside one sandbox
+│       │   ├── sandbox-reader.ts   memoised reads + inspection, one sandbox
 │       │   └── {index,registry,reader,contract,image,quantity}.ts
-│       └── test/verifier.test.ts
+│       └── test/                   every requirement type, both families
 │
 ├── labs/                           the catalog — data, not code
+│   ├── linux/
+│   │   ├── linux-001-files/lab.yaml
+│   │   ├── linux-002-permissions/
+│   │   │   ├── lab.yaml
+│   │   │   └── setup/seed.sh               baseline, run as root, then deleted
+│   │   ├── linux-003-users-groups/{lab.yaml,setup/}
+│   │   ├── linux-004-processes/{lab.yaml,setup/}
+│   │   ├── linux-005-services/{lab.yaml,setup/}
+│   │   ├── linux-006-networking/{lab.yaml,setup/}
+│   │   ├── linux-007-logs/{lab.yaml,setup/}
+│   │   ├── linux-008-storage/{lab.yaml,setup/}
+│   │   ├── linux-009-shell-scripting/{lab.yaml,setup/}
+│   │   └── linux-010-troubleshooting/
+│   │       ├── lab.yaml
+│   │       └── setup/seed.sh               the injected fault
 │   └── kubernetes/
 │       ├── k8s-001-pods/lab.yaml           single source of truth per lab
 │       ├── k8s-002-deployments/lab.yaml
@@ -435,7 +552,7 @@ jumptotech-labs/
 │   │   ├── api.Dockerfile
 │   │   ├── terminal.Dockerfile
 │   │   ├── web.Dockerfile
-│   │   ├── sandbox-linux.Dockerfile      the Linux sandbox image
+│   │   ├── sandbox-linux.Dockerfile      Debian + runit + the student account
 │   │   └── sandbox-terraform.Dockerfile  + terraform CLI and provider mirror
 │   └── kind/
 │       ├── cluster.yaml
@@ -901,28 +1018,36 @@ is belt and braces.
                                  │
                             Lab Catalog                  labs/**/lab.yaml
                                  │                       discovered at startup
-                    ┌────────────┴────────────┐
+                    ┌────────────┴────────────┬───────────────┐
+                    │                         │               │
+               Kubernetes                   Linux        Future tracks
                     │                         │
-               Kubernetes                Future tracks
-                    │
-   ┌────────┬───────┼───────┬────────┬─────── … ────────┐
-K8S-001  K8S-002  K8S-003  K8S-004  K8S-005          K8S-010
-   └────────┴───────┴───────┴────────┴─────── … ────────┘
+   ┌────────┬───── … ────────┐   ┌──────────┬─ … ─────────┐
+K8S-001  K8S-002          K8S-010 LINUX-001 LINUX-002  LINUX-010
+   └────────┴───── … ────────┘   └──────────┴─ … ─────────┘
+                    └────────────┬────────────┘
                                  │
                        Generic Lab Engine          no lab-specific code
-                    setup · verify · reset · hints
+                    setup · verify · reset · hints    no track-specific code
                                  │
                           Session Manager
                                  │
-                     PLATFORM-002 isolation          namespace per session
-                                 │
-                        Kubernetes cluster
+                          Provider router            by environment.provider
+                    ┌────────────┴────────────┐
+          namespace per session        container per session
+                    │                         │
+            Kubernetes cluster         Linux sandbox host
 ```
 
 The rule this section exists to state: **adding a lab does not change the
 application.** No React component, API route, orchestrator method, or verifier
 handler names a lab. `grep -r 'K8S-0' apps/ services/ --include='*.ts*'` finds
-only test fixtures.
+only test fixtures, and the same is true of `LINUX-0`.
+
+PLATFORM-LINUX-001 extended that rule one level up: **adding a track does not
+change the application either.** No component switches on a track name. The
+catalog renders track cards because the API reported more than one track, and a
+third track would render the same way without a line of frontend work.
 
 ### The ten Kubernetes labs
 
@@ -943,6 +1068,30 @@ Every lab is an original JumpToTech scenario set on a fictional banking
 platform, written from the official Kubernetes documentation. No wording,
 task, or solution is taken from any third-party training platform, and the
 loader rejects a definition that links to one.
+
+### The ten Linux labs
+
+| Lab | Title | Topic | Level | Prerequisites | Starts from |
+|---|---|---|---|---|---|
+| LINUX-001 | Files and Directories | linux-fundamentals | beginner | — | an empty home directory |
+| LINUX-002 | File Permissions | linux-fundamentals | beginner | LINUX-001 | a reporting directory with the wrong modes |
+| LINUX-003 | Users and Groups | linux-administration | beginner | LINUX-002 | a root-owned deploy area, no team group yet |
+| LINUX-004 | Processes | linux-fundamentals | beginner | LINUX-003 | one runaway process, one job not started |
+| LINUX-005 | Managing Services | linux-administration | intermediate | LINUX-004 | two runit services, both in the wrong state |
+| LINUX-006 | Networking Basics | linux-networking | intermediate | LINUX-005 | an edge service bound to loopback only |
+| LINUX-007 | Reading and Filtering Logs | linux-administration | intermediate | LINUX-006 | a payments log and an archived log |
+| LINUX-008 | Filesystem Usage and Disk Space | linux-administration | intermediate | LINUX-007 | a log archive that has grown |
+| LINUX-009 | Writing a Health-Check Script | shell-scripting | intermediate | LINUX-008 | status fixtures and an empty scripts dir |
+| LINUX-010 | Linux Troubleshooting | troubleshooting | advanced | LINUX-009 | **three independent faults** |
+
+Same rules, same schema, same file. The Linux labs are written from the GNU
+Coreutils manual, the Linux man-pages project, and the Debian documentation;
+the loader applies the same refusal to commercial training links.
+
+The two families cannot be mixed. A Linux lab that asks for a Kubernetes check,
+a Kubernetes lab that asks for a filesystem check, a Linux lab that declares
+Kubernetes setup manifests, or a lab declaring an isolation model its provider
+cannot deliver are all rejected at load time, with the reason named.
 
 ### Prerequisites are advice, not a gate
 
@@ -1187,6 +1336,176 @@ Two students on K8S-010 get two broken workloads in two namespaces. One
 student's Reset restores their own fault and leaves the other's repair alone;
 that is asserted against a real cluster in
 [`labs-integration.test.ts`](services/lab-orchestrator/test/labs-integration.test.ts).
+
+The Linux track applies the same rule on its own substrate: a unique session id,
+a derived container name, resource ceilings, a private network, an absolute
+deadline, an idle deadline, and the same reaper. See
+[The Linux track](#the-linux-track).
+
+---
+
+## The Linux track
+
+A Linux lab is the same lab engine on a different substrate. Everything
+PLATFORM-002 and PLATFORM-003 established — session ids, deadlines, cleanup,
+the catalog, hints, state-based verification, "no lab-specific code" — holds
+unchanged. What differs is where the state lives.
+
+| | Kubernetes track | Linux track |
+|---|---|---|
+| Sandbox | a namespace in a shared cluster | a container on a shared Docker host |
+| Handle | `lab-3f9c1a7b2d40` | `jtt-lab-3f9c1a7b2d40` |
+| Created by | `KindLabProvider` → Kubernetes API | `LinuxLabProvider` → `ContainerRuntimePort` → Docker |
+| Student credential | a namespace-scoped ServiceAccount kubeconfig | none — a PTY in their own container |
+| Shell | a PTY in the terminal container, holding that kubeconfig | a PTY inside the session's container |
+| Verified by reading | `spec`/`status` from the Kubernetes API | the filesystem, process table, sockets and accounts |
+| Setup | Kubernetes manifests, applied into the namespace | starter files, plus seed scripts run as root and then deleted |
+| Reset | purge the namespace's objects, keep the namespace | replace the container from the image |
+
+The Linux provider is a thin subclass of `ContainerLabProvider`, the shared
+container lifecycle that also backs Terraform. It pins the image, the
+capability grant, the foreground process and the inspection vocabulary; the
+create/status/reset/destroy/cleanup machinery is the same code for both.
+
+### The ten labs
+
+| Lab | Topic | What it teaches |
+|---|---|---|
+| LINUX-001 | files | navigating, creating, and *moving* rather than copying |
+| LINUX-002 | permissions | modes, ownership, and what an executable actually needs |
+| LINUX-003 | users & groups | `useradd`, `groupadd`, primary vs secondary membership |
+| LINUX-004 | processes | reading the process table, stopping and starting work |
+| LINUX-005 | services | enabling, starting and inspecting a supervised service |
+| LINUX-006 | networking | listening sockets, and capturing what is bound where |
+| LINUX-007 | logs | finding the signal in a log, and in a rotated archive |
+| LINUX-008 | storage | usage, reclaiming space, and keeping an index honest |
+| LINUX-009 | shell scripting | writing a script graded on behaviour, not on source |
+| LINUX-010 | troubleshooting | a seeded fault, diagnosed and repaired |
+
+### What a student's container is
+
+One container per session, created from `jumptotech/lab-linux` and thrown away
+with the session. It has:
+
+- **no host filesystem** — no bind mounts, ever, and the Docker socket is never
+  passed in. The image contains no Docker client either;
+- **no network** — `--network none`. Nothing in the track needs egress;
+- **hard ceilings** — `--cpus`, `--memory`, `--memory-swap` and `--pids-limit`
+  from `SessionPolicy.sandbox`, so one student cannot exhaust the host and an
+  abandoned shell cannot fork-bomb it;
+- **a real Debian userland** — GNU coreutils, `procps`, `iproute2`, man pages,
+  and `runit` as a genuine process supervisor.
+
+### On root, and what the boundary actually is
+
+A Terraform sandbox keeps the strictest possible profile: `--cap-drop ALL`,
+`no-new-privileges`, and a foreground process that does nothing. The Linux
+sandbox cannot, and pretending otherwise would make the track dishonest —
+LINUX-003 is about `useradd`, LINUX-005 is about a supervised service,
+LINUX-002 is about a file the student does not own. A stubbed `systemctl` or a
+fake `useradd` would teach students to type commands that produce no effect.
+
+So the Linux sandbox drops every capability and then adds back a narrow,
+explicit list — `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `SETUID`,
+`SETGID`, `SETPCAP`, `KILL` — and allows privilege escalation so `sudo` works.
+That list is checked against `GRANTABLE_CAPABILITIES` in the runtime before
+anything reaches Docker, and `SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE`, `MKNOD`,
+`SYS_MODULE` and `SYS_BOOT` are *not in it and cannot be added from
+configuration*.
+
+What that changes: the student is root inside their own container. What it does
+not change: no host filesystem, no Docker socket, no network, the same resource
+ceilings, the same one-container-per-session derivation, and the same reaper.
+**The isolation boundary for a Linux lab is the container, not the account
+inside it** — and a container is not a virtual machine, which is stated plainly
+in [Security model](#security-model) as well.
+
+### The shell
+
+The terminal service attaches a PTY to the session's container. It learns
+*which* container from the API, keyed by the session id inside a signed token —
+never from the browser — and it builds the argv itself from a closed
+`SpawnPlan`, after re-validating the container name shape. There is no field
+anywhere in the terminal binding that can become "run this string", and no
+credential is involved at all: the student's shell is not authenticated by a
+token, it is a process inside a container that belongs to exactly one session.
+
+A reset replaces the container, which kills the shell inside it. The API calls
+the terminal service's `/internal/reattach`, and the same browser socket gets a
+fresh shell in the fresh container — the session, the token and the scrollback
+all survive.
+
+### Setup, without executing lab content anywhere it does not belong
+
+Two mechanisms, in a deliberate order:
+
+1. **`setup.files`** — starter content written as the unprivileged student, so
+   it carries exactly the ownership the student's own work would.
+2. **`setup.seed_scripts`** — platform-authored scripts, shipped in the lab's
+   own directory, run inside *that session's* container as its root.
+
+The second exists because the first cannot stage a lab about accounts,
+services or `/var/log`. It is fenced the same way `setup.manifests` is:
+lab.yaml carries a *filename*, never a command; the path is confined to the
+lab's directory and re-checked after resolution; the file must begin with `#!`
+and is size-capped; and nothing student-supplied and nothing reachable from an
+HTTP route can reach the loader.
+
+Each script is written into a root-only directory, run once, and deleted — and
+the directory is emptied again in a `finally`, so a script survives neither
+success nor failure. That deletion is not tidiness: a troubleshooting lab's
+seed script *describes the fault it injects*, and the student is root in there.
+
+### Verification
+
+The `linux` requirement family adds what a file read cannot answer: is this
+process running, is anything listening on that port, does this account exist
+and is it in that group, does the script the student wrote actually work.
+
+Three of those types run something, and they are fenced:
+
+- **`command_exit_code` / `command_output`** name a binary from
+  `VERIFIER_COMMANDS`, a closed allow-list of read-only inspection binaries.
+  A lab cannot name `rm`, `chmod` or `bash`, and the list cannot be extended
+  from lab.yaml. Arguments are an argv array with no shell anywhere.
+- **`script_runs`** runs the student's own file, by path, as the student,
+  inside their own container — the one place that code can already run, because
+  they have a shell in it. It reaches nothing on the host and nothing belonging
+  to another student. It is a *separate* provider capability from inspection,
+  because "run a fixed platform binary" and "run student code" are different
+  things to reason about and should be different things to grant.
+
+Process matching happens in the verifier, over a table it read itself; a lab's
+pattern is never handed to `pgrep`, a shell, or a regular-expression engine, so
+it can neither inject nor backtrack.
+
+### Running the Linux track locally
+
+```bash
+npm run sandbox:build   # builds jumptotech/lab-linux (once, ~1 minute)
+```
+
+Then run the services on your host:
+
+```bash
+npm run dev:api
+npm run dev:terminal
+npm run dev:web
+```
+
+**The shipped `docker compose` stack cannot run Linux labs**, deliberately: no
+container in it is given a container runtime, and the Docker socket is never
+mounted into any of them — the same rule that keeps cluster creation on the
+host. Inside Compose, `LINUX_PROVIDER_ENABLED` and
+`TERMINAL_CONTAINER_EXEC_ENABLED` are off, the Linux labs stay in the catalog,
+and their cards say plainly that they cannot be started there.
+
+Without the image built, nothing pretends to work either: the provider reports
+itself unavailable with the exact command to fix it, and the catalog marks its
+labs accordingly.
+
+Every limit, image, user and network above is configuration, not code. See the
+sandbox blocks in [`.env.example`](.env.example).
 
 ---
 
@@ -1872,7 +2191,8 @@ sed -i.bak "s|^TERMINAL_SESSION_SECRET=.*|TERMINAL_SESSION_SECRET=$(openssl rand
 
 ## Running locally
 
-Two commands, in this order.
+Two commands for the Kubernetes track, plus two more if you want the Linux
+track as well.
 
 **1. Create the Kubernetes substrate** (once; takes 1–3 minutes the first time):
 
@@ -1934,6 +2254,7 @@ Then open:
 | web | http://localhost:3000 | the UI |
 | api | http://localhost:4000/health | REST API |
 | terminal | http://localhost:4001/health | WebSocket terminal gateway |
+| broker | http://127.0.0.1:4002/health | sandbox broker (host process, Linux track; needs the internal secret) |
 
 Check everything at once:
 
@@ -1961,6 +2282,7 @@ export DATABASE_URL="postgresql://jumptotech:<password>@localhost:5432/jumptotec
 npm run dev:api        # :4000
 npm run dev:terminal   # :4001  (needs Node 22 for node-pty)
 npm run dev:web        # :3000
+npm run sandbox:broker # :4002  (Linux track; needs the Docker socket)
 ```
 
 ### Shutting down
@@ -1969,6 +2291,14 @@ npm run dev:web        # :3000
 docker compose down          # stop the services, keep student progress
 docker compose down -v       # …and delete the progress volume too
 npm run cluster:down         # delete the kind cluster
+```
+
+Stop the broker with Ctrl-C. Any sandboxes still running are labelled with their
+expiry and are collected by the reaper on the next start; to clear them by hand:
+
+```bash
+docker rm -f $(docker ps -aq --filter label=jumptotech.io/managed=true)
+docker network prune -f --filter label=jumptotech.io/managed=true
 ```
 
 ---
@@ -2288,10 +2618,17 @@ mark EXPIRING → terminate terminal → delete namespace → verify gone → ma
 ```
 
 The orphan rule is what makes an API restart survivable. Session state is in
-memory today, so a restart loses it — but the namespace *labels* survive, and
-each one carries its own `jumptotech.io/expires-at`. The reaper reads expiry
-from the cluster and reclaims accordingly. A one-minute grace period stops it
-reclaiming a namespace that is still being provisioned.
+memory today, so a restart loses it — but the sandbox *labels* survive, and each
+one carries its own `jumptotech.io/expires-at`. The reaper reads expiry from the
+substrate and reclaims accordingly. A one-minute grace period stops it
+reclaiming a sandbox that is still being provisioned.
+
+One reaper covers every track. It asks each registered provider for every managed
+sandbox, which is a union across substrates, and routes each delete back by the
+handle's prefix — `lab-` to Kubernetes, `jtt-lab-` to the container providers. A handle matching
+no configured prefix is refused rather than guessed at, which is precisely why
+the two prefixes must differ. A substrate that cannot be reached contributes
+nothing to the sweep instead of hiding the other's sandboxes.
 
 ### Cleanup safety
 
@@ -2302,6 +2639,12 @@ gates stand in front of every delete, re-read from the API server each time:
 2. it must not be a protected cluster namespace;
 3. the live object must carry `jumptotech.io/managed=true`;
 4. when a session id is supplied, the namespace's session label must match it.
+
+The Linux side applies the same rule with the same labels, enforced inside the
+broker against the live container immediately before the delete: the name must
+carry `jtt-lab-`, the container must be `jumptotech.io/managed=true`, and a
+supplied session id must match its label. A sandbox that is already gone counts
+as removed, which is what makes repeat sweeps harmless.
 
 ```yaml
 metadata:
@@ -2509,6 +2852,38 @@ The mapped type in the verifier registry makes the compiler refuse the first
 without the second. Nothing else — no route, no component, no lab-specific
 branch anywhere.
 
+### Adding LINUX-011
+
+Identical, on the other substrate. `labs/linux/linux-011-<topic>/lab.yaml`,
+with:
+
+```yaml
+track: linux
+environment:
+  provider: linux                 # isolation: container is implied and checked
+
+setup:                            # optional
+  seed_scripts: [setup/seed.sh]   # NOT manifests — the loader refuses those here
+  verify:
+    - type: file_exists
+      path: /srv/example/input.csv
+
+requirements:                     # Linux types only; a Kubernetes type is refused
+  - type: file_mode
+    path: /srv/example/input.csv
+    mode: "640"
+    label: The input file is readable only by its owner and group
+
+references:                       # official Linux documentation, as validated
+  - title: chmod(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/chmod.1.html
+```
+
+Restart the API; `labsLoaded` becomes 21. The lab appears under the Linux track,
+provisions its own container, seeds its baseline root-only and then removes it,
+is graded against the live filesystem, and is reset by replacing the container.
+No application code is involved — the same rule, on the second track.
+
 ---
 
 ## API reference
@@ -2581,11 +2956,16 @@ by lab id — two students on the same lab have two different sandboxes.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/sessions/:sessionId` | status, countdowns, idle warning |
-| `POST` | `/api/sessions/:sessionId/check` | run the verifier against this session's namespace |
+| `POST` | `/api/sessions/:sessionId/check` | run the verifier against this session's own sandbox |
 | `POST` | `/api/sessions/:sessionId/reset` | restore this session's baseline |
 | `POST` | `/api/sessions/:sessionId/activity` | record activity ("Continue Lab") |
 | `POST` | `/api/sessions/:sessionId/hints` | record that a hint was revealed (idempotent) |
-| `DELETE` | `/api/sessions/:sessionId` | End Lab: delete the namespace, release the slot |
+| `DELETE` | `/api/sessions/:sessionId` | End Lab: delete the sandbox, release the slot |
+
+The shape is identical on every track. What differs is what the session's
+handle names: `sandboxKind` reports `namespace` or `container`, and a
+container-backed reset additionally reconnects the student's terminal, because
+replacing the container killed the shell inside it.
 
 ### Progress and attempts (PLATFORM-005)
 
@@ -2606,8 +2986,8 @@ about. The server decides who the caller is — see
 {
   "student": { "studentId": "dev-student-001", "authenticated": false,
                "identitySource": "development-default", "durable": true },
-  "overall": { "total": 12, "completed": 1, "inProgress": 0,
-               "notStarted": 11, "percent": 8 },
+  "overall": { "total": 21, "completed": 1, "inProgress": 0,
+               "notStarted": 20, "percent": 5 },
   "tracks": [
     { "track": "kubernetes", "title": "Kubernetes", "total": 10, "completed": 1,
       "inProgress": 0, "notStarted": 9, "percent": 10,
@@ -2652,7 +3032,21 @@ Notes on these endpoints:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/internal/sessions/:sessionId/credentials` | mint this session's namespace-scoped kubeconfig for the terminal service |
+| `POST` | `/internal/sessions/:sessionId/credentials` | what the terminal needs to open this session's shell |
+
+In the other direction, on the **terminal service** (`:4001`), the API calls
+`POST /internal/terminate` when a session ends and `POST /internal/reattach`
+after a container-backed reset has replaced the container the shell lived in.
+Both carry
+the same shared secret, and both are best-effort: sandbox teardown is never
+blocked by an unreachable terminal service.
+
+The terminal binding is a closed, discriminated union, because the tracks
+differ in kind: `{"kind":"kubernetes", "kubeconfig": …}` carries an actual
+credential, while `{"kind":"container-exec", "containerRef": …, "user": …}`
+carries none — it names a container, a user and a working directory, and the
+terminal service builds the argv itself. Neither variant carries a command
+line, so nothing here can become "run this string".
 
 Notes:
 
@@ -2684,7 +3078,10 @@ Error codes you may meet: `INVALID_LAB_ID`, `LAB_NOT_FOUND`, `INVALID_TRACK_ID`,
 `TRACK_NOT_FOUND`, `INVALID_SESSION_ID`, `SESSION_NOT_FOUND`,
 `SESSION_NOT_ACTIVE`, `LAB_CAPACITY_REACHED`, `SESSION_PROVISION_FAILED`,
 `SETUP_FAILED`, `ENVIRONMENT_UNREACHABLE`, `INVALID_STUDENT_ID`,
-`INVALID_HINT_INDEX`, `ATTEMPT_NOT_FOUND`, `PROGRESS_UNAVAILABLE`.
+`INVALID_HINT_INDEX`, `ATTEMPT_NOT_FOUND`, `PROGRESS_UNAVAILABLE`, and — when
+a deployment does not run the substrate a lab asks for —
+`UNKNOWN_ENVIRONMENT_PROVIDER` on start and `VERIFIER_NOT_CONFIGURED` on
+check. Both are `503`, and both are raised before anything is created.
 
 Try it:
 
@@ -2700,6 +3097,12 @@ curl -s -X POST "localhost:4000/api/sessions/$SID/check" | jq '.data.summary'
 curl -s -X POST "localhost:4000/api/sessions/$SID/hints" \
   -H 'content-type: application/json' -d '{"level":1}' | jq '.data'
 curl -s -X DELETE "localhost:4000/api/sessions/$SID" | jq '.data.message'
+
+# The same four calls, on the other substrate.
+LID=$(curl -s -X POST localhost:4000/api/labs/LINUX-001/start | jq -r '.data.session.sessionId')
+curl -s "localhost:4000/api/sessions/$LID" | jq '.data.environment | {provider, isolation, image}'
+curl -s -X POST "localhost:4000/api/sessions/$LID/check" | jq '.data.summary'
+curl -s -X DELETE "localhost:4000/api/sessions/$LID" | jq '.data.message'
 
 # …and the part that outlives all of it
 curl -s localhost:4000/api/me/progress | jq '.data.overall'
@@ -2732,6 +3135,16 @@ provisioning, solving, verifying, resetting and tearing down each one:
 RUN_INTEGRATION_TESTS=1 \
 KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml" \
   npx vitest run test/labs-integration.test.ts --root services/lab-orchestrator
+```
+
+Integration tests against real Docker, for the Linux track. These need the
+training image and a reachable Docker socket, and they are where every claim a
+mock could only pretend to prove is settled — real commands against real state,
+real isolation between five concurrent sandboxes, real teardown:
+
+```bash
+npm run sandbox:build
+make test-sandbox
 ```
 
 The end-to-end terminal suite additionally needs a working `node-pty`, which
@@ -2932,11 +3345,47 @@ npx vitest run --root apps/web               # catalog UI, lab page, hints
 | — | An attempt orphaned by an API restart is closed, and a live one is not | `service.test.ts`, `repository-contract.ts` (**both stores**) |
 | — | Dashboard and catalog completion state | `ProgressPage.test.tsx`, `CatalogProgress.test.tsx` |
 
+### Linux track coverage
+
+The Linux track is verified through the same seams as everything else, so this
+table is about *what is specific to Linux* rather than a second lifecycle.
+
+| # | Requirement | Where |
+|---|---|---|
+| 1–2 | Ten Linux lab definitions load; the catalog carries every track | `linux-labs.test.ts`, `lab-catalog.test.ts`, `catalog-api.test.ts` |
+| 3 | Starting a Linux lab creates an isolated container | `linux-provider.test.ts`, `linux-sessions.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 4 | A unique container per session | `linux-sessions.test.ts`, `linux-api.test.ts` |
+| 5 | The terminal attaches to the student's own container | `spawn-plan.test.ts`, `linux-api.test.ts`, `terminal-integration.test.ts` (**real PTY**) |
+| 6 | Real Linux commands execute against real state | `sandbox-integration.test.ts` (**real**) |
+| 7 | Student A cannot see or reach student B's environment | `linux-provider.test.ts`, `linux-api.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 8 | Filesystem checks read real state | `sandbox-requirements.test.ts`, `linux-verifier.test.ts` |
+| 9 | Permission, ownership and group checks | `sandbox-requirements.test.ts`, `linux-verifier.test.ts` |
+| 10 | Process and listening-port checks | `linux-verifier.test.ts` |
+| 11 | Script checks grade behaviour, not source | `linux-verifier.test.ts` |
+| 12–13 | Every shipped Linux lab fails unsolved and passes solved | `linux-verifier.test.ts` |
+| 14 | Reset replaces the container and reconnects the shell | `linux-provider.test.ts`, `linux-sessions.test.ts`, `linux-api.test.ts` |
+| 15–17 | End Lab, expiry, and idempotent cleanup | `linux-sessions.test.ts`, `reaper.test.ts` |
+| 18 | Five concurrent sessions stay isolated | `linux-sessions.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 19 | The API routes start / terminal binding / check / reset / end per track | `linux-api.test.ts`, `multi-track-api.test.ts` |
+| 20 | The catalog presents more than one track | `CatalogTracks.test.tsx`, `live-payloads.test.tsx` |
+| 21 | Seed scripts stage the baseline as root, then vanish | `linux-provider.test.ts`, `linux-sessions.test.ts` |
+| 22 | The capability grant is bounded, and never host-reaching | `linux-provider.test.ts`, `container-provider.test.ts` |
+| 23 | Inspection commands are allow-listed; anything else is refused | `linux-provider.test.ts`, `linux-verifier.test.ts` |
+
+Everything that depends on the container runtime genuinely *enforcing*
+something — the capability drop, the pids limit, `--network none`, a real shell
+running as `student` — is asserted against real Docker in
+`apps/api/test/sandbox-integration.test.ts`, never against a fake. The fakes
+pin what the platform *asks for*; only the integration suite can pin what the
+kernel does about it.
+
 The web suite additionally renders the components against **verbatim API
 responses** captured in `apps/web/test/fixtures/` — including
 `me-progress.json` and `me-attempts.json` — which is what catches a drift
-between what the API sends and what the UI expects; hand-written fixtures would
-hide exactly that.
+between what the API sends and what the UI expects; hand-written fixtures
+would hide exactly that. That capture is a three-track, twenty-one-lab
+catalog, so the catalog page is exercised against the shape it actually
+serves.
 
 Anything that depends on the API server actually *enforcing* something — RBAC
 decisions, quota admission, namespace deletion, an image that cannot be pulled,
@@ -2995,6 +3444,32 @@ docker compose logs api
 If you recreated the cluster, the kubeconfig changed — re-run
 `npm run cluster:up` (it re-exports both kubeconfigs) and
 `docker compose restart api terminal`.
+
+**A Linux lab fails with `ENVIRONMENT_UNREACHABLE`**
+The shipped Compose stack cannot run container-backed labs, deliberately: no
+container in it is given a container runtime, and the Docker socket is never
+mounted into any of them.
+
+```bash
+docker compose logs api | grep -i 'provider'
+curl -s localhost:4000/api/labs/LINUX-001 | jq '.data.availability'
+```
+
+Run the services on your host instead — `npm run dev:api`, `npm run dev:terminal`,
+`npm run dev:web`. See [The Linux track](#the-linux-track).
+
+**A Linux lab is marked unavailable naming the sandbox image**
+The image has not been built on this machine:
+
+```bash
+npm run sandbox:build
+docker image inspect jumptotech/lab-linux:latest >/dev/null && echo present
+```
+
+**A Linux lab is marked unavailable naming the container runtime**
+Nothing reachable is answering as a container daemon. Start Docker Desktop (or
+your runtime) and reload the catalog; the Kubernetes track is unaffected either
+way, and the Linux labs stay catalogued rather than disappearing.
 
 **Start Lab fails with `TERMINAL_UNAVAILABLE`**
 
@@ -3104,8 +3579,33 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 - *No process runs as root.* The api image runs as `node`; the terminal image
   runs as a dedicated `student` user (uid 1001) that owns nothing in `/app`.
   Both containers set `no-new-privileges` and drop all Linux capabilities.
-- *The Docker socket is never mounted.* Cluster creation happens on the host in
-  `scripts/cluster-up.sh`, outside every web-facing process.
+- *The Docker socket is never mounted into a web-facing process.* Cluster
+  creation happens on the host in `scripts/cluster-up.sh`; sandbox creation
+  happens in the sandbox broker, a host process outside the api, terminal and
+  web containers. Neither the api nor the terminal can create a container.
+- *The broker does not trust its callers.* Image, capabilities, limits, network,
+  and the exec allow-list are decided in the broker, re-checked there, and
+  clamped to configured ceilings — so a compromised API can ask for a sandbox
+  but not for a privileged one. Every request needs the internal service secret,
+  and the browser has no route to that service at all.
+- *A Linux sandbox is a locked-down container.* Never privileged; all
+  capabilities dropped and a minimal set added back (no `NET_RAW`, `NET_ADMIN`,
+  `SYS_ADMIN`, `SYS_PTRACE`, `MKNOD`, `SYS_MODULE`); no bind mounts, volumes, or
+  host paths of any kind; its own bridge network, `Internal` by default, so it
+  can reach neither another student, nor the platform's own services, nor the
+  internet; memory, swap, CPU, pids and file descriptors all capped.
+- *A Linux session carries no credential at all.* The internal credentials
+  endpoint returns the name of a container, not a secret. Possessing that name
+  grants nothing without the broker's service secret.
+- *Lab baselines never reach the student.* Seed scripts are lab content shipped
+  in this repository, confined to the lab's own directory, size-capped, and
+  required to be scripts. They are installed root-only inside one container, run
+  before the student's terminal exists, and deleted afterwards whatever the
+  outcome — so a troubleshooting lab's answer is never on disk to be read.
+- *Nothing a Linux lab declares is executed as shell.* `command_*` checks name a
+  binary from a closed list and pass an argv array; `script_runs` runs the
+  student's own file, by path, as the student. The broker enforces the same
+  allow-list a second time, so a bug above it cannot widen it.
 - *No shell over REST.* No API endpoint executes student input. The provider's
   internal `execute()` accepts only allow-listed binaries (`kubectl`), takes an
   explicit `argv` array, and runs with `shell: false`.
@@ -3248,31 +3748,44 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    claim tenant-level network isolation without verifying enforcement on the
    cluster you actually run. `kind` is development infrastructure and is not a
    supported production substrate.
-4. **The student shell is a normal shell.** It runs as an unprivileged user in a
-   container with no host mounts, but there is no sandbox layer beyond Docker's
-   defaults, and outbound network access from the shell itself is unrestricted.
-5. **Sandbox session state is in memory.** Restarting the API forgets *active
+4. **The student shell is a normal shell.** On the Kubernetes track it runs as
+   an unprivileged user in a container with no host mounts, but there is no
+   sandbox layer beyond Docker's defaults, and outbound network access from that
+   shell is unrestricted.
+5. **A Linux student is root inside their own container.** Passwordless `sudo`
+   is deliberate — the track teaches administration — and it means
+   `no-new-privileges` is *not* set on sandbox containers, unlike the platform's
+   own. The isolation boundary is therefore the container alone: same shared
+   kernel, so a container-escape or kernel vulnerability crosses it. Production
+   needs gVisor, Firecracker, or per-session VMs, plus seccomp profiles. Do not
+   run this on a host that matters.
+6. **Anything that can reach the broker's port and holds the internal secret can
+   create containers on that host.** It binds loopback by default and warns
+   loudly when told to bind wider; the Docker Compose flow needs it wider, which
+   makes that flow development-only.
+7. **Sandbox session state is in memory.** Restarting the API forgets *active
    sessions* — a student mid-lab loses their environment handle and starts
-   again. Namespaces are not leaked when that happens (the reaper reclaims them
-   from their labels), and since PLATFORM-005 their *history* is not lost
-   either: attempts and progress are in PostgreSQL. An attempt whose session was
-   forgotten is closed as `EXPIRED` by a sweep that only touches attempts older
-   than the absolute session lifetime — so a restart costs the environment, not
-   a lab stuck "in progress" forever. Moving the session store itself to
-   PostgreSQL is still a later story; `SessionStore` remains the seam.
-6. **The capacity guard is per-process.** `MAX_ACTIVE_SESSIONS` is enforced
+   again. Sandboxes are not leaked when that happens (the reaper reclaims
+   namespaces and containers alike from their own labels), and since
+   PLATFORM-005 their *history* is not lost either: attempts and progress are
+   in PostgreSQL. An attempt whose session was forgotten is closed as
+   `EXPIRED` by a sweep that only touches attempts older than the absolute
+   session lifetime — so a restart costs the environment, not a lab stuck "in
+   progress" forever. Moving the session store itself to PostgreSQL is still a
+   later story; `SessionStore` remains the seam.
+8. **The capacity guard is per-process.** `MAX_ACTIVE_SESSIONS` is enforced
    synchronously inside one API instance. Running several instances needs the
    same reservation inside a database transaction.
-7. **`kubectl` is available in the terminal container**, and a student can reach
+9. **`kubectl` is available in the terminal container**, and a student can reach
    the API server from it. That is the point of the lab; the RBAC above is what
    bounds it.
-8. **Development kubeconfigs are written to disk** at
+10. **Development kubeconfigs are written to disk** at
    `infrastructure/kind/generated/` with mode 644 so the containers' non-root
    users can read them. They are git-ignored and belong to a throwaway local
    cluster; treat them as credentials anyway.
-9. **The web container runs the Vite dev server**, which is not a production
+11. **The web container runs the Vite dev server**, which is not a production
    server.
-10. **TLS is not configured.** Everything is plain HTTP/WS on localhost, which
+12. **TLS is not configured.** Everything is plain HTTP/WS on localhost, which
     also means the terminal token and the internal service secret travel in
     clear text on the local network.
 
@@ -3304,6 +3817,24 @@ Beyond the security items above:
   `hashicorp/random`. A lab needing another provider needs it added to the
   image, which is deliberate but does mean a content change can require an
   image rebuild.
+- **A sandbox container has no persistent storage.** Everything the student
+  does lives in the container's writable layer and is gone when the session
+  ends, is reset, or expires. That is the intent: what a student *did* is
+  remembered — see [Persistent progress](#persistent-progress) — but the
+  environment they did it in is not.
+- **LINUX-005 teaches supervision with `runit`, not systemd.** A container does
+  not run systemd and the image does not pretend otherwise — there is no fake
+  `systemctl`. The concepts transfer; the exact commands do not, and the lab
+  text says so rather than hiding it.
+- **The Linux sandbox is deliberately less locked down than the Terraform
+  one.** It adds back a narrow capability set and allows `sudo`, because a lab
+  about `useradd` cannot be taught otherwise. The boundary is the container, not
+  the account inside it — see
+  [`linux-provider.ts`](services/lab-orchestrator/src/providers/linux-provider.ts)
+  for exactly what is granted and what is not.
+- **Sandbox capacity is bounded by one host.** `MAX_ACTIVE_SESSIONS` caps how
+  many sessions exist at once; there is no scheduling across hosts and no queue
+  past the cap.
 - Sandbox session state is in memory. Learning history is not — see
   [Persistent progress](#persistent-progress) — but a restart still costs a
   student their running environment.
@@ -3343,17 +3874,17 @@ Beyond the security items above:
 - **Hint usage is recorded, but nothing uses it.** Since PLATFORM-005 each
   reveal is stored once per (attempt, hint); no scoring, difficulty adjustment
   or instructor view reads it yet.
-- **Ten labs are a foundation, not CKA readiness.** The `certification`
-  metadata records that a lab is *relevant* to CKA and which domain it touches.
-  It does not claim, and must not be presented as claiming, that completing
-  these ten labs prepares anyone for the exam.
-- **Three tracks exist, and two of them have one lab each.** Linux and
-  Terraform are proofs that the multi-track engine works end to end, not
-  curricula. LINUX-001 and TF-001 do not make anyone competent at Linux or
-  Terraform, and must not be presented as doing so.
-- The Terraform lab's `certification` metadata records *relevance* to the
-  HashiCorp Terraform Associate exam, exactly as the Kubernetes labs do for
-  CKA. It is not a claim of exam readiness.
+- **Twenty-one labs are a foundation, not exam readiness.** The `certification`
+  metadata records that a lab is *relevant* to CKA, LFCS or the Terraform
+  Associate exam, and which domain it touches. It does not claim, and must not
+  be presented as claiming, that completing these labs prepares anyone for any
+  of them.
+- **Three tracks exist, and they are not the same size.** Kubernetes and Linux
+  are ten labs each; Terraform is one, and is a proof that the multi-track
+  engine works end to end rather than a curriculum. TF-001 does not make anyone
+  competent at Terraform and must not be presented as doing so.
+- The track machinery is generic and a fourth track would need no frontend
+  work, but it would need a provider and, most likely, a requirement family.
 - K8S-007 checks the CronJob's configured schedule rather than waiting for a
   firing, so that correct work is not left unmarked for five minutes.
 - Lab images are pulled from Docker Hub. `nginx:stable` is pre-pulled into the

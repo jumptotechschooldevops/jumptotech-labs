@@ -49,6 +49,21 @@ import { AttemptClosingListener } from '../src/progress.js';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'integration-test-secret-value';
 
+/**
+ * The end state LINUX-001 asks for, so a check can be made to pass.
+ *
+ * This mirrors `labs/linux/linux-001-files/lab.yaml` and nothing else: the
+ * tree is built, and `app.log` lives *only* under `archive`. The lab's last
+ * requirement is `path_absent` on `/home/student/project/app.log` — the log
+ * had to be moved, not copied — so that path is deliberately never written.
+ */
+const LINUX_001_SOLUTION: Record<string, Parameters<FakeContainerRuntime['put']>[2]> = {
+  '/home/student/project': { type: 'directory', mode: '755' },
+  '/home/student/project/config.txt': { type: 'file', mode: '644' },
+  '/home/student/project/archive': { type: 'directory', mode: '755' },
+  '/home/student/project/archive/app.log': { type: 'file', mode: '644', content: 'boot\n' },
+};
+
 const url = process.env.TEST_DATABASE_URL;
 const enabled = process.env.RUN_DB_TESTS === '1' && typeof url === 'string' && url.length > 0;
 
@@ -69,6 +84,23 @@ if (!enabled) {
     beforeAll(async () => {
       registry = new LabRegistry(path.join(repoRoot, 'labs'));
       await registry.load();
+      expect(registry.loadErrors).toEqual([]);
+
+      /*
+       * Pin the helper below to the lab on disk. If LINUX-001's requirements
+       * move, this is the assertion that should break — not a persistence
+       * assertion eight steps downstream that reads IN_PROGRESS instead of
+       * PASSED and looks like a database bug.
+       */
+      const requirements = registry.get('LINUX-001').requirements;
+      const pathOf = (r: (typeof requirements)[number]) => ('path' in r ? r.path : r.type);
+      expect(requirements.filter((r) => r.type !== 'path_absent').map(pathOf).sort()).toEqual(
+        Object.keys(LINUX_001_SOLUTION).sort(),
+      );
+      for (const requirement of requirements.filter((r) => r.type === 'path_absent')) {
+        expect(Object.keys(LINUX_001_SOLUTION)).not.toContain(pathOf(requirement));
+      }
+
       const db = openPool();
       await migrate(db);
     });
@@ -143,21 +175,14 @@ if (!enabled) {
     }
 
     function completeLinuxLab(runtime: FakeContainerRuntime, sandbox: string): void {
-      runtime.put(sandbox, '/home/student/deploy', {
-        type: 'directory',
-        mode: '750',
-        owner: 'student',
-        group: 'deployers',
-      });
-      runtime.put(sandbox, '/home/student/deploy/releases', { type: 'directory', mode: '755' });
-      runtime.put(sandbox, '/home/student/deploy/release.txt', {
-        type: 'file',
-        mode: '640',
-        owner: 'student',
-        group: 'deployers',
-        content: 'service=ledger-api\nversion=4.2.0\n',
-      });
+      for (const [pathName, entry] of Object.entries(LINUX_001_SOLUTION)) {
+        runtime.put(sandbox, pathName, entry);
+      }
     }
+
+    /** Catalog totals come from the labs on disk, never from a remembered number. */
+    const catalogTotal = (): number =>
+      registry.tracks().reduce((sum, track) => sum + track.labCount, 0);
 
     it('a student can leave, the platform can restart, and the progress is still there', async () => {
       // --- the first visit --------------------------------------------------
@@ -190,7 +215,7 @@ if (!enabled) {
       const progress = await request(second.app).get('/api/me/progress');
       expect(progress.status).toBe(200);
       expect(progress.body.data.student.durable).toBe(true);
-      expect(progress.body.data.overall).toMatchObject({ completed: 1, total: 12 });
+      expect(progress.body.data.overall).toMatchObject({ completed: 1, total: catalogTotal() });
       const linux = progress.body.data.tracks.find((t: { track: string }) => t.track === 'linux');
       expect(linux.labs[0]).toMatchObject({ labId: 'LINUX-001', status: 'COMPLETED' });
 
@@ -227,8 +252,8 @@ if (!enabled) {
       await request(second.app).post(`/api/sessions/${sessionTwo}/check`);
 
       const after = await request(second.app).get('/api/me/progress');
-      // Still one lab out of twelve: a second pass of the same lab is practice,
-      // not new progress.
+      // Still one completed lab in the whole catalog: a second pass of the same
+      // lab is practice, not new progress.
       expect(after.body.data.overall.completed).toBe(1);
       const linux = after.body.data.tracks.find((t: { track: string }) => t.track === 'linux');
       expect(linux.labs[0].completionCount).toBe(2);

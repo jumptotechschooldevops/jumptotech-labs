@@ -2,7 +2,7 @@
   "name": "jumptotech-labs",
   "version": "0.1.0",
   "private": true,
-  "description": "JumpToTech Labs \u2014 interactive DevOps lab platform (multi-student isolated Kubernetes sandboxes)",
+  "description": "JumpToTech Labs \u2014 interactive DevOps lab platform (isolated per-student Kubernetes namespaces and Linux containers)",
   "license": "UNLICENSED",
   "type": "module",
   "engines": {
@@ -28,7 +28,8 @@
     "dev:api": "npm run dev --workspace @jumptotech/api",
     "dev:terminal": "npm run dev --workspace @jumptotech/terminal",
     "dev:web": "npm run dev --workspace @jumptotech/web",
-    "test:integration:terminal": "RUN_INTEGRATION_TESTS=1 vitest run test/terminal-integration.test.ts --root services/terminal"
+    "test:integration:terminal": "RUN_INTEGRATION_TESTS=1 vitest run test/terminal-integration.test.ts --root services/terminal",
+    "test:integration:sandbox": "RUN_INTEGRATION_TESTS=1 vitest run test/sandbox-integration.test.ts --root apps/api"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

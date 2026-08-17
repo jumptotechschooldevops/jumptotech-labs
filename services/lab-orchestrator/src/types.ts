@@ -70,6 +70,8 @@ export interface EnvironmentInfo {
   nodes?: NodeInfo[];
   /** Sandbox image, for container-backed providers. */
   image?: string;
+  /** What the sandbox reports as its OS, e.g. `Debian GNU/Linux 12`. */
+  osRelease?: string;
   message?: string;
 }
 
@@ -360,6 +362,41 @@ export interface LabProvider {
     relativePath: string,
     options?: { maxBytes?: number },
   ): Promise<SandboxPathRead | null>;
+
+  /**
+   * Ask the sandbox one allow-listed, read-only inspection question.
+   *
+   * Only providers whose labs declare `linux` requirements implement it — the
+   * checks a system-administration lab needs (is this process running, is this
+   * port listening, is this account in that group) cannot be answered by
+   * reading a path. The command must come from the provider's own closed
+   * allow-list of inspection binaries, and arguments are an argv array with no
+   * shell anywhere on the path.
+   *
+   * As with `execute`, this is deliberately not wired to any REST endpoint.
+   */
+  inspectSandbox?(
+    context: LabSessionContext,
+    command: string,
+    args: readonly string[],
+    options?: { asRoot?: boolean; timeoutMs?: number },
+  ): Promise<ExecResult>;
+
+  /**
+   * Run a script the student wrote, inside their own sandbox, as themselves.
+   *
+   * Separate from `inspectSandbox` deliberately: that runs platform binaries
+   * from a closed list, this runs student code. Used only by the `script_runs`
+   * check, which grades a scripting lab on what the script *does* rather than
+   * on what it says — the only way two different correct solutions can both
+   * pass.
+   */
+  runSandboxScript?(
+    context: LabSessionContext,
+    scriptPath: string,
+    args: readonly string[],
+    options?: { timeoutMs?: number },
+  ): Promise<ExecResult>;
 }
 
 /** What a sandbox path looks like on disk, as seen from inside the sandbox. */

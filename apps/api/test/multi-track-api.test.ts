@@ -130,7 +130,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
 
     expect(tracks.map((t) => t.track).sort()).toEqual(['kubernetes', 'linux', 'terraform']);
     expect(tracks.find((t) => t.track === 'kubernetes')?.labCount).toBe(10);
-    expect(tracks.find((t) => t.track === 'linux')?.labCount).toBe(1);
+    expect(tracks.find((t) => t.track === 'linux')?.labCount).toBe(10);
     expect(tracks.find((t) => t.track === 'terraform')?.labCount).toBe(1);
     expect(tracks.find((t) => t.track === 'linux')?.providers).toEqual(['linux']);
   });
@@ -200,7 +200,21 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
     const { app } = buildApp();
 
     for (const [track, expected] of [
-      ['linux', ['LINUX-001']],
+      [
+        'linux',
+        [
+          'LINUX-001',
+          'LINUX-002',
+          'LINUX-003',
+          'LINUX-004',
+          'LINUX-005',
+          'LINUX-006',
+          'LINUX-007',
+          'LINUX-008',
+          'LINUX-009',
+          'LINUX-010',
+        ],
+      ],
       ['terraform', ['TF-001']],
     ] as const) {
       const viaLabs = await request(app).get(`/api/labs?track=${track}`);
@@ -227,7 +241,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
      * *machine-readable* requirement: no requirement type, and no expected
      * mode, owner or content as its own field, because that is the answer key.
      */
-    expect(response.body.data.requirements).toContain('Directory deploy exists');
+    expect(response.body.data.requirements).toContain('The project directory exists');
     const detail = JSON.stringify(response.body.data);
     expect(detail).not.toContain('file_mode');
     expect(detail).not.toContain('"mode"');
@@ -251,7 +265,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       'terraform',
       'aws',
     ]);
-    expect(response.body.data.labsLoaded).toBe(12);
+    expect(response.body.data.labsLoaded).toBe(21);
   });
 });
 
@@ -294,21 +308,13 @@ describe('one session API serves every provider (test requirement 21)', () => {
     expect(failing.status).toBe(200);
     expect(failing.body.data.passed).toBe(false);
 
-    // …and passes once the filesystem holds what the lab describes.
-    runtime.put(sandbox, '/home/student/deploy', {
-      type: 'directory',
-      mode: '750',
-      owner: 'student',
-      group: 'deployers',
-    });
-    runtime.put(sandbox, '/home/student/deploy/releases', { type: 'directory', mode: '755' });
-    runtime.put(sandbox, '/home/student/deploy/release.txt', {
-      type: 'file',
-      mode: '640',
-      owner: 'student',
-      group: 'deployers',
-      content: 'service=ledger-api\nversion=4.2.0\n',
-    });
+    // …and passes once the filesystem holds what the lab describes. LINUX-001
+    // is the "move it, do not copy it" lab: the archive gains the log, and the
+    // original path has to be genuinely gone.
+    runtime.put(sandbox, '/home/student/project', { type: 'directory', mode: '755' });
+    runtime.put(sandbox, '/home/student/project/config.txt', { type: 'file', mode: '644' });
+    runtime.put(sandbox, '/home/student/project/archive', { type: 'directory', mode: '755' });
+    runtime.put(sandbox, '/home/student/project/archive/app.log', { type: 'file', mode: '644' });
 
     const passing = await request(app).post(`/api/sessions/${sessionId}/check`);
     expect(passing.body.data.passed, JSON.stringify(passing.body.data.checks)).toBe(true);
@@ -318,7 +324,7 @@ describe('one session API serves every provider (test requirement 21)', () => {
     const reset = await request(app).post(`/api/sessions/${sessionId}/reset`);
     expect(reset.status).toBe(200);
     expect(reset.body.data.reconnectTerminal).toBe(true);
-    expect(runtime.entry(sandbox, '/home/student/deploy')).toBeUndefined();
+    expect(runtime.entry(sandbox, '/home/student/project')).toBeUndefined();
 
     const afterReset = await request(app).post(`/api/sessions/${sessionId}/check`);
     expect(afterReset.body.data.passed).toBe(false);
@@ -396,11 +402,11 @@ describe('the terminal binding is resolved server-side (test requirements 29–3
     const a = await start(app, 'LINUX-001');
     const b = await start(app, 'LINUX-001');
 
-    runtime.put(String(b.session.sandboxRef), '/home/student/deploy', {
+    runtime.put(String(b.session.sandboxRef), '/home/student/project', {
       type: 'directory',
-      mode: '750',
+      mode: '755',
       owner: 'student',
-      group: 'deployers',
+      group: 'student',
     });
 
     // Session A asks for a check while naming B's sandbox every way a body or
@@ -418,7 +424,9 @@ describe('the terminal binding is resolved server-side (test requirements 29–3
     expect(attack.status).toBe(200);
     expect(attack.body.data.passed).toBe(false);
     expect(attack.body.data.sandboxRef).toBe(a.session.sandboxRef);
-    expect(attack.body.data.checks[0].detail).toMatch(/No directory found at 'deploy'/);
+    expect(attack.body.data.checks[0].detail).toMatch(
+      /No directory found at '\/home\/student\/project'/,
+    );
   });
 
   it('never returns a credential or a sandbox internal on a public route', async () => {

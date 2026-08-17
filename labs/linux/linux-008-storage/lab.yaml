@@ -1,0 +1,140 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Unprivileged by design. Nothing in this lab mounts a filesystem, formats a
+# device, or touches partition tables — those need privileges a training
+# sandbox should not hand out, and the day-to-day skill is not "run mkfs", it
+# is "find out what is using the space and reclaim it safely".
+#
+# Content is written from the GNU Coreutils manual and the Linux man-pages
+# project only.
+# ---------------------------------------------------------------------------
+id: LINUX-008
+slug: linux-008-storage
+title: Filesystem Usage and Disk Space
+track: linux
+topic: linux-administration
+difficulty: intermediate
+level: practice
+duration_minutes: 25
+order: 8
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-007
+
+story: >
+  A disk-usage alert fired on the payments host overnight. The usual cause is
+  an export job that writes a raw dump and forgets to remove it, and the archive
+  index at `/var/log/jumptotech/archive/index.txt` records which files that job
+  considers disposable.
+
+  Reclaim the space — carefully. The last engineer who cleared this directory
+  with a wildcard also deleted the index, and the archival tooling could not run
+  for two days afterwards.
+
+objectives:
+  - Report filesystem-level usage with df and read what its columns mean
+  - Attribute space to a directory tree with du
+  - Tell the difference between "the filesystem is full" and "this directory is large"
+  - Reclaim space without deleting what the system still needs
+
+task:
+  summary: Report filesystem usage, identify the directory consuming the space, and reclaim it without losing the archive index.
+  description: >
+    Everything here is under your own account, so no elevated privileges are
+    needed and no mounting is involved. Write your findings into
+    `/home/student/capacity`, which already exists.
+
+    First, record usage for the root filesystem into `filesystem.txt`. Include
+    the tool's header row — the column names are half the point, and the check
+    looks for them.
+
+    Second, work out which directory beneath `/var/log/jumptotech` is consuming
+    the most space and write its full path into `largest.txt`.
+
+    Third, reclaim the space. Read `/var/log/jumptotech/archive/index.txt`
+    first: it says exactly which files are superseded and which one the archival
+    tooling still needs. Delete the superseded dumps and nothing else. The index
+    must still be there when you are finished — this lab checks for it, because
+    a cleanup that takes out the index is the incident, not the fix.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /var/log/jumptotech/archive/bulk-2026-06.dump
+      label: The first superseded dump is present
+    - type: file_exists
+      path: /var/log/jumptotech/archive/bulk-2026-07.dump
+      label: The second superseded dump is present
+    - type: file_exists
+      path: /var/log/jumptotech/archive/index.txt
+      label: The archive index is present
+
+requirements:
+  - type: file_content
+    path: /home/student/capacity/filesystem.txt
+    contains: Filesystem
+    label: Filesystem usage was recorded, with its column headings
+  - type: file_content
+    path: /home/student/capacity/largest.txt
+    contains: /var/log/jumptotech/archive
+    label: The directory consuming the space was identified
+  - type: path_absent
+    path: /var/log/jumptotech/archive/bulk-2026-06.dump
+    label: The first superseded dump was removed
+  - type: path_absent
+    path: /var/log/jumptotech/archive/bulk-2026-07.dump
+    label: The second superseded dump was removed
+  - type: file_exists
+    path: /var/log/jumptotech/archive/index.txt
+    label: The archive index survived the cleanup
+  - type: directory_exists
+    path: /srv/jumptotech/data
+    label: The application data tree was left alone
+
+hints:
+  - level: 1
+    text: >
+      Two different questions, two different tools. One reports on a whole
+      filesystem — how big it is and how much of it is used. The other adds up
+      the space used by a directory tree. Do not reach for the second when you
+      want the first.
+  - level: 2
+    text: >
+      The GNU Coreutils manual has a chapter on disk usage covering both, and
+      `man df` and `man du` cover the flags. Look for the option that prints
+      sizes in human-readable units, and — for the directory question — the one
+      that summarises a directory rather than listing every file beneath it.
+      `du` combined with `sort` is the usual way to rank directories.
+  - level: 3
+    text: >
+      `df -h /` answers the first question, headers included. For the second,
+      `du -sh /var/log/jumptotech/*` prints one line per entry, and the largest
+      is obvious; write its full path, not just its name. Before deleting
+      anything, `cat /var/log/jumptotech/archive/index.txt` — it names the two
+      files that may go and the one that may not. Remove the two by name rather
+      than with a wildcard.
+
+references:
+  - title: GNU Coreutils — Disk usage
+    url: https://www.gnu.org/software/coreutils/manual/html_node/Disk-usage.html
+  - title: df(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/df.1.html
+  - title: du(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/du.1.html
+
+skills:
+  - linux.storage.filesystem-usage
+  - linux.storage.directory-usage
+  - linux.storage.reclaim
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - storage-management

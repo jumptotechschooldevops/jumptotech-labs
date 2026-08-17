@@ -13,6 +13,8 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import {
   DEFAULT_SESSION_POLICY,
+  GRANTABLE_CAPABILITIES,
+  LINUX_SANDBOX_CAPABILITIES,
   LinuxLabProvider,
   TerraformLabProvider,
   loadLabDefinition,
@@ -26,7 +28,7 @@ const SANDBOX_A = 'jtt-lab-000000000001';
 const SANDBOX_B = 'jtt-lab-000000000002';
 const HOME = DEFAULT_SESSION_POLICY.sandbox.home;
 
-const LINUX_001 = path.join(LABS_DIR, 'linux', 'linux-001-files-permissions', 'lab.yaml');
+const LINUX_001 = path.join(LABS_DIR, 'linux', 'linux-001-files', 'lab.yaml');
 const TF_001 = path.join(LABS_DIR, 'terraform', 'tf-001-init-plan-apply', 'lab.yaml');
 
 function contextFor(
@@ -57,7 +59,6 @@ describe('LinuxLabProvider — create', () => {
     expect(spec.image).toBe('jumptotech/lab-linux:latest');
     // The guardrails the provider asks the runtime for.
     expect(spec.network).toBe('none');
-    expect(spec.user).toBe('student');
     expect(spec.pidsLimit).toBe(DEFAULT_SESSION_POLICY.sandbox.pidsLimit);
     expect(spec.cpus).toBe(DEFAULT_SESSION_POLICY.sandbox.cpus);
     expect(spec.memory).toBe(DEFAULT_SESSION_POLICY.sandbox.memory);
@@ -67,6 +68,60 @@ describe('LinuxLabProvider — create', () => {
     expect(spec.labels['jumptotech.io/lab-id']).toBe('LINUX-001');
     expect(spec.labels['jumptotech.io/provider']).toBe('linux');
     expect(Number(spec.labels['jumptotech.io/expires-at'])).toBeGreaterThan(0);
+  });
+
+  /*
+   * The Linux sandbox is the one that runs a real init as root, and it is worth
+   * being explicit about what that does and does not mean. `runsvdir` is root
+   * so that LINUX-005 can supervise services that drop to their own accounts.
+   * The *student* is never root by accident: every attach the platform makes —
+   * the terminal binding, the health check, the verifier's reads — names the
+   * unprivileged policy user explicitly.
+   */
+  it('runs its supervisor as root but attaches the student unprivileged', async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+    const context = contextFor(lab);
+
+    await provider.create(context);
+
+    const spec = runtime.created.at(-1)!;
+    expect(spec.user).toBe('root');
+    expect(spec.command).toEqual(['/usr/bin/runsvdir', '-P', '/etc/service']);
+
+    // Everything the platform execs into the sandbox on the student's behalf.
+    const terminal = await provider.getTerminalContext(context);
+    expect(terminal.kind).toBe('container-exec');
+    if (terminal.kind === 'container-exec') {
+      expect(terminal.user).toBe(DEFAULT_SESSION_POLICY.sandbox.user);
+    }
+
+    await provider.readSandboxPath!(context, 'deploy');
+    const readAsUsers = new Set(runtime.execs.map((e) => e.request.user));
+    expect(readAsUsers.has(DEFAULT_SESSION_POLICY.sandbox.user)).toBe(true);
+  });
+
+  /*
+   * Capabilities are dropped wholesale and then added back from a closed list.
+   * The grant is what makes a system-administration lab teachable; what it must
+   * never include is anything that reaches the host.
+   */
+  it('grants only the narrow capability set an administration lab needs', async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+
+    await provider.create(contextFor(lab));
+
+    const spec = runtime.created.at(-1)!;
+    expect(spec.capAdd).toEqual([...LINUX_SANDBOX_CAPABILITIES]);
+    for (const forbidden of ['SYS_ADMIN', 'NET_ADMIN', 'SYS_PTRACE', 'MKNOD', 'SYS_MODULE']) {
+      expect(spec.capAdd).not.toContain(forbidden);
+      expect(GRANTABLE_CAPABILITIES.has(forbidden)).toBe(false);
+    }
+    // Still no host filesystem and still no network, whatever the caps say.
+    expect(spec.network).toBe('none');
   });
 
   it('gives two sessions two separate containers', async () => {
@@ -342,10 +397,33 @@ describe('sandbox reads for the verifier', () => {
     const context = contextFor(lab);
     await provider.create(context);
 
-    for (const bad of ['../../etc/passwd', '/etc/shadow', '~/.ssh/id_rsa', 'deploy/../../etc/hosts']) {
+    for (const bad of ['../../etc/passwd', '~/.ssh/id_rsa', 'deploy/../../etc/hosts']) {
       await expect(provider.readSandboxPath(context, bad)).rejects.toThrow(/Invalid sandbox path/);
     }
     // Nothing was even attempted against the runtime.
     expect(runtime.execs.some((e) => JSON.stringify(e.request.argv).includes('passwd'))).toBe(false);
+  });
+
+  /*
+   * An absolute path is a path *inside the container*, and reading one is what
+   * the Linux track is made of — LINUX-007 grades files under /var/log, and
+   * LINUX-005 grades a service directory under /etc. It is still a sandbox
+   * read: it runs as the student, inside one session's own container, and it
+   * reaches nothing on the host.
+   */
+  it('reads an absolute path inside the container, as the student', async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+    const context = contextFor(lab);
+    await provider.create(context);
+
+    await provider.readSandboxPath!(context, '/var/log/jumptotech/payments.log');
+
+    const stat = runtime.execs.find((e) => e.request.argv[0] === '/usr/bin/stat');
+    expect(stat).toBeDefined();
+    expect(stat!.container).toBe(SANDBOX_A);
+    expect(stat!.request.argv).toContain('/var/log/jumptotech/payments.log');
+    expect(stat!.request.user).toBe(DEFAULT_SESSION_POLICY.sandbox.user);
   });
 });

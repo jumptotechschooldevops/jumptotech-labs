@@ -1,0 +1,138 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Content is written from the GNU Coreutils manual and the Linux man-pages
+# project only.
+# ---------------------------------------------------------------------------
+id: LINUX-002
+slug: linux-002-permissions
+title: File Permissions
+track: linux
+topic: linux-fundamentals
+difficulty: beginner
+level: practice
+duration_minutes: 25
+order: 2
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-001
+
+story: >
+  A deploy script on the JumpToTech Bank reporting host has been creating files
+  with whatever permissions it felt like. This morning's audit flagged two
+  problems in `/srv/jumptotech/reports`: a finance export that any account on
+  the box can rewrite, and a collector script nobody can actually run.
+
+  You have been asked to correct both, and to store the reporting API token
+  somewhere only your own account can read it.
+
+objectives:
+  - Read the permission bits `ls -l` shows and say what each position means
+  - Set an exact octal mode on a file with chmod
+  - Reason about which permissions a data file and an executable script each need
+
+task:
+  summary: Correct two wrong permission modes on a reporting directory and store an API token privately.
+  description: >
+    The directory `/srv/jumptotech/reports` belongs to your `student` account,
+    so you can change these files without elevated privileges.
+
+    Three things need to be true when you are finished.
+
+    First, `daily-balance.csv` currently allows anyone on the host to modify it.
+    It must end up readable and writable by its owner and readable by its group,
+    and give no access at all to other accounts.
+
+    Second, `collect-balances.sh` is a shell script that cannot currently be
+    executed. Its owner must be able to read, write and execute it; its group
+    must be able to read and execute it; other accounts must have no access.
+
+    Third, create the directory `/home/student/secure` and, inside it, a file
+    called `api-token.txt`. Its contents are yours to choose — what matters is
+    that only its owner can read or write it, and that it belongs to your own
+    account.
+
+    Permission modes here are exact. "More permissive than asked" is a finding
+    in an audit, so it is a failure here too.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/jumptotech/reports/daily-balance.csv
+      label: The balance export is present
+    - type: file_exists
+      path: /srv/jumptotech/reports/collect-balances.sh
+      label: The collector script is present
+
+requirements:
+  - type: file_mode
+    path: /srv/jumptotech/reports/daily-balance.csv
+    mode: "640"
+    label: The balance export is no longer writable by other accounts
+  - type: file_mode
+    path: /srv/jumptotech/reports/collect-balances.sh
+    mode: "750"
+    label: The collector script has the mode an executable needs
+  - type: script_executable
+    path: /srv/jumptotech/reports/collect-balances.sh
+    label: The collector script can actually be executed
+  - type: directory_exists
+    path: /home/student/secure
+    label: The secure directory exists
+  - type: file_exists
+    path: /home/student/secure/api-token.txt
+    label: The API token file exists
+  - type: file_mode
+    path: /home/student/secure/api-token.txt
+    mode: "600"
+    label: The API token is readable only by its owner
+  - type: file_owner
+    path: /home/student/secure/api-token.txt
+    owner: student
+    label: The API token belongs to the student account
+
+hints:
+  - level: 1
+    text: >
+      A mode has three groups of three bits — owner, group, other — and each
+      group is read, write and execute in that order. Work out what each of the
+      three requirements is asking for in words first, then translate.
+  - level: 2
+    text: >
+      `man chmod` and the GNU Coreutils chapter on file permissions describe
+      both the symbolic form (`u+x`, `go-w`) and the numeric form. `ls -l` shows
+      the current mode; `stat -c '%a %n' <file>` shows it as the octal number
+      you are aiming for.
+  - level: 3
+    text: >
+      Read-write is 6, read-execute is 5, read-only is 4, and no access is 0.
+      A data file that its owner edits, its group reads, and nobody else touches
+      is one of those combinations; an executable that its owner runs and its
+      group also runs is another. After each change, confirm with
+      `stat -c '%a %n' <file>` rather than assuming — an off-by-one digit is the
+      usual reason this lab does not pass.
+
+references:
+  - title: GNU Coreutils — File permissions
+    url: https://www.gnu.org/software/coreutils/manual/html_node/File-permissions.html
+  - title: chmod(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/chmod.1.html
+  - title: stat(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/stat.1.html
+
+skills:
+  - linux.permissions.read
+  - linux.permissions.chmod
+  - linux.permissions.ownership
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - users-and-groups
+      - essential-commands

@@ -63,6 +63,9 @@ interface Session {
   /** Present only for Kubernetes sessions; deleted when the shell dies. */
   kubeconfigPath: string | undefined;
   term: pty.IPty;
+  /** Last negotiated size, so a replacement shell opens at the same one. */
+  cols: number;
+  rows: number;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
 }
@@ -84,9 +87,14 @@ export function createTerminalServer(config: TerminalConfig): Server {
       return;
     }
 
-    // Internal control: the API closes a shell when its session ends.
+    // Internal control: the API closes a shell when its session ends, and
+    // replaces one when a container reset recreates the sandbox underneath it.
     if (req.url === '/internal/terminate' && req.method === 'POST') {
-      handleTerminate(req, res);
+      handleControl(req, res, (sessionId) => Promise.resolve({ terminated: closeSession(sessionId) }));
+      return;
+    }
+    if (req.url === '/internal/reattach' && req.method === 'POST') {
+      handleControl(req, res, async (sessionId) => ({ reattached: await reattachSession(sessionId) }));
       return;
     }
 
@@ -94,7 +102,11 @@ export function createTerminalServer(config: TerminalConfig): Server {
     res.end(JSON.stringify({ ok: false, error: { code: 'NOT_FOUND', message: 'No such endpoint' } }));
   });
 
-  function handleTerminate(req: IncomingMessage, res: import('node:http').ServerResponse): void {
+  function handleControl(
+    req: IncomingMessage,
+    res: import('node:http').ServerResponse,
+    act: (sessionId: string) => Promise<Record<string, boolean>>,
+  ): void {
     if (req.headers['x-internal-secret'] !== config.internalServiceSecret) {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Internal use only.' } }));
@@ -116,9 +128,27 @@ export function createTerminalServer(config: TerminalConfig): Server {
         return;
       }
 
-      const closed = typeof sessionId === 'string' ? closeSession(sessionId) : false;
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, data: { terminated: closed } }));
+      if (typeof sessionId !== 'string') {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({ ok: false, error: { code: 'MALFORMED', message: 'Expected a sessionId.' } }),
+        );
+        return;
+      }
+
+      void act(sessionId).then(
+        (data) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, data }));
+        },
+        (error: unknown) => {
+          log(`control action for ${sessionId} failed — ${describeError(error)}`);
+          res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({ ok: false, error: { code: 'CONTROL_FAILED', message: 'Action failed.' } }),
+          );
+        },
+      );
     });
   }
 
@@ -134,6 +164,104 @@ export function createTerminalServer(config: TerminalConfig): Server {
     endSession(ws);
     if (ws.readyState === ws.OPEN) ws.close(4410, 'session ended');
     return true;
+  }
+
+  /**
+   * Replace a live socket's shell without dropping the socket.
+   *
+   * A container-backed reset recreates the sandbox, which kills the `docker
+   * exec` shell inside it. Rather than leaving the student staring at a dead
+   * terminal, the API calls this and the same browser socket gets a fresh shell
+   * in the fresh container — the session, the token and the scrollback survive.
+   *
+   * The new binding is re-resolved from the API exactly as the first one was.
+   * The client contributes nothing to it here either, and a Kubernetes session
+   * never reaches this path: its reset leaves the namespace, and its shell, in
+   * place.
+   */
+  async function reattachSession(sessionId: string): Promise<boolean> {
+    const ws = bySessionId.get(sessionId);
+    const session = ws ? sessions.get(ws) : undefined;
+    if (!ws || !session || ws.readyState !== ws.OPEN) return false;
+    if (session.sandboxKind !== 'container') return false;
+
+    let plan: SpawnPlan;
+    try {
+      const context = await fetchTerminalContext({
+        apiInternalUrl: config.apiInternalUrl,
+        secret: config.internalServiceSecret,
+        sessionId: session.claims.sid,
+      });
+      if (context.kind !== 'container-exec' || !config.containerExecEnabled) return false;
+      plan = containerSpawnPlan(context, planOptionsFor(session.claims.labId));
+    } catch (error) {
+      log(`session ${sessionId}: reattach could not resolve a binding — ${describeError(error)}`);
+      return false;
+    }
+
+    // Detach the old shell quietly: its exit is expected, not a session end.
+    const previous = session.term;
+    previous.onData(() => undefined);
+    previous.onExit(() => undefined);
+    try {
+      previous.kill();
+    } catch {
+      /* already gone */
+    }
+
+    let term: pty.IPty;
+    try {
+      term = pty.spawn(plan.command, plan.args, {
+        name: 'xterm-256color',
+        cols: session.cols,
+        rows: session.rows,
+        cwd: plan.cwd,
+        env: plan.env,
+      });
+    } catch (error) {
+      log(`session ${sessionId}: reattach failed — ${describeError(error)}`);
+      send(ws, {
+        type: 'error',
+        code: 'SANDBOX_UNAVAILABLE',
+        message: 'The lab environment was reset, but the terminal could not reconnect.',
+      });
+      return false;
+    }
+
+    session.term = term;
+    session.sandboxRef = plan.sandboxRef;
+    wireShell(ws, term);
+    send(ws, {
+      type: 'reattached',
+      sessionId: session.claims.sid,
+      sandboxRef: plan.sandboxRef,
+      namespace: plan.sandboxRef,
+    });
+    log(`session ${sessionId}: reattached to ${plan.sandboxRef}`);
+    return true;
+  }
+
+  /** Options every spawn plan is built with. Never client-supplied. */
+  function planOptionsFor(labId: string) {
+    return {
+      shell: config.shell,
+      containerBinary: config.containerBinary,
+      workDir: config.workDir,
+      promptUser: config.promptUser,
+      promptHost: config.promptHost,
+      labId,
+    };
+  }
+
+  /**
+   * Attach output and exit plumbing to a session's current shell.
+   *
+   * Shared by the first spawn and by `reattachSession`, so a replaced shell is
+   * wired exactly like an original one — and a shell that `reattachSession`
+   * detached has had its listeners cleared, so its exit never ends the session.
+   */
+  function wireShell(ws: WebSocket, term: pty.IPty): void {
+    wireShell(ws, term);
   }
 
   const wss = new WebSocketServer({
@@ -236,6 +364,10 @@ export function createTerminalServer(config: TerminalConfig): Server {
           break;
         case 'resize':
           touch(session);
+          // Remembered as well as applied, so a shell replaced by
+          // `reattachSession` opens at the size the browser is actually showing.
+          session.cols = message.cols;
+          session.rows = message.rows;
           try {
             session.term.resize(message.cols, message.rows);
           } catch {
@@ -293,14 +425,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
         sessionId: claims.sid,
       });
 
-      const planOptions = {
-        shell: config.shell,
-        containerBinary: config.containerBinary,
-        workDir: config.workDir,
-        promptUser: config.promptUser,
-        promptHost: config.promptHost,
-        labId: claims.labId,
-      };
+      const planOptions = planOptionsFor(claims.labId);
 
       if (context.kind === 'container-exec') {
         if (!config.containerExecEnabled) {
@@ -372,6 +497,8 @@ export function createTerminalServer(config: TerminalConfig): Server {
       sandboxKind: plan.sandboxKind,
       kubeconfigPath,
       term,
+      cols: clampCols(cols),
+      rows: clampRows(rows),
       idleTimer: setTimeout(
         () => closeFor(ws, 'IDLE_TIMEOUT', 'Terminal closed after inactivity.'),
         config.idleTimeoutMs,
@@ -448,4 +575,9 @@ function send(ws: WebSocket, message: ServerMessage): void {
 
 function log(message: string): void {
   console.log(`[terminal] ${message}`);
+}
+
+/** Message text for a thrown value, for logs only. Never sent to a browser. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

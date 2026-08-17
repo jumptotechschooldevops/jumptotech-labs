@@ -1,10 +1,20 @@
 # ---------------------------------------------------------------------------
-# JumpToTech Labs — local development stack (PLATFORM-002)
+# JumpToTech Labs — local development stack (PLATFORM-002, PLATFORM-LINUX-001)
 #
-# Prerequisite: the Kubernetes substrate must exist first.
+# Prerequisite: the substrates must exist first, and both are created on the
+# host, deliberately outside any web-facing process.
 #
-#   npm run cluster:up      # creates the kind cluster + generated kubeconfigs
+#   npm run cluster:up      # Kubernetes track: kind cluster + kubeconfigs
+#   make linux-image        # Linux track: build the training image (once)
+#   make broker             # Linux track: the only holder of the Docker socket
 #   docker compose up --build
+#
+# The broker is not a service here on purpose: it needs the Docker socket, and
+# nothing in this file gets it. The api and terminal containers reach it over
+# `host.docker.internal`, which means the broker must bind an address a
+# container can reach — set SANDBOX_BROKER_BIND=0.0.0.0 on a development host
+# (see README → The Linux track). Without a broker running, the Kubernetes
+# track is unaffected and starting a Linux lab reports ENVIRONMENT_UNREACHABLE.
 #
 # The api and terminal services join the `kind` Docker network so they can
 # reach the cluster's API server directly at
@@ -128,10 +138,22 @@ services:
       CLUSTER_SERVICE_CIDR: ${CLUSTER_SERVICE_CIDR:-10.96.0.0/16}
       STUDENT_CREDENTIAL_TTL_SECONDS: ${STUDENT_CREDENTIAL_TTL_SECONDS:-3600}
       # --- container-backed tracks (PLATFORM-004) ---
-      # Off in compose by design: this container has no runtime to drive, and
-      # the honest catalog message is "switched off here", not a failed probe.
+      # Off in compose by design: this container is given no container runtime
+      # to drive — deliberately, for the same reason cluster creation happens on
+      # the host — and the honest catalog message is "switched off here" rather
+      # than a probe that fails. Run the services directly on your host
+      # (`npm run dev:api` and friends) to use the Linux and Terraform tracks.
       LINUX_PROVIDER_ENABLED: ${LINUX_PROVIDER_ENABLED:-false}
+      LINUX_SANDBOX_IMAGE: ${LINUX_SANDBOX_IMAGE:-jumptotech/lab-linux:latest}
       TERRAFORM_PROVIDER_ENABLED: ${TERRAFORM_PROVIDER_ENABLED:-false}
+      # Sandbox shape for container-backed sessions. These are the ceilings a
+      # student's environment is created with, not suggestions.
+      SANDBOX_CPUS: ${SANDBOX_CPUS:-0.5}
+      SANDBOX_MEMORY: ${SANDBOX_MEMORY:-512m}
+      SANDBOX_PIDS_LIMIT: ${SANDBOX_PIDS_LIMIT:-128}
+      SANDBOX_USER: ${SANDBOX_USER:-student}
+      SANDBOX_HOME: ${SANDBOX_HOME:-/home/student}
+      SANDBOX_NETWORK: ${SANDBOX_NETWORK:-none}
       # --- persistent progress (PLATFORM-005) ---
       # The api is the only service given a database credential.
       DATABASE_URL: postgresql://${POSTGRES_USER:-jumptotech}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-jumptotech_labs}
@@ -193,8 +215,10 @@ services:
       TERMINAL_MAX_SESSIONS: ${TERMINAL_MAX_SESSIONS:-16}
       TERMINAL_IDLE_TIMEOUT_SECONDS: ${TERMINAL_IDLE_TIMEOUT_SECONDS:-1800}
       TERMINAL_MAX_SESSION_SECONDS: ${TERMINAL_MAX_SESSION_SECONDS:-7200}
-      # This service cannot attach a PTY to a sandbox container here: it has no
-      # container runtime, by the same design decision as the api service.
+      # A container-backed session's shell is a PTY inside that session's own
+      # sandbox container. This service cannot open one here: it is given no
+      # container runtime, by the same design decision as the api service — and
+      # the Docker socket is never mounted into any container in this file.
       TERMINAL_CONTAINER_EXEC_ENABLED: ${TERMINAL_CONTAINER_EXEC_ENABLED:-false}
     ports:
       - "${TERMINAL_PORT:-4001}:4001"

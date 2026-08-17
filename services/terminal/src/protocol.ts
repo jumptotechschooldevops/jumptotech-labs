@@ -24,6 +24,15 @@ export type ServerMessage =
       /** Historical name for `sandboxRef`. */
       namespace: string;
     }
+  /**
+   * The shell was replaced under a live socket.
+   *
+   * Sent after a container-backed `Reset Lab`, which recreates the sandbox and
+   * therefore kills the shell inside it. A distinct type rather than a second
+   * `ready`: the browser has already wired up its input handler and its
+   * keep-alive, and must not do either twice.
+   */
+  | { type: 'reattached'; sessionId: string; sandboxRef: string; namespace: string }
   | { type: 'output'; data: string }
   | { type: 'error'; code: string; message: string }
   | { type: 'exit'; exitCode: number; signal?: number }

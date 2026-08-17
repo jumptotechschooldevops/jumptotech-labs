@@ -360,28 +360,348 @@
     },
     {
       "id": "LINUX-001",
-      "slug": "linux-001-files-permissions",
-      "title": "Files, Directories & Permissions",
+      "slug": "linux-001-files",
+      "title": "Files and Directories",
       "track": "linux",
       "provider": "linux",
-      "topic": "permissions",
-      "topicTitle": "Permissions",
+      "topic": "linux-fundamentals",
+      "topicTitle": "Linux Fundamentals",
       "difficulty": "beginner",
       "level": "practice",
-      "durationMinutes": 30,
+      "durationMinutes": 20,
       "order": 1,
-      "summary": "Prepare a deploy directory in your home directory with the correct contents, group and permissions.\n",
+      "summary": "Build a small project directory tree and move a log file into an archive.",
       "skills": [
-        "linux.filesystem.create",
-        "linux.permissions.modes",
-        "linux.permissions.ownership",
-        "linux.filesystem.inspect"
+        "linux.files.navigate",
+        "linux.files.create",
+        "linux.files.move"
       ],
       "hasSetup": false,
       "certifications": [
         "LFCS"
       ],
       "prerequisites": [],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-002",
+      "slug": "linux-002-permissions",
+      "title": "File Permissions",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "linux-fundamentals",
+      "topicTitle": "Linux Fundamentals",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 25,
+      "order": 2,
+      "summary": "Correct two wrong permission modes on a reporting directory and store an API token privately.",
+      "skills": [
+        "linux.permissions.read",
+        "linux.permissions.chmod",
+        "linux.permissions.ownership"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [
+        {
+          "id": "LINUX-001",
+          "title": "Files and Directories",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-003",
+      "slug": "linux-003-users-groups",
+      "title": "Users and Groups",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "linux-administration",
+      "topicTitle": "Linux Administration",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 3,
+      "summary": "Create a deployers group and a ci-runner service account, then give them a shared staging directory.",
+      "skills": [
+        "linux.accounts.users",
+        "linux.accounts.groups",
+        "linux.accounts.inspect",
+        "linux.permissions.ownership"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [
+        {
+          "id": "LINUX-002",
+          "title": "File Permissions",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-004",
+      "slug": "linux-004-processes",
+      "title": "Processes",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "linux-fundamentals",
+      "topicTitle": "Linux Fundamentals",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 25,
+      "order": 4,
+      "summary": "Stop a leftover background job, start the ledger sync job, and record the running process.",
+      "skills": [
+        "linux.processes.list",
+        "linux.processes.signal",
+        "linux.processes.background"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [
+        {
+          "id": "LINUX-003",
+          "title": "Users and Groups",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-005",
+      "slug": "linux-005-services",
+      "title": "Managing Services",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "linux-administration",
+      "topicTitle": "Linux Administration",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 5,
+      "summary": "Enable the ledger-api service and disable the debug tracer that was left running.",
+      "skills": [
+        "linux.services.enable",
+        "linux.services.disable",
+        "linux.services.status",
+        "linux.processes.list"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [
+        {
+          "id": "LINUX-004",
+          "title": "Processes",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-006",
+      "slug": "linux-006-networking",
+      "title": "Networking Basics",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "linux-networking",
+      "topicTitle": "Linux Networking",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 6,
+      "summary": "Gather this host's network facts — its listening ports, its hostname, and the edge proxy's response.",
+      "skills": [
+        "linux.network.interfaces",
+        "linux.network.sockets",
+        "linux.network.http",
+        "linux.network.hostname"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [
+        {
+          "id": "LINUX-005",
+          "title": "Managing Services",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-007",
+      "slug": "linux-007-logs",
+      "title": "Reading and Filtering Logs",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "linux-administration",
+      "topicTitle": "Linux Administration",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 7,
+      "summary": "Count the errors in the payments log, find the rejected transaction in the archive, and record where you found it.",
+      "skills": [
+        "linux.logs.read",
+        "linux.logs.filter",
+        "linux.files.search"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [
+        {
+          "id": "LINUX-006",
+          "title": "Networking Basics",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-008",
+      "slug": "linux-008-storage",
+      "title": "Filesystem Usage and Disk Space",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "linux-administration",
+      "topicTitle": "Linux Administration",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 25,
+      "order": 8,
+      "summary": "Report filesystem usage, identify the directory consuming the space, and reclaim it without losing the archive index.",
+      "skills": [
+        "linux.storage.filesystem-usage",
+        "linux.storage.directory-usage",
+        "linux.storage.reclaim"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [
+        {
+          "id": "LINUX-007",
+          "title": "Reading and Filtering Logs",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-009",
+      "slug": "linux-009-shell-scripting",
+      "title": "Writing a Health-Check Script",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "shell-scripting",
+      "topicTitle": "Shell Scripting",
+      "difficulty": "intermediate",
+      "level": "challenge",
+      "durationMinutes": 40,
+      "order": 9,
+      "summary": "Write /home/student/scripts/health-check.sh so it reports a service's state through both its output and its exit status.",
+      "skills": [
+        "linux.scripting.bash",
+        "linux.scripting.arguments",
+        "linux.scripting.exit-status",
+        "linux.permissions.chmod"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [
+        {
+          "id": "LINUX-008",
+          "title": "Filesystem Usage and Disk Space",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-010",
+      "slug": "linux-010-troubleshooting",
+      "title": "Linux Troubleshooting",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "troubleshooting",
+      "topicTitle": "Troubleshooting",
+      "difficulty": "advanced",
+      "level": "challenge",
+      "durationMinutes": 45,
+      "order": 10,
+      "summary": "The ledger API has been down since a migration. Investigate, fix what is wrong, and restore it to the state its runbook describes.",
+      "skills": [
+        "linux.troubleshooting.diagnose",
+        "linux.services.status",
+        "linux.network.sockets",
+        "linux.processes.signal",
+        "linux.permissions.chmod"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [
+        {
+          "id": "LINUX-009",
+          "title": "Writing a Health-Check Script",
+          "available": true
+        }
+      ],
       "hintCount": 3,
       "availability": {
         "provider": "linux",
@@ -424,6 +744,7 @@
     {
       "track": "kubernetes",
       "title": "Kubernetes",
+      "tagline": "CKA-oriented Kubernetes practice on a live cluster",
       "labCount": 10,
       "topics": [
         {
@@ -481,16 +802,39 @@
     {
       "track": "linux",
       "title": "Linux",
-      "labCount": 1,
+      "tagline": "Linux for DevOps engineers, on a real shell",
+      "labCount": 10,
       "topics": [
         {
-          "topic": "permissions",
-          "title": "Permissions",
+          "topic": "linux-fundamentals",
+          "title": "Linux Fundamentals",
+          "labCount": 3
+        },
+        {
+          "topic": "linux-administration",
+          "title": "Linux Administration",
+          "labCount": 4
+        },
+        {
+          "topic": "linux-networking",
+          "title": "Linux Networking",
+          "labCount": 1
+        },
+        {
+          "topic": "shell-scripting",
+          "title": "Shell Scripting",
+          "labCount": 1
+        },
+        {
+          "topic": "troubleshooting",
+          "title": "Troubleshooting",
           "labCount": 1
         }
       ],
       "difficulties": [
-        "beginner"
+        "beginner",
+        "intermediate",
+        "advanced"
       ],
       "providers": [
         "linux"
@@ -502,6 +846,7 @@
     {
       "track": "terraform",
       "title": "Terraform",
+      "tagline": "Infrastructure as code, applied in a private sandbox",
       "labCount": 1,
       "topics": [
         {
@@ -533,8 +878,7 @@
     {
       "provider": "docker",
       "available": false,
-      "reason": "Docker labs need a per-session Docker daemon. Sharing the host daemon would give a student root on the host, so this provider ships as architecture only.",
-      "remediation": "See README \u2192 Docker sandbox strategy. Enabling it requires rootless Docker-in-Docker or a brokered daemon on a substrate with a real kernel boundary (gVisor / Kata / Firecracker)."
+      "reason": "Docker labs need a per-session Docker daemon. Sharing the host daemon would give a student root on the host, so this provider ships as architecture only."
     },
     {
       "provider": "terraform",
@@ -543,10 +887,9 @@
     {
       "provider": "aws",
       "available": false,
-      "reason": "AWS labs are architecture only. No student credentials, roles, or resources are created by this platform yet.",
-      "remediation": "See README \u2192 Future AWS provider architecture. Enabling it requires scoped STS roles, a permission boundary, session resource tagging, and a budget guard."
+      "reason": "AWS labs are architecture only."
     }
   ],
-  "count": 12,
+  "count": 21,
   "prerequisitesEnforced": false
 }

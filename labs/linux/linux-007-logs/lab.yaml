@@ -1,0 +1,134 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Content is written from the GNU Grep manual and the Linux man-pages project
+# only.
+# ---------------------------------------------------------------------------
+id: LINUX-007
+slug: linux-007-logs
+title: Reading and Filtering Logs
+track: linux
+topic: linux-administration
+difficulty: intermediate
+level: practice
+duration_minutes: 30
+order: 7
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-006
+
+story: >
+  A customer has called JumpToTech Bank because a payment they made on the 19th
+  never arrived. Support has escalated it to you with nothing but a timestamp
+  and an account number.
+
+  The payments host keeps a current log and a directory of rotated ones. The
+  current log will tell you how bad the morning was; the archive will tell you
+  what happened to that one payment. Nobody is going to give you the answer —
+  you are going to grep for it.
+
+objectives:
+  - Read the head and tail of a log without opening the whole file
+  - Count matching lines rather than eyeballing them
+  - Search a directory tree for the file that contains a specific string
+  - Record findings as evidence for the next engineer
+
+task:
+  summary: Count the errors in the payments log, find the rejected transaction in the archive, and record where you found it.
+  description: >
+    The logs are under `/var/log/jumptotech`. The current log is
+    `payments.log`; rotated logs are in the `archive` subdirectory. All of them
+    are world-readable, so nothing here needs elevated privileges.
+
+    Write three answers into `/home/student/analysis`, which already exists and
+    belongs to you.
+
+    First, count how many lines in the *current* log carry the word `ERROR`, and
+    write just that number into `error-count.txt`.
+
+    Second, one payment was rejected outright rather than merely retried. Its
+    transaction id looks like `TXN-` followed by digits, and it does not appear
+    in the current log at all — it is in one of the archived ones. Write that
+    transaction id into `failed-transaction.txt`.
+
+    Third, write the full path of the archived log file you found it in into
+    `source.txt`. Evidence without a source is not evidence.
+
+    Each file may contain extra surrounding text; what is checked is that the
+    right answer is in it.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /var/log/jumptotech/payments.log
+      label: The current payments log is present
+    - type: directory_exists
+      path: /var/log/jumptotech/archive
+      label: The rotated log archive is present
+    - type: file_exists
+      path: /var/log/jumptotech/archive/payments-2026-08-19.log
+      label: The archived log for the incident date is present
+
+requirements:
+  - type: file_content
+    path: /home/student/analysis/error-count.txt
+    contains: "17"
+    label: The error count for the current log is correct
+  - type: file_content
+    path: /home/student/analysis/failed-transaction.txt
+    contains: TXN-4471
+    label: The rejected transaction was identified
+  - type: file_content
+    path: /home/student/analysis/source.txt
+    contains: /var/log/jumptotech/archive/payments-2026-08-19.log
+    label: The source log file was recorded
+
+hints:
+  - level: 1
+    text: >
+      You do not need to read these files top to bottom. One of the three
+      answers is a count, one is a string hidden in a directory of files, and
+      one is simply where you found the second. Think about which tool answers
+      "how many lines match" and which answers "which file contains this".
+  - level: 2
+    text: >
+      The GNU Grep manual covers both: there is an option that prints a count
+      instead of the matching lines, and an option that searches a whole
+      directory tree. `man head`, `man tail` and `man find` cover getting a feel
+      for a file's shape and locating candidates first. Remember that `grep` can
+      print the filename alongside each match.
+  - level: 3
+    text: >
+      For the count, `grep -c` on the current log alone — not the archive — is
+      what is being asked, and the answer is a two-digit number. For the
+      transaction, search the archive recursively for the pattern `TXN-`; the
+      matching line also names the reason and the account. Recursive grep prints
+      `path:line`, which hands you the third answer at the same time as the
+      second. Write only the number into `error-count.txt`.
+
+references:
+  - title: GNU Grep manual
+    url: https://www.gnu.org/software/grep/manual/grep.html
+  - title: grep(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/grep.1.html
+  - title: find(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/find.1.html
+  - title: tail(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/tail.1.html
+
+skills:
+  - linux.logs.read
+  - linux.logs.filter
+  - linux.files.search
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - essential-commands
+      - operation-of-running-systems

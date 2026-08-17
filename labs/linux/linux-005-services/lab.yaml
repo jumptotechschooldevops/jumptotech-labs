@@ -1,0 +1,158 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# ARCHITECTURAL DECISION — service management in a container
+#
+# A container does not run systemd, and this lab does not pretend that it does.
+# There is no stubbed `systemctl` anywhere in the training image: a stub would
+# teach a student to type commands that produce no effect, which is worse than
+# teaching nothing at all.
+#
+# Instead the image ships `runit`, a real process supervisor used in production
+# container images, and `runsvdir` is the container's main process. Everything
+# a service-management lesson is actually about is present and genuine:
+#
+#   a service is a unit of configuration      /etc/sv/<name>/run
+#   enabling is separate from starting        symlink into /etc/service
+#   the supervisor restarts what dies         runsv, automatically
+#   state is inspectable                      sudo sv status <name>
+#
+# What differs from systemd — unit files, dependency ordering, journald,
+# targets — is stated in the task text rather than hidden. A student finishing
+# this lab has practised the concepts on a real supervisor and knows which
+# specifics are systemd's rather than universal.
+#
+# Content is written from the Linux man-pages project and Debian documentation
+# only.
+# ---------------------------------------------------------------------------
+id: LINUX-005
+slug: linux-005-services
+title: Managing Services
+track: linux
+topic: linux-administration
+difficulty: intermediate
+level: practice
+duration_minutes: 30
+order: 5
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-004
+
+story: >
+  During last month's incident someone enabled a debug tracer on the ledger
+  host "just for tonight". It is still running, still writing a trace line
+  every second, and nobody has turned it off.
+
+  Meanwhile the `ledger-api` service was packaged and installed but never
+  switched on, so the host has been serving nothing. Both are supervised
+  services on this box. Put them the right way round.
+
+objectives:
+  - Explain the difference between a service being defined, enabled, and running
+  - Enable a service so the supervisor starts and keeps it running
+  - Stop and disable a service so it stays down across supervisor restarts
+  - Read a supervised service's live status
+
+task:
+  summary: Enable the ledger-api service and disable the debug tracer that was left running.
+  description: >
+    This host is supervised by `runit`, not systemd — containers do not run
+    systemd, and this platform will not fake a `systemctl` that does nothing.
+    The concepts are the ones you need everywhere; the commands are runit's.
+
+    Here is the whole model. A service is a directory under `/etc/sv` containing
+    an executable `run` script — that is the service being *defined*. It becomes
+    *enabled* when that directory is symlinked into `/etc/service`, which is
+    where the supervisor `runsvdir` looks. Once enabled, the supervisor starts
+    it and restarts it whenever it exits. You inspect and control an enabled
+    service with `sv` — which reaches the supervisor's control socket and so
+    needs elevated privileges, for example `sudo sv status ledger-api`.
+
+    Two services are defined on this host. `ledger-api` is defined but not
+    enabled, so nothing is running it. `debug-tracer` is enabled and running,
+    and should not be.
+
+    Enable `ledger-api` so its process is running under supervision. Disable
+    `debug-tracer` so its process is stopped and stays stopped — removing the
+    symlink is what makes it stay down; stopping it without disabling it would
+    only last until the supervisor next scanned.
+
+    Note that the supervisor rescans `/etc/service` every few seconds rather
+    than instantly, so give it a moment before concluding something has not
+    worked.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /etc/sv/ledger-api/run
+      label: The ledger API service is defined
+    - type: process_running
+      pattern: /usr/local/bin/debug-tracer
+      label: The debug tracer is running
+
+requirements:
+  - type: command_exit_code
+    command: test
+    args:
+      - -d
+      - /etc/service/ledger-api
+    expected_exit_code: 0
+    label: The ledger API service is enabled
+  - type: process_running
+    pattern: /usr/local/bin/ledger-api
+    label: The ledger API is running under supervision
+  - type: path_absent
+    path: /etc/service/debug-tracer
+    label: The debug tracer is no longer enabled
+  - type: process_not_running
+    pattern: /usr/local/bin/debug-tracer
+    label: The debug tracer is no longer running
+
+hints:
+  - level: 1
+    text: >
+      Enabling and running are two different states, and the supervisor is what
+      connects them. Look at what is present in `/etc/sv` and what is present in
+      `/etc/service`, and ask yourself which of those two directories the
+      supervisor actually watches.
+  - level: 2
+    text: >
+      `man sv` and `man runsvdir` describe the control commands and the scan
+      loop. `ls -l /etc/service` shows what is currently enabled and what each
+      entry points at. Debian's runit documentation covers the same layout.
+  - level: 3
+    text: >
+      Enabling is a symlink from `/etc/service/<name>` to `/etc/sv/<name>`;
+      disabling is removing that symlink. Both need elevated privileges, which
+      you have through `sudo`. After enabling, wait a few seconds and confirm
+      with `sudo sv status ledger-api` and `pgrep -af ledger-api`. When disabling,
+      stop the service as well as unlinking it if you do not want to wait for
+      the supervisor to tear it down — and check with `pgrep -af debug-tracer`
+      that no process is left.
+
+references:
+  - title: sv(8) — controlling runit services
+    url: https://manpages.debian.org/bookworm/runit/sv.8.en.html
+  - title: runsvdir(8) — starting and monitoring a collection of services
+    url: https://manpages.debian.org/bookworm/runit/runsvdir.8.en.html
+  - title: ln(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/ln.1.html
+  - title: pgrep(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/pgrep.1.html
+
+skills:
+  - linux.services.enable
+  - linux.services.disable
+  - linux.services.status
+  - linux.processes.list
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - operation-of-running-systems

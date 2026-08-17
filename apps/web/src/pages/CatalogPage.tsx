@@ -3,8 +3,17 @@
  *
  * Entirely driven by the API: tracks, topics, difficulties, and cards are all
  * derived from lab definitions on disk. There is no hardcoded lab, no
- * hardcoded track, and no switch on a lab id anywhere in this file — dropping
- * a new `lab.yaml` into `labs/` makes it appear here after an API restart.
+ * hardcoded track, and no switch on a lab id or a track name anywhere in this
+ * file — dropping a new `lab.yaml` into `labs/` makes it appear here after an
+ * API restart, and a second track appears as a second card without a line of
+ * frontend work.
+ *
+ * The page has two modes, and which one you see is data, not configuration:
+ *
+ * ```text
+ *   more than one track, none chosen ──► track cards, then every lab by track
+ *   a track chosen                   ──► that track's topics, then its labs
+ * ```
  */
 import { useEffect, useMemo, useState } from 'react';
 import { ApiRequestError, api } from '../lib/api';
@@ -14,6 +23,7 @@ import type {
   LabSummary,
   ProgressSnapshot,
   ProviderReadiness,
+  TopicSummary,
   TrackSummary,
 } from '../lib/types';
 
@@ -61,7 +71,14 @@ export function CatalogPage({
   const [error, setError] = useState<ApiError | null>(null);
 
   const [activeTrack, setActiveTrack] = useState<string | null>(null);
+  const [activeTopic, setActiveTopic] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState<string | null>(null);
+
+  /** Choosing a track clears any topic from the previous one. */
+  const chooseTrack = (track: string | null) => {
+    setActiveTrack(track);
+    setActiveTopic(null);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -124,10 +141,32 @@ export function CatalogPage({
   const visible = useMemo(() => {
     return (labs ?? []).filter((lab) => {
       if (activeTrack && lab.track !== activeTrack) return false;
+      if (activeTopic && lab.topic !== activeTopic) return false;
       if (difficulty && lab.difficulty !== difficulty) return false;
       return true;
     });
-  }, [labs, activeTrack, difficulty]);
+  }, [labs, activeTrack, activeTopic, difficulty]);
+
+  /**
+   * The chosen track's topics, from the API's own track summary.
+   *
+   * Falling back to deriving them from the loaded labs keeps the row correct
+   * for a consumer that serves labs without a matching track entry.
+   */
+  const topics = useMemo<TopicSummary[]>(() => {
+    if (!activeTrack) return [];
+    const summary = tracks.find((t) => t.track === activeTrack);
+    if (summary && summary.topics.length > 0) return summary.topics;
+
+    const counts = new Map<string, TopicSummary>();
+    for (const lab of labs ?? []) {
+      if (lab.track !== activeTrack) continue;
+      const existing = counts.get(lab.topic);
+      if (existing) existing.labCount += 1;
+      else counts.set(lab.topic, { topic: lab.topic, title: lab.topicTitle, labCount: 1 });
+    }
+    return [...counts.values()];
+  }, [activeTrack, tracks, labs]);
 
   const difficulties = useMemo(
     () =>
@@ -193,8 +232,9 @@ export function CatalogPage({
         <div className="catalog__intro">
           <h1>Practice environments, not slideshows</h1>
           <p>
-            Launch a disposable Kubernetes, Linux or Terraform environment in your browser, run
-            real commands, and have your work verified against the environment's live state.
+            Launch a disposable environment in your browser — a private Kubernetes namespace, or
+            your own Linux or Terraform container — run real commands, and have your work verified
+            against the state you actually left behind.
           </p>
         </div>
 
@@ -215,6 +255,38 @@ export function CatalogPage({
           </div>
         )}
 
+        {/*
+          Track cards are the front door once there is more than one track.
+          With a single track they would be a row of one, so the page goes
+          straight to the labs — the shape follows the data.
+        */}
+        {labs && labs.length > 0 && tracks.length > 1 && activeTrack === null && (
+          <section className="catalog__tracks" aria-label="Tracks">
+            <h2 className="catalog__tracks-title">Tracks</h2>
+            <div className="catalog__tracks-grid">
+              {tracks.map((track) => (
+                <button
+                  key={track.track}
+                  type="button"
+                  className="trackcard"
+                  onClick={() => chooseTrack(track.track)}
+                >
+                  <span className="trackcard__title">{track.title}</span>
+                  <span className="trackcard__count">
+                    {track.labCount} lab{track.labCount === 1 ? '' : 's'}
+                  </span>
+                  {track.tagline && <span className="trackcard__tagline">{track.tagline}</span>}
+                  {track.topics.length > 0 && (
+                    <span className="trackcard__topics">
+                      {track.topics.map((topic) => topic.title).join(' · ')}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         {labs && labs.length > 0 && (
           <nav className="catalog__filters" aria-label="Filter labs">
             <div className="filterrow" role="group" aria-label="Track">
@@ -223,7 +295,7 @@ export function CatalogPage({
                 type="button"
                 className="filterchip"
                 aria-pressed={activeTrack === null}
-                onClick={() => setActiveTrack(null)}
+                onClick={() => chooseTrack(null)}
               >
                 All
                 <span className="filterchip__count">{labs.length}</span>
@@ -234,13 +306,40 @@ export function CatalogPage({
                   type="button"
                   className="filterchip"
                   aria-pressed={activeTrack === track.track}
-                  onClick={() => setActiveTrack(track.track)}
+                  onClick={() => chooseTrack(track.track)}
                 >
                   {track.title}
                   <span className="filterchip__count">{track.labCount}</span>
                 </button>
               ))}
             </div>
+
+            {/* Topics belong to a track, so the row only exists once one is chosen. */}
+            {activeTrack && topics.length > 1 && (
+              <div className="filterrow" role="group" aria-label="Topic">
+                <span className="filterrow__label">Topic</span>
+                <button
+                  type="button"
+                  className="filterchip"
+                  aria-pressed={activeTopic === null}
+                  onClick={() => setActiveTopic(null)}
+                >
+                  All topics
+                </button>
+                {topics.map((topic) => (
+                  <button
+                    key={topic.topic}
+                    type="button"
+                    className="filterchip"
+                    aria-pressed={activeTopic === topic.topic}
+                    onClick={() => setActiveTopic(topic.topic)}
+                  >
+                    {topic.title}
+                    <span className="filterchip__count">{topic.labCount}</span>
+                  </button>
+                ))}
+              </div>
+            )}
 
             {difficulties.length > 1 && (
               <div className="filterrow" role="group" aria-label="Difficulty">
@@ -287,6 +386,11 @@ export function CatalogPage({
                 <span className="chip chip--unavailable" title={trackAvailability(track)?.reason}>
                   unavailable here
                 </span>
+              )}
+              {activeTrack === track && tracks.length > 1 && (
+                <button type="button" className="catalog__track-back" onClick={() => chooseTrack(null)}>
+                  All tracks
+                </button>
               )}
             </div>
 

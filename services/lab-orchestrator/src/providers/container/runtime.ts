@@ -14,6 +14,10 @@
  *   - **Every invocation is an argv array with `shell: false`.** No string is
  *     ever interpolated into a command line, so a path or an image name can
  *     never become syntax.
+ *   - **Capabilities are dropped wholesale, then added back from a closed
+ *     list.** `--cap-drop ALL` is unconditional; `GRANTABLE_CAPABILITIES` is
+ *     the only set a provider may re-add from, and nothing in it reaches
+ *     outside the container.
  *   - **Nothing here takes an identifier from a browser.** Container names are
  *     derived server-side from the session id, validated against
  *     `CONTAINER_SANDBOX_PATTERN`, and re-checked against ownership labels
@@ -55,6 +59,23 @@ export interface ContainerSpec {
   /** `--network`; `none` unless a lab genuinely needs egress. */
   network: string;
   hostname: string;
+  /**
+   * Linux capabilities added back after `--cap-drop ALL`.
+   *
+   * Empty for every sandbox that does not need one, which is the default and
+   * the case for Terraform. The Linux track is the exception: a lab about
+   * `useradd`, `chown` or a supervised service cannot be taught from an
+   * account that cannot administer anything, so `LinuxLabProvider` adds back
+   * the narrow set those tasks need — and nothing that reaches the host
+   * (`SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE`, `MKNOD`, `SYS_MODULE` are never
+   * in it). See `LINUX_SANDBOX_CAPABILITIES`.
+   */
+  capAdd?: string[];
+  /**
+   * `--security-opt no-new-privileges`. True unless a sandbox genuinely needs
+   * setuid to work, which is only the case where `sudo` is part of the lesson.
+   */
+  noNewPrivileges?: boolean;
   env?: Record<string, string>;
   /** Long-running foreground process that keeps the sandbox alive. */
   command: string[];
@@ -167,8 +188,6 @@ export class DockerCliRuntime implements ContainerRuntimePort {
       spec.network,
       '--cap-drop',
       'ALL',
-      '--security-opt',
-      'no-new-privileges:true',
       '--user',
       spec.user,
       '--workdir',
@@ -186,6 +205,17 @@ export class DockerCliRuntime implements ContainerRuntimePort {
       '--restart',
       'no',
     ];
+
+    // Everything is dropped first, then the sandbox's declared set is added
+    // back one flag at a time — so the grant is always an explicit, auditable
+    // list rather than the absence of a restriction.
+    for (const capability of spec.capAdd ?? []) {
+      assertCapabilityName(capability);
+      argv.push('--cap-add', capability);
+    }
+    if (spec.noNewPrivileges !== false) {
+      argv.push('--security-opt', 'no-new-privileges:true');
+    }
 
     for (const [key, value] of Object.entries(spec.labels)) {
       argv.push('--label', `${key}=${value}`);
@@ -398,6 +428,35 @@ export function assertUserName(user: unknown): string {
     throw new ContainerRuntimeError(`'${String(user)}' is not a valid sandbox user name`);
   }
   return user;
+}
+
+/**
+ * Capabilities a sandbox may be granted.
+ *
+ * A closed allow-list, not a syntax check. Anything that would let a container
+ * reach the host or another container — `SYS_ADMIN`, `SYS_MODULE`, `SYS_PTRACE`,
+ * `NET_ADMIN`, `NET_RAW`, `MKNOD`, `SYS_BOOT` — is simply absent, so no
+ * configuration path and no provider can ask for one.
+ */
+export const GRANTABLE_CAPABILITIES = new Set([
+  'CHOWN',
+  'DAC_OVERRIDE',
+  'FOWNER',
+  'FSETID',
+  'SETGID',
+  'SETUID',
+  'SETPCAP',
+  'KILL',
+  'AUDIT_WRITE',
+]);
+
+export function assertCapabilityName(capability: unknown): string {
+  if (typeof capability !== 'string' || !GRANTABLE_CAPABILITIES.has(capability)) {
+    throw new ContainerRuntimeError(
+      `'${String(capability)}' is not a capability a sandbox may be granted (allowed: ${[...GRANTABLE_CAPABILITIES].join(', ')})`,
+    );
+  }
+  return capability;
 }
 
 const ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,63}$/;

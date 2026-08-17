@@ -30,6 +30,8 @@ export {
 export {
   DockerCliRuntime,
   ContainerRuntimeError,
+  GRANTABLE_CAPABILITIES,
+  assertCapabilityName,
   MANAGED_CONTAINER_LABEL,
   MANAGED_CONTAINER_SELECTOR,
   CONTAINER_EXPIRES_LABEL,
@@ -49,6 +51,8 @@ export {
 export {
   LinuxLabProvider,
   DEFAULT_LINUX_SANDBOX_IMAGE,
+  LINUX_SANDBOX_CAPABILITIES,
+  LINUX_SANDBOX_HOSTNAME,
   type LinuxProviderOptions,
 } from './providers/linux-provider.js';
 export {
@@ -79,6 +83,11 @@ export {
   MAX_SETUP_FILE_BYTES,
   type LoadedSetupFile,
 } from './session/setup-files.js';
+export {
+  loadSeedScripts,
+  MAX_SEED_SCRIPT_BYTES,
+  type LoadedSeedScript,
+} from './session/seed-scripts.js';
 
 // --- session layer (PLATFORM-002) ------------------------------------------
 export * from './session/types.js';
@@ -93,6 +102,7 @@ export {
   type SessionLifecycleListener,
   type SessionLifetimeConfig,
   type SessionManagerOptions,
+  type SandboxInspectResult,
   type SandboxReadPort,
   type SessionView,
   type StartSessionResult,

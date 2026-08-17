@@ -8,7 +8,16 @@
  *
  * The second gate is the one that matters. A path can look safe segment by
  * segment and still normalise somewhere else, so the *resolved* result is
- * re-checked against the sandbox home rather than the input being trusted.
+ * re-checked rather than the input being trusted.
+ *
+ * Two forms are legal, and the distinction is the point of several assertions
+ * below. A **home-relative** path resolves under the session's sandbox home and
+ * is refused if normalisation takes it outside. A **container-absolute** path
+ * (`/var/log/…`, `/etc/…`) is taken as written *inside the container*, because
+ * the Linux track is about `/etc`, `/srv` and `/var/log` and the whole
+ * container — not one home directory — is the throwaway thing one session owns.
+ * What neither form may contain is `..`, `~`, a backslash, a NUL, an empty
+ * segment, or a shell metacharacter.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -27,7 +36,7 @@ const TRAVERSALS = [
   '../../../../etc/shadow',
   'deploy/../../etc/hosts',
   'deploy/../..',
-  '/etc/passwd',
+  '/etc/../../root',
   '/',
   '~/.ssh/id_rsa',
   '~',
@@ -76,7 +85,29 @@ describe('sandbox path validation (test requirement 28)', () => {
     }
   });
 
-  it('rejects every form of traversal, absolute path and shell metacharacter', () => {
+  /**
+   * Absolute paths name something inside the container, and are accepted.
+   *
+   * This is what makes the Linux track writable at all: LINUX-007 grades files
+   * under `/var/log`, LINUX-005 a service directory under `/etc`, LINUX-003 a
+   * deployment root under `/srv`. It widens *where inside the sandbox* a lab may
+   * look; it does not widen the sandbox, because the read still happens through
+   * the provider, inside one session's own container, as the student.
+   */
+  it('accepts absolute paths, which name something inside the container', () => {
+    for (const good of ['/etc/service/ledger-api', '/var/log/jumptotech/payments.log', '/srv']) {
+      expect(isSafeSandboxPath(good), `expected '${good}' to be accepted`).toBe(true);
+    }
+    // Taken as written, not re-rooted under the home directory.
+    expect(resolveSandboxPath(HOME, '/var/log/jumptotech/payments.log')).toBe(
+      '/var/log/jumptotech/payments.log',
+    );
+    expect(resolveSandboxPath(HOME, '/etc/service')).toBe('/etc/service');
+    // A trailing slash is still an empty segment, and still refused.
+    expect(isSafeSandboxPath('/etc/service/')).toBe(false);
+  });
+
+  it('rejects every form of traversal and shell metacharacter', () => {
     for (const bad of TRAVERSALS) {
       expect(isSafeSandboxPath(bad), `expected '${bad}' to be rejected`).toBe(false);
       expect(() => assertSafeSandboxPath(bad)).toThrow(SandboxPathError);
@@ -160,10 +191,25 @@ describe('the lab schema refuses an unsafe path before anything reads it', () =>
     expect(def.requirements[0]).toMatchObject({ type: 'file_exists', path: 'deploy/release.txt' });
   });
 
-  it('rejects a traversal, an absolute path and a home-relative path', () => {
-    for (const bad of ['../../etc/passwd', '/etc/passwd', '~/.ssh/id_rsa', 'deploy/../../root']) {
+  it('accepts an absolute path inside the container', () => {
+    const def = parseLabDefinition(labWithPath('/var/log/jumptotech/payments.log'));
+    expect(def.requirements[0]).toMatchObject({
+      type: 'file_exists',
+      path: '/var/log/jumptotech/payments.log',
+    });
+  });
+
+  it('rejects a traversal, a tilde and a metacharacter, in either form', () => {
+    for (const bad of [
+      '../../etc/passwd',
+      '/etc/../../root',
+      '~/.ssh/id_rsa',
+      'deploy/../../root',
+      'deploy/$(whoami)',
+      '/var/log/;rm -rf /',
+    ]) {
       expect(issuesFrom(labWithPath(bad)).join('\n'), `expected '${bad}' to be rejected`).toMatch(
-        /relative path inside the sandbox home/,
+        /path inside the sandbox/,
       );
     }
   });

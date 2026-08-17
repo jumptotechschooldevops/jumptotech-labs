@@ -42,12 +42,28 @@ import {
  * The platform's content rule is that teaching material is written from
  * upstream documentation. This is data, not logic — a new track adds an entry
  * here rather than a branch anywhere else.
+ *
+ * The Linux entry lists the authorities the Linux track is written from: the
+ * GNU Coreutils and Bash manuals, the Linux man-pages project, the kernel's
+ * own documentation, and Ubuntu/Debian manpages where distribution behaviour
+ * is what the lab is teaching.
  */
 export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
   kubernetes: ['kubernetes.io', 'www.kubernetes.io', 'github.com/kubernetes'],
-  // The Linux track is written from man pages and the maintainers' own
-  // documentation: the POSIX/`man7` reference set and the GNU coreutils manual.
-  linux: ['man7.org', 'www.man7.org', 'www.gnu.org', 'gnu.org', 'pubs.opengroup.org'],
+  linux: [
+    'man7.org',
+    'www.man7.org',
+    'www.gnu.org',
+    'gnu.org',
+    'www.kernel.org',
+    'kernel.org',
+    'help.ubuntu.com',
+    'ubuntu.com',
+    'manpages.ubuntu.com',
+    'manpages.debian.org',
+    'www.debian.org',
+    'pubs.opengroup.org',
+  ],
   terraform: ['developer.hashicorp.com', 'www.terraform.io', 'terraform.io'],
   docker: ['docs.docker.com'],
   aws: ['docs.aws.amazon.com', 'aws.amazon.com'],
@@ -61,10 +77,16 @@ export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
  * and a Kubernetes lab cannot ask for `file_mode`, because the verifier has no
  * sandbox filesystem to look at. Catching that at load time turns a runtime
  * "unsupported" into a precise authoring error.
+ *
+ * The `linux` family is the one that additionally needs the sandbox to answer
+ * an inspection command (process table, listening sockets, account databases).
+ * Only the Linux provider claims it: a Terraform sandbox has a filesystem but
+ * runs no services, so a Terraform lab asking `port_listening` is an authoring
+ * error rather than a check that would quietly never pass.
  */
 export const PROVIDER_REQUIREMENT_FAMILIES: Record<LabProviderId, readonly string[]> = {
   kubernetes: ['kubernetes'],
-  linux: ['filesystem'],
+  linux: ['filesystem', 'linux'],
   terraform: ['filesystem', 'terraform'],
   docker: ['filesystem'],
   aws: [],
@@ -132,14 +154,30 @@ const certificationSchema = z
  * Rejects absolute paths, parent traversal, and backslashes before the loader
  * ever touches the filesystem.
  */
-const manifestPath = z
-  .string()
-  .min(1)
-  .max(255)
-  .refine((p) => !path.isAbsolute(p), { message: 'manifest path must be relative to the lab directory' })
-  .refine((p) => !p.includes('\\'), { message: 'manifest path must use forward slashes' })
-  .refine((p) => !p.split('/').includes('..'), { message: 'manifest path must not traverse upwards' })
-  .refine((p) => /\.ya?ml$/i.test(p), { message: 'manifest path must be a .yaml file' });
+function labRelativePath(what: string, extension: RegExp, extensionMessage: string) {
+  return z
+    .string()
+    .min(1)
+    .max(255)
+    .refine((p) => !path.isAbsolute(p), { message: `${what} path must be relative to the lab directory` })
+    .refine((p) => !p.includes('\\'), { message: `${what} path must use forward slashes` })
+    .refine((p) => !p.split('/').includes('..'), { message: `${what} path must not traverse upwards` })
+    .refine((p) => extension.test(p), { message: extensionMessage });
+}
+
+const manifestPath = labRelativePath('manifest', /\.ya?ml$/i, 'manifest path must be a .yaml file');
+
+/**
+ * A baseline script for a Linux lab, shipped in the lab's own directory.
+ *
+ * This is the Linux equivalent of `setup.manifests`: platform-authored content
+ * that establishes the lab's starting condition — seeded log files, a broken
+ * permission, a misconfigured service. It is copied into the *session's own
+ * container* and run there as that container's root, exactly once, before the
+ * student's terminal opens. It never runs on the host, never runs in another
+ * student's container, and is never reachable from the browser.
+ */
+const seedScriptPath = labRelativePath('seed script', /\.sh$/, 'seed script path must be a .sh file');
 
 /**
  * A starter file seeded into a container sandbox.
@@ -181,6 +219,18 @@ const setupSchema = z
     manifests: z.array(manifestPath).max(10).default([]),
     /** Seeded into the session's sandbox home, for container-backed providers. */
     files: z.array(setupFileSchema).max(20).default([]),
+    /**
+     * Run inside the session's own container, in order, before the terminal
+     * opens.
+     *
+     * The container equivalent of `manifests`: `files` can only place content a
+     * student could have written themselves, which is not enough to stage a
+     * lab about accounts, services or logs owned by root. A seed script is
+     * platform-authored content shipped in the lab's own directory — it is not
+     * a field a lab can put a command *string* into, and it runs only in the
+     * throwaway container belonging to one session.
+     */
+    seed_scripts: z.array(seedScriptPath).max(10).default([]),
     /**
      * Checks that must pass before the lab is handed to the student. Reuses the
      * requirement vocabulary, so setup verification and solution verification
@@ -240,6 +290,11 @@ const labDefinitionSchema = z
     environment: z
       .object({
         provider: z.enum(LAB_PROVIDERS),
+        /**
+         * The isolation model. Each provider delivers exactly one (see
+         * `PROVIDER_ISOLATION`); declaring another is a validation error
+         * rather than a silently ignored field.
+         */
         isolation: z.enum(ISOLATION_MODES).optional(),
       })
       .strict(),
@@ -386,13 +441,14 @@ function checkRequirementTypes(raw: unknown, field: string, issues: string[]): v
 /**
  * Refuse a lab that asks its provider for something the provider cannot do.
  *
- * Three ways to get this wrong, all authoring bugs that would otherwise fail
+ * Four ways to get this wrong, all authoring bugs that would otherwise fail
  * confusingly at Start Lab or, worse, mark a lab passed on a check that never
  * ran:
  *
  *   1. requirement types from a family the provider cannot verify;
  *   2. Kubernetes setup manifests on a provider with no Kubernetes API;
- *   3. sandbox starter files on a provider with no sandbox filesystem.
+ *   3. sandbox starter files on a provider with no sandbox filesystem;
+ *   4. seed scripts on a provider with no container to run them in.
  */
 function checkProviderCapabilities(def: LabDefinition, issues: string[]): void {
   const provider = def.environment.provider;
@@ -414,12 +470,17 @@ function checkProviderCapabilities(def: LabDefinition, issues: string[]): void {
 
   if (def.setup.manifests.length > 0 && provider !== 'kubernetes') {
     issues.push(
-      `setup.manifests are Kubernetes objects and cannot be applied by the '${provider}' provider — use setup.files instead`,
+      `setup.manifests are Kubernetes objects and cannot be applied by the '${provider}' provider — use setup.files or setup.seed_scripts instead`,
     );
   }
   if (def.setup.files.length > 0 && PROVIDER_ISOLATION[provider] !== 'container') {
     issues.push(
       `setup.files are seeded into a sandbox filesystem, which the '${provider}' provider does not have`,
+    );
+  }
+  if (def.setup.seed_scripts.length > 0 && PROVIDER_ISOLATION[provider] !== 'container') {
+    issues.push(
+      `setup.seed_scripts run inside a sandbox container, which the '${provider}' provider does not create`,
     );
   }
 }
@@ -560,11 +621,13 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
   // A lab whose setup seeds anything but verifies nothing would hand the
   // student an environment nobody checked.
   if (
-    (def.setup.manifests.length > 0 || def.setup.files.length > 0) &&
+    (def.setup.manifests.length > 0 ||
+      def.setup.files.length > 0 ||
+      def.setup.seed_scripts.length > 0) &&
     def.setup.verify.length === 0
   ) {
     issues.push(
-      'setup.verify must describe at least one check when setup.manifests or setup.files is non-empty',
+      'setup.verify must describe at least one check when setup.manifests, setup.files or setup.seed_scripts is non-empty',
     );
   }
 
@@ -574,6 +637,13 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
   if (duplicateSetupPaths.length > 0) {
     issues.push(
       `setup.files declares the same destination twice: ${[...new Set(duplicateSetupPaths)].join(', ')}`,
+    );
+  }
+
+  const duplicateSeedScripts = def.setup.seed_scripts.filter((p, i, all) => all.indexOf(p) !== i);
+  if (duplicateSeedScripts.length > 0) {
+    issues.push(
+      `setup.seed_scripts names the same script twice: ${[...new Set(duplicateSeedScripts)].join(', ')}`,
     );
   }
 
@@ -605,21 +675,35 @@ export async function loadLabDefinition(filePath: string): Promise<LoadedLabDefi
 }
 
 /**
- * Resolve a declared manifest path to an absolute path inside the lab directory.
+ * Resolve a declared asset path to an absolute path inside the lab directory.
  *
  * The schema already rejects `..` and absolute paths; this re-checks the
  * resolved result so a symlinked or unusual path cannot escape either.
  */
-export function resolveManifestPath(lab: LoadedLabDefinition, relative: string): string {
+export function resolveLabAssetPath(
+  lab: LoadedLabDefinition,
+  relative: string,
+  what = 'Setup manifest',
+): string {
   const resolved = path.resolve(lab.directory, relative);
   const root = path.resolve(lab.directory) + path.sep;
   if (!resolved.startsWith(root)) {
     throw new LabDefinitionError(
-      `Setup manifest '${relative}' resolves outside the lab directory`,
+      `${what} '${relative}' resolves outside the lab directory`,
       lab.sourcePath,
       [],
       lab.id,
     );
   }
   return resolved;
+}
+
+/** Back-compatible alias; setup manifests are the Kubernetes flavour of asset. */
+export function resolveManifestPath(lab: LoadedLabDefinition, relative: string): string {
+  return resolveLabAssetPath(lab, relative, 'Setup manifest');
+}
+
+/** True when a lab seeds a starting state the student inherits. */
+export function labHasSetup(def: LabDefinition): boolean {
+  return def.setup.manifests.length > 0 || def.setup.seed_scripts.length > 0;
 }

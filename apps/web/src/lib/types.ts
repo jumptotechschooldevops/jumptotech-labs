@@ -56,11 +56,19 @@ export interface LabSummary {
   hintCount: number;
 }
 
+export interface TopicSummary {
+  topic: string;
+  title: string;
+  labCount: number;
+}
+
 export interface TrackSummary {
   track: string;
   title: string;
+  /** One-line description of the track. Absent for tracks with no tagline. */
+  tagline?: string;
   labCount: number;
-  topics: Array<{ topic: string; title: string; labCount: number }>;
+  topics: TopicSummary[];
   difficulties: string[];
   /** The providers this track's labs declare. */
   providers?: string[];
@@ -143,10 +151,14 @@ export interface EnvironmentInfo {
   sandboxRef?: string;
   sandboxKind?: SandboxKind;
   namespace: string;
+  /** What that handle names. Lets the UI label it honestly per track. */
+  isolation?: 'namespace' | 'container';
   sessionId?: string;
   kubernetesVersion?: string;
   nodes?: NodeInfo[];
+  /** Container-backed sessions: the sandbox image, and the OS it reports. */
   image?: string;
+  osRelease?: string;
   message?: string;
 }
 

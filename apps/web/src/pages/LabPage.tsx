@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiRequestError, api } from '../lib/api';
+import { describeEnvironment } from '../lib/environment';
 import type {
   ApiError,
   AttemptSummary,
@@ -52,16 +53,6 @@ const ENVIRONMENT_NAMES: Record<string, string> = {
   terraform: 'Terraform',
   aws: 'AWS',
 };
-
-/** A one-line description of whatever kind of environment was created. */
-function describeEnvironment(environment: EnvironmentInfo): string {
-  if (environment.kubernetesVersion) {
-    const nodes = environment.nodes?.length ?? 0;
-    return `${environment.provider} · ${environment.kubernetesVersion} · ${nodes} node${nodes === 1 ? '' : 's'}`;
-  }
-  if (environment.image) return `${environment.provider} · ${environment.image}`;
-  return environment.provider;
-}
 
 function toApiError(error: unknown): ApiError {
   if (error instanceof ApiRequestError) return error.error;
@@ -463,13 +454,11 @@ export function LabPage({
         <section className="terminal-pane" aria-label="Lab terminal">
           <div className="terminal-pane__header">
             <span className="terminal-pane__title">Terminal</span>
-            {/* Developer detail. The namespace is not a student-facing concept
-                and possessing it grants nothing — every API call is addressed
-                by session id. */}
             {/* Developer detail. The sandbox reference is not a student-facing
                 concept and possessing it grants nothing — every API call is
                 addressed by session id, and no endpoint accepts a sandbox
-                reference as input. */}
+                reference as input. It is labelled by what it actually names,
+                which the session record already tells us. */}
             <span className="terminal-pane__meta">
               {labReady && session
                 ? `${SANDBOX_NOUN[session.sandboxKind] ?? 'sandbox'}: ${session.sandboxRef}`

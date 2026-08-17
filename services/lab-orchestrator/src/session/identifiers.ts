@@ -27,6 +27,8 @@ export const NAMESPACE_PREFIX = 'lab-';
  * distinctive on a developer's machine: cleanup will only ever consider a
  * container whose *name* starts with this and whose *labels* say the platform
  * owns it, so a developer's own `lab-something` container cannot be reached.
+ * It is also a valid Docker container name and a valid RFC 1123 label, so one
+ * validator covers both substrates.
  */
 export const CONTAINER_SANDBOX_PREFIX = 'jtt-lab-';
 
@@ -130,12 +132,13 @@ export function deriveNamespace(options: DeriveNamespaceOptions): string {
   if (suffixChars < 6 || suffixChars > 40) {
     throw new Error('namespace suffix must be between 6 and 40 hex characters');
   }
+  const prefix = options.prefix ?? NAMESPACE_PREFIX;
   const digest = createHmac('sha256', options.secret)
     .update(`namespace:${sessionId}`)
     .digest('hex')
     .slice(0, suffixChars);
 
-  return assertValidLabNamespace(`${options.prefix ?? NAMESPACE_PREFIX}${digest}`);
+  return assertValidLabNamespace(`${prefix}${digest}`, prefix);
 }
 
 /**

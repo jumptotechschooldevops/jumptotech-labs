@@ -1,0 +1,146 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Safety note. Account management needs elevated privileges, and this lab gives
+# it to the student — through `sudo`, inside their own single-occupancy
+# container, with no host filesystem mounted and no route to any other
+# student's sandbox. Every account this lab creates lives and dies with that
+# container. See README → Security model.
+#
+# Content is written from the Linux man-pages project and Debian/Ubuntu
+# documentation only.
+# ---------------------------------------------------------------------------
+id: LINUX-003
+slug: linux-003-users-groups
+title: Users and Groups
+track: linux
+topic: linux-administration
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 3
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-002
+
+story: >
+  JumpToTech Bank is bringing a continuous-integration runner onto the
+  deployment host. It needs its own service account rather than borrowing
+  anyone's login, and it needs to share the release staging directory with the
+  humans who deploy by hand — which today means you.
+
+  The host has `/srv/jumptotech` and a README describing the intent. The
+  accounts and the group do not exist yet.
+
+objectives:
+  - Distinguish a user's primary group from its supplementary groups
+  - Create a group and a service account from the command line
+  - Give a directory to a group so several accounts can share it
+  - Read account state from /etc/passwd, /etc/group and the id command
+
+task:
+  summary: Create a deployers group and a ci-runner service account, then give them a shared staging directory.
+  description: >
+    You are the `student` account and you have passwordless `sudo` in this
+    sandbox, which is what account management needs.
+
+    Create a group called `deployers`. Create a user called `ci-runner` with a
+    home directory. Make `ci-runner` a member of `deployers`, and make your own
+    `student` account a member of `deployers` too.
+
+    Then create the directory `/srv/jumptotech/deploy`. It must belong to the
+    `deployers` group, and its mode must give the owner and the group full
+    access — read, write and execute — while giving other accounts none.
+
+    One thing that surprises people: your shell's group membership was fixed
+    when the shell started, so `id` in *this* terminal may not show `deployers`
+    even after you have been added. The system databases are what matter, and
+    that is what this lab reads. `id student` asks about the account rather than
+    about your current session.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: directory_exists
+      path: /srv/jumptotech
+      label: The deployment root exists
+    - type: file_exists
+      path: /srv/jumptotech/README.txt
+      label: The host README is present
+
+requirements:
+  - type: group_exists
+    name: deployers
+    label: The deployers group exists
+  - type: user_exists
+    name: ci-runner
+    label: The ci-runner account exists
+  - type: directory_exists
+    path: /home/ci-runner
+    label: ci-runner has a home directory
+  - type: user_in_group
+    user: ci-runner
+    group: deployers
+    label: ci-runner is a member of deployers
+  - type: user_in_group
+    user: student
+    group: deployers
+    label: student is a member of deployers
+  - type: directory_exists
+    path: /srv/jumptotech/deploy
+    label: The staging directory exists
+  - type: file_group
+    path: /srv/jumptotech/deploy
+    group: deployers
+    label: The staging directory belongs to the deployers group
+  - type: file_mode
+    path: /srv/jumptotech/deploy
+    mode: "770"
+    label: Only the owner and the deployers group can use the staging directory
+
+hints:
+  - level: 1
+    text: >
+      Three distinct things are being asked for: a group, an account, and
+      membership linking them. Each has its own command, and adding an existing
+      user to an existing group is a modification rather than a creation.
+  - level: 2
+    text: >
+      `man groupadd`, `man useradd` and `man usermod` describe all three. Pay
+      attention to the useradd flag that creates the home directory — on Debian
+      and Ubuntu it is not the default. For membership, look for the usermod
+      options that append a supplementary group rather than replacing the whole
+      list, since replacing it would silently remove other memberships.
+  - level: 3
+    text: >
+      Verify with `id ci-runner` and `id student`; both should list `deployers`.
+      A directory's group is changed with `chgrp` or `chown :group`, and the
+      mode you want gives the owner and the group read, write and execute while
+      other accounts get nothing. If `id student` still omits `deployers`, check
+      whether you replaced the group list instead of appending to it.
+
+references:
+  - title: useradd(8) — Linux manual page
+    url: https://man7.org/linux/man-pages/man8/useradd.8.html
+  - title: usermod(8) — Linux manual page
+    url: https://man7.org/linux/man-pages/man8/usermod.8.html
+  - title: group(5) — the format of /etc/group
+    url: https://man7.org/linux/man-pages/man5/group.5.html
+  - title: Ubuntu Server documentation — User management
+    url: https://help.ubuntu.com/community/AddUsersHowto
+
+skills:
+  - linux.accounts.users
+  - linux.accounts.groups
+  - linux.accounts.inspect
+  - linux.permissions.ownership
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - users-and-groups

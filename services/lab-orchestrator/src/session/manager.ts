@@ -78,11 +78,48 @@ export interface SandboxReadPort {
     relativePath: string,
     options?: { maxBytes?: number },
   ): Promise<SandboxPathRead | null>;
+  /**
+   * Ask the sandbox an allow-listed inspection question, for the `linux`
+   * requirement family — is this process running, is this port listening, is
+   * this account in that group.
+   *
+   * Optional, and absent unless the provider offered it. A Terraform sandbox
+   * has a filesystem but is not a system to administer, so it supplies `read`
+   * and nothing else, and a `linux` check against it is reported as skipped
+   * rather than failed.
+   */
+  inspect?(
+    command: string,
+    args: readonly string[],
+    options?: { asRoot?: boolean; timeoutMs?: number },
+  ): Promise<SandboxInspectResult>;
+  /** Run a script the student wrote, for the `script_runs` check. */
+  runScript?(
+    scriptPath: string,
+    args: readonly string[],
+    options?: { timeoutMs?: number },
+  ): Promise<SandboxInspectResult>;
+}
+
+/** What an inspection command reported. Never shown to a student verbatim. */
+export interface SandboxInspectResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
 }
 
 /** Hook used to close a student's terminal when their session goes away. */
 export interface TerminalTerminator {
   terminate(sessionId: string): Promise<void>;
+  /**
+   * Reconnect a live terminal to a replaced sandbox.
+   *
+   * Optional: a provider whose reset leaves the sandbox standing (the
+   * Kubernetes one) never triggers it, and a deployment configured without
+   * terminal control simply does not have it.
+   */
+  reattach?(sessionId: string): Promise<void>;
 }
 
 /**
@@ -502,8 +539,16 @@ export class SessionManager {
     if (!provider?.readSandboxPath) return null;
     const context = this.contextFor(session);
     const read = provider.readSandboxPath.bind(provider);
+    const inspect = provider.inspectSandbox?.bind(provider);
+    const runScript = provider.runSandboxScript?.bind(provider);
     return {
       read: (relativePath, options) => read(context, relativePath, options),
+      ...(inspect
+        ? { inspect: (command, args, options) => inspect(context, command, args, options) }
+        : {}),
+      ...(runScript
+        ? { runScript: (scriptPath, args, options) => runScript(context, scriptPath, args, options) }
+        : {}),
     };
   }
 
@@ -579,6 +624,27 @@ export class SessionManager {
       lastActivityAt: new Date(this.#now()).toISOString(),
       ...(result.ok ? {} : { statusReason: result.error?.message ?? 'reset failed' }),
     });
+
+    /*
+     * Reconnect the student's shell, for the providers whose reset replaces the
+     * sandbox rather than emptying it.
+     *
+     * A Kubernetes reset purges objects and keeps the namespace, so the shell
+     * — a local PTY holding a kubeconfig — survives untouched. A container
+     * reset genuinely recreates the container, which kills the `docker exec`
+     * inside it, so without this the student would be left looking at a dead
+     * terminal after a successful reset.
+     *
+     * Best-effort on purpose: the reset itself succeeded, and a terminal that
+     * could not be reconnected is a worse terminal, not a failed reset. The
+     * student can reload the page.
+     */
+    if (result.ok && session.sandboxKind === 'container' && this.#terminal?.reattach) {
+      await this.#terminal.reattach(session.sessionId).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.#log(`session ${session.sessionId}: terminal did not reconnect after reset — ${message}`);
+      });
+    }
 
     return { session: updated ?? session, result };
   }

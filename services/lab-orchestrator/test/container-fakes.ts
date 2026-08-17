@@ -42,6 +42,21 @@ export interface FakeRuntimeOptions {
   unreachable?: string;
   /** Extra entries every new container starts with, keyed by absolute path. */
   seed?: Record<string, Partial<FakeEntry>>;
+  /**
+   * Processes the fake sandbox reports, as `ps -eo pid=,user=,args=` lines.
+   *
+   * The fake does not *run* anything, and deliberately does not pretend to: a
+   * seed script that would have started a daemon does not start one here. Tests
+   * that need a process table state it, so no assertion can accidentally read
+   * as "the fake proved a real daemon came up".
+   */
+  processes?: string[];
+  /** Listening sockets, as `ss -H -lntu` lines. */
+  sockets?: string[];
+  /** `getent <db> <key>` answers, keyed `db:key`. */
+  accounts?: Record<string, string>;
+  /** Seed scripts that should fail, keyed by basename, with their exit code. */
+  failingSeedScripts?: Record<string, { exitCode: number; stderr: string }>;
 }
 
 export class FakeContainerRuntime implements ContainerRuntimePort {
@@ -53,9 +68,16 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
   /** Every exec, for asserting that reads run as the unprivileged user. */
   readonly execs: Array<{ container: string; request: ContainerExecRequest }> = [];
 
+  /** Seed scripts the provider installed and ran, in order, as `name`. */
+  readonly seedScriptsRun: string[] = [];
+
   #images: Set<string>;
   unreachable: string | undefined;
   #seed: Record<string, Partial<FakeEntry>>;
+  processes: string[];
+  sockets: string[];
+  accounts: Record<string, string>;
+  #failingSeedScripts: Record<string, { exitCode: number; stderr: string }>;
 
   constructor(options: FakeRuntimeOptions = {}) {
     this.#images = new Set(
@@ -63,6 +85,10 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
     );
     this.unreachable = options.unreachable;
     this.#seed = options.seed ?? {};
+    this.processes = options.processes ?? [];
+    this.sockets = options.sockets ?? [];
+    this.accounts = options.accounts ?? {};
+    this.#failingSeedScripts = options.failingSeedScripts ?? {};
   }
 
   async ping(): Promise<string> {
@@ -262,6 +288,46 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
         if (!entry) return fail(`chmod: cannot access '${target}': No such file or directory`);
         entry.mode = (args[0] ?? '644').replace(/^0+(?=\d{3})/, '');
         return ok('');
+      }
+
+      case '/bin/rm': {
+        for (const path of [...container.files.keys()]) {
+          if (path === target || path.startsWith(`${target}/`)) container.files.delete(path);
+        }
+        return ok('');
+      }
+
+      /*
+       * `sh -c 'exec "$0"' <path>` — how the provider runs a seed script, and
+       * how the verifier runs a student's script. The fake records the run and
+       * reports the outcome the test asked for; it never executes anything.
+       */
+      case '/bin/sh': {
+        const script = args[2] ?? '';
+        const name = script.split('/').pop() ?? '';
+        if (script.startsWith('/opt/jumptotech/seed/')) {
+          this.seedScriptsRun.push(name);
+          const failure = this.#failingSeedScripts[name];
+          if (failure) {
+            return { exitCode: failure.exitCode, stdout: '', stderr: failure.stderr, timedOut: false };
+          }
+          return ok('');
+        }
+        const entry = container.files.get(script);
+        if (!entry) return fail(`sh: ${script}: No such file or directory`);
+        return ok(entry.content);
+      }
+
+      // --- allow-listed inspection commands, for the `linux` family ---------
+      case 'ps':
+        return ok(this.processes.join('\n') + (this.processes.length ? '\n' : ''));
+
+      case 'ss':
+        return ok(this.sockets.join('\n') + (this.sockets.length ? '\n' : ''));
+
+      case 'getent': {
+        const answer = this.accounts[`${String(args[0])}:${String(args[1])}`];
+        return answer === undefined ? fail('') : ok(`${answer}\n`);
       }
 
       default:

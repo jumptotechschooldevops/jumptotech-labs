@@ -1,0 +1,122 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# This file is the single source of truth for the lab. The API loads it at
+# runtime and serves it to the frontend; nothing about this task is hardcoded
+# in React or in the verifier.
+#
+# PLATFORM-LINUX-001 note: there is deliberately no container name anywhere in
+# this file. Each student session gets its own generated sandbox, and both the
+# terminal and the verifier are scoped to it by the session record. A lab
+# cannot name the container it runs in — that is what stops one student's lab
+# content from reaching another student's sandbox.
+#
+# Content is written from the GNU Coreutils manual and the Linux man-pages
+# project only.
+# ---------------------------------------------------------------------------
+id: LINUX-001
+slug: linux-001-files
+title: Files and Directories
+track: linux
+topic: linux-fundamentals
+difficulty: beginner
+level: practice
+duration_minutes: 20
+order: 1
+
+environment:
+  provider: linux
+
+prerequisites: []
+
+story: >
+  Your first week on the JumpToTech Bank platform team, and you have been given
+  a shell on a build host. Before anyone hands you a production system, your
+  team lead wants to see that you can move around a filesystem and put files
+  where they belong without asking which button to press.
+
+  The task is small on purpose. Everything that follows in this track — reading
+  logs, fixing permissions, writing scripts — assumes you can do this without
+  thinking about it.
+
+objectives:
+  - Find out where you are in the filesystem and list what is there
+  - Create directories and empty files from the command line
+  - Move a file into another directory and confirm it is no longer in the old one
+
+task:
+  summary: Build a small project directory tree and move a log file into an archive.
+  description: >
+    Your shell starts in the `student` account's home directory. Everything in
+    this task happens inside it, and you already own it, so nothing here needs
+    elevated privileges.
+
+    Create a directory called `project` in your home directory. Inside it,
+    create two empty files, `app.log` and `config.txt`. Then create an `archive`
+    directory inside `project`, and move `app.log` into it.
+
+    When you are done, `project` should contain `config.txt` and the `archive`
+    directory, and `archive` should contain `app.log`. Note the word "move":
+    a copy that leaves the original behind is not the same thing, and this lab
+    checks for that.
+
+# Verification is state-based: the verifier reads the live filesystem inside
+# this session's own container, and never inspects the student's command
+# history. Creating these with `mkdir`/`touch`, with an editor, or with a
+# script you wrote yourself all pass identically.
+requirements:
+  - type: directory_exists
+    path: /home/student/project
+    label: The project directory exists
+  - type: file_exists
+    path: /home/student/project/config.txt
+    label: config.txt is in the project directory
+  - type: directory_exists
+    path: /home/student/project/archive
+    label: The archive directory exists inside project
+  - type: file_exists
+    path: /home/student/project/archive/app.log
+    label: app.log is in the archive directory
+  - type: path_absent
+    path: /home/student/project/app.log
+    label: app.log was moved, not copied
+
+hints:
+  - level: 1
+    text: >
+      Two of these steps make something that did not exist before, and one moves
+      something that did. Think about which command family each belongs to, and
+      remember that a directory and a file are created by different commands.
+  - level: 2
+    text: >
+      The GNU Coreutils manual documents the commands for creating directories
+      and empty files, and for renaming or relocating them. `man mkdir`,
+      `man touch`, and `man mv` are also available right there in your terminal.
+      If you are unsure where you are, there is a command that prints the
+      working directory.
+  - level: 3
+    text: >
+      The final layout must be exactly `~/project/config.txt`,
+      `~/project/archive/`, and `~/project/archive/app.log`. Check your work
+      with `ls -R ~/project`. If `app.log` still appears directly under
+      `project` as well as under `archive`, you copied it instead of moving it —
+      the last check exists precisely to catch that.
+
+references:
+  - title: GNU Coreutils — Directory listing and file creation
+    url: https://www.gnu.org/software/coreutils/manual/html_node/index.html
+  - title: mkdir(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/mkdir.1.html
+  - title: mv(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/mv.1.html
+
+skills:
+  - linux.files.navigate
+  - linux.files.create
+  - linux.files.move
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - essential-commands

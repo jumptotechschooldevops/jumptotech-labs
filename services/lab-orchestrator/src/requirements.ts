@@ -8,21 +8,54 @@
  * list, a lab can never name a requirement the verifier cannot execute, and a
  * verifier handler can never accept a shape the schema did not validate.
  *
+ * The vocabulary is split by **family**, because the families observe
+ * completely different substrates:
+ *
+ * ```text
+ *   kubernetes  ──► read the Kubernetes API in the session namespace
+ *   filesystem  ──► read a path inside the session's own sandbox container
+ *   terraform   ──► read terraform.tfstate inside that sandbox
+ *   linux       ──► additionally ask the sandbox an allow-listed inspection
+ *                   question: process table, listening sockets, accounts
+ * ```
+ *
+ * `lab-definition.ts` refuses a lab that asks its provider for a family the
+ * provider cannot answer, so a Kubernetes lab can never ask for a file check
+ * and a Linux lab can never ask for a Pod.
+ *
  * Security property: every schema below is `.strict()`. A lab definition
- * therefore cannot smuggle extra keys — no `command:`, no `script:`, no
- * `exec:`. There is deliberately no requirement type that runs anything; all
- * verification is a read of the Kubernetes API.
+ * therefore cannot smuggle extra keys — no `shell:`, no free-form `exec:`. The
+ * `linux` family does contain three types that *run* something
+ * (`command_exit_code`, `command_output`, `script_runs`), and they are fenced
+ * deliberately:
+ *
+ *   - `command`/`args` are never a shell string. They are an argv array,
+ *     executed with no shell, so argument content cannot become syntax.
+ *   - `command` is drawn from `VERIFIER_COMMANDS`, a closed allow-list of
+ *     read-only inspection binaries that ship in the sandbox image.
+ *   - `script_runs` executes only a path the lab names, **inside that
+ *     student's own throwaway container** — the one place where that code can
+ *     already run, because the student has a shell in it. It reaches nothing
+ *     on the host and nothing belonging to any other student.
  */
 import { z } from 'zod';
 import { isSafeSandboxPath, MAX_SANDBOX_PATH_LENGTH } from './session/sandbox-paths.js';
 
 /**
- * A path inside the session's sandbox home.
+ * A path inside the session's sandbox.
  *
- * Never absolute, never `..`, never a shell metacharacter — see
+ * Either relative to the sandbox home (`deploy/release.txt`) or absolute
+ * inside the container (`/var/log/jumptotech/payments.log`). Never `~`, never
+ * a `..` segment, never a shell metacharacter, never a backslash — see
  * `session/sandbox-paths.ts` for the rule and for the second check the runtime
- * applies before any read. A lab definition therefore cannot name a host path,
- * and cannot name a path outside its own student's sandbox.
+ * applies before any read.
+ *
+ * Absolute forms are accepted because a Linux system-administration lab is
+ * *about* `/etc`, `/var/log` and `/srv`, and because the whole container — not
+ * just one home directory — is the throwaway thing that belongs to exactly one
+ * session. What the rule still guarantees is unchanged: an absolute path is
+ * resolved inside the sandbox by the provider, so a lab definition can never
+ * name a path on the host or in another student's sandbox.
  */
 const sandboxPath = z
   .string()
@@ -30,7 +63,7 @@ const sandboxPath = z
   .max(MAX_SANDBOX_PATH_LENGTH)
   .refine(isSafeSandboxPath, {
     message:
-      'must be a relative path inside the sandbox home (no leading /, no ~, no .. segments, no backslashes)',
+      'must be a path inside the sandbox (no ~, no .. segments, no backslashes, no shell metacharacters)',
   });
 
 /** A POSIX user or group name, as `stat` reports it. */
@@ -128,6 +161,72 @@ const portValue = z.union([
     .max(15)
     .regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, 'must be a named port'),
 ]);
+
+/**
+ * A fixed string matched against a process command line.
+ *
+ * Matching happens in the verifier, over a process table it read itself — this
+ * is never handed to `pgrep`, a shell, or a regular-expression engine, so it
+ * can neither inject nor backtrack.
+ */
+const processPattern = z
+  .string()
+  .min(2)
+  .max(160)
+  .regex(/^[A-Za-z0-9._\-/ :=@,+]+$/, 'must be a plain command-line fragment');
+
+/** Literal text a file or command output must contain. */
+const literalText = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine((v) => !v.includes('\0'), { message: 'must not contain null bytes' });
+
+/**
+ * Inspection binaries a lab may name in `command_exit_code` / `command_output`.
+ *
+ * All of them read state; none of them mutate it. A lab cannot name `rm`,
+ * `chmod`, `bash`, or anything else outside this list, and there is no
+ * mechanism to extend the list from a lab definition. `LinuxLabProvider` hands
+ * exactly this array to the container provider, so the schema and the thing
+ * that enforces it cannot drift apart.
+ */
+export const VERIFIER_COMMANDS = [
+  'test',
+  'stat',
+  'id',
+  'getent',
+  'ps',
+  'ss',
+  'df',
+  'du',
+  'ls',
+  'cat',
+  'grep',
+  'wc',
+  'hostname',
+  'readlink',
+  'find',
+  'sha256sum',
+  'head',
+  'tail',
+  'awk',
+  'cut',
+  'sort',
+  'uniq',
+] as const;
+
+export type VerifierCommand = (typeof VERIFIER_COMMANDS)[number];
+
+/** One argv element. Never concatenated into a string, never shell-expanded. */
+const commandArgument = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9._\-/=:,%@+]+$/, 'command arguments are restricted to a safe character set');
+
+/** Which account a check observes the sandbox as. */
+const asUser = z.enum(['student', 'root']).default('student');
 
 const requirementSchemas = {
   // --- Pods --------------------------------------------------------------
@@ -548,6 +647,142 @@ const requirementSchemas = {
       ...common,
     })
     .strict(),
+  // =========================================================================
+  // Linux sandbox family
+  // =========================================================================
+  //
+  // Everything below observes the *inside of one session's container*: its
+  // process table, its listening sockets, its account databases, and paths
+  // outside the student's home such as `/etc` and `/var/log`. The filesystem
+  // family above stays as it is — these are the checks a Linux system
+  // administration lab needs and a plain file check cannot express.
+  //
+  // Three of them (`script_runs`, `command_exit_code`, `command_output`) run
+  // something, which no requirement type did before. They are fenced:
+  //
+  //   · `command` is drawn from `VERIFIER_COMMANDS`, a closed allow-list of
+  //     read-only inspection binaries. A lab cannot name `rm`, `bash`, or
+  //     anything outside it, and the list cannot be extended from lab.yaml.
+  //   · arguments are an argv array executed with no shell, so argument
+  //     content can never become syntax.
+  //   · `script_runs` executes only a path the lab names, inside that
+  //     student's own throwaway container — the one place that code can
+  //     already run, because the student has a shell in it. It reaches
+  //     nothing on the host and nothing belonging to another student.
+
+  /**
+   * Nothing exists at this path.
+   *
+   * Used by labs whose point is that something was *moved* rather than copied,
+   * and by clean-up steps in troubleshooting labs.
+   */
+  path_absent: z.object({ type: z.literal('path_absent'), path: sandboxPath, ...common }).strict(),
+
+  /** The file must NOT contain this text — e.g. a fault that had to be removed. */
+  file_content_absent: z
+    .object({
+      type: z.literal('file_content_absent'),
+      path: sandboxPath,
+      contains: literalText,
+      ignore_case: z.boolean().default(false),
+      ...common,
+    })
+    .strict(),
+
+  // --- Processes and ports ------------------------------------------------
+  process_running: z
+    .object({
+      type: z.literal('process_running'),
+      /** Fixed text that must appear in the process command line. */
+      pattern: processPattern,
+      min_count: z.number().int().min(1).max(50).default(1),
+      ...common,
+    })
+    .strict(),
+
+  process_not_running: z
+    .object({ type: z.literal('process_not_running'), pattern: processPattern, ...common })
+    .strict(),
+
+  port_listening: z
+    .object({
+      type: z.literal('port_listening'),
+      port: z.number().int().min(1).max(65535),
+      protocol: z.enum(['tcp', 'udp']).default('tcp'),
+      ...common,
+    })
+    .strict(),
+
+  port_not_listening: z
+    .object({
+      type: z.literal('port_not_listening'),
+      port: z.number().int().min(1).max(65535),
+      protocol: z.enum(['tcp', 'udp']).default('tcp'),
+      ...common,
+    })
+    .strict(),
+
+  // --- Accounts -----------------------------------------------------------
+  user_exists: z.object({ type: z.literal('user_exists'), name: posixName, ...common }).strict(),
+
+  group_exists: z.object({ type: z.literal('group_exists'), name: posixName, ...common }).strict(),
+
+  user_in_group: z
+    .object({
+      type: z.literal('user_in_group'),
+      user: posixName,
+      group: posixName,
+      ...common,
+    })
+    .strict(),
+
+  // --- Scripts ------------------------------------------------------------
+  /** A regular file that is executable by its owner. */
+  script_executable: z
+    .object({ type: z.literal('script_executable'), path: sandboxPath, ...common })
+    .strict(),
+
+  /**
+   * Run the student's own script and grade its behaviour, not its source.
+   *
+   * This is what lets a scripting lab accept every correct solution: two
+   * students who solve the task with completely different code both pass,
+   * because what is compared is the exit status and the output.
+   */
+  script_runs: z
+    .object({
+      type: z.literal('script_runs'),
+      path: sandboxPath,
+      args: z.array(commandArgument).max(8).default([]),
+      expected_exit_code: z.number().int().min(0).max(255).default(0),
+      output_contains: z.array(literalText).max(8).default([]),
+      timeout_seconds: z.number().int().min(1).max(60).default(15),
+      ...common,
+    })
+    .strict(),
+
+  // --- Allow-listed inspection commands -----------------------------------
+  command_exit_code: z
+    .object({
+      type: z.literal('command_exit_code'),
+      command: z.enum(VERIFIER_COMMANDS),
+      args: z.array(commandArgument).max(12).default([]),
+      expected_exit_code: z.number().int().min(0).max(255).default(0),
+      as_user: asUser,
+      ...common,
+    })
+    .strict(),
+
+  command_output: z
+    .object({
+      type: z.literal('command_output'),
+      command: z.enum(VERIFIER_COMMANDS),
+      args: z.array(commandArgument).max(12).default([]),
+      contains: literalText,
+      as_user: asUser,
+      ...common,
+    })
+    .strict(),
 } as const;
 
 /** Every requirement type the platform supports, in documentation order. */
@@ -559,16 +794,22 @@ export type RequirementType = keyof typeof requirementSchemas;
  * Which reader a requirement needs.
  *
  * This is the whole of the verifier's dispatch: `kubernetes` checks read the
- * Kubernetes API in the session's namespace, `filesystem` and `terraform`
- * checks read inside the session's sandbox. Splitting Terraform out from plain
- * filesystem checks is not cosmetic — it is what lets `lab-definition.ts` say
- * "the Linux provider cannot verify Terraform state" and refuse the lab.
+ * Kubernetes API in the session's namespace; `filesystem`, `terraform` and
+ * `linux` checks all read inside the session's sandbox. Splitting them is not
+ * cosmetic — it is what lets `lab-definition.ts` say "the Linux provider
+ * cannot verify Terraform state", or "the Terraform provider cannot inspect a
+ * process table", and refuse the lab at load time.
+ *
+ * `filesystem` needs only a path read; `linux` additionally needs the sandbox
+ * to answer an allow-listed inspection command, which is why a provider that
+ * offers reads but not exec reports `linux` checks as skipped rather than
+ * failed.
  *
  * The mapped type below is the completeness guarantee: adding a requirement
  * type without classifying it fails to compile, so a new check can never
  * silently fall through to the wrong reader.
  */
-export type RequirementFamily = 'kubernetes' | 'filesystem' | 'terraform';
+export type RequirementFamily = 'kubernetes' | 'filesystem' | 'terraform' | 'linux';
 
 export const REQUIREMENT_FAMILIES = {
   pod_exists: 'kubernetes',
@@ -621,6 +862,25 @@ export const REQUIREMENT_FAMILIES = {
   terraform_output_equals: 'terraform',
 
   resource_absent: 'kubernetes',
+
+  // These three read a path and nothing else, so they belong with the rest of
+  // the filesystem family — a sandbox that can answer `file_mode` can answer
+  // them too. `linux` is reserved for the checks that genuinely need the
+  // sandbox to answer an *inspection command*.
+  path_absent: 'filesystem',
+  file_content_absent: 'filesystem',
+  script_executable: 'filesystem',
+
+  process_running: 'linux',
+  process_not_running: 'linux',
+  port_listening: 'linux',
+  port_not_listening: 'linux',
+  user_exists: 'linux',
+  group_exists: 'linux',
+  user_in_group: 'linux',
+  script_runs: 'linux',
+  command_exit_code: 'linux',
+  command_output: 'linux',
   // `as const satisfies` rather than a plain annotation: the literal family of
   // each type has to survive for `RequirementTypeOf` to be able to filter on
   // it, while `satisfies` still enforces that every requirement type is
@@ -636,10 +896,15 @@ export type RequirementTypeOf<F extends RequirementFamily> = {
   [K in RequirementType]: (typeof REQUIREMENT_FAMILIES)[K] extends F ? K : never;
 }[RequirementType];
 
-/** Requirement types read through the sandbox filesystem rather than Kubernetes. */
-export type SandboxRequirementType = RequirementTypeOf<'filesystem' | 'terraform'>;
+/** Requirement types read inside the session's sandbox rather than Kubernetes. */
+export type SandboxRequirementType = RequirementTypeOf<'filesystem' | 'terraform' | 'linux'>;
 
 export type KubernetesRequirementType = RequirementTypeOf<'kubernetes'>;
+
+/** Sandbox checks that additionally need an allow-listed inspection command. */
+export type LinuxRequirementType = RequirementTypeOf<'linux'>;
+
+export const LINUX_REQUIREMENT_TYPES = requirementTypesForFamily('linux') as LinuxRequirementType[];
 
 export function requirementTypesForFamily(family: RequirementFamily): RequirementType[] {
   return REQUIREMENT_TYPES.filter((type) => REQUIREMENT_FAMILIES[type] === family);
@@ -647,6 +912,14 @@ export function requirementTypesForFamily(family: RequirementFamily): Requiremen
 
 export function isSupportedRequirementType(value: unknown): value is RequirementType {
   return typeof value === 'string' && Object.hasOwn(requirementSchemas, value);
+}
+
+export function isLinuxRequirementType(value: unknown): value is LinuxRequirementType {
+  return isSupportedRequirementType(value) && REQUIREMENT_FAMILIES[value] === 'linux';
+}
+
+export function isKubernetesRequirementType(value: unknown): value is KubernetesRequirementType {
+  return isSupportedRequirementType(value) && REQUIREMENT_FAMILIES[value] === 'kubernetes';
 }
 
 const schemaValues = Object.values(requirementSchemas) as unknown as [
@@ -668,6 +941,16 @@ export const requirementSchema = z.union(schemaValues);
 export type Requirement = {
   [K in RequirementType]: z.infer<(typeof requirementSchemas)[K]>;
 }[RequirementType];
+
+/** A requirement observed against a Kubernetes namespace. */
+export type KubernetesRequirement = {
+  [K in KubernetesRequirementType]: z.infer<(typeof requirementSchemas)[K]>;
+}[KubernetesRequirementType];
+
+/** A requirement observed inside the session's sandbox container. */
+export type SandboxRequirement = {
+  [K in SandboxRequirementType]: z.infer<(typeof requirementSchemas)[K]>;
+}[SandboxRequirementType];
 
 /** Narrow a validated requirement to one type. */
 export type RequirementOf<T extends RequirementType> = z.infer<(typeof requirementSchemas)[T]>;

@@ -64,6 +64,7 @@ import {
 } from '../../session/identifiers.js';
 import { resolveSandboxPath, sandboxParent } from '../../session/sandbox-paths.js';
 import { loadSetupFiles, type LoadedSetupFile } from '../../session/setup-files.js';
+import { loadSeedScripts, type LoadedSeedScript } from '../../session/seed-scripts.js';
 import { AVAILABLE, unavailable, type ProviderAvailability } from '../catalog.js';
 import {
   CONTAINER_EXPIRES_LABEL,
@@ -87,7 +88,24 @@ const INTERNAL_EXEC_ALLOWLIST = new Set([
   '/bin/rm',
   '/usr/bin/id',
   '/usr/bin/env',
+  '/bin/sh',
 ]);
+
+/**
+ * Where a lab's seed scripts land inside the sandbox.
+ *
+ * Root-owned and mode 0700, and emptied again the moment seeding finishes —
+ * successfully or not. The deletion is not tidiness: a troubleshooting lab's
+ * seed script *describes the fault it injects*, and a student with `sudo` in
+ * their own container would otherwise be able to read the answer key.
+ */
+const SEED_DIR = '/opt/jumptotech/seed';
+
+/** Cap on what one inspection command may return to the verifier. */
+const MAX_INSPECT_OUTPUT_BYTES = 256 * 1024;
+
+/** How long one seed script may take before the sandbox is declared broken. */
+const SEED_TIMEOUT_MS = 120_000;
 
 export interface ContainerProviderOptions {
   id: LabProviderId;
@@ -100,6 +118,55 @@ export interface ContainerProviderOptions {
   home?: string;
   /** Binaries a lab's own environment must contain for this provider to be usable. */
   requiredBinaries?: string[];
+  /**
+   * Capabilities added back after `--cap-drop ALL`, from the closed list in
+   * `runtime.ts`. Empty for every provider whose labs do not administer the
+   * sandbox itself.
+   */
+  capabilities?: string[];
+  /**
+   * Whether `--security-opt no-new-privileges` is applied. Only a provider
+   * whose labs teach `sudo` turns it off, and only for its own sandboxes.
+   */
+  noNewPrivileges?: boolean;
+  /**
+   * The account the container's **foreground process** runs as.
+   *
+   * Defaults to the same unprivileged user the student gets, which is right for
+   * a sandbox whose foreground process is `sleep infinity`. The Linux sandbox
+   * runs a real process supervisor instead, which has to be root to supervise
+   * services that drop to their own accounts — so it overrides this.
+   *
+   * It does **not** change who the student is. Shells, verifier reads and
+   * provider health checks all attach with `--user <policy.sandbox.user>`
+   * regardless; this is only the init process.
+   */
+  containerUser?: string;
+  /**
+   * The sandbox's hostname.
+   *
+   * Student-visible — it is in the prompt, and a scripting lab may legitimately
+   * grade what `hostname` reports — so it is a provider decision rather than a
+   * literal buried in the lifecycle.
+   */
+  hostname?: string;
+  /**
+   * The container's long-running foreground process.
+   *
+   * `sleep infinity` is right for a sandbox that is only ever a filesystem with
+   * shells exec'd into it. The Linux sandbox runs a real process supervisor
+   * instead, because LINUX-005 teaches services and a supervisor that is not
+   * actually running is not a service manager.
+   */
+  foregroundCommand?: string[];
+  /**
+   * Inspection binaries the verifier may run inside this provider's sandboxes.
+   *
+   * Empty by default: a provider whose labs verify by reading files needs no
+   * exec at all, and `verifyCommand` refuses everything until a provider opts
+   * in. `LinuxLabProvider` passes `VERIFIER_COMMANDS`.
+   */
+  inspectionCommands?: readonly string[];
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -113,6 +180,12 @@ export class ContainerLabProvider implements LabProvider {
   readonly #image: string;
   readonly #home: string;
   readonly #requiredBinaries: string[];
+  readonly #capabilities: string[];
+  readonly #containerUser: string | undefined;
+  readonly #hostname: string;
+  readonly #foregroundCommand: string[];
+  readonly #noNewPrivileges: boolean;
+  readonly #inspectionCommands: ReadonlySet<string>;
   readonly #now: () => number;
 
   constructor(options: ContainerProviderOptions) {
@@ -122,6 +195,12 @@ export class ContainerLabProvider implements LabProvider {
     this.#image = options.image;
     this.#home = options.home ?? '/home/student';
     this.#requiredBinaries = options.requiredBinaries ?? [];
+    this.#capabilities = options.capabilities ?? [];
+    this.#containerUser = options.containerUser;
+    this.#hostname = options.hostname ?? 'lab';
+    this.#foregroundCommand = options.foregroundCommand ?? ['sleep', 'infinity'];
+    this.#noNewPrivileges = options.noNewPrivileges ?? true;
+    this.#inspectionCommands = new Set(options.inspectionCommands ?? []);
     this.#now = options.now ?? (() => Date.now());
   }
 
@@ -176,13 +255,15 @@ export class ContainerLabProvider implements LabProvider {
       await this.#runtime.create({
         name: ref,
         image: this.#image,
-        hostname: 'lab',
-        user: context.policy.sandbox.user,
+        hostname: this.#hostname,
+        user: this.#containerUser ?? context.policy.sandbox.user,
         workdir: this.#home,
         cpus: context.policy.sandbox.cpus,
         memory: context.policy.sandbox.memory,
         pidsLimit: context.policy.sandbox.pidsLimit,
         network: context.policy.sandbox.network,
+        ...(this.#capabilities.length > 0 ? { capAdd: [...this.#capabilities] } : {}),
+        noNewPrivileges: this.#noNewPrivileges,
         labels: {
           [MANAGED_CONTAINER_LABEL]: 'true',
           [CONTAINER_SESSION_LABEL]: context.sessionId,
@@ -196,7 +277,7 @@ export class ContainerLabProvider implements LabProvider {
         },
         // A container needs a foreground process to stay alive; the student's
         // shells are `docker exec` children of it.
-        command: ['sleep', 'infinity'],
+        command: [...this.#foregroundCommand],
       });
       return `sandbox container ${ref} created (cpus=${context.policy.sandbox.cpus} memory=${context.policy.sandbox.memory} pids=${context.policy.sandbox.pidsLimit} network=${context.policy.sandbox.network})`;
     });
@@ -226,7 +307,7 @@ export class ContainerLabProvider implements LabProvider {
       };
     }
 
-    if (context.lab.setup.files.length > 0) {
+    if (context.lab.setup.files.length > 0 || context.lab.setup.seed_scripts.length > 0) {
       const setupStep = await this.#runStep(steps, 'lab-initial-state', 'Lab initial state ready', async () =>
         this.#applySetup(context),
       );
@@ -318,7 +399,10 @@ export class ContainerLabProvider implements LabProvider {
         ...(recreated.error ? { error: recreated.error } : {}),
       };
     }
-    restored = context.lab.setup.files.map((file) => file.path);
+    restored = [
+      ...context.lab.setup.files.map((file) => file.path),
+      ...context.lab.setup.seed_scripts,
+    ];
 
     return {
       ok: true,
@@ -595,14 +679,185 @@ export class ContainerLabProvider implements LabProvider {
     return found.length > 0 ? `${who}; ${found.join('; ')}` : `unprivileged user '${who}'`;
   }
 
-  /** Write the lab's starter files into the sandbox home. */
+  /**
+   * Put the lab's declared starting condition into the sandbox.
+   *
+   * Two mechanisms, in a deliberate order. Starter files land first, as the
+   * unprivileged student, so they carry exactly the ownership a student's own
+   * work would. Seed scripts run second, as the sandbox's root, because that is
+   * the only way to stage the system state an administration lab is *about* —
+   * an account that already exists, a service already supervised, a log
+   * directory populated by something other than the student.
+   */
   async #applySetup(context: LabSessionContext): Promise<string> {
-    const files = await loadSetupFiles(context.lab);
     const ref = this.#ref(context);
+    const done: string[] = [];
+
+    const files = await loadSetupFiles(context.lab);
     for (const file of files) {
       await this.#writeFile(ref, context.policy.sandbox.user, file);
     }
-    return `seeded ${files.length} starter file${files.length === 1 ? '' : 's'}`;
+    if (files.length > 0) {
+      done.push(`seeded ${files.length} starter file${files.length === 1 ? '' : 's'}`);
+    }
+
+    const scripts = await loadSeedScripts(context.lab);
+    if (scripts.length > 0) {
+      await this.#runSeedScripts(ref, scripts);
+      done.push(`ran ${scripts.length} seed script${scripts.length === 1 ? '' : 's'}`);
+    }
+
+    return done.join('; ');
+  }
+
+  /**
+   * Install, run, and remove a lab's baseline scripts.
+   *
+   * Each script is written into a root-only directory, marked executable, run
+   * once, and deleted immediately — and the directory is emptied again in a
+   * `finally`, so a script survives neither success nor failure. Content
+   * travels on stdin rather than in a command line, so there is nothing to
+   * quote; the only strings that reach an argv are the platform's own fixed
+   * paths and a basename this loader produced.
+   */
+  async #runSeedScripts(ref: string, scripts: readonly LoadedSeedScript[]): Promise<void> {
+    try {
+      const prepare = await this.#runtime.exec(ref, {
+        argv: ['/bin/mkdir', '-p', '--', SEED_DIR],
+        user: 'root',
+        workdir: '/',
+      });
+      if (prepare.exitCode !== 0) {
+        throw new Error(`could not prepare the seed directory: ${prepare.stderr.trim()}`);
+      }
+
+      for (const script of scripts) {
+        const target = `${SEED_DIR}/${script.name}`;
+
+        const write = await this.#runtime.exec(ref, {
+          argv: ['/usr/bin/tee', '--', target],
+          user: 'root',
+          workdir: SEED_DIR,
+          stdin: script.content,
+        });
+        if (write.exitCode !== 0) {
+          throw new Error(`could not install '${script.source}': ${write.stderr.trim()}`);
+        }
+
+        const chmod = await this.#runtime.exec(ref, {
+          argv: ['/bin/chmod', '0700', '--', target],
+          user: 'root',
+          workdir: SEED_DIR,
+        });
+        if (chmod.exitCode !== 0) {
+          throw new Error(`could not make '${script.source}' executable: ${chmod.stderr.trim()}`);
+        }
+
+        const run = await this.#runtime.exec(ref, {
+          argv: ['/bin/sh', '-c', 'exec "$0"', target],
+          user: 'root',
+          workdir: '/',
+          timeoutMs: SEED_TIMEOUT_MS,
+        });
+        if (run.timedOut) {
+          throw new Error(`seed script '${script.source}' did not finish within ${SEED_TIMEOUT_MS / 1000}s`);
+        }
+        if (run.exitCode !== 0) {
+          throw new Error(
+            `seed script '${script.source}' exited with ${run.exitCode}: ${run.stderr.trim().slice(0, 400)}`,
+          );
+        }
+      }
+    } finally {
+      // Whatever happened above, nothing a lab shipped stays on disk where a
+      // student could read it.
+      await this.#runtime
+        .exec(ref, {
+          argv: ['/bin/rm', '-rf', '--', SEED_DIR],
+          user: 'root',
+          workdir: '/',
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  /**
+   * Run one allow-listed inspection command for the verifier.
+   *
+   * The `linux` requirement family needs answers a file read cannot give: is
+   * this process running, is this port listening, is this account in that
+   * group. They are read-only questions, and this is the only way to ask them —
+   * `command` must be one of the provider's declared `inspectionCommands`,
+   * arguments are an argv array with no shell anywhere, and output is capped.
+   *
+   * A provider that declares no inspection commands (Terraform, Docker) refuses
+   * every call, so the capability is opt-in per provider rather than implied by
+   * having a container.
+   */
+  async inspectSandbox(
+    context: LabSessionContext,
+    command: string,
+    args: readonly string[],
+    options: { asRoot?: boolean; timeoutMs?: number } = {},
+  ): Promise<ExecResult> {
+    if (!this.#inspectionCommands.has(command)) {
+      throw new Error(
+        `'${command}' is not an inspection command the '${this.id}' provider offers the verifier`,
+      );
+    }
+    if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) {
+      throw new Error('inspectSandbox() requires args to be an array of strings');
+    }
+
+    return this.#runtime.exec(this.#ref(context), {
+      argv: [command, ...args],
+      // `root` only where the lab explicitly asked for it — reading
+      // `/etc/shadow`-adjacent state such as a service directory. Everything
+      // else observes exactly what the student can see.
+      user: options.asRoot ? 'root' : context.policy.sandbox.user,
+      workdir: this.#home,
+      timeoutMs: options.timeoutMs ?? 15_000,
+      maxBufferBytes: MAX_INSPECT_OUTPUT_BYTES,
+    });
+  }
+
+  /**
+   * Run a script the *student* wrote, inside their own sandbox, as themselves.
+   *
+   * A separate capability from `inspectSandbox` on purpose. That one runs a
+   * fixed set of platform binaries; this one runs student code, which is a
+   * different thing to reason about and therefore a different thing to grant.
+   * Only `script_runs` uses it, and only a provider that declared inspection
+   * commands offers it at all.
+   *
+   * The path is resolved through the same two-gate rule as every verifier read,
+   * so a lab cannot name something outside the sandbox — and there is nothing
+   * outside the sandbox to name, because the exec happens inside the container.
+   * `sh -c 'exec "$0"'` is used rather than bare argv so that a script without
+   * a `#!` line still runs the way a shell would run it; the path arrives as
+   * `$0`, never as command text.
+   */
+  async runSandboxScript(
+    context: LabSessionContext,
+    scriptPath: string,
+    args: readonly string[],
+    options: { timeoutMs?: number } = {},
+  ): Promise<ExecResult> {
+    if (this.#inspectionCommands.size === 0) {
+      throw new Error(`the '${this.id}' provider does not run scripts for the verifier`);
+    }
+    if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) {
+      throw new Error('runSandboxScript() requires args to be an array of strings');
+    }
+
+    const absolute = resolveSandboxPath(this.#home, scriptPath);
+    return this.#runtime.exec(this.#ref(context), {
+      argv: ['/bin/sh', '-c', 'exec "$0" "$@"', absolute, ...args],
+      user: context.policy.sandbox.user,
+      workdir: this.#home,
+      timeoutMs: options.timeoutMs ?? 15_000,
+      maxBufferBytes: MAX_INSPECT_OUTPUT_BYTES,
+    });
   }
 
   async #writeFile(ref: string, user: string, file: LoadedSetupFile): Promise<void> {

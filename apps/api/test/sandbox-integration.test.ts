@@ -36,6 +36,8 @@ import type { Express } from 'express';
 import {
   DEFAULT_LINUX_SANDBOX_IMAGE,
   DEFAULT_TERRAFORM_SANDBOX_IMAGE,
+  LINUX_SANDBOX_CAPABILITIES,
+  LINUX_SANDBOX_HOSTNAME,
   DockerCliRuntime,
   InMemorySessionStore,
   KubernetesClient,
@@ -58,11 +60,9 @@ const HOME = '/home/student';
 /** The commands a student would type to solve LINUX-001. */
 const LINUX_SOLUTION = `
 set -e
-mkdir -p deploy/releases
-printf 'service=ledger-api\\nversion=4.2.0\\n' > deploy/release.txt
-chgrp deployers deploy
-chmod 750 deploy
-chmod 640 deploy/release.txt
+mkdir -p project/archive
+touch project/app.log project/config.txt
+mv project/app.log project/archive/app.log
 `;
 
 /** The configuration a student would write to solve TF-001, plus the workflow. */
@@ -188,7 +188,16 @@ afterAll(async () => {
 }, 120_000);
 
 describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', () => {
-  it('creates a container with no network, no capabilities and bounded resources', async () => {
+  /*
+   * What the real daemon actually applied.
+   *
+   * The Linux sandbox is deliberately the *least* locked down of the container
+   * providers: it runs its supervisor as root and allows `sudo`, because a lab
+   * about `useradd` cannot be taught otherwise. This test is where that
+   * trade-off is pinned honestly — everything relaxed is named, and everything
+   * still standing is asserted against Docker rather than against a fake.
+   */
+  it('creates a container with no network, no host mounts and bounded resources', async () => {
     if (!enabled) return;
     const { app, sessions } = await harness();
     const session = await startLab(app, 'LINUX-001');
@@ -197,21 +206,35 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
       'inspect',
       session.sandboxRef,
       '--format',
-      '{{.HostConfig.NetworkMode}}|{{.HostConfig.CapDrop}}|{{.HostConfig.PidsLimit}}|{{.HostConfig.Memory}}|{{.Config.User}}|{{len .Mounts}}|{{.HostConfig.Privileged}}|{{.HostConfig.SecurityOpt}}',
+      '{{.HostConfig.NetworkMode}}|{{.HostConfig.CapDrop}}|{{.HostConfig.CapAdd}}|{{.HostConfig.PidsLimit}}|{{.HostConfig.Memory}}|{{.Config.User}}|{{len .Mounts}}|{{.HostConfig.Privileged}}|{{.Config.Hostname}}',
     ]);
-    const [network, capDrop, pids, memory, user, mounts, privileged, securityOpt] = stdout
+    const [network, capDrop, capAdd, pids, memory, user, mounts, privileged, hostname] = stdout
       .trim()
       .split('|');
 
+    // Unchanged, and the boundaries that actually contain a student.
     expect(network).toBe('none');
-    expect(capDrop).toContain('ALL');
     expect(Number(pids)).toBe(sessions.policy.sandbox.pidsLimit);
     expect(Number(memory)).toBeGreaterThan(0);
-    expect(user).toBe('student');
     expect(privileged).toBe('false');
-    expect(securityOpt).toContain('no-new-privileges');
     // No host filesystem is mounted, and in particular no Docker socket.
     expect(Number(mounts)).toBe(0);
+
+    // Everything is dropped, then a named, bounded set is added back.
+    expect(capDrop).toContain('ALL');
+    for (const granted of LINUX_SANDBOX_CAPABILITIES) {
+      expect(capAdd, granted).toContain(granted);
+    }
+    // Nothing that reaches the host is grantable at all.
+    for (const forbidden of ['SYS_ADMIN', 'NET_ADMIN', 'SYS_PTRACE', 'MKNOD', 'SYS_MODULE']) {
+      expect(capAdd, forbidden).not.toContain(forbidden);
+    }
+
+    // The init process is root so `runsvdir` can supervise services that drop
+    // to their own accounts. The *student* is not — see the next test, which
+    // asserts what a shell in here actually runs as.
+    expect(user).toBe('root');
+    expect(hostname).toBe(LINUX_SANDBOX_HOSTNAME);
 
     await request(app).delete(`/api/sessions/${session.sessionId}`);
   }, 180_000);
@@ -222,7 +245,7 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     const session = await startLab(app, 'LINUX-001');
 
     const id = await asStudent(session.sandboxRef, 'id -un && id -Gn');
-    expect(id.stdout).toContain('student');
+    expect(id.stdout.split('\n')[0]).toBe('student');
     expect(id.stdout).toContain('deployers');
 
     const ls = await asStudent(session.sandboxRef, 'ls -la ~ && pwd');
@@ -236,14 +259,41 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     });
     expect(docker.exitCode).not.toBe(0);
 
-    // And cannot give a file away to another user: there is no CAP_CHOWN.
+    // The student's own shell is unprivileged: `chown` to another user fails
+    // as it would on any real system, because the *shell* is not root.
     const chown = await runtime.exec(session.sandboxRef, {
       argv: ['/bin/bash', '-lc', 'touch f && chown root f'],
       user: 'student',
       workdir: HOME,
     });
     expect(chown.exitCode).not.toBe(0);
-    expect(chown.stderr).toMatch(/not permitted/i);
+    expect(chown.stderr).toMatch(/not permitted|Operation not permitted/i);
+
+    /*
+     * …and `sudo` genuinely works, quietly.
+     *
+     * LINUX-003 is a lab about `useradd`. If `sudo` were inert here — which is
+     * exactly what `no-new-privileges` would make it — the lab would teach a
+     * student to type a correct command and watch it do nothing. The quietness
+     * matters too: without CAP_AUDIT_WRITE every `sudo` prints an audit
+     * warning, in a track whose whole point is reading what the system says.
+     */
+    const sudo = await runtime.exec(session.sandboxRef, {
+      argv: ['/bin/bash', '-lc', 'sudo id -un'],
+      user: 'student',
+      workdir: HOME,
+    });
+    expect(sudo.exitCode).toBe(0);
+    expect(sudo.stdout.trim()).toBe('root');
+    expect(sudo.stderr).toBe('');
+
+    const useradd = await runtime.exec(session.sandboxRef, {
+      argv: ['/bin/bash', '-lc', 'sudo useradd --create-home ci-runner && getent passwd ci-runner'],
+      user: 'student',
+      workdir: HOME,
+    });
+    expect(useradd.exitCode, useradd.stderr).toBe(0);
+    expect(useradd.stdout).toContain('ci-runner');
 
     await request(app).delete(`/api/sessions/${session.sessionId}`);
   }, 180_000);
@@ -256,7 +306,12 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     const before = await check(app, session.sessionId);
     expect(before.passed).toBe(false);
     expect(before.summary).toBe('LAB NOT COMPLETE');
-    expect(before.checks.every((c) => c.status === 'fail')).toBe(true);
+    // Every check ran against the real container — none was skipped for want
+    // of a reader — and the ones describing work still to do failed. Not all
+    // of them: LINUX-001 asks that `app.log` was *moved*, and on an untouched
+    // sandbox nothing is at the old path, so that one legitimately passes.
+    expect(before.checks.every((c) => c.status !== 'skipped')).toBe(true);
+    expect(before.checks.filter((c) => c.status === 'fail').length).toBeGreaterThan(0);
 
     await asStudent(session.sandboxRef, LINUX_SOLUTION);
 

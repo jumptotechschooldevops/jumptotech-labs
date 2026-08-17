@@ -19,6 +19,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
   LabDefinitionError,
+  labHasSetup,
   loadLabDefinition,
   type LoadedLabDefinition,
 } from './lab-definition.js';
@@ -68,6 +69,8 @@ export interface TopicSummary {
 export interface TrackSummary {
   track: string;
   title: string;
+  /** One-line description of the track. Absent for tracks with no tagline. */
+  tagline?: string;
   labCount: number;
   topics: TopicSummary[];
   difficulties: string[];
@@ -110,8 +113,26 @@ const TRACK_TITLES: Record<string, string> = {
   aws: 'AWS',
 };
 
+/**
+ * One line describing what a track is for, shown on the catalog's track cards.
+ *
+ * Data, not logic: a new track adds an entry rather than a branch in React.
+ * An unknown track simply has no tagline, and the UI renders without one.
+ */
+const TRACK_TAGLINES: Record<string, string> = {
+  kubernetes: 'CKA-oriented Kubernetes practice on a live cluster',
+  linux: 'Linux for DevOps engineers, on a real shell',
+  terraform: 'Infrastructure as code, applied in a private sandbox',
+  docker: 'Containers from the command line up',
+  aws: 'Cloud fundamentals, on scoped throwaway credentials',
+};
+
 export function trackTitle(track: string): string {
   return TRACK_TITLES[track] ?? titleCase(track);
+}
+
+export function trackTagline(track: string): string | undefined {
+  return TRACK_TAGLINES[track];
 }
 
 export class LabRegistry {
@@ -333,6 +354,7 @@ export class LabRegistry {
       .map(([track, labs]) => ({
         track,
         title: trackTitle(track),
+        ...(trackTagline(track) ? { tagline: trackTagline(track)! } : {}),
         labCount: labs.length,
         topics: topicsOf(labs),
         difficulties: [...new Set(labs.map((l) => l.difficulty))].sort(byDifficulty),
@@ -420,7 +442,7 @@ function toSummary(def: LoadedLabDefinition): LabSummary {
     order: def.order,
     summary: def.task.summary,
     skills: def.skills,
-    hasSetup: def.setup.manifests.length > 0,
+    hasSetup: labHasSetup(def),
     certifications: def.certification.filter((c) => c.relevant).map((c) => c.certification),
     prerequisites: def.prerequisites.map((id) => ({ id, title: id, available: false })),
     hintCount: def.hints.length,

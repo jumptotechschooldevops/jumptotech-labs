@@ -56,6 +56,15 @@ export interface StudentCredentialsResponse {
   expiresAt: string;
 }
 
+export interface LinuxCredentialsResponse {
+  kind: 'linux';
+  sandboxId: string;
+  namespace: string;
+  shellUser: string;
+  workDir: string;
+  expiresAt: string;
+}
+
 export class CredentialsUnavailableError extends Error {
   constructor(
     readonly code: string,

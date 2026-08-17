@@ -10,8 +10,16 @@ export interface TerminalConfig {
    * namespace-scoped ServiceAccount kubeconfig fetched from here, per session.
    */
   apiInternalUrl: string;
-  /** Shared secret authenticating this service to the API. */
+  /** Shared secret authenticating this service to the API and the broker. */
   internalServiceSecret: string;
+  /**
+   * Base URL of the sandbox broker, used for Linux sessions.
+   *
+   * This service still holds no container-runtime access: it opens a WebSocket
+   * to the broker, authenticated with the internal secret, and the broker
+   * decides what may be attached to.
+   */
+  sandboxBrokerUrl: string;
   /** Where per-session kubeconfigs are written (0600, deleted on disconnect). */
   credentialsDir: string;
   /** Working directory + HOME for the student shell. */
@@ -75,6 +83,7 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
       .filter(Boolean),
     apiInternalUrl: env.API_INTERNAL_URL ?? 'http://localhost:4000',
     internalServiceSecret: env.INTERNAL_SERVICE_SECRET || sessionSecret,
+    sandboxBrokerUrl: env.SANDBOX_BROKER_URL ?? 'http://127.0.0.1:4002',
     credentialsDir: env.TERMINAL_CREDENTIALS_DIR ?? '/tmp/jumptotech-credentials',
     workDir: env.TERMINAL_WORKDIR ?? '/home/student',
     maxSessions: intFromEnv(env, 'TERMINAL_MAX_SESSIONS', 16),

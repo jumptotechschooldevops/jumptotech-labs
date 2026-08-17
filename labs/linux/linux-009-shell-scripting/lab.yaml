@@ -1,0 +1,173 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# How this lab is graded, and why. The verifier does not read the student's
+# source and does not compare it to a reference: it makes the script
+# executable-checked, then *runs* it against three fixtures and grades the exit
+# status and the output. Two students whose scripts share no line of code both
+# pass if both behave correctly — which is the only fair way to mark a
+# programming exercise, and the only way that survives a student who solves it
+# with a case statement instead of an if.
+#
+# The script runs as the unprivileged `student` account inside that student's
+# own container: the same place they already run it by hand.
+#
+# Content is written from the GNU Bash manual and the Linux man-pages project
+# only.
+# ---------------------------------------------------------------------------
+id: LINUX-009
+slug: linux-009-shell-scripting
+title: Writing a Health-Check Script
+track: linux
+topic: shell-scripting
+difficulty: intermediate
+level: challenge
+duration_minutes: 40
+order: 9
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-008
+
+story: >
+  JumpToTech Bank's monitoring system can run any command and cares about two
+  things: the exit status, and the text it printed. The team wants a small
+  health-check script it can point at any service's status file, so that a
+  degraded service pages someone and a missing status file does not get
+  mistaken for a healthy one.
+
+  Nobody has written it yet. You have.
+
+objectives:
+  - Write an executable Bash script with a correct interpreter line
+  - Read a command-line argument and handle the case where the file is missing
+  - Use exit status deliberately to signal three different outcomes
+  - Print machine-readable output alongside the check's result
+
+task:
+  summary: Write /home/student/scripts/health-check.sh so it reports a service's state through both its output and its exit status.
+  description: >
+    Write an executable script at `/home/student/scripts/health-check.sh`. That
+    directory already exists and belongs to you.
+
+    The script takes one argument — the path to a service status file — and must
+    behave as follows.
+
+    If the file does not exist, print a line containing `STATUS=UNKNOWN` and
+    exit with status 2.
+
+    If the file exists and contains the word `healthy`, print a line containing
+    `STATUS=OK` and exit with status 0.
+
+    If the file exists and does not contain `healthy`, print a line containing
+    `STATUS=FAIL` and exit with status 1.
+
+    In every case where the file exists, the script must also print a line
+    containing `HOST=` followed by this machine's hostname.
+
+    Two status files are already on the host for you to test against:
+    `/srv/jumptotech/app/healthy.status` and
+    `/srv/jumptotech/app/degraded.status`. For the missing-file case, use a path
+    that does not exist, such as `/srv/jumptotech/app/missing.status`.
+
+    How you write it is entirely up to you. Nothing compares your script to a
+    model answer — it is run against all three cases and graded on what it does.
+    Do check it by hand first: `./health-check.sh <file>; echo $?` shows you
+    both halves of what is being marked.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/jumptotech/app/healthy.status
+      label: The healthy status fixture is present
+    - type: file_exists
+      path: /srv/jumptotech/app/degraded.status
+      label: The degraded status fixture is present
+    - type: path_absent
+      path: /srv/jumptotech/app/missing.status
+      label: The missing-file case really is missing
+    - type: directory_exists
+      path: /home/student/scripts
+      label: The scripts directory exists
+
+requirements:
+  - type: file_exists
+    path: /home/student/scripts/health-check.sh
+    label: The health-check script exists
+  - type: script_executable
+    path: /home/student/scripts/health-check.sh
+    label: The script is executable
+  - type: script_runs
+    path: /home/student/scripts/health-check.sh
+    args:
+      - /srv/jumptotech/app/healthy.status
+    expected_exit_code: 0
+    output_contains:
+      - STATUS=OK
+      - HOST=jumptotech-lab
+    label: A healthy service reports OK and exits 0
+  - type: script_runs
+    path: /home/student/scripts/health-check.sh
+    args:
+      - /srv/jumptotech/app/degraded.status
+    expected_exit_code: 1
+    output_contains:
+      - STATUS=FAIL
+      - HOST=jumptotech-lab
+    label: A degraded service reports FAIL and exits 1
+  - type: script_runs
+    path: /home/student/scripts/health-check.sh
+    args:
+      - /srv/jumptotech/app/missing.status
+    expected_exit_code: 2
+    output_contains:
+      - STATUS=UNKNOWN
+    label: A missing status file reports UNKNOWN and exits 2
+
+hints:
+  - level: 1
+    text: >
+      Three outcomes, three exit statuses. Before writing anything, decide the
+      order in which your script asks its questions — "does the file exist" has
+      to come before "what is in it", or the second question has no answer.
+  - level: 2
+    text: >
+      The GNU Bash manual's sections on conditional constructs, positional
+      parameters, and exit status cover everything here. `man test` lists the
+      file operators; `man grep` describes how a search reports whether it found
+      anything through *its* exit status, which is often more convenient than
+      capturing its output.
+  - level: 3
+    text: >
+      The first line must be an interpreter line naming a shell. The argument
+      arrives as `$1`. A conditional can test whether a path exists as a regular
+      file, and a search command's own success or failure can drive the second
+      branch. `exit N` sets the status explicitly — do not rely on falling off
+      the end of the script, which returns the status of whatever ran last.
+      Remember the file needs its execute bit before anything can run it.
+
+references:
+  - title: GNU Bash manual — Conditional constructs
+    url: https://www.gnu.org/software/bash/manual/html_node/Conditional-Constructs.html
+  - title: GNU Bash manual — Exit status
+    url: https://www.gnu.org/software/bash/manual/html_node/Exit-Status.html
+  - title: GNU Bash manual — Shell parameters
+    url: https://www.gnu.org/software/bash/manual/html_node/Shell-Parameters.html
+  - title: test(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/test.1.html
+
+skills:
+  - linux.scripting.bash
+  - linux.scripting.arguments
+  - linux.scripting.exit-status
+  - linux.permissions.chmod
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - essential-commands

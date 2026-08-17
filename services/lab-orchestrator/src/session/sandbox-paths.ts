@@ -6,19 +6,27 @@
  * ship" is not "trusted enough to hand to a filesystem read", so every path is
  * checked twice:
  *
- *   1. the lab schema rejects anything that is not a plain relative path
- *      (`sandboxPathSchema` in `requirements.ts` uses `isSafeSandboxPath`);
- *   2. the resolved absolute path is re-checked against the sandbox root
- *      immediately before any read (`resolveSandboxPath`).
+ *   1. the lab schema rejects anything that is not a well-formed sandbox path
+ *      (`sandboxPath` in `requirements.ts` uses `isSafeSandboxPath`);
+ *   2. the path is normalised and re-checked immediately before any read
+ *      (`resolveSandboxPath`).
  *
- * The result is that a verifier can only ever read inside one session's own
- * sandbox home. `..`, absolute paths, `~`, backslashes, NUL bytes and empty
- * segments are all refused, and the resolved path must still start with the
- * sandbox root after normalisation — so a path that only *looks* safe segment
- * by segment cannot escape either.
+ * Two forms are accepted, and the difference matters:
+ *
+ *   - **home-relative** (`deploy/release.txt`) — resolved under the session's
+ *     sandbox home, and refused if normalisation takes it outside;
+ *   - **container-absolute** (`/var/log/jumptotech/payments.log`) — taken as
+ *     written *inside the container*. A Linux administration lab is about
+ *     `/etc`, `/srv` and `/var/log`, and the whole container is the throwaway
+ *     thing one session owns, so confining those labs to one home directory
+ *     would have meant they could not be written at all.
+ *
+ * What is refused either way: `..`, `~`, backslashes, NUL bytes, empty
+ * segments, and any character outside the narrow segment charset. A path that
+ * only *looks* safe segment by segment still has to survive normalisation.
  *
  * There is no host filesystem access anywhere on this path: reads happen inside
- * the sandbox container, as the unprivileged student user.
+ * the sandbox container, and `/etc` means the container's `/etc`.
  */
 import path from 'node:path';
 
@@ -58,11 +66,14 @@ export function assertSafeSandboxPath(input: unknown): string {
   }
   if (input.includes('\0')) throw new SandboxPathError(input, 'must not contain a NUL byte');
   if (input.includes('\\')) throw new SandboxPathError(input, 'must use forward slashes');
-  if (path.posix.isAbsolute(input) || input.startsWith('~')) {
-    throw new SandboxPathError(input, 'must be relative to the sandbox home directory');
+  if (input.startsWith('~')) {
+    throw new SandboxPathError(input, "must not start with '~' — name the path explicitly");
   }
+  if (input === '/') throw new SandboxPathError(input, 'must name something inside the sandbox');
 
-  const segments = input.split('/');
+  // An absolute path is one inside the container; drop the leading slash so the
+  // segment rules below are the same for both forms.
+  const segments = (path.posix.isAbsolute(input) ? input.slice(1) : input).split('/');
   for (const segment of segments) {
     if (segment.length === 0) {
       throw new SandboxPathError(input, 'must not contain an empty path segment');
@@ -90,22 +101,31 @@ export function isSafeSandboxPath(input: unknown): input is string {
 }
 
 /**
- * Resolve a declared path to an absolute path inside the sandbox home.
+ * Resolve a declared path to an absolute path inside the sandbox.
  *
- * The second gate. Even for a path the schema already accepted, the normalised
- * result must still live under `home` — so this is what a traversal attempt
- * actually collides with, whatever produced the string.
+ * The second gate. A home-relative path must still normalise to something under
+ * `home`, which is what a traversal attempt actually collides with, whatever
+ * produced the string. A container-absolute path is normalised and returned as
+ * written — it is already inside the sandbox, because the sandbox is the whole
+ * container.
  */
-export function resolveSandboxPath(home: string, relative: string): string {
+export function resolveSandboxPath(home: string, declared: string): string {
   if (!path.posix.isAbsolute(home)) {
     throw new SandboxPathError(home, 'sandbox home must be an absolute path');
   }
-  assertSafeSandboxPath(relative);
+  assertSafeSandboxPath(declared);
+
+  // Already absolute inside the container: normalise and use as written. The
+  // segment rules above have already excluded `..`, so normalisation cannot
+  // move it anywhere its literal text did not already point.
+  if (path.posix.isAbsolute(declared)) {
+    return path.posix.normalize(declared);
+  }
 
   const root = path.posix.normalize(home).replace(/\/+$/, '');
-  const resolved = path.posix.normalize(path.posix.join(root, relative));
+  const resolved = path.posix.normalize(path.posix.join(root, declared));
   if (resolved !== root && !resolved.startsWith(`${root}/`)) {
-    throw new SandboxPathError(relative, 'resolves outside the sandbox home directory');
+    throw new SandboxPathError(declared, 'resolves outside the sandbox home directory');
   }
   return resolved;
 }

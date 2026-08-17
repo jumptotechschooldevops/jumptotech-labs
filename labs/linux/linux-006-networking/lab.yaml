@@ -1,0 +1,138 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Network scope. This lab is entirely self-contained: the sandbox has its own
+# private bridge network and, by default, no route off the host at all. Nothing
+# here scans, probes, or contacts anything outside the student's own container.
+#
+# Content is written from the Linux man-pages project and iproute2/curl
+# documentation only.
+# ---------------------------------------------------------------------------
+id: LINUX-006
+slug: linux-006-networking
+title: Networking Basics
+track: linux
+topic: linux-networking
+difficulty: intermediate
+level: practice
+duration_minutes: 30
+order: 6
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-005
+
+story: >
+  The monitoring dashboard says the JumpToTech Bank edge proxy is "unreachable",
+  but the on-call engineer who raised it was checking from the wrong host. You
+  have a shell on the box itself. Before anyone escalates further, you have been
+  asked to gather the facts from the machine: what address it has, what it is
+  listening on, and what the service actually returns.
+
+  This is the unglamorous half of every network incident, and it is the half
+  that ends most of them.
+
+objectives:
+  - Read a host's own interfaces and addresses with the ip command
+  - List listening TCP sockets and identify which port a service holds
+  - Query a local HTTP service and capture what it returns
+  - Distinguish a host's identity (hostname) from its addressing
+
+task:
+  summary: Gather this host's network facts — its listening ports, its hostname, and the edge proxy's response.
+  description: >
+    An `edge-proxy` service is running on this host and answering HTTP. Your job
+    is to record three facts into `/home/student/net`, which already exists and
+    belongs to you.
+
+    First, capture the listening TCP sockets into `ports.txt`. Whatever form
+    your tool prints is fine — what matters is that the file shows the port the
+    edge proxy holds.
+
+    Second, ask the proxy for a response over HTTP on the loopback address and
+    save its body into `banner.txt`. The service answers on the same port you
+    just found, and it returns a short plain-text banner.
+
+    Third, record this host's hostname into `hostname.txt`.
+
+    All three are local. This sandbox has a private network of its own and no
+    route to anywhere else, so everything you need is on `127.0.0.1` or on the
+    container's own interface — there is nothing external to reach, and nothing
+    external to break.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: port_listening
+      port: 9105
+      label: The edge proxy is listening
+    - type: directory_exists
+      path: /home/student/net
+      label: The working directory exists
+
+requirements:
+  - type: port_listening
+    port: 9105
+    label: The edge proxy is still listening on its port
+  - type: file_exists
+    path: /home/student/net/ports.txt
+    label: The listening-socket capture exists
+  - type: file_content
+    path: /home/student/net/ports.txt
+    contains: "9105"
+    label: The capture shows the edge proxy's port
+  - type: file_content
+    path: /home/student/net/banner.txt
+    contains: JTT-EDGE-OK
+    label: The proxy's response was captured
+  - type: file_content
+    path: /home/student/net/hostname.txt
+    contains: jumptotech-lab
+    label: The host's own name was recorded
+
+hints:
+  - level: 1
+    text: >
+      Three separate questions: which sockets are open, what a service answers,
+      and what this machine calls itself. Each has a dedicated tool, and none of
+      them needs elevated privileges to answer for the local host.
+  - level: 2
+    text: >
+      `man ss` covers listening sockets — look for the options that restrict the
+      output to listening TCP sockets and print numeric ports rather than
+      service names. `man ip` covers addresses; `ip addr` is the modern
+      replacement for `ifconfig`. `man curl` covers fetching a URL, and
+      `man hostname` the third question. Redirect each command's output into its
+      file with `>`.
+  - level: 3
+    text: >
+      `ss -ltn` lists listening TCP sockets numerically; the proxy's port will
+      stand out as the only unusual one. Fetch the banner from
+      `http://127.0.0.1:<port>` and note that curl writes the body to standard
+      output, so a plain redirect captures it. If `banner.txt` ends up with
+      progress output instead of the body, look at curl's silent option.
+
+references:
+  - title: ss(8) — another utility to investigate sockets
+    url: https://man7.org/linux/man-pages/man8/ss.8.html
+  - title: ip(8) — show / manipulate routing, network devices and addresses
+    url: https://man7.org/linux/man-pages/man8/ip.8.html
+  - title: hostname(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/hostname.1.html
+  - title: curl(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/curl.1.html
+
+skills:
+  - linux.network.interfaces
+  - linux.network.sockets
+  - linux.network.http
+  - linux.network.hostname
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - networking

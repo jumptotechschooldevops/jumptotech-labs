@@ -1,0 +1,127 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Content is written from the Linux man-pages project and the GNU Bash manual
+# only.
+# ---------------------------------------------------------------------------
+id: LINUX-004
+slug: linux-004-processes
+title: Processes
+track: linux
+topic: linux-fundamentals
+difficulty: beginner
+level: practice
+duration_minutes: 25
+order: 4
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-003
+
+story: >
+  A release was rolled back three weeks ago, but something from it is still
+  running on this host and quietly writing to disk every few seconds. Nobody
+  noticed until the on-call engineer went looking for why `ledger-sync` — the
+  job that actually reconciles the bank's ledger with the clearing house — was
+  never started after the rollback.
+
+  Your job this morning: stop what should not be running, start what should be,
+  and leave a note for the next engineer showing what you found.
+
+objectives:
+  - List running processes and find one by name rather than by guessing a PID
+  - Understand what a process id is and where signals fit in
+  - Send a termination signal to a specific process
+  - Start a long-running job in the background and confirm it stays running
+
+task:
+  summary: Stop a leftover background job, start the ledger sync job, and record the running process.
+  description: >
+    Something called `stale-batch-job` is running on this host and should not
+    be. Find it and stop it. It is an ordinary background process, not a
+    supervised service, so terminating it is the end of the story — it will not
+    come back.
+
+    `ledger-sync` is installed at `/usr/local/bin/ledger-sync` but is not
+    running. Start it so that it keeps running in the background after you get
+    your prompt back. It never exits on its own; that is expected, and it means
+    running it in the foreground will simply take over your terminal.
+
+    Finally, write evidence of what you did. Capture the process-table line for
+    the running `ledger-sync` into `/home/student/ops/running.txt`. Anything
+    that includes the process's command line will do — the point is that the
+    file shows the job is genuinely up, not that it matches some exact format.
+
+    Both parts of this lab are checked by reading the live process table, not
+    your shell history. Stopping the job and restarting it a different way is
+    just as correct as getting it right first time.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: process_running
+      pattern: /usr/local/bin/stale-batch-job
+      label: The leftover job is running
+    - type: file_exists
+      path: /usr/local/bin/ledger-sync
+      label: The ledger sync job is installed
+
+requirements:
+  - type: process_not_running
+    pattern: /usr/local/bin/stale-batch-job
+    label: The leftover batch job is no longer running
+  - type: process_running
+    pattern: /usr/local/bin/ledger-sync
+    label: The ledger sync job is running
+  - type: file_exists
+    path: /home/student/ops/running.txt
+    label: The evidence file exists
+  - type: file_content
+    path: /home/student/ops/running.txt
+    contains: ledger-sync
+    label: The evidence file names the running job
+
+hints:
+  - level: 1
+    text: >
+      You cannot signal a process without knowing which one it is. Start by
+      listing what is running and finding the one whose command line you
+      recognise — every process carries the command that started it.
+  - level: 2
+    text: >
+      `man ps`, `man pgrep` and `man kill` cover the whole task. `ps -ef` and
+      `ps -eo pid,args` both print process ids alongside command lines; `pgrep`
+      goes straight from a name to a pid. For starting a job that outlives the
+      command line you typed, the GNU Bash manual's chapter on job control
+      explains what a trailing `&` does.
+  - level: 3
+    text: >
+      Terminating by name in one step is possible, but doing it in two — find
+      the pid, then signal it — is worth practising, because in a real incident
+      you want to look before you act. To start the sync job in the background,
+      run it with a trailing `&`, then confirm it survived with `pgrep -af
+      ledger-sync`. Redirect that same output into the evidence file with `>`.
+
+references:
+  - title: ps(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/ps.1.html
+  - title: kill(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/kill.1.html
+  - title: signal(7) — an overview of signals
+    url: https://man7.org/linux/man-pages/man7/signal.7.html
+  - title: GNU Bash manual — Job control
+    url: https://www.gnu.org/software/bash/manual/html_node/Job-Control.html
+
+skills:
+  - linux.processes.list
+  - linux.processes.signal
+  - linux.processes.background
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - operation-of-running-systems

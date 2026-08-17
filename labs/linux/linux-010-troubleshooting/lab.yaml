@@ -1,0 +1,167 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# The requirement labels below deliberately state the *goal* rather than the
+# fault. A troubleshooting lab whose checklist reads "the run script is not
+# executable" has already given away the investigation, so each label describes
+# the healthy end state a runbook would describe, and the hints stay at the
+# level of where to look rather than what to change.
+#
+# Content is written from the Linux man-pages project and Debian documentation
+# only.
+# ---------------------------------------------------------------------------
+id: LINUX-010
+slug: linux-010-troubleshooting
+title: Linux Troubleshooting
+track: linux
+topic: troubleshooting
+difficulty: advanced
+level: challenge
+duration_minutes: 45
+order: 10
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-009
+
+story: >
+  The JumpToTech Bank ledger API stopped answering during a migration window
+  four days ago, and the engineer who ran the migration has left for a
+  fortnight's leave. Monitoring says nothing has probed it successfully since.
+  Support has escalated it to you with the runbook and nothing else.
+
+  The host is not broken in one way. It is broken in several, and each one hides
+  the next — which is what a real incident feels like. Read before you type.
+
+objectives:
+  - Work from symptoms and evidence rather than from a list of known faults
+  - Read supervisor state, logs, and a runbook to build a picture of the healthy state
+  - Correlate a listening socket with the process that actually holds it
+  - Restore a service to the state its runbook describes, and verify it
+
+task:
+  summary: The ledger API has been down since a migration. Investigate, fix what is wrong, and restore it to the state its runbook describes.
+  description: >
+    You have a shell on the host and passwordless `sudo`. Nothing has been
+    fixed for you and nothing tells you what is wrong.
+
+    What you have is what an on-call engineer has: the runbook at
+    `/srv/jumptotech/runbooks/ledger-api.md`, which describes what "healthy"
+    means for this service; the service's log at
+    `/var/log/jumptotech/ledger-api.log`; the supervisor, which can be asked for
+    the state of any service; and the host's own process table and socket list.
+
+    Read the runbook first — it defines the target state, including the port the
+    service is supposed to answer on and what should *not* be running on this
+    host. Then work out why the current state differs, and correct it.
+
+    Expect more than one problem, and expect fixing one to change the symptom
+    rather than end it. When you think you are finished, verify it the way the
+    runbook says: ask the supervisor, look at the listening sockets, and make an
+    actual request to the service.
+
+    This lab is checked against the state of the host, not against a sequence of
+    commands. Any route to a healthy service passes.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/jumptotech/runbooks/ledger-api.md
+      label: The runbook is present
+    - type: file_exists
+      path: /var/log/jumptotech/ledger-api.log
+      label: The service log is present
+    - type: command_exit_code
+      command: test
+      args:
+        - -d
+        - /etc/service/ledger-api
+      expected_exit_code: 0
+      label: The service is enabled
+    - type: process_not_running
+      pattern: /usr/local/bin/ledger-api
+      label: The service is not currently running
+
+requirements:
+  - type: process_running
+    pattern: /usr/local/bin/ledger-api
+    label: The ledger API is running under its supervisor
+  - type: port_listening
+    port: 9105
+    label: The ledger API answers on its assigned port
+  - type: command_exit_code
+    command: test
+    args:
+      - -d
+      - /etc/service/ledger-api
+    expected_exit_code: 0
+    label: The service is still enabled
+  - type: file_mode
+    path: /etc/sv/ledger-api/run
+    mode: "755"
+    label: The supervisor is able to start the service
+  - type: file_content
+    path: /etc/jumptotech/ledger-api.conf
+    contains: PORT=9105
+    label: The service is configured for its assigned port
+  - type: file_content_absent
+    path: /etc/jumptotech/ledger-api.conf
+    contains: PORT=9999
+    label: The incorrect port setting is gone
+  - type: process_not_running
+    pattern: /usr/local/bin/legacy-exporter
+    label: The decommissioned exporter is no longer running
+
+hints:
+  - level: 1
+    text: >
+      Start with the runbook and the log, not with the shell. Between them they
+      tell you what healthy looks like and roughly when it stopped. Then ask
+      three questions in order: is the service running, is it configured
+      correctly, and is anything else in its way.
+  - level: 2
+    text: >
+      The supervisor can report a service's state and why it is not up —
+      `man sv`. Note that `sv` reaches the supervisor's control socket and so
+      needs elevated privileges. The log lines from the migration window are
+      worth reading twice; one of them is the supervisor complaining rather
+      than the service. For the third question, `ss -ltnp` shows listening
+      sockets together with the process holding them, and `ps -ef` or
+      `pgrep -af` connects a pid to a command line.
+  - level: 3
+    text: >
+      There are three separate problems and they interact: the supervisor cannot
+      start the service, the packaged configuration disagrees with the runbook
+      about the port, and something the migration was supposed to decommission
+      is still holding that port. Fixing only the first two will leave the
+      service restarting in a loop, because its socket cannot bind. When all
+      three are dealt with, `sudo sv status ledger-api` reports it running and
+      `curl -s http://127.0.0.1:9105` returns the banner named in the runbook.
+
+references:
+  - title: sv(8) — controlling runit services
+    url: https://manpages.debian.org/bookworm/runit/sv.8.en.html
+  - title: ss(8) — another utility to investigate sockets
+    url: https://man7.org/linux/man-pages/man8/ss.8.html
+  - title: pgrep(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/pgrep.1.html
+  - title: chmod(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/chmod.1.html
+
+skills:
+  - linux.troubleshooting.diagnose
+  - linux.services.status
+  - linux.network.sockets
+  - linux.processes.signal
+  - linux.permissions.chmod
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - operation-of-running-systems
+      - networking
