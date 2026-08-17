@@ -27,7 +27,7 @@ import { Router } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import type { SessionManager } from '@jumptotech/lab-orchestrator';
 import type { ApiConfig } from '../config.js';
-import { sendError, sendOk } from '../http.js';
+import { asyncRoute, sendError, sendOk } from '../http.js';
 import { sessionErrorResponse } from './sessions.js';
 
 export interface InternalRoutesDeps {
@@ -57,15 +57,27 @@ export function createInternalRoutes(deps: InternalRoutesDeps): Router {
     next();
   });
 
-  // POST /internal/sessions/:sessionId/credentials -------------------------
-  router.post('/sessions/:sessionId/credentials', async (req, res) => {
+  /*
+   * POST /internal/sessions/:sessionId/credentials
+   *
+   * PLATFORM-004 generalised this from "hand back a kubeconfig" to "hand back
+   * the terminal binding for whatever sandbox this session has". The response
+   * is a closed, typed union — `kubernetes` or `container-exec` — and carries
+   * no command line: the terminal service builds its own argv from the variant
+   * after re-validating every field. So even a compromised API cannot talk the
+   * terminal into running an arbitrary command.
+   *
+   * The Kubernetes variant keeps `kubeconfig` and `namespace` at the top level,
+   * where they have always been, so nothing that already reads this changes.
+   */
+  router.post('/sessions/:sessionId/credentials', asyncRoute(async (req, res) => {
     try {
-      const credentials = await sessions.issueCredentials(String(req.params.sessionId));
-      sendOk(res, credentials);
+      const context = await sessions.getTerminalContext(String(req.params.sessionId));
+      sendOk(res, context);
     } catch (error) {
       sessionErrorResponse(res, error);
     }
-  });
+  }));
 
   return router;
 }

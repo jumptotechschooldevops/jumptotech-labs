@@ -24,6 +24,8 @@ export const TEST_POLICY: SessionPolicy = DEFAULT_SESSION_POLICY;
 export interface ContextOverrides {
   sessionId?: string;
   namespace?: string;
+  /** Container sandbox name, for container-backed providers. */
+  sandboxRef?: string;
   expiresAtMs?: number;
   policy?: SessionPolicy;
 }
@@ -33,10 +35,12 @@ export function sessionContext(
   overrides: ContextOverrides = {},
 ): LabSessionContext {
   const policy = overrides.policy ?? TEST_POLICY;
+  const namespace = overrides.namespace ?? 'lab-0000000000aa';
   return {
     sessionId: overrides.sessionId ?? 'sess-000000000000000a',
     labId: lab.id,
-    namespace: overrides.namespace ?? 'lab-0000000000aa',
+    sandboxRef: overrides.sandboxRef ?? namespace,
+    namespace,
     serviceAccountName: policy.serviceAccountName,
     lab,
     expiresAtMs: overrides.expiresAtMs ?? Date.now() + 60 * 60_000,
@@ -49,6 +53,9 @@ export function labSession(overrides: Partial<LabSession> = {}): LabSession {
   return {
     sessionId: 'sess-000000000000000a',
     labId: 'K8S-001',
+    provider: 'kubernetes',
+    sandboxKind: 'namespace',
+    sandboxRef: overrides.sandboxRef ?? overrides.namespace ?? 'lab-0000000000aa',
     namespace: 'lab-0000000000aa',
     serviceAccountName: 'student',
     status: 'ACTIVE',

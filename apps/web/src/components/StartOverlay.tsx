@@ -3,7 +3,7 @@
  * provisioning progress, and — critically — the real failure when the
  * environment cannot be created.
  */
-import type { ApiError, ProvisionStep } from '../lib/types';
+import type { ApiError, ProvisionStep, ProviderAvailability } from '../lib/types';
 
 export type StartPhase = 'idle' | 'starting' | 'ready' | 'active' | 'failed';
 
@@ -14,12 +14,44 @@ interface StartOverlayProps {
   /** Status of the browser terminal, rendered as the final step. */
   terminalStep: ProvisionStep;
   error: ApiError | null;
+  /**
+   * Whether this lab's provider can create an environment here.
+   *
+   * When it cannot, the overlay says so and offers no button. Showing a Start
+   * Lab that was always going to fail would be the one thing the catalog's
+   * readiness model exists to prevent.
+   */
+  availability?: ProviderAvailability | undefined;
+  /** What the environment is called, e.g. `Kubernetes`, `Linux`. */
+  environmentName?: string;
   onStart: () => void;
 }
 
-export function StartOverlay({ phase, steps, terminalStep, error, onStart }: StartOverlayProps) {
+export function StartOverlay({
+  phase,
+  steps,
+  terminalStep,
+  error,
+  availability,
+  environmentName = 'lab',
+  onStart,
+}: StartOverlayProps) {
   // Once the lab is running the overlay gets out of the way entirely.
   if (phase === 'active') return null;
+
+  if (phase === 'idle' && availability && !availability.available) {
+    return (
+      <div className="overlay">
+        <div className="overlay__card overlay__card--wide">
+          <h2 className="overlay__title">Not available here</h2>
+          <p className="overlay__text">{availability.reason}</p>
+          {availability.remediation && (
+            <p className="overlay__text overlay__text--hint">{availability.remediation}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (phase === 'idle') {
     return (
@@ -27,8 +59,8 @@ export function StartOverlay({ phase, steps, terminalStep, error, onStart }: Sta
         <div className="overlay__card">
           <h2 className="overlay__title">Start Lab</h2>
           <p className="overlay__text">
-            A temporary Kubernetes environment will be prepared for you. Nothing is installed on
-            your computer.
+            A temporary {environmentName} environment will be prepared for you. Nothing is
+            installed on your computer.
           </p>
           <button type="button" className="btn btn--primary btn--lg" onClick={onStart}>
             Start Lab
@@ -48,7 +80,7 @@ export function StartOverlay({ phase, steps, terminalStep, error, onStart }: Sta
       ? 'Could not start the lab'
       : phase === 'ready'
         ? 'Lab Ready'
-        : 'Preparing Kubernetes environment…';
+        : `Preparing ${environmentName} environment…`;
 
   return (
     <div className="overlay">

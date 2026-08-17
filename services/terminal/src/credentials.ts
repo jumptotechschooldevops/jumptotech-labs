@@ -21,6 +21,34 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+/**
+ * The terminal binding the API hands back for one session.
+ *
+ * A closed union, re-validated here rather than trusted. Crucially it carries
+ * **no command line**: the `container-exec` variant names a container, a user
+ * and a working directory, and this service builds the argv itself. There is
+ * no field anywhere in this shape that can become "run this string".
+ */
+export type TerminalContextResponse =
+  | {
+      kind?: 'kubernetes';
+      kubeconfig: string;
+      namespace: string;
+      serviceAccountName: string;
+      expiresAt: string;
+      env?: Record<string, string>;
+    }
+  | {
+      kind: 'container-exec';
+      runtime: string;
+      containerRef: string;
+      user: string;
+      workdir: string;
+      env?: Record<string, string>;
+      expiresAt: string;
+    };
+
+/** Kubernetes variant, kept under its historical name for existing callers. */
 export interface StudentCredentialsResponse {
   kubeconfig: string;
   namespace: string;
@@ -46,10 +74,54 @@ export interface FetchOptions {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * Exchange a session id for that session's terminal binding.
+ *
+ * The session id comes from the signed token and from nowhere else, so this is
+ * the point at which "which sandbox does this socket get?" is answered — by the
+ * API, from the session record, and never by the browser.
+ */
+export async function fetchTerminalContext(
+  options: FetchOptions,
+): Promise<TerminalContextResponse> {
+  const data = await fetchInternal(options);
+
+  if (data.kind === 'container-exec') {
+    const container = data as Extract<TerminalContextResponse, { kind: 'container-exec' }>;
+    if (typeof container.containerRef !== 'string' || container.containerRef.length === 0) {
+      throw new CredentialsUnavailableError(
+        'CREDENTIALS_UNAVAILABLE',
+        'The lab API returned a container terminal context with no container reference.',
+      );
+    }
+    return container;
+  }
+
+  const kubernetes = data as Extract<TerminalContextResponse, { kind?: 'kubernetes' }>;
+  if (typeof kubernetes.kubeconfig !== 'string' || kubernetes.kubeconfig.length === 0) {
+    throw new CredentialsUnavailableError(
+      'CREDENTIALS_UNAVAILABLE',
+      'The lab API returned an empty kubeconfig.',
+    );
+  }
+  return { ...kubernetes, kind: 'kubernetes' };
+}
+
 /** Exchange a session id for that session's namespace-scoped kubeconfig. */
 export async function fetchStudentCredentials(
   options: FetchOptions,
 ): Promise<StudentCredentialsResponse> {
+  const context = await fetchTerminalContext(options);
+  if (context.kind === 'container-exec') {
+    throw new CredentialsUnavailableError(
+      'CREDENTIALS_UNAVAILABLE',
+      'This session is not backed by a Kubernetes namespace, so it has no kubeconfig.',
+    );
+  }
+  return context;
+}
+
+async function fetchInternal(options: FetchOptions): Promise<Record<string, unknown>> {
   const doFetch = options.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
@@ -74,7 +146,11 @@ export async function fetchStudentCredentials(
   }
 
   const body = (await response.json().catch(() => null)) as
-    | { ok?: boolean; data?: StudentCredentialsResponse; error?: { code?: string; message?: string } }
+    | {
+        ok?: boolean;
+        data?: Record<string, unknown>;
+        error?: { code?: string; message?: string };
+      }
     | null;
 
   if (!response.ok || !body?.ok || !body.data) {
@@ -83,15 +159,7 @@ export async function fetchStudentCredentials(
       body?.error?.message ?? `The lab API rejected the credential request (${response.status}).`,
     );
   }
-
-  const data = body.data;
-  if (typeof data.kubeconfig !== 'string' || data.kubeconfig.length === 0) {
-    throw new CredentialsUnavailableError(
-      'CREDENTIALS_UNAVAILABLE',
-      'The lab API returned an empty kubeconfig.',
-    );
-  }
-  return data;
+  return body.data;
 }
 
 /**

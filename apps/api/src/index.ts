@@ -15,6 +15,7 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import { waitForRequirements } from '@jumptotech/verifier';
 import { createApp } from './app.js';
+import { buildProviderRegistry } from './providers.js';
 import { loadConfig } from './config.js';
 import { HttpTerminalControl, noopTerminalControl } from './terminal-control.js';
 
@@ -40,13 +41,17 @@ async function main(): Promise<void> {
   const k8s = new KubernetesClient(
     config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {},
   );
-  const provider = createLabProvider({
+  const kubernetes = createLabProvider({
     provider: config.provider,
     clusterName: config.clusterName,
     ...(config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {}),
     k8s,
     waitForRequirements: (input) => waitForRequirements({ k8s, ...input }),
   });
+
+  // One registry, every sandbox backend. Which one a lab uses is decided by the
+  // lab's own `environment.provider`, not by anything in the application.
+  const providers = buildProviderRegistry({ config, kubernetes });
 
   const terminal = config.terminalControlUrl
     ? new HttpTerminalControl({
@@ -57,7 +62,7 @@ async function main(): Promise<void> {
 
   const sessions = new SessionManager({
     registry,
-    provider,
+    providers,
     store: new InMemorySessionStore(),
     policy: config.policy,
     lifetimes: config.lifetimes,
@@ -70,7 +75,7 @@ async function main(): Promise<void> {
   // idle, and orphaned sandboxes; see services/lab-orchestrator/src/session/reaper.ts.
   const reaper = new SessionReaper({
     sessions,
-    provider,
+    providers,
     intervalMs: config.reaperIntervalSeconds * 1000,
     retentionMs: config.sessionRetentionMinutes * 60_000,
   });
@@ -80,7 +85,14 @@ async function main(): Promise<void> {
 
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[api] listening on :${config.port}`);
-    console.log(`[api] provider=${provider.name} cluster=${config.clusterName}`);
+    console.log(`[api] kubernetes substrate=${kubernetes.name} cluster=${config.clusterName}`);
+    void sessions.providers.statuses().then((statuses) => {
+      for (const status of statuses) {
+        console.log(
+          `[api] provider ${status.providerId}: ${status.available ? 'available' : `unavailable — ${status.reason ?? 'unknown'}`}`,
+        );
+      }
+    });
     console.log(`[api] labs=${registry.size} from ${config.labsDir}`);
     console.log(`[api] kubernetes=${k8s.serverUrl}`);
     console.log(

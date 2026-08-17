@@ -17,6 +17,7 @@ function lab(overrides: Partial<LabSummary> = {}): LabSummary {
     slug: 'k8s-001-pods',
     title: 'Create Your First Pod',
     track: 'kubernetes',
+    provider: 'kubernetes',
     topic: 'pods',
     topicTitle: 'Pods',
     difficulty: 'beginner',
@@ -83,6 +84,85 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.clearAllMocks());
+
+// --- provider readiness (PLATFORM-004) --------------------------------------
+
+describe('CatalogPage — provider readiness', () => {
+  it('lists providers that have no labs yet as coming soon, without cards', async () => {
+    listLabs.mockResolvedValue({
+      labs: LABS,
+      tracks: TRACKS,
+      count: LABS.length,
+      providers: [
+        { provider: 'kubernetes', available: true },
+        {
+          provider: 'docker',
+          available: false,
+          reason: 'Docker labs need a per-session Docker daemon.',
+        },
+        { provider: 'aws', available: false, reason: 'AWS labs are architecture only.' },
+      ],
+    });
+
+    await renderCatalog();
+
+    expect(screen.getByRole('heading', { name: 'Coming soon' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Docker' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'AWS' })).toBeTruthy();
+    expect(screen.getByText('Docker labs need a per-session Docker daemon.')).toBeTruthy();
+    // Nothing to open: a track with no labs gets no Start-shaped affordance.
+    expect(screen.queryAllByRole('button', { name: 'Open lab' })).toHaveLength(LABS.length);
+  });
+
+  it('says why a track cannot run here, once, above its cards', async () => {
+    listLabs.mockResolvedValue({
+      labs: LABS,
+      tracks: [
+        {
+          ...TRACKS[0]!,
+          availability: {
+            available: false,
+            reason: "the sandbox image 'jumptotech/lab-linux:latest' has not been built",
+            remediation: 'Build the sandbox images once with: npm run sandbox:build',
+          },
+        },
+      ],
+      count: LABS.length,
+      providers: [],
+    });
+
+    await renderCatalog();
+
+    expect(screen.getByText('unavailable here')).toBeTruthy();
+    expect(screen.getByText(/has not been built/)).toBeTruthy();
+    expect(screen.getByText(/npm run sandbox:build/)).toBeTruthy();
+    // The brief is still reachable — reading a lab you cannot start is fine.
+    expect(screen.queryAllByRole('button', { name: 'View lab' }).length).toBe(0);
+  });
+
+  it('offers "View lab" rather than "Open lab" for a lab that cannot start', async () => {
+    listLabs.mockResolvedValue({
+      labs: [
+        lab({
+          id: 'LINUX-001',
+          title: 'Files, Directories & Permissions',
+          track: 'linux',
+          provider: 'linux',
+          availability: { available: false, reason: 'no container runtime is reachable' },
+        }),
+      ],
+      tracks: [{ ...TRACKS[0]!, track: 'linux', title: 'Linux', labCount: 1 }],
+      count: 1,
+      providers: [],
+    });
+
+    render(<CatalogPage onOpenLab={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Files, Directories & Permissions')).toBeTruthy());
+
+    expect(screen.getByRole('button', { name: 'View lab' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open lab' })).toBeNull();
+  });
+});
 
 /** Render and wait for the catalog to load. */
 async function renderCatalog(onOpenLab = vi.fn()) {

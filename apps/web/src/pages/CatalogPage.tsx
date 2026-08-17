@@ -8,7 +8,21 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { ApiRequestError, api } from '../lib/api';
-import type { ApiError, LabSummary, TrackSummary } from '../lib/types';
+import type { ApiError, LabSummary, ProviderReadiness, TrackSummary } from '../lib/types';
+
+/**
+ * Display names for providers that have no labs yet.
+ *
+ * Only used for the "coming soon" strip: a track with labs takes its title from
+ * the API, which derives it from the lab definitions.
+ */
+const PROVIDER_TITLES: Record<string, string> = {
+  kubernetes: 'Kubernetes',
+  linux: 'Linux',
+  docker: 'Docker',
+  terraform: 'Terraform',
+  aws: 'AWS',
+};
 
 /** Sorted low → high so the filter row reads as a progression. */
 const DIFFICULTY_RANK: Record<string, number> = { beginner: 0, intermediate: 1, advanced: 2 };
@@ -22,6 +36,7 @@ function toApiError(error: unknown): ApiError {
 export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void }) {
   const [labs, setLabs] = useState<LabSummary[] | null>(null);
   const [tracks, setTracks] = useState<TrackSummary[]>([]);
+  const [providers, setProviders] = useState<ProviderReadiness[]>([]);
   const [error, setError] = useState<ApiError | null>(null);
 
   const [activeTrack, setActiveTrack] = useState<string | null>(null);
@@ -35,6 +50,7 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
         if (cancelled) return;
         setLabs(data.labs);
         setTracks(data.tracks);
+        setProviders(data.providers ?? []);
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(toApiError(err));
@@ -82,6 +98,21 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
   const trackTitle = (track: string) =>
     tracks.find((t) => t.track === track)?.title ?? track;
 
+  const trackAvailability = (track: string) =>
+    tracks.find((t) => t.track === track)?.availability;
+
+  /*
+   * Providers that exist in the platform but have no labs to show yet.
+   *
+   * These are the honest "Coming soon" entries — Docker and AWS today. They are
+   * listed because the architecture is there and the tracks are planned, and
+   * they are *not* rendered as cards, because there is nothing to open.
+   */
+  const comingSoon = useMemo(() => {
+    const withLabs = new Set((labs ?? []).map((lab) => lab.provider));
+    return providers.filter((provider) => !withLabs.has(provider.provider) && !provider.available);
+  }, [providers, labs]);
+
   return (
     <div className="page">
       <header className="topbar">
@@ -99,8 +130,8 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
         <div className="catalog__intro">
           <h1>Practice environments, not slideshows</h1>
           <p>
-            Launch a disposable Kubernetes environment in your browser, run real commands, and have
-            your work verified against live cluster state.
+            Launch a disposable Kubernetes, Linux or Terraform environment in your browser, run
+            real commands, and have your work verified against the environment's live state.
           </p>
         </div>
 
@@ -189,7 +220,23 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
               <span className="catalog__track-count">
                 {trackLabs.length} lab{trackLabs.length === 1 ? '' : 's'}
               </span>
+              {trackAvailability(track)?.available === false && (
+                <span className="chip chip--unavailable" title={trackAvailability(track)?.reason}>
+                  unavailable here
+                </span>
+              )}
             </div>
+
+            {/* The reason is stated once per track rather than on every card:
+                it is a property of the backend, not of any individual lab. */}
+            {trackAvailability(track)?.available === false && (
+              <p className="catalog__track-note" role="status">
+                {trackAvailability(track)?.reason}
+                {trackAvailability(track)?.remediation
+                  ? ` ${trackAvailability(track)?.remediation}`
+                  : ''}
+              </p>
+            )}
 
             <div className="catalog__grid">
               {trackLabs.map((lab) => (
@@ -250,12 +297,16 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
                         prepared environment
                       </span>
                     )}
+                    {/* The lab page still opens for an unavailable lab — the
+                        brief, the objectives and the documentation are worth
+                        reading either way. What it will not do is offer to
+                        start an environment that cannot be created. */}
                     <button
                       type="button"
                       className="btn btn--primary labcard__cta"
                       onClick={() => onOpenLab(lab.id)}
                     >
-                      Open lab
+                      {lab.availability?.available === false ? 'View lab' : 'Open lab'}
                     </button>
                   </div>
                 </article>
@@ -263,6 +314,26 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
             </div>
           </section>
         ))}
+
+        {comingSoon.length > 0 && (
+          <section className="catalog__track catalog__track--soon">
+            <div className="catalog__track-head">
+              <h2 className="catalog__track-title">Coming soon</h2>
+              <span className="catalog__track-count">{comingSoon.length} tracks</span>
+            </div>
+            <div className="catalog__soon">
+              {comingSoon.map((provider) => (
+                <article key={provider.provider} className="labcard labcard--soon">
+                  <h3 className="labcard__title">
+                    {PROVIDER_TITLES[provider.provider] ?? provider.provider}
+                  </h3>
+                  <p className="labcard__summary">{provider.reason}</p>
+                  <span className="chip chip--unavailable">not available yet</span>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );

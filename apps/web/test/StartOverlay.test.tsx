@@ -111,4 +111,57 @@ describe('StartOverlay', () => {
     expect(screen.queryByText('Lab Ready')).toBeNull();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeDefined();
   });
+
+  it('offers no Start Lab button when the provider cannot run the lab here', () => {
+    render(
+      <StartOverlay
+        phase="idle"
+        steps={[]}
+        terminalStep={TERMINAL_PENDING}
+        error={null}
+        availability={{
+          available: false,
+          reason: "the sandbox image 'jumptotech/lab-linux:latest' has not been built on this machine",
+          remediation: 'Build the sandbox images once with: npm run sandbox:build',
+        }}
+        environmentName="Linux"
+        onStart={vi.fn()}
+      />,
+    );
+
+    // The honest failure is up front, not after a click that was never going
+    // to work.
+    expect(screen.getByText('Not available here')).toBeDefined();
+    expect(screen.getByText(/has not been built on this machine/)).toBeDefined();
+    expect(screen.getByText(/npm run sandbox:build/)).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Start Lab' })).toBeNull();
+  });
+
+  it('names the environment it is preparing, whatever the track', () => {
+    const { unmount } = render(
+      <StartOverlay
+        phase="idle"
+        steps={[]}
+        terminalStep={TERMINAL_PENDING}
+        error={null}
+        environmentName="Terraform"
+        onStart={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/A temporary Terraform environment/)).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Start Lab' })).toBeDefined();
+    unmount();
+
+    render(
+      <StartOverlay
+        phase="starting"
+        steps={[{ id: 'environment-created', label: 'Environment created', status: 'pending' }]}
+        terminalStep={TERMINAL_PENDING}
+        error={null}
+        environmentName="Linux"
+        onStart={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Preparing Linux environment…')).toBeDefined();
+  });
 });

@@ -1,0 +1,89 @@
+{
+  "id": "LINUX-001",
+  "slug": "linux-001-files-permissions",
+  "title": "Files, Directories & Permissions",
+  "track": "linux",
+  "topic": "permissions",
+  "topicTitle": "Permissions",
+  "difficulty": "beginner",
+  "level": "practice",
+  "durationMinutes": 30,
+  "environment": {
+    "provider": "linux",
+    "isolation": "container"
+  },
+  "story": "You have joined the operations team at JumpToTech Bank. Tomorrow morning the team ships a new build of the ledger API, and the deployment runs as your account on the release host.\nYour team lead has one rule about release directories: the people who deploy can read and enter them, and nobody else can. Before the change window opens, she wants the directory laid out, the release recorded, and the permissions correct \u2014 checked, not assumed.\n",
+  "objectives": [
+    "Create directories and files from the shell",
+    "Read the ownership and permission bits that ls and stat report",
+    "Set permissions with chmod using octal notation",
+    "Change a file's group to a group you belong to"
+  ],
+  "task": {
+    "summary": "Prepare a deploy directory in your home directory with the correct contents, group and permissions.\n",
+    "description": "Working in your home directory, create a directory named `deploy`, and inside it a directory named `releases`.\nRecord the release in a file at `deploy/release.txt`. It must contain exactly two lines \u2014 `service=ledger-api` on the first and `version=4.2.0` on the second.\nThen fix the permissions. The `deploy` directory must be owned by you, belong to the `deployers` group, and be readable, writable and enterable by its owner and readable and enterable by that group \u2014 and nothing for anyone else. The release file must be readable and writable by its owner and readable by the group, and nothing for anyone else.\nYou are an ordinary unprivileged user here, exactly as you would be on the real release host. There is no root and no sudo, and you do not need either: you are already a member of the `deployers` group.\n"
+  },
+  "requirements": [
+    "Directory deploy exists",
+    "Directory deploy/releases exists",
+    "File deploy/release.txt exists",
+    "deploy/release.txt records the service and version",
+    "deploy is owned by your account",
+    "deploy belongs to the deployers group",
+    "deploy permissions are rwxr-x---",
+    "deploy/release.txt permissions are rw-r-----"
+  ],
+  "hints": [
+    {
+      "level": 1,
+      "text": "A directory and a file are created with different commands, and the permission bits on each are set separately afterwards. Start by getting the layout right, then look at what `ls -l` reports about it.\n"
+    },
+    {
+      "level": 2,
+      "text": "`ls -l` prints permissions as ten characters, and `stat` prints the same information as an octal number \u2014 which is the form `chmod` accepts. Compare what `stat -c '%a %U %G' deploy` reports with what the task asks for. Group ownership is changed by a different command than permissions.\n"
+    },
+    {
+      "level": 3,
+      "text": "`rwxr-x---` is 750 and `rw-r-----` is 640; `chmod` takes either the symbolic or the octal form. `chgrp` changes a file's group, and you may set it to any group you are a member of \u2014 `id` lists yours. Read `man chmod`, `man chgrp` and `man stat` in your terminal if you want the details.\n"
+    }
+  ],
+  "references": [
+    {
+      "title": "chmod(1) \u2014 Linux manual page",
+      "url": "https://man7.org/linux/man-pages/man1/chmod.1.html"
+    },
+    {
+      "title": "chgrp(1) \u2014 Linux manual page",
+      "url": "https://man7.org/linux/man-pages/man1/chgrp.1.html"
+    },
+    {
+      "title": "stat(1) \u2014 Linux manual page",
+      "url": "https://man7.org/linux/man-pages/man1/stat.1.html"
+    },
+    {
+      "title": "GNU coreutils \u2014 File permissions",
+      "url": "https://www.gnu.org/software/coreutils/manual/html_node/File-permissions.html"
+    }
+  ],
+  "skills": [
+    "linux.filesystem.create",
+    "linux.permissions.modes",
+    "linux.permissions.ownership",
+    "linux.filesystem.inspect"
+  ],
+  "certifications": [
+    {
+      "certification": "LFCS",
+      "domains": [
+        "essential-commands"
+      ]
+    }
+  ],
+  "prerequisites": [],
+  "prerequisitesEnforced": false,
+  "hasSetup": false,
+  "availability": {
+    "provider": "linux",
+    "available": true
+  }
+}

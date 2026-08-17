@@ -1,0 +1,88 @@
+{
+  "id": "TF-001",
+  "slug": "tf-001-init-plan-apply",
+  "title": "Terraform Init, Plan & Apply",
+  "track": "terraform",
+  "topic": "workflow",
+  "topicTitle": "Workflow",
+  "difficulty": "beginner",
+  "level": "practice",
+  "durationMinutes": 30,
+  "environment": {
+    "provider": "terraform",
+    "isolation": "container"
+  },
+  "story": "The JumpToTech Bank platform team has been creating things by hand and then arguing about what is actually deployed. The fix they have agreed on is to keep infrastructure described as code, in files that can be reviewed like any other change.\nBefore anyone points Terraform at real infrastructure, your lead wants to see you take a configuration through the whole loop yourself \u2014 write it, initialise it, look at the plan, apply it, and then show what the state says exists.\n",
+  "objectives": [
+    "Initialise a Terraform working directory",
+    "Read a plan before applying it",
+    "Declare a resource and an output in HCL",
+    "Confirm what was created by inspecting Terraform state"
+  ],
+  "task": {
+    "summary": "Write a small local Terraform configuration in the terraform directory and take it through init, plan and apply.\n",
+    "description": "Your lab environment has a `terraform` directory containing a `versions.tf` that already declares the providers you may use. Do your work in that directory.\nAdd a configuration that uses the `local` provider to manage one file resource. The resource must be named `manifest`, and it must write a file at `build/manifest.txt` \u2014 a path relative to the Terraform directory \u2014 whose contents include the service name `ledger-api`.\nDeclare an output named `manifest_path` whose value is `build/manifest.txt`.\nThen run the workflow: initialise the directory, review the plan, and apply it. When you are done, `terraform output` should print your output and the file should exist on disk.\nThis lab is entirely local. There is no cloud provider, no credential and no network access \u2014 `terraform init` resolves the providers from a mirror inside the environment.\n"
+  },
+  "requirements": [
+    "Terraform is initialised in the terraform directory",
+    "Terraform state contains the manifest file resource",
+    "The manifest file was created on disk",
+    "The manifest names the ledger-api service",
+    "Output manifest_path reports the file path"
+  ],
+  "hints": [
+    {
+      "level": 1,
+      "text": "Terraform will not plan or apply until the working directory has been initialised, and initialising is what installs the providers `versions.tf` declares. Start there, then write the configuration.\n"
+    },
+    {
+      "level": 2,
+      "text": "The `local` provider manages files on the machine Terraform runs on. Look up its file resource in the provider documentation to see which arguments it takes. An output is declared with its own block, separate from the resource, and its value can be any expression.\n"
+    },
+    {
+      "level": 3,
+      "text": "The resource type is `local_file` and the lab expects its local name to be `manifest`, so the block header reads `resource \"local_file\" \"manifest\"`. It needs the path to write and the contents to write there. Create the output with an `output \"manifest_path\"` block. Then run `terraform init`, `terraform plan`, and `terraform apply` \u2014 and `terraform show` if you want to see what ended up in state.\n"
+    }
+  ],
+  "references": [
+    {
+      "title": "Terraform \u2014 The core workflow",
+      "url": "https://developer.hashicorp.com/terraform/intro/core-workflow"
+    },
+    {
+      "title": "Terraform \u2014 Command: init",
+      "url": "https://developer.hashicorp.com/terraform/cli/commands/init"
+    },
+    {
+      "title": "Terraform \u2014 Output values",
+      "url": "https://developer.hashicorp.com/terraform/language/values/outputs"
+    },
+    {
+      "title": "Terraform \u2014 hashicorp/local provider",
+      "url": "https://developer.hashicorp.com/terraform/providers"
+    }
+  ],
+  "skills": [
+    "terraform.workflow.init",
+    "terraform.workflow.apply",
+    "terraform.language.resources",
+    "terraform.language.outputs",
+    "terraform.state.inspect"
+  ],
+  "certifications": [
+    {
+      "certification": "TERRAFORM-ASSOCIATE",
+      "domains": [
+        "use-the-terraform-cli",
+        "read-and-write-configuration"
+      ]
+    }
+  ],
+  "prerequisites": [],
+  "prerequisitesEnforced": false,
+  "hasSetup": false,
+  "availability": {
+    "provider": "terraform",
+    "available": true
+  }
+}

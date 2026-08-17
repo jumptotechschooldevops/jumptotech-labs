@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiRequestError, api } from '../lib/api';
 import type {
   ApiError,
+  EnvironmentInfo,
   LabDetail,
   ProvisionStep,
   SessionInfo,
@@ -25,6 +26,40 @@ const TERMINAL_STATUS_LABEL: Record<TerminalStatus, string> = {
 
 /** How often the browser asks the server for session state. */
 const POLL_INTERVAL_MS = 15_000;
+
+/**
+ * The noun the terminal pane header uses for a sandbox reference.
+ *
+ * This is the whole extent to which the lab page adapts to a provider: a label.
+ * There is no `KubernetesLabPage` and no `LinuxLabPage`, and nothing here
+ * branches on a track — Start, Check, Reset and End are the same calls against
+ * the same session API whatever the sandbox turns out to be.
+ */
+const SANDBOX_NOUN: Record<string, string> = {
+  namespace: 'namespace',
+  container: 'container',
+  'cloud-session': 'session scope',
+  none: 'sandbox',
+};
+
+/** How the Start overlay names each kind of environment. */
+const ENVIRONMENT_NAMES: Record<string, string> = {
+  kubernetes: 'Kubernetes',
+  linux: 'Linux',
+  docker: 'Docker',
+  terraform: 'Terraform',
+  aws: 'AWS',
+};
+
+/** A one-line description of whatever kind of environment was created. */
+function describeEnvironment(environment: EnvironmentInfo): string {
+  if (environment.kubernetesVersion) {
+    const nodes = environment.nodes?.length ?? 0;
+    return `${environment.provider} · ${environment.kubernetesVersion} · ${nodes} node${nodes === 1 ? '' : 's'}`;
+  }
+  if (environment.image) return `${environment.provider} · ${environment.image}`;
+  return environment.provider;
+}
 
 function toApiError(error: unknown): ApiError {
   if (error instanceof ApiRequestError) return error.error;
@@ -68,6 +103,8 @@ export function LabPage({
   const [notice, setNotice] = useState<string | null>(null);
 
   const [envSummary, setEnvSummary] = useState<string | null>(null);
+  /** Bumped when a reset replaced the sandbox, to reattach the terminal. */
+  const [reconnectNonce, setReconnectNonce] = useState(0);
 
   const terminalRef = useRef<LabTerminalHandle | null>(null);
 
@@ -182,10 +219,7 @@ export function LabPage({
       setTerminalUrl(response.terminal.url);
       setTerminalToken(response.terminal.token);
       adoptSession(response.session);
-      const nodeCount = response.environment.nodes?.length ?? 0;
-      setEnvSummary(
-        `${response.environment.provider} · ${response.environment.kubernetesVersion ?? 'k8s'} · ${nodeCount} node${nodeCount === 1 ? '' : 's'}`,
-      );
+      setEnvSummary(describeEnvironment(response.environment));
     } catch (error) {
       const apiError = toApiError(error);
       setStartPhase('failed');
@@ -222,8 +256,16 @@ export function LabPage({
       const response = await api.resetLab(session.sessionId);
       if (response.clearTerminal) {
         terminalRef.current?.clear();
-        terminalRef.current?.writeNotice('Lab reset. Press Enter for a fresh prompt.');
+        terminalRef.current?.writeNotice(
+          response.reconnectTerminal
+            ? 'Lab reset. Reconnecting to your new environment…'
+            : 'Lab reset. Press Enter for a fresh prompt.',
+        );
       }
+      // A container-backed reset replaces the sandbox, so the shell attached to
+      // the old one is gone. Reattach with the same session rather than leaving
+      // a dead terminal on screen.
+      if (response.reconnectTerminal) setReconnectNonce((n) => n + 1);
       const removedNote =
         response.removed.length > 0
           ? ` Removed: ${response.removed.join(', ')}.`
@@ -375,8 +417,14 @@ export function LabPage({
             {/* Developer detail. The namespace is not a student-facing concept
                 and possessing it grants nothing — every API call is addressed
                 by session id. */}
+            {/* Developer detail. The sandbox reference is not a student-facing
+                concept and possessing it grants nothing — every API call is
+                addressed by session id, and no endpoint accepts a sandbox
+                reference as input. */}
             <span className="terminal-pane__meta">
-              {labReady && session ? `namespace: ${session.namespace}` : 'not started'}
+              {labReady && session
+                ? `${SANDBOX_NOUN[session.sandboxKind] ?? 'sandbox'}: ${session.sandboxRef}`
+                : 'not started'}
             </span>
           </div>
 
@@ -385,6 +433,7 @@ export function LabPage({
               ref={terminalRef}
               url={terminalUrl}
               token={terminalToken}
+              reconnectNonce={reconnectNonce}
               onStatusChange={handleTerminalStatus}
             />
             <StartOverlay
@@ -392,6 +441,8 @@ export function LabPage({
               steps={steps}
               terminalStep={terminalStep}
               error={startError}
+              availability={lab.availability}
+              environmentName={ENVIRONMENT_NAMES[lab.environment.provider] ?? lab.track}
               onStart={handleStart}
             />
           </div>

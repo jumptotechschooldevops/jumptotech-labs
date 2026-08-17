@@ -125,7 +125,8 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.size).toBe(10);
+    // Ten Kubernetes labs from PLATFORM-003, plus the two PLATFORM-004 tracks.
+    expect(registry.size).toBe(12);
     expect(registry.all().map((l) => l.id)).toEqual([
       'K8S-001',
       'K8S-002',
@@ -137,6 +138,8 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
       'K8S-008',
       'K8S-009',
       'K8S-010',
+      'LINUX-001',
+      'TF-001',
     ]);
   });
 
@@ -164,8 +167,17 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
   });
 
   it('orders labs by track then declared order', async () => {
-    const orders = (await realRegistry()).all().map((l) => l.order);
-    expect(orders).toEqual([...orders].sort((a, b) => a - b));
+    const labs = (await realRegistry()).all();
+
+    // Tracks come out in a stable order…
+    expect([...new Set(labs.map((l) => l.track))]).toEqual(['kubernetes', 'linux', 'terraform']);
+
+    // …and within each track, `order` ascends. Checking per track rather than
+    // globally is the point: the second track restarts at 1.
+    for (const track of new Set(labs.map((l) => l.track))) {
+      const orders = labs.filter((l) => l.track === track).map((l) => l.order);
+      expect(orders, track).toEqual([...orders].sort((a, b) => a - b));
+    }
   });
 });
 
@@ -240,7 +252,10 @@ describe('catalog — filtering (test requirement 5)', () => {
     const registry = await realRegistry();
 
     expect(registry.list({ track: 'kubernetes' })).toHaveLength(10);
-    expect(registry.list({ track: 'terraform' })).toHaveLength(0);
+    expect(registry.list({ track: 'linux' }).map((l) => l.id)).toEqual(['LINUX-001']);
+    expect(registry.list({ track: 'terraform' }).map((l) => l.id)).toEqual(['TF-001']);
+    // A track nothing ships yet still matches nothing rather than erroring.
+    expect(registry.list({ track: 'ansible' })).toHaveLength(0);
     expect(registry.labsForTrack('kubernetes')).toHaveLength(10);
   });
 
@@ -486,9 +501,22 @@ describe('schema — documentation (test requirement 10)', () => {
   });
 
   it('points every shipped lab at official documentation only', async () => {
+    // One official host per track — the loader enforces this, and this asserts
+    // the shipped content actually satisfies it.
+    const officialHost: Record<string, RegExp> = {
+      kubernetes: /^kubernetes\.io$/,
+      linux: /^(man7\.org|www\.gnu\.org)$/,
+      terraform: /^developer\.hashicorp\.com$/,
+    };
+
     for (const lab of (await realRegistry()).all()) {
       expect(lab.references.length).toBeGreaterThan(0);
-      expect(lab.references.some((ref) => new URL(ref.url).hostname === 'kubernetes.io')).toBe(true);
+      const expected = officialHost[lab.track];
+      expect(expected, `no official host declared for track '${lab.track}'`).toBeDefined();
+      expect(
+        lab.references.some((ref) => expected!.test(new URL(ref.url).hostname)),
+        `${lab.id} must cite official ${lab.track} documentation`,
+      ).toBe(true);
       for (const ref of lab.references) expect(ref.url).toMatch(/^https:\/\//);
     }
   });

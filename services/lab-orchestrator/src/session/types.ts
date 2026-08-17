@@ -6,6 +6,7 @@
  * lifecycle — never an ambiguous `active: true` boolean.
  */
 export type { StudentCredentials } from '../types.js';
+import type { LabProviderId, SandboxKind } from '../providers/catalog.js';
 
 /**
  * Session lifecycle.
@@ -63,6 +64,28 @@ export function occupiesCapacity(status: SessionStatus): boolean {
 export interface LabSession {
   sessionId: string;
   labId: string;
+  /**
+   * Which provider owns this session's sandbox.
+   *
+   * Recorded at creation from the lab definition and never mutable afterwards:
+   * a live session cannot be moved to another provider's sandbox, which is why
+   * `SessionStore.update` refuses to patch it (see `store.ts`).
+   */
+  provider: LabProviderId;
+  sandboxKind: SandboxKind;
+  /**
+   * The provider's handle for this session's sandbox — namespace name,
+   * container name, … Derived server-side from the session id.
+   */
+  sandboxRef: string;
+  /**
+   * Kubernetes namespace for this session.
+   *
+   * The Kubernetes view of `sandboxRef`, kept as its own field so Kubernetes
+   * code and the existing API payload read naturally. Carries the same derived
+   * sandbox id for every provider; only meaningful when `provider` is
+   * `kubernetes`, and the API payload omits it otherwise.
+   */
   namespace: string;
   serviceAccountName: string;
   status: SessionStatus;
@@ -83,6 +106,7 @@ export interface LabSession {
 }
 
 export type SessionErrorCode =
+  | 'PROVIDER_UNAVAILABLE'
   | 'LAB_CAPACITY_REACHED'
   | 'SESSION_NOT_FOUND'
   | 'SESSION_NOT_ACTIVE'
@@ -142,7 +166,35 @@ export interface NetworkPolicyConfig {
 }
 
 /**
- * Everything that shapes a session's namespace. Values come from configuration
+ * Resource bounds for a container-backed sandbox (Linux, Terraform, Docker).
+ *
+ * The container equivalent of the Kubernetes ResourceQuota/LimitRange pair:
+ * one student cannot exhaust the host, and an abandoned shell cannot fork-bomb
+ * it. Centralised here rather than written into each provider so all three
+ * container providers are tuned in one place — see PLATFORM-004 §18.
+ */
+export interface SandboxContainerPolicy {
+  /** CPU cores, as Docker's `--cpus` accepts, e.g. `0.5`. */
+  cpus: string;
+  /** Memory ceiling, e.g. `512m`. */
+  memory: string;
+  /** Process ceiling (`--pids-limit`), which is what stops a fork bomb. */
+  pidsLimit: number;
+  /** Writable scratch size for the sandbox home, e.g. `64m`. */
+  tmpfsSize: string;
+  /** Unprivileged user the student's shell runs as inside the sandbox. */
+  user: string;
+  /** The student's home directory, and the root every verifier path resolves under. */
+  home: string;
+  /**
+   * Docker network mode. `none` by default: a Linux or Terraform lab needs no
+   * network, and giving one away would be a cost and egress risk for nothing.
+   */
+  network: string;
+}
+
+/**
+ * Everything that shapes a session's sandbox. Values come from configuration
  * (see `apps/api/src/config.ts`), never from literals buried in provider code,
  * so production values can be tuned after load testing without a code change.
  */
@@ -156,6 +208,8 @@ export interface SessionPolicy {
   serviceAccountName: string;
   /** Lifetime of a minted student ServiceAccount token, in seconds. */
   credentialTtlSeconds: number;
+  /** Bounds applied to container-backed sandboxes. */
+  sandbox: SandboxContainerPolicy;
 }
 
 /**
@@ -195,4 +249,13 @@ export const DEFAULT_SESSION_POLICY: SessionPolicy = {
   },
   serviceAccountName: 'student',
   credentialTtlSeconds: 3_600,
+  sandbox: {
+    cpus: '0.5',
+    memory: '512m',
+    pidsLimit: 128,
+    tmpfsSize: '64m',
+    user: 'student',
+    home: '/home/student',
+    network: 'none',
+  },
 };

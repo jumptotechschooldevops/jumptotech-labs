@@ -20,20 +20,43 @@ labs, and the application contains no code that knows about any of them:
 adding a lab means adding a `lab.yaml`, and nothing else. See
 [The lab catalog](#the-lab-catalog).
 
+**PLATFORM-004** made the platform stop being about Kubernetes. A lab now
+declares which *kind of sandbox* it needs — `kubernetes`, `linux`, `docker`,
+`terraform`, `aws` — and a provider registry produces it. Kubernetes labs still
+get a namespace; Linux and Terraform labs get their own throwaway container.
+The catalog, the session lifecycle, the timer, the hints, Start / Check / Reset
+/ End, the terminal and the cleanup service are the *same code* for all of
+them. See [Multi-track architecture](#multi-track-architecture).
+
 ---
 
 ## Contents
 
 - [What is in scope](#what-is-in-scope)
 - [Architecture](#architecture)
+- [Multi-track architecture](#multi-track-architecture)
+  - [The provider contract](#the-provider-contract)
+  - [The provider registry](#the-provider-registry)
+  - [The Kubernetes provider](#the-kubernetes-provider)
+  - [The Linux provider](#the-linux-provider)
+  - [The Terraform provider](#the-terraform-provider)
+  - [Docker sandbox strategy](#docker-sandbox-strategy)
+  - [Session and provider binding](#session-and-provider-binding)
+  - [The terminal binding](#the-terminal-binding)
+  - [Generic verification](#generic-verification)
+  - [Cleanup across providers](#cleanup-across-providers)
+  - [Adding a provider](#adding-a-provider)
+  - [Adding a lab to an existing provider](#adding-a-lab-to-an-existing-provider)
 - [The lab catalog](#the-lab-catalog)
 - [Multi-student architecture](#multi-student-architecture)
 - [Session lifecycle](#session-lifecycle)
 - [Cost model](#cost-model)
+- [Local development requirements](#local-development-requirements)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Running locally](#running-locally)
 - [Starting K8S-001](#starting-k8s-001)
+- [Starting LINUX-001 and TF-001](#starting-linux-001-and-tf-001)
 - [Testing the terminal](#testing-the-terminal)
 - [Testing the verifier](#testing-the-verifier)
 - [Resetting the lab](#resetting-the-lab)
@@ -47,6 +70,7 @@ adding a lab means adding a `lab.yaml`, and nothing else. See
 - [Security](#security)
 - [Known limitations](#known-limitations)
 - [Future AWS architecture](#future-aws-architecture)
+- [Future AWS provider architecture](#future-aws-provider-architecture)
 
 ---
 
@@ -75,6 +99,30 @@ Added by PLATFORM-002:
 - **A capacity guard** (`MAX_ACTIVE_SESSIONS`).
 - **Session-scoped verification and reset** — one student's work can neither
   satisfy nor disturb another's.
+
+Added by PLATFORM-004:
+
+- **Three live tracks.** Kubernetes (10 labs), Linux (1), Terraform (1), from
+  one catalog, one lab page and one session API.
+- **A generic sandbox provider contract**, and a registry that resolves a lab's
+  declared provider to an implementation. There is no `switch (track)` anywhere
+  above it.
+- **A Linux provider** — one hardened, throwaway container per session: no
+  network, no capabilities, no host mounts, no Docker socket, bounded CPU,
+  memory and PIDs.
+- **A Terraform provider** — the same sandbox plus the Terraform CLI and an
+  offline provider mirror, so `terraform init` works with no network and no
+  cloud credentials.
+- **A generic terminal binding.** The terminal service attaches a PTY to
+  whatever the session's sandbox is, resolved server-side; the browser never
+  names a namespace, a container, or a command.
+- **A generic verification engine** with three requirement families —
+  Kubernetes API, sandbox filesystem, Terraform state — dispatched per
+  requirement, with the lab loader refusing a lab whose provider cannot verify
+  what it asks for.
+- **Provider readiness in the catalog.** A track whose backend is missing says
+  so, with the real reason; Docker and AWS ship as architecture only and are
+  labelled *Coming soon* rather than offered.
 
 Added by PLATFORM-003:
 
@@ -160,28 +208,14 @@ explicitly (`prerequisitesEnforced: false`).
 ### Key design decisions
 
 **`LabProvider` is the seam.** Everything above it — API routes, verifier,
-React — is unaware that `kind` exists. Adding an EKS or Firecracker backend
-means implementing one interface
-([`services/lab-orchestrator/src/types.ts`](services/lab-orchestrator/src/types.ts))
-and adding a case to the factory. No caller changes.
-
-```ts
-interface LabProvider {
-  create(ctx):  Promise<CreateResult>       // namespace + guardrails + initial state
-  status(ctx):  Promise<EnvironmentInfo>
-  reset(ctx):   Promise<ResetResult>
-  destroy(ctx): Promise<DestroyResult>      // and confirm the namespace is gone
-  execute(ctx, req): Promise<ExecResult>    // allow-listed binaries, internal only
-  issueCredentials(ctx): Promise<StudentCredentials>   // namespace-scoped only
-  listManagedNamespaces(): Promise<ManagedNamespace[]> // for the reaper
-  destroyNamespace(ns, sessionId?): Promise<DestroyResult>
-}
-```
+React — is unaware of *how* a sandbox is produced. See
+[Multi-track architecture](#multi-track-architecture) for the contract and the
+registry that resolves it.
 
 **The unit of isolation is a session, not a lab.** Two students on the same lab
-get two namespaces. Nothing above the provider ever names a namespace: the API,
-the verifier, and the terminal all work from a session id and look the
-namespace up server-side.
+get two sandboxes. Nothing above the provider ever names one: the API, the
+verifier, and the terminal all work from a session id and look the sandbox up
+server-side.
 
 **The kind cluster is the substrate, not the sandbox.** Creating a kind cluster
 requires the Docker socket. Rather than hand that capability to a web-facing
@@ -243,38 +277,53 @@ jumptotech-labs/
 │       └── vite.config.ts
 │
 ├── services/
-│   ├── lab-orchestrator/           lab lifecycle + Kubernetes access
+│   ├── lab-orchestrator/           lab lifecycle + sandbox providers
 │   │   ├── src/
 │   │   │   ├── k8s/client.ts       @kubernetes/client-node adapter
 │   │   │   ├── k8s/port.ts         KubernetesPort interface (testable seam)
 │   │   │   ├── k8s/labels.ts       ownership labels + the cleanup-safety gate
 │   │   │   ├── k8s/student-kubeconfig.ts  namespace-scoped kubeconfig builder
 │   │   │   ├── session/
-│   │   │   │   ├── identifiers.ts  session ids + namespace derivation
+│   │   │   │   ├── identifiers.ts  session ids + namespace/container derivation
 │   │   │   │   ├── isolation.ts    quota / limits / netpol / RBAC manifests
 │   │   │   │   ├── manager.ts      SessionManager — the state machine
 │   │   │   │   ├── manifests.ts    setup-manifest loading + kind allow-list
+│   │   │   │   ├── setup-files.ts  sandbox starter files + their constraints
+│   │   │   │   ├── sandbox-paths.ts  the two path-traversal gates
 │   │   │   │   ├── reaper.ts       SessionReaper — automatic cleanup
 │   │   │   │   ├── store.ts        SessionStore (PostgreSQL-ready)
 │   │   │   │   └── types.ts        session record, statuses, policy
 │   │   │   ├── lab-definition.ts   lab.yaml schema + parser (zod)
 │   │   │   ├── lab-registry.ts     lab discovery
-│   │   │   ├── requirements.ts     closed vocabulary of check types
+│   │   │   ├── requirements.ts     closed vocabulary of checks + families
 │   │   │   ├── providers/
-│   │   │   │   ├── factory.ts      provider selection
-│   │   │   │   └── kind-provider.ts KindLabProvider implements LabProvider
+│   │   │   │   ├── catalog.ts      the provider vocabulary (ids, sandbox kinds)
+│   │   │   │   ├── registry.ts     ProviderRegistry — id → implementation
+│   │   │   │   ├── factory.ts      Kubernetes substrate selection (kind, …)
+│   │   │   │   ├── kind-provider.ts       Kubernetes: namespace per session
+│   │   │   │   ├── linux-provider.ts      Linux: container per session
+│   │   │   │   ├── terraform-provider.ts  Terraform: container + offline CLI
+│   │   │   │   ├── docker-provider.ts     architecture only, disabled
+│   │   │   │   ├── aws-provider.ts        architecture only, disabled
+│   │   │   │   └── container/
+│   │   │   │       ├── runtime.ts         ContainerRuntimePort + docker CLI
+│   │   │   │       └── sandbox-provider.ts  the shared container lifecycle
 │   │   │   ├── session-token.ts    HMAC terminal session tokens
 │   │   │   ├── types.ts            LabProvider + result contracts
 │   │   │   └── validation.ts       lab id allow-list
 │   │   └── test/                   unit + live-cluster integration tests
 │   ├── terminal/                   WebSocket → PTY gateway
 │   │   ├── src/
-│   │   │   ├── credentials.ts      per-session kubeconfig fetch + storage
+│   │   │   ├── credentials.ts      per-session terminal binding fetch
+│   │   │   ├── spawn-plan.ts       the closed set of things it may spawn
 │   │   │   └── {config,index,protocol,server}.ts
 │   │   └── test/                   protocol, credentials, live-cluster E2E
 │   └── verifier/                   state-based verification
 │       ├── src/
 │       │   ├── handlers/           one handler per requirement type
+│       │   │   ├── filesystem.ts   sandbox files, modes, owners, groups
+│       │   │   └── terraform.ts    state, resources, outputs
+│       │   ├── sandbox-reader.ts   memoised reads inside one sandbox
 │       │   └── {index,registry,reader,contract,image,quantity}.ts
 │       └── test/verifier.test.ts
 │
@@ -294,12 +343,20 @@ jumptotech-labs/
 │       └── k8s-010-troubleshooting/
 │           ├── lab.yaml
 │           └── setup/ledger-api.yaml         the injected fault
+│   ├── linux/
+│   │   └── linux-001-files-permissions/lab.yaml
+│   └── terraform/
+│       └── tf-001-init-plan-apply/
+│           ├── lab.yaml
+│           └── setup/versions.tf             the starter configuration
 │
 ├── infrastructure/
 │   ├── docker/
 │   │   ├── api.Dockerfile
 │   │   ├── terminal.Dockerfile
-│   │   └── web.Dockerfile
+│   │   ├── web.Dockerfile
+│   │   ├── sandbox-linux.Dockerfile      the Linux sandbox image
+│   │   └── sandbox-terraform.Dockerfile  + terraform CLI and provider mirror
 │   └── kind/
 │       ├── cluster.yaml
 │       └── generated/              kubeconfigs (git-ignored)
@@ -307,7 +364,8 @@ jumptotech-labs/
 ├── scripts/
 │   ├── cluster-up.sh
 │   ├── cluster-down.sh
-│   └── cluster-status.sh
+│   ├── cluster-status.sh
+│   └── sandbox-build.sh            builds the sandbox images on the host
 │
 ├── docker-compose.yml
 ├── Makefile                        convenience wrappers (make help)
@@ -315,6 +373,444 @@ jumptotech-labs/
 ├── .gitignore
 └── README.md
 ```
+
+---
+
+## Multi-track architecture
+
+PLATFORM-003 ended with a catalog that could describe any lab and a platform
+that could only run one kind of them. PLATFORM-004 closed that gap.
+
+```text
+                          JumpToTech Labs
+                                 │
+                            Lab Catalog                 labs/**/lab.yaml
+                                 │
+                             Lab Engine                 setup · verify · reset
+                                 │                      hints · timer · session
+                          Sandbox Provider              ← the only seam
+                                 │
+      ┌──────────────┬───────────┼────────────┬──────────────┐
+      │              │           │            │              │
+ Kubernetes        Linux      Docker      Terraform         AWS
+   provider       provider    provider     provider       provider
+      │              │           │            │              │
+  namespace      container   (disabled)   container      (skeleton)
+      │              │                        │
+  kubectl,        bash,                   terraform,
+  RBAC, quota     no network              offline mirror
+```
+
+The rule this section exists to state: **a track is data.** `environment.provider`
+in a `lab.yaml` is the only place a technology is named as a *decision*. There
+is no `if (track === 'linux')` in the API routes, the session manager, the
+reaper, the verifier, or React: `grep -rn "'linux'" apps/ --include='*.tsx'`
+finds nothing at all, and in `apps/api/src` it finds only configuration (which
+image, is it enabled) and the registry composition. The UI's only concession is
+two label maps — the noun for a sandbox reference, and the name of an
+environment in the Start overlay — neither of which changes behaviour.
+
+### The provider contract
+
+One interface, in
+[`services/lab-orchestrator/src/types.ts`](services/lab-orchestrator/src/types.ts):
+
+```ts
+interface LabProvider {
+  readonly id: LabProviderId          // kubernetes | linux | docker | terraform | aws
+  readonly name: string               // implementation: kind, docker-linux, …
+  readonly sandboxKind: SandboxKind   // namespace | container | cloud-session | none
+
+  availability(): Promise<ProviderAvailability>   // can this run here, and if not why
+
+  create(ctx):  Promise<CreateResult>             // sandbox + guardrails + initial state
+  status(ctx):  Promise<EnvironmentInfo>
+  reset(ctx):   Promise<ResetResult>
+  destroy(ctx): Promise<DestroyResult>            // and confirm the sandbox is gone
+
+  getTerminalContext(ctx): Promise<TerminalContext>  // how to attach a shell
+  execute(ctx, req): Promise<ExecResult>             // allow-listed binaries, internal only
+
+  listManagedSandboxes(): Promise<ManagedSandbox[]>  // for the reaper
+  destroySandbox(ref, sessionId?): Promise<DestroyResult>
+
+  // Optional: only providers whose labs declare filesystem or Terraform
+  // requirements implement this. Kubernetes labs read the Kubernetes API.
+  readSandboxPath?(ctx, path, opts): Promise<SandboxPathRead | null>
+}
+```
+
+Three things about it are worth saying out loud.
+
+**`availability()` returns data, not an exception.** A laptop without Docker
+still serves the Kubernetes catalog; the Linux and Terraform cards say plainly
+that they cannot start here, and why. A provider that is architecture-only
+(AWS) reports unavailable forever. This is what makes "do not fake labs as
+runnable" enforceable rather than aspirational.
+
+**There is no method that takes a command from a caller.** `execute()` is an
+allow-list of binaries with an explicit argv array and `shell: false`, reachable
+only from internal health checks and verifier reads. Student commands travel
+through the terminal service, over an authenticated WebSocket, and nowhere else.
+
+**`getTerminalContext()` replaced `issueCredentials()`.** A Kubernetes lab's
+terminal binding is a kubeconfig; a Linux lab's is a container to `exec` into.
+Both are the same shape to everything above the provider — see
+[The terminal binding](#the-terminal-binding).
+
+### The provider registry
+
+[`providers/registry.ts`](services/lab-orchestrator/src/providers/registry.ts)
+is the **only** place that maps a provider id to an implementation, and
+[`apps/api/src/providers.ts`](apps/api/src/providers.ts) is the only place that
+decides which ones this deployment offers.
+
+| Provider | Implementation | Sandbox | State |
+|---|---|---|---|
+| `kubernetes` | `KindLabProvider` | namespace in a shared kind cluster | live |
+| `linux` | `LinuxLabProvider` | container from `jumptotech/lab-linux` | live when Docker + the image are present |
+| `terraform` | `TerraformLabProvider` | container from `jumptotech/lab-terraform` | live when Docker + the image are present |
+| `docker` | `DockerLabProvider` | — | **disabled** — see [Docker sandbox strategy](#docker-sandbox-strategy) |
+| `aws` | `AwsLabProvider` | — | **disabled** — see [Future AWS provider architecture](#future-aws-provider-architecture) |
+
+`resolve()` refuses three structural cases with their own explanations: the
+provider id is not in the vocabulary, nothing is registered for it, or it is
+switched off. It deliberately does **not** probe the backend, because a cluster
+that is down or a daemon that is not running is better reported against the
+provisioning step that actually failed (`✗ Environment created — connect
+ECONNREFUSED …`) than as a generic refusal. The catalog probes separately,
+through `status()`, so a lab whose backend is down is marked unavailable
+*before* it is clicked.
+
+### The Kubernetes provider
+
+Unchanged by PLATFORM-004, and deliberately so: everything in
+[Multi-student architecture](#multi-student-architecture) — namespace per
+session, scoped ServiceAccount and Role, ResourceQuota, LimitRange, four
+NetworkPolicies, the four cleanup gates — still applies exactly as it did. The
+only additions are `id`, `sandboxKind`, `availability()`, and generic aliases
+for the cleanup methods.
+
+### The Linux provider
+
+```text
+   Student session
+        ↓
+   LinuxLabProvider
+        ↓
+   docker run --network none --cap-drop ALL --security-opt no-new-privileges
+              --user student --cpus 0.5 --memory 512m --pids-limit 128
+        ↓
+   jtt-lab-3f9c1a7b2d40         one container, one session, no host mounts
+        ↓
+   bash, attached by docker exec as the unprivileged student
+        ↓
+   verifier reads the real filesystem back through the same runtime
+```
+
+| Concern | Control |
+|---|---|
+| host filesystem | no bind mounts at all — `len .Mounts` is asserted to be `0` against a real daemon |
+| the Docker socket | never passed in; `command -v docker` inside a sandbox fails |
+| privilege | `--user student`, `--cap-drop ALL`, `--security-opt no-new-privileges`, never `--privileged` |
+| network | `--network none` — a Linux lab needs none, so it gets none |
+| CPU / memory | `--cpus`, `--memory`, `--memory-swap` (equal, so the ceiling is real) |
+| fork bombs | `--pids-limit` |
+| lifetime | the session's own deadlines, plus the reaper |
+
+All of it comes from `SessionPolicy.sandbox`, which is read from the
+environment (`SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS_LIMIT`, …) — the
+container equivalent of the ResourceQuota/LimitRange values, configurable in
+the same place and for the same reason.
+
+**Reset replaces the container.** A Kubernetes reset can purge objects and keep
+the namespace, because the namespace is not where the student's state lives. A
+container *is* where it lives — files, background processes, shell history,
+anything they installed — so restoring a subset of it would leave the rest.
+Reset therefore destroys the sandbox, creates a fresh one from the same image,
+and re-seeds the lab's starter files. The cost is that the shell attached to the
+old container dies; the reset response sets `reconnectTerminal: true` and the UI
+reattaches to the new sandbox with the same session.
+
+**The image is built on the host**, by `npm run sandbox:build`, and never by the
+orchestrator: building an image needs the Docker socket, and the same rule that
+keeps kind cluster creation out of the API applies here.
+
+### The Terraform provider
+
+The Linux sandbox plus the Terraform CLI and a **filesystem provider mirror**
+baked into the image, with `TF_CLI_CONFIG_FILE` pointing at it and `direct`
+installation excluded. Three things follow:
+
+1. the sandbox runs with `--network none` like any other, so a Terraform lab
+   has no egress;
+2. `terraform init` is deterministic and offline — a registry outage cannot
+   break a student's lab;
+3. no cloud credential is ever needed, so none can leak.
+
+Adding a provider to a lab means adding it to the mirror in
+[`sandbox-terraform.Dockerfile`](infrastructure/docker/sandbox-terraform.Dockerfile).
+That is deliberate: the set of things a student can reach is a decision, not a
+default.
+
+Provisioning refuses to hand over a Terraform sandbox whose image has no
+working `terraform` in it, rather than presenting a Terraform lab with no
+Terraform.
+
+### Docker sandbox strategy
+
+**The host Docker socket is never given to a student**, and no configuration
+flag enables it. Mounting it into a sandbox is equivalent to giving the student
+root on the host: they could start a privileged container, bind-mount `/`, and
+read or replace anything — including every other student's sandbox and the
+platform's own secrets.
+
+Two designs would be safe enough, and neither fits in this story:
+
+**Rootless Docker-in-Docker, one daemon per session.** Blast radius is one
+session. Costs: user namespaces, a `fuse-overlayfs`/`vfs` storage driver, and
+usually `--privileged` or a substantial capability set on the outer container —
+exactly what this platform refuses to grant. Making it genuinely safe means a
+real kernel boundary (gVisor / Kata / Firecracker) underneath, which is a
+substrate change, not a code change.
+
+**A brokered daemon.** The student's CLI talks to a platform-owned proxy that
+allow-lists the operations a lab needs and stamps ownership labels on everything
+created. Blast radius is whatever the allow-list permits — and the proxy is then
+the entire security boundary, where one missed field in a run spec undoes it.
+
+So PLATFORM-004 ships the *contract*: `DockerLabProvider` exists, is registered,
+is covered by the provider-registry tests, and reports itself unavailable with
+that reason. There is no Docker lab in `labs/`, and the catalog shows Docker
+under **Coming soon**. Enabling it later is a construction argument plus a
+sandbox image plus `labs/docker/…`; nothing above the provider changes.
+
+**There is no Docker integration test, because there is nothing real to test.**
+
+### Session and provider binding
+
+```text
+  session_id        sess-a84fc21ab3d90e12          64 bits of crypto.randomBytes
+  lab_id            LINUX-001
+  provider          linux                          from the lab definition
+  sandbox_kind      container
+  sandbox_ref       jtt-lab-3f9c1a7b2d40           HMAC(session_id), server-side
+  namespace         lab-8a02fd9579bf               Kubernetes' view of the same idea
+  status            ACTIVE
+  created_at / last_activity_at / expires_at
+```
+
+Both bindings are decided server-side at Start Lab: the provider from the lab
+definition, the sandbox reference from the session id through a keyed HMAC. The
+two derivations use **different HMAC domains**, so a session's namespace name
+and its container name are unrelated strings — learning one tells you nothing
+about the other, and neither can be inverted back into the session id that
+actually controls the session.
+
+`SessionStore.update()` drops `provider`, `sandboxKind`, `sandboxRef` and
+`namespace` from every patch. A live session therefore cannot be moved to
+another sandbox or another provider by construction, rather than by every
+caller remembering not to.
+
+Teardown resolves the provider from the **stored** provider id, never from the
+lab definition as it stands now — a lab edited to declare a different provider
+must not make a running session tear down through the wrong backend.
+
+What the browser sees is `provider`, `sandboxKind` and `sandboxRef`. The
+reference is a developer detail shown in the terminal pane header; possessing it
+grants nothing, because no endpoint anywhere accepts one as input. `namespace`
+is served **only** for Kubernetes sessions: a Linux session has no namespace,
+and echoing a container name under that key would be a lie the UI would repeat.
+
+### The terminal binding
+
+```text
+  POST /api/labs/LINUX-001/start
+        └─► HMAC token { sid, labId, … }  ──►  browser
+                                                 │
+                                    WebSocket auth frame (token only)
+                                                 │
+                                        services/terminal
+                                                 │
+                        POST /internal/sessions/:sid/credentials
+                                                 │
+                    ┌────────────────────────────┴───────────────────────────┐
+                    │ kind: 'kubernetes'          │ kind: 'container-exec'    │
+                    │ kubeconfig, namespace       │ containerRef, user, cwd   │
+                    └────────────────────────────┬───────────────────────────┘
+                                                 │
+                    bash + KUBECONFIG      docker exec -u student <ref> bash
+```
+
+The response is a **closed, typed union that carries no command line**. The
+terminal service builds its own argv from the variant, after re-validating
+every field against the same patterns the orchestrator used to mint them:
+the container reference must match `jtt-lab-<hex>`, the user must be a POSIX
+user name, the working directory must be a plain absolute path, and environment
+names and values must be ordinary single-line strings. A context that fails any
+of these is rejected outright rather than sanitised.
+
+That validation is duplicated on purpose. The API and the terminal service are
+separate processes; this is the check that still holds if the other one is
+wrong. Concretely: even a compromised API cannot talk the terminal service into
+`exec`ing an arbitrary container or running an arbitrary command.
+
+The browser contributes exactly one thing to this flow — the signed token — and
+a second `auth` frame is still refused, so a live socket cannot move itself to
+another session.
+
+### Generic verification
+
+```text
+                       requirement
+                            │
+                    requirement family
+        ┌───────────────────┼────────────────────┐
+   kubernetes           filesystem            terraform
+        │                   │                     │
+  VerifyReader         SandboxReader         SandboxReader
+        │                   │                     │
+ Kubernetes API      the sandbox's real filesystem (docker exec, as the student)
+        └───────────────────┴─────────────────────┘
+                            │
+                  PASS / FAIL + observed detail
+```
+
+Every requirement type declares its family in
+[`requirements.ts`](services/lab-orchestrator/src/requirements.ts), and the
+verifier keeps one handler map per family. Both maps are mapped types over the
+requirement types of their family, so a requirement type with no handler fails
+to compile — *and* a handler registered against the wrong reader fails to
+compile too.
+
+All 32 Kubernetes requirement types are unchanged. PLATFORM-004 adds nine:
+
+| Family | Types |
+|---|---|
+| Filesystem | `file_exists`, `directory_exists`, `file_content`, `file_mode`, `file_owner`, `file_group` |
+| Terraform | `terraform_initialized`, `terraform_resource_exists`, `terraform_output_equals` |
+
+Design points worth stating:
+
+**A symlink is not a file.** `stat` runs without `-L`, so a link reports as a
+link. Without that, a student could satisfy a content check by pointing the
+expected path at some other file, and a permissions lab would be teaching the
+wrong thing.
+
+**Reads run as the unprivileged student**, not as root — so a check sees exactly
+what the student can see, and there is no privileged bypass of the permissions
+the lab is teaching.
+
+**There is no regular-expression requirement type.** A lab-supplied pattern is
+untrusted input to a regex engine, and a catastrophic backtrack inside the
+verifier would be a denial of service on the API for everyone. `file_content`
+offers `equals` (trailing whitespace ignored) and `contains`.
+
+**Terraform state is read, never executed.** The checks parse
+`terraform.tfstate` rather than running `terraform show` in a directory whose
+contents the student controls. `terraform apply` having been typed proves
+nothing; a resource with no instance in state, or an output that is missing,
+fails.
+
+**Paths cannot escape the sandbox.** Two gates: the lab schema rejects anything
+that is not a plain relative path, and the resolved absolute path is re-checked
+against the sandbox home immediately before any read. The second is the one that
+matters — a path can look safe segment by segment and still normalise somewhere
+else.
+
+The lab loader also refuses a lab whose provider cannot verify what it asks for:
+a Linux lab declaring `pod_running`, or a Kubernetes lab declaring `file_mode`,
+is rejected at startup with a precise message rather than failing at Check
+Solution.
+
+### Cleanup across providers
+
+```text
+   expired / idle session
+            ↓
+   SessionManager.expire()
+            ↓
+   provider recorded on the session       ← never guessed, never re-derived
+            ↓
+   provider.destroySandbox(ref, sessionId)
+            ↓
+   verify gone → mark EXPIRED
+```
+
+The orphan sweep asks **every** registered provider for the sandboxes it owns,
+so a deployment running Kubernetes and container sandboxes side by side reclaims
+both in one pass. A provider whose backend is unreachable records the error and
+the sweep continues; one sick backend does not stop another's cleanup.
+
+The container gates mirror the namespace ones exactly:
+
+1. the name must parse as `jtt-lab-<hex>`;
+2. the *live* container must carry `jumptotech.io/managed=true`;
+3. when a session id is supplied, the container's session label must match it;
+4. a container that is already gone counts as deleted, so teardown is
+   re-entrant.
+
+Gates 2 and 3 are re-read from the runtime immediately before every delete, so a
+stale record cannot authorise one. A developer's own container called
+`lab-something`, or a hand-labelled `my-postgres`, cannot be reached from this
+path — gate 1 refuses it before anything else runs.
+
+### Adding a provider
+
+Adding, say, **Ansible** is three things and no rewrites:
+
+1. add `'ansible'` to `LAB_PROVIDERS`, `PROVIDER_ISOLATION` and
+   `PROVIDER_SANDBOX_KIND` in
+   [`providers/catalog.ts`](services/lab-orchestrator/src/providers/catalog.ts),
+   and to `PROVIDER_REQUIREMENT_FAMILIES` in `lab-definition.ts`;
+2. implement `LabProvider` — for a container-backed track that is a subclass of
+   `ContainerLabProvider` pinning an image, which is all
+   [`linux-provider.ts`](services/lab-orchestrator/src/providers/linux-provider.ts)
+   is;
+3. register it in [`apps/api/src/providers.ts`](apps/api/src/providers.ts).
+
+Then drop in `labs/ansible/ansible-001-…/lab.yaml` with
+`environment: { provider: ansible }`. The catalog, the lab page, the timer, the
+hints, the session lifecycle, the terminal, the verifier and the reaper all work
+already, because none of them names a provider.
+
+What would additionally require code is a genuinely new *kind of check* — say
+`ansible_playbook_applied`. That is one entry in `requirements.ts` (with its
+family) and one handler in the verifier; the compiler refuses the first without
+the second.
+
+### Adding a lab to an existing provider
+
+Exactly as before — a directory and a `lab.yaml`. For a container-backed
+provider the only differences are the requirement types you may use and the way
+starter state is declared:
+
+```yaml
+environment:
+  provider: linux          # isolation is filled in from the provider
+
+setup:
+  files:                   # instead of Kubernetes manifests
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Starter configuration is in place
+
+requirements:
+  - type: file_mode
+    path: deploy
+    mode: '750'
+    label: deploy permissions are rwxr-x---
+```
+
+Starter files are constrained the same way setup manifests are: `source` cannot
+escape the lab directory, `path` cannot escape the sandbox home, each file is
+size-capped, and the mode has its execute bits cleared — so lab content cannot
+ship a script. Nothing in the platform executes a starter file in any case; that
+is belt and braces.
 
 ---
 
@@ -831,26 +1327,39 @@ sleeping laptop would keep a sandbox alive forever.
 
 ## Cost model
 
-JumpToTech does **not** create a cluster per student. It creates a namespace.
+JumpToTech does **not** create a cluster per student, a VM per student, or an
+account per student. It creates the smallest disposable thing that teaches the
+lab: a namespace, or a container.
 
-| Per student, per lab | Cost |
-|---|---|
-| Kubernetes cluster | none — the cluster is shared |
-| Node / VM | none |
-| LoadBalancer or public IP | none — pinned to `0` in the quota, not configurable upward |
-| NodePort | none — pinned to `0` |
-| Database | none |
-| Namespace + SA + Role + Binding + Quota + LimitRange + 4 NetworkPolicies | ~9 small API objects |
+| Per student, per lab | Kubernetes | Linux / Terraform |
+|---|---|---|
+| Cluster | none — shared | n/a |
+| Node / VM | none | **none** — a container, not a VM |
+| LoadBalancer or public IP | none — pinned to `0` in the quota | none — `--network none` |
+| Database | none | none |
+| What is actually created | ~9 small API objects | 1 container, bounded at 0.5 CPU / 512 MB / 128 PIDs |
+| Image pulls | shared node cache | one image, built once, shared by every session |
 
 Browsing the catalog creates nothing at all: no provider method runs until a
-student clicks **Start Lab**.
+student clicks **Start Lab**. Provider *readiness* is a cheap local probe
+(`docker version`, an API ping) memoised for 30 seconds, so a busy catalog does
+not turn into a busy daemon.
 
-Three things bound the spend: a **ResourceQuota** caps what one session may
-consume, **`MAX_ACTIVE_SESSIONS`** caps how many sessions exist at once, and the
-**cleanup service** guarantees that an abandoned environment is reclaimed rather
-than paid for indefinitely. Cluster-per-student would multiply the control-plane
-cost by the number of students for no pedagogical gain — a namespace teaches
-`kubectl` exactly as well.
+Four things bound the spend, and they are the same four for every provider: a
+**per-session resource bound** (ResourceQuota / LimitRange, or `--cpus`,
+`--memory`, `--pids-limit`), **`MAX_ACTIVE_SESSIONS`**, the **session TTL**, and
+the **cleanup service** that guarantees an abandoned environment is reclaimed
+rather than paid for indefinitely.
+
+Explicitly rejected, and rejected the same way at every layer:
+
+| Rejected | Why | What is done instead |
+|---|---|---|
+| one VM per Linux lab | a VM costs orders of magnitude more than a container and teaches `chmod` no better | one container per session |
+| one cluster per Kubernetes student | multiplies control-plane cost by the number of students for no pedagogical gain | one namespace per session |
+| one AWS account per session | account provisioning is slow, expensive, and hard to reclaim | scoped role + tags + budget guard, when AWS arrives |
+| long-lived cloud resources | anything outliving a session is paid for by nobody's lesson | session TTL, plus the reaper |
+| manual cleanup | students never do it, and operators should not have to | the reaper, across every provider |
 
 This is the same shape that will run on shared EKS later: the
 [`LabProvider`](services/lab-orchestrator/src/types.ts) interface is what lets
@@ -859,16 +1368,63 @@ frontend changing.
 
 ---
 
+## Local development requirements
+
+| Track | Needs | How to get it |
+|---|---|---|
+| Kubernetes | a kind cluster | `npm run cluster:up` |
+| Linux | Docker + `jumptotech/lab-linux` | `npm run sandbox:build` |
+| Terraform | Docker + `jumptotech/lab-terraform` | `npm run sandbox:build` |
+| Docker | — | not enabled; see [Docker sandbox strategy](#docker-sandbox-strategy) |
+| AWS | — | not enabled; see [Future AWS provider architecture](#future-aws-provider-architecture) |
+
+Missing either substrate is not fatal: the catalog still loads, and the tracks
+that cannot run say so with the real reason.
+
+> **The container tracks need the services running on your host.**
+>
+> The Linux and Terraform providers drive a container runtime, and the terminal
+> service attaches a PTY with `docker exec`. Inside the shipped
+> `docker compose` stack neither container is given access to a runtime — the
+> compose file mounts no Docker socket anywhere, deliberately, and PLATFORM-004
+> did not change that. So in compose the Kubernetes track works and the
+> container tracks report themselves unavailable.
+>
+> To use them, run the services on your host, where they inherit your own
+> Docker context:
+>
+> ```bash
+> npm run cluster:up          # for the Kubernetes track
+> npm run sandbox:build       # for the Linux and Terraform tracks
+>
+> export KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml"
+> export TERMINAL_SESSION_SECRET="$(openssl rand -hex 32)"
+>
+> npm run dev:api             # :4000
+> npm run dev:terminal        # :4001  (needs Node 22 for node-pty)
+> npm run dev:web             # :3000
+> ```
+>
+> **This is a development arrangement, and it is honestly a compromise.** It
+> means the orchestrator and the terminal service can reach the host's Docker
+> daemon, which is a capability neither would hold in production. The production
+> shape is a dedicated sandbox-broker service holding a rootless, per-tenant
+> daemon, with the API talking to it over an authenticated API rather than to a
+> socket. See [Security](#security) for what this does and does not buy you.
+
+---
+
 ## Requirements
 
 | Tool | Version tested | Why |
 |---|---|---|
-| Docker | 28.4 (Docker Desktop) | runs the services and the kind node |
+| Docker | 28.4 (Docker Desktop) | runs the services, the kind node, **and the Linux/Terraform sandboxes** |
 | Docker Compose | v2.39 | orchestrates the local stack |
 | [kind](https://kind.sigs.k8s.io/) | 0.31.0 | creates the local Kubernetes cluster |
 | kubectl | 1.34 | host-side cluster checks |
-| Node.js | 22 LTS or 24 | only for running tests / services outside Docker |
+| Node.js | 22 LTS or 24 | running tests / services outside Docker |
 | Bash | 3.2+ | the `scripts/` helpers |
+| Terraform | 1.9.8 | **inside the sandbox image only** — you do not install it |
 
 Docker must be running with at least ~4 GB of memory available.
 
@@ -925,11 +1481,27 @@ two kubeconfigs into `infrastructure/kind/generated/`:
 - `kubeconfig-internal.yaml` — for the containers, pointing at
   `jumptotech-labs-control-plane:6443` on the shared `kind` Docker network
 
-**2. Start the application:**
+**2. Build the sandbox images** (once; needed only for the Linux and Terraform
+tracks):
+
+```bash
+npm run sandbox:build
+```
+
+This builds `jumptotech/lab-linux` and `jumptotech/lab-terraform` on your host.
+Skipping it is fine — the Kubernetes track still works, and the other two are
+marked unavailable in the catalog with a link to this command.
+
+**3. Start the application:**
 
 ```bash
 docker compose up --build
 ```
+
+> The compose stack serves the **Kubernetes track**. The Linux and Terraform
+> tracks need the services running on your host, because no container in the
+> stack is given access to a container runtime. See
+> [Local development requirements](#local-development-requirements).
 
 Then open:
 
@@ -1014,6 +1586,81 @@ Environment: Ready        namespace: lab-3f9c1a7b2d40
 the session's server-side absolute deadline — closing the tab does not stop it.
 The namespace is shown as a developer detail; it is not something a student
 needs, and possessing it grants nothing.
+
+---
+
+## Starting LINUX-001 and TF-001
+
+The same three clicks, on a different kind of environment.
+
+1. Open http://localhost:3000
+2. Under **Linux**, click **LINUX-001 — Files, Directories & Permissions**
+3. Click **Start Lab**
+
+```text
+Preparing Linux environment…
+
+✓ Environment created      sandbox container jtt-lab-3f9c1a7b2d40 created
+                           (cpus=0.5 memory=512m pids=128 network=none)
+✓ Sandbox tooling ready    unprivileged user 'student'
+✓ Terminal connected
+
+Lab Ready
+```
+
+The terminal pane header reads `container: jtt-lab-3f9c1a7b2d40` instead of
+`namespace: lab-…`, and that is the whole visible difference. Everything else —
+the brief, the hints, the timer, Check Solution, Reset Lab, End Lab — is the
+same page and the same API calls.
+
+Solve it the way you would on a real host:
+
+```bash
+student@lab:~$ mkdir -p deploy/releases
+student@lab:~$ printf 'service=ledger-api\nversion=4.2.0\n' > deploy/release.txt
+student@lab:~$ chgrp deployers deploy
+student@lab:~$ chmod 750 deploy
+student@lab:~$ chmod 640 deploy/release.txt
+student@lab:~$ stat -c '%F %a %U %G' deploy deploy/release.txt
+directory 750 student deployers
+regular file 640 student student
+```
+
+**Check Solution** reads that filesystem back — not your shell history:
+
+```text
+✓ Directory deploy exists
+✓ Directory deploy/releases exists
+✓ File deploy/release.txt exists
+✓ deploy/release.txt records the service and version
+✓ deploy is owned by your account
+✓ deploy belongs to the deployers group
+✓ deploy permissions are rwxr-x---
+✓ deploy/release.txt permissions are rw-r-----
+
+LAB PASSED
+```
+
+TF-001 works identically, on a sandbox that also has the Terraform CLI:
+
+```bash
+student@lab:~$ ls terraform
+versions.tf
+student@lab:~$ cd terraform
+student@lab:~/terraform$ terraform init      # resolves offline, no credentials
+student@lab:~/terraform$ terraform plan
+student@lab:~/terraform$ terraform apply -auto-approve
+student@lab:~/terraform$ terraform output
+manifest_path = "build/manifest.txt"
+```
+
+**Reset Lab** on either track replaces the sandbox and reattaches your terminal;
+your files are gone and the lab's starter state is back. **End Lab** removes the
+container. Confirm it from the host:
+
+```bash
+docker ps --filter label=jumptotech.io/managed=true
+```
 
 ---
 
@@ -1449,8 +2096,8 @@ All responses use a structured envelope:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health` | service status, labs loaded, lab load errors, session capacity |
-| `GET` | `/api/labs` | catalog: lab cards + tracks |
+| `GET` | `/health` | service status, labs loaded, lab load errors, **provider readiness**, session capacity |
+| `GET` | `/api/labs` | catalog: lab cards + tracks + **provider readiness** |
 | `GET` | `/api/labs/:labId` | student-safe lab definition for the UI |
 | `POST` | `/api/labs/:labId/start` | create a session sandbox; returns the session, provisioning steps, and a session-bound terminal token |
 | `GET` | `/api/tracks` | list tracks with their topics and difficulties |
@@ -1464,10 +2111,39 @@ track endpoints the path pins the track, so a contradicting `?track=` is
 ignored rather than allowed to widen the result.
 
 **Catalog responses are student-safe.** Neither endpoint serves the requirement
-objects, the setup manifests, or the reset policy — the expected end state of a
-lab is the solution, and for K8S-010 the setup manifest *is* the injected fault.
-`GET /api/labs/:labId` serves requirements as their student-facing `label`
-strings only. Browsing the catalog also touches no cluster and creates nothing.
+objects, the setup manifests, the setup files, or the reset policy — the
+expected end state of a lab is the solution, and for K8S-010 the setup manifest
+*is* the injected fault. `GET /api/labs/:labId` serves requirements as their
+student-facing `label` strings only. Browsing the catalog also touches no
+cluster and creates nothing.
+
+**Catalog responses carry provider readiness** (PLATFORM-004). Each lab gets
+`provider` and `availability`, each track gets `providers` and `availability`,
+and the top level carries a `providers` array covering every provider in the
+vocabulary — including the ones with no labs yet, which is how Docker and AWS
+appear as *Coming soon* rather than as something startable:
+
+```jsonc
+{
+  "labs": [
+    { "id": "LINUX-001", "provider": "linux",
+      "availability": { "provider": "linux", "available": true } }
+  ],
+  "tracks": [
+    { "track": "linux", "labCount": 1, "providers": ["linux"],
+      "availability": { "available": true } }
+  ],
+  "providers": [
+    { "provider": "kubernetes", "available": true },
+    { "provider": "docker", "available": false,
+      "reason": "Docker labs need a per-session Docker daemon…" }
+  ]
+}
+```
+
+**There is deliberately no `/api/kubernetes/start`, `/api/linux/start` or
+`/api/terraform/start`.** One `POST /api/labs/:labId/start` serves every track,
+and a test asserts those routes return 404 so the split cannot creep back in.
 
 ### Session operations
 
@@ -1490,9 +2166,16 @@ by lab id — two students on the same lab have two different sandboxes.
 
 Notes:
 
-- **The namespace is never an input.** No endpoint accepts one. It is looked up
-  from the session record on every request, so possessing or guessing a
-  namespace name grants nothing at all.
+- **The sandbox is never an input.** No endpoint accepts a namespace, a
+  container reference, or a provider. All three are looked up from the session
+  record on every request, so possessing or guessing one grants nothing at all.
+- **Session payloads describe the sandbox honestly.** `provider`,
+  `sandboxKind` and `sandboxRef` on every session; `namespace` only when the
+  provider is `kubernetes`.
+- **`POST /api/sessions/:id/reset` returns `reconnectTerminal`.** True for
+  container-backed providers, whose reset replaces the sandbox and therefore
+  ends the shell attached to the old one; false for Kubernetes, whose reset
+  keeps the namespace and the shell.
 - **Session possession is the MVP authorization mechanism, and it is NOT
   production authentication.** There are no user accounts yet, so holding a
   session id is what lets you act on that session. This is why session ids are
@@ -1564,6 +2247,37 @@ KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml" \
   npx vitest run test/terminal-integration.test.ts --root services/terminal
 ```
 
+Integration tests against **real sandbox containers** — no cluster needed, but
+Docker and the sandbox images are:
+
+```bash
+npm run sandbox:build
+RUN_INTEGRATION_TESTS=1 \
+  npx vitest run test/sandbox-integration.test.ts --root apps/api
+# or: make test-sandbox
+```
+
+That suite creates real containers, runs real commands in them, solves
+LINUX-001 and TF-001 the way a student would, and asserts the sandbox's actual
+hardening by reading it back from the daemon:
+
+```text
+✓ creates a container with no network, no capabilities and bounded resources
+✓ runs real Linux commands as an unprivileged user with no daemon access
+✓ fails LINUX-001 before the work and passes it after, on real state
+✓ restores the baseline on Reset and destroys the sandbox on End
+✓ keeps two students in two sandboxes
+✓ reclaims an expired sandbox without anyone asking
+✓ refuses to delete a container it does not own
+✓ ships a working terraform CLI and the lab starter files
+✓ runs init, plan and apply offline, and passes TF-001 on real state
+✓ restores the starter configuration on Reset and removes the sandbox on End
+✓ runs a Linux and a Terraform sandbox side by side, isolated
+```
+
+It skips itself with an explanation when Docker or an image is missing, rather
+than failing a developer who has not built them.
+
 ### Running the catalog tests only
 
 The catalog, schema, setup-engine and verification suites need no cluster:
@@ -1628,6 +2342,40 @@ npx vitest run --root apps/web               # catalog UI, lab page, hints
 | 35 | One lab page renders different definitions | `LabBrief.test.tsx`, `live-payloads.test.tsx` |
 | 36 | Progressive hints reveal one at a time | `HintPanel.test.tsx`, `live-payloads.test.tsx` |
 | 37 | Start / Reset / End / Check still function | `catalog-api.test.ts`, `labs-integration.test.ts`, `StartOverlay.test.tsx`, `CheckPanel.test.tsx` |
+
+### PLATFORM-004 coverage
+
+| # | Requirement | Where |
+|---|---|---|
+| 1–3 | `kubernetes` / `linux` / `terraform` providers resolve | `provider-registry.test.ts` |
+| 4 | Unknown provider rejected by name | `provider-registry.test.ts` |
+| 5 | Disabled provider returns a clear unavailable state | `provider-registry.test.ts`, `multi-track-api.test.ts` |
+| 6 | Session records its provider and sandbox kind | `multi-provider-session.test.ts` |
+| 7 | Sandbox reference is bound server-side and is not patchable | `multi-provider-session.test.ts` |
+| 8 | Session A cannot reach, reset or destroy session B's sandbox | `multi-provider-session.test.ts`, `container-provider.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 9 | A Linux session creates an isolated sandbox | `container-provider.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 10 | The terminal executes real Linux commands | `sandbox-integration.test.ts` (**real**) |
+| 11 | LINUX-001 starts | `multi-track-api.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 12–13 | LINUX-001 fails initially and passes on correct state | `sandbox-requirements.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 14 | Reset restores the Linux baseline | `container-provider.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 15 | End destroys the sandbox | `container-provider.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 16 | Expiry destroys the sandbox | `multi-provider-session.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 17–18 | Terraform sandbox starts and the CLI is present | `container-provider.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 19–20 | TF-001 fails initially and passes on real state | `sandbox-requirements.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 21 | Reset restores the Terraform starter configuration | `container-provider.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 22 | End destroys the Terraform sandbox | `sandbox-integration.test.ts` (**real**) |
+| 23–24 | K8S-001 and K8S-010 still work | `labs-integration.test.ts` (**real kind**) |
+| 25 | Kubernetes isolation tests still pass | `integration.test.ts` (**real RBAC**) |
+| 26 | Five simultaneous isolated sessions still pass | `integration.test.ts` (**real kind**) |
+| 27 | Namespace cleanup still works | `integration.test.ts`, `reaper.test.ts` |
+| 28 | Path traversal rejected, twice over | `sandbox-paths.test.ts`, `container-provider.test.ts` |
+| 29 | The browser cannot choose another container | `multi-track-api.test.ts`, `container-provider.test.ts` |
+| 30 | The browser cannot choose another provider context | `multi-provider-session.test.ts`, `multi-track-api.test.ts` |
+| 31 | Cleanup refuses an unmanaged sandbox | `multi-provider-session.test.ts`, `container-provider.test.ts`, `sandbox-integration.test.ts` (**real**) |
+| 32 | No public API returns credentials or sensitive references | `multi-track-api.test.ts` |
+| 33 | Kubernetes / Linux / Terraform tracks appear | `multi-track-api.test.ts`, `catalog-api.test.ts` |
+| 34 | Disabled providers are marked correctly | `multi-track-api.test.ts` |
+| 35 | Labs filter correctly by track | `multi-track-api.test.ts`, `lab-catalog.test.ts` |
 
 The web suite additionally renders the components against **verbatim API
 responses** captured in `apps/web/test/fixtures/`, which is what catches a drift
@@ -1813,6 +2561,49 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 - *Errors do not leak internals.* Structured codes out, stack traces in the log.
   Kubeconfigs and tokens are never logged and never returned to the browser.
 
+**Added by PLATFORM-004, for the container-backed tracks**
+
+- *No host filesystem reaches a sandbox.* Sandbox containers are created with no
+  bind mounts at all — asserted against a real daemon (`len .Mounts == 0`), not
+  merely intended.
+- *The Docker socket is never exposed to a student.* Not by the sandbox spec,
+  not by the terminal binding, and not by any configuration flag. `command -v
+  docker` inside a sandbox fails, and that is asserted too. The Docker *track*
+  is disabled precisely because doing it properly needs a per-session daemon —
+  see [Docker sandbox strategy](#docker-sandbox-strategy).
+- *Sandboxes are unprivileged and capability-free.* `--user student`,
+  `--cap-drop ALL`, `--security-opt no-new-privileges`, never `--privileged`. A
+  student cannot `chown` a file to another user, because there is no CAP_CHOWN —
+  which is real Linux behaviour the lab then teaches.
+- *No network from a sandbox.* `--network none`. Terraform resolves its
+  providers from a mirror inside the image, so even that needs no egress.
+- *Resource bounds per sandbox.* `--cpus`, `--memory` (with `--memory-swap`
+  equal, so the ceiling is real), and `--pids-limit`, all from configuration.
+- *The browser cannot name a sandbox.* No endpoint accepts a container id, a
+  namespace, a provider, or a kubeconfig path. Every operation resolves the
+  sandbox from the session record — asserted by a test that sends another
+  session's reference in the body and the query string and watches it be
+  ignored.
+- *A session cannot change provider or sandbox.* `SessionStore.update()` drops
+  those fields from every patch, so it is true by construction rather than by
+  convention.
+- *The terminal service re-validates everything it is handed.* The API returns a
+  closed union with no command line; the terminal builds its own argv after
+  re-checking the container name, the user, the working directory and every
+  environment name and value. Validating on both sides of a process boundary is
+  the point: this check holds even if the API is wrong.
+- *Verifier reads cannot leave the sandbox.* Two gates — a schema that rejects
+  anything but a plain relative path, and a resolved-path re-check against the
+  sandbox home — plus reads that run as the unprivileged student, so there is no
+  privileged bypass of the permissions a lab is teaching. A symlink is reported
+  as a symlink, so it cannot stand in for the file a check is about.
+- *Cleanup still only removes what it owns.* The container gates mirror the
+  namespace gates: name shape, live `jumptotech.io/managed` label, session label
+  match, all re-read immediately before every delete.
+- *Lab content still cannot execute anything.* Starter files are size-capped,
+  confined to the sandbox home, and have their execute bits stripped; nothing in
+  the platform runs one.
+
 **Remaining limitations — do not deploy this as-is**
 
 1. **No authentication.** Anyone who can reach the ports can start a lab.
@@ -1820,10 +2611,22 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    stopgap, **not production authentication**. A leaked or shoulder-surfed
    session id grants full control of that session. Real identity is a later
    story; the session id becomes a claim exchange rather than a bare capability.
-2. **Namespace isolation is not VM isolation.** Everything shares one kernel and
-   one control plane. A container-escape or kernel vulnerability crosses every
-   boundary described above. Production needs gVisor or Firecracker, seccomp
-   profiles, and per-session PID/memory limits at the runtime level.
+2. **Container isolation is not VM-grade tenant isolation, for any track.**
+   Namespaces and containers alike share one kernel; a container-escape or
+   kernel vulnerability crosses every boundary described above. This is stated
+   plainly rather than hedged: the Linux and Terraform sandboxes are hardened
+   containers, not virtual machines, and they should not be described to anyone
+   as equivalent. Production needs gVisor, Kata or Firecracker underneath, plus
+   seccomp profiles.
+2b. **The orchestrator and the terminal service reach the host's Docker daemon
+   in local development.** That is how the container tracks work today, and it
+   is a capability neither process would hold in production: anything able to
+   drive that daemon is effectively root on the host. The production shape is a
+   dedicated sandbox-broker service owning a rootless, per-tenant daemon, with
+   the API talking to it over an authenticated API rather than a socket. The
+   shipped `docker compose` stack gives no container that access, which is why
+   the container tracks report unavailable there — see
+   [Local development requirements](#local-development-requirements).
 3. **NetworkPolicy enforcement depends on the CNI.** The objects are always
    created; whether they are *enforced* is a property of the cluster. Do not
    claim tenant-level network isolation without verifying enforcement on the
@@ -1858,7 +2661,28 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 
 Beyond the security items above:
 
-- Only `LAB_PROVIDER=kind` is implemented. The factory rejects anything else.
+- `kind` is the only Kubernetes substrate implemented. The factory rejects
+  anything else.
+- **The Docker track is architecture only.** It has a provider, a registry
+  entry and tests, and it is disabled — see
+  [Docker sandbox strategy](#docker-sandbox-strategy). There is no Docker lab
+  and **no Docker integration test**, because there is nothing real to test.
+- **The AWS track is architecture only.** No credential, role, or resource is
+  ever created — see
+  [Future AWS provider architecture](#future-aws-provider-architecture). There
+  is **no AWS integration test**, and a mocked one would only prove the mock
+  returns what it was told to.
+- **The container tracks need the services on your host**, because the compose
+  stack gives no container access to a container runtime. See
+  [Local development requirements](#local-development-requirements).
+- **Container reset replaces the sandbox**, so a student's shell is
+  disconnected and reattached. The UI does that automatically; it is still a
+  visible blink, and it is a deliberate trade against leaving half a student's
+  state behind.
+- **The Terraform provider mirror is a fixed set** — `hashicorp/local` and
+  `hashicorp/random`. A lab needing another provider needs it added to the
+  image, which is deliberate but does mean a content change can require an
+  image rebuild.
 - Session state is in memory; there is no persistence, progress tracking, or
   attempt history.
 - The capacity guard has no queue. Past `MAX_ACTIVE_SESSIONS` a student is told
@@ -1883,8 +2707,13 @@ Beyond the security items above:
   metadata records that a lab is *relevant* to CKA and which domain it touches.
   It does not claim, and must not be presented as claiming, that completing
   these ten labs prepares anyone for the exam.
-- Only one track (`kubernetes`) exists. The track machinery is generic, but
-  nothing else has been written against it.
+- **Three tracks exist, and two of them have one lab each.** Linux and
+  Terraform are proofs that the multi-track engine works end to end, not
+  curricula. LINUX-001 and TF-001 do not make anyone competent at Linux or
+  Terraform, and must not be presented as doing so.
+- The Terraform lab's `certification` metadata records *relevance* to the
+  HashiCorp Terraform Associate exam, exactly as the Kubernetes labs do for
+  CKA. It is not a claim of exam readiness.
 - K8S-007 checks the CronJob's configured schedule rather than waiting for a
   firing, so that correct work is not left unmarked for five minutes.
 - Lab images are pulled from Docker Hub. `nginx:stable` is pre-pulled into the
@@ -1894,6 +2723,8 @@ Beyond the security items above:
   therefore Node 22; it skips itself with an explanatory message on newer Node.
 - Single-architecture testing: developed and verified on macOS arm64 with
   Docker Desktop. The images build for amd64 and arm64 but only arm64 was run.
+  The sandbox images select their architecture at build time from
+  `dpkg --print-architecture`, so they are built per machine rather than pulled.
 
 ---
 
@@ -1955,3 +2786,89 @@ Migration path, in order of what unblocks what:
 
 The point of the `LabProvider` interface is that step 1 did not require
 rewriting the API, the verifier, or the frontend — and step 2 will not either.
+
+---
+
+## Future AWS provider architecture
+
+Distinct from the section above, which is about running *this platform* on AWS.
+This one is about the **AWS track**: labs where the student uses AWS itself.
+
+**Nothing here is built, and that is the point of writing it down now.**
+`AwsLabProvider` exists, implements the same contract as every other provider,
+refuses every lifecycle call with `PROVIDER_UNAVAILABLE`, and is registered
+disabled. No student ever receives a credential, and no configuration flag
+changes that.
+
+```text
+   Student
+      ↓
+   AWS lab session
+      ↓
+   sts:AssumeRole  →  temporary scoped credentials (minutes, not hours)
+      ↓
+   dedicated per-lab IAM role + permission boundary
+      ↓
+   allowed services only, allowed regions only
+      ↓
+   every created resource tagged with the session
+      ↓
+   budget / cost guard
+      ↓
+   automatic cleanup by tag
+```
+
+### Ownership tagging
+
+Cleanup can only be exact if creation is. Every resource an AWS lab creates must
+carry — and the permission boundary must *require* — these tags:
+
+```text
+   jumptotech.io/session-id     the session that owns the resource
+   jumptotech.io/lab-id         which lab created it
+   jumptotech.io/student-id     reserved; arrives with authentication
+```
+
+`aws:RequestTag` conditions in the boundary make an untagged create *fail*, and
+`aws:ResourceTag` conditions scope every mutating action to the session's own
+resources. That is the AWS analogue of the namespace label gate the Kubernetes
+provider already enforces, and it buys the same property: cleanup can prove
+ownership from the resource itself rather than from a record that might be
+stale.
+
+### The credential contract
+
+```ts
+interface AwsSessionCredentials {
+  accessKeyId: string
+  secretAccessKey: string
+  sessionToken: string
+  expiresAt: string     // ISO-8601, never longer than the lab session
+  region: string
+  roleArn: string       // the assumed role, for auditing
+}
+```
+
+Three rules, all of which the platform already keeps for Kubernetes:
+
+1. credentials are minted per session and expire with it;
+2. they never reach the browser — the terminal service fetches them over the
+   internal, service-authenticated route, exactly as it does a kubeconfig today;
+3. they are never logged and never returned by a public endpoint.
+
+### Cost guard
+
+A permission boundary that allows `ec2:RunInstances` allows a student to spend
+money. So the boundary pins instance types, forbids anything with an hourly
+floor a lab does not need (NAT gateways, provisioned IOPS, dedicated hosts), and
+each account carries an AWS Budgets action that revokes the lab role when a
+threshold is crossed. The reaper deletes by tag on the session's deadline; the
+budget action is the backstop for whatever outlives it.
+
+### What is deliberately not decided yet
+
+Whether sessions share one account with tag-scoped roles or get accounts from an
+Organizations pool. The first is cheaper and faster; the second is a real
+blast-radius boundary. That choice needs the numbers a running platform
+produces, and guessing it now would bake an assumption into the session model.
+The provider contract does not depend on the answer.

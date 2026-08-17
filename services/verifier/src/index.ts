@@ -24,49 +24,85 @@ import {
   type Requirement,
 } from '@jumptotech/lab-orchestrator';
 import { VerifyReader } from './reader.js';
-import { checkId, verifyRequirements } from './registry.js';
+import { checkId, verifyRequirements, type VerificationReaders } from './registry.js';
+import { SandboxReader, type SandboxPort } from './sandbox-reader.js';
 import type { CheckResult } from './contract.js';
 
 export * from './contract.js';
 export * from './registry.js';
 export { VerifyReader } from './reader.js';
+export {
+  SandboxReader,
+  parseTerraformState,
+  TERRAFORM_LOCK_FILE,
+  TERRAFORM_STATE_FILE,
+  TERRAFORM_WORK_DIR,
+  type SandboxPort,
+  type TerraformStateSnapshot,
+} from './sandbox-reader.js';
+export { normalizeMode } from './handlers/filesystem.js';
 export { imageMatches, normalizeImageReference } from './image.js';
 export { parseQuantity, quantitiesEqual } from './quantity.js';
 
 export interface VerificationResult {
   labId: string;
+  /** The sandbox the checks ran against: a namespace, a container name, … */
+  sandboxRef: string;
+  /**
+   * Kubernetes namespace the checks ran against.
+   *
+   * Carries the sandbox reference whatever the provider, so existing callers
+   * keep working; for a container-backed lab read `sandboxRef` instead.
+   */
   namespace: string;
   passed: boolean;
   /** `LAB PASSED` / `LAB NOT COMPLETE` — the headline the UI renders. */
   summary: 'LAB PASSED' | 'LAB NOT COMPLETE';
   checks: CheckResult[];
   checkedAt: string;
-  /** Set when verification could not run at all (cluster unreachable). */
+  /** Set when verification could not run at all (environment unreachable). */
   error?: { code: string; message: string };
 }
 
 export interface VerifyOptions {
-  k8s: KubernetesPort;
+  /** Required for labs with Kubernetes requirements. */
+  k8s?: KubernetesPort;
+  /** Required for labs with filesystem or Terraform requirements. */
+  sandbox?: SandboxPort;
   lab: LabDefinition;
-  /** The session's private namespace. */
+  /**
+   * The session's private sandbox: namespace for Kubernetes labs, container
+   * name for container-backed ones. Always resolved from the session record.
+   */
   namespace: string;
   now?: () => Date;
 }
 
+/**
+ * Verify a lab against its session's live environment.
+ *
+ * Which readers exist is decided by the caller from the session's provider, and
+ * the registry dispatches each requirement to the right one. A Kubernetes lab
+ * and a Linux lab therefore travel the same code path from the API route down.
+ */
 export async function verifyLab(options: VerifyOptions): Promise<VerificationResult> {
   const { lab, k8s, namespace } = options;
   const checkedAt = (options.now?.() ?? new Date()).toISOString();
-  const reader = new VerifyReader(k8s, namespace);
+  const readers: VerificationReaders = {
+    ...(k8s ? { kubernetes: new VerifyReader(k8s, namespace) } : {}),
+    ...(options.sandbox ? { sandbox: new SandboxReader(options.sandbox) } : {}),
+  };
 
   let checks: CheckResult[];
   try {
-    checks = await verifyRequirements(lab.requirements as readonly Requirement[], reader);
+    checks = await verifyRequirements(lab.requirements as readonly Requirement[], readers);
   } catch (error) {
     // A cluster we cannot read is not a failed lab — it is a broken
     // environment, and the UI must say so rather than blame the student.
     if (error instanceof KubernetesUnreachableError) {
       return {
         labId: lab.id,
+        sandboxRef: namespace,
         namespace,
         passed: false,
         summary: 'LAB NOT COMPLETE',
@@ -86,6 +122,7 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
   const passed = checks.length > 0 && checks.every((c) => c.status === 'pass');
   return {
     labId: lab.id,
+    sandboxRef: namespace,
     namespace,
     passed,
     summary: passed ? 'LAB PASSED' : 'LAB NOT COMPLETE',

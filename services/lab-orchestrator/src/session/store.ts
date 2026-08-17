@@ -20,9 +20,11 @@ export interface SessionStore {
   update(sessionId: string, patch: Partial<LabSession>): Promise<LabSession | null>;
   delete(sessionId: string): Promise<void>;
   list(): Promise<LabSession[]>;
-  /** Sessions holding a live namespace — the ones that count towards capacity. */
+  /** Sessions holding a live sandbox — the ones that count towards capacity. */
   listOccupying(): Promise<LabSession[]>;
-  /** Guards against ever handing two sessions the same namespace. */
+  /** Guards against ever handing two sessions the same sandbox. */
+  findBySandboxRef(sandboxRef: string): Promise<LabSession | null>;
+  /** Kubernetes-specific alias of `findBySandboxRef`. */
   findByNamespace(namespace: string): Promise<LabSession | null>;
 }
 
@@ -44,8 +46,22 @@ export class InMemorySessionStore implements SessionStore {
   async update(sessionId: string, patch: Partial<LabSession>): Promise<LabSession | null> {
     const current = this.#bySessionId.get(sessionId);
     if (!current) return null;
-    // sessionId and namespace are identity, not state: never patchable.
-    const { sessionId: _ignoredId, namespace: _ignoredNs, ...safe } = patch;
+    /*
+     * Identity is not state.
+     *
+     * The session id, its provider, its sandbox kind, and its sandbox handle
+     * are fixed at creation. Dropping them here is what makes "a live session
+     * cannot be moved to another sandbox, or to another provider" true by
+     * construction rather than by every caller remembering not to.
+     */
+    const {
+      sessionId: _ignoredId,
+      namespace: _ignoredNs,
+      sandboxRef: _ignoredRef,
+      provider: _ignoredProvider,
+      sandboxKind: _ignoredKind,
+      ...safe
+    } = patch;
     const next: LabSession = { ...current, ...safe };
     this.#bySessionId.set(sessionId, next);
     return { ...next };
@@ -63,11 +79,17 @@ export class InMemorySessionStore implements SessionStore {
     return (await this.list()).filter((s) => occupiesCapacity(s.status));
   }
 
-  async findByNamespace(namespace: string): Promise<LabSession | null> {
+  async findBySandboxRef(sandboxRef: string): Promise<LabSession | null> {
     for (const session of this.#bySessionId.values()) {
-      if (session.namespace === namespace) return { ...session };
+      if (session.sandboxRef === sandboxRef || session.namespace === sandboxRef) {
+        return { ...session };
+      }
     }
     return null;
+  }
+
+  async findByNamespace(namespace: string): Promise<LabSession | null> {
+    return this.findBySandboxRef(namespace);
   }
 }
 

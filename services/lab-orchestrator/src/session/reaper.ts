@@ -35,7 +35,8 @@
  * by an operator hand-labelling a system namespace, because the name check
  * would still refuse it.
  */
-import type { LabProvider } from '../types.js';
+import type { LabProvider, ManagedSandbox } from '../types.js';
+import { ProviderRegistry, singleProviderRegistry } from '../providers/registry.js';
 import type { SessionManager } from './manager.js';
 import { isExpired, isIdle } from './store.js';
 import { isTerminalStatus } from './types.js';
@@ -44,7 +45,16 @@ export type SweepReason = 'expired' | 'idle' | 'orphaned';
 
 export interface ReaperOptions {
   sessions: SessionManager;
-  provider: LabProvider;
+  /**
+   * Every provider whose sandboxes must be reclaimed.
+   *
+   * The orphan sweep asks each in turn, so a deployment running Kubernetes and
+   * container sandboxes side by side reclaims both. Defaults to the session
+   * manager's own registry, which is the right answer in production.
+   */
+  providers?: ProviderRegistry;
+  /** A single provider, for callers that only have one. */
+  provider?: LabProvider;
   /** How often to sweep. */
   intervalMs: number;
   /**
@@ -82,12 +92,16 @@ export class SessionReaper {
   readonly #log: (message: string) => void;
   readonly #orphanGraceMs: number;
   readonly #retentionMs: number;
+  readonly #providers: ProviderRegistry;
 
   constructor(private readonly options: ReaperOptions) {
     this.#now = options.now ?? (() => Date.now());
     this.#log = options.log ?? ((message) => console.log(`[reaper] ${message}`));
     this.#orphanGraceMs = options.orphanGraceMs ?? 60_000;
     this.#retentionMs = options.retentionMs ?? 15 * 60_000;
+    this.#providers =
+      options.providers ??
+      (options.provider ? singleProviderRegistry(options.provider) : options.sessions.providers);
   }
 
   /** Begin sweeping. The timer is unref'd so it never holds the process open. */
@@ -169,20 +183,24 @@ export class SessionReaper {
           ? 'absolute session lifetime reached'
           : `idle for more than ${session.idleTimeoutSeconds}s`;
 
+      // Teardown runs through `SessionManager.expire`, which dispatches to the
+      // provider recorded on the session — so a Kubernetes namespace and a
+      // Linux container both reach EXPIRED through the same state machine.
+      const ref = session.sandboxRef ?? session.namespace;
       try {
         const outcome = await this.options.sessions.expire(session.sessionId, detail);
         if (outcome.destroy.namespaceGone) {
-          result.removed.push(session.namespace);
-          result.reasons[session.namespace] = reason;
-          this.#log(`removed ${session.namespace} (${reason}, lab=${session.labId})`);
+          result.removed.push(ref);
+          result.reasons[ref] = reason;
+          this.#log(`removed ${ref} (${reason}, provider=${session.provider}, lab=${session.labId})`);
         } else {
-          result.pending.push(session.namespace);
+          result.pending.push(ref);
           if (outcome.destroy.error) {
-            result.errors.push(`${session.namespace}: ${outcome.destroy.error.message}`);
+            result.errors.push(`${ref}: ${outcome.destroy.error.message}`);
           }
         }
       } catch (error) {
-        result.errors.push(`${session.namespace}: ${describe(error)}`);
+        result.errors.push(`${ref}: ${describe(error)}`);
       }
     }
   }
@@ -193,36 +211,54 @@ export class SessionReaper {
     const now = this.#now();
 
     let known: Set<string>;
-    let managed;
     try {
-      known = new Set((await this.options.sessions.list()).map((s) => s.namespace));
-      managed = await this.options.provider.listManagedNamespaces();
+      known = new Set(
+        (await this.options.sessions.list()).flatMap((s) => [s.sandboxRef ?? s.namespace, s.namespace]),
+      );
     } catch (error) {
-      result.errors.push(`listing managed namespaces: ${describe(error)}`);
+      result.errors.push(`listing sessions: ${describe(error)}`);
       return;
     }
 
-    for (const ns of managed) {
-      if (known.has(ns.namespace)) continue;
-      if (ns.phase === 'Terminating') continue;
-
-      // An unlabelled expiry is left for an operator: the platform will not
-      // guess a deadline for a namespace it cannot date.
-      if (ns.expiresAtMs === 0) {
-        this.#log(`leaving ${ns.namespace} alone (managed but carries no expiry label)`);
+    // Ask every registered provider for the sandboxes it owns. A provider whose
+    // backend is unreachable reports the error and the sweep continues — one
+    // sick backend must not stop another's cleanup.
+    for (const provider of this.#providers.all()) {
+      let managed: ManagedSandbox[];
+      try {
+        managed = await provider.listManagedSandboxes();
+      } catch (error) {
+        result.errors.push(`listing ${provider.id} sandboxes: ${describe(error)}`);
         continue;
       }
-      if (now < ns.expiresAtMs + this.#orphanGraceMs) continue;
 
-      const outcome = await this.options.provider.destroyNamespace(ns.namespace);
-      if (outcome.namespaceGone) {
-        result.removed.push(ns.namespace);
-        result.reasons[ns.namespace] = 'orphaned';
-        this.#log(`removed ${ns.namespace} (orphaned, lab=${ns.labId || 'unknown'})`);
-      } else if (outcome.ok) {
-        result.pending.push(ns.namespace);
-      } else {
-        result.errors.push(`${ns.namespace}: ${outcome.error?.message ?? 'unknown error'}`);
+      for (const sandbox of managed) {
+        if (known.has(sandbox.sandboxRef)) continue;
+        // Already going away on its own.
+        if (sandbox.phase === 'Terminating' || sandbox.phase === 'removing') continue;
+
+        // An unlabelled expiry is left for an operator: the platform will not
+        // guess a deadline for a sandbox it cannot date.
+        if (sandbox.expiresAtMs === 0) {
+          this.#log(`leaving ${sandbox.sandboxRef} alone (managed but carries no expiry label)`);
+          continue;
+        }
+        if (now < sandbox.expiresAtMs + this.#orphanGraceMs) continue;
+
+        const outcome = await provider.destroySandbox(sandbox.sandboxRef);
+        if (outcome.namespaceGone) {
+          result.removed.push(sandbox.sandboxRef);
+          result.reasons[sandbox.sandboxRef] = 'orphaned';
+          this.#log(
+            `removed ${sandbox.sandboxRef} (orphaned, provider=${provider.id}, lab=${sandbox.labId || 'unknown'})`,
+          );
+        } else if (outcome.ok) {
+          result.pending.push(sandbox.sandboxRef);
+        } else {
+          result.errors.push(
+            `${sandbox.sandboxRef}: ${outcome.error?.message ?? 'unknown error'}`,
+          );
+        }
       }
     }
   }

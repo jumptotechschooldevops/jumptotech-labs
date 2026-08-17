@@ -5,8 +5,13 @@
  * collects them never import each other, and so a handler's only dependency is
  * this file plus the read-only `VerifyReader`.
  */
-import type { RequirementOf, RequirementType } from '@jumptotech/lab-orchestrator';
+import type {
+  RequirementOf,
+  RequirementType,
+  SandboxRequirementType,
+} from '@jumptotech/lab-orchestrator';
 import type { VerifyReader } from './reader.js';
+import type { SandboxReader } from './sandbox-reader.js';
 
 export type CheckStatus = 'pass' | 'fail' | 'skipped';
 
@@ -47,4 +52,25 @@ export interface VerifierHandler<T extends RequirementType> {
   readonly type: T;
   label(requirement: RequirementOf<T>): string;
   run(requirement: RequirementOf<T>, reader: VerifyReader): Promise<HandlerOutcome>;
+}
+
+/**
+ * One sandbox requirement type's implementation.
+ *
+ * Identical in shape to `VerifierHandler`, but handed a `SandboxReader` instead
+ * of a Kubernetes one. Keeping them as two contracts rather than one handler
+ * that receives "whichever reader applies" is what lets the registry's mapped
+ * types prove, at compile time, that every requirement type has a handler *of
+ * the right family* — a filesystem check cannot accidentally be registered
+ * against the Kubernetes reader.
+ */
+export interface SandboxVerifierHandler<T extends SandboxRequirementType> {
+  readonly type: T;
+  label(requirement: RequirementOf<T>): string;
+  run(requirement: RequirementOf<T>, reader: SandboxReader): Promise<HandlerOutcome>;
+}
+
+/** Uniform "there is nothing at that path" message across the sandbox handlers. */
+export function missingPath(kind: string, path: string): HandlerOutcome {
+  return fail(`No ${kind} found at '${path}' in your lab environment`);
 }

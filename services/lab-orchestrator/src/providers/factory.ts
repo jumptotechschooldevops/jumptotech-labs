@@ -1,15 +1,24 @@
 /**
- * Provider selection.
+ * Kubernetes backend selection.
  *
- * Adding a sandbox backend later (EKS, Firecracker, gVisor …) means adding a
- * case here and implementing `LabProvider`. No API route, verifier rule, or
- * React component changes.
+ * This factory answers one narrow question: *which* Kubernetes substrate backs
+ * the `kubernetes` provider — `kind` today, EKS later. It is not the place that
+ * chooses between Kubernetes, Linux and Terraform; that is
+ * [`ProviderRegistry`](registry.ts), driven by `environment.provider` in each
+ * lab definition.
+ *
+ * Keeping the two separate is deliberate. `LAB_PROVIDER=kind` is a deployment
+ * decision ("this install runs its Kubernetes labs on a local kind cluster");
+ * `provider: kubernetes` in a lab is content metadata ("this lab needs a
+ * Kubernetes sandbox"). Conflating them is what would force a frontend to know
+ * about substrates.
  */
 import { KubernetesClient } from '../k8s/client.js';
 import type { KubernetesPort } from '../k8s/port.js';
 import type { LabProvider } from '../types.js';
 import { KindLabProvider, type RequirementWaiter } from './kind-provider.js';
 
+/** Kubernetes substrates this build can drive. */
 export const SUPPORTED_PROVIDERS = ['kind'] as const;
 export type SupportedProvider = (typeof SUPPORTED_PROVIDERS)[number];
 
@@ -30,7 +39,7 @@ export function isSupportedProvider(value: string): value is SupportedProvider {
 export function createLabProvider(options: ProviderFactoryOptions): LabProvider {
   if (!isSupportedProvider(options.provider)) {
     throw new Error(
-      `Unknown LAB_PROVIDER '${options.provider}'. Supported: ${SUPPORTED_PROVIDERS.join(', ')}`,
+      `Unknown LAB_PROVIDER '${options.provider}'. Supported Kubernetes substrates: ${SUPPORTED_PROVIDERS.join(', ')}`,
     );
   }
 

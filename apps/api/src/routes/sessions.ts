@@ -31,7 +31,7 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import { verifyLab } from '@jumptotech/verifier';
 import type { ApiConfig } from '../config.js';
-import { sendError, sendOk } from '../http.js';
+import { asyncRoute, sendError, sendOk } from '../http.js';
 
 export interface SessionRoutesDeps {
   registry: LabRegistry;
@@ -42,6 +42,7 @@ export interface SessionRoutesDeps {
 
 /** HTTP status for each session-domain error code. */
 const STATUS_BY_CODE: Record<string, number> = {
+  PROVIDER_UNAVAILABLE: 503,
   LAB_CAPACITY_REACHED: 503,
   SESSION_NOT_FOUND: 404,
   SESSION_NOT_ACTIVE: 409,
@@ -79,7 +80,23 @@ export function toSessionPayload(manager: SessionManager, session: LabSession) {
     sessionId: view.sessionId,
     labId: view.labId,
     status: view.status,
-    namespace: view.namespace,
+    /*
+     * Which sandbox backend the session runs on, and the sandbox's own handle.
+     *
+     * `sandboxRef` is a developer detail shown in the terminal pane header, and
+     * possessing it grants nothing: no endpoint accepts a sandbox reference as
+     * input, and every operation resolves one from the session record. It is
+     * derived from the session id through a keyed HMAC, so it cannot be
+     * inverted back into the capability that does control the session.
+     *
+     * `namespace` is served only for Kubernetes sessions. A Linux session has
+     * no namespace, and echoing the container name under that key would be a
+     * lie the UI would then repeat.
+     */
+    provider: view.provider,
+    sandboxKind: view.sandboxKind,
+    sandboxRef: view.sandboxRef,
+    ...(view.provider === 'kubernetes' ? { namespace: view.namespace } : {}),
     createdAt: view.createdAt,
     lastActivityAt: view.lastActivityAt,
     expiresAt: view.expiresAt,
@@ -100,7 +117,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   // GET /api/sessions/:sessionId -------------------------------------------
   // Polling this deliberately does NOT count as activity: an abandoned browser
   // tab must not be able to keep a sandbox alive forever.
-  router.get('/:sessionId', async (req, res) => {
+  router.get('/:sessionId', asyncRoute(async (req, res) => {
     let session: LabSession;
     try {
       session = await sessions.require(req.params.sessionId);
@@ -115,12 +132,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     }
 
     sendOk(res, { session: toSessionPayload(sessions, session), environment });
-  });
+  }));
 
   // POST /api/sessions/:sessionId/activity ---------------------------------
   // Backs the "Continue Lab" button. It moves the idle deadline only; the
   // absolute deadline is untouched, so this can never extend a lab forever.
-  router.post('/:sessionId/activity', async (req, res) => {
+  router.post('/:sessionId/activity', asyncRoute(async (req, res) => {
     try {
       const session = await sessions.require(req.params.sessionId);
       const updated = (await sessions.touch(session.sessionId, 'continue')) ?? session;
@@ -128,10 +145,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     } catch (error) {
       sessionErrorResponse(res, error);
     }
-  });
+  }));
 
   // POST /api/sessions/:sessionId/check ------------------------------------
-  router.post('/:sessionId/check', async (req, res) => {
+  router.post('/:sessionId/check', asyncRoute(async (req, res) => {
     let session: LabSession;
     try {
       ({ session } = await sessions.requireActive(req.params.sessionId));
@@ -141,9 +158,21 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     }
 
     const lab = registry.get(session.labId);
-    // The namespace comes from the session record, never from the request.
-    // A correct Pod in someone else's namespace is invisible here.
-    const result = await verifyLab({ k8s, lab, namespace: session.namespace });
+    /*
+     * The readers are built from the session record, never from the request.
+     *
+     * The Kubernetes reader is scoped to this session's namespace; the sandbox
+     * reader is bound to this session's container. A correct Pod — or a correct
+     * file — in someone else's environment is invisible here, and there is no
+     * request field anywhere that could name another one.
+     */
+    const sandboxPort = sessions.sandboxPort(session);
+    const result = await verifyLab({
+      lab,
+      namespace: session.sandboxRef ?? session.namespace,
+      ...(session.provider === 'kubernetes' ? { k8s } : {}),
+      ...(sandboxPort ? { sandbox: sandboxPort } : {}),
+    });
     await sessions.touch(session.sessionId, 'check');
 
     if (result.error) {
@@ -158,10 +187,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
 
     // A failing lab is a successful *check*: HTTP 200 with passed:false.
     sendOk(res, { ...result, session: toSessionPayload(sessions, session) });
-  });
+  }));
 
   // POST /api/sessions/:sessionId/reset ------------------------------------
-  router.post('/:sessionId/reset', async (req, res) => {
+  router.post('/:sessionId/reset', asyncRoute(async (req, res) => {
     try {
       const { session, result } = await sessions.reset(String(req.params.sessionId));
       if (!result.ok) {
@@ -182,15 +211,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         session: toSessionPayload(sessions, session),
         /** Tells the UI it is safe to clear the terminal scrollback. */
         clearTerminal: true,
+        /*
+         * Container-backed providers reset by replacing the sandbox, which
+         * necessarily ends the `docker exec` the student's shell was running.
+         * The UI reconnects rather than leaving a dead terminal on screen.
+         * A Kubernetes reset keeps the namespace and the shell, so it does not
+         * ask for this.
+         */
+        reconnectTerminal: session.sandboxKind === 'container',
       });
     } catch (error) {
       sessionErrorResponse(res, error);
     }
-  });
+  }));
 
   // DELETE /api/sessions/:sessionId ----------------------------------------
   // End Lab: terminate the terminal, delete the namespace, release the slot.
-  router.delete('/:sessionId', async (req, res) => {
+  router.delete('/:sessionId', asyncRoute(async (req, res) => {
     try {
       const { session, destroy } = await sessions.end(String(req.params.sessionId));
       if (!destroy.namespaceGone) {
@@ -211,7 +248,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     } catch (error) {
       sessionErrorResponse(res, error);
     }
-  });
+  }));
 
   return router;
 }

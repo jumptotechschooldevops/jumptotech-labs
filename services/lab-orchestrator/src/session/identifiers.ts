@@ -20,6 +20,19 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 export const SESSION_ID_PREFIX = 'sess-';
 export const NAMESPACE_PREFIX = 'lab-';
 
+/**
+ * Prefix for container-backed sandboxes (Linux, Terraform, Docker).
+ *
+ * Deliberately distinct from the Kubernetes `lab-` prefix and deliberately
+ * distinctive on a developer's machine: cleanup will only ever consider a
+ * container whose *name* starts with this and whose *labels* say the platform
+ * owns it, so a developer's own `lab-something` container cannot be reached.
+ */
+export const CONTAINER_SANDBOX_PREFIX = 'jtt-lab-';
+
+/** Exactly what a container sandbox name may look like, on both sides of the wire. */
+export const CONTAINER_SANDBOX_PATTERN = /^jtt-lab-[0-9a-f]{6,40}$/;
+
 /** Hex characters of entropy in a session id. 16 → 64 bits. */
 export const DEFAULT_SESSION_ID_ENTROPY_CHARS = 16;
 
@@ -172,6 +185,78 @@ export function isLabNamespace(namespace: unknown, prefix = NAMESPACE_PREFIX): n
   } catch {
     return false;
   }
+}
+
+/**
+ * Derive the sandbox handle for a session, for any provider.
+ *
+ * The Kubernetes case is `deriveNamespace` — same HMAC, same guarantee. A
+ * container-backed provider gets its own prefix *and* its own HMAC domain, so
+ * the same session's namespace and container names are unrelated strings:
+ * learning one tells you nothing about the other, and neither can be inverted
+ * back into the session id that actually controls the session.
+ */
+export function deriveSandboxRef(options: {
+  sessionId: string;
+  secret: string;
+  prefix?: string;
+  suffixChars?: number;
+}): string {
+  const prefix = options.prefix ?? NAMESPACE_PREFIX;
+  if (prefix === NAMESPACE_PREFIX) {
+    return deriveNamespace({
+      sessionId: options.sessionId,
+      secret: options.secret,
+      ...(options.suffixChars !== undefined ? { suffixChars: options.suffixChars } : {}),
+    });
+  }
+
+  const sessionId = assertValidSessionId(options.sessionId);
+  if (!options.secret || options.secret.length < 8) {
+    throw new Error('sandbox derivation requires a secret of at least 8 characters');
+  }
+  const suffixChars = options.suffixChars ?? DEFAULT_NAMESPACE_SUFFIX_CHARS;
+  if (suffixChars < 6 || suffixChars > 40) {
+    throw new Error('sandbox suffix must be between 6 and 40 hex characters');
+  }
+  const digest = createHmac('sha256', options.secret)
+    .update(`sandbox:${prefix}:${sessionId}`)
+    .digest('hex')
+    .slice(0, suffixChars);
+
+  return assertValidContainerSandboxRef(`${prefix}${digest}`);
+}
+
+export class InvalidSandboxRefError extends Error {
+  readonly code = 'INVALID_SANDBOX_REF';
+  constructor(
+    readonly received: string,
+    reason: string,
+  ) {
+    super(`Invalid sandbox reference: ${reason}`);
+    this.name = 'InvalidSandboxRefError';
+  }
+}
+
+/**
+ * Validate a container sandbox name before it reaches a container runtime.
+ *
+ * The name-shape gate for containers, mirroring `assertValidLabNamespace` for
+ * namespaces. Ownership labels are still re-read from the runtime immediately
+ * before any destructive call — a name alone never authorises a delete.
+ */
+export function assertValidContainerSandboxRef(input: unknown): string {
+  if (typeof input !== 'string') {
+    throw new InvalidSandboxRefError(String(input), 'expected a string');
+  }
+  if (!CONTAINER_SANDBOX_PATTERN.test(input)) {
+    throw new InvalidSandboxRefError(input, `must match ${CONTAINER_SANDBOX_PATTERN.source}`);
+  }
+  return input;
+}
+
+export function isContainerSandboxRef(input: unknown): input is string {
+  return typeof input === 'string' && CONTAINER_SANDBOX_PATTERN.test(input);
 }
 
 /** Constant-time session id comparison, for anywhere ids are matched. */

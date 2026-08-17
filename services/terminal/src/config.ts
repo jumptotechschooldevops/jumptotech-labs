@@ -25,6 +25,27 @@ export interface TerminalConfig {
   shell: string;
   promptUser: string;
   promptHost: string;
+  /**
+   * Container CLI used to attach a PTY to a sandbox container.
+   *
+   * Configuration only. No value from the network ever reaches this, and the
+   * spawn plan re-validates every other field before building an argv.
+   */
+  containerBinary: string;
+  /**
+   * May this service attach to sandbox containers at all?
+   *
+   * Off inside the shipped compose stack, where the terminal container has no
+   * access to a container runtime by design. On when the service runs on a
+   * developer's host, which is where the Linux and Terraform tracks run today.
+   */
+  containerExecEnabled: boolean;
+}
+
+function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
 
 function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -62,5 +83,7 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     shell: env.TERMINAL_SHELL ?? '/bin/bash',
     promptUser: env.TERMINAL_PROMPT_USER ?? 'student',
     promptHost: env.TERMINAL_PROMPT_HOST ?? 'lab',
+    containerBinary: env.SANDBOX_CONTAINER_BINARY ?? 'docker',
+    containerExecEnabled: boolFromEnv(env, 'TERMINAL_CONTAINER_EXEC_ENABLED', true),
   };
 }

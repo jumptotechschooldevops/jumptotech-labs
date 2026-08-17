@@ -24,9 +24,25 @@ import type {
   LabProvider,
   ProvisionStep,
   ResetResult,
+  SandboxPathRead,
   StudentCredentials,
+  TerminalContext,
 } from '../types.js';
-import { assertValidSessionId, deriveNamespace, newSessionId } from './identifiers.js';
+import { ProviderUnavailableError } from '../types.js';
+import {
+  CONTAINER_SANDBOX_PREFIX,
+  NAMESPACE_PREFIX,
+  assertValidSessionId,
+  deriveNamespace,
+  deriveSandboxRef,
+  newSessionId,
+} from './identifiers.js';
+import {
+  PROVIDER_SANDBOX_KIND,
+  type LabProviderId,
+  type SandboxKind,
+} from '../providers/catalog.js';
+import { ProviderRegistry, singleProviderRegistry } from '../providers/registry.js';
 import type { SessionStore } from './store.js';
 import {
   OCCUPYING_STATUSES,
@@ -51,6 +67,19 @@ export interface SessionLifetimeConfig {
   maxActiveSessions: number;
 }
 
+/**
+ * The read primitive the verifier uses for filesystem and Terraform checks.
+ *
+ * Already bound to one session's sandbox — there is no parameter for naming a
+ * different one.
+ */
+export interface SandboxReadPort {
+  read(
+    relativePath: string,
+    options?: { maxBytes?: number },
+  ): Promise<SandboxPathRead | null>;
+}
+
 /** Hook used to close a student's terminal when their session goes away. */
 export interface TerminalTerminator {
   terminate(sessionId: string): Promise<void>;
@@ -58,7 +87,21 @@ export interface TerminalTerminator {
 
 export interface SessionManagerOptions {
   registry: LabRegistry;
-  provider: LabProvider;
+  /**
+   * Every sandbox backend the platform can run.
+   *
+   * The provider for a session is resolved from *the lab it is starting*, not
+   * from configuration — that is what makes a track's technology lab metadata
+   * rather than an application branch.
+   */
+  providers?: ProviderRegistry;
+  /**
+   * A single provider, for callers that only have one.
+   *
+   * Registered under its own id, so a lab declaring a different provider still
+   * fails loudly rather than silently landing in the wrong kind of sandbox.
+   */
+  provider?: LabProvider;
   store: SessionStore;
   policy: SessionPolicy;
   lifetimes: SessionLifetimeConfig;
@@ -86,6 +129,12 @@ export interface SessionView {
   sessionId: string;
   labId: string;
   status: SessionStatus;
+  /** Which sandbox backend owns this session. */
+  provider: LabProviderId;
+  sandboxKind: SandboxKind;
+  /** The provider's handle for the sandbox: namespace name, container name, … */
+  sandboxRef: string;
+  /** Kubernetes namespace. Only meaningful when `provider` is `kubernetes`. */
   namespace: string;
   createdAt: string;
   lastActivityAt: string;
@@ -104,7 +153,7 @@ export interface SessionView {
 
 export class SessionManager {
   readonly #registry: LabRegistry;
-  readonly #provider: LabProvider;
+  readonly #providers: ProviderRegistry;
   readonly #store: SessionStore;
   readonly #policy: SessionPolicy;
   readonly #lifetimes: SessionLifetimeConfig;
@@ -123,8 +172,12 @@ export class SessionManager {
   readonly #released = new Set<string>();
 
   constructor(options: SessionManagerOptions) {
+    if (!options.providers && !options.provider) {
+      throw new Error('SessionManager requires either a provider registry or a single provider');
+    }
     this.#registry = options.registry;
-    this.#provider = options.provider;
+    this.#providers =
+      options.providers ?? singleProviderRegistry(options.provider as LabProvider);
     this.#store = options.store;
     this.#policy = options.policy;
     this.#lifetimes = options.lifetimes;
@@ -146,12 +199,56 @@ export class SessionManager {
     return this.#occupied;
   }
 
+  get providers(): ProviderRegistry {
+    return this.#providers;
+  }
+
+  /**
+   * The provider that owns a session's sandbox.
+   *
+   * Looked up from the *stored* provider id, never from the lab definition as
+   * it stands now: a lab edited to declare a different provider must not make
+   * an already-running session tear down through the wrong backend.
+   *
+   * `peek` rather than `resolve`: cleanup has to work while a provider is
+   * reporting unhealthy, or a transient Docker hiccup would leak sandboxes.
+   */
+  #providerFor(session: LabSession): LabProvider {
+    const provider = this.#providers.peek(session.provider);
+    if (!provider) {
+      throw new ProviderUnavailableError(
+        session.provider,
+        'no implementation is registered for the provider that created this session',
+      );
+    }
+    return provider;
+  }
+
   // ----------------------------------------------------------------- start
 
   /** Create a session: unique id, unique namespace, fully provisioned sandbox. */
   async start(labId: string): Promise<StartSessionResult> {
     // Throws LabNotFoundError / InvalidLabIdError before anything is reserved.
     const lab = this.#registry.get(labId);
+
+    // Resolve the sandbox backend from the lab *before* reserving capacity, so
+    // a lab whose provider cannot run here never consumes a slot and never
+    // creates a session record.
+    let provider: LabProvider;
+    try {
+      provider = await this.#providers.resolve(lab.environment.provider);
+    } catch (error) {
+      if (error instanceof ProviderUnavailableError) {
+        throw new SessionError(
+          'PROVIDER_UNAVAILABLE',
+          error.message,
+          error.remediation ??
+            'This lab needs a sandbox backend that is not available on this deployment.',
+          { provider: lab.environment.provider },
+        );
+      }
+      throw error;
+    }
 
     if (this.#occupied >= this.#lifetimes.maxActiveSessions) {
       throw new SessionError(
@@ -165,7 +262,7 @@ export class SessionManager {
 
     let session: LabSession;
     try {
-      session = await this.#insertSession(lab);
+      session = await this.#insertSession(lab, provider);
     } catch (error) {
       this.#occupied -= 1;
       throw error;
@@ -174,7 +271,7 @@ export class SessionManager {
     const context = this.#contextFor(lab, session);
     let result: CreateResult;
     try {
-      result = await this.#provider.create(context);
+      result = await provider.create(context);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.#failSession(session, context, message);
@@ -200,7 +297,7 @@ export class SessionManager {
     });
 
     this.#log(
-      `session ${session.sessionId} ACTIVE (lab=${lab.id} ns=${session.namespace}, ${this.#occupied}/${this.#lifetimes.maxActiveSessions} in use)`,
+      `session ${session.sessionId} ACTIVE (lab=${lab.id} provider=${session.provider} sandbox=${session.sandboxRef}, ${this.#occupied}/${this.#lifetimes.maxActiveSessions} in use)`,
     );
 
     return {
@@ -211,23 +308,40 @@ export class SessionManager {
     };
   }
 
-  async #insertSession(lab: LoadedLabDefinition): Promise<LabSession> {
+  /**
+   * Create the session record, binding it to a provider and a sandbox handle.
+   *
+   * Both are derived here, server-side: the provider from the lab definition,
+   * the sandbox handle from the session id through a keyed HMAC. Neither can be
+   * influenced by request input, which is what makes "a browser cannot choose
+   * its sandbox, or another session's" true at the point it matters.
+   */
+  async #insertSession(lab: LoadedLabDefinition, provider: LabProvider): Promise<LabSession> {
     const createdAtMs = this.#now();
     const createdAt = new Date(createdAtMs).toISOString();
     const expiresAt = new Date(
       createdAtMs + this.#lifetimes.maxSessionSeconds * 1000,
     ).toISOString();
+    const sandboxKind = PROVIDER_SANDBOX_KIND[provider.id];
+    const prefix = sandboxKind === 'container' ? CONTAINER_SANDBOX_PREFIX : NAMESPACE_PREFIX;
 
     // Random ids collide with negligible probability; check anyway rather than
-    // ever handing two students the same namespace.
+    // ever handing two students the same sandbox.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const sessionId = newSessionId();
       const namespace = deriveNamespace({ sessionId, secret: this.#namespaceSecret });
-      if (await this.#store.findByNamespace(namespace)) continue;
+      const sandboxRef =
+        prefix === NAMESPACE_PREFIX
+          ? namespace
+          : deriveSandboxRef({ sessionId, secret: this.#namespaceSecret, prefix });
+      if (await this.#store.findBySandboxRef(sandboxRef)) continue;
 
       const session: LabSession = {
         sessionId,
         labId: lab.id,
+        provider: provider.id,
+        sandboxKind,
+        sandboxRef,
         namespace,
         serviceAccountName: this.#policy.serviceAccountName,
         status: 'CREATING',
@@ -243,7 +357,7 @@ export class SessionManager {
     }
     throw new SessionError(
       'SESSION_PROVISION_FAILED',
-      'Could not allocate a unique lab namespace after 5 attempts.',
+      'Could not allocate a unique lab sandbox after 5 attempts.',
     );
   }
 
@@ -253,7 +367,7 @@ export class SessionManager {
     reason: string,
   ): Promise<void> {
     // Best-effort teardown so a failed start does not leak a namespace.
-    await this.#provider.destroy(context).catch(() => undefined);
+    await this.#providerFor(session).destroy(context).catch(() => undefined);
     await this.#store.update(session.sessionId, {
       status: 'FAILED',
       statusReason: reason,
@@ -306,7 +420,7 @@ export class SessionManager {
 
   /** Live environment health for one session. Cheap enough for the UI to poll. */
   async status(session: LabSession): Promise<EnvironmentInfo> {
-    return this.#provider.status(this.contextFor(session));
+    return this.#providerFor(session).status(this.contextFor(session));
   }
 
   async list(): Promise<LabSession[]> {
@@ -330,11 +444,31 @@ export class SessionManager {
     return {
       sessionId: session.sessionId,
       labId: session.labId,
+      // Both come from the stored record, itself derived from the session id.
+      sandboxRef: session.sandboxRef ?? session.namespace,
       namespace: session.namespace,
       serviceAccountName: session.serviceAccountName,
       lab,
       expiresAtMs: Date.parse(session.expiresAt),
       policy: this.#policy,
+    };
+  }
+
+  /**
+   * A read port into one session's sandbox, for the verifier.
+   *
+   * Returns `null` for a provider with no sandbox filesystem (Kubernetes labs
+   * verify through the Kubernetes API instead). The session's context — and
+   * therefore its sandbox — is bound here, so a handler is never in a position
+   * to name a path in someone else's environment.
+   */
+  sandboxPort(session: LabSession): SandboxReadPort | null {
+    const provider = this.#providers.peek(session.provider);
+    if (!provider?.readSandboxPath) return null;
+    const context = this.contextFor(session);
+    const read = provider.readSandboxPath.bind(provider);
+    return {
+      read: (relativePath, options) => read(context, relativePath, options),
     };
   }
 
@@ -352,6 +486,9 @@ export class SessionManager {
       sessionId: session.sessionId,
       labId: session.labId,
       status: session.status,
+      provider: session.provider,
+      sandboxKind: session.sandboxKind,
+      sandboxRef: session.sandboxRef ?? session.namespace,
       namespace: session.namespace,
       createdAt: session.createdAt,
       lastActivityAt: session.lastActivityAt,
@@ -395,7 +532,7 @@ export class SessionManager {
     await this.#store.update(sessionId, { status: 'RESETTING' });
     let result: ResetResult;
     try {
-      result = await this.#provider.reset(context);
+      result = await this.#providerFor(session).reset(context);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.#store.update(sessionId, { status: 'ACTIVE', statusReason: message });
@@ -462,7 +599,7 @@ export class SessionManager {
     }
 
     const context = this.contextFor(marked);
-    const destroy = await this.#provider.destroy(context);
+    const destroy = await this.#providerFor(marked).destroy(context);
 
     // `ok` means the delete call was accepted; `namespaceGone` means the
     // namespace is verifiably absent. Only the latter finishes the teardown.
@@ -514,9 +651,33 @@ export class SessionManager {
    * the internal, service-authenticated route calls this.
    */
   async issueCredentials(sessionId: string): Promise<StudentCredentials> {
+    const context = await this.getTerminalContext(sessionId);
+    if (context.kind !== 'kubernetes') {
+      throw new SessionError(
+        'CREDENTIALS_UNAVAILABLE',
+        `This session's sandbox is not a Kubernetes namespace, so it has no kubeconfig.`,
+      );
+    }
+    return {
+      kubeconfig: context.kubeconfig,
+      namespace: context.namespace,
+      serviceAccountName: context.serviceAccountName,
+      expiresAt: context.expiresAt,
+    };
+  }
+
+  /**
+   * The terminal binding for a session.
+   *
+   * The generic replacement for "hand the terminal a kubeconfig". Resolved from
+   * the session record through that session's own provider, so the terminal
+   * service never learns which sandbox to attach to from anything a browser
+   * sent — see `apps/api/src/routes/internal.ts`.
+   */
+  async getTerminalContext(sessionId: string): Promise<TerminalContext> {
     const { session, lab } = await this.requireActive(sessionId);
     try {
-      return await this.#provider.issueCredentials(this.#contextFor(lab, session));
+      return await this.#providerFor(session).getTerminalContext(this.#contextFor(lab, session));
     } catch (error) {
       throw new SessionError(
         'CREDENTIALS_UNAVAILABLE',

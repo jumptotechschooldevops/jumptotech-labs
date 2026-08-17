@@ -81,6 +81,11 @@ services:
       CLUSTER_POD_CIDR: ${CLUSTER_POD_CIDR:-10.244.0.0/16}
       CLUSTER_SERVICE_CIDR: ${CLUSTER_SERVICE_CIDR:-10.96.0.0/16}
       STUDENT_CREDENTIAL_TTL_SECONDS: ${STUDENT_CREDENTIAL_TTL_SECONDS:-3600}
+      # --- container-backed tracks (PLATFORM-004) ---
+      # Off in compose by design: this container has no runtime to drive, and
+      # the honest catalog message is "switched off here", not a failed probe.
+      LINUX_PROVIDER_ENABLED: ${LINUX_PROVIDER_ENABLED:-false}
+      TERRAFORM_PROVIDER_ENABLED: ${TERRAFORM_PROVIDER_ENABLED:-false}
     ports:
       - "${API_PORT:-4000}:4000"
     volumes:
@@ -127,6 +132,9 @@ services:
       TERMINAL_MAX_SESSIONS: ${TERMINAL_MAX_SESSIONS:-16}
       TERMINAL_IDLE_TIMEOUT_SECONDS: ${TERMINAL_IDLE_TIMEOUT_SECONDS:-1800}
       TERMINAL_MAX_SESSION_SECONDS: ${TERMINAL_MAX_SESSION_SECONDS:-7200}
+      # This service cannot attach a PTY to a sandbox container here: it has no
+      # container runtime, by the same design decision as the api service.
+      TERMINAL_CONTAINER_EXEC_ENABLED: ${TERMINAL_CONTAINER_EXEC_ENABLED:-false}
     ports:
       - "${TERMINAL_PORT:-4001}:4001"
     depends_on:

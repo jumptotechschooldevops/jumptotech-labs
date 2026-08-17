@@ -2,7 +2,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import cors from 'cors';
 import type { KubernetesPort, LabRegistry, SessionManager } from '@jumptotech/lab-orchestrator';
 import type { ApiConfig } from './config.js';
-import { sendError, sendOk } from './http.js';
+import { asyncRoute, sendError, sendOk } from './http.js';
 import { createLabRoutes } from './routes/labs.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createInternalRoutes } from './routes/internal.js';
@@ -31,18 +31,30 @@ export function createApp(deps: CreateAppDeps): Express {
     credentials: false,
   });
 
-  app.get('/health', (_req, res) => {
+  app.get('/health', asyncRoute(async (_req, res) => {
+    // Provider readiness belongs on /health because an operator's first
+    // question after "are the labs loaded?" is "which tracks can actually run
+    // here?" — and the answer is a live probe, not configuration.
+    const providers = await deps.sessions.providers.statuses();
     sendOk(res, {
       service: 'api',
       status: 'ok',
       labsLoaded: deps.registry.size,
       labLoadErrors: deps.registry.loadErrors,
+      providers: providers.map((provider) => ({
+        provider: provider.providerId,
+        implementation: provider.implementation,
+        sandboxKind: provider.sandboxKind,
+        registered: provider.registered,
+        available: provider.available,
+        ...(provider.reason ? { reason: provider.reason } : {}),
+      })),
       sessions: {
         active: deps.sessions.activeCount,
         maxActive: deps.sessions.lifetimes.maxActiveSessions,
       },
     });
-  });
+  }));
 
   app.use('/api/labs', browserCors, createLabRoutes(deps));
   app.use('/api/tracks', browserCors, createTrackRoutes(deps));

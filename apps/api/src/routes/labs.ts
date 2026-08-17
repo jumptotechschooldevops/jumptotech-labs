@@ -22,8 +22,9 @@ import {
   titleCase,
   type LabRegistry,
   type LoadedLabDefinition,
+  type SessionManager,
 } from '@jumptotech/lab-orchestrator';
-import { sendError, sendOk } from '../http.js';
+import { asyncRoute, sendError, sendOk } from '../http.js';
 import { sessionErrorResponse, toSessionPayload, type SessionRoutesDeps } from './sessions.js';
 
 /**
@@ -112,6 +113,79 @@ export function readFilter(req: Request): {
   };
 }
 
+/**
+ * Provider readiness, keyed by provider id.
+ *
+ * The catalog's honesty rule: a lab is only offered as startable when the
+ * backend that would run it can actually run it. A missing sandbox image, a
+ * stopped Docker daemon, a cluster that is down, and a provider that is
+ * deliberately architecture-only all produce the same shape — `available:
+ * false` plus the real reason — so the UI never has to guess and never shows a
+ * Start Lab button that was always going to fail.
+ */
+export type ProviderReadiness = Map<string, LabProviderReadiness>;
+
+export interface LabProviderReadiness {
+  provider: string;
+  available: boolean;
+  reason?: string;
+  remediation?: string;
+}
+
+async function providerReadiness(sessions: SessionManager): Promise<ProviderReadiness> {
+  const statuses = await sessions.providers.statuses();
+  return new Map(
+    statuses.map((status) => [
+      status.providerId,
+      {
+        provider: status.providerId,
+        available: status.available,
+        ...(status.reason ? { reason: status.reason } : {}),
+        ...(status.remediation ? { remediation: status.remediation } : {}),
+      },
+    ]),
+  );
+}
+
+function availabilityFor(provider: string, readiness: ProviderReadiness): LabProviderReadiness {
+  return (
+    readiness.get(provider) ?? {
+      provider,
+      available: false,
+      reason: `no implementation is registered for the '${provider}' provider`,
+    }
+  );
+}
+
+function withAvailability<T extends { provider: string }>(lab: T, readiness: ProviderReadiness) {
+  return { ...lab, availability: availabilityFor(lab.provider, readiness) };
+}
+
+/**
+ * A track is startable when *any* of its labs' providers is.
+ *
+ * Tracks map to one provider today, but the catalog groups by track rather
+ * than by provider, and a future track could mix them — so the readiness is
+ * derived from the providers actually present in the track rather than assumed.
+ */
+function withTrackAvailability(
+  track: { track: string; providers: string[] },
+  readiness: ProviderReadiness,
+) {
+  const statuses = track.providers.map((provider) => availabilityFor(provider, readiness));
+  const blocked = statuses.filter((status) => !status.available);
+  return {
+    ...track,
+    availability: {
+      available: statuses.some((status) => status.available),
+      ...(blocked.length > 0 && blocked[0]?.reason ? { reason: blocked[0].reason } : {}),
+      ...(blocked.length > 0 && blocked[0]?.remediation
+        ? { remediation: blocked[0].remediation }
+        : {}),
+    },
+  };
+}
+
 /** Translate domain errors into HTTP responses. */
 function handleDomainError(res: Response, error: unknown): boolean {
   if (error instanceof InvalidLabIdError) {
@@ -147,25 +221,31 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
   // GET /api/labs ----------------------------------------------------------
   // Optional filters: ?track= &topic= &difficulty= &level= &q=
   // Unknown filter values are not an error; they simply match nothing.
-  router.get('/', (req, res) => {
+  router.get('/', asyncRoute(async (req, res) => {
     const labs = registry.list(readFilter(req));
+    const readiness = await providerReadiness(sessions);
     sendOk(res, {
-      labs,
-      tracks: registry.tracks(),
+      labs: labs.map((lab) => withAvailability(lab, readiness)),
+      tracks: registry.tracks().map((track) => withTrackAvailability(track, readiness)),
+      providers: [...readiness.values()],
       count: labs.length,
       prerequisitesEnforced: false,
     });
-  });
+  }));
 
   // GET /api/labs/:id ------------------------------------------------------
-  router.get('/:id', (req, res) => {
+  router.get('/:id', asyncRoute(async (req, res) => {
     const def = resolveLab(req, res);
     if (!def) return;
-    sendOk(res, toLabDetail(def, registry));
-  });
+    const readiness = await providerReadiness(sessions);
+    sendOk(res, {
+      ...toLabDetail(def, registry),
+      availability: availabilityFor(def.environment.provider, readiness),
+    });
+  }));
 
   // POST /api/labs/:id/start ----------------------------------------------
-  router.post('/:id/start', async (req, res) => {
+  router.post('/:id/start', asyncRoute(async (req, res) => {
     const def = resolveLab(req, res);
     if (!def) return;
 
@@ -200,7 +280,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
         token,
       },
     });
-  });
+  }));
 
   return router;
 }

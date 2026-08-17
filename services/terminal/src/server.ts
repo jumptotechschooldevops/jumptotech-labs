@@ -34,10 +34,16 @@ import {
 import type { TerminalConfig } from './config.js';
 import {
   CredentialsUnavailableError,
-  fetchStudentCredentials,
+  fetchTerminalContext,
   removeSessionKubeconfig,
   writeSessionKubeconfig,
 } from './credentials.js';
+import {
+  containerSpawnPlan,
+  kubernetesSpawnPlan,
+  TerminalContextError,
+  type SpawnPlan,
+} from './spawn-plan.js';
 import {
   MAX_FRAME_BYTES,
   ProtocolError,
@@ -51,8 +57,11 @@ const AUTH_GRACE_MS = 10_000;
 
 interface Session {
   claims: TerminalSessionClaims;
-  namespace: string;
-  kubeconfigPath: string;
+  /** The sandbox this PTY is attached to: namespace name or container name. */
+  sandboxRef: string;
+  sandboxKind: 'namespace' | 'container';
+  /** Present only for Kubernetes sessions; deleted when the shell dies. */
+  kubeconfigPath: string | undefined;
   term: pty.IPty;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
@@ -270,27 +279,61 @@ export function createTerminalServer(config: TerminalConfig): Server {
     // the first rather than running two shells against one sandbox.
     closeSession(claims.sid);
 
-    let kubeconfigPath: string;
-    let namespace: string;
+    /*
+     * Resolve *what this socket attaches to* from the API, keyed by the session
+     * id inside the signed token. The client contributed the token and nothing
+     * else: no container id, no namespace, no kubeconfig path, no command.
+     */
+    let plan: SpawnPlan;
+    let kubeconfigPath: string | undefined;
     try {
-      const credentials = await fetchStudentCredentials({
+      const context = await fetchTerminalContext({
         apiInternalUrl: config.apiInternalUrl,
         secret: config.internalServiceSecret,
         sessionId: claims.sid,
       });
-      namespace = credentials.namespace;
-      kubeconfigPath = await writeSessionKubeconfig(
-        config.credentialsDir,
-        claims.sid,
-        credentials.kubeconfig,
-      );
-      log(
-        `session ${claims.sid}: issued namespace-scoped credentials (ns=${namespace} sa=${credentials.serviceAccountName} expires=${credentials.expiresAt})`,
-      );
+
+      const planOptions = {
+        shell: config.shell,
+        containerBinary: config.containerBinary,
+        workDir: config.workDir,
+        promptUser: config.promptUser,
+        promptHost: config.promptHost,
+        labId: claims.labId,
+      };
+
+      if (context.kind === 'container-exec') {
+        if (!config.containerExecEnabled) {
+          throw new CredentialsUnavailableError(
+            'CONTAINER_EXEC_DISABLED',
+            'This terminal service is not configured to attach to sandbox containers.',
+          );
+        }
+        plan = containerSpawnPlan(context, planOptions);
+        log(
+          `session ${claims.sid}: attaching to sandbox container ${plan.sandboxRef} as ${context.user}`,
+        );
+      } else {
+        kubeconfigPath = await writeSessionKubeconfig(
+          config.credentialsDir,
+          claims.sid,
+          context.kubeconfig,
+        );
+        plan = kubernetesSpawnPlan(context, kubeconfigPath, planOptions);
+        log(
+          `session ${claims.sid}: issued namespace-scoped credentials (ns=${context.namespace} sa=${context.serviceAccountName} expires=${context.expiresAt})`,
+        );
+      }
     } catch (error) {
-      const code = error instanceof CredentialsUnavailableError ? error.code : 'CREDENTIALS_UNAVAILABLE';
+      const code =
+        error instanceof CredentialsUnavailableError
+          ? error.code
+          : error instanceof TerminalContextError
+            ? error.code
+            : 'CREDENTIALS_UNAVAILABLE';
       const msg = error instanceof Error ? error.message : String(error);
-      log(`session ${claims.sid}: credential issue failed — ${msg}`);
+      log(`session ${claims.sid}: terminal binding failed — ${msg}`);
+      await removeSessionKubeconfig(kubeconfigPath);
       send(ws, { type: 'error', code, message: msg });
       ws.close(4403, 'no credentials');
       return false;
@@ -301,34 +344,14 @@ export function createTerminalServer(config: TerminalConfig): Server {
       return false;
     }
 
-    const env: Record<string, string> = {
-      // A deliberately minimal environment: nothing from the host process
-      // leaks into the student shell except what is listed here. In
-      // particular, no inherited KUBECONFIG — this one is session-scoped.
-      PATH: '/usr/local/bin:/usr/bin:/bin',
-      HOME: config.workDir,
-      TERM: 'xterm-256color',
-      LANG: 'C.UTF-8',
-      SHELL: config.shell,
-      USER: config.promptUser,
-      HOSTNAME: config.promptHost,
-      PS1: `\\[\\e[32m\\]${config.promptUser}@${config.promptHost}\\[\\e[0m\\]:\\[\\e[34m\\]\\w\\[\\e[0m\\]$ `,
-      KUBECONFIG: kubeconfigPath,
-      // The kubeconfig's context already defaults to this namespace, so plain
-      // `kubectl get pods` is scoped correctly without any -n flag. These are
-      // exported for prompts and scripts that want to display it.
-      JTT_LAB_ID: claims.labId,
-      JTT_NAMESPACE: namespace,
-    };
-
     let term: pty.IPty;
     try {
-      term = pty.spawn(config.shell, ['--norc', '--noprofile'], {
+      term = pty.spawn(plan.command, plan.args, {
         name: 'xterm-256color',
         cols: clampCols(cols),
         rows: clampRows(rows),
-        cwd: config.workDir,
-        env,
+        cwd: plan.cwd,
+        env: plan.env,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -345,7 +368,8 @@ export function createTerminalServer(config: TerminalConfig): Server {
 
     const session: Session = {
       claims,
-      namespace,
+      sandboxRef: plan.sandboxRef,
+      sandboxKind: plan.sandboxKind,
       kubeconfigPath,
       term,
       idleTimer: setTimeout(
@@ -371,9 +395,15 @@ export function createTerminalServer(config: TerminalConfig): Server {
       type: 'ready',
       sessionId: claims.sid,
       labId: claims.labId,
-      namespace,
+      sandboxKind: plan.sandboxKind,
+      sandboxRef: plan.sandboxRef,
+      // Kept for clients that read it; for a container sandbox it is the same
+      // handle under its historical name.
+      namespace: plan.sandboxRef,
     });
-    log(`session ${claims.sid} started (lab=${claims.labId} ns=${namespace})`);
+    log(
+      `session ${claims.sid} started (lab=${claims.labId} ${plan.sandboxKind}=${plan.sandboxRef})`,
+    );
     return true;
   }
 

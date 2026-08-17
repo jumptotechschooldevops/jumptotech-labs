@@ -23,6 +23,15 @@ interface LabTerminalProps {
   url: string | null;
   /** Session token minted by POST /api/labs/:id/start. */
   token: string | null;
+  /**
+   * Bump to force a reconnection with the same session.
+   *
+   * A container-backed Reset replaces the sandbox, which ends the shell that
+   * was attached to the old one. Changing this re-runs the connection effect,
+   * and the terminal service resolves the session's *new* sandbox from the same
+   * token — the browser still names nothing.
+   */
+  reconnectNonce?: number;
   onStatusChange: (status: TerminalStatus, detail?: string) => void;
 }
 
@@ -43,7 +52,7 @@ const THEME = {
 } as const;
 
 export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(function LabTerminal(
-  { url, token, onStatusChange },
+  { url, token, reconnectNonce = 0, onStatusChange },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -214,7 +223,7 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
       socketRef.current = null;
       socket.close(1000, 'component unmounted');
     };
-  }, [url, token]);
+  }, [url, token, reconnectNonce]);
 
   const handleClick = useCallback(() => termRef.current?.focus(), []);
 

@@ -78,7 +78,9 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.data.count).toBe(10);
+    // Catalog order is by track, then by each lab's `order`. PLATFORM-004
+    // added two tracks; the Kubernetes ten are unchanged and still first.
+    expect(res.body.data.count).toBe(12);
     expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual([
       'K8S-001',
       'K8S-002',
@@ -90,6 +92,8 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
       'K8S-008',
       'K8S-009',
       'K8S-010',
+      'LINUX-001',
+      'TF-001',
     ]);
     expect(res.body.data.tracks[0]).toMatchObject({ track: 'kubernetes', labCount: 10 });
   });
@@ -291,7 +295,12 @@ describe('GET /api/tracks', () => {
     const res = await request(buildApp().app).get('/api/tracks');
 
     expect(res.status).toBe(200);
-    expect(res.body.data.count).toBe(1);
+    expect(res.body.data.count).toBe(3);
+    expect(res.body.data.tracks.map((t: { track: string }) => t.track)).toEqual([
+      'kubernetes',
+      'linux',
+      'terraform',
+    ]);
     expect(res.body.data.tracks[0]).toMatchObject({
       track: 'kubernetes',
       title: 'Kubernetes',
@@ -336,7 +345,9 @@ describe('GET /api/tracks', () => {
   });
 
   it('returns 404 for an unknown track and 400 for a malformed one', async () => {
-    const missing = await request(buildApp().app).get('/api/tracks/terraform');
+    // `ansible` is a track nothing ships yet — `terraform` used to serve as the
+    // unknown one here, and now exists.
+    const missing = await request(buildApp().app).get('/api/tracks/ansible');
     expect(missing.status).toBe(404);
     expect(missing.body.error.code).toBe('TRACK_NOT_FOUND');
 
@@ -344,7 +355,7 @@ describe('GET /api/tracks', () => {
     expect(malformed.status).toBe(400);
     expect(malformed.body.error.code).toBe('INVALID_TRACK_ID');
 
-    const missingLabs = await request(buildApp().app).get('/api/tracks/terraform/labs');
+    const missingLabs = await request(buildApp().app).get('/api/tracks/ansible/labs');
     expect(missingLabs.status).toBe(404);
   });
 

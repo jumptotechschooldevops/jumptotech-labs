@@ -13,7 +13,17 @@ export type ClientMessage =
   | { type: 'ping' };
 
 export type ServerMessage =
-  | { type: 'ready'; sessionId: string; labId: string; namespace: string }
+  | {
+      type: 'ready';
+      sessionId: string;
+      labId: string;
+      /** What the sandbox is: a Kubernetes namespace or a sandbox container. */
+      sandboxKind?: 'namespace' | 'container';
+      /** The sandbox's handle. Possessing it grants nothing — see README. */
+      sandboxRef?: string;
+      /** Historical name for `sandboxRef`. */
+      namespace: string;
+    }
   | { type: 'output'; data: string }
   | { type: 'error'; code: string; message: string }
   | { type: 'exit'; exitCode: number; signal?: number }

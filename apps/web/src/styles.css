@@ -804,6 +804,35 @@ code {
 }
 .catalog__track-count { font-family: var(--mono); font-size: 11.5px; color: var(--text-faint); }
 
+/* --- provider readiness (PLATFORM-004) ------------------------------------ */
+
+/* A track whose sandbox backend cannot run here says so once, at the top,
+   rather than repeating itself on every card: it is a property of the
+   backend, not of any individual lab. */
+.catalog__track-note {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--warn);
+}
+.chip--unavailable { color: var(--warn); border-color: #7a6120; text-transform: none; }
+
+.catalog__track--soon { opacity: 0.85; }
+.catalog__soon {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+.labcard--soon {
+  border-style: dashed;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.labcard--soon .labcard__summary { flex: 1; }
+
+.overlay__text--hint { color: var(--text-faint); font-size: 12.5px; }
+
 /* --- message card --------------------------------------------------------- */
 
 .message-card {

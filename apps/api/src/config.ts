@@ -9,7 +9,10 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  DEFAULT_LINUX_SANDBOX_IMAGE,
+  DEFAULT_DOCKER_SANDBOX_IMAGE,
   DEFAULT_SESSION_POLICY,
+  DEFAULT_TERRAFORM_SANDBOX_IMAGE,
   type SessionLifetimeConfig,
   type SessionPolicy,
 } from '@jumptotech/lab-orchestrator';
@@ -39,9 +42,31 @@ export interface ApiConfig {
   namespaceSecret: string;
   lifetimes: SessionLifetimeConfig;
   policy: SessionPolicy;
+  /** Container-backed sandbox providers (PLATFORM-004). */
+  sandbox: SandboxProviderConfig;
   reaperIntervalSeconds: number;
   sessionRetentionMinutes: number;
   nodeEnv: string;
+}
+
+/**
+ * Which container-backed tracks this deployment offers, and from which images.
+ *
+ * The images are built on the host by `npm run sandbox:build`, deliberately not
+ * by this process: building an image needs the container socket, and the same
+ * rule that keeps kind cluster creation out of the API applies here. A provider
+ * whose image is missing reports itself unavailable and its labs are marked as
+ * such in the catalog — nothing pretends to be runnable.
+ */
+export interface SandboxProviderConfig {
+  /** Container CLI to drive. Never taken from a request. */
+  containerBinary: string;
+  linuxEnabled: boolean;
+  linuxImage: string;
+  terraformEnabled: boolean;
+  terraformImage: string;
+  /** Registered but never enabled — see providers.ts and README → Docker. */
+  dockerImage: string;
 }
 
 function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -128,6 +153,22 @@ export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): Session
       'STUDENT_CREDENTIAL_TTL_SECONDS',
       base.credentialTtlSeconds,
     ),
+    /*
+     * Container sandbox bounds — the Linux/Terraform analogue of the
+     * ResourceQuota and LimitRange above, and configurable for the same
+     * reason: production values belong in configuration, not in provider code.
+     */
+    sandbox: {
+      cpus: strFromEnv(env, 'SANDBOX_CPUS', base.sandbox.cpus),
+      memory: strFromEnv(env, 'SANDBOX_MEMORY', base.sandbox.memory),
+      pidsLimit: intFromEnv(env, 'SANDBOX_PIDS_LIMIT', base.sandbox.pidsLimit),
+      tmpfsSize: strFromEnv(env, 'SANDBOX_TMPFS_SIZE', base.sandbox.tmpfsSize),
+      user: strFromEnv(env, 'SANDBOX_USER', base.sandbox.user),
+      home: strFromEnv(env, 'SANDBOX_HOME', base.sandbox.home),
+      // Not raised casually: a lab that needs egress is a cost and a security
+      // decision, not a convenience.
+      network: strFromEnv(env, 'SANDBOX_NETWORK', base.sandbox.network),
+    },
   };
 }
 
@@ -174,6 +215,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       maxActiveSessions: intFromEnv(env, 'MAX_ACTIVE_SESSIONS', 20),
     },
     policy: loadSessionPolicy(env),
+    sandbox: {
+      containerBinary: strFromEnv(env, 'SANDBOX_CONTAINER_BINARY', 'docker'),
+      linuxEnabled: boolFromEnv(env, 'LINUX_PROVIDER_ENABLED', true),
+      linuxImage: strFromEnv(env, 'LINUX_SANDBOX_IMAGE', DEFAULT_LINUX_SANDBOX_IMAGE),
+      terraformEnabled: boolFromEnv(env, 'TERRAFORM_PROVIDER_ENABLED', true),
+      terraformImage: strFromEnv(env, 'TERRAFORM_SANDBOX_IMAGE', DEFAULT_TERRAFORM_SANDBOX_IMAGE),
+      dockerImage: strFromEnv(env, 'DOCKER_SANDBOX_IMAGE', DEFAULT_DOCKER_SANDBOX_IMAGE),
+    },
     reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',

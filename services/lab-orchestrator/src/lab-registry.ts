@@ -41,6 +41,8 @@ export interface LabSummary {
   slug: string;
   title: string;
   track: string;
+  /** Which sandbox backend this lab needs. Lab metadata, never a UI decision. */
+  provider: string;
   topic: string;
   topicTitle: string;
   difficulty: string;
@@ -69,6 +71,8 @@ export interface TrackSummary {
   labCount: number;
   topics: TopicSummary[];
   difficulties: string[];
+  /** The providers this track's labs declare, in first-appearance order. */
+  providers: string[];
 }
 
 export interface LabFilter {
@@ -100,6 +104,10 @@ export function titleCase(slug: string): string {
 /** Track display names. Falls back to title-casing an unknown track slug. */
 const TRACK_TITLES: Record<string, string> = {
   kubernetes: 'Kubernetes',
+  linux: 'Linux',
+  terraform: 'Terraform',
+  docker: 'Docker',
+  aws: 'AWS',
 };
 
 export function trackTitle(track: string): string {
@@ -328,6 +336,7 @@ export class LabRegistry {
         labCount: labs.length,
         topics: topicsOf(labs),
         difficulties: [...new Set(labs.map((l) => l.difficulty))].sort(byDifficulty),
+        providers: [...new Set(labs.map((l) => l.environment.provider))],
       }))
       .sort((a, b) => a.track.localeCompare(b.track));
   }
@@ -402,6 +411,7 @@ function toSummary(def: LoadedLabDefinition): LabSummary {
     slug: def.slug,
     title: def.title,
     track: def.track,
+    provider: def.environment.provider,
     topic: def.topic,
     topicTitle: titleCase(def.topic),
     difficulty: def.difficulty,

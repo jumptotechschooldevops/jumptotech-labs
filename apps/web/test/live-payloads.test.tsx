@@ -8,9 +8,11 @@
  * hand-written fixtures would happily hide.
  *
  * Refresh them with:
- *   curl -s localhost:4000/api/labs        | jq '.data' > test/fixtures/labs.json
+ *   curl -s localhost:4000/api/labs         | jq '.data' > test/fixtures/labs.json
  *   curl -s localhost:4000/api/labs/K8S-010 | jq '.data' > test/fixtures/lab-k8s-010.json
  *   curl -s localhost:4000/api/labs/K8S-006 | jq '.data' > test/fixtures/lab-k8s-006.json
+ *   curl -s localhost:4000/api/labs/LINUX-001 | jq '.data' > test/fixtures/lab-linux-001.json
+ *   curl -s localhost:4000/api/labs/TF-001    | jq '.data' > test/fixtures/lab-tf-001.json
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -20,10 +22,14 @@ import type { LabDetail, LabSummary, TrackSummary } from '../src/lib/types';
 import catalog from './fixtures/labs.json';
 import k8s010 from './fixtures/lab-k8s-010.json';
 import k8s006 from './fixtures/lab-k8s-006.json';
+import linux001 from './fixtures/lab-linux-001.json';
+import tf001 from './fixtures/lab-tf-001.json';
 
 const CATALOG = catalog as unknown as { labs: LabSummary[]; tracks: TrackSummary[]; count: number };
 const TROUBLESHOOTING = k8s010 as unknown as LabDetail;
 const JOBS = k8s006 as unknown as LabDetail;
+const LINUX = linux001 as unknown as LabDetail;
+const TERRAFORM = tf001 as unknown as LabDetail;
 
 const listLabs = vi.fn();
 vi.mock('../src/lib/api', async () => {
@@ -37,15 +43,19 @@ beforeEach(() => {
 });
 
 describe('catalog UI against the real API payload (test requirement 34)', () => {
-  it('renders all ten shipped labs', async () => {
+  it('renders every shipped lab, grouped into its track', async () => {
     render(<CatalogPage onOpenLab={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
 
     for (const lab of CATALOG.labs) {
       expect(screen.getByText(lab.title), lab.id).toBeTruthy();
     }
+    // One page, three tracks, no per-technology component anywhere.
     expect(screen.getByText('10 labs')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Kubernetes' })).toBeTruthy();
+    expect(screen.getAllByText('1 lab')).toHaveLength(2);
+    for (const track of ['Kubernetes', 'Linux', 'Terraform']) {
+      expect(screen.getByRole('heading', { name: track }), track).toBeTruthy();
+    }
   });
 
   it('shows every card with a duration, a difficulty and its skills', async () => {
@@ -55,7 +65,7 @@ describe('catalog UI against the real API payload (test requirement 34)', () => 
     expect(screen.getAllByText('beginner').length).toBeGreaterThanOrEqual(7);
     expect(screen.getAllByText('intermediate').length).toBeGreaterThanOrEqual(3);
     expect(screen.getAllByText('CKA')).toHaveLength(10);
-    expect(screen.getAllByRole('button', { name: 'Open lab' })).toHaveLength(10);
+    expect(screen.getAllByRole('button', { name: 'Open lab' })).toHaveLength(CATALOG.labs.length);
     // Labs that seed an environment say so.
     expect(screen.getAllByText('prepared environment')).toHaveLength(
       CATALOG.labs.filter((l) => l.hasSetup).length,
@@ -119,6 +129,34 @@ describe('lab page UI against the real API payload (test requirement 35)', () =>
     expect(screen.getByText('Job completed successfully')).toBeTruthy();
     // Nothing from the troubleshooting lab bleeds through.
     expect(screen.queryByText('Repair a Broken Deployment')).toBeNull();
+  });
+
+  it('renders a Linux lab and a Terraform lab from the same component', () => {
+    // The point of PLATFORM-004 in one assertion: no LinuxLabPage, no
+    // TerraformLabPage. The same brief renders a Kubernetes lab, a Linux lab
+    // and a Terraform lab, because the only thing that differs is the data.
+    const { unmount } = render(<LabBrief lab={LINUX} />);
+    expect(screen.getByText('LINUX-001')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Files, Directories & Permissions' })).toBeTruthy();
+    expect(screen.getByText('deploy permissions are rwxr-x---')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /chmod\(1\)/ })).toBeTruthy();
+    // No Kubernetes vocabulary leaks into a Linux lab.
+    expect(screen.queryByText(/namespace/i)).toBeNull();
+    unmount();
+
+    render(<LabBrief lab={TERRAFORM} />);
+    expect(screen.getByText('TF-001')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Terraform Init, Plan & Apply' })).toBeTruthy();
+    expect(screen.getByText('Terraform is initialised in the terraform directory')).toBeTruthy();
+    expect(screen.queryByText('Files, Directories & Permissions')).toBeNull();
+  });
+
+  it('serves a container-backed lab with its provider and readiness', () => {
+    expect(LINUX.environment).toEqual({ provider: 'linux', isolation: 'container' });
+    expect(TERRAFORM.environment).toEqual({ provider: 'terraform', isolation: 'container' });
+    expect(LINUX.availability?.available).toBe(true);
+    // And still no answer key: requirements arrive as student-facing labels.
+    expect(LINUX.requirements.every((r) => typeof r === 'string')).toBe(true);
   });
 
   it('shows prerequisites as guidance, not as a gate', () => {

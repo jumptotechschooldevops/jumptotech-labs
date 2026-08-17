@@ -1,0 +1,146 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# The first lab on a non-Kubernetes provider. Note what changes and what does
+# not: `environment.provider` says `linux`, and that is the entire difference.
+# The catalog card, the lab page, the timer, the hints, Start / Check / Reset /
+# End, the session lifecycle and the cleanup are all the same machinery.
+#
+# There is deliberately no path outside the student's own sandbox anywhere in
+# this file. Every path below is relative to their home directory, and the
+# verifier resolves each one against that home and refuses anything that would
+# escape it.
+#
+# Content is written from the Linux manual pages and the GNU coreutils manual.
+# ---------------------------------------------------------------------------
+id: LINUX-001
+slug: linux-001-files-permissions
+title: Files, Directories & Permissions
+track: linux
+topic: permissions
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 1
+
+environment:
+  provider: linux
+  isolation: container
+
+prerequisites: []
+
+story: >
+  You have joined the operations team at JumpToTech Bank. Tomorrow morning the
+  team ships a new build of the ledger API, and the deployment runs as your
+  account on the release host.
+
+  Your team lead has one rule about release directories: the people who deploy
+  can read and enter them, and nobody else can. Before the change window opens,
+  she wants the directory laid out, the release recorded, and the permissions
+  correct — checked, not assumed.
+
+objectives:
+  - Create directories and files from the shell
+  - Read the ownership and permission bits that ls and stat report
+  - Set permissions with chmod using octal notation
+  - Change a file's group to a group you belong to
+
+task:
+  summary: >
+    Prepare a deploy directory in your home directory with the correct
+    contents, group and permissions.
+  description: >
+    Working in your home directory, create a directory named `deploy`, and
+    inside it a directory named `releases`.
+
+    Record the release in a file at `deploy/release.txt`. It must contain
+    exactly two lines — `service=ledger-api` on the first and `version=4.2.0`
+    on the second.
+
+    Then fix the permissions. The `deploy` directory must be owned by you,
+    belong to the `deployers` group, and be readable, writable and enterable by
+    its owner and readable and enterable by that group — and nothing for anyone
+    else. The release file must be readable and writable by its owner and
+    readable by the group, and nothing for anyone else.
+
+    You are an ordinary unprivileged user here, exactly as you would be on the
+    real release host. There is no root and no sudo, and you do not need
+    either: you are already a member of the `deployers` group.
+
+# Verification is state-based: the checks read the real filesystem inside your
+# lab environment. How you got there — mkdir, install, a heredoc, an editor —
+# makes no difference, and the checks never look at what you typed.
+requirements:
+  - type: directory_exists
+    path: deploy
+    label: Directory deploy exists
+  - type: directory_exists
+    path: deploy/releases
+    label: Directory deploy/releases exists
+  - type: file_exists
+    path: deploy/release.txt
+    label: File deploy/release.txt exists
+  - type: file_content
+    path: deploy/release.txt
+    equals: |
+      service=ledger-api
+      version=4.2.0
+    label: deploy/release.txt records the service and version
+  - type: file_owner
+    path: deploy
+    owner: student
+    label: deploy is owned by your account
+  - type: file_group
+    path: deploy
+    group: deployers
+    label: deploy belongs to the deployers group
+  - type: file_mode
+    path: deploy
+    mode: '750'
+    label: deploy permissions are rwxr-x---
+  - type: file_mode
+    path: deploy/release.txt
+    mode: '640'
+    label: deploy/release.txt permissions are rw-r-----
+
+hints:
+  - level: 1
+    text: >
+      A directory and a file are created with different commands, and the
+      permission bits on each are set separately afterwards. Start by getting
+      the layout right, then look at what `ls -l` reports about it.
+  - level: 2
+    text: >
+      `ls -l` prints permissions as ten characters, and `stat` prints the same
+      information as an octal number — which is the form `chmod` accepts.
+      Compare what `stat -c '%a %U %G' deploy` reports with what the task asks
+      for. Group ownership is changed by a different command than permissions.
+  - level: 3
+    text: >
+      `rwxr-x---` is 750 and `rw-r-----` is 640; `chmod` takes either the
+      symbolic or the octal form. `chgrp` changes a file's group, and you may
+      set it to any group you are a member of — `id` lists yours. Read
+      `man chmod`, `man chgrp` and `man stat` in your terminal if you want the
+      details.
+
+references:
+  - title: chmod(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/chmod.1.html
+  - title: chgrp(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/chgrp.1.html
+  - title: stat(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/stat.1.html
+  - title: GNU coreutils — File permissions
+    url: https://www.gnu.org/software/coreutils/manual/html_node/File-permissions.html
+
+skills:
+  - linux.filesystem.create
+  - linux.permissions.modes
+  - linux.permissions.ownership
+  - linux.filesystem.inspect
+
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - essential-commands

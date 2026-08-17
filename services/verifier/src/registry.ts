@@ -1,25 +1,45 @@
 /**
- * The verifier registry.
+ * The verification engine.
  *
- *   Requirement → requirement type → handler → Kubernetes API → PASS / FAIL
+ * ```text
+ *                      requirement
+ *                           │
+ *                    requirement family
+ *          ┌────────────────┼─────────────────┐
+ *     kubernetes        filesystem         terraform
+ *          │                │                  │
+ *     VerifyReader      SandboxReader     SandboxReader
+ *          │                │                  │
+ *   Kubernetes API    the sandbox's real filesystem
+ *          └────────────────┴──────────────────┘
+ *                           │
+ *                    PASS / FAIL + observed detail
+ * ```
  *
- * Adding a lab never touches this file. Adding a *new kind of check* means
- * adding one entry to `requirements.ts` and one handler here — and the type
- * system enforces that both happen: `HANDLERS` is a mapped type over every
- * `RequirementType`, so a requirement type without a handler fails to compile.
+ * Adding a lab never touches this file. Adding a *new kind of check* means one
+ * entry in `requirements.ts` — including its family — and one handler here.
+ * The type system enforces that both happen: the two handler maps are mapped
+ * types over the requirement types of each family, so a requirement type with
+ * no handler fails to compile, and a handler registered against the wrong
+ * reader fails to compile too.
  *
  * There is no path from lab.yaml to arbitrary execution. A requirement names a
  * type from a closed vocabulary; the handler for that type is code that shipped
- * with the platform, and the only thing it is given is a read-only reader.
+ * with the platform, and the only thing it is given is a read-only reader
+ * already scoped to one session's sandbox.
  */
 import {
   isSupportedRequirementType,
+  requirementFamily,
   REQUIREMENT_TYPES,
+  type KubernetesRequirementType,
   type Requirement,
   type RequirementType,
+  type SandboxRequirementType,
 } from '@jumptotech/lab-orchestrator';
-import type { CheckResult, VerifierHandler } from './contract.js';
+import type { CheckResult, SandboxVerifierHandler, VerifierHandler } from './contract.js';
 import type { VerifyReader } from './reader.js';
+import type { SandboxReader } from './sandbox-reader.js';
 import {
   podExists,
   podImage,
@@ -64,6 +84,19 @@ import {
   jobImage,
 } from './handlers/batch.js';
 import { resourceAbsent } from './handlers/generic.js';
+import {
+  directoryExists,
+  fileContent,
+  fileExists,
+  fileGroup,
+  fileMode,
+  fileOwner,
+} from './handlers/filesystem.js';
+import {
+  terraformInitialized,
+  terraformOutputEquals,
+  terraformResourceExists,
+} from './handlers/terraform.js';
 
 /** Raised when a requirement names a type with no registered handler. */
 export class UnsupportedRequirementError extends Error {
@@ -82,7 +115,7 @@ export class UnsupportedRequirementError extends Error {
  * The mapped type is the completeness guarantee: TypeScript will not accept
  * this object unless it has exactly one handler per `RequirementType`.
  */
-const HANDLERS: { [K in RequirementType]: VerifierHandler<K> } = {
+const HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K> } = {
   pod_exists: podExists,
   pod_image: podImage,
   pod_running: podRunning,
@@ -124,18 +157,49 @@ const HANDLERS: { [K in RequirementType]: VerifierHandler<K> } = {
   resource_absent: resourceAbsent,
 };
 
+/**
+ * Every sandbox requirement type, mapped to its handler.
+ *
+ * Same completeness guarantee as `HANDLERS`, over the other families. These
+ * read a real filesystem inside one session's sandbox rather than the
+ * Kubernetes API.
+ */
+const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<K> } = {
+  file_exists: fileExists,
+  directory_exists: directoryExists,
+  file_content: fileContent,
+  file_mode: fileMode,
+  file_owner: fileOwner,
+  file_group: fileGroup,
+
+  terraform_initialized: terraformInitialized,
+  terraform_resource_exists: terraformResourceExists,
+  terraform_output_equals: terraformOutputEquals,
+};
+
 /** Requirement types that currently have a handler. */
 export function registeredRequirementTypes(): RequirementType[] {
-  return Object.keys(HANDLERS) as RequirementType[];
+  return [...Object.keys(HANDLERS), ...Object.keys(SANDBOX_HANDLERS)] as RequirementType[];
 }
 
 export function hasHandler(type: string): boolean {
-  return isSupportedRequirementType(type) && Object.hasOwn(HANDLERS, type);
+  if (!isSupportedRequirementType(type)) return false;
+  return Object.hasOwn(HANDLERS, type) || Object.hasOwn(SANDBOX_HANDLERS, type);
 }
 
-function handlerFor(type: string): VerifierHandler<RequirementType> {
-  if (!hasHandler(type)) throw new UnsupportedRequirementError(type);
-  return HANDLERS[type as RequirementType] as VerifierHandler<RequirementType>;
+/**
+ * The readers a verification run may use.
+ *
+ * A run supplies whichever readers its provider can back. Asking for a check
+ * whose reader is absent is reported as `skipped` with a plain explanation
+ * rather than as a failed check — a missing reader is a platform problem, and
+ * blaming the student for it would be wrong. In practice the lab loader already
+ * refuses a lab whose requirements its provider cannot verify, so this is a
+ * backstop rather than a routine path.
+ */
+export interface VerificationReaders {
+  kubernetes?: VerifyReader | undefined;
+  sandbox?: SandboxReader | undefined;
 }
 
 /** Stable, human-meaningful id for a check, used as the React key. */
@@ -144,18 +208,63 @@ export function checkId(requirement: Requirement, index: number): string {
   return `${index + 1}-${requirement.type}-${name}`;
 }
 
-/** Run one requirement. Throws only for an unregistered type. */
+/** Accept either a bare Kubernetes reader or the full reader set. */
+function toReaders(input: VerifyReader | VerificationReaders): VerificationReaders {
+  return 'namespace' in input ? { kubernetes: input } : input;
+}
+
+/**
+ * Run one requirement.
+ *
+ * Dispatch is by requirement *family*, so the same call site serves a
+ * Kubernetes check and a filesystem check without knowing which it has.
+ * Throws only for a requirement type with no registered handler at all.
+ */
 export async function verifyRequirement(
   requirement: Requirement,
-  reader: VerifyReader,
+  readers: VerifyReader | VerificationReaders,
   index = 0,
 ): Promise<CheckResult> {
-  const handler = handlerFor(requirement.type);
-  const label = requirement.label ?? handler.label(requirement);
-  const outcome = await handler.run(requirement, reader);
+  if (!hasHandler(requirement.type)) throw new UnsupportedRequirementError(requirement.type);
+  const available = toReaders(readers);
+  const family = requirementFamily(requirement.type);
+  const id = checkId(requirement, index);
 
+  if (family === 'kubernetes') {
+    const handler = HANDLERS[requirement.type as KubernetesRequirementType] as VerifierHandler<RequirementType>;
+    const label = requirement.label ?? handler.label(requirement);
+    if (!available.kubernetes) {
+      return {
+        id,
+        label,
+        status: 'skipped',
+        detail: 'This lab environment has no Kubernetes API to check against',
+      };
+    }
+    const outcome = await handler.run(requirement, available.kubernetes);
+    return {
+      id,
+      label,
+      status: outcome.ok ? 'pass' : 'fail',
+      ...(outcome.detail ? { detail: outcome.detail } : {}),
+    };
+  }
+
+  const handler = SANDBOX_HANDLERS[
+    requirement.type as SandboxRequirementType
+  ] as SandboxVerifierHandler<SandboxRequirementType>;
+  const label = requirement.label ?? handler.label(requirement as never);
+  if (!available.sandbox) {
+    return {
+      id,
+      label,
+      status: 'skipped',
+      detail: 'This lab environment has no sandbox filesystem to check against',
+    };
+  }
+  const outcome = await handler.run(requirement as never, available.sandbox);
   return {
-    id: checkId(requirement, index),
+    id,
     label,
     status: outcome.ok ? 'pass' : 'fail',
     ...(outcome.detail ? { detail: outcome.detail } : {}),
@@ -163,7 +272,7 @@ export async function verifyRequirement(
 }
 
 /**
- * Run every requirement against one namespace.
+ * Run every requirement against one session's environment.
  *
  * Checks run sequentially and independently: one failure never short-circuits
  * the rest, because a student is owed the full picture of what is and is not
@@ -171,11 +280,11 @@ export async function verifyRequirement(
  */
 export async function verifyRequirements(
   requirements: readonly Requirement[],
-  reader: VerifyReader,
+  readers: VerifyReader | VerificationReaders,
 ): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   for (const [index, requirement] of requirements.entries()) {
-    results.push(await verifyRequirement(requirement, reader, index));
+    results.push(await verifyRequirement(requirement, readers, index));
   }
   return results;
 }

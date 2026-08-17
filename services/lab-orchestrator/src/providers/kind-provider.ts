@@ -29,10 +29,13 @@ import type {
   LabProvider,
   LabSessionContext,
   ManagedNamespace,
+  ManagedSandbox,
   ProvisionStep,
   ResetResult,
   StudentCredentials,
+  TerminalContext,
 } from '../types.js';
+import { AVAILABLE, unavailable, type ProviderAvailability } from './catalog.js';
 import {
   KubernetesUnreachableError,
   ManifestApplyError,
@@ -87,7 +90,10 @@ export interface KindProviderOptions {
 }
 
 export class KindLabProvider implements LabProvider {
+  /** The lab-facing provider id this implementation satisfies. */
+  readonly id = 'kubernetes' as const;
   readonly name = 'kind';
+  readonly sandboxKind = 'namespace' as const;
 
   readonly #k8s: KubernetesPort;
   readonly #clusterName: string;
@@ -121,11 +127,35 @@ export class KindLabProvider implements LabProvider {
     return {
       environmentId: this.environmentId(context),
       provider: this.name,
+      providerId: this.id,
       phase,
+      sandboxRef: context.namespace,
+      sandboxKind: this.sandboxKind,
       namespace: context.namespace,
       sessionId: context.sessionId,
       ...extra,
     };
+  }
+
+  // ---------------------------------------------------------- availability
+
+  /**
+   * Is the substrate reachable?
+   *
+   * The kind cluster is provisioned on the host, so "available" here means the
+   * API server answers. A cluster that is down makes the whole Kubernetes track
+   * report unavailable in the catalog rather than failing at Start Lab.
+   */
+  async availability(): Promise<ProviderAvailability> {
+    try {
+      await this.#k8s.ping();
+      return AVAILABLE;
+    } catch (error) {
+      return unavailable(
+        `the Kubernetes cluster is not reachable (${describe(error)})`,
+        'Start the substrate with: npm run cluster:up',
+      );
+    }
   }
 
   // ---------------------------------------------------------------- create
@@ -388,6 +418,17 @@ export class KindLabProvider implements LabProvider {
   }
 
   /**
+   * The generic cleanup entry point.
+   *
+   * `destroyNamespace` is the Kubernetes-specific name the cleanup-safety tests
+   * exercise directly; this is the same operation under the name the reaper
+   * uses for every provider.
+   */
+  async destroySandbox(sandboxRef: string, expectedSessionId?: string): Promise<DestroyResult> {
+    return this.destroyNamespace(sandboxRef, expectedSessionId);
+  }
+
+  /**
    * Delete a sandbox namespace, and confirm it is gone.
    *
    * Four gates stand between this call and `deleteNamespace`, in order:
@@ -536,6 +577,25 @@ export class KindLabProvider implements LabProvider {
     };
   }
 
+  /**
+   * The terminal binding for a Kubernetes lab.
+   *
+   * Exactly what `issueCredentials` produces, in the generic envelope the
+   * terminal service now reads. The namespace is resolved here from the session
+   * context — the browser contributes nothing to it.
+   */
+  async getTerminalContext(context: LabSessionContext): Promise<TerminalContext> {
+    const credentials = await this.issueCredentials(context);
+    return {
+      kind: 'kubernetes',
+      kubeconfig: credentials.kubeconfig,
+      namespace: credentials.namespace,
+      serviceAccountName: credentials.serviceAccountName,
+      expiresAt: credentials.expiresAt,
+      env: { JTT_LAB_ID: context.labId, JTT_NAMESPACE: credentials.namespace },
+    };
+  }
+
   // --------------------------------------------------------------- cleanup
 
   /**
@@ -555,6 +615,20 @@ export class KindLabProvider implements LabProvider {
         expiresAtMs: expiryFromLabels(ns.labels),
         phase: ns.phase,
       }));
+  }
+
+  /** The same list, in the provider-agnostic shape the reaper consumes. */
+  async listManagedSandboxes(): Promise<ManagedSandbox[]> {
+    const namespaces = await this.listManagedNamespaces();
+    return namespaces.map((ns) => ({
+      providerId: this.id,
+      sandboxRef: ns.namespace,
+      sandboxKind: this.sandboxKind,
+      sessionId: ns.sessionId,
+      labId: ns.labId,
+      expiresAtMs: ns.expiresAtMs,
+      phase: ns.phase,
+    }));
   }
 
   // --------------------------------------------------------------- execute

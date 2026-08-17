@@ -14,6 +14,36 @@
  * verification is a read of the Kubernetes API.
  */
 import { z } from 'zod';
+import { isSafeSandboxPath, MAX_SANDBOX_PATH_LENGTH } from './session/sandbox-paths.js';
+
+/**
+ * A path inside the session's sandbox home.
+ *
+ * Never absolute, never `..`, never a shell metacharacter — see
+ * `session/sandbox-paths.ts` for the rule and for the second check the runtime
+ * applies before any read. A lab definition therefore cannot name a host path,
+ * and cannot name a path outside its own student's sandbox.
+ */
+const sandboxPath = z
+  .string()
+  .min(1)
+  .max(MAX_SANDBOX_PATH_LENGTH)
+  .refine(isSafeSandboxPath, {
+    message:
+      'must be a relative path inside the sandbox home (no leading /, no ~, no .. segments, no backslashes)',
+  });
+
+/** A POSIX user or group name, as `stat` reports it. */
+const posixName = z
+  .string()
+  .min(1)
+  .max(32)
+  .regex(/^[a-z_][a-z0-9_-]*\$?$/, 'must be a POSIX user or group name');
+
+/** An octal permission string, e.g. `750`. */
+const fileMode = z
+  .string()
+  .regex(/^0?[0-7]{3,4}$/, 'must be an octal permission string such as 750');
 
 /** DNS-1123 subdomain, the naming rule for most Kubernetes objects. */
 const resourceName = z
@@ -398,6 +428,111 @@ const requirementSchemas = {
     })
     .strict(),
 
+  // --- Sandbox filesystem (Linux / Terraform / Docker) -------------------
+  /**
+   * A regular file exists at this path.
+   *
+   * Deliberately strict about *what* is there: a symlink pointing at the
+   * expected name does not satisfy `file_exists`, because the point of a
+   * permissions lab is the file, not a name that resolves to one. The reader
+   * runs `stat` without `-L` so it can tell the difference.
+   */
+  file_exists: z
+    .object({ type: z.literal('file_exists'), path: sandboxPath, ...common })
+    .strict(),
+
+  directory_exists: z
+    .object({ type: z.literal('directory_exists'), path: sandboxPath, ...common })
+    .strict(),
+
+  /**
+   * A file's contents.
+   *
+   * `equals` compares after trimming trailing whitespace, so a student is not
+   * failed for a trailing newline their editor added. `contains` is for files
+   * whose exact wording is not the point. There is deliberately no regular
+   * expression form: a lab-supplied pattern is untrusted input to a regex
+   * engine, and a catastrophic backtrack in the verifier would be a denial of
+   * service on the API for everyone.
+   */
+  file_content: z
+    .object({
+      type: z.literal('file_content'),
+      path: sandboxPath,
+      equals: z.string().max(4096).optional(),
+      contains: z.string().min(1).max(1024).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.equals !== undefined || v.contains !== undefined, {
+      message: 'must specify equals, contains, or both',
+    }),
+
+  file_mode: z
+    .object({ type: z.literal('file_mode'), path: sandboxPath, mode: fileMode, ...common })
+    .strict(),
+
+  file_owner: z
+    .object({ type: z.literal('file_owner'), path: sandboxPath, owner: posixName, ...common })
+    .strict(),
+
+  file_group: z
+    .object({ type: z.literal('file_group'), path: sandboxPath, group: posixName, ...common })
+    .strict(),
+
+  // --- Terraform ---------------------------------------------------------
+  /**
+   * `terraform init` completed in this directory.
+   *
+   * Checked from what init actually leaves behind — the `.terraform` directory
+   * and the dependency lock file — not from a transcript. A student who ran
+   * init in the wrong directory has not initialised the one the lab grades.
+   */
+  terraform_initialized: z
+    .object({ type: z.literal('terraform_initialized'), dir: sandboxPath, ...common })
+    .strict(),
+
+  /**
+   * A resource is present in the Terraform state.
+   *
+   * Read from `terraform.tfstate`, so it reflects a *successful apply*.
+   * Typing `terraform apply` and answering no leaves no state, and therefore
+   * does not pass.
+   */
+  terraform_resource_exists: z
+    .object({
+      type: z.literal('terraform_resource_exists'),
+      dir: sandboxPath,
+      /** Provider resource type, e.g. `local_file`. */
+      resource_type: z
+        .string()
+        .min(1)
+        .max(128)
+        .regex(/^[a-z][a-z0-9_]*$/, 'must be a Terraform resource type such as local_file'),
+      /** The resource's local name, e.g. `manifest`. */
+      name: z
+        .string()
+        .min(1)
+        .max(128)
+        .regex(/^[a-zA-Z_][a-zA-Z0-9_-]*$/, 'must be a Terraform resource name'),
+      ...common,
+    })
+    .strict(),
+
+  terraform_output_equals: z
+    .object({
+      type: z.literal('terraform_output_equals'),
+      dir: sandboxPath,
+      name: z
+        .string()
+        .min(1)
+        .max(128)
+        .regex(/^[a-zA-Z_][a-zA-Z0-9_-]*$/, 'must be a Terraform output name'),
+      value: z.string().max(1024),
+      ...common,
+    })
+    .strict(),
+
   // --- Generic -----------------------------------------------------------
   /**
    * A named object must NOT exist.
@@ -419,6 +554,96 @@ const requirementSchemas = {
 export const REQUIREMENT_TYPES = Object.keys(requirementSchemas) as ReadonlyArray<RequirementType>;
 
 export type RequirementType = keyof typeof requirementSchemas;
+
+/**
+ * Which reader a requirement needs.
+ *
+ * This is the whole of the verifier's dispatch: `kubernetes` checks read the
+ * Kubernetes API in the session's namespace, `filesystem` and `terraform`
+ * checks read inside the session's sandbox. Splitting Terraform out from plain
+ * filesystem checks is not cosmetic — it is what lets `lab-definition.ts` say
+ * "the Linux provider cannot verify Terraform state" and refuse the lab.
+ *
+ * The mapped type below is the completeness guarantee: adding a requirement
+ * type without classifying it fails to compile, so a new check can never
+ * silently fall through to the wrong reader.
+ */
+export type RequirementFamily = 'kubernetes' | 'filesystem' | 'terraform';
+
+export const REQUIREMENT_FAMILIES = {
+  pod_exists: 'kubernetes',
+  pod_image: 'kubernetes',
+  pod_running: 'kubernetes',
+  pod_phase: 'kubernetes',
+  pod_ready: 'kubernetes',
+  pod_label: 'kubernetes',
+  pod_resources: 'kubernetes',
+
+  deployment_exists: 'kubernetes',
+  deployment_image: 'kubernetes',
+  deployment_replicas: 'kubernetes',
+  deployment_available: 'kubernetes',
+  deployment_rollout_complete: 'kubernetes',
+  deployment_selector: 'kubernetes',
+  deployment_resources: 'kubernetes',
+  deployment_probe: 'kubernetes',
+  deployment_uses_configmap: 'kubernetes',
+  deployment_uses_secret: 'kubernetes',
+
+  service_exists: 'kubernetes',
+  service_type: 'kubernetes',
+  service_port: 'kubernetes',
+  service_selector: 'kubernetes',
+  service_endpoints: 'kubernetes',
+
+  configmap_exists: 'kubernetes',
+  configmap_key: 'kubernetes',
+  secret_exists: 'kubernetes',
+  secret_key: 'kubernetes',
+  secret_type: 'kubernetes',
+
+  job_exists: 'kubernetes',
+  job_completed: 'kubernetes',
+  job_image: 'kubernetes',
+  cronjob_exists: 'kubernetes',
+  cronjob_schedule: 'kubernetes',
+  cronjob_suspended: 'kubernetes',
+
+  file_exists: 'filesystem',
+  directory_exists: 'filesystem',
+  file_content: 'filesystem',
+  file_mode: 'filesystem',
+  file_owner: 'filesystem',
+  file_group: 'filesystem',
+
+  terraform_initialized: 'terraform',
+  terraform_resource_exists: 'terraform',
+  terraform_output_equals: 'terraform',
+
+  resource_absent: 'kubernetes',
+  // `as const satisfies` rather than a plain annotation: the literal family of
+  // each type has to survive for `RequirementTypeOf` to be able to filter on
+  // it, while `satisfies` still enforces that every requirement type is
+  // classified and that no family outside the union sneaks in.
+} as const satisfies { [K in RequirementType]: RequirementFamily };
+
+export function requirementFamily(type: RequirementType): RequirementFamily {
+  return REQUIREMENT_FAMILIES[type];
+}
+
+/** The requirement types belonging to one family, at the type level. */
+export type RequirementTypeOf<F extends RequirementFamily> = {
+  [K in RequirementType]: (typeof REQUIREMENT_FAMILIES)[K] extends F ? K : never;
+}[RequirementType];
+
+/** Requirement types read through the sandbox filesystem rather than Kubernetes. */
+export type SandboxRequirementType = RequirementTypeOf<'filesystem' | 'terraform'>;
+
+export type KubernetesRequirementType = RequirementTypeOf<'kubernetes'>;
+
+export function requirementTypesForFamily(family: RequirementFamily): RequirementType[] {
+  return REQUIREMENT_TYPES.filter((type) => REQUIREMENT_FAMILIES[type] === family);
+}
 
 export function isSupportedRequirementType(value: unknown): value is RequirementType {
   return typeof value === 'string' && Object.hasOwn(requirementSchemas, value);

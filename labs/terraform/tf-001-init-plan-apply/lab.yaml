@@ -1,0 +1,148 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# A Terraform lab that needs no cloud account, no credential and no network.
+# The sandbox ships the Terraform CLI and an offline mirror of the providers
+# this lab declares, so `terraform init` resolves locally.
+#
+# Verification reads the state Terraform actually wrote and the artifact the
+# apply actually produced. Typing `terraform apply` is not a pass.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# ---------------------------------------------------------------------------
+id: TF-001
+slug: tf-001-init-plan-apply
+title: Terraform Init, Plan & Apply
+track: terraform
+topic: workflow
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 1
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites: []
+
+story: >
+  The JumpToTech Bank platform team has been creating things by hand and then
+  arguing about what is actually deployed. The fix they have agreed on is to
+  keep infrastructure described as code, in files that can be reviewed like any
+  other change.
+
+  Before anyone points Terraform at real infrastructure, your lead wants to see
+  you take a configuration through the whole loop yourself — write it,
+  initialise it, look at the plan, apply it, and then show what the state says
+  exists.
+
+objectives:
+  - Initialise a Terraform working directory
+  - Read a plan before applying it
+  - Declare a resource and an output in HCL
+  - Confirm what was created by inspecting Terraform state
+
+task:
+  summary: >
+    Write a small local Terraform configuration in the terraform directory and
+    take it through init, plan and apply.
+  description: >
+    Your lab environment has a `terraform` directory containing a `versions.tf`
+    that already declares the providers you may use. Do your work in that
+    directory.
+
+    Add a configuration that uses the `local` provider to manage one file
+    resource. The resource must be named `manifest`, and it must write a file
+    at `build/manifest.txt` — a path relative to the Terraform directory — whose
+    contents include the service name `ledger-api`.
+
+    Declare an output named `manifest_path` whose value is `build/manifest.txt`.
+
+    Then run the workflow: initialise the directory, review the plan, and apply
+    it. When you are done, `terraform output` should print your output and the
+    file should exist on disk.
+
+    This lab is entirely local. There is no cloud provider, no credential and
+    no network access — `terraform init` resolves the providers from a mirror
+    inside the environment.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Starter configuration is in place
+
+# Every check reads what a run left behind: the initialised working directory,
+# the state file, and the artifact on disk. A plan that was never applied, or an
+# apply that failed, leaves none of them.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: manifest
+    label: Terraform state contains the manifest file resource
+  - type: file_exists
+    path: terraform/build/manifest.txt
+    label: The manifest file was created on disk
+  - type: file_content
+    path: terraform/build/manifest.txt
+    contains: ledger-api
+    label: The manifest names the ledger-api service
+  - type: terraform_output_equals
+    dir: terraform
+    name: manifest_path
+    value: build/manifest.txt
+    label: Output manifest_path reports the file path
+
+hints:
+  - level: 1
+    text: >
+      Terraform will not plan or apply until the working directory has been
+      initialised, and initialising is what installs the providers `versions.tf`
+      declares. Start there, then write the configuration.
+  - level: 2
+    text: >
+      The `local` provider manages files on the machine Terraform runs on. Look
+      up its file resource in the provider documentation to see which arguments
+      it takes. An output is declared with its own block, separate from the
+      resource, and its value can be any expression.
+  - level: 3
+    text: >
+      The resource type is `local_file` and the lab expects its local name to be
+      `manifest`, so the block header reads `resource "local_file" "manifest"`.
+      It needs the path to write and the contents to write there. Create the
+      output with an `output "manifest_path"` block. Then run `terraform init`,
+      `terraform plan`, and `terraform apply` — and `terraform show` if you want
+      to see what ended up in state.
+
+references:
+  - title: Terraform — The core workflow
+    url: https://developer.hashicorp.com/terraform/intro/core-workflow
+  - title: 'Terraform — Command: init'
+    url: https://developer.hashicorp.com/terraform/cli/commands/init
+  - title: Terraform — Output values
+    url: https://developer.hashicorp.com/terraform/language/values/outputs
+  - title: Terraform — hashicorp/local provider
+    url: https://developer.hashicorp.com/terraform/providers
+
+skills:
+  - terraform.workflow.init
+  - terraform.workflow.apply
+  - terraform.language.resources
+  - terraform.language.outputs
+  - terraform.state.inspect
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - use-the-terraform-cli
+      - read-and-write-configuration

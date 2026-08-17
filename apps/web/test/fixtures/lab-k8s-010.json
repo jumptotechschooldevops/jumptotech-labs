@@ -12,7 +12,7 @@
     "provider": "kubernetes",
     "isolation": "namespace"
   },
-  "story": "You are on call. The ledger API at JumpToTech Bank is down: no replica is serving, and the internal clients that depend on it are timing out.\nThe last change was deployed by someone who has since gone off shift, and there is no useful description on the pull request. Nobody has told you what is wrong — finding that out is the job.\nInvestigate the live cluster state, work out why the service is not serving, and restore it. There is more than one thing wrong.\n",
+  "story": "You are on call. The ledger API at JumpToTech Bank is down: no replica is serving, and the internal clients that depend on it are timing out.\nThe last change was deployed by someone who has since gone off shift, and there is no useful description on the pull request. Nobody has told you what is wrong \u2014 finding that out is the job.\nInvestigate the live cluster state, work out why the service is not serving, and restore it. There is more than one thing wrong.\n",
   "objectives": [
     "Investigate a failing workload from cluster state alone",
     "Read Pod status, container state, and events to locate a fault",
@@ -20,7 +20,7 @@
   ],
   "task": {
     "summary": "Investigate the ledger-api workload and restore it to a healthy, serving state.",
-    "description": "The `ledger-api` Deployment and its Service already exist in your namespace. Neither is working.\nYour task is to find out why and fix it, so that two replicas are running the correct application image and the Service actually routes traffic to them.\nThe correct application image for this service is `nginx:stable`. Every other detail you need is discoverable from the cluster.\nStart by looking at what is there and what state it is in. `kubectl get` shows you the shape of the problem; `kubectl describe` shows you the events behind it; a Service with no endpoints is telling you something specific about how it is finding Pods.\nHow you repair it is up to you. `kubectl edit`, `kubectl patch`, `kubectl set`, or re-applying a corrected manifest are all accepted — this lab checks the state of the cluster at the end, never the commands you typed to get there.\n"
+    "description": "The `ledger-api` Deployment and its Service already exist in your namespace. Neither is working.\nYour task is to find out why and fix it, so that two replicas are running the correct application image and the Service actually routes traffic to them.\nThe correct application image for this service is `nginx:stable`. Every other detail you need is discoverable from the cluster.\nStart by looking at what is there and what state it is in. `kubectl get` shows you the shape of the problem; `kubectl describe` shows you the events behind it; a Service with no endpoints is telling you something specific about how it is finding Pods.\nHow you repair it is up to you. `kubectl edit`, `kubectl patch`, `kubectl set`, or re-applying a corrected manifest are all accepted \u2014 this lab checks the state of the cluster at the end, never the commands you typed to get there.\n"
   },
   "requirements": [
     "Deployment ledger-api exists",
@@ -41,7 +41,7 @@
     },
     {
       "level": 3,
-      "text": "For the first fault, `kubectl describe pod` on a failing replica shows a container that never started and an event explaining why the image could not be fetched — compare the tag against `nginx:stable`. For the second, compare `kubectl get service ledger-api -o yaml` (its selector) with `kubectl get pods --show-labels` (the Pod labels); `kubectl get endpoints ledger-api` will stay empty until they agree.\n"
+      "text": "For the first fault, `kubectl describe pod` on a failing replica shows a container that never started and an event explaining why the image could not be fetched \u2014 compare the tag against `nginx:stable`. For the second, compare `kubectl get service ledger-api -o yaml` (its selector) with `kubectl get pods --show-labels` (the Pod labels); `kubectl get endpoints ledger-api` will stay empty until they agree.\n"
     }
   ],
   "references": [
@@ -91,5 +91,9 @@
     }
   ],
   "prerequisitesEnforced": false,
-  "hasSetup": true
+  "hasSetup": true,
+  "availability": {
+    "provider": "kubernetes",
+    "available": true
+  }
 }

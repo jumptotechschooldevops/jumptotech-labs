@@ -5,6 +5,7 @@
       "slug": "k8s-001-pods",
       "title": "Create Your First Pod",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "pods",
       "topicTitle": "Pods",
       "difficulty": "beginner",
@@ -21,13 +22,18 @@
         "CKA"
       ],
       "prerequisites": [],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
     },
     {
       "id": "K8S-002",
       "slug": "k8s-002-deployments",
       "title": "Run an Application with a Deployment",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "workloads",
       "topicTitle": "Workloads",
       "difficulty": "beginner",
@@ -52,13 +58,18 @@
           "available": true
         }
       ],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
     },
     {
       "id": "K8S-003",
       "slug": "k8s-003-services",
       "title": "Expose a Workload with a Service",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "networking",
       "topicTitle": "Networking",
       "difficulty": "beginner",
@@ -83,13 +94,18 @@
           "available": true
         }
       ],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
     },
     {
       "id": "K8S-004",
       "slug": "k8s-004-configmaps",
       "title": "Move Configuration into a ConfigMap",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "configuration",
       "topicTitle": "Configuration",
       "difficulty": "beginner",
@@ -114,13 +130,18 @@
           "available": true
         }
       ],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
     },
     {
       "id": "K8S-005",
       "slug": "k8s-005-secrets",
       "title": "Hold Sensitive Configuration in a Secret",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "configuration",
       "topicTitle": "Configuration",
       "difficulty": "beginner",
@@ -145,13 +166,18 @@
           "available": true
         }
       ],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
     },
     {
       "id": "K8S-006",
       "slug": "k8s-006-jobs",
       "title": "Run a One-Time Task with a Job",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "batch",
       "topicTitle": "Batch",
       "difficulty": "beginner",
@@ -176,13 +202,18 @@
           "available": true
         }
       ],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
     },
     {
       "id": "K8S-007",
       "slug": "k8s-007-cronjobs",
       "title": "Schedule Recurring Work with a CronJob",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "batch",
       "topicTitle": "Batch",
       "difficulty": "beginner",
@@ -207,13 +238,18 @@
           "available": true
         }
       ],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
     },
     {
       "id": "K8S-008",
       "slug": "k8s-008-probes",
       "title": "Signal Readiness with a Probe",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "reliability",
       "topicTitle": "Reliability",
       "difficulty": "intermediate",
@@ -238,13 +274,18 @@
           "available": true
         }
       ],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
     },
     {
       "id": "K8S-009",
       "slug": "k8s-009-resources",
       "title": "Declare Resource Requests and Limits",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "scheduling",
       "topicTitle": "Scheduling",
       "difficulty": "intermediate",
@@ -269,13 +310,18 @@
           "available": true
         }
       ],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
     },
     {
       "id": "K8S-010",
       "slug": "k8s-010-troubleshooting",
       "title": "Repair a Broken Deployment",
       "track": "kubernetes",
+      "provider": "kubernetes",
       "topic": "troubleshooting",
       "topicTitle": "Troubleshooting",
       "difficulty": "intermediate",
@@ -306,7 +352,72 @@
           "available": true
         }
       ],
-      "hintCount": 3
+      "hintCount": 3,
+      "availability": {
+        "provider": "kubernetes",
+        "available": true
+      }
+    },
+    {
+      "id": "LINUX-001",
+      "slug": "linux-001-files-permissions",
+      "title": "Files, Directories & Permissions",
+      "track": "linux",
+      "provider": "linux",
+      "topic": "permissions",
+      "topicTitle": "Permissions",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 1,
+      "summary": "Prepare a deploy directory in your home directory with the correct contents, group and permissions.\n",
+      "skills": [
+        "linux.filesystem.create",
+        "linux.permissions.modes",
+        "linux.permissions.ownership",
+        "linux.filesystem.inspect"
+      ],
+      "hasSetup": false,
+      "certifications": [
+        "LFCS"
+      ],
+      "prerequisites": [],
+      "hintCount": 3,
+      "availability": {
+        "provider": "linux",
+        "available": true
+      }
+    },
+    {
+      "id": "TF-001",
+      "slug": "tf-001-init-plan-apply",
+      "title": "Terraform Init, Plan & Apply",
+      "track": "terraform",
+      "provider": "terraform",
+      "topic": "workflow",
+      "topicTitle": "Workflow",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 1,
+      "summary": "Write a small local Terraform configuration in the terraform directory and take it through init, plan and apply.\n",
+      "skills": [
+        "terraform.workflow.init",
+        "terraform.workflow.apply",
+        "terraform.language.resources",
+        "terraform.language.outputs",
+        "terraform.state.inspect"
+      ],
+      "hasSetup": false,
+      "certifications": [
+        "TERRAFORM-ASSOCIATE"
+      ],
+      "prerequisites": [],
+      "hintCount": 3,
+      "availability": {
+        "provider": "terraform",
+        "available": true
+      }
     }
   ],
   "tracks": [
@@ -359,9 +470,83 @@
       "difficulties": [
         "beginner",
         "intermediate"
-      ]
+      ],
+      "providers": [
+        "kubernetes"
+      ],
+      "availability": {
+        "available": true
+      }
+    },
+    {
+      "track": "linux",
+      "title": "Linux",
+      "labCount": 1,
+      "topics": [
+        {
+          "topic": "permissions",
+          "title": "Permissions",
+          "labCount": 1
+        }
+      ],
+      "difficulties": [
+        "beginner"
+      ],
+      "providers": [
+        "linux"
+      ],
+      "availability": {
+        "available": true
+      }
+    },
+    {
+      "track": "terraform",
+      "title": "Terraform",
+      "labCount": 1,
+      "topics": [
+        {
+          "topic": "workflow",
+          "title": "Workflow",
+          "labCount": 1
+        }
+      ],
+      "difficulties": [
+        "beginner"
+      ],
+      "providers": [
+        "terraform"
+      ],
+      "availability": {
+        "available": true
+      }
     }
   ],
-  "count": 10,
+  "providers": [
+    {
+      "provider": "kubernetes",
+      "available": true
+    },
+    {
+      "provider": "linux",
+      "available": true
+    },
+    {
+      "provider": "docker",
+      "available": false,
+      "reason": "Docker labs need a per-session Docker daemon. Sharing the host daemon would give a student root on the host, so this provider ships as architecture only.",
+      "remediation": "See README \u2192 Docker sandbox strategy. Enabling it requires rootless Docker-in-Docker or a brokered daemon on a substrate with a real kernel boundary (gVisor / Kata / Firecracker)."
+    },
+    {
+      "provider": "terraform",
+      "available": true
+    },
+    {
+      "provider": "aws",
+      "available": false,
+      "reason": "AWS labs are architecture only. No student credentials, roles, or resources are created by this platform yet.",
+      "remediation": "See README \u2192 Future AWS provider architecture. Enabling it requires scoped STS roles, a permission boundary, session resource tagging, and a budget guard."
+    }
+  ],
+  "count": 12,
   "prerequisitesEnforced": false
 }

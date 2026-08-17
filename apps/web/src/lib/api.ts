@@ -4,6 +4,7 @@ import type {
   EndLabResponse,
   LabDetail,
   LabSummary,
+  ProviderReadiness,
   ResetResponse,
   SessionInfo,
   SessionStatusResponse,
@@ -85,9 +86,13 @@ export interface LabFilters {
 
 export const api = {
   listLabs: (filters: LabFilters = {}) =>
-    request<{ labs: LabSummary[]; tracks: TrackSummary[]; count: number }>(
-      `/api/labs${query(filters)}`,
-    ),
+    request<{
+      labs: LabSummary[];
+      tracks: TrackSummary[];
+      /** Readiness of every provider, including ones with no labs yet. */
+      providers?: ProviderReadiness[];
+      count: number;
+    }>(`/api/labs${query(filters)}`),
 
   listTracks: () => request<{ tracks: TrackSummary[]; count: number }>('/api/tracks'),
 
