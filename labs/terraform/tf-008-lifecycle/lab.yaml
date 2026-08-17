@@ -170,8 +170,14 @@ skills:
   - terraform.plan.interpret
 
 certification:
-  - certification: TERRAFORM-ASSOCIATE
+  - certification: TERRAFORM-ASSOCIATE-004
     relevant: true
     domains:
-      - read-generate-modify-configuration
-      - understand-terraform-basics
+      - '4'
+    objectives:
+      - 4f
+
+review_questions:
+  - TFQ-415
+  - TFQ-314
+  - TFQ-414

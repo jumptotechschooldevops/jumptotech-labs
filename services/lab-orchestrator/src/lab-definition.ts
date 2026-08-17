@@ -123,6 +123,30 @@ const certificationSchema = z
      * a fixed set. Percentages are intentionally absent.
      */
     domains: z.array(z.string().min(1).max(64)).default([]),
+    /**
+     * Official objective ids this lab provides hands-on practice for.
+     *
+     * Validated *here* only as well-formed tokens. Whether an id is actually
+     * published is checked by `CertificationRegistry`, against the vendor's
+     * objective catalog — the lab loader has to keep working standalone (a
+     * track with no certification file must still load), and a lab must never be
+     * able to define an objective merely by naming one.
+     *
+     * This is what the coverage gate counts. A lab claiming an objective it
+     * does not verify is the one failure mode a certification-alignment claim
+     * cannot survive, so the claim is written next to the requirements that
+     * back it rather than in a separate mapping file.
+     */
+    objectives: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(32)
+          .regex(/^[a-z0-9][a-z0-9.-]*$/i, 'objective must be an id such as 4h or 1.2'),
+      )
+      .max(20)
+      .default([]),
   })
   .strict();
 
@@ -297,6 +321,23 @@ const labDefinitionSchema = z
       .min(1)
       .max(12),
     certification: z.array(certificationSchema).max(6).default([]),
+
+    /**
+     * Certification-review questions shown after the lab, by question id.
+     *
+     * Knowledge review, never a substitute for the work: answering these
+     * changes nothing about whether the lab passed. `requirements[]` is the only
+     * thing that decides that, and the two are graded by different code paths
+     * that share no state. Kept deliberately short — three to five — so a
+     * beginner lab ends with a check of understanding rather than a quiz.
+     *
+     * Ids are resolved by `CertificationRegistry`; the lab loader only checks
+     * their shape, so a track with no question bank still loads.
+     */
+    review_questions: z
+      .array(z.string().regex(/^[A-Z][A-Z0-9]{1,11}-\d{3,4}$/, 'must be a question id such as TFQ-001'))
+      .max(10)
+      .default([]),
   })
   .strict();
 
@@ -518,6 +559,27 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
   const duplicateSkills = def.skills.filter((skill, i, all) => all.indexOf(skill) !== i);
   if (duplicateSkills.length > 0) {
     issues.push(`skills contains duplicates: ${[...new Set(duplicateSkills)].join(', ')}`);
+  }
+
+  const duplicateQuestions = def.review_questions.filter((id, i, all) => all.indexOf(id) !== i);
+  if (duplicateQuestions.length > 0) {
+    issues.push(`review_questions contains duplicates: ${[...new Set(duplicateQuestions)].join(', ')}`);
+  }
+
+  for (const entry of def.certification) {
+    const duplicateObjectives = entry.objectives.filter((id, i, all) => all.indexOf(id) !== i);
+    if (duplicateObjectives.length > 0) {
+      issues.push(
+        `certification '${entry.certification}' lists objective(s) twice: ${[...new Set(duplicateObjectives)].join(', ')}`,
+      );
+    }
+    // A lab that says an exam is relevant but names nothing it covers is a
+    // badge, not a mapping — and the coverage matrix would silently omit it.
+    if (entry.relevant && entry.objectives.length === 0 && entry.domains.length === 0) {
+      issues.push(
+        `certification '${entry.certification}' is marked relevant but names no domains or objectives`,
+      );
+    }
   }
 
   const hintLevels = def.hints.map((h) => h.level);

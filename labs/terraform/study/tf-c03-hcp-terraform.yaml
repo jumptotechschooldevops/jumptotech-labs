@@ -1,0 +1,215 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — CONCEPTUAL study unit
+#
+# TF-C03 covers all four objectives of domain 8. HCP Terraform is a hosted
+# platform: using it needs an account, a network and a browser login. This
+# repository's Terraform sandbox has none of those, on purpose.
+#
+# The platform therefore teaches this domain and says plainly that it is
+# teaching, not demonstrating. Nothing here simulates a run, prints invented
+# output, or implies that a student is connected to anything.
+# ---------------------------------------------------------------------------
+id: TF-C03
+certification: TERRAFORM-ASSOCIATE-004
+track: terraform
+title: HCP Terraform
+order: 3
+duration_minutes: 35
+summary: >
+  What HCP Terraform adds to the Terraform you already know: remote runs, shared
+  state, the three ways a run gets triggered, how workspaces and projects
+  organise an estate, and the collaboration and governance features that make it
+  a platform rather than a state store.
+
+objectives:
+  - 8a
+  - 8b
+  - 8c
+  - 8d
+
+sections:
+  - heading: What HCP Terraform is
+    body: >
+      HCP Terraform (formerly Terraform Cloud) is HashiCorp's hosted platform for
+      running Terraform. The configuration language does not change; what changes
+      is where state lives and where operations run.
+
+      At minimum it is a remote backend: state per workspace, stored remotely,
+      locked during runs, and versioned so an earlier version can be inspected or
+      restored. Many teams adopt it for that alone.
+
+      Beyond that it offers *remote operations*: the plan and apply execute on
+      HCP Terraform's own infrastructure, with the log streamed back to whoever
+      started the run. The platform holds the credentials rather than each
+      engineer holding them, every run is recorded against a user and a commit,
+      and the result is a consistent, auditable history of changes rather than a
+      collection of things people did on laptops.
+
+  - heading: Three ways to start a run
+    body: >
+      **VCS-driven.** A workspace is connected to a repository. A commit to the
+      tracked branch queues a run; a pull request queues a speculative plan whose
+      result is posted back to the PR. This is the usual choice for a team,
+      because every applied change is tied to a reviewed commit.
+
+      **CLI-driven.** The working directory contains a `cloud` block. You still
+      type `terraform plan` and `terraform apply`, but the run happens remotely
+      and the output streams to your terminal. Local familiarity, remote
+      execution and remote state.
+
+      **API-driven.** A pipeline uploads a configuration and starts a run through
+      the API. This is for teams with an existing delivery system that needs to
+      drive Terraform itself.
+    diagram: |
+      VCS-driven                CLI-driven                API-driven
+      ──────────                ──────────                ──────────
+      git push                  terraform apply           POST /runs
+          │                          │                        │
+          ▼                          ▼                        ▼
+      ┌──────────────────────────────────────────────────────────────┐
+      │                        HCP Terraform                         │
+      │   workspace: variables · state · run history · policies      │
+      │        ┌────────┐    ┌────────┐    ┌────────────┐            │
+      │        │  plan  │ ─► │ policy │ ─► │   apply    │            │
+      │        └────────┘    │ check  │    └────────────┘            │
+      │                      └────────┘      (needs approval)        │
+      └──────────────────────────────┬───────────────────────────────┘
+                                     ▼
+                             provider APIs
+
+  - heading: Workspaces and projects
+    body: >
+      An HCP Terraform **workspace** is the unit of management: one
+      configuration, its own state, its own variables, and its own run history.
+      It corresponds roughly to one working directory in the CLI world.
+
+      Be careful with the word. A *CLI workspace* — `terraform workspace new` —
+      is a much smaller thing: several state files inside one working directory,
+      sharing one backend and one configuration. The exam expects you to know
+      that these are different concepts with the same name.
+
+      A workspace holds two kinds of variable. Terraform variables are passed to
+      the configuration and must still be declared there with a `variable` block.
+      Environment variables are made available to the run process, which is how
+      provider credentials are usually supplied. Sensitive values are write-only
+      once saved: you can replace one but not read it back.
+
+      **Variable sets** solve the problem of the same value being needed in many
+      workspaces. Define a region, or a set of credentials, once and apply the
+      set to several workspaces or to a whole project.
+
+      **Projects** are the layer above workspaces. Once an organisation has more
+      workspaces than anyone can hold in their head, projects group the related
+      ones so that teams are granted access to a project rather than to dozens of
+      workspaces individually. Objective 8c is new in the 004 exam, which is a
+      fair signal of how central projects have become.
+
+      **Run triggers** connect workspaces: when the upstream workspace applies
+      successfully, the downstream one queues a run. That is how a networking
+      workspace and the application workspaces that depend on it stay in step.
+
+  - heading: Collaboration and governance
+    body: >
+      **Teams and permissions.** Access is granted to teams, per workspace or per
+      project, at levels such as read, plan and write. An engineer who may
+      propose a change is not necessarily one who may apply it.
+
+      **Policy enforcement.** Policy sets — written in Sentinel or in Open Policy
+      Agent's Rego — are evaluated against a plan before an apply is allowed.
+      Enforcement levels range from advisory (report and continue) through
+      soft-mandatory (an authorised user may override) to hard-mandatory (the run
+      stops). This is where an organisational rule such as "every resource must
+      carry an owner tag" becomes something the platform enforces rather than
+      something a reviewer has to remember.
+
+      **Run tasks** call an external service at defined points in a run, which is
+      how third-party cost or security scanning is integrated.
+
+      **Private registry.** An organisation publishes its own modules — and
+      providers — to its members, versioned and discoverable, so teams consume a
+      curated internal catalogue instead of copying directories between
+      repositories.
+
+      **Health assessments.** HCP Terraform can periodically check whether a
+      workspace's real infrastructure still matches its state, surfacing drift
+      before the next apply trips over it.
+
+  - heading: Connecting the CLI
+    body: >
+      For the CLI-driven workflow, the configuration declares a `cloud` block
+      inside its `terraform` block, naming the organisation and either a
+      workspace name or a set of tags. The older `backend "remote"` block still
+      works and you will meet it in existing configurations, but `cloud` is what
+      new work uses.
+
+      Before the first `terraform init` against it, run `terraform login`. That
+      performs a browser-based flow and stores an API token in the CLI
+      configuration; the CLI uses it for every later call.
+
+      Migrating an existing workspace is the ordinary backend migration: replace
+      the backend with a `cloud` block, run `terraform init`, and accept the offer
+      to copy the state across. The infrastructure is untouched — only the record
+      of it moves.
+    diagram: |
+      terraform {
+        cloud {
+          organization = "acme"
+
+          workspaces {
+            name = "ledger-prod"      # or: tags = ["ledger", "prod"]
+          }
+        }
+      }
+
+      $ terraform login      # once per machine — stores an API token
+      $ terraform init       # binds the directory; offers to migrate state
+      $ terraform apply      # runs remotely; output streams to this terminal
+
+limitations: >
+  This unit is CONCEPTUAL. HCP Terraform is a hosted service that requires an
+  account, a network connection and a browser login, and the JumpToTech Terraform
+  sandbox has none of those — it runs with no network access at all, so that a
+  student never needs a cloud account or a bill to learn Terraform. This platform
+  will not fake an HCP Terraform backend, will not print invented run output, and
+  will never imply that you are connected to a workspace when you are not. If you
+  want hands-on experience, HashiCorp offers a free tier: create an organisation
+  at app.terraform.io, run `terraform login`, and follow the official
+  cloud-get-started collection linked below. Everything you have learned in the
+  hands-on labs applies unchanged there — the language and the workflow are the
+  same, and only the location of the state and the run moves.
+
+references:
+  - title: HCP Terraform documentation
+    url: https://developer.hashicorp.com/terraform/cloud-docs
+  - title: Remote operations
+    url: https://developer.hashicorp.com/terraform/cloud-docs/run/remote-operations
+  - title: Workspaces
+    url: https://developer.hashicorp.com/terraform/cloud-docs/workspaces
+  - title: Projects
+    url: https://developer.hashicorp.com/terraform/cloud-docs/projects
+  - title: Managing variables and variable sets
+    url: https://developer.hashicorp.com/terraform/cloud-docs/workspaces/variables/managing-variables
+  - title: Policy enforcement
+    url: https://developer.hashicorp.com/terraform/cloud-docs/policy-enforcement
+  - title: Teams
+    url: https://developer.hashicorp.com/terraform/cloud-docs/users-teams-organizations/teams
+  - title: Private registry
+    url: https://developer.hashicorp.com/terraform/cloud-docs/registry
+  - title: The cloud block
+    url: https://developer.hashicorp.com/terraform/cli/cloud/settings
+  - title: 'Command: terraform login'
+    url: https://developer.hashicorp.com/terraform/cli/commands/login
+  - title: Migrate state to HCP Terraform
+    url: https://developer.hashicorp.com/terraform/cloud-docs/migrate
+  - title: Get started with HCP Terraform (tutorials)
+    url: https://developer.hashicorp.com/terraform/tutorials/cloud-get-started
+
+review_questions:
+  - TFQ-801
+  - TFQ-802
+  - TFQ-804
+  - TFQ-806
+  - TFQ-807
+  - TFQ-808
+  - TFQ-810
+  - TFQ-812

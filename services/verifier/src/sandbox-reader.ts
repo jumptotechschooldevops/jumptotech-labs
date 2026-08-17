@@ -34,6 +34,7 @@
  */
 import {
   parseTerraformState,
+  scanHcl,
   scanHclFiles,
   TerraformStateParseError,
   type ExecResult,
@@ -127,23 +128,39 @@ export class SandboxReader {
    * thing to put in a checklist. `stateProblem()` carries the detail for the
    * one check that needs to tell them apart.
    */
-  async terraformState(dir: string): Promise<TerraformState | null> {
-    return (await this.#stateResult(dir)).state;
+  async terraformState(dir: string, stateFile?: string): Promise<TerraformState | null> {
+    return (await this.#stateResult(dir, stateFile)).state;
   }
 
   /** Why state could not be read, when a file was there but unusable. */
-  async stateProblem(dir: string): Promise<string | undefined> {
-    return (await this.#stateResult(dir)).problem;
+  async stateProblem(dir: string, stateFile?: string): Promise<string | undefined> {
+    return (await this.#stateResult(dir, stateFile)).problem;
   }
 
-  #stateResult(dir: string): Promise<{ state: TerraformState | null; problem?: string }> {
-    return this.#once(`state:${dir}`, async () => {
-      const read = await this.path(this.join(dir, TERRAFORM_STATE_FILE));
+  /**
+   * Where a lab's state lives, relative to the sandbox home.
+   *
+   * `stateFile` is the local backend's `path` argument: absent for every lab
+   * using the default, present for the one that teaches relocating it. Resolved
+   * here rather than in each handler so "no readable state in X" always names
+   * the file the check actually looked at.
+   */
+  statePath(dir: string, stateFile?: string): string {
+    return this.join(dir, stateFile ?? TERRAFORM_STATE_FILE);
+  }
+
+  #stateResult(
+    dir: string,
+    stateFile?: string,
+  ): Promise<{ state: TerraformState | null; problem?: string }> {
+    const relative = this.statePath(dir, stateFile);
+    return this.#once(`state:${relative}`, async () => {
+      const read = await this.path(relative);
       if (!read || read.type !== 'file' || read.content === undefined) return { state: null };
       if (read.truncated) {
         return {
           state: null,
-          problem: `terraform.tfstate in '${dir}' is too large for the platform to read`,
+          problem: `${relative} is too large for the platform to read`,
         };
       }
       try {
@@ -154,6 +171,23 @@ export class SandboxReader {
           problem: error instanceof Error ? error.message : String(error),
         };
       }
+    });
+  }
+
+  /**
+   * The dependency lock file's block structure, or `null` when there is none.
+   *
+   * `.terraform.lock.hcl` is HCL, so the same scanner that reads a student's
+   * `.tf` files reads it — no second parser, and no need to run Terraform to
+   * find out what `init` resolved.
+   */
+  terraformLock(dir: string): Promise<HclDocument | null> {
+    return this.#once(`lock:${dir}`, async () => {
+      const read = await this.path(this.join(dir, TERRAFORM_LOCK_FILE), {
+        maxBytes: MAX_CONFIG_FILE_BYTES,
+      });
+      if (!read || read.type !== 'file' || read.content === undefined) return null;
+      return scanHcl(read.content, TERRAFORM_LOCK_FILE);
     });
   }
 

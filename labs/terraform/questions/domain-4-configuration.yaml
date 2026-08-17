@@ -1,0 +1,482 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — certification questions
+#
+# Domain 4: Terraform configuration
+#
+# The largest domain, and the one the 004 revision changed most: 4f now names
+# explicit dependencies and create_before_destroy, 4g adds custom conditions,
+# and 4h extends sensitive-data handling to ephemeral values and write-only
+# arguments. Original JumpToTech material written from the official HashiCorp
+# documentation.
+# ---------------------------------------------------------------------------
+certification: TERRAFORM-ASSOCIATE-004
+description: Resources and data sources, references, variables and outputs, complex types, expressions and functions, dependencies, custom conditions, and sensitive data.
+
+questions:
+  - id: TFQ-401
+    objective: 4a
+    type: single
+    question: >
+      What is the difference between a `resource` block and a `data` block?
+    choices:
+      - A `resource` block describes an object Terraform creates and manages; a `data` block reads an object Terraform does not manage
+      - A `resource` block is evaluated at plan time; a `data` block is evaluated at apply time
+      - A `resource` block belongs to the root module; a `data` block may only appear in a child module
+      - A `resource` block is written in HCL; a `data` block is written in JSON
+    correct_answer:
+      - A `resource` block describes an object Terraform creates and manages; a `data` block reads an object Terraform does not manage
+    explanation: >
+      Managed resources are created, updated and destroyed by Terraform and are
+      recorded in state as `managed`. Data sources are read-only lookups —
+      something else owns the object, and Terraform simply wants its attributes.
+      Removing a data source from a configuration destroys nothing, which is the
+      practical consequence of the distinction.
+    official_reference: https://developer.hashicorp.com/terraform/language/data-sources
+
+  - id: TFQ-402
+    objective: 4a
+    type: single
+    question: >
+      A team reads an existing configuration file from disk with `data
+      "local_file" "settings"`, then someone edits that file by hand and runs
+      `terraform plan`. What does Terraform do with the data source?
+    choices:
+      - Re-reads it during the plan, so the new contents are reflected in any value derived from it
+      - Uses the value recorded at the last apply, until the next apply refreshes it
+      - Reports drift and refuses to plan until the file is restored
+      - Ignores the change, because data sources are read only once when first added
+    correct_answer:
+      - Re-reads it during the plan, so the new contents are reflected in any value derived from it
+    explanation: >
+      Data sources are read during planning, so their values reflect the world as
+      it is at plan time rather than as it was at the last apply. That is what
+      makes them useful for looking up something another team owns — and also why
+      a resource derived from a data source can show a change even though nobody
+      edited the configuration.
+    official_reference: https://developer.hashicorp.com/terraform/language/data-sources
+
+  - id: TFQ-403
+    objective: 4b
+    type: single
+    question: >
+      How do you refer to the `id` attribute of a managed resource declared as
+      `resource "random_pet" "release"`?
+    choices:
+      - random_pet.release.id
+      - data.random_pet.release.id
+      - resource.random_pet.release.id
+      - var.random_pet.release.id
+    correct_answer:
+      - random_pet.release.id
+    explanation: >
+      A managed resource is referenced as `<TYPE>.<NAME>.<ATTRIBUTE>`, with no
+      prefix. The `data.` prefix is for data sources, `var.` is for input
+      variables, and while `resource.` exists in some contexts such as import and
+      moved blocks it is not how you read an attribute in an ordinary expression.
+    official_reference: https://developer.hashicorp.com/terraform/language/expressions/references
+
+  - id: TFQ-404
+    objective: 4b
+    type: true_false
+    question: >
+      Referring to one resource's attribute from another resource's argument
+      creates a dependency that Terraform uses to order the two operations.
+    correct_answer:
+      - 'True'
+    explanation: >
+      A reference is how Terraform learns that one object must exist before
+      another can be created. The dependency is implicit — you get it simply by
+      using the value — and it is why explicit `depends_on` is needed only when
+      an ordering requirement exists that no reference expresses.
+    official_reference: https://developer.hashicorp.com/terraform/tutorials/configuration-language/dependencies
+
+  - id: TFQ-405
+    objective: 4c
+    type: single
+    question: >
+      A variable is declared with no `default`, and no value is supplied through
+      a `.tfvars` file, a `-var` flag or an environment variable. What happens
+      when a non-interactive `terraform apply` runs?
+    choices:
+      - The run fails, because a variable with no default and no value cannot be resolved
+      - The variable is treated as an empty string
+      - The variable is treated as `null` and the resource is skipped
+      - Terraform reads the value from state, where the previous run recorded it
+    correct_answer:
+      - The run fails, because a variable with no default and no value cannot be resolved
+    explanation: >
+      A variable without a default is required. Interactively Terraform prompts
+      for it; non-interactively there is nothing to prompt, so the run fails.
+      This is exactly why you leave out the default when there is no sensible one
+      — "which service is this?" should stop the run rather than quietly pick
+      something.
+    official_reference: https://developer.hashicorp.com/terraform/language/values/variables
+
+  - id: TFQ-406
+    objective: 4c
+    type: single
+    question: >
+      A variable `region` has a default of `eu-west-1`, is set to `us-east-1` in
+      `terraform.tfvars`, and the run is started with `-var="region=ap-south-1"`.
+      Which value does Terraform use?
+    choices:
+      - ap-south-1
+      - us-east-1
+      - eu-west-1
+      - The run fails because the value is defined three times
+    correct_answer:
+      - ap-south-1
+    explanation: >
+      Terraform resolves a variable from the highest-precedence source that
+      supplies it. A `-var` flag on the command line beats a `terraform.tfvars`
+      file, which in turn beats the declared default. Environment variables named
+      `TF_VAR_<name>` sit below the files. Defining a value more than once is
+      normal and is never an error.
+    official_reference: https://developer.hashicorp.com/terraform/language/values/variables
+
+  - id: TFQ-407
+    objective: 4c
+    type: multiple
+    question: >
+      Pick the 2 true statements about output values.
+    choices:
+      - A calling module can read a child module's output as `module.<name>.<output>`
+      - Output values are recorded in state, so `terraform output` works without re-running a plan
+      - An output value can be referenced from inside the module that declares it, as `output.<name>`
+      - Outputs are evaluated before resources are created, so they can be used as resource arguments
+      - An output marked `sensitive` is omitted from state entirely
+    correct_answer:
+      - A calling module can read a child module's output as `module.<name>.<output>`
+      - Output values are recorded in state, so `terraform output` works without re-running a plan
+    explanation: >
+      Outputs are a module's return values: the caller reads them through the
+      `module.` prefix, and the root module's outputs are stored in state so
+      `terraform output` can print them at any time. There is no `output.` prefix
+      for reading your own outputs — reference the underlying value instead — and
+      marking an output sensitive only suppresses it from CLI display; the value
+      is still in state.
+    official_reference: https://developer.hashicorp.com/terraform/language/values/outputs
+
+  - id: TFQ-408
+    objective: 4d
+    type: single
+    question: >
+      Which type constraint describes a value like `{ web = { port = 443, tier =
+      "public" }, api = { port = 8080, tier = "internal" } }`?
+    choices:
+      - map(object({ port = number, tier = string }))
+      - list(object({ port = number, tier = string }))
+      - object({ port = number, tier = string })
+      - set(map(string))
+    correct_answer:
+      - map(object({ port = number, tier = string }))
+    explanation: >
+      The outer value is keyed by arbitrary strings (`web`, `api`), which is a
+      map. Each element has the same fixed set of named attributes with
+      per-attribute types, which is an object. A list would be indexed by number
+      rather than by name, a bare object would describe one element rather than
+      the collection, and `set(map(string))` loses both the keys and the number
+      typing.
+    official_reference: https://developer.hashicorp.com/terraform/language/expressions/types
+
+  - id: TFQ-409
+    objective: 4d
+    type: multiple
+    question: >
+      Pick the 2 true statements about Terraform's collection types.
+    choices:
+      - A set has no ordering and no duplicate elements
+      - A map's elements are identified by string keys
+      - A list's elements are identified by string keys
+      - A tuple requires every element to have the same type
+      - A set can be indexed by position, as `local.things[0]`
+    correct_answer:
+      - A set has no ordering and no duplicate elements
+      - A map's elements are identified by string keys
+    explanation: >
+      Lists are ordered and indexed by whole numbers; maps are keyed by strings;
+      sets are unordered collections of unique values and therefore cannot be
+      indexed by position. Tuples are the structural counterpart of lists and
+      allow a different type per position, which is what separates them from a
+      `list(...)`.
+    official_reference: https://developer.hashicorp.com/terraform/language/expressions/types
+
+  - id: TFQ-410
+    objective: 4d
+    type: single
+    question: >
+      A variable is declared as `type = list(string)` and a caller supplies
+      `["a", "b", 3]`. What does Terraform do?
+    choices:
+      - Converts 3 to the string "3", because the element type can accept it
+      - Fails, because a list of strings may not contain a number
+      - Silently drops the third element
+      - Treats the whole value as a tuple instead
+    correct_answer:
+      - Converts 3 to the string "3", because the element type can accept it
+    explanation: >
+      Terraform applies automatic type conversion where it is unambiguous, and
+      number-to-string is one of those cases. The conversion is part of what
+      makes type constraints useful rather than brittle: they document intent
+      and normalise input. A value that genuinely cannot be converted — an object
+      where a string is required, say — is an error.
+    official_reference: https://developer.hashicorp.com/terraform/language/expressions/types
+
+  - id: TFQ-411
+    objective: 4e
+    type: single
+    question: >
+      What does the expression `[for name, config in var.services : name if
+      config.tier == "public"]` produce?
+    choices:
+      - A list of the map keys whose element has a `tier` of "public"
+      - A map of the same shape as `var.services`, filtered to public tiers
+      - A single string joining every public service name
+      - An error, because a `for` expression cannot include a condition
+    correct_answer:
+      - A list of the map keys whose element has a `tier` of "public"
+    explanation: >
+      Square brackets around a `for` expression produce a list (braces would
+      produce a map or object). Iterating a map yields key and value, the
+      expression after the colon says what to emit — here the key — and the `if`
+      clause filters. `for` expressions do support conditions, which is what
+      makes them a filter as well as a transformation.
+    official_reference: https://developer.hashicorp.com/terraform/language/expressions/for
+
+  - id: TFQ-412
+    objective: 4e
+    type: single
+    question: >
+      Which expression sets `instance_count` to 3 when `var.environment` is
+      "prod" and 1 otherwise?
+    choices:
+      - 'var.environment == "prod" ? 3 : 1'
+      - 'if var.environment == "prod" then 3 else 1'
+      - 'coalesce(var.environment == "prod", 3, 1)'
+      - 'lookup(var.environment, "prod", 3, 1)'
+    correct_answer:
+      - 'var.environment == "prod" ? 3 : 1'
+    explanation: >
+      Terraform's conditional expression is the ternary form `condition ?
+      true_value : false_value`. There is no `if/then/else` statement in the
+      language. `coalesce` returns the first non-null argument and `lookup` reads
+      a key from a map; neither takes a condition.
+    official_reference: https://developer.hashicorp.com/terraform/language/expressions/conditionals
+
+  - id: TFQ-413
+    objective: 4e
+    type: multiple
+    question: >
+      Pick the 2 statements that are true about Terraform's built-in functions.
+    choices:
+      - Functions such as `join`, `merge` and `jsonencode` are available anywhere an expression is
+      - The set of functions is fixed by Terraform, and a configuration cannot define its own
+      - A configuration can define a custom function with a `function` block in the root module
+      - Functions may perform arbitrary shell commands when passed a command string
+      - Functions are evaluated only at apply time, never during a plan
+    correct_answer:
+      - Functions such as `join`, `merge` and `jsonencode` are available anywhere an expression is
+      - The set of functions is fixed by Terraform, and a configuration cannot define its own
+    explanation: >
+      Terraform ships a fixed library of built-in functions and a configuration
+      cannot add to it — which is deliberate, because it keeps a configuration's
+      behaviour predictable to anyone reading it. Functions are pure expression
+      evaluation: they run during plan as well as apply, and none of them
+      executes a command.
+    official_reference: https://developer.hashicorp.com/terraform/language/functions
+
+  - id: TFQ-414
+    objective: 4f
+    type: single
+    question: >
+      A `null_resource` must not run until a configuration file has been written
+      by a `local_file` resource, but its arguments do not refer to that file in
+      any way. How should the ordering be expressed?
+    choices:
+      - Add `depends_on = [local_file.config]` to the null_resource
+      - Move the null_resource below the local_file in the same file
+      - Add `lifecycle { create_before_destroy = true }` to the local_file
+      - Split the two resources into separate working directories and apply in order
+    correct_answer:
+      - Add `depends_on = [local_file.config]` to the null_resource
+    explanation: >
+      `depends_on` exists exactly for a dependency Terraform cannot infer,
+      because no attribute of one resource appears in the other. Block order in a
+      file means nothing to Terraform, `create_before_destroy` changes
+      replacement ordering rather than creation ordering, and splitting
+      directories replaces one configuration with two state files to keep in
+      step.
+    official_reference: https://developer.hashicorp.com/terraform/language/meta-arguments/depends_on
+
+  - id: TFQ-415
+    objective: 4f
+    type: single
+    question: >
+      A resource must be replaced, and the team cannot tolerate a window in which
+      it does not exist. Which lifecycle setting addresses this?
+    choices:
+      - create_before_destroy = true
+      - prevent_destroy = true
+      - ignore_changes = all
+      - replace_triggered_by = []
+    correct_answer:
+      - create_before_destroy = true
+    explanation: >
+      By default Terraform destroys the old object before creating the
+      replacement. `create_before_destroy` inverts that order so the new object
+      exists before the old one goes away. `prevent_destroy` blocks destruction
+      entirely, `ignore_changes` suppresses drift on named arguments, and
+      `replace_triggered_by` chooses *when* to replace rather than in which
+      order.
+    official_reference: https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle
+
+  - id: TFQ-416
+    objective: 4f
+    type: multiple
+    question: >
+      Pick the 2 true statements about resource dependencies in Terraform.
+    choices:
+      - Terraform builds a dependency graph and creates independent resources concurrently
+      - A reference to another resource's attribute creates an implicit dependency
+      - Every dependency must be declared with `depends_on`, because Terraform does not infer any
+      - "`depends_on` accepts arbitrary expressions, including function calls"
+      - Dependencies are read from the order of blocks within each `.tf` file
+    correct_answer:
+      - Terraform builds a dependency graph and creates independent resources concurrently
+      - A reference to another resource's attribute creates an implicit dependency
+    explanation: >
+      Terraform derives a graph from references and walks it, running
+      independent nodes in parallel. Most dependencies come for free from
+      references; `depends_on` is the escape hatch for the rest and takes a list
+      of static references only, not computed expressions. Block order in a file
+      carries no meaning at all.
+    official_reference: https://developer.hashicorp.com/terraform/internals/graph
+
+  - id: TFQ-417
+    objective: 4g
+    type: single
+    question: >
+      A variable must only ever be `dev`, `staging` or `prod`, and a run with any
+      other value should stop with a clear message. What is the right mechanism?
+    choices:
+      - A `validation` block inside the `variable` block, with a `condition` and an `error_message`
+      - A `precondition` block inside the variable, checked before the plan runs
+      - A `check` block that asserts the variable's value after apply
+      - A conditional expression that returns `null` for unexpected values
+    correct_answer:
+      - A `validation` block inside the `variable` block, with a `condition` and an `error_message`
+    explanation: >
+      Variable validation is evaluated as soon as the value is known, so a bad
+      input is rejected before Terraform plans anything. Preconditions and
+      postconditions live in a resource's `lifecycle` block, `check` blocks
+      report assertions without blocking a run, and returning `null` would let
+      the mistake through silently.
+    official_reference: https://developer.hashicorp.com/terraform/language/expressions/custom-conditions
+
+  - id: TFQ-418
+    objective: 4g
+    type: single
+    question: >
+      Where do `precondition` and `postcondition` blocks belong?
+    choices:
+      - Inside a resource or data source's `lifecycle` block
+      - Inside the `terraform` block, alongside `required_providers`
+      - Inside a `check` block, as siblings of `assert`
+      - Inside a `variable` block, alongside `validation`
+    correct_answer:
+      - Inside a resource or data source's `lifecycle` block
+    explanation: >
+      Both are nested in `lifecycle`. A precondition is checked before the
+      resource's own action, so it can stop a plan on an assumption that does
+      not hold; a postcondition is checked after, so it can catch a result that
+      is wrong. `check` blocks are a separate top-level construct containing
+      `assert` blocks, and `validation` belongs to variables.
+    official_reference: https://developer.hashicorp.com/terraform/language/expressions/custom-conditions
+
+  - id: TFQ-419
+    objective: 4g
+    type: single
+    question: >
+      How does a failing assertion inside a `check` block differ from a failing
+      resource `postcondition`?
+    choices:
+      - A failed check reports a warning and the run continues; a failed postcondition is an error that stops the run
+      - A failed check stops the run; a failed postcondition only logs at TRACE level
+      - Both stop the run, but a check reports its message first
+      - Neither affects the run; both are informational only
+    correct_answer:
+      - A failed check reports a warning and the run continues; a failed postcondition is an error that stops the run
+    explanation: >
+      `check` blocks are deliberately non-blocking: they exist to report on
+      conditions you want visibility of — health of a deployed endpoint, say —
+      without one transient failure blocking every future apply. Preconditions
+      and postconditions are guarantees, so breaking one is an error.
+    official_reference: https://developer.hashicorp.com/terraform/language/checks
+
+  - id: TFQ-420
+    objective: 4h
+    type: multiple
+    question: >
+      A variable is declared with `sensitive = true`. Pick the 2 true statements
+      about what that does.
+    choices:
+      - Terraform redacts the value in plan and apply output
+      - Values derived from it are also treated as sensitive and redacted
+      - The value is encrypted in the state file
+      - The value is omitted from the state file entirely
+      - The value can no longer be used as a resource argument
+    correct_answer:
+      - Terraform redacts the value in plan and apply output
+      - Values derived from it are also treated as sensitive and redacted
+    explanation: >
+      `sensitive` controls *display*: Terraform suppresses the value in its own
+      output and propagates that marking to anything derived from it. It does not
+      encrypt or omit anything — the value is written to state in plain text, and
+      protecting state is a separate concern handled by the backend and by access
+      control. This is the single most commonly misunderstood point about
+      sensitive values.
+    official_reference: https://developer.hashicorp.com/terraform/language/state/sensitive-data
+
+  - id: TFQ-421
+    objective: 4h
+    type: single
+    question: >
+      A team needs a database password available to the provider during a run
+      but does not want it persisted in state. Which Terraform 1.10-and-later
+      feature is designed for this?
+    choices:
+      - Ephemeral values, which exist only during a run and are never written to state or plan files
+      - Marking the variable `sensitive`, which keeps it out of state
+      - Storing the value in a local value, because locals are not persisted
+      - Passing the value with `-var`, because command-line values are not recorded
+    correct_answer:
+      - Ephemeral values, which exist only during a run and are never written to state or plan files
+    explanation: >
+      Ephemeral input variables, outputs and resources were introduced for
+      exactly this: a value is available while Terraform runs and is then
+      discarded, rather than being recorded. `sensitive` only redacts display,
+      and neither locals nor `-var` keeps a value out of state once it reaches a
+      resource argument. Write-only arguments, added in 1.11, are the companion
+      feature on the resource side.
+    official_reference: https://developer.hashicorp.com/terraform/language/values/ephemeral
+
+  - id: TFQ-422
+    objective: 4h
+    type: single
+    question: >
+      Which practice best protects secrets in a Terraform workflow?
+    choices:
+      - Fetch secrets at run time from a dedicated secrets manager such as Vault, and treat the state file itself as sensitive
+      - Commit secrets to a `secrets.tfvars` file in the repository so every engineer can run a plan
+      - Mark every output sensitive, which removes secrets from the state file
+      - Rely on the provider to encrypt any argument whose name contains "password"
+    correct_answer:
+      - Fetch secrets at run time from a dedicated secrets manager such as Vault, and treat the state file itself as sensitive
+    explanation: >
+      The documented approach is to keep secrets out of the configuration
+      entirely, retrieve them at run time from a system built to hold them, and
+      protect state with a backend that encrypts at rest and restricts access —
+      because any secret that reaches a resource argument can appear in state.
+      Committing secrets, or assuming a marking or a naming convention removes
+      them, are all ways of believing a secret is protected when it is not.
+    official_reference: https://developer.hashicorp.com/terraform/tutorials/secrets/secrets-vault

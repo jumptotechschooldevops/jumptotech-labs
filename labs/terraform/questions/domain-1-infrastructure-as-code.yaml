@@ -1,0 +1,193 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — certification questions
+#
+# Domain 1: Infrastructure as Code (IaC) with Terraform
+#
+# Original JumpToTech material, written from the official HashiCorp
+# documentation linked on each question. Nothing here is reproduced from an exam
+# dump, a commercial course, or the official sample questions — those were read
+# only to understand the format (single answer, multiple answer, true/false) and
+# the depth expected.
+#
+# Each question is deliberately scenario-shaped where a scenario adds something.
+# A question that can be answered by recognising a keyword tests recall; one that
+# describes a team's situation tests whether the concept landed.
+# ---------------------------------------------------------------------------
+certification: TERRAFORM-ASSOCIATE-004
+description: Infrastructure as Code concepts, the advantages of IaC, and Terraform's provider-agnostic model.
+
+questions:
+  - id: TFQ-101
+    objective: 1a
+    type: single
+    question: >
+      A team currently provisions its environments by following a wiki page of
+      console clicks. They want to move to infrastructure as code. Which
+      statement best describes what that change actually means?
+    choices:
+      - The infrastructure is defined in machine-readable configuration files that are the source of truth for what should exist
+      - The infrastructure is documented in a wiki page that engineers keep up to date after each change
+      - The infrastructure is provisioned by a script that records each console click as it happens
+      - The infrastructure is managed by a monitoring tool that alerts when a resource is missing
+    correct_answer:
+      - The infrastructure is defined in machine-readable configuration files that are the source of truth for what should exist
+    explanation: >
+      Infrastructure as code means the desired state of the infrastructure lives
+      in configuration files that a tool reads and acts on. The files are the
+      authority: what is running is derived from them, rather than the files
+      being a description written after the fact. Documentation, click-recording
+      and monitoring may all be useful, but none of them makes the definition
+      authoritative — which is the property that makes provisioning repeatable
+      and reviewable.
+    official_reference: https://developer.hashicorp.com/terraform/intro
+
+  - id: TFQ-102
+    objective: 1a
+    type: single
+    question: >
+      Terraform configuration is described as declarative. What does that mean
+      for the engineer writing it?
+    choices:
+      - You describe the end state you want, and Terraform works out the operations needed to reach it
+      - You describe each operation in order, and Terraform executes them exactly as written
+      - You describe the end state, and Terraform asks you to confirm each operation before running it
+      - You describe the operations, and Terraform reorders them alphabetically before running them
+    correct_answer:
+      - You describe the end state you want, and Terraform works out the operations needed to reach it
+    explanation: >
+      In a declarative language you write what the result should be, not the
+      steps. Terraform compares your configuration with what it has recorded and
+      derives the create, update and destroy actions needed to close the gap.
+      That is why the same configuration applied twice produces no second round
+      of changes — the desired state is already the actual state. Confirmation
+      prompts exist, but they are a workflow feature, not what makes the
+      language declarative.
+    official_reference: https://developer.hashicorp.com/terraform/intro
+
+  - id: TFQ-103
+    objective: 1a
+    type: true_false
+    question: >
+      Because Terraform configuration is declarative, the order in which you
+      write resource blocks in a file determines the order in which Terraform
+      creates them.
+    correct_answer:
+      - 'False'
+    explanation: >
+      Terraform derives creation order from the dependency graph it builds out
+      of references between resources, not from the order blocks appear in a
+      file. Resources with no dependency between them may be created
+      concurrently. When an order is required but no reference exists to imply
+      it, you state it with the depends_on meta-argument.
+    official_reference: https://developer.hashicorp.com/terraform/internals/graph
+
+  - id: TFQ-104
+    objective: 1b
+    type: multiple
+    question: >
+      A platform team is arguing for adopting infrastructure as code. Which two
+      of the following are genuine advantages of an IaC approach over manual
+      provisioning?
+    choices:
+      - Infrastructure changes can be reviewed, versioned and rolled back like any other code change
+      - The same configuration can be used to build repeated, consistent copies of an environment
+      - Infrastructure becomes immune to provider outages because the configuration describes it locally
+      - Cloud provider costs are reduced automatically because the tool selects cheaper resources
+      - Credentials are no longer required, because the configuration authenticates on its own
+    correct_answer:
+      - Infrastructure changes can be reviewed, versioned and rolled back like any other code change
+      - The same configuration can be used to build repeated, consistent copies of an environment
+    explanation: >
+      The two real advantages here are version control and repeatability: a
+      change to infrastructure becomes a diff someone can review, and one
+      definition can build development, staging and production without them
+      drifting apart. The other three are not claims IaC makes. A configuration
+      file does not keep a provider online, does not choose cheaper resources on
+      your behalf, and still needs credentials to talk to a provider API.
+    official_reference: https://developer.hashicorp.com/terraform/intro
+
+  - id: TFQ-105
+    objective: 1b
+    type: single
+    question: >
+      Two engineers each built a "staging" environment by hand six months apart.
+      The environments now behave differently and nobody can say exactly how they
+      differ. Which IaC benefit most directly addresses this problem?
+    choices:
+      - Repeatable provisioning from a single definition, which removes configuration drift between environments
+      - Faster provisioning, because a tool issues API calls more quickly than a human clicks
+      - Automatic cost reporting, which shows which environment is more expensive
+      - Built-in monitoring, which alerts when the two environments diverge
+    correct_answer:
+      - Repeatable provisioning from a single definition, which removes configuration drift between environments
+    explanation: >
+      The problem described is drift between environments that were built
+      independently. IaC addresses it by making one definition the source for
+      every environment, with the differences expressed as explicit input values
+      rather than as accumulated undocumented decisions. Speed and cost
+      reporting are real but secondary; Terraform is not a monitoring tool.
+    official_reference: https://developer.hashicorp.com/terraform/tutorials/aws-get-started/infrastructure-as-code
+
+  - id: TFQ-106
+    objective: 1b
+    type: single
+    question: >
+      Which statement best explains why representing infrastructure as code
+      improves collaboration on a platform team?
+    choices:
+      - A proposed infrastructure change becomes a diff that colleagues can read, comment on and approve before it is applied
+      - A proposed infrastructure change is applied immediately, so colleagues can see the result and object afterwards
+      - Infrastructure code removes the need for engineers to understand the underlying provider
+      - Infrastructure code guarantees that only one engineer can work on the environment at a time
+    correct_answer:
+      - A proposed infrastructure change becomes a diff that colleagues can read, comment on and approve before it is applied
+    explanation: >
+      Once infrastructure is code, the ordinary software collaboration tools
+      apply to it: pull requests, review, history and blame. The change is
+      visible and discussable before it reaches anything real. Engineers still
+      need to understand the provider they are using, and serialising work is a
+      property of state locking rather than of writing code.
+    official_reference: https://developer.hashicorp.com/terraform/intro
+
+  - id: TFQ-107
+    objective: 1c
+    type: single
+    question: >
+      An organisation runs workloads across two cloud providers and an
+      on-premises virtualisation platform, and also manages DNS and a SaaS
+      monitoring tool. How does Terraform support this in a single workflow?
+    choices:
+      - Each system is managed through its own provider plugin, and one configuration can use several providers together
+      - Terraform translates a single generic resource definition into whichever cloud is configured at apply time
+      - Terraform supports one provider per working directory, so each system needs its own separate workflow
+      - Terraform manages cloud providers natively and requires a separate tool for SaaS and on-premises systems
+    correct_answer:
+      - Each system is managed through its own provider plugin, and one configuration can use several providers together
+    explanation: >
+      Terraform itself knows nothing about any particular platform. Providers
+      are plugins that expose a platform's API as resource and data source
+      types, and a single configuration may require and use as many of them as
+      it needs. That is what makes the workflow service-agnostic: the same
+      write, plan, apply loop covers cloud, on-premises and SaaS. Terraform does
+      not offer a generic resource that maps onto whichever cloud is configured;
+      resources are provider-specific.
+    official_reference: https://developer.hashicorp.com/terraform/language/providers
+
+  - id: TFQ-108
+    objective: 1c
+    type: true_false
+    question: >
+      Because Terraform can manage more than one cloud, a configuration written
+      for one cloud provider can be pointed at a different cloud provider without
+      changing its resource blocks.
+    correct_answer:
+      - 'False'
+    explanation: >
+      Terraform gives you one workflow and one language across many platforms,
+      not one set of resource types. Each provider defines its own resource
+      types and arguments, so moving a configuration between clouds means
+      rewriting the resources against the other provider's schema. The benefit
+      of the multi-cloud model is that engineers do not have to learn a new tool
+      and a new workflow for each platform — not that configurations are
+      portable between them.
+    official_reference: https://developer.hashicorp.com/terraform/intro/use-cases

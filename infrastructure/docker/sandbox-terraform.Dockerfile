@@ -31,10 +31,24 @@ ARG SANDBOX_LINUX_IMAGE=jumptotech/lab-linux:latest
 # --- build stage: fetch the CLI and mirror the providers --------------------
 FROM debian:bookworm-slim AS tools
 
-ARG TERRAFORM_VERSION=1.9.8
+# Pinned to the version the HashiCorp Certified: Terraform Associate (004)
+# exam states it tests. TERRAFORM-CERT-004 raised this from 1.9.8 so that the
+# CLI a student practises on is the CLI the certification describes — the 004
+# objectives include material (ephemeral values, write-only arguments) that
+# does not exist before 1.10, and a student reading the 1.12 documentation
+# should not meet a CLI that disagrees with it.
+#
+# See docs/certifications/terraform-associate-004.md for the compatibility
+# review behind this number.
+ARG TERRAFORM_VERSION=1.12.2
 # Every version is exact. Provider behaviour and state attribute names change
 # between releases, and the verifier reads state attributes — so a floating
 # constraint would make a lab's checks depend on when the image was built.
+#
+# These three are deliberately *unchanged* by the CLI upgrade. A lab's checks
+# compare attribute values the provider produced, so moving a provider version
+# is a separate decision with its own regression risk, and bundling it into a
+# CLI upgrade would make a failure impossible to attribute.
 ARG LOCAL_PROVIDER_VERSION=2.5.2
 ARG RANDOM_PROVIDER_VERSION=3.6.3
 # `null_resource` and its `triggers`, used by TF-005 and TF-008 to teach

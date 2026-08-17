@@ -141,8 +141,17 @@ skills:
   - terraform.state.inspect
 
 certification:
-  - certification: TERRAFORM-ASSOCIATE
+  - certification: TERRAFORM-ASSOCIATE-004
     relevant: true
     domains:
-      - use-the-terraform-cli
-      - read-and-write-configuration
+      - '3'
+    objectives:
+      - 3a
+      - 3b
+      - 3e
+
+review_questions:
+  - TFQ-301
+  - TFQ-302
+  - TFQ-305
+  - TFQ-311

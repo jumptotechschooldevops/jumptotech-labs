@@ -158,8 +158,17 @@ skills:
   - terraform.workflow.destroy
 
 certification:
-  - certification: TERRAFORM-ASSOCIATE
+  - certification: TERRAFORM-ASSOCIATE-004
     relevant: true
     domains:
-      - understand-terraform-state
-      - use-the-terraform-cli
+      - '2'
+      - '7'
+    objectives:
+      - 2d
+      - 7b
+
+review_questions:
+  - TFQ-210
+  - TFQ-211
+  - TFQ-704
+  - TFQ-705

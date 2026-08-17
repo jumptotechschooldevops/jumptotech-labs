@@ -1,0 +1,339 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — certification questions
+#
+# Domain 3: Core Terraform workflow
+#
+# Original JumpToTech material written from the official HashiCorp
+# documentation. See domain-1 for the sourcing note that applies to every file
+# in this directory.
+# ---------------------------------------------------------------------------
+certification: TERRAFORM-ASSOCIATE-004
+description: Write, plan, apply — plus init, validate, fmt and destroy, and what each one actually does.
+
+questions:
+  - id: TFQ-301
+    objective: 3a
+    type: single
+    question: >
+      Which sequence describes the core Terraform workflow as HashiCorp
+      documents it?
+    choices:
+      - Write, Plan, Apply
+      - Init, Validate, Destroy
+      - Plan, Import, Apply
+      - Format, Apply, Refresh
+    correct_answer:
+      - Write, Plan, Apply
+    explanation: >
+      The core workflow is Write (author the configuration), Plan (review the
+      change Terraform proposes), Apply (make it real). Commands such as `init`,
+      `validate` and `fmt` support that loop, and `destroy` and `import` are
+      operations you reach for at particular moments — but the loop the whole
+      tool is shaped around is those three steps.
+    official_reference: https://developer.hashicorp.com/terraform/intro/core-workflow
+
+  - id: TFQ-302
+    objective: 3a
+    type: single
+    question: >
+      An engineer edits a configuration and immediately runs `terraform apply`
+      without running `terraform plan` first. What happens?
+    choices:
+      - Terraform generates a plan, shows it, and asks for confirmation before making any change
+      - Terraform refuses to run until a saved plan file is supplied
+      - Terraform applies the change without showing what it intends to do
+      - Terraform runs `terraform plan` and stops, requiring a second command to apply
+    correct_answer:
+      - Terraform generates a plan, shows it, and asks for confirmation before making any change
+    explanation: >
+      `terraform apply` without a saved plan file creates a plan itself, prints
+      it, and waits for an interactive `yes`. Running `plan` separately is still
+      worthwhile — it is how a change gets reviewed by someone other than the
+      person applying it, and how a plan is saved for a pipeline to apply later —
+      but it is not a prerequisite.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/apply
+
+  - id: TFQ-303
+    objective: 3b
+    type: multiple
+    question: >
+      Pick the 2 things `terraform init` does in a working directory.
+    choices:
+      - Installs the providers the configuration requires
+      - Initialises the configured backend
+      - Creates the resources described in the configuration
+      - Refreshes state against the real infrastructure
+      - Removes any resources that are no longer in the configuration
+    correct_answer:
+      - Installs the providers the configuration requires
+      - Initialises the configured backend
+    explanation: >
+      `init` prepares the working directory: it installs providers, downloads
+      modules, initialises the backend, and writes the dependency lock file.
+      It never creates, changes, refreshes or destroys anything — that is what
+      makes it safe to run repeatedly, including on a directory someone else
+      already initialised.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/init
+
+  - id: TFQ-304
+    objective: 3b
+    type: single
+    question: >
+      A colleague adds a new `module` block sourcing a local directory and
+      commits it. You pull the change and run `terraform plan`, which fails with
+      an error about the module not being installed. What should you do?
+    choices:
+      - Run `terraform init` again, because modules are installed at init time
+      - Run `terraform validate`, which installs missing modules as a side effect
+      - Delete the `.terraform` directory, because it has become corrupt
+      - Run `terraform apply -refresh-only`, which reconciles the module list
+    correct_answer:
+      - Run `terraform init` again, because modules are installed at init time
+    explanation: >
+      Adding or moving a module means the working directory needs initialising
+      again — `init` is what installs modules, including local ones, and records
+      them so a plan can use them. Neither `validate` nor a refresh-only apply
+      installs modules, and deleting `.terraform` would only force a full
+      re-init that you can request directly.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/init
+
+  - id: TFQ-305
+    objective: 3b
+    type: true_false
+    question: >
+      Running `terraform init` a second time in an already-initialised directory
+      will destroy and recreate the resources it manages.
+    correct_answer:
+      - 'False'
+    explanation: >
+      `init` only prepares the working directory — providers, modules, backend,
+      lock file. It never touches managed infrastructure and never modifies
+      state contents, so it is safe to run as often as you like. The one
+      operation that can move state is `init` with a backend change, and even
+      then Terraform prompts before migrating.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/init
+
+  - id: TFQ-306
+    objective: 3c
+    type: single
+    question: >
+      What does `terraform validate` check?
+    choices:
+      - That the configuration is syntactically valid and internally consistent, without contacting any provider API
+      - That the resources described in the configuration currently exist in the provider
+      - That the configuration is formatted according to the canonical style
+      - That the state file matches the real infrastructure
+    correct_answer:
+      - That the configuration is syntactically valid and internally consistent, without contacting any provider API
+    explanation: >
+      `validate` is an offline check of the configuration itself: syntax,
+      argument names and types, references that resolve, and so on. It does not
+      reach a remote API and knows nothing about what exists. Comparing against
+      reality is what `plan` does; canonical formatting is `fmt`.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/validate
+
+  - id: TFQ-307
+    objective: 3c
+    type: single
+    question: >
+      `terraform validate` reports "Missing required provider configuration" on a
+      directory that has never been initialised. What is the most likely cause?
+    choices:
+      - The directory has not been initialised, and validate needs the installed providers to check the configuration against their schemas
+      - The configuration contains a syntax error that only `terraform fmt` can reveal
+      - The state file is missing, and validate compares configuration to state
+      - The provider requires credentials, which validate reads at start-up
+    correct_answer:
+      - The directory has not been initialised, and validate needs the installed providers to check the configuration against their schemas
+    explanation: >
+      Validation is offline in the sense that it contacts no provider API, but it
+      is not schema-free: to tell you that an argument name is wrong it needs the
+      provider's schema, which means the provider has to be installed. That is
+      why `init` comes before `validate` in the troubleshooting order. It reads
+      no credentials and does not consult state.
+    official_reference: https://developer.hashicorp.com/terraform/tutorials/configuration-language/troubleshooting-workflow
+
+  - id: TFQ-308
+    objective: 3d
+    type: single
+    question: >
+      A plan ends with `Plan: 1 to add, 0 to change, 1 to destroy` for what is a
+      single resource in the configuration. What has Terraform decided?
+    choices:
+      - The resource must be replaced, because an argument changed that the provider cannot update in place
+      - Two separate resources are affected, one being created and an unrelated one removed
+      - The resource will be created twice and one copy cleaned up afterwards
+      - The plan is inconsistent and applying it will fail
+    correct_answer:
+      - The resource must be replaced, because an argument changed that the provider cannot update in place
+    explanation: >
+      A replacement shows in the summary as one add and one destroy, and in the
+      detailed output the resource is marked with `-/+` together with the reason
+      — "forces replacement" next to the argument responsible. Reading that line
+      is the difference between knowingly replacing something and being surprised
+      by it, which is why plans are reviewed rather than skipped.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/plan
+
+  - id: TFQ-309
+    objective: 3d
+    type: multiple
+    question: >
+      Pick the 2 true statements about `terraform plan`.
+    choices:
+      - It can be saved to a file with `-out` and applied later, so the applied change is exactly the reviewed one
+      - It refreshes its view of existing objects before comparing them with the configuration
+      - It applies any change it considers low risk without prompting
+      - It permanently writes its proposed changes into the state file
+      - It requires the `-target` option whenever more than one resource changes
+    correct_answer:
+      - It can be saved to a file with `-out` and applied later, so the applied change is exactly the reviewed one
+      - It refreshes its view of existing objects before comparing them with the configuration
+    explanation: >
+      A saved plan file makes the review and the apply refer to the same set of
+      actions, which is why pipelines use `plan -out` followed by `apply
+      <file>`. By default a plan also refreshes the objects in state so it is
+      comparing against current reality. A plan changes nothing and writes no
+      proposed actions into state, and `-target` is a narrowing option for
+      exceptional situations, not a requirement.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/plan
+
+  - id: TFQ-310
+    objective: 3d
+    type: single
+    question: >
+      In plan output, what does the `~` symbol next to a resource mean?
+    choices:
+      - The resource will be updated in place
+      - The resource will be destroyed and recreated
+      - The resource will be read but not modified
+      - The resource has drifted and Terraform cannot decide what to do
+    correct_answer:
+      - The resource will be updated in place
+    explanation: >
+      Terraform marks planned actions with `+` for create, `-` for destroy, `~`
+      for update in place, and `-/+` for replacement. A `<=` marks a data source
+      that will be read. Learning to read these symbols is the fastest way to
+      tell a routine change from a destructive one before confirming an apply.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/plan
+
+  - id: TFQ-311
+    objective: 3e
+    type: single
+    question: >
+      Which command applies a previously saved plan file without prompting for
+      confirmation?
+    choices:
+      - terraform apply tfplan
+      - terraform apply -auto-approve tfplan
+      - terraform plan -apply tfplan
+      - terraform apply -plan=tfplan
+    correct_answer:
+      - terraform apply tfplan
+    explanation: >
+      Applying a saved plan file needs no confirmation prompt, because the
+      actions were already decided and reviewed when the plan was created —
+      Terraform simply carries them out. `-auto-approve` is what you would use to
+      skip the prompt when applying *without* a saved plan, and is redundant
+      here. There is no `-plan` option.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/apply
+
+  - id: TFQ-312
+    objective: 3e
+    type: true_false
+    question: >
+      If `terraform apply` fails partway through, the resources it had already
+      created are rolled back automatically.
+    correct_answer:
+      - 'False'
+    explanation: >
+      Terraform has no rollback. When an apply fails, whatever succeeded before
+      the failure has been created and is recorded in state; Terraform stops and
+      reports the error. The recovery path is to fix the cause and run apply
+      again, at which point Terraform plans from the state it now has — which is
+      exactly why state is written as it goes rather than only at the end.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/apply
+
+  - id: TFQ-313
+    objective: 3f
+    type: single
+    question: >
+      A team wants to tear down a temporary environment completely. Which
+      command does this, and what does it use to decide what to remove?
+    choices:
+      - '`terraform destroy`, which removes every object recorded in that workspace''s state'
+      - '`terraform destroy`, which removes every object the provider account contains'
+      - '`terraform apply -destroy-all`, which reads the configuration and deletes everything it describes'
+      - '`terraform state rm`, which deletes the objects and clears state'
+    correct_answer:
+      - '`terraform destroy`, which removes every object recorded in that workspace''s state'
+    explanation: >
+      `terraform destroy` plans the removal of the resources in the current
+      workspace's state — not everything in the account, and not anything
+      Terraform never created. `terraform state rm` does the opposite of what is
+      wanted here: it forgets a resource while leaving the real object running.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/destroy
+
+  - id: TFQ-314
+    objective: 3f
+    type: single
+    question: >
+      A resource carries `lifecycle { prevent_destroy = true }`. What happens
+      when someone runs `terraform destroy` on that workspace?
+    choices:
+      - Terraform fails with an error and destroys nothing
+      - Terraform destroys everything except that resource
+      - Terraform prompts for an extra confirmation and then destroys it
+      - Terraform ignores the setting, because `prevent_destroy` only affects `apply`
+    correct_answer:
+      - Terraform fails with an error and destroys nothing
+    explanation: >
+      `prevent_destroy` makes any plan that would destroy the resource an error,
+      so the run stops rather than proceeding partially. It is a guard against
+      accidents — removing the resource for real means removing the setting first
+      and saying so in a commit, which is precisely the deliberate step it exists
+      to force.
+    official_reference: https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle
+
+  - id: TFQ-315
+    objective: 3g
+    type: multiple
+    question: >
+      Pick the 2 true statements about `terraform fmt`.
+    choices:
+      - It rewrites configuration files to the canonical Terraform style
+      - With `-check` it reports whether files would be changed without rewriting them
+      - It reports configuration errors such as an argument that does not exist
+      - It reorders resource blocks so that dependencies appear first
+      - It requires the working directory to be initialised
+    correct_answer:
+      - It rewrites configuration files to the canonical Terraform style
+      - With `-check` it reports whether files would be changed without rewriting them
+    explanation: >
+      `fmt` is a formatter: indentation, alignment and spacing. `-check` makes it
+      report rather than rewrite, which is what a CI job uses. It does not
+      validate arguments, does not reorder blocks — order carries no meaning in
+      Terraform — and needs no initialised directory, because formatting does not
+      depend on any provider schema.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/fmt
+
+  - id: TFQ-316
+    objective: 3g
+    type: single
+    question: >
+      A CI pipeline should fail when a contributor commits configuration that is
+      not canonically formatted, without the pipeline modifying the repository.
+      Which command fits?
+    choices:
+      - terraform fmt -check -recursive
+      - terraform fmt -recursive
+      - terraform validate -json
+      - terraform plan -detailed-exitcode
+    correct_answer:
+      - terraform fmt -check -recursive
+    explanation: >
+      `-check` makes `fmt` exit non-zero when a file would be rewritten while
+      leaving the file alone, and `-recursive` extends it to subdirectories such
+      as a `modules/` tree. Plain `fmt -recursive` would rewrite the files in the
+      CI checkout, which is not what a check job should do. `validate` and
+      `plan` answer different questions entirely.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/fmt

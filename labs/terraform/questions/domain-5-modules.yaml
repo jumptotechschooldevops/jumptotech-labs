@@ -1,0 +1,241 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — certification questions
+#
+# Domain 5: Terraform modules
+#
+# Original JumpToTech material written from the official HashiCorp
+# documentation. See domain-1 for the sourcing note that applies to every file
+# in this directory.
+# ---------------------------------------------------------------------------
+certification: TERRAFORM-ASSOCIATE-004
+description: Module sources, variable scope, calling modules, and version constraints.
+
+questions:
+  - id: TFQ-501
+    objective: 5a
+    type: multiple
+    question: >
+      Pick the 2 values that are valid `source` arguments for a `module` block.
+    choices:
+      - "./modules/application"
+      - "hashicorp/consul/aws"
+      - "module.application"
+      - "terraform.modules.application"
+      - "/etc/terraform/modules"
+    correct_answer:
+      - "./modules/application"
+      - "hashicorp/consul/aws"
+    explanation: >
+      A local path source must begin with `./` or `../` — that prefix is how
+      Terraform tells a local path from a registry address. A registry source
+      takes the form `<NAMESPACE>/<NAME>/<PROVIDER>`. `module.application` is how
+      you *reference* a module's outputs, not where it comes from; an absolute
+      path is not a supported local source form; and there is no dotted source
+      syntax.
+    official_reference: https://developer.hashicorp.com/terraform/language/modules/sources
+
+  - id: TFQ-502
+    objective: 5a
+    type: single
+    question: >
+      When does Terraform fetch the modules a configuration calls?
+    choices:
+      - During `terraform init`, which installs them into the working directory
+      - During `terraform plan`, on each run
+      - During `terraform apply`, only if the module's resources have changed
+      - During `terraform validate`, before schemas are checked
+    correct_answer:
+      - During `terraform init`, which installs them into the working directory
+    explanation: >
+      Module installation is part of initialisation, alongside providers and the
+      backend. That is why adding, moving or changing the source of a module
+      means running `init` again before a plan will work — and why a fresh clone
+      of a repository cannot plan until it has been initialised.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/init
+
+  - id: TFQ-503
+    objective: 5a
+    type: true_false
+    question: >
+      Every Terraform configuration has a root module, even when it calls no
+      other modules.
+    correct_answer:
+      - 'True'
+    explanation: >
+      The directory Terraform runs in is the root module. Modules are not an
+      advanced feature you opt into: you are always writing one, and calling a
+      child module simply nests another underneath it. Thinking of it this way is
+      what makes variable scope and output plumbing feel consistent rather than
+      special-cased.
+    official_reference: https://developer.hashicorp.com/terraform/language/modules
+
+  - id: TFQ-504
+    objective: 5b
+    type: single
+    question: >
+      A child module declares `variable "environment"`. The root module also
+      declares a variable with that name. What does the child module see?
+    choices:
+      - Only the value the `module` block passes to it; the root's variable is not visible inside the child
+      - Both, with the root module's value taking precedence
+      - The root module's value, because variables are global to a configuration
+      - An error, because two modules may not declare variables with the same name
+    correct_answer:
+      - Only the value the `module` block passes to it; the root's variable is not visible inside the child
+    explanation: >
+      Variables are scoped to the module that declares them. A child module can
+      only see what its caller passes in through the `module` block's arguments,
+      which is what makes a module a reusable component rather than something
+      coupled to one particular caller. Identical names in different modules are
+      entirely unrelated.
+    official_reference: https://developer.hashicorp.com/terraform/language/modules/syntax
+
+  - id: TFQ-505
+    objective: 5b
+    type: single
+    question: >
+      A root module needs the id of a resource created inside a child module.
+      What has to exist for that to be possible?
+    choices:
+      - The child module must declare an `output` exposing the value, which the root reads as `module.<name>.<output>`
+      - Nothing — the root can reference the child's resource directly as `module.<name>.<type>.<name>.id`
+      - The child module must write the value to a local file the root then reads with a data source
+      - The root must declare a variable with the same name as the child's resource
+    correct_answer:
+      - The child module must declare an `output` exposing the value, which the root reads as `module.<name>.<output>`
+    explanation: >
+      A module's resources are encapsulated: outputs are its only way of
+      returning values. That is the other half of the scoping rule that keeps
+      variables in — inputs go in through arguments, results come out through
+      outputs, and nothing else crosses the boundary in an expression.
+    official_reference: https://developer.hashicorp.com/terraform/language/values/outputs
+
+  - id: TFQ-506
+    objective: 5c
+    type: single
+    question: >
+      A configuration calls the same local module twice, as `module "ledger"` and
+      `module "accounts"`. What is true of the resources they create?
+    choices:
+      - Each call produces its own resources, addressed under `module.ledger.` and `module.accounts.` respectively
+      - The second call overwrites the resources created by the first
+      - Terraform refuses to plan, because a module may only be called once per configuration
+      - Both calls share one set of resources, and the arguments of the second call win
+    correct_answer:
+      - Each call produces its own resources, addressed under `module.ledger.` and `module.accounts.` respectively
+    explanation: >
+      Each `module` block is an independent instance with its own inputs, its own
+      resources and its own outputs. The call's label becomes the address prefix,
+      which is exactly what you see in `terraform state list`. Calling a module
+      several times with different inputs is the ordinary way to remove
+      duplication between near-identical pieces of configuration.
+    official_reference: https://developer.hashicorp.com/terraform/language/modules/syntax
+
+  - id: TFQ-507
+    objective: 5c
+    type: multiple
+    question: >
+      Pick the 2 meta-arguments that may be used on a `module` block.
+    choices:
+      - for_each
+      - count
+      - lifecycle
+      - connection
+      - alias
+    correct_answer:
+      - for_each
+      - count
+    explanation: >
+      `count`, `for_each`, `depends_on` and `providers` are all available on a
+      `module` block, so a module can be instantiated repeatedly the same way a
+      resource can. `lifecycle` and `connection` belong to resources, and `alias`
+      belongs to `provider` blocks.
+    official_reference: https://developer.hashicorp.com/terraform/language/modules/syntax
+
+  - id: TFQ-508
+    objective: 5c
+    type: single
+    question: >
+      Which files does a conventional standard-structure module contain at
+      minimum?
+    choices:
+      - main.tf, variables.tf and outputs.tf
+      - module.tf and terraform.tfvars
+      - main.tf and terraform.tfstate
+      - index.tf and providers.tf
+    correct_answer:
+      - main.tf, variables.tf and outputs.tf
+    explanation: >
+      The documented standard module structure is `main.tf` for the resources,
+      `variables.tf` for the inputs and `outputs.tf` for the results — a
+      convention rather than a rule Terraform enforces, since it reads every
+      `.tf` file in the directory regardless of name. Its value is that any
+      engineer opening an unfamiliar module knows where to look for its
+      interface. A child module does not carry its own state file.
+    official_reference: https://developer.hashicorp.com/terraform/language/modules/develop/structure
+
+  - id: TFQ-509
+    objective: 5d
+    type: single
+    question: >
+      A module block sources `hashicorp/consul/aws` with `version = "~> 0.11.0"`.
+      Which published versions satisfy that constraint?
+    choices:
+      - 0.11.0 through 0.11.x, but not 0.12.0
+      - 0.11.0 only
+      - Any 0.x version at or above 0.11.0
+      - Any version at or above 0.11.0, including 1.0.0
+    correct_answer:
+      - 0.11.0 through 0.11.x, but not 0.12.0
+    explanation: >
+      The pessimistic constraint operator `~>` allows the rightmost specified
+      component to increase and nothing further left. With three components
+      specified, `~> 0.11.0` allows patch increases within 0.11 and stops at
+      0.12.0. Written as `~> 0.11`, it would instead allow any 0.x from 0.11
+      upwards.
+    official_reference: https://developer.hashicorp.com/terraform/language/expressions/version-constraints
+
+  - id: TFQ-510
+    objective: 5d
+    type: single
+    question: >
+      Why does the `version` argument work for a registry module source but not
+      for a local path source?
+    choices:
+      - A local path has no registry to query for published versions, so the version comes from whatever is in that directory
+      - Local modules are always version 1.0.0 by convention
+      - Version constraints are only supported for providers, never for modules
+      - Local modules must instead declare their version in a `required_version` argument
+    correct_answer:
+      - A local path has no registry to query for published versions, so the version comes from whatever is in that directory
+    explanation: >
+      Version selection needs a registry that publishes discrete versions to
+      choose between. A local path is simply a directory on disk, versioned — if
+      at all — by the repository containing it, so Terraform rejects a `version`
+      argument there. `required_version` is a different setting: it constrains
+      the Terraform CLI itself.
+    official_reference: https://developer.hashicorp.com/terraform/language/modules/syntax
+
+  - id: TFQ-511
+    objective: 5d
+    type: multiple
+    question: >
+      Pick the 2 reasons a team should pin a version constraint on every registry
+      module they call.
+    choices:
+      - So that a new module release cannot change their infrastructure without a deliberate change on their side
+      - So that everyone running the configuration resolves the same module code
+      - So that Terraform can skip downloading the module on later runs
+      - So that the module's own provider requirements are ignored
+      - So that the module's resources are excluded from state
+    correct_answer:
+      - So that a new module release cannot change their infrastructure without a deliberate change on their side
+      - So that everyone running the configuration resolves the same module code
+    explanation: >
+      A version constraint is about control and reproducibility: upstream
+      releases arrive when the team chooses to accept them, and every engineer
+      and every pipeline gets the same code. It is not a caching mechanism, it
+      does not suppress the module's provider requirements — those are merged
+      with the caller's — and module resources are recorded in state like any
+      others.
+    official_reference: https://developer.hashicorp.com/terraform/language/modules/syntax

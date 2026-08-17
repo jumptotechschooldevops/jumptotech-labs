@@ -1,0 +1,265 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — certification questions
+#
+# Domain 6: Terraform state management
+#
+# Original JumpToTech material written from the official HashiCorp
+# documentation. See domain-1 for the sourcing note that applies to every file
+# in this directory.
+# ---------------------------------------------------------------------------
+certification: TERRAFORM-ASSOCIATE-004
+description: The local backend, state locking, remote state via the backend block, and managing drift and refactoring.
+
+questions:
+  - id: TFQ-601
+    objective: 6a
+    type: single
+    question: >
+      A configuration contains no `backend` block at all. Where does Terraform
+      store its state?
+    choices:
+      - In a `terraform.tfstate` file in the working directory, using the local backend by default
+      - Nowhere — state is held in memory and discarded when the command exits
+      - In HCP Terraform, which is the default for Terraform 1.x
+      - In the `.terraform` directory, alongside the installed providers
+    correct_answer:
+      - In a `terraform.tfstate` file in the working directory, using the local backend by default
+    explanation: >
+      The local backend is the default, and it writes `terraform.tfstate` beside
+      the configuration. Writing an explicit `backend "local"` block changes
+      nothing except that it lets you set options such as `path`. `.terraform`
+      holds providers, modules and the record of which backend is in use — not
+      the state itself.
+    official_reference: https://developer.hashicorp.com/terraform/language/backend/local
+
+  - id: TFQ-602
+    objective: 6a
+    type: multiple
+    question: >
+      Pick the 2 genuine drawbacks of leaving state in the local backend for a
+      team's shared environment.
+    choices:
+      - State lives on one engineer's machine, so nobody else can run a plan against it
+      - Sensitive attribute values sit in a plain file outside any access control the team has designed
+      - The local backend cannot record dependencies between resources
+      - The local backend limits a configuration to ten resources
+      - Local state cannot be read by `terraform state list`
+    correct_answer:
+      - State lives on one engineer's machine, so nobody else can run a plan against it
+      - Sensitive attribute values sit in a plain file outside any access control the team has designed
+    explanation: >
+      The local backend is fine for one person learning or experimenting. For a
+      team it fails on sharing and on protection: the file is on a laptop, and it
+      contains attribute values in plain text. Those are the two reasons teams
+      move to a remote backend. The local backend has no resource limit and
+      records exactly the same information any other backend does.
+    official_reference: https://developer.hashicorp.com/terraform/language/state/backends
+
+  - id: TFQ-603
+    objective: 6a
+    type: single
+    question: >
+      A `backend "local"` block sets `path = "state/service.tfstate"`. What
+      changes?
+    choices:
+      - Terraform reads and writes state at that path instead of ./terraform.tfstate
+      - Terraform copies state to that path after each apply, keeping the default as the primary
+      - Terraform stores only outputs at that path
+      - Nothing, because `path` is only meaningful for remote backends
+    correct_answer:
+      - Terraform reads and writes state at that path instead of ./terraform.tfstate
+    explanation: >
+      `path` relocates the state file the local backend uses. After changing it,
+      `terraform init` offers to migrate the existing state to the new location
+      so the workspace keeps managing the same objects — which is the same
+      migration machinery used when moving to a genuinely remote backend, at a
+      scale small enough to see all of.
+    official_reference: https://developer.hashicorp.com/terraform/language/backend/local
+
+  - id: TFQ-604
+    objective: 6b
+    type: single
+    question: >
+      What problem does state locking solve?
+    choices:
+      - Two runs writing to the same state at the same time, which can corrupt it
+      - Unauthorised users reading sensitive values out of the state file
+      - State growing too large for Terraform to parse
+      - Resources drifting from the configuration between runs
+    correct_answer:
+      - Two runs writing to the same state at the same time, which can corrupt it
+    explanation: >
+      A lock serialises write operations on a state file so that two concurrent
+      applies cannot interleave. It is a concurrency control, not an access
+      control: keeping unauthorised readers out is the backend's encryption and
+      permissions, and drift is a separate concern entirely.
+    official_reference: https://developer.hashicorp.com/terraform/language/state/locking
+
+  - id: TFQ-605
+    objective: 6b
+    type: multiple
+    question: >
+      Pick the 2 true statements about state locking.
+    choices:
+      - Whether locking is available depends on the backend in use
+      - Locking can be skipped for a single run with the `-lock=false` option, at the operator's risk
+      - Terraform locks state during `terraform validate`
+      - A lock, once taken, can only be released by deleting the state file
+      - Locking prevents two engineers from editing the same `.tf` file
+    correct_answer:
+      - Whether locking is available depends on the backend in use
+      - Locking can be skipped for a single run with the `-lock=false` option, at the operator's risk
+    explanation: >
+      Not every backend supports locking, and Terraform locks automatically for
+      operations that could write state. `-lock=false` exists for the rare case
+      where a lock is genuinely in the way, and is documented as dangerous. A
+      stale lock is cleared with `terraform force-unlock`, not by deleting state.
+      Validation writes nothing and takes no lock, and locking has nothing to do
+      with source files.
+    official_reference: https://developer.hashicorp.com/terraform/language/state/locking
+
+  - id: TFQ-606
+    objective: 6b
+    type: single
+    question: >
+      An apply was interrupted when the runner was killed, and the next run
+      reports that the state is locked by an operation that is no longer running.
+      What is the documented way to clear it?
+    choices:
+      - terraform force-unlock <LOCK_ID>
+      - terraform state rm --lock
+      - Delete the state file and run terraform init again
+      - terraform apply -lock=false, which clears the stale lock as a side effect
+    correct_answer:
+      - terraform force-unlock <LOCK_ID>
+    explanation: >
+      `force-unlock` releases a lock the backend still holds, using the lock id
+      Terraform prints in the error. It is a deliberate manual step because
+      unlocking a state that another run *is* still writing to is exactly the
+      corruption locking exists to prevent. Deleting state destroys the record of
+      everything the workspace manages, and `-lock=false` bypasses the lock
+      without releasing it.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/force-unlock
+
+  - id: TFQ-607
+    objective: 6c
+    type: multiple
+    question: >
+      Pick the 2 things a team gains by moving state to a properly configured
+      remote backend.
+    choices:
+      - State is shared, so every engineer and pipeline plans against the same record
+      - State can be encrypted at rest and access-controlled by the storage system
+      - Terraform stops recording sensitive attribute values in state
+      - Resource dependencies no longer need to be expressed in configuration
+      - The configuration no longer needs `terraform init`
+    correct_answer:
+      - State is shared, so every engineer and pipeline plans against the same record
+      - State can be encrypted at rest and access-controlled by the storage system
+    explanation: >
+      A remote backend gives shared, protected state — usually with locking as
+      well. What it does not change is what state contains: sensitive values are
+      still recorded, which is why the backend's encryption and permissions
+      matter. Dependencies and initialisation are unaffected.
+    official_reference: https://developer.hashicorp.com/terraform/language/state/backends
+
+  - id: TFQ-608
+    objective: 6c
+    type: single
+    question: >
+      A team adds a `backend` block to a configuration whose state is currently
+      local. What must they do next?
+    choices:
+      - Run `terraform init`, which detects the backend change and offers to migrate the existing state
+      - Run `terraform apply`, which recreates every resource against the new backend
+      - Copy `terraform.tfstate` into the remote store by hand before the next run
+      - Run `terraform import` for each resource, to re-adopt it under the new backend
+    correct_answer:
+      - Run `terraform init`, which detects the backend change and offers to migrate the existing state
+    explanation: >
+      Backend initialisation belongs to `init`. When the backend configuration
+      changes, Terraform notices and offers to copy the existing state across, so
+      the workspace goes on managing the same objects. Re-applying or re-importing
+      would be doing by hand what the migration does correctly, and re-applying
+      against empty state would propose creating everything again.
+    official_reference: https://developer.hashicorp.com/terraform/language/backend
+
+  - id: TFQ-609
+    objective: 6c
+    type: true_false
+    question: >
+      A `backend` block can use input variables and local values to configure
+      itself, for example `bucket = var.state_bucket`.
+    correct_answer:
+      - 'False'
+    explanation: >
+      The backend is initialised before Terraform evaluates the rest of the
+      configuration, so a backend block cannot refer to variables, locals,
+      resources or data sources. Values that must vary between environments are
+      supplied as partial configuration instead — a separate backend config file
+      or `-backend-config` options passed to `terraform init`.
+    official_reference: https://developer.hashicorp.com/terraform/language/backend
+
+  - id: TFQ-610
+    objective: 6d
+    type: single
+    question: >
+      Someone changed a Terraform-managed object directly in the provider's
+      console. Which command updates state to record what is really there,
+      without changing any infrastructure?
+    choices:
+      - terraform apply -refresh-only
+      - terraform apply -auto-approve
+      - terraform state rm
+      - terraform force-unlock
+    correct_answer:
+      - terraform apply -refresh-only
+    explanation: >
+      Refresh-only mode reads the real objects and proposes updating state to
+      match, showing you the drift and asking for approval before writing. A
+      normal apply would do the opposite — push the configuration back over the
+      manual change. `state rm` forgets a resource, and `force-unlock` concerns
+      locking.
+    official_reference: https://developer.hashicorp.com/terraform/tutorials/state/resource-drift
+
+  - id: TFQ-611
+    objective: 6d
+    type: single
+    question: >
+      A resource is being renamed from `local_file.report` to
+      `local_file.daily_report`. The object must not be destroyed and recreated.
+      What is the configuration-based way to do this?
+    choices:
+      - Add a `moved` block declaring `from = local_file.report` and `to = local_file.daily_report`
+      - Run `terraform state rm` then `terraform import` under the new name
+      - Add `lifecycle { ignore_changes = [name] }` to the renamed resource
+      - Rename it and run `terraform apply -refresh-only`
+    correct_answer:
+      - Add a `moved` block declaring `from = local_file.report` and `to = local_file.daily_report`
+    explanation: >
+      A `moved` block records the rename in the configuration, so every engineer
+      and every pipeline applies the same state move without anyone running a
+      manual command. Remove-and-import reaches the same place but is a manual
+      step each operator has to repeat, `ignore_changes` is unrelated, and a
+      refresh does not move state entries.
+    official_reference: https://developer.hashicorp.com/terraform/language/moved
+
+  - id: TFQ-612
+    objective: 6d
+    type: single
+    question: >
+      What is the difference between `terraform state rm` and a `removed` block?
+    choices:
+      - Both stop Terraform managing a resource without destroying it, but the `removed` block records the decision in the configuration
+      - "`state rm` destroys the object; a `removed` block only forgets it"
+      - "`state rm` is for data sources; a `removed` block is for managed resources"
+      - A `removed` block destroys the object; `state rm` only forgets it
+    correct_answer:
+      - Both stop Terraform managing a resource without destroying it, but the `removed` block records the decision in the configuration
+    explanation: >
+      Neither destroys anything by default: they both mean "Terraform should stop
+      tracking this object". The difference is where the decision lives. `state
+      rm` is a one-off command each operator must run; a `removed` block is
+      committed alongside the change, reviewed like any other, and applied
+      consistently by everyone. That makes it the better default for a team.
+    official_reference: https://developer.hashicorp.com/terraform/language/resources/syntax

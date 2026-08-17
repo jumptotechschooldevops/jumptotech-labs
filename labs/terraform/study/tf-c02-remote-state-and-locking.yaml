@@ -1,0 +1,173 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — CONCEPTUAL study unit
+#
+# TF-C02 covers the two state objectives this platform cannot honestly practise:
+# state locking (6b) and configuring remote state (6c). Both need a backend that
+# is not a file on the local disk, and the Terraform sandbox runs with
+# `--network none` and no credentials — by design, so that a beginner never needs
+# a cloud account or a bill to learn Terraform.
+#
+# The platform therefore does *not* fake an S3 bucket, a DynamoDB lock table, or
+# an HCP Terraform connection. TF-016 goes as far as a local backend honestly
+# can — an explicit backend block, a relocated state file, a real `init`
+# migration — and this unit covers what lies beyond that boundary.
+# ---------------------------------------------------------------------------
+id: TF-C02
+certification: TERRAFORM-ASSOCIATE-004
+track: terraform
+title: Remote State, Backends and State Locking
+order: 2
+duration_minutes: 25
+summary: >
+  Why a team moves state off a laptop, how a backend block configures where
+  state lives, what locking protects against, and how to recover from a lock
+  that outlived the run that took it.
+
+objectives:
+  - 6b
+  - 6c
+
+sections:
+  - heading: What a backend decides
+    body: >
+      A backend determines where Terraform stores state and, for some backends,
+      where operations run. There is always one: with no `backend` block, the
+      local backend writes `terraform.tfstate` beside your configuration. Writing
+      the block explicitly changes nothing by itself — it just makes the default
+      visible and lets you set its options.
+
+      Backend configuration is initialised before Terraform evaluates anything
+      else in the configuration. That has one consequence people trip over
+      constantly: a `backend` block cannot use input variables, local values,
+      resource attributes or data sources. There is nothing evaluated yet for it
+      to refer to.
+
+      Values that must differ between environments are supplied as *partial
+      configuration* instead: leave them out of the block and pass them at init
+      time, either in a separate backend configuration file or with
+      `-backend-config` options.
+
+  - heading: Why teams leave the local backend
+    body: >
+      The local backend is right for one person experimenting. It fails a team on
+      two counts, and both are worth being precise about.
+
+      Sharing. The state file is on one engineer's machine. Nobody else can plan
+      against it, a CI pipeline cannot see it, and if the laptop is lost the
+      team's record of what it manages goes with it.
+
+      Protection. State contains attribute values — including sensitive ones,
+      because marking a variable or output `sensitive` controls display, not
+      storage. A state file on a laptop or in a Git repository is a secret
+      sitting outside whatever access control the team designed.
+
+      A remote backend answers both: state is stored centrally where everyone
+      and every pipeline can reach it, encrypted at rest, and access-controlled
+      by the storage system's own permissions. Most remote backends add locking
+      as well.
+
+      What a remote backend does *not* change is what state contains. Sensitive
+      values are still recorded. Moving state remotely is what makes protecting
+      it possible; it is not the protection itself.
+
+  - heading: Migrating to a backend
+    body: >
+      Changing the backend is a configuration change plus an `init`. Terraform
+      notices that the backend configuration differs from the one recorded in
+      `.terraform`, and offers to copy the existing state to the new location so
+      the workspace goes on managing exactly the same objects.
+
+      That is the whole migration. Destroying and re-applying would take an
+      outage for nothing, and importing resource by resource would be doing the
+      migration by hand, badly. The same mechanism moves state from local to S3,
+      from S3 to HCP Terraform, or — as in TF-016 — from one local path to
+      another, which is why that lab is a genuine rehearsal for the real thing
+      rather than a toy.
+    diagram: |
+      before                                    after
+      ──────                                    ─────
+      terraform {                               terraform {
+        # (no backend block)                      backend "s3" {
+      }                                             bucket = "acme-tfstate"
+                                                    key    = "ledger/terraform.tfstate"
+      ./terraform.tfstate  ◄── state              }
+                                                }
+
+                        terraform init
+                             │
+             "Do you want to copy existing state
+              to the new backend?"   →  yes
+                             │
+                             ▼
+              s3://acme-tfstate/ledger/terraform.tfstate  ◄── state
+              (local file left behind as a backup)
+
+  - heading: State locking
+    body: >
+      Terraform locks state for any operation that could write it. The lock
+      serialises those operations so two applies cannot interleave and leave a
+      state file describing neither run's result.
+
+      Locking is a property of the backend, not of Terraform: not every backend
+      supports it. Where it is supported it happens automatically — you will only
+      notice it when a second run waits, or reports that the state is already
+      locked and by whom.
+
+      `-lock=false` disables it for one run. The documentation calls this
+      dangerous and means it: the only situations where it is appropriate are
+      ones where you know no other operation can be running.
+
+      A lock can outlive the run that took it — a CI runner killed mid-apply, a
+      laptop that lost power. The state stays locked and every later run refuses
+      to start. `terraform force-unlock <LOCK_ID>` releases it, using the id
+      Terraform prints in the error. It is deliberately a manual command with a
+      confirmation, because force-unlocking a state another run *is* still
+      writing to causes exactly the corruption locking exists to prevent.
+
+  - heading: Choosing a backend
+    body: >
+      The Associate exam does not require you to memorise every backend's
+      arguments. What it does expect is that you can reason about the trade-off:
+      where does state live, who can read it, is it encrypted, does it lock, and
+      who runs the operation.
+
+      Broadly, the options are a local file (simple, unshared, unprotected),
+      an object store or database backend such as S3, Azure Blob Storage, Google
+      Cloud Storage or Consul (shared, protected by that system's access control,
+      locking varies by backend), and HCP Terraform, which stores state, locks
+      it, versions it, and can also run the operation itself. Domain 8 and study
+      unit TF-C03 cover that last option.
+
+limitations: >
+  This unit is CONCEPTUAL, and deliberately so. Demonstrating a remote backend
+  requires a network, a storage account and credentials; demonstrating locking
+  requires two concurrent runs against a backend that implements it. The
+  JumpToTech Terraform sandbox runs with no network access and holds no cloud
+  credentials, so none of that can happen here — and this platform will not print
+  invented output implying that it did. What you *can* do for real is TF-016,
+  which writes an explicit `backend "local"` block, relocates the state file, and
+  performs a genuine `terraform init` state migration. That covers objective 6a
+  hands-on and rehearses the migration flow you would use against a remote
+  backend. Objectives 6b and 6c are assessed here by question.
+
+references:
+  - title: Backend configuration
+    url: https://developer.hashicorp.com/terraform/language/backend
+  - title: State — backends
+    url: https://developer.hashicorp.com/terraform/language/state/backends
+  - title: State locking
+    url: https://developer.hashicorp.com/terraform/language/state/locking
+  - title: 'Command: terraform force-unlock'
+    url: https://developer.hashicorp.com/terraform/cli/commands/force-unlock
+  - title: 'Backend: local'
+    url: https://developer.hashicorp.com/terraform/language/backend/local
+  - title: Manage sensitive data in state
+    url: https://developer.hashicorp.com/terraform/language/state/sensitive-data
+
+review_questions:
+  - TFQ-604
+  - TFQ-605
+  - TFQ-606
+  - TFQ-607
+  - TFQ-608
+  - TFQ-609

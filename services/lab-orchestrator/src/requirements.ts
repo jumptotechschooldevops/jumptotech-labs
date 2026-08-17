@@ -133,6 +133,63 @@ const terraformAddress = z
     'must be a Terraform address such as local_file.greeting or module.application.random_pet.name',
   );
 
+/**
+ * A provider source address, e.g. `hashicorp/local` or
+ * `registry.terraform.io/hashicorp/local`.
+ */
+const providerSource = z
+  .string()
+  .min(3)
+  .max(128)
+  .regex(
+    /^([a-z0-9][a-z0-9.-]*\/)?[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/,
+    'must be a provider source such as hashicorp/local',
+  );
+
+/**
+ * A version or version-constraint string, e.g. `2.5.2` or `~> 2.5`.
+ *
+ * A narrow character class rather than a constraint grammar: the value is only
+ * ever compared against text the platform read out of the student's own files,
+ * never parsed as a constraint or interpolated anywhere.
+ */
+const versionConstraint = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[0-9A-Za-z.,>=<~^!+*\s-]+$/, 'must be a version or version constraint such as ~> 2.5');
+
+/**
+ * Where a lab's Terraform state actually lives, relative to the working
+ * directory.
+ *
+ * Almost always omitted — the local backend's default is `terraform.tfstate`
+ * beside the configuration, and every lab before TF-016 uses it. A lab that
+ * teaches `backend "local" { path = … }` moves the file, and the checks have to
+ * follow it there rather than reporting "nothing has been applied" about a
+ * workspace that plainly has been.
+ */
+const stateFilePath = z
+  .string()
+  .min(1)
+  .max(MAX_SANDBOX_PATH_LENGTH)
+  .refine(isSafeSandboxPath, {
+    message: 'must be a relative path inside the working directory (no leading /, no .. segments)',
+  });
+
+/**
+ * Fields shared by every check that reads Terraform state.
+ *
+ * Spread rather than repeated, so a state-reading check cannot be added that
+ * silently ignores a relocated backend — the two fields always travel together.
+ */
+const stateSource = {
+  /** The Terraform working directory, relative to the sandbox home. */
+  dir: sandboxPath,
+  /** Where state lives inside `dir`. Defaults to `terraform.tfstate`. */
+  state_file: stateFilePath.optional(),
+};
+
 /** A dotted path into an instance's attributes, e.g. `permissions.0.role`. */
 const attributePath = z
   .string()
@@ -586,7 +643,7 @@ const requirementSchemas = {
   terraform_resource_exists: z
     .object({
       type: z.literal('terraform_resource_exists'),
-      dir: sandboxPath,
+      ...stateSource,
       /** Provider resource type, e.g. `local_file`. */
       resource_type: terraformIdentifier,
       /** The resource's local name, e.g. `manifest`. */
@@ -609,7 +666,7 @@ const requirementSchemas = {
   terraform_state_contains: z
     .object({
       type: z.literal('terraform_state_contains'),
-      dir: sandboxPath,
+      ...stateSource,
       address: terraformAddress,
       ...common,
     })
@@ -625,7 +682,7 @@ const requirementSchemas = {
   terraform_state_absent: z
     .object({
       type: z.literal('terraform_state_absent'),
-      dir: sandboxPath,
+      ...stateSource,
       address: terraformAddress,
       ...common,
     })
@@ -641,7 +698,7 @@ const requirementSchemas = {
   terraform_resource_attribute: z
     .object({
       type: z.literal('terraform_resource_attribute'),
-      dir: sandboxPath,
+      ...stateSource,
       resource_type: terraformIdentifier,
       name: terraformIdentifier,
       module: terraformModuleRef.optional(),
@@ -665,7 +722,7 @@ const requirementSchemas = {
   terraform_resource_count: z
     .object({
       type: z.literal('terraform_resource_count'),
-      dir: sandboxPath,
+      ...stateSource,
       resource_type: terraformIdentifier,
       count: z.number().int().min(0).max(100),
       ...common,
@@ -675,7 +732,7 @@ const requirementSchemas = {
   terraform_output_exists: z
     .object({
       type: z.literal('terraform_output_exists'),
-      dir: sandboxPath,
+      ...stateSource,
       name: terraformIdentifier,
       ...common,
     })
@@ -692,7 +749,7 @@ const requirementSchemas = {
   terraform_output_equals: z
     .object({
       type: z.literal('terraform_output_equals'),
-      dir: sandboxPath,
+      ...stateSource,
       name: terraformIdentifier,
       value: z.union([z.string().max(2048), z.number(), z.boolean()]),
       ...common,
@@ -709,6 +766,73 @@ const requirementSchemas = {
       has_default: z.boolean().optional(),
       /** Require a `type` argument to be present — teaches typed variables. */
       has_type: z.boolean().optional(),
+      /**
+       * A substring the declared type must contain, e.g. `map(object(`.
+       *
+       * A substring rather than an exact match because a complex type is
+       * written across several lines with the author's own spacing, and a lab
+       * teaching `map(object(…))` cares that the student reached for a map of
+       * objects — not that they laid it out the way the lab author did. The
+       * comparison is made against the type expression's source text with
+       * whitespace collapsed; nothing is evaluated.
+       */
+      type_contains: z.string().min(1).max(200).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A variable is (or is not) marked `sensitive`.
+   *
+   * Read from configuration, because that is where the *decision* lives.
+   * Whether a value then still appears in state is the lesson of the lab, not
+   * something the check needs to read — and this platform deliberately never
+   * compares a sensitive value.
+   */
+  terraform_variable_sensitive: z
+    .object({
+      type: z.literal('terraform_variable_sensitive'),
+      dir: sandboxPath,
+      name: terraformIdentifier,
+      /** Defaults to "must be sensitive". */
+      expected: z.boolean().default(true),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A variable declares at least one `validation` block.
+   *
+   * Optionally requires the rule's condition to mention a given function or
+   * identifier, so a lab can ask for a *specific* kind of rule without pinning
+   * the exact expression a student wrote.
+   */
+  terraform_variable_validation: z
+    .object({
+      type: z.literal('terraform_variable_validation'),
+      dir: sandboxPath,
+      name: terraformIdentifier,
+      /** Minimum number of `validation` blocks. Defaults to 1. */
+      min_rules: z.number().int().min(1).max(10).default(1),
+      /** Identifiers or function names the conditions must between them mention. */
+      condition_mentions: z.array(terraformIdentifier).min(1).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * An output is (or is not) marked `sensitive`.
+   *
+   * Read from *state*, where Terraform records the flag it actually applied, so
+   * a student who marked the output sensitive but never applied does not pass.
+   * The value itself is never read — see `terraform_output_equals`.
+   */
+  terraform_output_sensitive: z
+    .object({
+      type: z.literal('terraform_output_sensitive'),
+      ...stateSource,
+      name: terraformIdentifier,
+      expected: z.boolean().default(true),
       ...common,
     })
     .strict(),
@@ -784,6 +908,193 @@ const requirementSchemas = {
       dir: sandboxPath,
       module: terraformIdentifier,
       input: terraformIdentifier,
+      ...common,
+    })
+    .strict(),
+
+  // --- Providers ---------------------------------------------------------
+
+  /**
+   * A provider is declared in `required_providers`, with the source and version
+   * constraint the lab asked for.
+   *
+   * Read from configuration: `required_providers` is a *statement of intent*,
+   * and the objective it serves ("install and version Terraform providers") is
+   * about writing that statement. What actually got installed is a separate
+   * check — `terraform_lock_provider` — so a lab can require both and tell a
+   * student which half is missing.
+   */
+  terraform_required_provider: z
+    .object({
+      type: z.literal('terraform_required_provider'),
+      dir: sandboxPath,
+      /** The local name: the key inside `required_providers`, e.g. `local`. */
+      name: terraformIdentifier,
+      /** The full source address the entry must declare. */
+      source: providerSource.optional(),
+      /** The exact constraint text, e.g. `~> 2.5`. Compared after collapsing spaces. */
+      version_constraint: versionConstraint.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A `provider` block exists, optionally with a given alias.
+   *
+   * The alias is what makes "write configuration using multiple providers"
+   * verifiable in a directory that only has one provider *plugin* available:
+   * two configurations of the same provider exercise exactly the mechanism the
+   * objective is about.
+   */
+  terraform_provider_configured: z
+    .object({
+      type: z.literal('terraform_provider_configured'),
+      dir: sandboxPath,
+      /** Provider local name, i.e. the block's label: `provider "local"`. */
+      provider: terraformIdentifier,
+      /** Require this alias. Omit to accept the default (unaliased) configuration. */
+      alias: terraformIdentifier.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A resource in state is bound to a particular provider configuration.
+   *
+   * State records the full provider reference Terraform resolved
+   * (`provider["registry.terraform.io/hashicorp/local"].reports`), which is the
+   * only honest proof that the student's `provider = local.reports` argument
+   * took effect rather than merely being typed.
+   */
+  terraform_resource_provider: z
+    .object({
+      type: z.literal('terraform_resource_provider'),
+      ...stateSource,
+      resource_type: terraformIdentifier,
+      name: terraformIdentifier,
+      module: terraformModuleRef.optional(),
+      /** The alias the resource must be using. Omit to require the default config. */
+      alias: terraformIdentifier.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The dependency lock file records a provider, at a version.
+   *
+   * Reads `.terraform.lock.hcl`, which `terraform init` writes and a student
+   * cannot produce by typing a constraint. Together with
+   * `terraform_required_provider` this is the difference between "declared a
+   * version" and "installed the version they declared".
+   */
+  terraform_lock_provider: z
+    .object({
+      type: z.literal('terraform_lock_provider'),
+      dir: sandboxPath,
+      /** Registry address as the lock file writes it, e.g. `hashicorp/local`. */
+      source: providerSource,
+      /** The exact resolved version the lock must record. */
+      version: versionConstraint.optional(),
+      ...common,
+    })
+    .strict(),
+
+  // --- Dependencies and conditions ---------------------------------------
+
+  /**
+   * A resource declares `depends_on`, naming given references.
+   *
+   * Configuration, not state: an explicit dependency exists precisely because
+   * there is no attribute reference to infer it from, so it leaves no trace in
+   * the applied result. That is also why the objective distinguishes it from
+   * the implicit dependencies `terraform_resource_attribute` already proves.
+   */
+  terraform_resource_depends_on: z
+    .object({
+      type: z.literal('terraform_resource_depends_on'),
+      dir: sandboxPath,
+      resource_type: terraformIdentifier,
+      name: terraformIdentifier,
+      /** Addresses the list must mention, e.g. `null_resource.database`. */
+      references: z.array(terraformAddress).min(1).max(10),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A resource or data source declares a custom condition.
+   *
+   * `precondition` and `postcondition` live inside a `lifecycle` block; both are
+   * checked there. A lab may additionally require the condition text to mention
+   * something, for the same reason `ignore_changes` can.
+   */
+  terraform_resource_condition: z
+    .object({
+      type: z.literal('terraform_resource_condition'),
+      dir: sandboxPath,
+      resource_type: terraformIdentifier,
+      name: terraformIdentifier,
+      mode: z.enum(['managed', 'data']).default('managed'),
+      condition: z.enum(['precondition', 'postcondition']),
+      /** Identifiers or function names the condition must mention. */
+      condition_mentions: z.array(terraformIdentifier).min(1).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** A `check "name"` block with at least one `assert`. */
+  terraform_check_declared: z
+    .object({
+      type: z.literal('terraform_check_declared'),
+      dir: sandboxPath,
+      name: terraformIdentifier,
+      /** Minimum number of `assert` blocks. Defaults to 1. */
+      min_assertions: z.number().int().min(1).max(10).default(1),
+      ...common,
+    })
+    .strict(),
+
+  // --- Backends and refactoring -------------------------------------------
+
+  /**
+   * The `terraform` block configures a backend of the given kind.
+   *
+   * Configuration only. There is no way for a lab in this sandbox to *prove* a
+   * remote backend works — the sandbox has no network — so the platform does not
+   * pretend otherwise: what it verifies is the block the student wrote, and the
+   * state file that a local backend actually produced (via `state_file` on the
+   * state checks).
+   */
+  terraform_backend_configured: z
+    .object({
+      type: z.literal('terraform_backend_configured'),
+      dir: sandboxPath,
+      /** Backend type, i.e. the block label: `backend "local"`. */
+      backend: terraformIdentifier,
+      /** Arguments the backend block must set, compared as literal strings. */
+      arguments: z
+        .record(terraformIdentifier, z.string().min(1).max(255))
+        .refine((value) => Object.keys(value).length > 0, {
+          message: 'must name at least one argument',
+        })
+        .optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A `moved` block records a rename.
+   *
+   * The point of the block is that a resource keeps its identity through a
+   * refactor, so a lab pairs this with a state check on the *new* address and an
+   * attribute check proving the object was not recreated.
+   */
+  terraform_moved_declared: z
+    .object({
+      type: z.literal('terraform_moved_declared'),
+      dir: sandboxPath,
+      from: terraformAddress,
+      to: terraformAddress,
       ...common,
     })
     .strict(),
@@ -883,11 +1194,23 @@ export const REQUIREMENT_FAMILIES = {
   terraform_output_exists: 'terraform',
   terraform_output_equals: 'terraform',
   terraform_variable_declared: 'terraform',
+  terraform_variable_sensitive: 'terraform',
+  terraform_variable_validation: 'terraform',
+  terraform_output_sensitive: 'terraform',
   terraform_locals_declared: 'terraform',
   terraform_data_source_declared: 'terraform',
   terraform_resource_lifecycle: 'terraform',
   terraform_module_exists: 'terraform',
   terraform_module_input: 'terraform',
+  terraform_required_provider: 'terraform',
+  terraform_provider_configured: 'terraform',
+  terraform_resource_provider: 'terraform',
+  terraform_lock_provider: 'terraform',
+  terraform_resource_depends_on: 'terraform',
+  terraform_resource_condition: 'terraform',
+  terraform_check_declared: 'terraform',
+  terraform_backend_configured: 'terraform',
+  terraform_moved_declared: 'terraform',
 
   resource_absent: 'kubernetes',
   // `as const satisfies` rather than a plain annotation: the literal family of

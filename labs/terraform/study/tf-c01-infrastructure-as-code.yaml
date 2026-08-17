@@ -1,0 +1,174 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — CONCEPTUAL study unit
+#
+# TF-C01 covers domain 1, whose three objectives are all "explain" and
+# "describe". There is no artefact to inspect and nothing to verify: a student
+# who can articulate why a team moved to infrastructure as code has met the
+# objective, and no `terraform apply` would demonstrate that. So this is reading
+# plus questions, and it says so.
+#
+# The hands-on labs still teach domain 1 implicitly — every one of them is IaC in
+# practice — but the curriculum does not *claim* hands-on coverage for an
+# objective whose verb is "explain".
+# ---------------------------------------------------------------------------
+id: TF-C01
+certification: TERRAFORM-ASSOCIATE-004
+track: terraform
+title: Infrastructure as Code and the Terraform Model
+order: 1
+duration_minutes: 20
+summary: >
+  What infrastructure as code actually changes about how a team works, why
+  declarative configuration behaves the way it does, and how one Terraform
+  workflow reaches many different platforms.
+
+objectives:
+  - 1a
+  - 1b
+  - 1c
+
+sections:
+  - heading: What infrastructure as code means
+    body: >
+      Infrastructure as code means the definition of your infrastructure lives in
+      machine-readable configuration files, and those files are the authority.
+      What is running is derived from them. That is a stronger claim than "we
+      have a script": a script describes a procedure that was run once, whereas a
+      configuration describes a state that should hold.
+
+      The practical test is what happens when reality and the files disagree. In
+      a click-ops world, reality wins and the documentation quietly rots. Under
+      infrastructure as code, the disagreement is something the tool detects and
+      offers to resolve — Terraform calls it drift, and you will practise finding
+      and reconciling it in TF-017.
+
+      Terraform's configuration language is declarative. You write the end state:
+      three files with this content, a network with that CIDR. You do not write
+      "create this, then wait, then create that". Terraform derives the
+      operations, and the order, from the configuration and from its record of
+      what already exists.
+
+  - heading: Why declarative configuration converges
+    body: >
+      A declarative tool computes the difference between what you asked for and
+      what exists, then closes it. Two consequences follow, and they explain most
+      of Terraform's behaviour.
+
+      First, applying the same configuration twice produces no changes the second
+      time. The desired state is already the actual state, so there is nothing to
+      do. This is what makes it safe to run Terraform repeatedly, and it is why a
+      plan that reports "No changes" is a meaningful result rather than a failure
+      to do anything.
+
+      Second, the order in which you write blocks in a file is irrelevant.
+      Terraform builds a dependency graph out of the references between
+      resources — resource B mentions resource A's id, so A comes first — and
+      walks it, running independent work concurrently. When an ordering
+      requirement exists that no reference expresses, you state it explicitly
+      with `depends_on`. That distinction, implicit versus explicit dependency,
+      is objective 4f and is what TF-013 is about.
+    diagram: |
+      configuration (desired)      state (recorded)      provider (actual)
+             │                           │                       │
+             └─────────►  terraform plan ◄───────────────────────┘
+                                 │
+                     "1 to add, 0 to change, 1 to destroy"
+                                 │
+                          terraform apply
+                                 │
+                  ┌──────────────┴───────────────┐
+                  ▼                              ▼
+           provider API calls            state updated to match
+
+  - heading: The advantages a team actually feels
+    body: >
+      Version control. An infrastructure change becomes a diff. Someone other
+      than the author can read it, comment on it, and approve it before anything
+      real happens. The history of an environment becomes the history of a
+      repository, with authorship and dates attached.
+
+      Repeatability. One definition builds development, staging and production,
+      with the differences expressed as input values rather than as accumulated
+      undocumented decisions. This is the answer to the very common situation
+      where two environments were built by hand months apart and nobody can say
+      how they differ.
+
+      Reviewable change. `terraform plan` shows what will happen before it
+      happens. A change that will replace a database rather than update it says
+      so, in the plan, with the argument that forced the replacement named.
+
+      Reduced key-person risk. The knowledge of how an environment is built stops
+      living in one engineer's head and starts living in a repository the whole
+      team reads.
+
+      What infrastructure as code does *not* do is worth saying too. It does not
+      make a provider outage go away, it does not choose cheaper resources for
+      you, and it does not remove the need for credentials. Being clear about
+      that is part of being able to argue for it honestly.
+
+  - heading: One workflow, many platforms
+    body: >
+      Terraform Core knows nothing about AWS, Azure, Kubernetes, GitHub or your
+      DNS provider. Everything a configuration can manage comes from a *provider*
+      — a plugin that exposes some platform's API as resource types and data
+      source types. `terraform init` installs the providers a configuration
+      requires; Terraform Core handles the language, the graph, the plan and the
+      state.
+
+      That architecture is what makes the workflow service-agnostic. A single
+      configuration can require several providers and use them together: create
+      a cluster in one cloud, a DNS record at a registrar, and a monitoring
+      dashboard in a SaaS tool, in one plan, with the dependencies between them
+      understood.
+
+      One thing this is *not*: a configuration written for one cloud is not
+      portable to another. Each provider defines its own resource types with
+      their own arguments, so moving between clouds means rewriting the
+      resources. The multi-cloud benefit is that engineers use one tool, one
+      language and one workflow across every platform — not that configurations
+      are interchangeable. Confusing the two leads to disappointment and to bad
+      architectural decisions.
+
+      One configuration may require any combination of the providers below. The
+      workflow — write, init, plan, apply — is identical for all of them.
+    diagram: |
+      ┌────────────────────────────────────────────────────────────┐
+      │                      Terraform Core                        │
+      │        language · graph · plan · state · workflow          │
+      └───────────────────────────┬────────────────────────────────┘
+                                  │  plugin protocol
+           ┌──────────────┬───────┴───────┬──────────────────┐
+           ▼              ▼               ▼                  ▼
+       aws provider    azurerm        kubernetes       local / random
+           │              │               │                  │
+       AWS APIs      Azure APIs       Kube API      the local filesystem
+
+limitations: >
+  This unit is CONCEPTUAL. Objectives 1a, 1b and 1c ask you to explain and
+  describe, not to build, so there is no sandbox exercise and no Check Solution
+  here. Every hands-on lab in the track is an instance of the ideas above; if
+  you want to see them rather than read about them, TF-001 walks the whole
+  write/plan/apply loop for real. The multi-cloud discussion in particular is
+  necessarily abstract in this environment: the Terraform sandbox has no network
+  access and no cloud credentials, so it demonstrates the provider architecture
+  with the local, random and null providers rather than with a cloud API.
+
+references:
+  - title: What is Terraform?
+    url: https://developer.hashicorp.com/terraform/intro
+  - title: Terraform use cases
+    url: https://developer.hashicorp.com/terraform/intro/use-cases
+  - title: The core Terraform workflow
+    url: https://developer.hashicorp.com/terraform/intro/core-workflow
+  - title: How Terraform works with plugins
+    url: https://developer.hashicorp.com/terraform/plugin/how-terraform-works
+  - title: Infrastructure as code (tutorial)
+    url: https://developer.hashicorp.com/terraform/tutorials/aws-get-started/infrastructure-as-code
+
+review_questions:
+  - TFQ-101
+  - TFQ-102
+  - TFQ-104
+  - TFQ-105
+  - TFQ-107
+  - TFQ-108

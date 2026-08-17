@@ -181,8 +181,14 @@ skills:
   - terraform.state.inspect
 
 certification:
-  - certification: TERRAFORM-ASSOCIATE
+  - certification: TERRAFORM-ASSOCIATE-004
     relevant: true
     domains:
-      - understand-terraform-state
-      - use-terraform-outside-core-workflow
+      - '7'
+    objectives:
+      - 7a
+
+review_questions:
+  - TFQ-701
+  - TFQ-702
+  - TFQ-703

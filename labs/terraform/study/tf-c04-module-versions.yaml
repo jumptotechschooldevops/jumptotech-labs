@@ -1,0 +1,136 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — CONCEPTUAL study unit
+#
+# TF-C04 covers objective 5d, "Manage module versions". Version selection needs
+# a registry to select from, and the Terraform sandbox runs with `--network
+# none` — so `terraform init` on a registry module source cannot resolve, and a
+# lab that required one would fail for reasons that have nothing to do with the
+# student.
+#
+# TF-018 covers module *sources* and composition hands-on, using local paths.
+# This unit covers the part that genuinely needs a registry.
+# ---------------------------------------------------------------------------
+id: TF-C04
+certification: TERRAFORM-ASSOCIATE-004
+track: terraform
+title: Module Sources, Versions and the Registry
+order: 4
+duration_minutes: 20
+summary: >
+  Where Terraform fetches modules from, how version constraints select between
+  published releases, why local sources cannot be versioned, and what pinning
+  buys a team.
+
+objectives:
+  - 5d
+
+sections:
+  - heading: Where a module comes from
+    body: >
+      A `module` block's `source` argument tells Terraform where to fetch the
+      module. The form of the string decides how it is interpreted, which is why
+      the prefixes matter.
+
+      A **local path** starts with `./` or `../`. That prefix is not decoration —
+      it is how Terraform distinguishes a path from a registry address. A local
+      module is not fetched or copied; Terraform reads it in place, which is why
+      a change to it takes effect on the next plan.
+
+      A **registry address** is `<NAMESPACE>/<NAME>/<PROVIDER>` for the public
+      registry, optionally prefixed with a hostname for a private one:
+      `app.terraform.io/acme/vpc/aws`. Registry sources are the ones that support
+      versioning.
+
+      Other supported forms include Git repositories, HTTP archives and object
+      storage. Modules are installed by `terraform init`, so adding one, moving
+      one, or changing a `source` means running `init` again before a plan will
+      work.
+
+  - heading: Version constraints
+    body: >
+      The `version` argument on a `module` block constrains which published
+      release Terraform selects. It accepts the same constraint syntax as
+      provider requirements.
+
+      The pessimistic operator `~>` is the one worth being precise about: it
+      allows the rightmost specified component to increase, and nothing further
+      left.
+
+      Constraints can be combined with commas — `">= 1.2.0, < 2.0.0"` — and
+      Terraform selects the newest published version that satisfies all of them.
+    diagram: |
+      constraint          allows                                  rejects
+      ──────────          ──────                                  ───────
+      = 1.2.0             1.2.0 exactly                           1.2.1
+      >= 1.2.0            1.2.0, 1.9.4, 2.0.0, 3.1.0              1.1.9
+      ~> 1.2.0            1.2.0 … 1.2.x                           1.3.0
+      ~> 1.2              1.2.0 … 1.x                             2.0.0
+      >= 1.2, < 2.0       1.2.0 … 1.x                             2.0.0
+
+  - heading: Why local sources take no version
+    body: >
+      Selecting a version means choosing between discrete published releases.
+      A local path is a directory on disk: there is nothing to choose between,
+      and whatever is in that directory right now is what you get. Terraform
+      rejects a `version` argument on a local source rather than silently
+      ignoring it.
+
+      Do not confuse this with `required_version` inside the `terraform` block.
+      That constrains the Terraform CLI itself — "this configuration needs
+      Terraform 1.5 or later" — and is unrelated to module versioning.
+
+      If a local module needs versioning, the answer is to publish it: to a
+      private registry, or to a Git repository referenced with a `ref`.
+
+  - heading: What pinning buys a team
+    body: >
+      Two things, and both are about control rather than convenience.
+
+      **Upstream releases arrive when you choose.** Without a constraint, a new
+      release of a module can change your infrastructure on the next `init
+      -upgrade` with no change on your side. With one, accepting a new version is
+      a commit somebody reviews.
+
+      **Everyone resolves the same code.** Every engineer and every pipeline gets
+      the same module, so a plan on a laptop and a plan in CI agree.
+
+      Pinning is not a caching mechanism — Terraform installs the module either
+      way — and it does not suppress the module's own provider requirements,
+      which are merged with the caller's during version resolution.
+
+      A module's own `required_providers` matters here. A module declares which
+      providers it needs and with what constraints; the root module's constraints
+      and every called module's constraints must be jointly satisfiable, or
+      `terraform init` fails. Over-tight constraints inside a widely used module
+      are a common cause of a resolution failure that looks mysterious until you
+      run `terraform providers` and read what each module asked for.
+
+limitations: >
+  This unit is CONCEPTUAL because version selection needs a registry to select
+  from. The JumpToTech Terraform sandbox runs with no network access and installs
+  providers from a filesystem mirror baked into the image, so `terraform init`
+  cannot reach registry.terraform.io and a lab requiring a registry module would
+  fail for reasons unrelated to the student's work. This platform will not stub
+  out a fake registry to hide that. What you can practise for real is TF-007 and
+  TF-018, which build and compose local modules — the authoring, the interface,
+  the composition and the `init`-after-adding-a-module step are all identical;
+  only the source string and the version selection differ.
+
+references:
+  - title: Module sources
+    url: https://developer.hashicorp.com/terraform/language/modules/sources
+  - title: Module blocks — version
+    url: https://developer.hashicorp.com/terraform/language/modules/syntax
+  - title: Version constraint syntax
+    url: https://developer.hashicorp.com/terraform/language/expressions/version-constraints
+  - title: Find and use modules from the registry
+    url: https://developer.hashicorp.com/terraform/tutorials/modules/module-use
+  - title: Providers within modules
+    url: https://developer.hashicorp.com/terraform/language/modules/develop/providers
+
+review_questions:
+  - TFQ-501
+  - TFQ-502
+  - TFQ-509
+  - TFQ-510
+  - TFQ-511

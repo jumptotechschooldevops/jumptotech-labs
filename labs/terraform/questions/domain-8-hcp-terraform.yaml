@@ -1,0 +1,267 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — certification questions
+#
+# Domain 8: HCP Terraform
+#
+# Every objective in this domain is CONCEPTUAL in the JumpToTech curriculum:
+# HCP Terraform is a hosted platform, and this repository's sandbox has no
+# network access and no account. The platform does not simulate it. These
+# questions accompany study unit TF-C03, which teaches the material and says
+# plainly what it cannot demonstrate.
+#
+# Original JumpToTech material written from the official HashiCorp
+# documentation.
+# ---------------------------------------------------------------------------
+certification: TERRAFORM-ASSOCIATE-004
+description: HCP Terraform remote runs, collaboration and governance, workspaces and projects, and CLI/VCS/API integration.
+
+questions:
+  - id: TFQ-801
+    objective: 8a
+    type: single
+    question: >
+      What is a "remote operation" in HCP Terraform?
+    choices:
+      - A plan or apply that executes on HCP Terraform's infrastructure, with its output streamed back to the operator
+      - A plan or apply that runs locally but stores its state remotely
+      - A plan that runs remotely while the apply always runs locally
+      - An operation performed by the provider rather than by Terraform
+    correct_answer:
+      - A plan or apply that executes on HCP Terraform's infrastructure, with its output streamed back to the operator
+    explanation: >
+      With remote operations the run itself happens on HCP Terraform: it holds
+      the credentials, executes the plan and apply, records the run, and streams
+      the log to whoever started it. That is what makes runs consistent and
+      auditable regardless of whose laptop triggered them. Storing state remotely
+      without remote execution is a different, lighter-weight setup.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs/run/remote-operations
+
+  - id: TFQ-802
+    objective: 8a
+    type: multiple
+    question: >
+      Pick the 2 workflows HCP Terraform supports for triggering runs.
+    choices:
+      - A VCS-driven workflow, where a commit or pull request starts a run
+      - A CLI-driven workflow, where `terraform apply` from a developer's machine starts a remote run
+      - A cron-only workflow, where runs may be scheduled but never triggered manually
+      - A provider-driven workflow, where the cloud provider starts a run when a resource changes
+      - A state-driven workflow, where editing the state file directly starts a run
+    correct_answer:
+      - A VCS-driven workflow, where a commit or pull request starts a run
+      - A CLI-driven workflow, where `terraform apply` from a developer's machine starts a remote run
+    explanation: >
+      HCP Terraform offers three documented workflows: VCS-driven, CLI-driven and
+      API-driven. The VCS integration is the usual choice for a team, because it
+      ties every run to a commit. The CLI-driven workflow keeps the familiar
+      local commands while the execution and state move to the platform.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs
+
+  - id: TFQ-803
+    objective: 8a
+    type: true_false
+    question: >
+      HCP Terraform stores state for a workspace and retains previous state
+      versions.
+    correct_answer:
+      - 'True'
+    explanation: >
+      Every HCP Terraform workspace has its own remote state, versioned so that
+      earlier versions can be inspected and, if necessary, rolled back. Together
+      with locking during a run, that is the baseline reason many teams adopt it
+      even before they use remote execution or policy enforcement.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs/workspaces
+
+  - id: TFQ-804
+    objective: 8b
+    type: single
+    question: >
+      A platform team wants every run to be checked against a written policy —
+      "no workspace may create a resource without an owner tag" — and to be
+      blocked when it fails. Which HCP Terraform capability is this?
+    choices:
+      - Policy enforcement, using policy sets written in Sentinel or OPA and attached to workspaces or projects
+      - Run triggers, which run a policy workspace before the target workspace
+      - Variable sets, which apply a policy variable to every workspace
+      - The private registry, which only publishes compliant modules
+    correct_answer:
+      - Policy enforcement, using policy sets written in Sentinel or OPA and attached to workspaces or projects
+    explanation: >
+      Policy enforcement evaluates a plan against rules before an apply is
+      allowed, with enforcement levels ranging from advisory to hard-mandatory.
+      Run triggers chain workspaces, variable sets share variables, and a private
+      registry distributes modules — useful things, but none of them inspects a
+      plan against a rule.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs/policy-enforcement
+
+  - id: TFQ-805
+    objective: 8b
+    type: multiple
+    question: >
+      Pick the 2 HCP Terraform features that support collaboration and
+      governance across an organisation.
+    choices:
+      - Teams and permissions, which control who may read, plan or apply in each workspace
+      - A private registry, which publishes an organisation's own modules and providers to its members
+      - Provider aliases, which let each team use a different provider version
+      - The dependency lock file, which is generated per team
+      - Workspace-local state files stored on each engineer's machine
+    correct_answer:
+      - Teams and permissions, which control who may read, plan or apply in each workspace
+      - A private registry, which publishes an organisation's own modules and providers to its members
+    explanation: >
+      Governance in HCP Terraform is built from teams and permissions, policy
+      enforcement, run tasks, audit trails and a private registry that gives an
+      organisation a curated, versioned catalogue of its own modules. Provider
+      aliases and the lock file are ordinary Terraform language and CLI features
+      with no organisational dimension, and local state is what the platform
+      exists to replace.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs/registry
+
+  - id: TFQ-806
+    objective: 8b
+    type: single
+    question: >
+      What are HCP Terraform health assessments used for?
+    choices:
+      - Periodically checking whether a workspace's real infrastructure has drifted from its state
+      - Measuring how long each run takes, to report on pipeline performance
+      - Scanning module code for style violations before it is published
+      - Verifying that provider plugins are the latest available version
+    correct_answer:
+      - Periodically checking whether a workspace's real infrastructure has drifted from its state
+    explanation: >
+      Health assessments run drift detection on a schedule and surface workspaces
+      whose infrastructure no longer matches what Terraform recorded, so drift is
+      found before the next apply trips over it. They are a monitoring feature
+      for state accuracy, not a performance or code-quality tool.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs/workspaces/health
+
+  - id: TFQ-807
+    objective: 8c
+    type: single
+    question: >
+      What is an HCP Terraform workspace?
+    choices:
+      - A separate working directory equivalent with its own state, variables and run history
+      - A named folder inside a single shared state file
+      - A group of projects that share one set of credentials
+      - A snapshot of state taken before each apply
+    correct_answer:
+      - A separate working directory equivalent with its own state, variables and run history
+    explanation: >
+      An HCP Terraform workspace is the unit of management: one configuration,
+      one state, its own variables and its own record of runs. It is a broader
+      thing than a CLI workspace, which only switches between state files inside
+      one working directory — a distinction worth keeping straight, because the
+      same word means both.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs/workspaces
+
+  - id: TFQ-808
+    objective: 8c
+    type: single
+    question: >
+      An organisation has grown to over a hundred workspaces spread across
+      several product teams, and permissions are becoming unmanageable. Which
+      HCP Terraform construct is designed for this?
+    choices:
+      - Projects, which group related workspaces so that access and settings can be managed together
+      - Variable sets, which group variables so that access can be managed together
+      - Run triggers, which group workspaces into an execution order
+      - Policy sets, which group workspaces by compliance requirement
+    correct_answer:
+      - Projects, which group related workspaces so that access and settings can be managed together
+    explanation: >
+      Projects are the organisational layer above workspaces: they gather related
+      workspaces so teams can be granted access to a project rather than to each
+      workspace individually. Variable sets, run triggers and policy sets each
+      group something, but none of them is the mechanism for organising
+      workspaces and their permissions.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs/projects
+
+  - id: TFQ-809
+    objective: 8c
+    type: multiple
+    question: >
+      Pick the 2 true statements about variables in HCP Terraform.
+    choices:
+      - A workspace can define Terraform variables and environment variables
+      - A variable set can apply the same variables to many workspaces or to a whole project
+      - Variables defined in a workspace are automatically shared with every other workspace
+      - Sensitive workspace variables can be read back through the UI after being saved
+      - Variable sets replace the need to declare variables in the configuration
+    correct_answer:
+      - A workspace can define Terraform variables and environment variables
+      - A variable set can apply the same variables to many workspaces or to a whole project
+    explanation: >
+      A workspace holds both kinds of variable: Terraform variables passed to the
+      configuration, and environment variables available to the run. Variable
+      sets exist so a value such as a region or a credential is defined once and
+      applied across workspaces or a whole project. Variables are not shared
+      implicitly between workspaces, sensitive values are write-only once saved,
+      and a Terraform variable must still be declared in the configuration.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs/workspaces/variables/managing-variables
+
+  - id: TFQ-810
+    objective: 8d
+    type: single
+    question: >
+      Which block connects a local Terraform configuration to an HCP Terraform
+      workspace for the CLI-driven workflow?
+    choices:
+      - A `cloud` block inside the `terraform` block, naming the organisation and workspaces
+      - A `provider "hcp"` block naming the organisation
+      - A `backend "remote"` block, which is the only supported form in Terraform 1.x
+      - A `workspace` block at the top level of the configuration
+    correct_answer:
+      - A `cloud` block inside the `terraform` block, naming the organisation and workspaces
+    explanation: >
+      The `cloud` block is the current way to bind a working directory to HCP
+      Terraform. The older `backend "remote"` block still works and is still seen
+      in existing configurations, but `cloud` is what new configurations use.
+      There is no top-level `workspace` block, and the HCP provider manages HCP
+      resources rather than connecting the CLI to a workspace.
+    official_reference: https://developer.hashicorp.com/terraform/cli/cloud/settings
+
+  - id: TFQ-811
+    objective: 8d
+    type: single
+    question: >
+      Before running `terraform init` against a `cloud` block for the first
+      time, what must an engineer do on their machine?
+    choices:
+      - Run `terraform login` to obtain and store an API token for HCP Terraform
+      - Run `terraform workspace new` to create the remote workspace locally
+      - Copy the organisation's state file into the working directory
+      - Export the organisation's private key as TF_CLOUD_KEY
+    correct_answer:
+      - Run `terraform login` to obtain and store an API token for HCP Terraform
+    explanation: >
+      `terraform login` performs the browser-based flow and stores a credentials
+      token, which the CLI then uses to talk to HCP Terraform. Workspaces are
+      created on the platform (or automatically by the `cloud` block's tags or
+      name), state lives remotely rather than being copied in, and there is no
+      `TF_CLOUD_KEY` variable.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/login
+
+  - id: TFQ-812
+    objective: 8d
+    type: single
+    question: >
+      A team currently keeps state in an S3 backend and wants to move to HCP
+      Terraform without recreating their infrastructure. What is the documented
+      path?
+    choices:
+      - Replace the backend with a `cloud` block and run `terraform init`, which offers to migrate the existing state
+      - Run `terraform destroy`, then re-apply with the `cloud` block configured
+      - Import every resource into the new workspace one at a time
+      - Upload the state file through the HCP Terraform UI and delete the local configuration
+    correct_answer:
+      - Replace the backend with a `cloud` block and run `terraform init`, which offers to migrate the existing state
+    explanation: >
+      Migration works the same way as any other backend change: alter the
+      configuration and let `terraform init` detect it and copy the state across,
+      so the workspace carries on managing the same objects. Destroying and
+      re-applying would take an outage for no reason, and importing resource by
+      resource would be doing the migration by hand.
+    official_reference: https://developer.hashicorp.com/terraform/cloud-docs/migrate

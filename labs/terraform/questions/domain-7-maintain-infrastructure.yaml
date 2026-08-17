@@ -1,0 +1,198 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — certification questions
+#
+# Domain 7: Maintain infrastructure with Terraform
+#
+# Original JumpToTech material written from the official HashiCorp
+# documentation. See domain-1 for the sourcing note that applies to every file
+# in this directory.
+# ---------------------------------------------------------------------------
+certification: TERRAFORM-ASSOCIATE-004
+description: Importing existing infrastructure, inspecting state from the CLI, and verbose logging.
+
+questions:
+  - id: TFQ-701
+    objective: 7a
+    type: single
+    question: >
+      An object was created by hand and must now be managed by Terraform.
+      What does `terraform import` do?
+    choices:
+      - Records the existing object in state against a resource address you have already declared
+      - Creates a resource block for the object and adds it to your configuration
+      - Recreates the object so that Terraform owns it from the start
+      - Copies the object's settings into a `.tfvars` file for you to review
+    correct_answer:
+      - Records the existing object in state against a resource address you have already declared
+    explanation: >
+      `terraform import` writes to state and nothing else. It does not create,
+      change or destroy the object, and it does not write configuration — the
+      resource block has to exist first, or there is no address to import into.
+      Confirming the work is done means running a plan and seeing no changes.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/import
+
+  - id: TFQ-702
+    objective: 7a
+    type: multiple
+    question: >
+      Pick the 2 true statements about the `import` block introduced in
+      Terraform 1.5.
+    choices:
+      - It declares imports in configuration, so a plan shows them and a normal apply performs them
+      - Combined with `terraform plan -generate-config-out=<FILE>`, it can generate a starting resource configuration
+      - It replaces state entirely, so an imported workspace no longer needs a backend
+      - It destroys and recreates the object under Terraform's ownership
+      - It may only be used for data sources
+    correct_answer:
+      - It declares imports in configuration, so a plan shows them and a normal apply performs them
+      - Combined with `terraform plan -generate-config-out=<FILE>`, it can generate a starting resource configuration
+    explanation: >
+      The `import` block moves importing into the reviewable, plannable part of
+      the workflow: you can see what an import will do before it happens, and
+      apply it like any other change. Its configuration-generation option gives
+      you a draft resource block to edit rather than requiring you to write one
+      from scratch. It changes nothing about backends and destroys nothing.
+    official_reference: https://developer.hashicorp.com/terraform/language/import
+
+  - id: TFQ-703
+    objective: 7a
+    type: single
+    question: >
+      After importing an existing object, `terraform plan` proposes replacing it.
+      What does that most likely mean?
+    choices:
+      - The configuration does not match the object as it really is, so Terraform sees a change that forces replacement
+      - The import failed and wrote nothing to state
+      - The import always requires one replacement to take ownership
+      - The provider does not support importing this resource type
+    correct_answer:
+      - The configuration does not match the object as it really is, so Terraform sees a change that forces replacement
+    explanation: >
+      A successful import means state now describes the real object. If the plan
+      is not empty, your configuration disagrees with it — usually an argument
+      you guessed at rather than read from the imported state. The fix is to
+      inspect the imported resource with `terraform state show` and make the
+      configuration match. An empty plan is the signal that the import is
+      genuinely complete.
+    official_reference: https://developer.hashicorp.com/terraform/language/import
+
+  - id: TFQ-704
+    objective: 7b
+    type: single
+    question: >
+      Which command lists the addresses of every resource Terraform is currently
+      tracking in the workspace?
+    choices:
+      - terraform state list
+      - terraform show -json
+      - terraform providers
+      - terraform output
+    correct_answer:
+      - terraform state list
+    explanation: >
+      `terraform state list` prints one resource address per line, which is the
+      quickest way to see what a workspace manages and the natural first step
+      before `terraform state show <ADDRESS>`. `terraform show` prints the whole
+      state or plan, `terraform providers` reports provider requirements, and
+      `terraform output` prints only output values.
+    official_reference: https://developer.hashicorp.com/terraform/cli/commands/state/list
+
+  - id: TFQ-705
+    objective: 7b
+    type: single
+    question: >
+      An engineer wants the recorded attributes of one specific managed resource,
+      to compare them with what the configuration says. Which command is
+      designed for that?
+    choices:
+      - terraform state show <ADDRESS>
+      - terraform state list <ADDRESS>
+      - terraform plan -target=<ADDRESS>
+      - terraform refresh <ADDRESS>
+    correct_answer:
+      - terraform state show <ADDRESS>
+    explanation: >
+      `terraform state show` prints the attributes recorded for one resource,
+      including values the provider computed that the configuration never
+      mentions. `state list` filters addresses rather than showing attributes, a
+      targeted plan answers a different question, and `terraform refresh` is
+      deprecated in favour of `apply -refresh-only`.
+    official_reference: https://developer.hashicorp.com/terraform/cli/state/inspect
+
+  - id: TFQ-706
+    objective: 7b
+    type: multiple
+    question: >
+      Pick the 2 true statements about inspecting Terraform state.
+    choices:
+      - '`terraform show -json` produces a machine-readable rendering of state or of a saved plan'
+      - '`terraform output -json` prints output values in a form other tools can parse'
+      - '`terraform state list` contacts the provider API to confirm each object still exists'
+      - '`terraform state show` requires the `-refresh=true` option to read anything'
+      - Inspecting state requires the working directory to be uninitialised
+    correct_answer:
+      - '`terraform show -json` produces a machine-readable rendering of state or of a saved plan'
+      - '`terraform output -json` prints output values in a form other tools can parse'
+    explanation: >
+      Both commands have JSON forms intended for scripting and for feeding other
+      tools. The state inspection commands read the state Terraform already has;
+      they do not call the provider to re-check reality — that is what a refresh
+      does. And of course inspecting state needs an initialised directory, since
+      the backend has to be known.
+    official_reference: https://developer.hashicorp.com/terraform/cli/state/inspect
+
+  - id: TFQ-707
+    objective: 7c
+    type: single
+    question: >
+      Which environment variable enables Terraform's verbose logging, and what
+      are its accepted levels?
+    choices:
+      - TF_LOG, accepting TRACE, DEBUG, INFO, WARN and ERROR
+      - TF_DEBUG, accepting on and off
+      - TERRAFORM_VERBOSE, accepting 0 to 5
+      - TF_LOG_LEVEL, accepting VERBOSE and QUIET
+    correct_answer:
+      - TF_LOG, accepting TRACE, DEBUG, INFO, WARN and ERROR
+    explanation: >
+      Setting `TF_LOG` turns on detailed logging, with TRACE the most verbose and
+      the level HashiCorp asks for in bug reports. `TF_LOG_CORE` and
+      `TF_LOG_PROVIDER` let you raise the level for only one side when the noise
+      from both is too much to read.
+    official_reference: https://developer.hashicorp.com/terraform/internals/debugging
+
+  - id: TFQ-708
+    objective: 7c
+    type: single
+    question: >
+      A CI job needs Terraform's debug output captured to a file rather than
+      mixed into the job's console output. Which environment variable does that?
+    choices:
+      - TF_LOG_PATH
+      - TF_LOG_FILE
+      - TF_OUTPUT
+      - TF_CLI_LOG
+    correct_answer:
+      - TF_LOG_PATH
+    explanation: >
+      `TF_LOG_PATH` writes the log to the named file, and it only takes effect
+      when `TF_LOG` is also set. Capturing to a file is the practical way to use
+      verbose logging in automation: the log is long, worth keeping as an
+      artefact, and unreadable interleaved with normal output.
+    official_reference: https://developer.hashicorp.com/terraform/internals/debugging
+
+  - id: TFQ-709
+    objective: 7c
+    type: true_false
+    question: >
+      Verbose Terraform logs may contain sensitive information and should be
+      treated with the same care as state.
+    correct_answer:
+      - 'True'
+    explanation: >
+      Debug and trace logs record request and response detail, including
+      attribute values, so a log can contain exactly the secrets a redacted plan
+      output was hiding. That is why verbose logging is something you turn on
+      deliberately to diagnose a problem, and why the resulting file needs the
+      same handling as a state file rather than being pasted into a ticket.
+    official_reference: https://developer.hashicorp.com/terraform/internals/debugging

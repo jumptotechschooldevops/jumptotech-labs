@@ -1,0 +1,402 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — certification objective catalog
+#
+# HashiCorp Certified: Terraform Associate (004).
+#
+# This file is the machine-readable copy of the *official* exam content list.
+# It is data, not curriculum: the domain and objective ids and titles are
+# HashiCorp's, the reference URLs are HashiCorp's, and nothing in here describes
+# a JumpToTech lab. The mapping in the other direction — which lab or question
+# covers which objective — lives in the lab and question files themselves, so
+# that adding a lab cannot silently claim coverage this file did not define.
+#
+# The coverage gate (`npm run certification:terraform`) reads this file, walks
+# every Terraform lab, study unit and question, and fails when an objective has
+# neither hands-on practice nor assessment coverage.
+#
+# Reviewed against the official content list on 2026-08-17. Re-review whenever
+# HashiCorp publishes a new exam version; see docs/certifications/.
+# ---------------------------------------------------------------------------
+id: TERRAFORM-ASSOCIATE-004
+name: 'HashiCorp Certified: Terraform Associate (004)'
+short_name: Terraform Associate (004)
+vendor: HashiCorp
+track: terraform
+exam_version: '004'
+
+# The Terraform version the certification states it tests. Compared against the
+# version the sandbox image actually ships; see docs/certifications/.
+product: Terraform
+product_version: '1.12'
+
+reviewed_on: '2026-08-17'
+
+# Deliberately no pass-rate claim and no question count: HashiCorp publishes the
+# format, and repeating a number here that could drift would be a claim we
+# cannot keep current.
+notes: >
+  The 004 exam adds four topics relative to 003: explicit resource dependencies
+  and create_before_destroy (4f), custom conditions (4g), ephemeral values and
+  write-only arguments (4h), and organising HCP Terraform workspaces and
+  projects (8c). It tests Terraform 1.12 and includes HCP Terraform content.
+  Completing this track does not guarantee a pass; it maps our curriculum onto
+  every published objective.
+
+sources:
+  - title: Exam Content List — Terraform Associate 004
+    url: https://developer.hashicorp.com/terraform/tutorials/certification-004/associate-review-004
+  - title: Learning Path — Terraform Associate 004
+    url: https://developer.hashicorp.com/terraform/tutorials/certification-004/associate-study-004
+  - title: Sample Questions — Terraform Associate 004
+    url: https://developer.hashicorp.com/terraform/tutorials/certification-004/associate-questions-004
+  - title: Associate Prep (004)
+    url: https://developer.hashicorp.com/terraform/tutorials/certification-004
+  - title: HashiCorp Certifications — Infrastructure Automation
+    url: https://developer.hashicorp.com/certifications/infrastructure-automation
+
+# `practice` is JumpToTech's delivery decision for the objective, not HashiCorp's:
+#
+#   hands-on    the objective can be practised for real in an offline, no-cloud
+#               sandbox, so the curriculum must contain a lab that verifies it
+#   conceptual  it cannot be — remote services, paid platforms, or knowledge
+#               that has no artefact to inspect — so the curriculum must teach
+#               it in a study unit and assess it with questions
+#
+# Every objective, whichever it is, must also carry assessment coverage. The
+# coverage gate enforces both halves.
+domains:
+  - id: '1'
+    title: Infrastructure as Code (IaC) with Terraform
+    objectives:
+      - id: 1a
+        title: Explain what IaC is
+        practice: conceptual
+        references:
+          - title: What is Terraform?
+            url: https://developer.hashicorp.com/terraform/intro
+          - title: Infrastructure as code
+            url: https://developer.hashicorp.com/terraform/tutorials/aws-get-started/infrastructure-as-code
+      - id: 1b
+        title: Describe the advantages of IaC patterns
+        practice: conceptual
+        references:
+          - title: Why Terraform?
+            url: https://developer.hashicorp.com/terraform/intro#why-terraform
+          - title: Infrastructure as code
+            url: https://developer.hashicorp.com/terraform/tutorials/aws-get-started/infrastructure-as-code
+      - id: 1c
+        title: Explain how Terraform manages multi-cloud, hybrid cloud, and service-agnostic workflows
+        practice: conceptual
+        references:
+          - title: Terraform use cases — multi-cloud deployment
+            url: https://developer.hashicorp.com/terraform/intro/use-cases
+          - title: How Terraform works
+            url: https://developer.hashicorp.com/terraform/plugin/how-terraform-works
+
+  - id: '2'
+    title: Terraform fundamentals
+    objectives:
+      - id: 2a
+        title: Install and version Terraform providers
+        practice: hands-on
+        references:
+          - title: Provider requirements
+            url: https://developer.hashicorp.com/terraform/language/providers/requirements
+          - title: Dependency lock file
+            url: https://developer.hashicorp.com/terraform/language/files/dependency-lock
+          - title: Lock and upgrade provider versions
+            url: https://developer.hashicorp.com/terraform/tutorials/configuration-language/provider-versioning
+      - id: 2b
+        title: Describe how Terraform uses providers
+        practice: hands-on
+        references:
+          - title: Providers
+            url: https://developer.hashicorp.com/terraform/language/providers
+          - title: How Terraform works with plugins
+            url: https://developer.hashicorp.com/terraform/plugin/how-terraform-works
+      - id: 2c
+        title: Write Terraform configuration using multiple providers
+        practice: hands-on
+        references:
+          - title: Provider configuration
+            url: https://developer.hashicorp.com/terraform/language/providers/configuration
+          - title: Provider requirements
+            url: https://developer.hashicorp.com/terraform/language/providers/requirements
+      - id: 2d
+        title: Explain how Terraform uses and manages state
+        practice: hands-on
+        references:
+          - title: Purpose of Terraform state
+            url: https://developer.hashicorp.com/terraform/language/state/purpose
+          - title: Manage Terraform state with the CLI
+            url: https://developer.hashicorp.com/terraform/tutorials/state/state-cli
+
+  - id: '3'
+    title: Core Terraform workflow
+    objectives:
+      - id: 3a
+        title: Describe the Terraform workflow
+        practice: hands-on
+        references:
+          - title: The core Terraform workflow
+            url: https://developer.hashicorp.com/terraform/intro/core-workflow
+      - id: 3b
+        title: Initialize a Terraform working directory
+        practice: hands-on
+        references:
+          - title: 'Command: terraform init'
+            url: https://developer.hashicorp.com/terraform/cli/commands/init
+          - title: Dependency lock file
+            url: https://developer.hashicorp.com/terraform/language/files/dependency-lock
+      - id: 3c
+        title: Validate a Terraform configuration
+        practice: hands-on
+        references:
+          - title: 'Command: terraform validate'
+            url: https://developer.hashicorp.com/terraform/cli/commands/validate
+          - title: Troubleshoot Terraform
+            url: https://developer.hashicorp.com/terraform/tutorials/configuration-language/troubleshooting-workflow
+      - id: 3d
+        title: Generate and review an execution plan for Terraform
+        practice: hands-on
+        references:
+          - title: 'Command: terraform plan'
+            url: https://developer.hashicorp.com/terraform/cli/commands/plan
+          - title: Resource graph
+            url: https://developer.hashicorp.com/terraform/internals/graph
+      - id: 3e
+        title: Apply changes to infrastructure with Terraform
+        practice: hands-on
+        references:
+          - title: 'Command: terraform apply'
+            url: https://developer.hashicorp.com/terraform/cli/commands/apply
+      - id: 3f
+        title: Destroy Terraform-managed infrastructure
+        practice: hands-on
+        references:
+          - title: 'Command: terraform destroy'
+            url: https://developer.hashicorp.com/terraform/cli/commands/destroy
+      - id: 3g
+        title: Apply formatting and style adjustments to a configuration
+        practice: hands-on
+        references:
+          - title: 'Command: terraform fmt'
+            url: https://developer.hashicorp.com/terraform/cli/commands/fmt
+          - title: Terraform style guide
+            url: https://developer.hashicorp.com/terraform/language/style
+
+  - id: '4'
+    title: Terraform configuration
+    objectives:
+      - id: 4a
+        title: Use and differentiate resource and data blocks
+        practice: hands-on
+        references:
+          - title: Resources
+            url: https://developer.hashicorp.com/terraform/language/resources
+          - title: Data sources
+            url: https://developer.hashicorp.com/terraform/language/data-sources
+      - id: 4b
+        title: Refer to resource attributes and create cross-resource references
+        practice: hands-on
+        references:
+          - title: References to values
+            url: https://developer.hashicorp.com/terraform/language/expressions/references
+          - title: Resource addressing
+            url: https://developer.hashicorp.com/terraform/cli/state/resource-addressing
+      - id: 4c
+        title: Use variables and outputs
+        practice: hands-on
+        references:
+          - title: Input variables
+            url: https://developer.hashicorp.com/terraform/language/values/variables
+          - title: Output values
+            url: https://developer.hashicorp.com/terraform/language/values/outputs
+      - id: 4d
+        title: Understand and use complex types
+        practice: hands-on
+        references:
+          - title: Type constraints
+            url: https://developer.hashicorp.com/terraform/language/expressions/types
+      - id: 4e
+        title: Write dynamic configuration using expressions and functions
+        practice: hands-on
+        references:
+          - title: Expressions
+            url: https://developer.hashicorp.com/terraform/language/expressions
+          - title: Built-in functions
+            url: https://developer.hashicorp.com/terraform/language/functions
+      - id: 4f
+        title: Define resource dependencies in configuration
+        practice: hands-on
+        references:
+          - title: 'Meta-argument: depends_on'
+            url: https://developer.hashicorp.com/terraform/language/meta-arguments/depends_on
+          - title: 'Meta-argument: lifecycle'
+            url: https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle
+          - title: Resource graph
+            url: https://developer.hashicorp.com/terraform/internals/graph
+      - id: 4g
+        title: Validate configuration using custom conditions
+        practice: hands-on
+        references:
+          - title: Custom conditions
+            url: https://developer.hashicorp.com/terraform/language/expressions/custom-conditions
+          - title: Checks
+            url: https://developer.hashicorp.com/terraform/language/checks
+      - id: 4h
+        title: Understand best practices for managing sensitive data, including secrets management with Vault
+        practice: hands-on
+        references:
+          - title: Manage sensitive data in state
+            url: https://developer.hashicorp.com/terraform/language/state/sensitive-data
+          - title: Protect sensitive input variables
+            url: https://developer.hashicorp.com/terraform/tutorials/configuration-language/sensitive-variables
+          - title: Ephemeral values
+            url: https://developer.hashicorp.com/terraform/language/values/ephemeral
+          - title: Inject secrets into Terraform using the Vault provider
+            url: https://developer.hashicorp.com/terraform/tutorials/secrets/secrets-vault
+
+  - id: '5'
+    title: Terraform modules
+    objectives:
+      - id: 5a
+        title: Explain how Terraform sources modules
+        practice: hands-on
+        references:
+          - title: Module sources
+            url: https://developer.hashicorp.com/terraform/language/modules/sources
+          - title: Find and use modules from the registry
+            url: https://developer.hashicorp.com/terraform/tutorials/modules/module-use
+      - id: 5b
+        title: Describe variable scope within modules
+        practice: hands-on
+        references:
+          - title: Module blocks
+            url: https://developer.hashicorp.com/terraform/language/modules/syntax
+          - title: Values — variables, outputs and locals
+            url: https://developer.hashicorp.com/terraform/language/values
+      - id: 5c
+        title: Use modules in configuration
+        practice: hands-on
+        references:
+          - title: Module composition
+            url: https://developer.hashicorp.com/terraform/language/modules/develop/composition
+          - title: Build and use a local module
+            url: https://developer.hashicorp.com/terraform/tutorials/modules/module-create
+      - id: 5d
+        title: Manage module versions
+        practice: conceptual
+        references:
+          - title: Module version constraints
+            url: https://developer.hashicorp.com/terraform/language/modules/syntax#version
+          - title: Version constraint syntax
+            url: https://developer.hashicorp.com/terraform/language/expressions/version-constraints
+
+  - id: '6'
+    title: Terraform state management
+    objectives:
+      - id: 6a
+        title: Describe the local backend
+        practice: hands-on
+        references:
+          - title: Backend configuration
+            url: https://developer.hashicorp.com/terraform/language/backend
+          - title: 'Backend: local'
+            url: https://developer.hashicorp.com/terraform/language/backend/local
+      - id: 6b
+        title: Describe state locking
+        practice: conceptual
+        references:
+          - title: State locking
+            url: https://developer.hashicorp.com/terraform/language/state/locking
+          - title: 'Command: terraform force-unlock'
+            url: https://developer.hashicorp.com/terraform/cli/commands/force-unlock
+      - id: 6c
+        title: Configure remote state using the backend block
+        practice: conceptual
+        references:
+          - title: State backends
+            url: https://developer.hashicorp.com/terraform/language/state/backends
+          - title: Backend configuration
+            url: https://developer.hashicorp.com/terraform/language/backend
+      - id: 6d
+        title: Manage resource drift and Terraform state
+        practice: hands-on
+        references:
+          - title: Manage resource drift
+            url: https://developer.hashicorp.com/terraform/tutorials/state/resource-drift
+          - title: Refactoring — the moved block
+            url: https://developer.hashicorp.com/terraform/language/modules/develop/refactoring
+          - title: 'Block: moved'
+            url: https://developer.hashicorp.com/terraform/language/moved
+
+  - id: '7'
+    title: Maintain infrastructure with Terraform
+    objectives:
+      - id: 7a
+        title: Import existing infrastructure into your Terraform workspace
+        practice: hands-on
+        references:
+          - title: 'Command: terraform import'
+            url: https://developer.hashicorp.com/terraform/cli/commands/import
+          - title: Import existing resources
+            url: https://developer.hashicorp.com/terraform/language/import
+      - id: 7b
+        title: Use the CLI to inspect state
+        practice: hands-on
+        references:
+          - title: 'Command: terraform state'
+            url: https://developer.hashicorp.com/terraform/cli/commands/state
+          - title: Inspecting state
+            url: https://developer.hashicorp.com/terraform/cli/state/inspect
+      - id: 7c
+        title: Describe when and how to use verbose logging
+        practice: hands-on
+        references:
+          - title: Debugging Terraform
+            url: https://developer.hashicorp.com/terraform/internals/debugging
+          - title: Troubleshoot Terraform
+            url: https://developer.hashicorp.com/terraform/tutorials/configuration-language/troubleshooting-workflow
+
+  - id: '8'
+    title: HCP Terraform
+    objectives:
+      - id: 8a
+        title: Use HCP Terraform to create infrastructure
+        practice: conceptual
+        references:
+          - title: HCP Terraform overview
+            url: https://developer.hashicorp.com/terraform/cloud-docs
+          - title: Remote operations
+            url: https://developer.hashicorp.com/terraform/cloud-docs/run/remote-operations
+      - id: 8b
+        title: Describe HCP Terraform collaboration and governance features
+        practice: conceptual
+        references:
+          - title: Teams
+            url: https://developer.hashicorp.com/terraform/cloud-docs/users-teams-organizations/teams
+          - title: Policy enforcement
+            url: https://developer.hashicorp.com/terraform/cloud-docs/policy-enforcement
+          - title: Private registry
+            url: https://developer.hashicorp.com/terraform/cloud-docs/registry
+      - id: 8c
+        title: Describe how to organize and use HCP Terraform workspaces and projects
+        practice: conceptual
+        references:
+          - title: Workspaces
+            url: https://developer.hashicorp.com/terraform/cloud-docs/workspaces
+          - title: Projects
+            url: https://developer.hashicorp.com/terraform/cloud-docs/projects
+          - title: Variable sets
+            url: https://developer.hashicorp.com/terraform/cloud-docs/workspaces/variables/managing-variables
+      - id: 8d
+        title: Configure and use HCP Terraform integration
+        practice: conceptual
+        references:
+          - title: The cloud block
+            url: https://developer.hashicorp.com/terraform/cli/cloud/settings
+          - title: 'Command: terraform login'
+            url: https://developer.hashicorp.com/terraform/cli/commands/login
+          - title: Migrate state to HCP Terraform
+            url: https://developer.hashicorp.com/terraform/cloud-docs/migrate

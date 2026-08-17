@@ -82,6 +82,17 @@ export * from './session/sandbox-paths.js';
 export * from './terraform/state.js';
 export * from './terraform/hcl.js';
 
+// --- certification alignment (TERRAFORM-CERT-004) --------------------------
+// Vendor-neutral: objective catalogs, question banks, conceptual study units,
+// practice assessments, and the coverage matrix that ties them to labs. Nothing
+// in here knows what Terraform is — a CKA catalog is another YAML file.
+export * from './certification/catalog.js';
+export * from './certification/questions.js';
+export * from './certification/study.js';
+export * from './certification/exam.js';
+export * from './certification/coverage.js';
+export * from './certification/registry.js';
+
 export {
   loadSetupFiles,
   nonExecutableMode,
