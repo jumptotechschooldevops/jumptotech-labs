@@ -14,7 +14,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { LabRegistry, parseLabDefinition, LabDefinitionError } from '../src/index.js';
+import {
+  LabRegistry,
+  LabDefinitionError,
+  OFFICIAL_DOC_HOSTS,
+  parseLabDefinition,
+} from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 
 const DOC_URL = 'https://kubernetes.io/docs/concepts/workloads/pods/';
@@ -125,8 +130,10 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.size).toBe(10);
-    expect(registry.all().map((l) => l.id)).toEqual([
+    // Asserted per track rather than as one flat list: a new track must be
+    // able to arrive without this test needing to know it did, while a lab
+    // disappearing from an existing track still fails loudly.
+    expect(registry.labsForTrack('kubernetes').map((l) => l.id)).toEqual([
       'K8S-001',
       'K8S-002',
       'K8S-003',
@@ -138,6 +145,9 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
       'K8S-009',
       'K8S-010',
     ]);
+    expect(registry.size).toBe(
+      registry.tracks().reduce((total, track) => total + track.labCount, 0),
+    );
   });
 
   it('discovers multiple labs from nested directories', async () => {
@@ -164,8 +174,16 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
   });
 
   it('orders labs by track then declared order', async () => {
-    const orders = (await realRegistry()).all().map((l) => l.order);
-    expect(orders).toEqual([...orders].sort((a, b) => a - b));
+    const registry = await realRegistry();
+    // Order is *within* a track; across tracks the sort is by track name, so a
+    // flat list of orders is not monotonic once a second track exists.
+    for (const track of registry.tracks()) {
+      const orders = registry.labsForTrack(track.track).map((l) => l.order);
+      expect(orders, track.track).toEqual([...orders].sort((a, b) => a - b));
+    }
+    expect(registry.all().map((l) => l.track)).toEqual(
+      [...registry.all().map((l) => l.track)].sort(),
+    );
   });
 });
 
@@ -248,7 +266,9 @@ describe('catalog — filtering (test requirement 5)', () => {
     const registry = await realRegistry();
 
     expect(registry.list({ topic: 'batch' }).map((l) => l.id)).toEqual(['K8S-006', 'K8S-007']);
-    expect(registry.list({ difficulty: 'intermediate' }).map((l) => l.id)).toEqual([
+    // Difficulty spans tracks, so this is scoped to one — otherwise the
+    // assertion would have to be rewritten every time a track is added.
+    expect(registry.list({ track: 'kubernetes', difficulty: 'intermediate' }).map((l) => l.id)).toEqual([
       'K8S-008',
       'K8S-009',
       'K8S-010',
@@ -258,7 +278,7 @@ describe('catalog — filtering (test requirement 5)', () => {
 
   it('reports tracks with their topics and difficulties', async () => {
     const registry = await realRegistry();
-    const [track] = registry.tracks();
+    const track = registry.track('kubernetes');
 
     expect(track).toMatchObject({ track: 'kubernetes', title: 'Kubernetes', labCount: 10 });
     expect(track?.difficulties).toEqual(['beginner', 'intermediate']);
@@ -486,10 +506,23 @@ describe('schema — documentation (test requirement 10)', () => {
   });
 
   it('points every shipped lab at official documentation only', async () => {
-    for (const lab of (await realRegistry()).all()) {
-      expect(lab.references.length).toBeGreaterThan(0);
-      expect(lab.references.some((ref) => new URL(ref.url).hostname === 'kubernetes.io')).toBe(true);
-      for (const ref of lab.references) expect(ref.url).toMatch(/^https:\/\//);
+    const registry = await realRegistry();
+
+    // Each track has its own set of official hosts (OFFICIAL_DOC_HOSTS), and
+    // the loader enforces that a lab cites at least one of its own track's.
+    // The assertion is written the same way, so it covers a track that does
+    // not exist yet without being rewritten.
+    for (const lab of registry.all()) {
+      expect(lab.references.length, lab.id).toBeGreaterThan(0);
+      for (const ref of lab.references) expect(ref.url, lab.id).toMatch(/^https:\/\//);
+
+      const official = OFFICIAL_DOC_HOSTS[lab.track];
+      expect(official, `no official hosts declared for track '${lab.track}'`).toBeTruthy();
+      const hosts = lab.references.map((ref) => new URL(ref.url).hostname);
+      expect(
+        hosts.some((host) => official!.some((allowed) => host === allowed || allowed.startsWith(`${host}/`))),
+        `${lab.id}: ${hosts.join(', ')}`,
+      ).toBe(true);
     }
   });
 });

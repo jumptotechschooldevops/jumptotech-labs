@@ -130,6 +130,9 @@ suite('integration: real kind cluster', () => {
   /** Write this session's student kubeconfig to disk; returns its path. */
   async function studentKubeconfig(manager: SessionManager, session: LabSession): Promise<string> {
     const credentials = await manager.issueCredentials(session.sessionId);
+    if (credentials.kind !== 'kubeconfig') {
+      throw new Error(`K8S-001 must issue kubeconfig credentials, got '${credentials.kind}'`);
+    }
     const file = path.join(scratchDir, `${session.sessionId}.kubeconfig`);
     await writeFile(file, credentials.kubeconfig, { mode: 0o600 });
     return file;

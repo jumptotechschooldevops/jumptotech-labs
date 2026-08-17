@@ -27,6 +27,7 @@ adding a lab means adding a `lab.yaml`, and nothing else. See
 - [What is in scope](#what-is-in-scope)
 - [Architecture](#architecture)
 - [The lab catalog](#the-lab-catalog)
+- [The CI/CD track](#the-cicd-track)
 - [Multi-student architecture](#multi-student-architecture)
 - [Session lifecycle](#session-lifecycle)
 - [Cost model](#cost-model)
@@ -325,23 +326,30 @@ jumptotech-labs/
                                  │
                             Lab Catalog                  labs/**/lab.yaml
                                  │                       discovered at startup
-                    ┌────────────┴────────────┐
-                    │                         │
-               Kubernetes                Future tracks
-                    │
-   ┌────────┬───────┼───────┬────────┬─────── … ────────┐
-K8S-001  K8S-002  K8S-003  K8S-004  K8S-005          K8S-010
-   └────────┴───────┴───────┴────────┴─────── … ────────┘
+             ┌───────────────────┼───────────────────┐
+             │                   │                   │
+        Kubernetes             CI/CD           Future tracks
+             │                   │             Linux · Terraform
+   ┌─────┬───┼───┬ … ─┐  ┌─────┬─┼───┬ … ─┐    Docker · AWS · …
+K8S-001 …        K8S-010 CICD-001 …   CICD-010
+   └─────┴───────┴ … ─┘  └─────┴─────┴ … ─┘
                                  │
                        Generic Lab Engine          no lab-specific code
                     setup · verify · reset · hints
                                  │
                           Session Manager
                                  │
-                     PLATFORM-002 isolation          namespace per session
-                                 │
-                        Kubernetes cluster
+                       CompositeLabProvider        one sandbox per session,
+                                 │                 chosen by the lab
+                    ┌────────────┴────────────┐
+            Kubernetes namespace        private workspace
+              (KindLabProvider)      (WorkspaceLabProvider)
 ```
+
+Nothing in that diagram is a special case. `CompositeLabProvider` dispatches on
+`environment.provider` in the lab definition; the session manager, the REST
+routes, the cleanup reaper, and React all see one provider with one lifecycle.
+Adding a third sandbox kind is one class and one entry in the factory.
 
 The rule this section exists to state: **adding a lab does not change the
 application.** No React component, API route, orchestrator method, or verifier
@@ -400,8 +408,8 @@ duration_minutes: 30
 order: 2                        # sort position within the track
 
 environment:
-  provider: kubernetes
-  isolation: namespace          # the only value; keeps the seam visible
+  provider: kubernetes          # kubernetes → a namespace | workspace → a directory
+  isolation: namespace          # namespace for kubernetes, workspace for workspace
 
 prerequisites: [K8S-001]        # advisory — see above
 story: >                        # the realistic situation, rendered as "Scenario"
@@ -609,6 +617,275 @@ Two students on K8S-010 get two broken workloads in two namespaces. One
 student's Reset restores their own fault and leaves the other's repair alone;
 that is asserted against a real cluster in
 [`labs-integration.test.ts`](services/lab-orchestrator/test/labs-integration.test.ts).
+
+---
+
+## The CI/CD track
+
+CI/CD is the platform's second track and its first **file-backed** one. A
+Kubernetes lab is about objects in a cluster; a CI/CD lab is about files in a
+project — a workflow, a Jenkinsfile, a Dockerfile, an artifact — so the sandbox
+is a directory rather than a namespace, and the verifier reads bytes rather
+than the Kubernetes API.
+
+```text
+  JumpToTech Labs → CI/CD → select lab → Start Lab
+                                              │
+                              private workspace, seeded from the lab
+                                              │
+                                     browser terminal (PTY)
+                                              │
+                    student edits real project and pipeline files
+                                              │
+                                       Check Solution
+                                              │
+                        file reads  +  real build / real tests
+                                              │
+                                 LAB PASSED / LAB NOT COMPLETE
+                                              │
+                                    Reset  ·  End  ·  Expire
+                                              │
+                                    workspace destroyed
+```
+
+### The ten CI/CD labs
+
+| Lab | Title | Topic | Level | Prerequisites | Starts from |
+|---|---|---|---|---|---|
+| CICD-001 | Continuous Integration, Delivery and Deployment | fundamentals | beginner | — | the statements service |
+| CICD-002 | Your First GitHub Actions Workflow | github-actions | beginner | CICD-001 | the statements service |
+| CICD-003 | Build and Test in a Workflow | github-actions | beginner | CICD-002 | a workflow that only checks out |
+| CICD-004 | Publishing Build Artifacts | github-actions | intermediate | CICD-003 | a workflow that builds and tests |
+| CICD-005 | Building a Container Image in CI | github-actions | intermediate | CICD-004 | a workflow that publishes an artifact |
+| CICD-006 | Your First Jenkins Pipeline | jenkins | beginner | CICD-001 | the statements service |
+| CICD-007 | Multi-Stage Jenkins Pipelines | jenkins | intermediate | CICD-006 | a single-stage Jenkinsfile |
+| CICD-008 | Environment Variables and Credentials | jenkins | intermediate | CICD-007 | **a pipeline with a hardcoded value** |
+| CICD-009 | A Complete Delivery Pipeline | pipelines | advanced | CICD-004, CICD-005 | CI, a Dockerfile, a deploy manifest |
+| CICD-010 | Troubleshooting a Broken Pipeline | troubleshooting | advanced | CICD-007, CICD-009 | **several injected faults** |
+
+Every lab is an original JumpToTech scenario on the same fictional banking
+platform as the Kubernetes track, written from the official GitHub Actions,
+Jenkins, Git and Docker documentation. No wording, task, or solution is taken
+from any third-party training platform, and the loader rejects a definition
+that links to one.
+
+### The sample application
+
+Each lab seeds `jumptotech-statements`, a small statement-formatting service
+for JumpToTech Bank. It is **dependency-free on purpose**: the labs are about
+the pipeline, so nothing in a workspace reaches a package registry, and a
+pipeline step that "installs dependencies" for this project is really a step
+that provisions the right Node.js version.
+
+```text
+build.mjs                 the build: src/ → dist/
+package.json              name, version, scripts
+src/statements.mjs        the library — no imports, so it can be bundled
+src/cli.mjs               command line and --selftest
+test/statements.test.mjs  tests, using the Node.js built-in runner
+```
+
+Three commands matter, and they are the ones the labs and the verifier both
+use: `node build.mjs`, `node --test`, and `node src/cli.mjs --selftest`.
+
+### What each lab actually verifies
+
+The story's rule is that pipeline results are never faked, so every lab states
+plainly which of three kinds each of its checks is:
+
+| Kind | What it proves | Used by |
+|---|---|---|
+| **Configuration** | the file is well formed and declares what was asked | all ten |
+| **Locally executed** | the command really ran and really succeeded | 001, 003, 004, 006, 007, 008, 009, 010 |
+| **Not executed** | declared only; stated as such in the lab text | `docker build` in 005 and 009 |
+
+Concretely:
+
+- **GitHub Actions** structure is parsed from the workflow YAML — triggers,
+  jobs, `runs-on`, `needs`, steps, `uses`, `run`, `with`. No workflow is ever
+  *scheduled*: that needs a repository and a runner pool. Where a lab claims a
+  workflow builds and tests, the underlying build and test commands are run in
+  the student's own workspace and the real exit codes are reported.
+- **Jenkins** pipelines are parsed structurally — see below for exactly what
+  that does and does not mean.
+- **`docker build`** is never executed. This sandbox has no Docker daemon and
+  a student shell is never given one; handing a student the host's Docker
+  socket would hand them the host. CICD-005 and CICD-009 say so in the lab
+  text rather than implying a build happened.
+
+### Jenkins, precisely
+
+There is no Jenkins controller in this platform, and the MVP does not start
+one. Running a per-student Jenkins would mean a JVM, a plugin set, and a
+persistent controller per session, which is out of proportion to what the labs
+teach and would put a large permanent service in front of every student.
+
+What exists instead is a structural reader for **declarative** pipelines
+([`ci/jenkinsfile.ts`](services/verifier/src/ci/jenkinsfile.ts)): a
+brace-matching scanner that is aware of comments and string literals, so a `{`
+inside `sh 'echo {'` does not open a block. From the block tree it reads the
+`pipeline` block, the `agent`, the `stages`, each `stage('Name')` in order,
+each `steps` body, and each `environment` entry.
+
+**It proves:** the file is structurally well formed (balanced braces, a
+`pipeline` block, an `agent`, a `stages` block); which stages exist and in what
+order; what each stage's steps contain; what `environment` declares and whether
+a value is a literal or a `credentials()` binding. That is enough to grade
+CICD-006 through CICD-008 and to catch the CICD-010 fault.
+
+**It does not prove:** that Jenkins would schedule the pipeline, that a step
+would succeed, or that a Groovy expression evaluates. No lab claims otherwise.
+
+Classification of every Jenkins exercise in the track:
+
+| Exercise | Kind |
+|---|---|
+| CICD-006 — pipeline / agent / stages / steps | syntax + structure verification |
+| CICD-006 — the build itself | locally executed |
+| CICD-007 — four stages and their order | syntax + structure verification |
+| CICD-007 — build and tests | locally executed |
+| CICD-008 — environment and credential handling | syntax + structure verification |
+| CICD-010 — repairing an unbalanced pipeline | syntax + structure verification |
+| Running a pipeline on a real controller | **future work** — see below |
+
+A future story can add real Jenkins execution. The shape that fits this
+architecture is a **shared, ephemeral controller running one job per session**,
+addressed by session id, with the workspace bind-mounted read-only and the
+pipeline run in an agent container — not a controller per student. The
+`WorkspaceLabProvider` already produces the per-session directory such a runner
+would need, so it is an addition rather than a rewrite.
+
+### GitHub Actions, precisely
+
+No lab requires a GitHub account, a personal repository, or a token. Beginners
+learn workflow structure locally, from official syntax, against files they
+control. That is deliberate: requiring an account to attempt CICD-002 would
+gate the first workflow a student ever writes behind an OAuth flow.
+
+A future story can connect real repositories and real runners. Until then the
+labs say what they verified.
+
+### The CI/CD sandbox
+
+Each session gets its own directory, named by the same HMAC-derived,
+one-way identifier the Kubernetes provider uses for a namespace:
+
+```text
+  <LAB_WORKSPACE_ROOT>/
+    lab-3f9c1a7b2d40/          ← one session: HOME, cwd, the project
+    lab-88b0e2c94117/          ← another session; different bytes, always
+    .index/
+      lab-3f9c1a7b2d40.json    ← ownership + expiry, platform-only
+```
+
+Reusing the namespace identifier is what keeps everything above the provider
+unchanged: the session manager, the routes, and the reaper deal in "this
+session's isolation unit", and a namespace and a workspace are two spellings
+of it.
+
+**What is isolated, and tested:** project files, pipeline files, artifacts,
+build output, temporary files, and shell environment. Reset restores one
+session's baseline and touches no other; End destroys one workspace and leaves
+the rest operational; expiry destroys a workspace and repeated cleanup passes
+change nothing.
+
+**What is not isolated, stated plainly:** the operating-system boundary. Every
+student PTY runs as the same user inside the terminal container, so no file
+mode can stop a determined student from reading a peer's workspace. Directory
+names are unguessable and modes exclude everyone else on the host, which raises
+the bar without being a boundary. **The fix is one container — or one OS user —
+per session**, and it is the recommended next story rather than something this
+release quietly claims to have done.
+
+What a workspace session *does* get, which a Kubernetes session does not:
+
+- **no cluster credential of any kind.** There is no kubeconfig, no token, and
+  nothing to leak — `issueCredentials` returns a directory and an environment.
+- **no Docker socket**, in any container, for any track.
+- **no host environment.** The PTY's environment is an explicit allow-list, and
+  so is the environment given to build and test tasks; nothing from the API
+  process — not the internal service secret, not the namespace derivation
+  secret, not `KUBECONFIG` — is inherited. This is asserted by a test that
+  plants those variables in the parent process and reads the child's.
+
+### Running commands, safely
+
+Three requirement types execute something: `project_builds`, `tests_pass` and
+`command_exit_code`. A CI lab that never builds would be exactly the faked
+result the story forbids, so these run the real thing — and the boundaries are
+worth being precise about.
+
+A lab **never supplies a command**. It names a task *id* from a closed table in
+[`workspace/tasks.ts`](services/lab-orchestrator/src/workspace/tasks.ts); the
+argv it maps to is a fixed array in platform code. There is no field anywhere
+in the lab schema that can hold a command, a script, or a shell fragment, and
+`.strict()` on every requirement schema means an attempt to add one is a load
+error rather than ignored data.
+
+| Control | How |
+|---|---|
+| No command from lab.yaml | task id from a closed table; argv is platform code |
+| No shell | `execFile` with `shell: false`; argv stays argv |
+| No PATH search | `node` resolves to `process.execPath`, an absolute path |
+| No host environment | explicit env; nothing inherited |
+| Bounded time | per-task wall-clock timeout |
+| Bounded output | capped buffer, truncated in the message |
+| One run per check | memoised by task id, so a build and its artifact check describe the same build |
+
+What a task *does* execute is the student's own project, in the student's own
+workspace. That is the point — and it is not a privilege boundary, because the
+student already has a shell there. A task adds no capability they did not have.
+
+### File access, safely
+
+Every path from a lab or a requirement is validated as a string (no traversal,
+no absolute paths, no backslashes, no characters outside `[A-Za-z0-9._-]`) and
+then re-checked *after* `realpath` against the workspace root. That second
+check is the one that matters: a student has a shell in the directory and can
+`ln -s /etc/passwd leak.txt` at will. A path whose real location is outside the
+root reads as absent, which is asserted by a test that creates exactly that
+link.
+
+### Credentials in labs
+
+**No lab contains a secret.** CICD-008 teaches credential handling and grades
+it with `secret_not_hardcoded`, which is *structural*: a key that names a
+credential (`*_TOKEN`, `*_PASSWORD`, `*_SECRET`, `*_API_KEY`, …) assigned a
+literal fails; the same key assigned `${{ secrets.NAME }}`, `credentials('id')`,
+or `$VAR` passes. So the check needs no list of known secrets to compare
+against — a lab that shipped one would be making the mistake it teaches.
+
+The failure message names the key and where it was written and **never echoes
+the value**, because a verification detail is rendered in a browser and pasted
+into support threads.
+
+The one seeded literal, in CICD-008, is an obvious placeholder the student is
+asked to remove; the lab's own text says so.
+
+### CI/CD requirement types
+
+Fourteen types were added, all reading the session workspace. Like every other
+requirement type they are a closed vocabulary shared by the schema and the
+verifier registry: a mapped type over `RequirementType` means a type without a
+handler does not compile.
+
+| Type | Checks |
+|---|---|
+| `file_exists` | a path exists, is the right kind, and is not empty |
+| `file_contains` | plain substrings are present or absent (never a pattern) |
+| `yaml_valid` | the file parses, quoting the parser's own error and line |
+| `github_workflow_exists` | it is under `.github/workflows/`, parses, and has `on` and `jobs` |
+| `github_workflow_trigger` | an event is declared, optionally filtered to branches |
+| `github_workflow_job_exists` | a job id, its `runs-on`, its step count, its `needs` |
+| `github_workflow_step_exists` | a step `uses` an action or `run`s a command, with `with` inputs |
+| `jenkinsfile_exists` | a well-formed declarative pipeline with an agent and stages |
+| `jenkins_stage_exists` | a named stage, its steps, and its position relative to others |
+| `environment_reference_exists` | a value is supplied by reference, optionally by a named mechanism |
+| `secret_not_hardcoded` | no credential-shaped literal, structurally |
+| `artifact_exists` | the build produced something, of a minimum size |
+| `command_exit_code` | an allow-listed task exits as expected |
+| `project_builds` | the build runs, succeeds, and leaves its output |
+| `tests_pass` | the suite runs, passes, and was not empty |
 
 ---
 
@@ -1569,8 +1846,9 @@ KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml" \
 The catalog, schema, setup-engine and verification suites need no cluster:
 
 ```bash
-npx vitest run test/lab-catalog.test.ts test/setup-engine.test.ts \
-  --root services/lab-orchestrator          # catalog + schema + setup engine
+npx vitest run test/lab-catalog.test.ts test/cicd-catalog.test.ts \
+  test/setup-engine.test.ts test/workspace-provider.test.ts \
+  --root services/lab-orchestrator          # catalog + schema + both sandboxes
 npx vitest run --root services/verifier      # every requirement type
 npx vitest run --root apps/api               # catalog + track + session APIs
 npx vitest run --root apps/web               # catalog UI, lab page, hints
@@ -1628,6 +1906,48 @@ npx vitest run --root apps/web               # catalog UI, lab page, hints
 | 35 | One lab page renders different definitions | `LabBrief.test.tsx`, `live-payloads.test.tsx` |
 | 36 | Progressive hints reveal one at a time | `HintPanel.test.tsx`, `live-payloads.test.tsx` |
 | 37 | Start / Reset / End / Check still function | `catalog-api.test.ts`, `labs-integration.test.ts`, `StartOverlay.test.tsx`, `CheckPanel.test.tsx` |
+
+### PLATFORM-CICD-001 coverage
+
+Every one of these runs with `npm test`; none needs a cluster, because a
+file-backed session does not have one.
+
+| # | Requirement | Where |
+|---|---|---|
+| 1 | The CI/CD track loads | `lab-orchestrator/test/cicd-catalog.test.ts`, `verifier/test/cicd-labs.test.ts`, `api/test/cicd-api.test.ts` |
+| 2 | CICD-001 through CICD-010 load | `cicd-catalog.test.ts` (each lab checked individually), `cicd-api.test.ts` |
+| 3 | A session workspace is created | `lab-orchestrator/test/workspace-provider.test.ts`, `cicd-api.test.ts` |
+| 4 | GitHub Actions YAML verification works | `verifier/test/cicd-requirements.test.ts` |
+| 5 | An invalid workflow fails | `cicd-requirements.test.ts`, `cicd-api.test.ts` |
+| 6 | A correct workflow passes | `cicd-requirements.test.ts`, `cicd-labs.test.ts`, `cicd-api.test.ts` |
+| 7 | Jenkinsfile verification works | `cicd-requirements.test.ts`, `cicd-api.test.ts` |
+| 8 | Jenkins stage verification works | `cicd-requirements.test.ts` (including stage *order*) |
+| 9 | Build verification works | `cicd-requirements.test.ts` (real `node build.mjs`) |
+| 10 | Test verification works | `cicd-requirements.test.ts` (real `node --test`, including an empty suite) |
+| 11 | Artifact verification works | `cicd-requirements.test.ts` |
+| 12 | The hardcoded-secret scenario is handled safely | `cicd-requirements.test.ts` — fails a literal, passes a reference, and never echoes the value |
+| 13 | Reset restores the baseline | `workspace-provider.test.ts`, `cicd-api.test.ts` |
+| 14 | End destroys the workspace | `workspace-provider.test.ts`, `cicd-api.test.ts` |
+| 15 | Expiration destroys the workspace | `workspace-provider.test.ts` (through the real reaper) |
+| 16 | Cleanup is idempotent | `workspace-provider.test.ts` — repeated destroys and repeated sweeps |
+| 17 | Five sessions remain isolated | `workspace-provider.test.ts`, `cicd-api.test.ts` |
+| 18 | Kubernetes regression tests still pass | the PLATFORM-001/002/003 suites above, unchanged |
+
+Two suites are worth calling out.
+
+**`verifier/test/cicd-labs.test.ts`** seeds each of the ten labs into a real
+temporary workspace, asserts its declared starting condition holds, asserts the
+unsolved workspace reports `LAB NOT COMPLETE`, then applies a reference
+solution and asserts `LAB PASSED`. A lab whose requirements cannot all be
+satisfied is unsolvable, and the only way to know is to solve it — on every
+run. (It has already earned its keep: it caught a YAML quoting fault in a
+delivery-pipeline solution that a human reviewer read straight past.)
+
+**`api/test/cicd-api.test.ts`** is the acceptance walk-through driven over
+HTTP: open the catalog, select CI/CD, open CICD-002, start, write the workflow,
+check (fail, then pass), reset, run five sessions, confirm isolation, end one,
+confirm the rest still work — plus a Kubernetes session and a CI/CD session
+running side by side, each getting the credential kind its own provider issues.
 
 The web suite additionally renders the components against **verbatim API
 responses** captured in `apps/web/test/fixtures/`, which is what catches a drift
@@ -1858,7 +2178,26 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 
 Beyond the security items above:
 
-- Only `LAB_PROVIDER=kind` is implemented. The factory rejects anything else.
+- Only `LAB_PROVIDER=kind` is implemented as the Kubernetes substrate. The
+  factory rejects anything else. (`environment.provider: workspace` is served
+  by the file-backed provider and is unaffected by this setting.)
+- **File-backed sessions share one OS user.** Every student PTY runs as the
+  same user inside the terminal container, so file modes cannot stop one
+  student from reading another's workspace. Directory names are unguessable
+  and the functional isolation — files, artifacts, reset, end, expiry — is
+  real and tested, but the OS boundary is not there yet. One container, or one
+  OS user, per session is the fix; see
+  [The CI/CD sandbox](#the-cicd-sandbox).
+- **`project_builds`, `tests_pass` and `command_exit_code` run the student's
+  own project** in the student's own workspace, from a closed table of argv
+  arrays. That is deliberate — a build that never runs proves nothing — and it
+  is not a privilege boundary, because the student already has a shell there.
+- **No Jenkins controller runs.** Jenkins labs are verified structurally, and
+  each exercise is classified in [The CI/CD track](#the-cicd-track). Real
+  pipeline execution is future work.
+- **`docker build` is never executed.** CICD-005 and CICD-009 verify the
+  configuration and say so; no container image is produced, and no registry is
+  contacted.
 - Session state is in memory; there is no persistence, progress tracking, or
   attempt history.
 - The capacity guard has no queue. Past `MAX_ACTIVE_SESSIONS` a student is told
@@ -1883,8 +2222,10 @@ Beyond the security items above:
   metadata records that a lab is *relevant* to CKA and which domain it touches.
   It does not claim, and must not be presented as claiming, that completing
   these ten labs prepares anyone for the exam.
-- Only one track (`kubernetes`) exists. The track machinery is generic, but
-  nothing else has been written against it.
+- Two tracks exist (`kubernetes`, `cicd`). The track machinery is generic —
+  `trackTitle` title-cases an unknown slug, and a new track needs no code — but
+  Linux, Terraform, Docker, AWS, Ansible, Monitoring and Security have no
+  content yet.
 - K8S-007 checks the CronJob's configured schedule rather than waiting for a
   firing, so that correct work is not left unmarked for five minutes.
 - Lab images are pulled from Docker Hub. `nginx:stable` is pre-pulled into the

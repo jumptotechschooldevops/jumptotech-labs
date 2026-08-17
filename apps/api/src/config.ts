@@ -7,6 +7,7 @@
  * be tuned after load testing without a code change.
  */
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_SESSION_POLICY,
@@ -23,6 +24,14 @@ export interface ApiConfig {
   provider: string;
   clusterName: string;
   kubeconfigPath: string | undefined;
+  /**
+   * Root directory holding one private workspace per file-backed session.
+   *
+   * Must be on storage the API *and* the terminal service can both see: the API
+   * seeds and verifies it, the terminal runs the student's shell in it. In
+   * `docker compose` that is the `lab-workspaces` volume, mounted into both.
+   */
+  workspaceRoot: string;
   allowedOrigins: string[];
   terminalSessionSecret: string;
   terminalSessionTtlSeconds: number;
@@ -155,6 +164,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     provider: env.LAB_PROVIDER ?? 'kind',
     clusterName: env.LAB_CLUSTER_NAME ?? 'jumptotech-labs',
     kubeconfigPath: env.KUBECONFIG || undefined,
+    workspaceRoot:
+      env.LAB_WORKSPACE_ROOT?.trim() || path.join(tmpdir(), 'jumptotech-labs-workspaces'),
     allowedOrigins: (env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
       .split(',')
       .map((o) => o.trim())

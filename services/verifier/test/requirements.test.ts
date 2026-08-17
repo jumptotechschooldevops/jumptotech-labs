@@ -44,7 +44,7 @@ beforeAll(async () => {
 
 /** Run one requirement against a fake cluster and return its result. */
 async function check(k8s: FakeKubernetes, requirement: Requirement, namespace = NS) {
-  return verifyRequirement(requirement, new VerifyReader(k8s, namespace));
+  return verifyRequirement(requirement, new VerifyReader({ k8s, namespace }));
 }
 
 /** Run a whole shipped lab against a fake cluster. */

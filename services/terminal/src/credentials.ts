@@ -21,10 +21,34 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-export interface StudentCredentialsResponse {
+/**
+ * What the API hands back for one session.
+ *
+ * A discriminated union, because the two sandbox kinds give a shell genuinely
+ * different things: a Kubernetes session gets a namespace-scoped kubeconfig; a
+ * workspace session gets a directory and *no cluster credential at all*.
+ * Branching on `kind` is the only place the terminal service distinguishes
+ * them — there is no lab id, track, or provider name in this service.
+ */
+export type StudentCredentialsResponse =
+  | KubeconfigCredentialsResponse
+  | WorkspaceCredentialsResponse;
+
+export interface KubeconfigCredentialsResponse {
+  kind: 'kubeconfig';
   kubeconfig: string;
   namespace: string;
   serviceAccountName: string;
+  expiresAt: string;
+}
+
+export interface WorkspaceCredentialsResponse {
+  kind: 'workspace';
+  namespace: string;
+  /** Absolute path of this session's private workspace. */
+  workspacePath: string;
+  /** Extra shell environment. Contains no secret, by construction. */
+  environment: Record<string, string>;
   expiresAt: string;
 }
 
@@ -84,14 +108,55 @@ export async function fetchStudentCredentials(
     );
   }
 
-  const data = body.data;
-  if (typeof data.kubeconfig !== 'string' || data.kubeconfig.length === 0) {
-    throw new CredentialsUnavailableError(
-      'CREDENTIALS_UNAVAILABLE',
-      'The lab API returned an empty kubeconfig.',
-    );
+  return assertUsableCredentials(body.data);
+}
+
+/**
+ * Refuse anything that would produce a half-configured shell.
+ *
+ * The API is trusted, but a shape mismatch after a deploy skew must fail loudly
+ * here rather than spawning a PTY with no credential and no explanation. The
+ * workspace path is additionally required to be absolute and to end in the
+ * session's own sandbox name, so a malformed response can never point a shell
+ * at an arbitrary directory.
+ */
+export function assertUsableCredentials(data: StudentCredentialsResponse): StudentCredentialsResponse {
+  if (data?.kind === 'kubeconfig') {
+    if (typeof data.kubeconfig !== 'string' || data.kubeconfig.length === 0) {
+      throw new CredentialsUnavailableError(
+        'CREDENTIALS_UNAVAILABLE',
+        'The lab API returned an empty kubeconfig.',
+      );
+    }
+    return data;
   }
-  return data;
+
+  if (data?.kind === 'workspace') {
+    if (typeof data.workspacePath !== 'string' || !data.workspacePath.startsWith('/')) {
+      throw new CredentialsUnavailableError(
+        'CREDENTIALS_UNAVAILABLE',
+        'The lab API returned no workspace path for this session.',
+      );
+    }
+    if (data.workspacePath.includes('..')) {
+      throw new CredentialsUnavailableError(
+        'CREDENTIALS_UNAVAILABLE',
+        'The lab API returned a workspace path containing a parent reference.',
+      );
+    }
+    if (typeof data.namespace !== 'string' || !data.workspacePath.endsWith(`/${data.namespace}`)) {
+      throw new CredentialsUnavailableError(
+        'CREDENTIALS_UNAVAILABLE',
+        "The lab API returned a workspace path that does not belong to this session's sandbox.",
+      );
+    }
+    return data;
+  }
+
+  throw new CredentialsUnavailableError(
+    'CREDENTIALS_UNAVAILABLE',
+    `The lab API returned credentials of an unknown kind ('${String((data as { kind?: unknown })?.kind)}').`,
+  );
 }
 
 /**

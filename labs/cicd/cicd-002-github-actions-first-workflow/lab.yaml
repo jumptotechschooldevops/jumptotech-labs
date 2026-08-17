@@ -1,0 +1,145 @@
+id: CICD-002
+slug: cicd-002-github-actions-first-workflow
+title: Your First GitHub Actions Workflow
+track: cicd
+topic: github-actions
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 2
+
+environment:
+  provider: workspace
+  isolation: workspace
+
+prerequisites:
+  - CICD-001
+
+story: >
+  The JumpToTech Bank platform team has agreed that no change reaches the
+  shared branch again without a server checking it first. The statements
+  service lives in GitHub, so GitHub Actions is where that check will run.
+
+  Nobody has written a workflow for this repository yet. That is your first
+  task, and it is deliberately a small one: get a valid workflow in the right
+  place, triggered by the right event, with one job that a runner would accept.
+  Making it actually build and test comes next.
+
+objectives:
+  - Explain where GitHub reads workflow files from, and why the path matters
+  - Write a workflow with the required top-level keys
+  - Choose a trigger event with the `on` key
+  - Define a job with a runner label and at least one step
+
+task:
+  summary: Create .github/workflows/ci.yml with a named workflow, a push trigger, and a build job.
+  description: >
+    A GitHub Actions workflow is a YAML file that GitHub reads from one
+    specific place: the `.github/workflows` directory in the root of the
+    repository. A perfectly valid workflow file anywhere else is simply never
+    run, and no error is reported — the file is just ignored. That single fact
+    causes more confusion than any other part of Actions.
+
+    A workflow needs three things.
+
+    `name` labels the workflow in the Actions tab. It is optional in the
+    syntax, but a repository with several unnamed workflows becomes very hard
+    to read, so this lab asks for one.
+
+    `on` says what starts it. `push` runs the workflow whenever commits are
+    pushed; other events include `pull_request`, `schedule`, and
+    `workflow_dispatch` for a manual run. A workflow with no `on` key can never
+    start.
+
+    `jobs` holds the actual work. Each job has an id — the key you write it
+    under — and each job needs `runs-on` to say what kind of machine executes
+    it. `ubuntu-latest` is the standard GitHub-hosted Linux runner. Inside the
+    job, `steps` is a list; each step either `uses` an action or `run`s a
+    command.
+
+    Create `.github/workflows/ci.yml` in your workspace so that it:
+
+    * has a `name`
+    * runs `on` a `push`
+    * defines a job whose id is `build`
+    * runs that job on `ubuntu-latest`
+    * has at least one step
+
+    The step can be anything at all for now — printing a line is fine. What is
+    being checked here is workflow *structure*, not what the job does.
+
+    Note what verification does and does not tell you. This lab confirms your
+    file is where GitHub reads workflows from and that it declares a workflow
+    GitHub's syntax would accept. It does not schedule a run on GitHub's
+    infrastructure — that needs a repository and a runner, which this sandbox
+    deliberately does not have and which no beginner lab should require an
+    account for.
+
+setup:
+  workspace: workspace
+  verify:
+    - type: file_exists
+      path: README.md
+      min_bytes: 100
+      label: Project README is present
+    - type: file_exists
+      path: src/statements.mjs
+      min_bytes: 200
+      label: Application source is present
+
+requirements:
+  - type: file_exists
+    path: .github/workflows/ci.yml
+    min_bytes: 40
+    label: Workflow file exists at .github/workflows/ci.yml
+  - type: yaml_valid
+    path: .github/workflows/ci.yml
+    label: Workflow file is valid YAML
+  - type: github_workflow_exists
+    path: .github/workflows/ci.yml
+    require_name: true
+    label: File is a named GitHub Actions workflow
+  - type: github_workflow_trigger
+    path: .github/workflows/ci.yml
+    trigger: push
+    label: Workflow is triggered on push
+  - type: github_workflow_job_exists
+    path: .github/workflows/ci.yml
+    job: build
+    runs_on: ubuntu-latest
+    min_steps: 1
+    label: A build job runs on ubuntu-latest with at least one step
+
+hints:
+  - level: 1
+    text: >
+      GitHub only looks in one directory for workflows. Neither that directory
+      nor its parent exists in your workspace yet, so you will have to create
+      both before you can create the file.
+  - level: 2
+    text: >
+      Three top-level keys carry the workflow: one names it, one says what
+      starts it, and one holds the work. Under the third, the key you choose is
+      the job's id, and inside the job you must say what kind of machine runs
+      it before you list any steps.
+  - level: 3
+    text: >
+      The job id this lab checks for is `build`, and the runner label is
+      `ubuntu-latest`. YAML is indentation-sensitive and Actions uses two
+      spaces per level throughout — if the file exists but the checks disagree
+      about what is in it, the indentation is the first thing to look at. The
+      workflow-syntax reference below shows a complete minimal example.
+
+references:
+  - title: Workflow syntax for GitHub Actions
+    url: https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+  - title: Events that trigger workflows
+    url: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+  - title: Writing workflows — quickstart
+    url: https://docs.github.com/en/actions/get-started/quickstart
+
+skills:
+  - cicd.githubactions.workflow.create
+  - cicd.githubactions.triggers
+  - cicd.githubactions.jobs
+  - cicd.yaml.author

@@ -12,6 +12,7 @@
  */
 import type { LoadedLabDefinition } from './lab-definition.js';
 import type { SessionPolicy } from './session/types.js';
+import type { WorkspacePort } from './workspace/port.js';
 
 export type ProvisionStepStatus = 'pending' | 'ok' | 'failed';
 
@@ -40,6 +41,15 @@ export interface EnvironmentInfo {
   /** The session's private namespace. */
   namespace: string;
   sessionId?: string;
+  /**
+   * One line describing the environment, written by the provider.
+   *
+   * Exists so the UI can show "what am I connected to?" without knowing which
+   * provider produced it. A Kubernetes sandbox fills it with a version and a
+   * node count; a workspace sandbox with a runtime version. The fields below
+   * stay for callers that want the structured Kubernetes detail.
+   */
+  summary?: string;
   kubernetesVersion?: string;
   nodes?: NodeInfo[];
   message?: string;
@@ -128,20 +138,65 @@ export interface LabSessionContext {
 }
 
 /**
- * Namespace-scoped credentials handed to the terminal service, never to the
- * browser.
+ * What a student's shell is given, and nothing more.
  *
- * This is the *only* credential a student shell is ever given. It authenticates
- * as the session's ServiceAccount, whose rights stop at the namespace edge, and
- * it carries a bound, short-lived token rather than a long-lived secret.
+ * Handed to the terminal service over the internal, service-authenticated
+ * route; never to the browser. The `kind` discriminator is what lets a single
+ * terminal service serve every track: it decides how one PTY is configured and
+ * carries no branch on lab id, track, or provider name.
  */
-export interface StudentCredentials {
+export type StudentCredentials = KubeconfigCredentials | WorkspaceCredentials;
+
+/**
+ * Kubernetes sandbox credentials.
+ *
+ * Authenticates as the session's ServiceAccount, whose rights stop at the
+ * namespace edge, and carries a bound, short-lived token rather than a
+ * long-lived secret.
+ */
+export interface KubeconfigCredentials {
+  kind: 'kubeconfig';
   /** A complete kubeconfig YAML document scoped to the session namespace. */
   kubeconfig: string;
   namespace: string;
   serviceAccountName: string;
   /** ISO-8601 expiry of the embedded ServiceAccount token. */
   expiresAt: string;
+}
+
+/**
+ * File-backed sandbox credentials.
+ *
+ * There is no token here, and deliberately so: a workspace lab gives the
+ * student *no* cluster credential at all. What it gives them is a directory —
+ * their own — plus the environment variables their shell should start with.
+ *
+ * `workspacePath` is a server-side path shared between the API and the terminal
+ * service. It is not a capability (the terminal already authenticates to the
+ * API with the internal secret to obtain it) and it never reaches a browser.
+ */
+export interface WorkspaceCredentials {
+  kind: 'workspace';
+  /** The session's isolation identifier, and the workspace directory name. */
+  namespace: string;
+  /** Absolute path of the session's private workspace. */
+  workspacePath: string;
+  /** Extra environment for the student's shell. Never contains a secret. */
+  environment: Record<string, string>;
+  /** ISO-8601 time after which this workspace may be reclaimed. */
+  expiresAt: string;
+}
+
+export function isKubeconfigCredentials(
+  credentials: StudentCredentials,
+): credentials is KubeconfigCredentials {
+  return credentials.kind === 'kubeconfig';
+}
+
+export function isWorkspaceCredentials(
+  credentials: StudentCredentials,
+): credentials is WorkspaceCredentials {
+  return credentials.kind === 'workspace';
 }
 
 /** Outcome of tearing a sandbox down. */
@@ -167,6 +222,19 @@ export interface ManagedNamespace {
   /** Epoch ms, parsed from the namespace label the provider wrote at creation. */
   expiresAtMs: number;
   phase: string;
+}
+
+/**
+ * Read-only handles the verifier can use to observe one session's sandbox.
+ *
+ * Kubernetes evidence is deliberately absent: the API already holds one cluster
+ * client and scopes reads by namespace, so there is nothing per-session for a
+ * provider to hand over. A file-backed sandbox is different — its evidence *is*
+ * a per-session object, bound to one directory — so this is how a provider
+ * supplies it without any caller learning which provider produced it.
+ */
+export interface VerificationEvidence {
+  workspace?: WorkspacePort;
 }
 
 /**
@@ -199,8 +267,16 @@ export interface LabProvider {
    */
   execute(context: LabSessionContext, request: ExecRequest): Promise<ExecResult>;
 
-  /** Mint namespace-scoped credentials for the student's shell. */
+  /** Mint sandbox-scoped credentials for the student's shell. */
   issueCredentials(context: LabSessionContext): Promise<StudentCredentials>;
+
+  /**
+   * Per-session read handles for verification.
+   *
+   * Optional: a provider whose sandbox the verifier can already reach (the
+   * Kubernetes one) does not implement it.
+   */
+  verificationEvidence?(context: LabSessionContext): VerificationEvidence;
 
   /** Every sandbox this platform owns, for expiry and orphan cleanup. */
   listManagedNamespaces(): Promise<ManagedNamespace[]>;

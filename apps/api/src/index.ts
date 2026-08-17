@@ -5,6 +5,7 @@
  * manager, reaper — and starts the HTTP server. Everything that varies between
  * environments is decided here and nowhere else.
  */
+import { mkdir } from 'node:fs/promises';
 import {
   InMemorySessionStore,
   KubernetesClient,
@@ -40,12 +41,19 @@ async function main(): Promise<void> {
   const k8s = new KubernetesClient(
     config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {},
   );
+  // The workspace root must exist before a lab asks for one; creating it here
+  // (rather than on first use) turns a permissions problem into a startup
+  // error an operator sees, not a failed Start Lab a student sees.
+  await mkdir(config.workspaceRoot, { recursive: true, mode: 0o700 });
+
   const provider = createLabProvider({
     provider: config.provider,
     clusterName: config.clusterName,
     ...(config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {}),
     k8s,
     waitForRequirements: (input) => waitForRequirements({ k8s, ...input }),
+    workspaceRoot: config.workspaceRoot,
+    waitForWorkspaceRequirements: (input) => waitForRequirements(input),
   });
 
   const terminal = config.terminalControlUrl
@@ -83,6 +91,7 @@ async function main(): Promise<void> {
     console.log(`[api] provider=${provider.name} cluster=${config.clusterName}`);
     console.log(`[api] labs=${registry.size} from ${config.labsDir}`);
     console.log(`[api] kubernetes=${k8s.serverUrl}`);
+    console.log(`[api] workspaces=${config.workspaceRoot}`);
     console.log(
       `[api] sessions: max=${config.lifetimes.maxActiveSessions} lifetime=${config.lifetimes.maxSessionSeconds / 60}m idle=${config.lifetimes.idleTimeoutSeconds / 60}m warn=${config.lifetimes.warningSeconds / 60}m`,
     );

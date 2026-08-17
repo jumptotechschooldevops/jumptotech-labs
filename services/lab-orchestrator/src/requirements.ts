@@ -10,10 +10,16 @@
  *
  * Security property: every schema below is `.strict()`. A lab definition
  * therefore cannot smuggle extra keys — no `command:`, no `script:`, no
- * `exec:`. There is deliberately no requirement type that runs anything; all
- * verification is a read of the Kubernetes API.
+ * `exec:`. No requirement carries a command line: the Kubernetes types are
+ * pure reads of the API, and the file-backed types are pure reads of the
+ * session workspace except for three (`project_builds`, `tests_pass`,
+ * `command_exit_code`) which name a task *id* from the platform's closed table
+ * in `workspace/tasks.ts`. A lab picks from that table; it never writes an
+ * entry in it.
  */
 import { z } from 'zod';
+import { WORKSPACE_TASK_IDS, type WorkspaceTaskId } from './workspace/tasks.js';
+import { isSafeRelativePath } from './workspace/paths.js';
 
 /** DNS-1123 subdomain, the naming rule for most Kubernetes objects. */
 const resourceName = z
@@ -88,6 +94,68 @@ const cronSchedule = z
   .min(1)
   .max(120)
   .regex(/^[-*/,?\dA-Za-z\s]+$/, 'must be a cron schedule such as */5 * * * *');
+
+// --- scalars for file-backed (workspace) requirements ----------------------
+
+/**
+ * A path inside the session workspace.
+ *
+ * Validated by the same function the filesystem layer uses, so a path that
+ * passes the schema is a path the workspace will accept — there is no second,
+ * looser rule anywhere.
+ */
+const workspacePath = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((p) => isSafeRelativePath(p), {
+    message:
+      'must be a relative workspace path with no traversal, e.g. .github/workflows/ci.yml',
+  });
+
+/**
+ * A workflow path, additionally required to live where GitHub looks.
+ *
+ * Documented in the GitHub Actions workflow-syntax reference: workflow files
+ * are read from `.github/workflows` in the repository root.
+ */
+const workflowPath = workspacePath.refine(
+  (p) => /^\.github\/workflows\/[^/]+\.(ya?ml)$/i.test(p),
+  { message: 'must be a .yml or .yaml file directly inside .github/workflows/' },
+);
+
+/** A GitHub Actions event name, e.g. `push`, `pull_request`, `workflow_dispatch`. */
+const eventName = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9_]*$/, 'must be a lowercase event name such as push or pull_request');
+
+/** A git branch name, as it would appear in a `branches:` filter. */
+const branchName = z
+  .string()
+  .min(1)
+  .max(120)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._\-/*]*$/, 'must be a branch name or pattern');
+
+/** A YAML mapping key used as an identifier: a job id, an action input name. */
+const identifier = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z_][A-Za-z0-9_-]*$/, 'must be an identifier such as build or fetch-depth');
+
+/** A shell environment variable name. */
+const envVarName = z
+  .string()
+  .min(1)
+  .max(96)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name such as REGISTRY_URL');
+
+/** One id from the platform's closed task table. */
+const workspaceTaskId = z.enum(
+  WORKSPACE_TASK_IDS as unknown as [WorkspaceTaskId, ...WorkspaceTaskId[]],
+);
 
 /** A port number, or the name of a named container port. */
 const portValue = z.union([
@@ -398,6 +466,244 @@ const requirementSchemas = {
     })
     .strict(),
 
+  // --- Files in the session workspace -------------------------------------
+  /**
+   * A file or directory exists in the student's workspace.
+   *
+   * `min_bytes` guards the commonest false pass in a file-based lab: a student
+   * creates the right path with `touch` and moves on. A workflow file that
+   * exists but is empty is not a workflow.
+   */
+  file_exists: z
+    .object({
+      type: z.literal('file_exists'),
+      path: workspacePath,
+      kind: z.enum(['file', 'directory']).default('file'),
+      min_bytes: z.number().int().min(0).max(10_000_000).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A file the student authored says particular things.
+   *
+   * For content with no dedicated parser — a shell script, a Dockerfile, a
+   * note recording a decision. `contains` fragments are plain substrings,
+   * compared with whitespace collapsed and case ignored; they are **never**
+   * patterns, so a lab cannot hand the verifier a regular expression to
+   * compile. `absent` is the mirror image, for "you were asked to replace
+   * this, not keep it".
+   */
+  file_contains: z
+    .object({
+      type: z.literal('file_contains'),
+      path: workspacePath,
+      contains: z.array(z.string().min(1).max(120)).max(10).default([]),
+      absent: z.array(z.string().min(1).max(120)).max(10).default([]),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.contains.length > 0 || v.absent.length > 0, {
+      message: 'must specify contains, absent, or both',
+    }),
+
+  /** A file parses as YAML. Structure is checked by the workflow types below. */
+  yaml_valid: z
+    .object({ type: z.literal('yaml_valid'), path: workspacePath, ...common })
+    .strict(),
+
+  // --- GitHub Actions ------------------------------------------------------
+  /**
+   * A workflow exists where GitHub would look for it.
+   *
+   * The path must be under `.github/workflows/`, because a valid workflow file
+   * in the wrong directory is exactly the mistake CICD-010 injects: GitHub
+   * never runs it, and a check that accepted any location would teach the
+   * wrong lesson.
+   */
+  github_workflow_exists: z
+    .object({
+      type: z.literal('github_workflow_exists'),
+      path: workflowPath,
+      /** Require `name:` to be set. Off by default — `name` is optional syntax. */
+      require_name: z.boolean().default(false),
+      ...common,
+    })
+    .strict(),
+
+  github_workflow_trigger: z
+    .object({
+      type: z.literal('github_workflow_trigger'),
+      path: workflowPath,
+      /** An event name from the `on:` key, e.g. `push`. */
+      trigger: eventName,
+      /** Require the trigger to be filtered to these branches. */
+      branches: z.array(branchName).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  github_workflow_job_exists: z
+    .object({
+      type: z.literal('github_workflow_job_exists'),
+      path: workflowPath,
+      /** The job's key under `jobs:`. */
+      job: identifier,
+      /** Require a `runs-on` value, e.g. `ubuntu-latest`. */
+      runs_on: z.string().min(1).max(64).optional(),
+      /** Require the job to declare at least this many steps. */
+      min_steps: z.number().int().min(1).max(50).optional(),
+      /** Require `needs:` to include these job ids, so ordering is explicit. */
+      needs: z.array(identifier).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A step inside a job does a particular thing.
+   *
+   * Either it *uses* an action (matched on the action name, ignoring the
+   * version, so `actions/checkout@v4` and `@v5` both satisfy a lab that only
+   * cares that code is checked out), or it *runs* a command containing all of
+   * the given fragments. Fragments are plain substrings, never patterns: a lab
+   * cannot supply a regular expression for the verifier to compile.
+   */
+  github_workflow_step_exists: z
+    .object({
+      type: z.literal('github_workflow_step_exists'),
+      path: workflowPath,
+      job: identifier,
+      uses: z.string().min(1).max(160).optional(),
+      run_contains: z.array(z.string().min(1).max(120)).max(6).optional(),
+      /** Require the step's `with:` block to set these input names. */
+      with_keys: z.array(identifier).max(10).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.uses !== undefined || v.run_contains !== undefined, {
+      message: 'must specify uses, run_contains, or both',
+    }),
+
+  // --- Jenkins -------------------------------------------------------------
+  /**
+   * A Jenkinsfile exists and parses as a declarative pipeline.
+   *
+   * "Parses" means the platform's structural reader finds a `pipeline` block
+   * with an `agent` and a `stages` block. It is a syntax and structure check,
+   * not a Groovy interpreter — see README → Jenkins for exactly what that does
+   * and does not prove.
+   */
+  jenkinsfile_exists: z
+    .object({
+      type: z.literal('jenkinsfile_exists'),
+      path: workspacePath.default('Jenkinsfile'),
+      /** Require an explicit `agent` directive at pipeline level. */
+      require_agent: z.boolean().default(true),
+      ...common,
+    })
+    .strict(),
+
+  jenkins_stage_exists: z
+    .object({
+      type: z.literal('jenkins_stage_exists'),
+      path: workspacePath.default('Jenkinsfile'),
+      /** The stage name, matched exactly as written in `stage('…')`. */
+      stage: z.string().min(1).max(64),
+      /** Require the stage's `steps` block to mention all of these substrings. */
+      steps_contain: z.array(z.string().min(1).max(120)).max(6).optional(),
+      /** Require the stage to appear after these stages, in file order. */
+      after: z.array(z.string().min(1).max(64)).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  // --- Environment and credentials ----------------------------------------
+  /**
+   * A named value is supplied by *reference* rather than written in the file.
+   *
+   * `via` pins the mechanism where the lab teaches one specific pattern:
+   *
+   *   `workflow_env`        `env:` in a GitHub Actions workflow
+   *   `workflow_secret`     `${{ secrets.NAME }}`
+   *   `jenkins_environment` an `environment { }` entry in a Jenkinsfile
+   *   `jenkins_credentials` `credentials('id')` in a Jenkinsfile
+   */
+  environment_reference_exists: z
+    .object({
+      type: z.literal('environment_reference_exists'),
+      path: workspacePath,
+      /** The variable name, e.g. `REGISTRY_URL` or `DEPLOY_TOKEN`. */
+      name: envVarName,
+      via: z
+        .enum(['workflow_env', 'workflow_secret', 'jenkins_environment', 'jenkins_credentials'])
+        .optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * No credential-shaped value is written in plain text.
+   *
+   * Structural, not a word list: a value fails when a key that names a
+   * credential (`*_TOKEN`, `*_PASSWORD`, `*_SECRET`, `*_API_KEY`, …) is
+   * assigned a *literal* instead of a reference to a secret store. The lab
+   * definition therefore never has to contain a secret value in order to
+   * forbid one — which is the whole point.
+   */
+  secret_not_hardcoded: z
+    .object({
+      type: z.literal('secret_not_hardcoded'),
+      path: workspacePath,
+      ...common,
+    })
+    .strict(),
+
+  // --- Build, test, artifacts ---------------------------------------------
+  /**
+   * A build artifact is present in the workspace.
+   *
+   * Distinct from `file_exists` only in intent and wording, but the distinction
+   * matters to a student: this check is about what the pipeline *produced*, and
+   * its failure text says so.
+   */
+  artifact_exists: z
+    .object({
+      type: z.literal('artifact_exists'),
+      path: workspacePath,
+      kind: z.enum(['file', 'directory']).default('file'),
+      min_bytes: z.number().int().min(1).max(10_000_000).default(1),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * An allow-listed task exits with an expected status.
+   *
+   * `command` is an *id* from `workspace/tasks.ts`, not a command line. There
+   * is no field anywhere in this schema that carries one.
+   */
+  command_exit_code: z
+    .object({
+      type: z.literal('command_exit_code'),
+      command: workspaceTaskId,
+      expected_exit_code: z.number().int().min(0).max(255).default(0),
+      ...common,
+    })
+    .strict(),
+
+  /** The project's build task succeeds, and optionally leaves an output path. */
+  project_builds: z
+    .object({
+      type: z.literal('project_builds'),
+      /** A path the build must have produced, checked after it exits. */
+      produces: workspacePath.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** The project's test task succeeds. */
+  tests_pass: z.object({ type: z.literal('tests_pass'), ...common }).strict(),
+
   // --- Generic -----------------------------------------------------------
   /**
    * A named object must NOT exist.
@@ -451,3 +757,40 @@ export type RequirementOf<T extends RequirementType> = z.infer<(typeof requireme
 export function requirementSubject(requirement: Requirement): string {
   return requirement.type.split('_')[0] ?? requirement.type;
 }
+
+/**
+ * Where a requirement's evidence comes from.
+ *
+ * The verifier uses this to say something precise when a check cannot run at
+ * all — "this lab reads the session workspace, and none is attached" is a very
+ * different message from "the cluster is unreachable", and a student must not
+ * see either one reported as a failed attempt.
+ */
+export type RequirementEvidence = 'kubernetes' | 'workspace';
+
+const WORKSPACE_REQUIREMENT_TYPES = new Set<RequirementType>([
+  'file_exists',
+  'file_contains',
+  'yaml_valid',
+  'github_workflow_exists',
+  'github_workflow_trigger',
+  'github_workflow_job_exists',
+  'github_workflow_step_exists',
+  'jenkinsfile_exists',
+  'jenkins_stage_exists',
+  'environment_reference_exists',
+  'secret_not_hardcoded',
+  'artifact_exists',
+  'command_exit_code',
+  'project_builds',
+  'tests_pass',
+]);
+
+export function requirementEvidence(type: RequirementType): RequirementEvidence {
+  return WORKSPACE_REQUIREMENT_TYPES.has(type) ? 'workspace' : 'kubernetes';
+}
+
+/** Every requirement type that reads a session workspace rather than a cluster. */
+export const WORKSPACE_REQUIREMENTS: ReadonlyArray<RequirementType> = [
+  ...WORKSPACE_REQUIREMENT_TYPES,
+];

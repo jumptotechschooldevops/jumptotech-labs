@@ -1,0 +1,16 @@
+// JumpToTech Bank — statements service
+//
+// This is the single-stage pipeline CICD-006 produced. It builds, and that is
+// all it does: there is nothing to say where the code came from, nothing that
+// runs the tests, and nothing that packages the result.
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                sh 'node build.mjs'
+            }
+        }
+    }
+}

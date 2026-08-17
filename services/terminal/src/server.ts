@@ -52,10 +52,21 @@ const AUTH_GRACE_MS = 10_000;
 interface Session {
   claims: TerminalSessionClaims;
   namespace: string;
-  kubeconfigPath: string;
+  /** Set only for Kubernetes sessions; deleted when the shell ends. */
+  kubeconfigPath: string | undefined;
   term: pty.IPty;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
+}
+
+/** How one PTY is configured, derived entirely from the session's credentials. */
+interface ShellSetup {
+  namespace: string;
+  /** Working directory and HOME for the shell. */
+  workDir: string;
+  env: Record<string, string>;
+  /** Present only when a kubeconfig file was written for this session. */
+  kubeconfigPath?: string;
 }
 
 export function createTerminalServer(config: TerminalConfig): Server {
@@ -260,6 +271,77 @@ export function createTerminalServer(config: TerminalConfig): Server {
     });
   });
 
+  /**
+   * Turn one session's credentials into a PTY configuration.
+   *
+   * The common part is a deliberately minimal environment: nothing from the
+   * host process leaks into a student shell except what is listed here. The
+   * variable part is the whole difference between the two sandbox kinds —
+   * a kubeconfig and a shared work directory, or a private workspace and no
+   * cluster credential whatsoever.
+   */
+  async function buildShellSetup(claims: TerminalSessionClaims): Promise<ShellSetup> {
+    const credentials = await fetchStudentCredentials({
+      apiInternalUrl: config.apiInternalUrl,
+      secret: config.internalServiceSecret,
+      sessionId: claims.sid,
+    });
+
+    const baseEnv = (workDir: string): Record<string, string> => ({
+      PATH: '/usr/local/bin:/usr/bin:/bin',
+      HOME: workDir,
+      TERM: 'xterm-256color',
+      LANG: 'C.UTF-8',
+      SHELL: config.shell,
+      USER: config.promptUser,
+      HOSTNAME: config.promptHost,
+      PS1: `\\[\\e[32m\\]${config.promptUser}@${config.promptHost}\\[\\e[0m\\]:\\[\\e[34m\\]\\w\\[\\e[0m\\]$ `,
+      JTT_LAB_ID: claims.labId,
+    });
+
+    if (credentials.kind === 'workspace') {
+      // No KUBECONFIG is set, and none exists to inherit: a workspace lab hands
+      // the student no cluster credential at all.
+      const workDir = credentials.workspacePath;
+      log(
+        `session ${claims.sid}: attached private workspace (ns=${credentials.namespace} expires=${credentials.expiresAt})`,
+      );
+      return {
+        namespace: credentials.namespace,
+        workDir,
+        env: {
+          ...baseEnv(workDir),
+          // Temporary files stay inside the student's own sandbox rather than
+          // in a directory every session shares.
+          TMPDIR: workDir,
+          ...credentials.environment,
+        },
+      };
+    }
+
+    const kubeconfigPath = await writeSessionKubeconfig(
+      config.credentialsDir,
+      claims.sid,
+      credentials.kubeconfig,
+    );
+    log(
+      `session ${claims.sid}: issued namespace-scoped credentials (ns=${credentials.namespace} sa=${credentials.serviceAccountName} expires=${credentials.expiresAt})`,
+    );
+    return {
+      namespace: credentials.namespace,
+      workDir: config.workDir,
+      kubeconfigPath,
+      env: {
+        ...baseEnv(config.workDir),
+        KUBECONFIG: kubeconfigPath,
+        // The kubeconfig's context already defaults to this namespace, so plain
+        // `kubectl get pods` is scoped correctly without any -n flag. This is
+        // exported for prompts and scripts that want to display it.
+        JTT_NAMESPACE: credentials.namespace,
+      },
+    };
+  }
+
   async function startSession(
     ws: WebSocket,
     claims: TerminalSessionClaims,
@@ -270,23 +352,9 @@ export function createTerminalServer(config: TerminalConfig): Server {
     // the first rather than running two shells against one sandbox.
     closeSession(claims.sid);
 
-    let kubeconfigPath: string;
-    let namespace: string;
+    let setup: ShellSetup;
     try {
-      const credentials = await fetchStudentCredentials({
-        apiInternalUrl: config.apiInternalUrl,
-        secret: config.internalServiceSecret,
-        sessionId: claims.sid,
-      });
-      namespace = credentials.namespace;
-      kubeconfigPath = await writeSessionKubeconfig(
-        config.credentialsDir,
-        claims.sid,
-        credentials.kubeconfig,
-      );
-      log(
-        `session ${claims.sid}: issued namespace-scoped credentials (ns=${namespace} sa=${credentials.serviceAccountName} expires=${credentials.expiresAt})`,
-      );
+      setup = await buildShellSetup(claims);
     } catch (error) {
       const code = error instanceof CredentialsUnavailableError ? error.code : 'CREDENTIALS_UNAVAILABLE';
       const msg = error instanceof Error ? error.message : String(error);
@@ -296,30 +364,12 @@ export function createTerminalServer(config: TerminalConfig): Server {
       return false;
     }
 
+    const { namespace, env, kubeconfigPath } = setup;
+
     if (ws.readyState !== ws.OPEN) {
       await removeSessionKubeconfig(kubeconfigPath);
       return false;
     }
-
-    const env: Record<string, string> = {
-      // A deliberately minimal environment: nothing from the host process
-      // leaks into the student shell except what is listed here. In
-      // particular, no inherited KUBECONFIG — this one is session-scoped.
-      PATH: '/usr/local/bin:/usr/bin:/bin',
-      HOME: config.workDir,
-      TERM: 'xterm-256color',
-      LANG: 'C.UTF-8',
-      SHELL: config.shell,
-      USER: config.promptUser,
-      HOSTNAME: config.promptHost,
-      PS1: `\\[\\e[32m\\]${config.promptUser}@${config.promptHost}\\[\\e[0m\\]:\\[\\e[34m\\]\\w\\[\\e[0m\\]$ `,
-      KUBECONFIG: kubeconfigPath,
-      // The kubeconfig's context already defaults to this namespace, so plain
-      // `kubectl get pods` is scoped correctly without any -n flag. These are
-      // exported for prompts and scripts that want to display it.
-      JTT_LAB_ID: claims.labId,
-      JTT_NAMESPACE: namespace,
-    };
 
     let term: pty.IPty;
     try {
@@ -327,7 +377,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
         name: 'xterm-256color',
         cols: clampCols(cols),
         rows: clampRows(rows),
-        cwd: config.workDir,
+        cwd: setup.workDir,
         env,
       });
     } catch (error) {
@@ -346,7 +396,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
     const session: Session = {
       claims,
       namespace,
-      kubeconfigPath,
+      ...(kubeconfigPath !== undefined ? { kubeconfigPath } : { kubeconfigPath: undefined }),
       term,
       idleTimer: setTimeout(
         () => closeFor(ws, 'IDLE_TIMEOUT', 'Terminal closed after inactivity.'),

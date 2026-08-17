@@ -1,0 +1,161 @@
+id: CICD-005
+slug: cicd-005-github-actions-docker-build
+title: Building a Container Image in CI
+track: cicd
+topic: github-actions
+difficulty: intermediate
+level: practice
+duration_minutes: 45
+order: 5
+
+environment:
+  provider: workspace
+  isolation: workspace
+
+prerequisites:
+  - CICD-004
+
+story: >
+  The statements service currently ships as a directory of files that somebody
+  copies onto a server which already has the right Node.js version. When that
+  server was rebuilt last quarter it came back with a different one, and the
+  service would not start.
+
+  The team's answer is to ship the runtime with the application: a container
+  image, built by CI, identified by a tag, and run identically wherever it
+  lands.
+
+objectives:
+  - Write a Dockerfile that packages the application with its runtime
+  - Add a job that builds an image after the application build succeeds
+  - Tag an image from a workflow variable rather than a literal
+  - Describe what a registry is for, and where it fits after the build
+
+task:
+  summary: Write a Dockerfile and add an image job that builds and tags it.
+  description: >
+    A container image is the packaging step of the pipeline taken one level
+    further. An artifact is your code, built; an image is your code, built,
+    *plus everything needed to run it*: the base operating system, the runtime,
+    the working directory, and the command to start.
+
+    The chain becomes:
+
+        source → build → artifact → image → registry → deployment
+
+    A **registry** is where images are stored and fetched from — Docker Hub,
+    GitHub Container Registry, Amazon ECR. CI pushes an image to a registry;
+    whatever runs the workload pulls it from there. The tag is what makes a
+    specific build addressable: `statements:8f21c4a` is one exact image
+    forever, whereas `statements:latest` means something different every hour.
+
+    **This lab builds an image. It does not push one, and it needs no registry
+    account, no credentials, and no cloud provider.** Pushing is where secrets
+    enter the picture and secrets are the next lab; here the pipeline stops at
+    a locally built, correctly tagged image, which is exactly how you would
+    develop this in a real repository before wiring up a registry.
+
+    Do two things.
+
+    **Write a `Dockerfile`** in the workspace root. It needs a `FROM` line
+    choosing a base image with Node.js on it, a `WORKDIR`, a `COPY` bringing
+    the application in, and a `CMD` starting it. The container should start the
+    service the same way you would — look at the README for the command.
+
+    **Add an `image` job** to `.github/workflows/ci.yml` that:
+
+    * declares `needs: build`, so it only runs when the build job succeeded —
+      there is no point building an image around code that failed its tests;
+    * runs `docker build` in a step;
+    * takes the image name from a workflow-level `env` value called
+      `IMAGE_NAME` rather than repeating a literal in every step.
+
+    What is verified: the Dockerfile exists and has content, and the workflow
+    declares the job, the dependency, the build command, and the variable. The
+    `docker build` command itself is **not executed** — the sandbox has no
+    Docker daemon and is never given one, since handing a student shell access
+    to a Docker socket would give it the host. This lab is configuration-
+    verified, and the lab list in the README says so.
+
+setup:
+  workspace: workspace
+  verify:
+    - type: github_workflow_exists
+      path: .github/workflows/ci.yml
+      label: Starter workflow is present
+    - type: github_workflow_job_exists
+      path: .github/workflows/ci.yml
+      job: build
+      label: Starter workflow already has a build job
+
+requirements:
+  - type: file_exists
+    path: Dockerfile
+    min_bytes: 60
+    label: A Dockerfile exists
+  - type: file_contains
+    path: Dockerfile
+    contains:
+      - FROM
+      - WORKDIR
+      - COPY
+      - CMD
+    label: The Dockerfile has a base image, a workdir, a copy and a start command
+  - type: github_workflow_exists
+    path: .github/workflows/ci.yml
+    label: Workflow is valid
+  - type: github_workflow_job_exists
+    path: .github/workflows/ci.yml
+    job: image
+    runs_on: ubuntu-latest
+    needs:
+      - build
+    label: An image job runs after the build job succeeds
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: image
+    run_contains:
+      - docker build
+    label: A step builds the container image
+  - type: environment_reference_exists
+    path: .github/workflows/ci.yml
+    name: IMAGE_NAME
+    via: workflow_env
+    label: The image name comes from a workflow variable
+  - type: secret_not_hardcoded
+    path: .github/workflows/ci.yml
+    label: No credentials are written into the workflow
+
+hints:
+  - level: 1
+    text: >
+      Two files change: a new one describing how to package the application,
+      and the workflow, which gains a second job. Think about what a bare
+      Linux machine would need before it could run this service.
+  - level: 2
+    text: >
+      A job says what it waits for with a key that names another job's id. A
+      workflow-level variable is declared in a block at the top level of the
+      file, next to the trigger rather than inside a job, and steps read it
+      with the usual shell variable syntax.
+  - level: 3
+    text: >
+      The Dockerfile needs a base image with Node.js, a working directory, a
+      copy of the application, and the start command from the README. The new
+      job's id must be `image`, it must declare that it needs `build`, and the
+      variable must be called `IMAGE_NAME`. The Dockerfile reference below
+      shows the minimal set of instructions.
+
+references:
+  - title: Dockerfile reference
+    url: https://docs.docker.com/reference/dockerfile/
+  - title: Publishing Docker images with GitHub Actions
+    url: https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images
+  - title: Workflow syntax — jobs.<job_id>.needs and env
+    url: https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+
+skills:
+  - cicd.docker.dockerfile.author
+  - cicd.docker.build.pipeline
+  - cicd.githubactions.jobs.dependencies
+  - cicd.registry.concepts

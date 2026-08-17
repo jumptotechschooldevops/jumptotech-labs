@@ -1,0 +1,17 @@
+# JumpToTech Bank — statements service deployment manifest
+#
+# This is the file the delivery pipeline updates. It is the record of what is
+# supposed to be running: change the image tag here, and whatever reconciles
+# this manifest rolls the new version out.
+#
+# The tag below is a placeholder. The deploy stage of your pipeline replaces
+# it with the tag of the image that was actually built and tested in this run,
+# which is what makes a deployment traceable back to a commit.
+service: statements
+environment: staging
+replicas: 2
+image: jumptotech/statements:REPLACE_ME
+port: 8080
+health:
+  path: /healthz
+  intervalSeconds: 10

@@ -1,0 +1,18 @@
+# JumpToTech Bank — statements service CI
+#
+# This is the workflow CICD-002 left behind: valid, in the right place, and it
+# does not yet do anything useful. It checks the code out and stops.
+#
+# Your job in CICD-003 is to make it a real continuous integration pipeline.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4

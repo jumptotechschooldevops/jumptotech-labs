@@ -27,8 +27,8 @@ export function StartOverlay({ phase, steps, terminalStep, error, onStart }: Sta
         <div className="overlay__card">
           <h2 className="overlay__title">Start Lab</h2>
           <p className="overlay__text">
-            A temporary Kubernetes environment will be prepared for you. Nothing is installed on
-            your computer.
+            A temporary environment will be prepared for you, private to this session. Nothing is
+            installed on your computer.
           </p>
           <button type="button" className="btn btn--primary btn--lg" onClick={onStart}>
             Start Lab
@@ -43,12 +43,15 @@ export function StartOverlay({ phase, steps, terminalStep, error, onStart }: Sta
   const backendSucceeded = steps.length > 0 && steps.every((s) => s.status === 'ok');
   const allSteps: ProvisionStep[] = backendSucceeded ? [...steps, terminalStep] : steps;
 
+  // Deliberately not "Preparing Kubernetes environment…": the step *labels*
+  // come from the provider that is actually preparing the sandbox, so a
+  // Kubernetes lab still reads as one without the heading naming a track.
   const title =
     phase === 'failed'
       ? 'Could not start the lab'
       : phase === 'ready'
         ? 'Lab Ready'
-        : 'Preparing Kubernetes environment…';
+        : 'Preparing lab environment…';
 
   return (
     <div className="overlay">

@@ -166,6 +166,7 @@ export class KindLabProvider implements LabProvider {
     // Step 2 — Kubernetes API reachable, with real version/node data.
     let nodes: EnvironmentInfo['nodes'];
     let kubernetesVersion: string | undefined;
+    let summary: string | undefined;
     const apiStep = await this.#runStep(steps, 'kubernetes-api', 'Kubernetes API available', async () => {
       await this.#k8s.ping();
       const version = await this.#k8s.version();
@@ -176,7 +177,8 @@ export class KindLabProvider implements LabProvider {
       if (notReady.length > 0) {
         throw new Error(`node(s) not Ready: ${notReady.map((n) => n.name).join(', ')}`);
       }
-      return `${version.gitVersion} — ${nodes.length} node${nodes.length === 1 ? '' : 's'} Ready`;
+      summary = `${version.gitVersion} — ${nodes.length} node${nodes.length === 1 ? '' : 's'} Ready`;
+      return summary;
     });
     if (!apiStep.ok) {
       return {
@@ -250,7 +252,11 @@ export class KindLabProvider implements LabProvider {
 
     return {
       ok: true,
-      environment: this.#environment(context, 'ready', { kubernetesVersion, nodes }),
+      environment: this.#environment(context, 'ready', {
+        kubernetesVersion,
+        nodes,
+        ...(summary ? { summary } : {}),
+      }),
       steps,
     };
   }
@@ -529,6 +535,7 @@ export class KindLabProvider implements LabProvider {
         : new Date(this.#now() + ttlSeconds * 1000).toISOString();
 
     return {
+      kind: 'kubeconfig',
       kubeconfig,
       namespace: context.namespace,
       serviceAccountName: context.serviceAccountName,

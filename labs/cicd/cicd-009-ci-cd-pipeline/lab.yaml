@@ -1,0 +1,186 @@
+id: CICD-009
+slug: cicd-009-ci-cd-pipeline
+title: A Complete Delivery Pipeline
+track: cicd
+topic: pipelines
+difficulty: advanced
+level: challenge
+duration_minutes: 60
+order: 9
+
+environment:
+  provider: workspace
+  isolation: workspace
+
+prerequisites:
+  - CICD-005
+  - CICD-004
+
+story: >
+  Every piece exists somewhere. Continuous integration builds and tests on
+  every push. There is a Dockerfile. There is a deployment manifest under
+  `deploy/` that records what staging is supposed to be running — and somebody
+  still edits it by hand and pushes, which is how staging spent Tuesday
+  running an image that was never built by anything.
+
+  Connect them. One pipeline: a change lands on the main branch, gets built and
+  tested, becomes a tagged image, and updates the manifest that says what
+  staging runs. No manual step in the middle.
+
+objectives:
+  - Compose a multi-job pipeline where each job depends on the last
+  - Derive an image tag from the commit rather than a literal
+  - Update a deployment manifest as a pipeline stage
+  - Restrict a delivery pipeline to the branch that represents releasable code
+
+task:
+  summary: Build a three-job pipeline — build and test, image, deploy — where deploying updates deploy/app.yml.
+  description: >
+    You are assembling the whole chain now:
+
+        Git → CI → Build → Test → Docker image → deployment manifest update
+
+    **Trigger.** Continuous integration runs on every push, but delivery must
+    not. Restrict this workflow's `push` trigger to the `main` branch with a
+    `branches:` filter, so work in progress on a feature branch is never
+    delivered anywhere.
+
+    **The `build` job** stays broadly as it is: check out, provision Node.js,
+    build, test, and publish the build output as an artifact. Keep it at five
+    steps or more.
+
+    **The `image` job** declares `needs: build` and builds the container image
+    from the Dockerfile already in the workspace. Tag it from `IMAGE_TAG`, a
+    workflow-level `env` value, rather than repeating a literal. A useful tag
+    identifies the commit — `${{ github.sha }}` is the commit that triggered
+    the run, which is what makes an image traceable back to a change.
+
+    **The `deploy` job** declares `needs: image` and updates `deploy/app.yml`
+    so its `image:` line names the tag this run produced. Any reasonable
+    mechanism is fine — a `sed` in a `run` step is the usual first version, and
+    it is honest about what a deployment step really is: something that edits
+    the record of what should be running, and then something else notices.
+
+    **No cloud account, no registry credentials, no production infrastructure.**
+    The image is built, not pushed; the manifest is updated, not applied
+    anywhere. Adding a registry means adding credentials, and credentials are
+    a deliberate later step.
+
+    **What this verifies.** The workflow's structure — the branch filter, the
+    three jobs, their dependency chain, the image build command, the manifest
+    update, and the tag variable — plus a scan proving no credential is written
+    in plain text. The build and the test suite are additionally executed for
+    real in your workspace. `docker build` is not executed: this sandbox has no
+    Docker daemon, and a student shell is never given one.
+
+setup:
+  workspace: workspace
+  verify:
+    - type: github_workflow_exists
+      path: .github/workflows/ci.yml
+      label: Continuous integration workflow is present
+    - type: file_exists
+      path: Dockerfile
+      min_bytes: 60
+      label: Dockerfile is present
+    - type: file_exists
+      path: deploy/app.yml
+      min_bytes: 100
+      label: Deployment manifest is present
+
+requirements:
+  - type: github_workflow_exists
+    path: .github/workflows/ci.yml
+    require_name: true
+    label: Workflow is valid and named
+  - type: github_workflow_trigger
+    path: .github/workflows/ci.yml
+    trigger: push
+    branches:
+      - main
+    label: Delivery runs only on pushes to main
+  - type: github_workflow_job_exists
+    path: .github/workflows/ci.yml
+    job: build
+    runs_on: ubuntu-latest
+    min_steps: 5
+    label: The build job builds, tests and publishes the artifact
+  - type: github_workflow_job_exists
+    path: .github/workflows/ci.yml
+    job: image
+    needs:
+      - build
+    label: The image job runs only after build succeeds
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: image
+    run_contains:
+      - docker build
+    label: The image job builds the container image
+  - type: github_workflow_job_exists
+    path: .github/workflows/ci.yml
+    job: deploy
+    needs:
+      - image
+    label: The deploy job runs only after the image is built
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: deploy
+    run_contains:
+      - deploy/app.yml
+    label: The deploy job updates the deployment manifest
+  - type: environment_reference_exists
+    path: .github/workflows/ci.yml
+    name: IMAGE_TAG
+    via: workflow_env
+    label: The image tag comes from a workflow variable
+  - type: secret_not_hardcoded
+    path: .github/workflows/ci.yml
+    label: No credentials are written into the workflow
+  - type: yaml_valid
+    path: deploy/app.yml
+    label: The deployment manifest is still valid YAML
+  - type: project_builds
+    produces: dist/build-info.json
+    label: The build actually succeeds
+  - type: tests_pass
+    label: The test suite actually passes
+
+hints:
+  - level: 1
+    text: >
+      Three jobs, in a line: nothing builds an image around untested code, and
+      nothing deploys an image that was never built. Start by writing the three
+      job ids and what each one waits for, before writing a single step.
+  - level: 2
+    text: >
+      A trigger can be narrowed with a filter on the event rather than left to
+      fire on everything. A job says what it waits for with a key naming
+      another job's id. The tag should identify the commit — the workflow
+      context exposes it, and the events reference lists what is available.
+  - level: 3
+    text: >
+      The three job ids are `build`, `image` and `deploy`. `image` needs
+      `build`; `deploy` needs `image`. Declare `IMAGE_TAG` in a workflow-level
+      `env` block and reference it from the steps. The deploy step has to
+      mention `deploy/app.yml` — an in-place `sed` replacing the placeholder
+      tag is a perfectly good first version. One YAML trap to expect: a command
+      containing a colon followed by a space cannot be written as a bare
+      scalar, so give that step a block scalar (`run: |`) or quote it.
+
+references:
+  - title: Workflow syntax for GitHub Actions
+    url: https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+  - title: Contexts reference — the github context
+    url: https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+  - title: Publishing Docker images
+    url: https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images
+  - title: Dockerfile reference
+    url: https://docs.docker.com/reference/dockerfile/
+
+skills:
+  - cicd.pipeline.compose
+  - cicd.githubactions.jobs.dependencies
+  - cicd.docker.build.pipeline
+  - cicd.deployment.manifest
+  - cicd.pipeline.branch.filters

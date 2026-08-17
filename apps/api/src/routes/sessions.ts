@@ -141,9 +141,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     }
 
     const lab = registry.get(session.labId);
-    // The namespace comes from the session record, never from the request.
-    // A correct Pod in someone else's namespace is invisible here.
-    const result = await verifyLab({ k8s, lab, namespace: session.namespace });
+    /*
+     * Everything the verifier reads is derived from the session record, never
+     * from the request: the namespace comes from the store, and the workspace
+     * handle (when the lab has one) comes from the provider that created it.
+     * A correct Pod — or a correct workflow file — belonging to another session
+     * is invisible here, because nothing in this request can name one.
+     */
+    const evidence = sessions.evidenceFor(session);
+    const result = await verifyLab({
+      k8s,
+      ...evidence,
+      lab,
+      namespace: session.namespace,
+    });
     await sessions.touch(session.sessionId, 'check');
 
     if (result.error) {

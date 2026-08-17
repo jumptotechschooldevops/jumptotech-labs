@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+      steps:
+        - name: Check out the repository
+          uses: actions/checkout@v4
+
+        - name: Build
+          run: node build.js
+
+        - name: Test
+          run: node --test
+
+        - name: Publish the build output
+          uses: actions/upload-artifact@v4
+          with:
+            name: statements-${APP_VERSION}
+            path: build/

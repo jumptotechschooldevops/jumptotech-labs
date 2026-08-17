@@ -64,6 +64,16 @@ import {
   jobImage,
 } from './handlers/batch.js';
 import { resourceAbsent } from './handlers/generic.js';
+import { artifactExists, fileContains, fileExists, yamlValid } from './handlers/files.js';
+import {
+  githubWorkflowExists,
+  githubWorkflowJobExists,
+  githubWorkflowStepExists,
+  githubWorkflowTrigger,
+} from './handlers/github-actions.js';
+import { jenkinsStageExists, jenkinsfileExists } from './handlers/jenkins.js';
+import { environmentReferenceExists, secretNotHardcoded } from './handlers/pipeline-config.js';
+import { commandExitCode, projectBuilds, testsPass } from './handlers/build.js';
 
 /** Raised when a requirement names a type with no registered handler. */
 export class UnsupportedRequirementError extends Error {
@@ -121,6 +131,27 @@ const HANDLERS: { [K in RequirementType]: VerifierHandler<K> } = {
   cronjob_schedule: cronJobSchedule,
   cronjob_suspended: cronJobSuspended,
 
+  // --- file-backed sandboxes (CI/CD today; Linux, Docker, Terraform next) ---
+  file_exists: fileExists,
+  file_contains: fileContains,
+  yaml_valid: yamlValid,
+  artifact_exists: artifactExists,
+
+  github_workflow_exists: githubWorkflowExists,
+  github_workflow_trigger: githubWorkflowTrigger,
+  github_workflow_job_exists: githubWorkflowJobExists,
+  github_workflow_step_exists: githubWorkflowStepExists,
+
+  jenkinsfile_exists: jenkinsfileExists,
+  jenkins_stage_exists: jenkinsStageExists,
+
+  environment_reference_exists: environmentReferenceExists,
+  secret_not_hardcoded: secretNotHardcoded,
+
+  command_exit_code: commandExitCode,
+  project_builds: projectBuilds,
+  tests_pass: testsPass,
+
   resource_absent: resourceAbsent,
 };
 
@@ -138,10 +169,24 @@ function handlerFor(type: string): VerifierHandler<RequirementType> {
   return HANDLERS[type as RequirementType] as VerifierHandler<RequirementType>;
 }
 
-/** Stable, human-meaningful id for a check, used as the React key. */
+/**
+ * Stable, human-meaningful id for a check, used as the React key.
+ *
+ * The subject is whichever identifying field the requirement carries: a
+ * Kubernetes object `name`, a workspace `path`, or an allow-listed task
+ * `command`. Falling back to a constant would give two file checks in one lab
+ * the same key.
+ */
 export function checkId(requirement: Requirement, index: number): string {
-  const name = 'name' in requirement ? requirement.name : 'target';
-  return `${index + 1}-${requirement.type}-${name}`;
+  const subject =
+    'name' in requirement
+      ? requirement.name
+      : 'path' in requirement
+        ? requirement.path
+        : 'command' in requirement
+          ? requirement.command
+          : 'target';
+  return `${index + 1}-${requirement.type}-${subject}`;
 }
 
 /** Run one requirement. Throws only for an unregistered type. */

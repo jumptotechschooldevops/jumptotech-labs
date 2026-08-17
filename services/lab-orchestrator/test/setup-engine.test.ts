@@ -89,7 +89,7 @@ spec:
 
 /** A provider whose setup verification always succeeds, so tests isolate setup itself. */
 function provider(k8s: FakeKubernetes): KindLabProvider {
-  return new KindLabProvider({
+  const instance = new KindLabProvider({
     k8s,
     clusterName: 'jumptotech-labs',
     resetDrainTimeoutMs: 1_000,
@@ -97,6 +97,26 @@ function provider(k8s: FakeKubernetes): KindLabProvider {
     sleep: async () => undefined,
     waitForRequirements: async () => ({ ok: true, checks: [] }),
   });
+
+  /*
+   * Stub the "kubectl ready" health check, as `api.test.ts` and
+   * `session-manager.test.ts` already do.
+   *
+   * `create()` otherwise spawns the real `kubectl version`, which contacts an
+   * API server and — with no cluster reachable — sits out its own connection
+   * timeout. That is several seconds of wall clock inside a 5s unit test, so
+   * whether this file passes depends on the developer's machine rather than on
+   * the setup engine. The real binary is exercised by the integration suites,
+   * which is where it belongs.
+   */
+  instance.execute = async () => ({
+    exitCode: 0,
+    stdout: JSON.stringify({ clientVersion: { gitVersion: 'v1.34.2' } }),
+    stderr: '',
+    timedOut: false,
+  });
+
+  return instance;
 }
 
 afterEach(async () => {

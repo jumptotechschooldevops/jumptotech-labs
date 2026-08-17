@@ -97,6 +97,9 @@ suite('PLATFORM-003 integration: the lab catalog on real kind', () => {
   /** Write this session's namespace-scoped kubeconfig; returns a kubectl bound to it. */
   async function studentKubectl(session: LabSession): Promise<(...args: string[]) => Promise<Cmd>> {
     const credentials = await manager.issueCredentials(session.sessionId);
+    if (credentials.kind !== 'kubeconfig') {
+      throw new Error(`a Kubernetes lab must issue kubeconfig credentials, got '${credentials.kind}'`);
+    }
     const file = path.join(scratchDir, `${session.sessionId}.kubeconfig`);
     await writeFile(file, credentials.kubeconfig, { mode: 0o600 });
     return (...args: string[]) => kubectlWith(file, ...args);
@@ -122,7 +125,10 @@ suite('PLATFORM-003 integration: the lab catalog on real kind', () => {
     registry = new LabRegistry(path.join(repoRoot, 'labs'));
     await registry.load();
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.size).toBe(10);
+    // Scoped to the track this suite exercises. Other tracks may exist — the
+    // CI/CD ones are file-backed and have no business in a cluster suite — and
+    // their arrival must not fail this.
+    expect(registry.labsForTrack('kubernetes')).toHaveLength(10);
 
     scratchDir = await mkdtemp(path.join(tmpdir(), 'jtt-labs-integration-'));
     k8s = new KubernetesClient({ kubeconfigPath: HOST_KUBECONFIG });

@@ -32,6 +32,19 @@ import { isSupportedRequirementType, REQUIREMENT_TYPES, requirementSchema } from
  */
 export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
   kubernetes: ['kubernetes.io', 'www.kubernetes.io', 'github.com/kubernetes'],
+  /**
+   * CI/CD labs are written from the vendors' own documentation: GitHub for
+   * Actions workflow syntax, the Jenkins project for pipeline syntax, and the
+   * Git and Docker projects for the concepts either one builds on.
+   */
+  cicd: [
+    'docs.github.com',
+    'docs.jenkins.io',
+    'www.jenkins.io',
+    'jenkins.io',
+    'git-scm.com',
+    'docs.docker.com',
+  ],
 };
 
 /**
@@ -105,10 +118,30 @@ const manifestPath = z
   .refine((p) => !p.split('/').includes('..'), { message: 'manifest path must not traverse upwards' })
   .refine((p) => /\.ya?ml$/i.test(p), { message: 'manifest path must be a .yaml file' });
 
+/**
+ * A directory inside the lab holding the project files a workspace lab starts
+ * from. Same containment rules as `manifestPath`, but a directory rather than
+ * a YAML document.
+ */
+const seedDirectory = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/, 'workspace seed must be a plain directory name');
+
 const setupSchema = z
   .object({
     /** Applied into the session namespace, in order, before the terminal opens. */
     manifests: z.array(manifestPath).max(10).default([]),
+    /**
+     * Directory of project files copied into a file-backed session workspace
+     * at Start Lab, and copied again on Reset.
+     *
+     * Mutually exclusive with `manifests`: a lab starts from Kubernetes objects
+     * or from files, and the provider that owns the sandbox is what decides
+     * which. See the cross-check in `parseLabDefinition`.
+     */
+    workspace: seedDirectory.optional(),
     /**
      * Checks that must pass before the lab is handed to the student. Reuses the
      * requirement vocabulary, so setup verification and solution verification
@@ -156,11 +189,23 @@ const labDefinitionSchema = z
     /** Sort position within the track. Ties fall back to lab id. */
     order: z.number().int().min(0).max(9999).default(0),
 
+    /**
+     * Which kind of sandbox this lab needs.
+     *
+     * `kubernetes` — a private namespace in the shared cluster.
+     * `workspace`  — a private project directory the student edits and the
+     *                verifier reads. Used by tracks whose subject is files
+     *                rather than cluster objects (CI/CD today; Linux, Docker
+     *                and Terraform are expected to share it).
+     *
+     * The value selects a `LabProvider` at session start and nothing else in
+     * the platform branches on it, so adding a third kind is one provider plus
+     * one entry here.
+     */
     environment: z
       .object({
-        provider: z.enum(['kubernetes']),
-        /** Only namespace isolation exists today; the field keeps the seam visible. */
-        isolation: z.enum(['namespace']).default('namespace'),
+        provider: z.enum(['kubernetes', 'workspace']),
+        isolation: z.enum(['namespace', 'workspace']).default('namespace'),
       })
       .strict(),
 
@@ -399,10 +444,43 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
     issues.push(`prerequisites must not include the lab's own id (${def.id})`);
   }
 
-  // A lab whose setup declares manifests but no verification would hand the
-  // student an environment nobody checked.
+  // A lab whose setup declares a starting state but no verification would hand
+  // the student an environment nobody checked.
   if (def.setup.manifests.length > 0 && def.setup.verify.length === 0) {
     issues.push('setup.verify must describe at least one check when setup.manifests is non-empty');
+  }
+  if (def.setup.workspace && def.setup.verify.length === 0) {
+    issues.push('setup.verify must describe at least one check when setup.workspace is set');
+  }
+
+  /*
+   * The starting state has to match the sandbox that will hold it.
+   *
+   * A `workspace` lab that shipped Kubernetes manifests would declare an
+   * initial state its provider cannot apply, and the mismatch would only
+   * surface at Start Lab — for a student, not for the author. Both directions
+   * are rejected at load time instead.
+   */
+  if (def.environment.provider === 'workspace') {
+    if (def.setup.manifests.length > 0) {
+      issues.push(
+        "setup.manifests is not supported when environment.provider is 'workspace' — use setup.workspace",
+      );
+    }
+    if (def.environment.isolation !== 'workspace') {
+      issues.push("environment.isolation must be 'workspace' when environment.provider is 'workspace'");
+    }
+  } else {
+    if (def.setup.workspace) {
+      issues.push(
+        `setup.workspace is only supported when environment.provider is 'workspace' (this lab declares '${def.environment.provider}')`,
+      );
+    }
+    if (def.environment.isolation !== 'namespace') {
+      issues.push(
+        `environment.isolation must be 'namespace' when environment.provider is '${def.environment.provider}'`,
+      );
+    }
   }
 
   if (issues.length > 0) {

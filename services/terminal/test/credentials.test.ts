@@ -54,6 +54,7 @@ describe('fetchStudentCredentials', () => {
         return jsonResponse({
           ok: true,
           data: {
+            kind: 'kubeconfig',
             kubeconfig: KUBECONFIG,
             namespace: 'lab-0000000000aa',
             serviceAccountName: 'student',
@@ -81,7 +82,7 @@ describe('fetchStudentCredentials', () => {
         requested = String(url);
         return jsonResponse({
           ok: true,
-          data: { kubeconfig: KUBECONFIG, namespace: 'x', serviceAccountName: 'student', expiresAt: '' },
+          data: { kind: 'kubeconfig', kubeconfig: KUBECONFIG, namespace: 'x', serviceAccountName: 'student', expiresAt: '' },
         });
       }) as unknown as typeof fetch,
     });
@@ -127,7 +128,7 @@ describe('fetchStudentCredentials', () => {
         fetchImpl: (async () =>
           jsonResponse({
             ok: true,
-            data: { kubeconfig: '', namespace: 'x', serviceAccountName: 'student', expiresAt: '' },
+            data: { kind: 'kubeconfig', kubeconfig: '', namespace: 'x', serviceAccountName: 'student', expiresAt: '' },
           })) as unknown as typeof fetch,
       }),
     ).rejects.toThrow(/empty kubeconfig/);

@@ -78,8 +78,16 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.data.count).toBe(10);
-    expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual([
+
+    const labs = res.body.data.labs as Array<{ id: string; track: string }>;
+    const tracks = res.body.data.tracks as Array<{ track: string; labCount: number }>;
+
+    expect(res.body.data.count).toBe(labs.length);
+    expect(res.body.data.count).toBe(tracks.reduce((total, t) => total + t.labCount, 0));
+
+    // Asserted per track: a new track must be able to arrive without editing
+    // this, while a Kubernetes lab going missing still fails loudly.
+    expect(labs.filter((l) => l.track === 'kubernetes').map((l) => l.id)).toEqual([
       'K8S-001',
       'K8S-002',
       'K8S-003',
@@ -91,7 +99,10 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
       'K8S-009',
       'K8S-010',
     ]);
-    expect(res.body.data.tracks[0]).toMatchObject({ track: 'kubernetes', labCount: 10 });
+    expect(tracks.find((t) => t.track === 'kubernetes')).toMatchObject({
+      track: 'kubernetes',
+      labCount: 10,
+    });
   });
 
   it('gives a card everything it needs to render', async () => {
@@ -122,7 +133,8 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
     const byTopic = await request(app).get('/api/labs?topic=batch');
     expect(byTopic.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-006', 'K8S-007']);
 
-    const byDifficulty = await request(app).get('/api/labs?difficulty=intermediate');
+    // Difficulty spans tracks, so it is combined with one here.
+    const byDifficulty = await request(app).get('/api/labs?track=kubernetes&difficulty=intermediate');
     expect(byDifficulty.body.data.count).toBe(3);
 
     const byQuery = await request(app).get('/api/labs?q=secret');
@@ -291,13 +303,18 @@ describe('GET /api/tracks', () => {
     const res = await request(buildApp().app).get('/api/tracks');
 
     expect(res.status).toBe(200);
-    expect(res.body.data.count).toBe(1);
-    expect(res.body.data.tracks[0]).toMatchObject({
-      track: 'kubernetes',
-      title: 'Kubernetes',
-      labCount: 10,
-    });
-    expect(res.body.data.tracks[0].topics.map((t: { topic: string }) => t.topic)).toContain('batch');
+
+    const tracks = res.body.data.tracks as Array<{
+      track: string;
+      title: string;
+      labCount: number;
+      topics: Array<{ topic: string }>;
+    }>;
+    expect(res.body.data.count).toBe(tracks.length);
+
+    const kubernetes = tracks.find((t) => t.track === 'kubernetes');
+    expect(kubernetes).toMatchObject({ track: 'kubernetes', title: 'Kubernetes', labCount: 10 });
+    expect(kubernetes?.topics.map((t) => t.topic)).toContain('batch');
   });
 
   it('returns one track with its labs', async () => {

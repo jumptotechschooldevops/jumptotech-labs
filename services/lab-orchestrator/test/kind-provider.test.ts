@@ -326,11 +326,29 @@ describe('reset() (test requirement 7)', () => {
   });
 });
 
+/**
+ * Narrow to the kubeconfig variant.
+ *
+ * `StudentCredentials` became a union when the file-backed provider arrived;
+ * this provider must always produce the kubeconfig arm, and asserting that
+ * here is part of what these tests check.
+ */
+async function kubeconfigFrom(
+  provider: KindLabProvider,
+  context = CONTEXT,
+): Promise<Extract<Awaited<ReturnType<KindLabProvider['issueCredentials']>>, { kind: 'kubeconfig' }>> {
+  const credentials = await provider.issueCredentials(context);
+  if (credentials.kind !== 'kubeconfig') {
+    throw new Error(`expected kubeconfig credentials, got '${credentials.kind}'`);
+  }
+  return credentials;
+}
+
 describe('issueCredentials()', () => {
   it('mints a namespace-scoped kubeconfig for the session ServiceAccount', async () => {
     const k8s = withSessionNamespace();
 
-    const credentials = await makeProvider(k8s).issueCredentials(CONTEXT);
+    const credentials = await kubeconfigFrom(makeProvider(k8s));
 
     expect(k8s.tokenRequests).toHaveLength(1);
     expect(k8s.tokenRequests[0]?.namespace).toBe(CONTEXT.namespace);
@@ -359,7 +377,7 @@ describe('issueCredentials()', () => {
   });
 
   it('contains no client-certificate or cluster-admin material', async () => {
-    const credentials = await makeProvider(withSessionNamespace()).issueCredentials(CONTEXT);
+    const credentials = await kubeconfigFrom(makeProvider(withSessionNamespace()));
 
     expect(credentials.kubeconfig).not.toContain('client-certificate');
     expect(credentials.kubeconfig).not.toContain('client-key');

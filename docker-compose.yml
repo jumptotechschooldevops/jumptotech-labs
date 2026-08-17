@@ -50,6 +50,10 @@ services:
       LAB_CLUSTER_NAME: ${LAB_CLUSTER_NAME:-jumptotech-labs}
       KUBECONFIG: /etc/jumptotech/kubeconfig.yaml
       LABS_DIR: /app/labs
+      # File-backed sandboxes (CI/CD). One directory per session on the shared
+      # `lab-workspaces` volume: the api seeds and verifies it, the terminal
+      # runs the student's shell in it.
+      LAB_WORKSPACE_ROOT: /var/lib/jumptotech/workspaces
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       TERMINAL_SESSION_SECRET: ${TERMINAL_SESSION_SECRET:?set TERMINAL_SESSION_SECRET in .env (copy from .env.example)}
       TERMINAL_SESSION_TTL_SECONDS: ${TERMINAL_SESSION_TTL_SECONDS:-3600}
@@ -83,6 +87,11 @@ services:
       STUDENT_CREDENTIAL_TTL_SECONDS: ${STUDENT_CREDENTIAL_TTL_SECONDS:-3600}
     ports:
       - "${API_PORT:-4000}:4000"
+    # The api seeds and verifies session workspaces; the terminal runs the
+    # student's shell in them. Two containers, one volume — so the api joins
+    # the terminal user's group (1001) to share it. Its own filesystem is
+    # read-only apart from a tmpfs, so the uid it runs as owns nothing else.
+    user: "1000:1001"
     volumes:
       - <<: *kubeconfig
       # Lab definitions are data, mounted read-only so a running service can
@@ -91,6 +100,9 @@ services:
         source: ./labs
         target: /app/labs
         read_only: true
+      - type: volume
+        source: lab-workspaces
+        target: /var/lib/jumptotech/workspaces
     networks:
       - default
       - kind
@@ -129,6 +141,19 @@ services:
       TERMINAL_MAX_SESSION_SECONDS: ${TERMINAL_MAX_SESSION_SECONDS:-7200}
     ports:
       - "${TERMINAL_PORT:-4001}:4001"
+    volumes:
+      # Session workspaces for file-backed labs. The PTY's cwd and HOME point
+      # at one directory inside here, chosen per session by the API — this
+      # service never picks a path of its own.
+      #
+      # NOTE, and it is a real limitation: every PTY in this container runs as
+      # the same `student` user, so file modes cannot stop one student reading
+      # another's workspace. Names are unguessable and the functional isolation
+      # is tested, but the OS boundary is one container per session, which this
+      # deployment does not yet have. See README → CI/CD sandbox.
+      - type: volume
+        source: lab-workspaces
+        target: /var/lib/jumptotech/workspaces
     depends_on:
       api:
         condition: service_healthy
@@ -166,6 +191,13 @@ services:
         condition: service_healthy
     networks:
       - default
+
+volumes:
+  # Session workspaces. Deliberately a named volume rather than a bind mount:
+  # it is scratch space the platform creates and reaps, it must not appear in
+  # anyone's checkout, and `docker compose down -v` disposes of it with
+  # everything else.
+  lab-workspaces:
 
 networks:
   default:

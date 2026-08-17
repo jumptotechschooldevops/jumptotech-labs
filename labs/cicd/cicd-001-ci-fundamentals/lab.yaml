@@ -1,0 +1,185 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — CI/CD track
+#
+# Adding this file is the entire process for adding a lab. Nothing in React,
+# the API, the orchestrator, or the verifier knows that CICD-001 exists.
+#
+# `environment.provider: workspace` selects the file-backed sandbox: each
+# session gets its own private project directory, seeded from `workspace/`
+# below, which the student edits from the browser terminal and the verifier
+# reads. There is no `path:` to a shared directory anywhere in this file —
+# the workspace is derived from the session, never named by lab content.
+#
+# Content is written from the official GitHub Actions, Jenkins and Git
+# documentation only.
+# ---------------------------------------------------------------------------
+id: CICD-001
+slug: cicd-001-ci-fundamentals
+title: Continuous Integration, Delivery and Deployment
+track: cicd
+topic: fundamentals
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 1
+
+environment:
+  provider: workspace
+  isolation: workspace
+
+story: >
+  You have joined the JumpToTech Bank platform team. Statements are generated
+  by a small service, `jumptotech-statements`, and until last month it was
+  released by hand: whoever was on duty pulled the code onto the release box,
+  ran the tests if they remembered to, copied the files across, and told the
+  channel it was done.
+
+  Two Fridays ago that went wrong. A change that passed on the author's laptop
+  reached production without ever being tested anywhere else, and statements
+  came out with the closing balance missing a decimal place.
+
+  Before the team automates anything, they want you to walk the pipeline by
+  hand — to be the CI server for one afternoon — so you know exactly what each
+  automated stage will be doing on your behalf.
+
+objectives:
+  - Distinguish continuous integration, continuous delivery and continuous deployment
+  - Run the build, test and smoke stages of a pipeline yourself, in order
+  - Explain what a build artifact is and why deployment uses it instead of source
+  - Read a build manifest to see what went into an artifact
+
+task:
+  summary: Run each stage of the delivery pipeline by hand and produce a real build artifact.
+  description: >
+    Three terms get used interchangeably and mean different things.
+
+    **Continuous integration** is the practice of merging every change into the
+    shared branch frequently, and having a server build and test each merge
+    automatically. Its output is a verdict: this change is safe, or it is not.
+
+    **Continuous delivery** extends that so every change which passes is
+    packaged into a release artifact and kept ready to go out. Releasing is a
+    button somebody presses.
+
+    **Continuous deployment** removes the button: every change that passes goes
+    to production on its own.
+
+    All three share the same spine, and that spine is what you are going to run
+    by hand:
+
+        Developer → Git → CI → Build → Test → Artifact → CD
+
+    Your workspace holds the statements service. Nothing is installed on your
+    machine and nothing here reaches the network — the project has no
+    dependencies on purpose, so this lab is about the pipeline rather than
+    about npm.
+
+    Work through the stages in the order a CI server would:
+
+    1. **Build.** Run `node build.mjs`. Read what it prints, then look at what
+       appeared in `dist/`. Open `dist/build-info.json` — that is the manifest
+       recording exactly which sources went into the artifact and their
+       digests. This is why deployment ships an artifact rather than a git
+       checkout: the artifact is one identified thing you can point at, and the
+       manifest says what it was made of.
+
+    2. **Test.** Run `node --test`. A CI server runs this on a machine that is
+       not yours, from a clean checkout, which is what would have caught the
+       Friday incident.
+
+    3. **Smoke.** Run `node src/cli.mjs --selftest`. Building and testing prove
+       the source is sound; the smoke check proves the thing you built actually
+       runs. A delivery pipeline runs one after deployment for the same reason.
+
+    Then write down what you just did, as something a machine could repeat.
+    Create `ci/pipeline.sh` — a shell script that runs the three stages in
+    order, one command per stage, exactly as you ran them. That script is the
+    thing the next two labs replace with a real CI system: everything GitHub
+    Actions and Jenkins add on top of it is scheduling, isolation and
+    reporting, and it helps to have seen the small version first.
+
+    Leave the workspace with a successful build in `dist/` and the script in
+    place. Then press Check Solution — it reads your script and runs the same
+    three commands itself, so it is verifying what a pipeline would verify
+    rather than what you typed into the terminal.
+
+setup:
+  workspace: workspace
+  verify:
+    - type: file_exists
+      path: build.mjs
+      min_bytes: 200
+      label: Build script is present
+    - type: file_exists
+      path: src/statements.mjs
+      min_bytes: 200
+      label: Application source is present
+    - type: file_exists
+      path: test/statements.test.mjs
+      min_bytes: 200
+      label: Test suite is present
+
+# Verification is state-based and behavioural: the checks below run the real
+# build and the real tests in this session's own workspace and read the real
+# files that came out. Nothing inspects the student's shell history — building
+# from the terminal, from a script, or from an editor all pass identically.
+requirements:
+  - type: file_exists
+    path: ci/pipeline.sh
+    min_bytes: 40
+    label: A pipeline script records the stages
+  - type: file_contains
+    path: ci/pipeline.sh
+    contains:
+      - node build.mjs
+      - node --test
+      - --selftest
+    label: The script runs the build, test and smoke stages
+  - type: tests_pass
+    label: The test suite passes
+  - type: project_builds
+    produces: dist/build-info.json
+    label: The build succeeds and writes a build manifest
+  - type: artifact_exists
+    path: dist/statements.bundle.js
+    min_bytes: 500
+    label: The build produced the deployable artifact
+  - type: command_exit_code
+    command: app_smoke
+    expected_exit_code: 0
+    label: The smoke check passes
+
+hints:
+  - level: 1
+    text: >
+      Everything you need is already in the workspace. Start by listing what is
+      there and reading the README — it names the three commands a pipeline
+      cares about.
+  - level: 2
+    text: >
+      The build writes into a directory that does not exist until you run it.
+      If a check about the artifact fails, run the build first and then look at
+      what appeared.
+  - level: 3
+    text: >
+      Run the stages in order from the workspace root: the build script, then
+      the test runner, then the self-check. Each one reports success through its
+      exit code, which is exactly how a pipeline decides whether to continue —
+      `echo $?` after a command shows you the same number the pipeline sees.
+      The script goes in a directory that does not exist yet, so create it
+      first; three command lines and a `#!/bin/sh` are enough.
+
+references:
+  - title: About continuous integration with GitHub Actions
+    url: https://docs.github.com/en/actions/concepts/overview/continuous-integration
+  - title: Storing and sharing data from a workflow
+    url: https://docs.github.com/en/actions/tutorials/store-and-share-data
+  - title: Git — About Version Control
+    url: https://git-scm.com/book/en/v2/Getting-Started-About-Version-Control
+
+skills:
+  - cicd.fundamentals.integration
+  - cicd.fundamentals.delivery
+  - cicd.fundamentals.deployment
+  - cicd.pipeline.stages
+  - cicd.artifacts.understand

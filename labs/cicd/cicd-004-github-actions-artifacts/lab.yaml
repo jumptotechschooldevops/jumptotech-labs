@@ -1,0 +1,146 @@
+id: CICD-004
+slug: cicd-004-github-actions-artifacts
+title: Publishing Build Artifacts
+track: cicd
+topic: github-actions
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 4
+
+environment:
+  provider: workspace
+  isolation: workspace
+
+prerequisites:
+  - CICD-003
+
+story: >
+  The workflow builds and tests on every push, and then the runner is
+  destroyed and everything it made goes with it. When the release manager
+  asked for "the build from commit 8f21c4a" this morning, the honest answer
+  was that it no longer exists and would have to be built again — on a
+  different machine, from a checkout that might resolve differently.
+
+  A pipeline that cannot hand you the thing it built is not a delivery
+  pipeline. Make the build produce something the rest of the pipeline can
+  carry.
+
+objectives:
+  - Explain the relationship between source, build, artifact and deployment
+  - Upload a build output as a named workflow artifact
+  - Choose an artifact path that matches what the build actually writes
+  - Recognise why deployment consumes an artifact rather than rebuilding
+
+task:
+  summary: Upload the build output as a named workflow artifact.
+  description: >
+    The chain a delivery pipeline runs on is short and each link matters:
+
+        source  →  build  →  artifact  →  deployment
+
+    **Source** is what people edit. It is not deployable: it needs a toolchain,
+    and two builds from the same source on two machines are only identical if
+    something makes them so.
+
+    **Build** is the step that turns source into output. In this project
+    `node build.mjs` writes two files into `dist/`: `statements.bundle.js`,
+    the deployable code, and `build-info.json`, a manifest recording which
+    sources went in and their digests.
+
+    **Artifact** is that output, kept. Once the artifact exists, it is a fixed
+    thing with a name: it can be downloaded, inspected, attached to a release,
+    and promoted from staging to production *without being rebuilt*. That last
+    point is the whole reason artifacts exist — if you rebuild between staging
+    and production, you did not test what you shipped.
+
+    **Deployment** takes the artifact and puts it somewhere. It does not see
+    your repository at all.
+
+    GitHub Actions publishes artifacts with `actions/upload-artifact`. It takes
+    two inputs under `with:`: `name`, which is what the artifact is called in
+    the run summary, and `path`, which is what to collect. The path is
+    relative to the workspace, and it is where this step usually goes wrong —
+    a path that matches nothing makes the step warn and produce an empty
+    artifact rather than fail, so the run stays green and the artifact is
+    useless.
+
+    Add an upload step to the `build` job, after the build has run. Then run
+    the build in your terminal so a real artifact exists in your workspace to
+    check.
+
+setup:
+  workspace: workspace
+  verify:
+    - type: github_workflow_exists
+      path: .github/workflows/ci.yml
+      label: Starter workflow is present
+    - type: github_workflow_step_exists
+      path: .github/workflows/ci.yml
+      job: build
+      run_contains:
+        - node build.mjs
+      label: Starter workflow already builds
+
+requirements:
+  - type: github_workflow_exists
+    path: .github/workflows/ci.yml
+    label: Workflow is valid
+  - type: github_workflow_job_exists
+    path: .github/workflows/ci.yml
+    job: build
+    min_steps: 5
+    label: The build job has an extra step for the artifact
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    uses: actions/upload-artifact
+    with_keys:
+      - name
+      - path
+    label: A step uploads a named artifact from a path
+  - type: project_builds
+    produces: dist/build-info.json
+    label: The build succeeds and writes its manifest
+  - type: artifact_exists
+    path: dist
+    kind: directory
+    min_bytes: 500
+    label: The build output directory holds the artifacts
+  - type: artifact_exists
+    path: dist/statements.bundle.js
+    min_bytes: 500
+    label: The deployable bundle was produced
+
+hints:
+  - level: 1
+    text: >
+      Nothing survives a job unless a step deliberately keeps it. Look for the
+      official action whose whole purpose is holding on to files after the job
+      finishes.
+  - level: 2
+    text: >
+      The action takes its configuration under `with:`, and it needs two
+      things: what to call the artifact, and which files to collect. Run the
+      build in your terminal first and see what directory appears — that
+      directory is what the step should collect.
+  - level: 3
+    text: >
+      The upload step must come after the build step, because it can only
+      collect files that already exist. The build writes into `dist/`, so that
+      is the value for the path input. The two artifact checks in this lab look
+      at your own workspace, so run `node build.mjs` before checking.
+
+references:
+  - title: Storing and sharing data from a workflow
+    url: https://docs.github.com/en/actions/tutorials/store-and-share-data
+  - title: Workflow syntax — jobs.<job_id>.steps[*].with
+    url: https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+  - title: actions/upload-artifact
+    url: https://github.com/actions/upload-artifact
+
+skills:
+  - cicd.artifacts.publish
+  - cicd.githubactions.actions.inputs
+  - cicd.pipeline.build
+  - cicd.artifacts.understand

@@ -97,9 +97,17 @@ export function titleCase(slug: string): string {
     .join(' ');
 }
 
-/** Track display names. Falls back to title-casing an unknown track slug. */
+/**
+ * Track display names.
+ *
+ * An *override* table, not a registry of what exists: a track slug with no
+ * entry here is title-cased, so dropping `labs/ansible/...` onto disk produces
+ * an "Ansible" track with no code change. Entries exist only where the
+ * mechanical title would be wrong — `cicd` would render as "Cicd".
+ */
 const TRACK_TITLES: Record<string, string> = {
   kubernetes: 'Kubernetes',
+  cicd: 'CI/CD',
 };
 
 export function trackTitle(track: string): string {

@@ -1,0 +1,35 @@
+# JumpToTech Bank — statements service
+#
+# Continuous integration only. It proves a change is sound and stops there:
+# nothing here builds an image, and nothing updates what staging is running.
+#
+# CICD-009 turns this into a delivery pipeline.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build
+        run: node build.mjs
+
+      - name: Test
+        run: node --test
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: statements-dist
+          path: dist/

@@ -25,6 +25,7 @@ import type {
   ProvisionStep,
   ResetResult,
   StudentCredentials,
+  VerificationEvidence,
 } from '../types.js';
 import { assertValidSessionId, deriveNamespace, newSessionId } from './identifiers.js';
 import type { SessionStore } from './store.js';
@@ -307,6 +308,19 @@ export class SessionManager {
   /** Live environment health for one session. Cheap enough for the UI to poll. */
   async status(session: LabSession): Promise<EnvironmentInfo> {
     return this.#provider.status(this.contextFor(session));
+  }
+
+  /**
+   * Read handles the verifier needs for this session's sandbox.
+   *
+   * The check route asks for these rather than deciding for itself which kind
+   * of sandbox a lab has: the provider that created it is the only thing that
+   * should know, and routing that knowledge through here is what keeps the
+   * route free of a per-track branch.
+   */
+  evidenceFor(session: LabSession): VerificationEvidence {
+    const context = this.contextFor(session);
+    return this.#provider.verificationEvidence?.(context) ?? {};
   }
 
   async list(): Promise<LabSession[]> {

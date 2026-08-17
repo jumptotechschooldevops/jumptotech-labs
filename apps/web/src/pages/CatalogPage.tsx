@@ -99,8 +99,8 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
         <div className="catalog__intro">
           <h1>Practice environments, not slideshows</h1>
           <p>
-            Launch a disposable Kubernetes environment in your browser, run real commands, and have
-            your work verified against live cluster state.
+            Launch a disposable environment in your browser, run real commands, and have your work
+            verified against what you actually built.
           </p>
         </div>
 

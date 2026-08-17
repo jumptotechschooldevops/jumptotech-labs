@@ -111,6 +111,8 @@ export interface EnvironmentInfo {
   phase: 'not_created' | 'provisioning' | 'ready' | 'degraded' | 'error';
   namespace: string;
   sessionId?: string;
+  /** One line describing the environment, written by whichever provider made it. */
+  summary?: string;
   kubernetesVersion?: string;
   nodes?: NodeInfo[];
   message?: string;

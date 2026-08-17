@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiRequestError, api } from '../lib/api';
+import { describeEnvironment } from '../lib/environment';
 import type {
   ApiError,
   LabDetail,
@@ -182,10 +183,7 @@ export function LabPage({
       setTerminalUrl(response.terminal.url);
       setTerminalToken(response.terminal.token);
       adoptSession(response.session);
-      const nodeCount = response.environment.nodes?.length ?? 0;
-      setEnvSummary(
-        `${response.environment.provider} · ${response.environment.kubernetesVersion ?? 'k8s'} · ${nodeCount} node${nodeCount === 1 ? '' : 's'}`,
-      );
+      setEnvSummary(describeEnvironment(response.environment));
     } catch (error) {
       const apiError = toApiError(error);
       setStartPhase('failed');
