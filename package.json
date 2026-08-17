@@ -28,7 +28,6 @@
     "certification": "tsx scripts/certification-coverage.ts",
     "certification:terraform": "tsx scripts/certification-coverage.ts --track terraform",
     "certification:docs": "tsx scripts/certification-coverage.ts --track terraform --markdown docs/certifications/terraform-associate-004-coverage.md",
-    "test:integration:terraform": "RUN_INTEGRATION_TESTS=1 vitest run test/terraform-integration.test.ts --root services/lab-orchestrator",
     "dev:api": "npm run dev --workspace @jumptotech/api",
     "dev:terminal": "npm run dev --workspace @jumptotech/terminal",
     "dev:web": "npm run dev --workspace @jumptotech/web",
