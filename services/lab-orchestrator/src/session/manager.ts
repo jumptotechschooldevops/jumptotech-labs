@@ -85,6 +85,37 @@ export interface TerminalTerminator {
   terminate(sessionId: string): Promise<void>;
 }
 
+/**
+ * A session reached the end of its life.
+ *
+ * Emitted once per session, after the sandbox is verifiably gone, whether that
+ * came from End Lab or from the reaper.
+ */
+export interface SessionClosedEvent {
+  sessionId: string;
+  labId: string;
+  provider: LabProviderId;
+  /** How it ended. The reaper produces EXPIRED; the student produces ENDED. */
+  status: Extract<SessionStatus, 'ENDED' | 'EXPIRED'>;
+  reason: string;
+}
+
+/**
+ * An outbound notification port for session lifecycle changes.
+ *
+ * This exists so PLATFORM-005 can close a student's *attempt* when their
+ * sandbox goes away without the orchestrator learning that persistence exists.
+ * The dependency points the right way: the orchestrator declares the interface,
+ * the composition root supplies an implementation, and nothing in this package
+ * imports `@jumptotech/progress`.
+ *
+ * A listener that throws is logged and ignored — bookkeeping must never be able
+ * to stop a sandbox being reclaimed.
+ */
+export interface SessionLifecycleListener {
+  onSessionClosed?(event: SessionClosedEvent): Promise<void> | void;
+}
+
 export interface SessionManagerOptions {
   registry: LabRegistry;
   /**
@@ -108,6 +139,8 @@ export interface SessionManagerOptions {
   /** Keys the session-id → namespace derivation. */
   namespaceSecret: string;
   terminal?: TerminalTerminator;
+  /** Told when a session finishes, so learning history can be closed off. */
+  listener?: SessionLifecycleListener;
   now?: () => number;
   logger?: (message: string) => void;
 }
@@ -159,6 +192,7 @@ export class SessionManager {
   readonly #lifetimes: SessionLifetimeConfig;
   readonly #namespaceSecret: string;
   readonly #terminal: TerminalTerminator | undefined;
+  readonly #listener: SessionLifecycleListener | undefined;
   readonly #now: () => number;
   readonly #log: (message: string) => void;
 
@@ -183,6 +217,7 @@ export class SessionManager {
     this.#lifetimes = options.lifetimes;
     this.#namespaceSecret = options.namespaceSecret;
     this.#terminal = options.terminal;
+    this.#listener = options.listener;
     this.#now = options.now ?? (() => Date.now());
     this.#log = options.logger ?? (() => undefined);
   }
@@ -622,7 +657,29 @@ export class SessionManager {
     this.#release(session.sessionId);
     this.#log(`session ${session.sessionId} ${done} (${reason})`);
 
+    // The sandbox is gone; tell whoever keeps the durable record. Emitted here
+    // rather than in the two callers so End Lab and the reaper cannot drift.
+    await this.#notifyClosed({
+      sessionId: ended.sessionId,
+      labId: ended.labId,
+      provider: ended.provider,
+      status: done,
+      reason,
+    });
+
     return { session: ended, destroy };
+  }
+
+  /** Never lets a listener failure escape into the teardown path. */
+  async #notifyClosed(event: SessionClosedEvent): Promise<void> {
+    if (!this.#listener?.onSessionClosed) return;
+    try {
+      await this.#listener.onSessionClosed(event);
+    } catch (error) {
+      this.#log(
+        `session ${event.sessionId}: lifecycle listener failed — ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**

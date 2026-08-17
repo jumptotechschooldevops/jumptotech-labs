@@ -24,7 +24,11 @@ import {
   type LoadedLabDefinition,
   type SessionManager,
 } from '@jumptotech/lab-orchestrator';
+import type { LabAttempt } from '@jumptotech/progress';
 import { asyncRoute, sendError, sendOk } from '../http.js';
+import { progressErrorResponse, resolveStudent } from '../identity.js';
+import { record } from '../progress.js';
+import { toAttemptPayload } from './me.js';
 import { sessionErrorResponse, toSessionPayload, type SessionRoutesDeps } from './sessions.js';
 
 /**
@@ -204,7 +208,8 @@ function handleDomainError(res: Response, error: unknown): boolean {
 }
 
 export function createLabRoutes(deps: SessionRoutesDeps): Router {
-  const { registry, sessions, config } = deps;
+  const { registry, sessions, config, progress, identity } = deps;
+  const log = deps.logger ?? (() => undefined);
   const router = Router();
 
   /** Resolve `:id` → definition, replying with the right error if it fails. */
@@ -249,12 +254,60 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
     const def = resolveLab(req, res);
     if (!def) return;
 
+    /*
+     * The attempt is opened *before* the sandbox exists.
+     *
+     * That order is the architecture rule made executable: the attempt is the
+     * parent of the session, not a footnote on it. A start that never gets an
+     * environment still leaves an honest FAILED record, and the sandbox that
+     * follows can be destroyed without taking anything with it.
+     *
+     * It is best-effort on purpose. If the progress store is down the lab still
+     * starts — the student loses the record, not the lesson.
+     */
+    let identityUsed;
+    try {
+      identityUsed = resolveStudent(identity, req);
+    } catch (error) {
+      if (progressErrorResponse(res, error)) return;
+      throw error;
+    }
+
+    const attempt = await record(log, 'open attempt', () =>
+      progress.startAttempt({
+        studentId: identityUsed.studentId,
+        labId: def.id,
+        track: def.track,
+        identitySource: identityUsed.source,
+      }),
+    );
+
     let started;
     try {
       started = await sessions.start(def.id);
     } catch (error) {
+      // The sandbox never came up. Close the attempt honestly rather than
+      // leaving a row that says the student is still working on it.
+      if (attempt) {
+        await record(log, 'close failed attempt', () =>
+          progress.failAttempt(
+            attempt.attemptId,
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      }
       sessionErrorResponse(res, error);
       return;
+    }
+
+    // Bind the sandbox to the attempt. From here on every session-scoped write
+    // finds its attempt through this one column.
+    let bound: LabAttempt | undefined = attempt;
+    if (attempt) {
+      bound =
+        (await record(log, 'bind session to attempt', () =>
+          progress.bindSession(attempt.attemptId, started.session.sessionId),
+        )) ?? attempt;
     }
 
     // The token is bound to this session id. The browser never sees the
@@ -272,6 +325,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
 
     sendOk(res, {
       session: toSessionPayload(sessions, started.session),
+      ...(bound ? { attempt: toAttemptPayload(bound, registry) } : {}),
       environment: started.environment,
       steps: started.steps,
       terminal: {

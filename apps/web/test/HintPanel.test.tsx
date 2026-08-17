@@ -84,11 +84,11 @@ describe('HintPanel', () => {
   });
 
   /*
-   * PLATFORM-003 has no persistence. `onReveal` is the seam a later story
-   * writes hint usage through, so it is asserted here even though nothing
-   * stores the result yet.
+   * `onReveal` was the seam PLATFORM-003 left for persistence, and PLATFORM-005
+   * hangs hint tracking off it: the lab page forwards each event to the API,
+   * which records it against the student's attempt.
    */
-  it('reports each reveal so a later story can persist usage', () => {
+  it('reports each reveal so usage can be persisted', () => {
     const onReveal = vi.fn();
     render(<HintPanel hints={HINTS} onReveal={onReveal} />);
 
@@ -97,6 +97,21 @@ describe('HintPanel', () => {
     expect(onReveal).toHaveBeenCalledTimes(2);
     expect(onReveal).toHaveBeenNthCalledWith(1, HINTS[0], 1);
     expect(onReveal).toHaveBeenNthCalledWith(2, HINTS[1], 2);
+  });
+
+  it('reports a hint exactly once, however the panel re-renders', () => {
+    const onReveal = vi.fn();
+    const { rerender } = render(<HintPanel hints={HINTS} onReveal={onReveal} />);
+
+    reveal(1);
+    // A re-render for any unrelated reason must not replay the event: the
+    // server is idempotent, but a component that double-reports is still
+    // lying about what the student did.
+    rerender(<HintPanel hints={HINTS} onReveal={onReveal} />);
+    rerender(<HintPanel hints={HINTS} onReveal={onReveal} />);
+
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    expect(onReveal).toHaveBeenCalledWith(HINTS[0], 1);
   });
 
   it('handles a single-hint ladder', () => {

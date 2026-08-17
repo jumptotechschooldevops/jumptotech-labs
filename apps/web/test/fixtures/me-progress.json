@@ -1,0 +1,158 @@
+{
+  "student": {
+    "studentId": "dev-student-001",
+    "authenticated": false,
+    "identitySource": "development-default",
+    "durable": true
+  },
+  "overall": {
+    "total": 12,
+    "completed": 2,
+    "inProgress": 2,
+    "notStarted": 8,
+    "percent": 17
+  },
+  "tracks": [
+    {
+      "track": "kubernetes",
+      "title": "Kubernetes",
+      "total": 10,
+      "completed": 1,
+      "inProgress": 1,
+      "notStarted": 8,
+      "percent": 10,
+      "labs": [
+        {
+          "labId": "K8S-001",
+          "title": "Create Your First Pod",
+          "status": "COMPLETED",
+          "attemptCount": 1,
+          "completionCount": 1,
+          "completedAt": "2026-08-17T19:40:59.380Z",
+          "lastCompletedAt": "2026-08-17T19:40:59.380Z"
+        },
+        {
+          "labId": "K8S-002",
+          "title": "Run an Application with a Deployment",
+          "status": "NOT_STARTED",
+          "attemptCount": 0,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        },
+        {
+          "labId": "K8S-003",
+          "title": "Expose a Workload with a Service",
+          "status": "NOT_STARTED",
+          "attemptCount": 0,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        },
+        {
+          "labId": "K8S-004",
+          "title": "Move Configuration into a ConfigMap",
+          "status": "IN_PROGRESS",
+          "attemptCount": 1,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        },
+        {
+          "labId": "K8S-005",
+          "title": "Hold Sensitive Configuration in a Secret",
+          "status": "NOT_STARTED",
+          "attemptCount": 0,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        },
+        {
+          "labId": "K8S-006",
+          "title": "Run a One-Time Task with a Job",
+          "status": "NOT_STARTED",
+          "attemptCount": 0,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        },
+        {
+          "labId": "K8S-007",
+          "title": "Schedule Recurring Work with a CronJob",
+          "status": "NOT_STARTED",
+          "attemptCount": 0,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        },
+        {
+          "labId": "K8S-008",
+          "title": "Signal Readiness with a Probe",
+          "status": "NOT_STARTED",
+          "attemptCount": 0,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        },
+        {
+          "labId": "K8S-009",
+          "title": "Declare Resource Requests and Limits",
+          "status": "NOT_STARTED",
+          "attemptCount": 0,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        },
+        {
+          "labId": "K8S-010",
+          "title": "Repair a Broken Deployment",
+          "status": "NOT_STARTED",
+          "attemptCount": 0,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        }
+      ]
+    },
+    {
+      "track": "linux",
+      "title": "Linux",
+      "total": 1,
+      "completed": 1,
+      "inProgress": 0,
+      "notStarted": 0,
+      "percent": 100,
+      "labs": [
+        {
+          "labId": "LINUX-001",
+          "title": "Files, Directories & Permissions",
+          "status": "COMPLETED",
+          "attemptCount": 1,
+          "completionCount": 1,
+          "completedAt": "2026-08-17T19:40:59.385Z",
+          "lastCompletedAt": "2026-08-17T19:40:59.385Z"
+        }
+      ]
+    },
+    {
+      "track": "terraform",
+      "title": "Terraform",
+      "total": 1,
+      "completed": 0,
+      "inProgress": 1,
+      "notStarted": 0,
+      "percent": 0,
+      "labs": [
+        {
+          "labId": "TF-001",
+          "title": "Terraform Init, Plan & Apply",
+          "status": "IN_PROGRESS",
+          "attemptCount": 1,
+          "completionCount": 0,
+          "completedAt": null,
+          "lastCompletedAt": null
+        }
+      ]
+    }
+  ]
+}

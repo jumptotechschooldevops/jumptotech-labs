@@ -6,7 +6,7 @@
  * up here with no change to this file. Sections that a lab does not define
  * (a story, objectives, prerequisites) simply do not render.
  */
-import type { LabDetail } from '../lib/types';
+import type { LabDetail, LabHint } from '../lib/types';
 import { HintPanel } from './HintPanel';
 
 /** Split a YAML block scalar into paragraphs on blank lines. */
@@ -20,9 +20,15 @@ function paragraphs(text: string): string[] {
 export function LabBrief({
   lab,
   onOpenLab,
+  onHintReveal,
 }: {
   lab: LabDetail;
   onOpenLab?: (labId: string) => void;
+  /**
+   * Called when the student reveals a hint, so it can be recorded against
+   * their attempt. The brief itself stores nothing — it forwards the event.
+   */
+  onHintReveal?: (hint: LabHint, revealedCount: number) => void;
 }) {
   return (
     <aside className="brief" aria-label="Lab instructions">
@@ -130,7 +136,7 @@ export function LabBrief({
         </ul>
       </section>
 
-      <HintPanel hints={lab.hints} />
+      <HintPanel hints={lab.hints} {...(onHintReveal ? { onReveal: onHintReveal } : {})} />
 
       {lab.skills.length > 0 && (
         <section className="brief__section">

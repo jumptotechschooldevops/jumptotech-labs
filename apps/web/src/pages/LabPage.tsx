@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiRequestError, api } from '../lib/api';
 import type {
   ApiError,
+  AttemptSummary,
   EnvironmentInfo,
   LabDetail,
+  LabHint,
   ProvisionStep,
   SessionInfo,
   VerificationResult,
@@ -84,6 +86,15 @@ export function LabPage({
   const [startError, setStartError] = useState<ApiError | null>(null);
 
   const [session, setSession] = useState<SessionInfo | null>(null);
+  /**
+   * The persisted attempt for this lab run.
+   *
+   * Separate from `session` on purpose, and the pair is the whole PLATFORM-005
+   * idea in miniature: the session is the disposable environment, the attempt
+   * is the record of what the student did in it. The attempt outlives the
+   * session, so the page keeps showing "Completed" after the sandbox is gone.
+   */
+  const [attempt, setAttempt] = useState<AttemptSummary | null>(null);
   const [terminalUrl, setTerminalUrl] = useState<string | null>(null);
   const [terminalToken, setTerminalToken] = useState<string | null>(null);
   const [terminalStatus, setTerminalStatus] = useState<TerminalStatus>('idle');
@@ -219,6 +230,9 @@ export function LabPage({
       setTerminalUrl(response.terminal.url);
       setTerminalToken(response.terminal.token);
       adoptSession(response.session);
+      // Absent when the progress store could not record the attempt. The lab
+      // still runs; the page simply does not claim a record that does not exist.
+      setAttempt(response.attempt ?? null);
       setEnvSummary(describeEnvironment(response.environment));
     } catch (error) {
       const apiError = toApiError(error);
@@ -239,6 +253,12 @@ export function LabPage({
       const result = await api.checkSolution(session.sessionId);
       setCheckResult(result);
       if (result.session) setSession(result.session);
+      if (result.attempt) setAttempt(result.attempt);
+      // Said once, on the check that actually completed the lab. Repeating it
+      // on every later pass would make it meaningless.
+      if (result.newlyCompleted) {
+        setNotice('Lab passed. Your progress has been saved — you can leave and come back.');
+      }
     } catch (error) {
       setCheckError(toApiError(error));
     } finally {
@@ -266,6 +286,9 @@ export function LabPage({
       // the old one is gone. Reattach with the same session rather than leaving
       // a dead terminal on screen.
       if (response.reconnectTerminal) setReconnectNonce((n) => n + 1);
+      // Reset wipes the environment, not the record: the attempt keeps its
+      // checks and any completion it already earned.
+      if (response.attempt) setAttempt(response.attempt);
       const removedNote =
         response.removed.length > 0
           ? ` Removed: ${response.removed.join(', ')}.`
@@ -300,6 +323,8 @@ export function LabPage({
     try {
       const response = await api.endLab(session.sessionId);
       setSession(response.session);
+      // The environment is gone; the attempt is not, and stays on screen.
+      if (response.attempt) setAttempt(response.attempt);
       setEndDialogOpen(false);
       setStartPhase('idle');
       setTerminalUrl(null);
@@ -313,6 +338,23 @@ export function LabPage({
       setEnding(false);
     }
   }, [session]);
+
+  /**
+   * Report a revealed hint.
+   *
+   * Fire-and-forget, and addressed by session id like every other write — the
+   * browser never names an attempt. The server records the same (attempt,
+   * level) once, so a double click, a re-render, or a retry cannot inflate the
+   * count. A failure here is silent by design: losing the record of a hint must
+   * not stop the student reading it.
+   */
+  const handleHintReveal = useCallback(
+    (hint: LabHint) => {
+      if (!session) return;
+      void api.recordHint(session.sessionId, hint.level).catch(() => undefined);
+    },
+    [session],
+  );
 
   const handleExpire = useCallback(() => setTimeExpired(true), []);
 
@@ -362,6 +404,13 @@ export function LabPage({
               {session.status}
             </span>
           )}
+          {/* The saved outcome, which stays on screen after the environment
+              has been released — the record is not the sandbox. */}
+          {attempt?.status === 'PASSED' && (
+            <span className="statuspill statuspill--connected" title="Saved to your progress">
+              ✓ Completed
+            </span>
+          )}
           <span className={`statuspill statuspill--${terminalStatus}`}>
             {TERMINAL_STATUS_LABEL[terminalStatus]}
           </span>
@@ -409,7 +458,7 @@ export function LabPage({
       )}
 
       <main className="workspace">
-        <LabBrief lab={lab} {...(onOpenLab ? { onOpenLab } : {})} />
+        <LabBrief lab={lab} onHintReveal={handleHintReveal} {...(onOpenLab ? { onOpenLab } : {})} />
 
         <section className="terminal-pane" aria-label="Lab terminal">
           <div className="terminal-pane__header">

@@ -89,6 +89,8 @@ export * from './session/manifests.js';
 export {
   SessionManager,
   type ActivityReason,
+  type SessionClosedEvent,
+  type SessionLifecycleListener,
   type SessionLifetimeConfig,
   type SessionManagerOptions,
   type SandboxReadPort,

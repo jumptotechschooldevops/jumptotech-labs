@@ -18,6 +18,17 @@
 # no longer mounts a kubeconfig at all — it fetches a namespace-scoped
 # ServiceAccount kubeconfig per session from the API, over the internal Docker
 # network, authenticated with INTERNAL_SERVICE_SECRET.
+#
+# PLATFORM-005: PostgreSQL joins the stack and holds the one thing here that is
+# not disposable — students, attempts, progress and hint usage. Two rules follow
+# from that:
+#
+#   · only the `api` service can reach it. It is not on the `kind` network, the
+#     web and terminal services have no credential for it, and a student's shell
+#     could not resolve it even if it had one.
+#   · its data lives in a named volume, so `docker compose down` keeps the
+#     history. `docker compose down -v` is what deletes it, and `make clean`
+#     says so.
 # ---------------------------------------------------------------------------
 
 name: jumptotech-labs
@@ -30,6 +41,41 @@ x-kubeconfig: &kubeconfig
   read_only: true
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: jumptotech-postgres
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Credentials come from .env and nowhere else. There is no default
+      # password here or in application source; `make setup` generates one.
+      POSTGRES_USER: ${POSTGRES_USER:-jumptotech}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (make setup generates one)}
+      POSTGRES_DB: ${POSTGRES_DB:-jumptotech_labs}
+      # Deterministic collation, so a database created on a laptop and one
+      # created in CI sort identically.
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    volumes:
+      # Named volume: the whole point of this story is that it survives.
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      # Published so `npm run db:migrate` and psql work from the host. Change
+      # POSTGRES_PORT if 5432 is already taken on your machine.
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # The api waits for this: migrations run at startup, and racing initdb
+      # would fail the first boot for no reason.
+      test:
+        - CMD-SHELL
+        - pg_isready -U "${POSTGRES_USER:-jumptotech}" -d "${POSTGRES_DB:-jumptotech_labs}"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks:
+      - default
+
   api:
     build:
       context: .
@@ -86,6 +132,18 @@ services:
       # the honest catalog message is "switched off here", not a failed probe.
       LINUX_PROVIDER_ENABLED: ${LINUX_PROVIDER_ENABLED:-false}
       TERRAFORM_PROVIDER_ENABLED: ${TERRAFORM_PROVIDER_ENABLED:-false}
+      # --- persistent progress (PLATFORM-005) ---
+      # The api is the only service given a database credential.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-jumptotech}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-jumptotech_labs}
+      # Forward-only migrations, applied at startup. Never destructive: it runs
+      # the migration files this database has not seen and nothing else. Set to
+      # false if you would rather run `npm run db:migrate` from a pipeline.
+      DATABASE_AUTO_MIGRATE: ${DATABASE_AUTO_MIGRATE:-true}
+      # The development identity every request is attributed to. NOT a login.
+      DEV_STUDENT_ID: ${DEV_STUDENT_ID:-dev-student-001}
+      # Off by design. Switching it on lets any caller name any student with a
+      # header, which is only acceptable on a laptop — see README → Security.
+      DEV_STUDENT_HEADER_ENABLED: ${DEV_STUDENT_HEADER_ENABLED:-false}
     ports:
       - "${API_PORT:-4000}:4000"
     volumes:
@@ -96,6 +154,9 @@ services:
         source: ./labs
         target: /app/labs
         read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - default
       - kind
@@ -174,6 +235,11 @@ services:
         condition: service_healthy
     networks:
       - default
+
+volumes:
+  # Student history. `docker compose down` keeps it; only `down -v` removes it.
+  postgres-data:
+    name: jumptotech-labs-postgres-data
 
 networks:
   default:

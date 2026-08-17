@@ -1,0 +1,100 @@
+/**
+ * Migration files and database configuration — the parts that need no server.
+ *
+ * The runner's behaviour against a live database (idempotence, the checksum
+ * guard, the advisory lock) is in `postgres-repository.test.ts`.
+ */
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { MIGRATIONS_DIR, MigrationError, loadMigrations } from '../src/postgres/migrator.js';
+import { describeDatabase, loadDatabaseConfig } from '../src/postgres/config.js';
+
+describe('migration files', () => {
+  it('ships the initial schema with the package', async () => {
+    const migrations = await loadMigrations(MIGRATIONS_DIR);
+
+    expect(migrations.map((m) => m.version)).toEqual(['001_progress']);
+    expect(migrations[0]?.checksum).toMatch(/^[0-9a-f]{64}$/);
+
+    const sql = migrations[0]!.sql;
+    for (const table of ['students', 'lab_attempts', 'lab_progress', 'hint_usage']) {
+      expect(sql).toContain(`CREATE TABLE ${table}`);
+    }
+    // Forward-only, and never destructive on startup.
+    expect(sql).not.toMatch(/\bDROP\s+TABLE\b/i);
+    expect(sql).not.toMatch(/\bTRUNCATE\b/i);
+    expect(sql).not.toMatch(/\bDROP\s+DATABASE\b/i);
+  });
+
+  it('applies in filename order', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'jtt-migrations-'));
+    await writeFile(path.join(dir, '010_later.sql'), 'SELECT 1;');
+    await writeFile(path.join(dir, '002_middle.sql'), 'SELECT 1;');
+    await writeFile(path.join(dir, '001_first.sql'), 'SELECT 1;');
+    await writeFile(path.join(dir, 'README.md'), 'not a migration');
+
+    const migrations = await loadMigrations(dir);
+    expect(migrations.map((m) => m.version)).toEqual(['001_first', '002_middle', '010_later']);
+  });
+
+  it('rejects a misnamed migration rather than guessing its order', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'jtt-migrations-'));
+    await writeFile(path.join(dir, 'add-progress.sql'), 'SELECT 1;');
+    await expect(loadMigrations(dir)).rejects.toBeInstanceOf(MigrationError);
+  });
+
+  it('fails loudly when the directory is missing or empty', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'jtt-migrations-'));
+    await expect(loadMigrations(dir)).rejects.toBeInstanceOf(MigrationError);
+    await expect(loadMigrations(path.join(dir, 'nope'))).rejects.toBeInstanceOf(MigrationError);
+  });
+});
+
+describe('database configuration', () => {
+  it('is absent until a deployment configures one', () => {
+    expect(loadDatabaseConfig({} as NodeJS.ProcessEnv)).toBeNull();
+    expect(loadDatabaseConfig({ DATABASE_URL: '' } as NodeJS.ProcessEnv)).toBeNull();
+  });
+
+  it('reads a connection string', () => {
+    const config = loadDatabaseConfig({
+      DATABASE_URL: 'postgresql://labs:secret@postgres:5432/jumptotech_labs',
+    } as NodeJS.ProcessEnv);
+
+    expect(config?.url).toBe('postgresql://labs:secret@postgres:5432/jumptotech_labs');
+    expect(config?.maxConnections).toBe(10);
+    expect(config?.statementTimeoutMs).toBe(10_000);
+  });
+
+  it('reads discrete variables for deployments that inject the password separately', () => {
+    const config = loadDatabaseConfig({
+      POSTGRES_HOST: 'db.internal',
+      POSTGRES_PORT: '6432',
+      POSTGRES_DB: 'labs',
+      POSTGRES_USER: 'labs',
+      POSTGRES_PASSWORD: 'from-a-secret-store',
+      DATABASE_POOL_MAX: '4',
+    } as NodeJS.ProcessEnv);
+
+    expect(config).toMatchObject({ host: 'db.internal', port: 6432, database: 'labs', maxConnections: 4 });
+  });
+
+  it('never puts a password in a log line', () => {
+    const config = loadDatabaseConfig({
+      DATABASE_URL: 'postgresql://labs:hunter2@postgres:5432/jumptotech_labs',
+    } as NodeJS.ProcessEnv)!;
+
+    const described = describeDatabase(config);
+    expect(described).toBe('postgres:5432/jumptotech_labs');
+    expect(described).not.toContain('hunter2');
+    expect(describeDatabase({ ...config, url: 'not a url' })).toBe('(configured)');
+  });
+
+  it('rejects a nonsensical numeric setting instead of silently defaulting', () => {
+    expect(() =>
+      loadDatabaseConfig({ DATABASE_URL: 'postgresql://x/y', DATABASE_POOL_MAX: 'lots' } as NodeJS.ProcessEnv),
+    ).toThrow(/DATABASE_POOL_MAX/);
+  });
+});

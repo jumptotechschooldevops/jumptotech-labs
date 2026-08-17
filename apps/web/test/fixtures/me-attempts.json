@@ -1,0 +1,60 @@
+{
+  "student": {
+    "studentId": "dev-student-001",
+    "authenticated": false,
+    "identitySource": "development-default",
+    "durable": true
+  },
+  "attempts": [
+    {
+      "attemptId": "437616ea-eae5-4dbd-a91e-0647c004c4dd",
+      "labId": "K8S-004",
+      "labTitle": "Move Configuration into a ConfigMap",
+      "track": "kubernetes",
+      "status": "ENDED",
+      "statusReason": "ended by student",
+      "startedAt": "2026-08-17T19:40:59.387Z",
+      "completedAt": null,
+      "endedAt": "2026-08-17T19:40:59.391Z",
+      "checkCount": 1,
+      "resetCount": 0
+    },
+    {
+      "attemptId": "1d8c383c-ad0c-4a2c-9d86-7874d61aa9e8",
+      "labId": "TF-001",
+      "labTitle": "Terraform Init, Plan & Apply",
+      "track": "terraform",
+      "status": "IN_PROGRESS",
+      "startedAt": "2026-08-17T19:40:59.386Z",
+      "completedAt": null,
+      "endedAt": null,
+      "checkCount": 0,
+      "resetCount": 0
+    },
+    {
+      "attemptId": "653e2029-c20e-44ae-ba72-2fbd9088f0ae",
+      "labId": "LINUX-001",
+      "labTitle": "Files, Directories & Permissions",
+      "track": "linux",
+      "status": "PASSED",
+      "startedAt": "2026-08-17T19:40:59.382Z",
+      "completedAt": "2026-08-17T19:40:59.385Z",
+      "endedAt": null,
+      "checkCount": 1,
+      "resetCount": 0
+    },
+    {
+      "attemptId": "d1530df0-70b9-4fc0-90cd-a7a03f3b6c1c",
+      "labId": "K8S-001",
+      "labTitle": "Create Your First Pod",
+      "track": "kubernetes",
+      "status": "PASSED",
+      "startedAt": "2026-08-17T19:40:59.363Z",
+      "completedAt": "2026-08-17T19:40:59.380Z",
+      "endedAt": "2026-08-17T19:40:59.381Z",
+      "checkCount": 1,
+      "resetCount": 0
+    }
+  ],
+  "count": 4
+}

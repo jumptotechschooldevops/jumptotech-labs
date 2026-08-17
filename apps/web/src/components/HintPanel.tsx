@@ -10,10 +10,15 @@
  * when the lab is authored (see `lab-definition.ts`), not something this
  * component can guarantee.
  *
- * Usage is reported through `onReveal` rather than stored. PLATFORM-003 has no
- * persistence, so the count lives for as long as the page does; the callback is
- * the seam a later story writes to a database through, without this component
- * changing.
+ * Usage is reported through `onReveal` rather than stored. PLATFORM-005 hangs
+ * persistence off exactly that seam — the lab page forwards the event to the
+ * API, which records it against the student's attempt — and this component did
+ * not change to make that work. It still owns only what is on screen.
+ *
+ * The callback fires once per hint, when it is first revealed: `revealed` never
+ * goes backwards, so re-rendering cannot replay it. The server is idempotent
+ * per (attempt, level) anyway, because a component contract is not somewhere to
+ * put a correctness guarantee.
  */
 import { useCallback, useState } from 'react';
 import type { LabHint } from '../lib/types';
@@ -28,14 +33,14 @@ export function HintPanel({ hints, onReveal }: HintPanelProps) {
   const [revealed, setRevealed] = useState(0);
 
   const revealNext = useCallback(() => {
-    setRevealed((current) => {
-      if (current >= hints.length) return current;
-      const next = current + 1;
-      const hint = hints[current];
-      if (hint) onReveal?.(hint, next);
-      return next;
-    });
-  }, [hints, onReveal]);
+    if (revealed >= hints.length) return;
+    const hint = hints[revealed];
+    setRevealed(revealed + 1);
+    // Reported outside the state updater: React may invoke an updater more than
+    // once, and a reveal that is *reported* twice would be a lie about what the
+    // student did — however forgiving the server is about receiving it twice.
+    if (hint) onReveal?.(hint, revealed + 1);
+  }, [hints, onReveal, revealed]);
 
   if (hints.length === 0) return null;
 

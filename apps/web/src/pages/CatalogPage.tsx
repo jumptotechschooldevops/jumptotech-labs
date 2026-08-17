@@ -8,7 +8,14 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { ApiRequestError, api } from '../lib/api';
-import type { ApiError, LabSummary, ProviderReadiness, TrackSummary } from '../lib/types';
+import type {
+  ApiError,
+  LabProgressStatus,
+  LabSummary,
+  ProgressSnapshot,
+  ProviderReadiness,
+  TrackSummary,
+} from '../lib/types';
 
 /**
  * Display names for providers that have no labs yet.
@@ -33,10 +40,24 @@ function toApiError(error: unknown): ApiError {
     : { code: 'UNEXPECTED_ERROR', message: String(error) };
 }
 
-export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void }) {
+/** How a card announces where the student stands. */
+const PROGRESS_LABEL: Record<Exclude<LabProgressStatus, 'NOT_STARTED'>, string> = {
+  COMPLETED: '✓ Completed',
+  IN_PROGRESS: 'In progress',
+};
+
+export function CatalogPage({
+  onOpenLab,
+  onOpenProgress,
+}: {
+  onOpenLab: (labId: string) => void;
+  /** Optional so the catalog still renders anywhere routing is not wired up. */
+  onOpenProgress?: () => void;
+}) {
   const [labs, setLabs] = useState<LabSummary[] | null>(null);
   const [tracks, setTracks] = useState<TrackSummary[]>([]);
   const [providers, setProviders] = useState<ProviderReadiness[]>([]);
+  const [progress, setProgress] = useState<ProgressSnapshot | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
 
   const [activeTrack, setActiveTrack] = useState<string | null>(null);
@@ -59,6 +80,38 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
       cancelled = true;
     };
   }, []);
+
+  /*
+   * Completion state, fetched separately from the catalog.
+   *
+   * Two requests rather than one enriched endpoint, on purpose: browsing the
+   * catalog stays a pure read of in-memory lab metadata, and a progress store
+   * that is unavailable costs the student a few badges instead of the whole
+   * page. Hence the deliberately silent catch.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.getProgress())
+      .then((snapshot) => {
+        if (!cancelled) setProgress(snapshot);
+      })
+      .catch(() => {
+        if (!cancelled) setProgress(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** labId → standing, for the badges on the cards. */
+  const progressByLab = useMemo(() => {
+    const byLab = new Map<string, LabProgressStatus>();
+    for (const track of progress?.tracks ?? []) {
+      for (const lab of track.labs) byLab.set(lab.labId, lab.status);
+    }
+    return byLab;
+  }, [progress]);
 
   /*
    * Filtering happens client-side over the already-loaded catalog.
@@ -122,6 +175,16 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
         </span>
         <div className="topbar__center" />
         <div className="topbar__right">
+          {onOpenProgress && (
+            <button type="button" className="btn btn--ghost topbar__link" onClick={onOpenProgress}>
+              My progress
+              {progress && (
+                <span className="topbar__progress">
+                  {progress.overall.completed}/{progress.overall.total}
+                </span>
+              )}
+            </button>
+          )}
           <span className="topbar__track">catalog</span>
         </div>
       </header>
@@ -240,10 +303,25 @@ export function CatalogPage({ onOpenLab }: { onOpenLab: (labId: string) => void 
 
             <div className="catalog__grid">
               {trackLabs.map((lab) => (
-                <article key={lab.id} className="labcard">
+                <article
+                  key={lab.id}
+                  className={`labcard${
+                    progressByLab.get(lab.id) === 'COMPLETED' ? ' labcard--completed' : ''
+                  }`}
+                >
                   <div className="labcard__top">
                     <span className="labcard__id">{lab.id}</span>
                     <div className="labcard__badges">
+                      {/* Where this student stands. Absent for a lab never
+                          opened — an explicit "Not started" badge on every
+                          untouched card would be noise, and the plain card
+                          already says it. */}
+                      {progressByLab.get(lab.id) === 'COMPLETED' && (
+                        <span className="chip chip--completed">{PROGRESS_LABEL.COMPLETED}</span>
+                      )}
+                      {progressByLab.get(lab.id) === 'IN_PROGRESS' && (
+                        <span className="chip chip--inprogress">{PROGRESS_LABEL.IN_PROGRESS}</span>
+                      )}
                       {lab.certifications.map((cert) => (
                         <span key={cert} className="chip chip--cert">
                           {cert}

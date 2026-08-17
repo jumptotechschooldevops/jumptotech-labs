@@ -16,6 +16,11 @@ import {
   type SessionLifetimeConfig,
   type SessionPolicy,
 } from '@jumptotech/lab-orchestrator';
+import {
+  DEFAULT_DEV_STUDENT_ID,
+  loadDatabaseConfig,
+  type DatabaseConfig,
+} from '@jumptotech/progress';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../..');
@@ -44,9 +49,43 @@ export interface ApiConfig {
   policy: SessionPolicy;
   /** Container-backed sandbox providers (PLATFORM-004). */
   sandbox: SandboxProviderConfig;
+  /** Persistent learning state (PLATFORM-005). */
+  progress: ProgressConfig;
   reaperIntervalSeconds: number;
   sessionRetentionMinutes: number;
   nodeEnv: string;
+}
+
+/**
+ * Where learning history is kept, and who it is attributed to.
+ *
+ * `database` is null when nothing is configured, and the API then runs on the
+ * in-memory store and says so — on startup and on `/health`. It never invents a
+ * connection string: there is no default host, user or password anywhere in
+ * this codebase.
+ */
+export interface ProgressConfig {
+  database: DatabaseConfig | null;
+  /**
+   * Apply pending migrations at startup.
+   *
+   * Forward-only and idempotent — it applies migration files this database has
+   * not seen and does nothing else. It is emphatically not a "drop and recreate
+   * the schema on boot" scheme; see services/progress/src/postgres/migrator.ts.
+   * Deployments that migrate from a pipeline instead can switch it off.
+   */
+  autoMigrate: boolean;
+  /** The development identity every request is attributed to. NOT a login. */
+  devStudentId: string;
+  /**
+   * Whether `x-dev-student-id` may select a different student.
+   *
+   * Development only, and off by default. It exists so two browser tabs can act
+   * as two students before authentication exists — which also means anyone who
+   * can reach the API can read anyone's progress, so it must stay off anywhere
+   * that holds real learner data.
+   */
+  allowStudentHeader: boolean;
 }
 
 /**
@@ -172,6 +211,21 @@ export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): Session
   };
 }
 
+/** Persistence + development identity settings. */
+export function loadProgressConfig(env: NodeJS.ProcessEnv = process.env): ProgressConfig {
+  const nodeEnv = env.NODE_ENV ?? 'development';
+  return {
+    database: loadDatabaseConfig(env),
+    autoMigrate: boolFromEnv(env, 'DATABASE_AUTO_MIGRATE', true),
+    devStudentId: strFromEnv(env, 'DEV_STUDENT_ID', DEFAULT_DEV_STUDENT_ID),
+    // Opt-in, and never on by default in production even if someone forgets.
+    allowStudentHeader:
+      nodeEnv === 'production'
+        ? boolFromEnv(env, 'DEV_STUDENT_HEADER_ENABLED', false)
+        : boolFromEnv(env, 'DEV_STUDENT_HEADER_ENABLED', true),
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const secret = env.TERMINAL_SESSION_SECRET ?? '';
   if (secret.length < 8) {
@@ -223,6 +277,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       terraformImage: strFromEnv(env, 'TERRAFORM_SANDBOX_IMAGE', DEFAULT_TERRAFORM_SANDBOX_IMAGE),
       dockerImage: strFromEnv(env, 'DOCKER_SANDBOX_IMAGE', DEFAULT_DOCKER_SANDBOX_IMAGE),
     },
+    progress: loadProgressConfig(env),
     reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',

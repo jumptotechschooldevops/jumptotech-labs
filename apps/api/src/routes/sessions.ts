@@ -30,14 +30,30 @@ import {
   type SessionManager,
 } from '@jumptotech/lab-orchestrator';
 import { verifyLab } from '@jumptotech/verifier';
+import type { ProgressService, StudentIdentityResolver } from '@jumptotech/progress';
 import type { ApiConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
+import { progressErrorResponse } from '../identity.js';
+import { record } from '../progress.js';
+import { toAttemptPayload } from './me.js';
 
 export interface SessionRoutesDeps {
   registry: LabRegistry;
   sessions: SessionManager;
   k8s: KubernetesPort;
   config: ApiConfig;
+  /**
+   * Persistent learning state (PLATFORM-005).
+   *
+   * Every write here is addressed by the session id the caller already holds;
+   * the attempt — and therefore the student — is resolved server-side. No route
+   * on this router accepts an attempt id or a student id.
+   */
+  progress: ProgressService;
+  identity: StudentIdentityResolver;
+  /** False when history is in memory only. */
+  durable: boolean;
+  logger?: (message: string) => void;
 }
 
 /** HTTP status for each session-domain error code. */
@@ -111,7 +127,8 @@ export function toSessionPayload(manager: SessionManager, session: LabSession) {
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps): Router {
-  const { registry, sessions, k8s } = deps;
+  const { registry, sessions, k8s, progress } = deps;
+  const log = deps.logger ?? (() => undefined);
   const router = Router();
 
   // GET /api/sessions/:sessionId -------------------------------------------
@@ -176,6 +193,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     await sessions.touch(session.sessionId, 'check');
 
     if (result.error) {
+      // The environment could not be read, so no check actually happened —
+      // recording one would inflate `check_count` with a cluster outage.
       sendError(res, 503, {
         code: result.error.code,
         message: result.error.message,
@@ -185,8 +204,70 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       return;
     }
 
+    /*
+     * Persist the check, and the completion if this was the passing one.
+     *
+     * Wrapped in `record`: a bookkeeping failure must not turn a successful
+     * verification into an error for the student. The attempt is resolved from
+     * the session, and a repeated PASS updates nothing — the store decides that,
+     * not this route.
+     */
+    const outcome = await record(log, 'record check', () =>
+      progress.recordCheck(session.sessionId, result.passed),
+    );
+
     // A failing lab is a successful *check*: HTTP 200 with passed:false.
-    sendOk(res, { ...result, session: toSessionPayload(sessions, session) });
+    sendOk(res, {
+      ...result,
+      session: toSessionPayload(sessions, session),
+      ...(outcome
+        ? {
+            attempt: toAttemptPayload(outcome.attempt, registry),
+            /** True only for the check that first completed this attempt. */
+            newlyCompleted: outcome.newlyCompleted,
+          }
+        : {}),
+    });
+  }));
+
+  // POST /api/sessions/:sessionId/hints -------------------------------------
+  // Records that a hint was revealed. Idempotent per (attempt, hint level): a
+  // replayed request returns the original record rather than counting twice.
+  router.post('/:sessionId/hints', asyncRoute(async (req, res) => {
+    let session: LabSession;
+    try {
+      session = await sessions.require(req.params.sessionId);
+    } catch (error) {
+      sessionErrorResponse(res, error);
+      return;
+    }
+
+    const body = (req.body ?? {}) as { level?: unknown };
+    let outcome;
+    try {
+      outcome = await progress.recordHint(session.sessionId, body.level as number);
+    } catch (error) {
+      if (progressErrorResponse(res, error)) return;
+      // The store is unavailable. Revealing a hint still worked in the browser;
+      // saying otherwise would be a worse lie than losing the record.
+      log(`could not record hint: ${error instanceof Error ? error.message : String(error)}`);
+      sendOk(res, { recorded: false, persisted: false, revealedCount: null });
+      return;
+    }
+
+    if (!outcome) {
+      // No attempt for this session (started before progress existed, or the
+      // attempt could not be written). Nothing to record; not an error.
+      sendOk(res, { recorded: false, persisted: false, revealedCount: null });
+      return;
+    }
+
+    sendOk(res, {
+      recorded: outcome.recorded,
+      persisted: true,
+      hint: { level: outcome.usage.hintIndex, revealedAt: outcome.usage.revealedAt },
+      revealedCount: outcome.revealedCount,
+    });
   }));
 
   // POST /api/sessions/:sessionId/reset ------------------------------------
@@ -202,8 +283,20 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         return;
       }
 
+      /*
+       * A reset wipes the sandbox, never the record.
+       *
+       * `reset_count` goes up; the attempt, its checks, and any completion it
+       * already earned stay exactly as they were. That asymmetry is the whole
+       * point of keeping learning state outside the sandbox.
+       */
+      const attempt = await record(log, 'record reset', () =>
+        progress.recordReset(session.sessionId),
+      );
+
       sendOk(res, {
         message: 'Lab reset successfully.',
+        ...(attempt ? { attempt: toAttemptPayload(attempt, registry) } : {}),
         removed: result.removed,
         restored: result.restored,
         steps: result.steps,
@@ -227,6 +320,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
 
   // DELETE /api/sessions/:sessionId ----------------------------------------
   // End Lab: terminate the terminal, delete the namespace, release the slot.
+  //
+  // The *attempt* is closed by the session manager's lifecycle listener, not
+  // here — see apps/api/src/progress.ts. Ending a lab and the reaper expiring
+  // one therefore travel the same path and cannot record different things.
+  // Nothing is deleted from history either way.
   router.delete('/:sessionId', asyncRoute(async (req, res) => {
     try {
       const { session, destroy } = await sessions.end(String(req.params.sessionId));
@@ -240,9 +338,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         return;
       }
 
+      // Read back the closed attempt so the UI can show the outcome that was
+      // actually persisted rather than inferring one from the session status.
+      const attempt = await record(log, 'read attempt', () =>
+        progress.attemptForSession(session.sessionId),
+      );
+
       sendOk(res, {
         message: 'Lab environment released.',
         session: toSessionPayload(sessions, session),
+        ...(attempt ? { attempt: toAttemptPayload(attempt, registry) } : {}),
         steps: destroy.steps,
       });
     } catch (error) {

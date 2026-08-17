@@ -1,22 +1,58 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import type { KubernetesPort, LabRegistry, SessionManager } from '@jumptotech/lab-orchestrator';
+import {
+  DevStudentIdentity,
+  InMemoryProgressRepository,
+  ProgressService,
+  type StudentIdentityResolver,
+} from '@jumptotech/progress';
 import type { ApiConfig } from './config.js';
 import { asyncRoute, sendError, sendOk } from './http.js';
 import { createLabRoutes } from './routes/labs.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createInternalRoutes } from './routes/internal.js';
 import { createTrackRoutes } from './routes/tracks.js';
+import { createMeRoutes } from './routes/me.js';
+
+/**
+ * The learning-history half of the graph.
+ *
+ * Optional: a caller that supplies nothing gets an in-memory store, which is
+ * what the unit suites and a laptop with no database use. The composition root
+ * passes the PostgreSQL-backed one (see `progress.ts`).
+ */
+export interface ProgressDeps {
+  progress: ProgressService;
+  identity: StudentIdentityResolver;
+  store: string;
+  /** False when history does not outlive the process. */
+  durable: boolean;
+}
 
 export interface CreateAppDeps {
   registry: LabRegistry;
   sessions: SessionManager;
   k8s: KubernetesPort;
   config: ApiConfig;
+  progress?: ProgressDeps;
+}
+
+function inMemoryProgress(config: ApiConfig): ProgressDeps {
+  return {
+    progress: new ProgressService({ repository: new InMemoryProgressRepository() }),
+    identity: new DevStudentIdentity({
+      studentId: config.progress.devStudentId,
+      allowHeaderOverride: config.progress.allowStudentHeader,
+    }),
+    store: 'memory',
+    durable: false,
+  };
 }
 
 export function createApp(deps: CreateAppDeps): Express {
   const app = express();
+  const learning = deps.progress ?? inMemoryProgress(deps.config);
 
   // No `x-powered-by`, and small request bodies only — nothing here needs more.
   app.disable('x-powered-by');
@@ -36,6 +72,10 @@ export function createApp(deps: CreateAppDeps): Express {
     // question after "are the labs loaded?" is "which tracks can actually run
     // here?" — and the answer is a live probe, not configuration.
     const providers = await deps.sessions.providers.statuses();
+    // Where learning history is going, and whether it is really going there.
+    // An operator must be able to see "memory" at a glance rather than
+    // discovering it when a restart loses a cohort's progress.
+    const store = await learning.progress.health();
     sendOk(res, {
       service: 'api',
       status: 'ok',
@@ -53,12 +93,20 @@ export function createApp(deps: CreateAppDeps): Express {
         active: deps.sessions.activeCount,
         maxActive: deps.sessions.lifetimes.maxActiveSessions,
       },
+      progress: {
+        store: store.store,
+        ok: store.ok,
+        durable: learning.durable,
+        ...(store.detail ? { detail: store.detail } : {}),
+      },
     });
   }));
 
-  app.use('/api/labs', browserCors, createLabRoutes(deps));
-  app.use('/api/tracks', browserCors, createTrackRoutes(deps));
-  app.use('/api/sessions', browserCors, createSessionRoutes(deps));
+  const routes = { ...deps, ...learning };
+  app.use('/api/labs', browserCors, createLabRoutes(routes));
+  app.use('/api/tracks', browserCors, createTrackRoutes(routes));
+  app.use('/api/sessions', browserCors, createSessionRoutes(routes));
+  app.use('/api/me', browserCors, createMeRoutes(routes));
   app.use('/internal', createInternalRoutes(deps));
 
   app.use((_req, res) => {

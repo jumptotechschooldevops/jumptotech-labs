@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 
-.PHONY: help setup cluster-up cluster-down sandbox-build sandbox-clean status up down logs test test-integration test-sandbox typecheck check reset clean
+.PHONY: help setup cluster-up cluster-down sandbox-build sandbox-clean status up down logs test test-integration test-sandbox test-db db-up db-migrate db-status db-shell typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -11,8 +11,11 @@ help: ## Show this help
 
 setup: ## First-time setup: .env + kind cluster
 	@test -f .env || (cp .env.example .env && \
-		sed -i.bak "s|^TERMINAL_SESSION_SECRET=.*|TERMINAL_SESSION_SECRET=$$(openssl rand -hex 32)|" .env && \
-		rm -f .env.bak && echo "created .env with a generated secret")
+		sed -i.bak -e "s|^TERMINAL_SESSION_SECRET=.*|TERMINAL_SESSION_SECRET=$$(openssl rand -hex 32)|" \
+		           -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$$(openssl rand -hex 16)|" .env && \
+		rm -f .env.bak && echo "created .env with generated secrets")
+	@grep -q '^POSTGRES_PASSWORD=' .env || (echo "POSTGRES_PASSWORD=$$(openssl rand -hex 16)" >> .env && \
+		echo "added a generated POSTGRES_PASSWORD to your existing .env")
 	@$(MAKE) cluster-up
 	@$(MAKE) sandbox-build
 
@@ -50,6 +53,38 @@ test-integration: ## Run tests against the real kind cluster
 test-sandbox: ## Run tests against real Linux/Terraform sandbox containers
 	@RUN_INTEGRATION_TESTS=1 npx vitest run test/sandbox-integration.test.ts --root apps/api
 
+# --- database (PLATFORM-005) ------------------------------------------------
+
+db-up: ## Start PostgreSQL only
+	@docker compose up -d postgres
+
+db-migrate: ## Apply pending migrations (forward-only, never destructive)
+	@set -a; . ./.env; set +a; \
+		DATABASE_URL="$${DATABASE_URL:-postgresql://$${POSTGRES_USER:-jumptotech}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB:-jumptotech_labs}}" \
+		npm run db:migrate
+
+db-status: ## Show which migrations are applied and which are pending
+	@set -a; . ./.env; set +a; \
+		DATABASE_URL="$${DATABASE_URL:-postgresql://$${POSTGRES_USER:-jumptotech}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB:-jumptotech_labs}}" \
+		npm run db:status
+
+db-shell: ## Open psql against the development database
+	@docker compose exec postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
+test-db: ## Run the persistence suites against a throwaway PostgreSQL
+	@docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
+	@docker run --rm -d --name jumptotech-labs-test-db \
+		-e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=jumptotech_labs_test \
+		-p $${TEST_DB_PORT:-55432}:5432 postgres:16-alpine >/dev/null
+	@for i in $$(seq 1 30); do \
+		docker exec jumptotech-labs-test-db pg_isready -U test -d jumptotech_labs_test >/dev/null 2>&1 && break; \
+		sleep 1; \
+	done
+	@RUN_DB_TESTS=1 \
+		TEST_DATABASE_URL=postgresql://test:test@localhost:$${TEST_DB_PORT:-55432}/jumptotech_labs_test \
+		npm run test:db; \
+		status=$$?; docker rm -f jumptotech-labs-test-db >/dev/null; exit $$status
+
 typecheck: ## Typecheck every workspace
 	@npm run typecheck
 
@@ -59,6 +94,7 @@ check: ## Call the verifier for K8S-001
 reset: ## Reset the K8S-001 lab environment
 	@curl -s -X POST localhost:4000/api/labs/K8S-001/reset | python3 -m json.tool
 
-clean: ## Tear down everything (containers + cluster)
+clean: ## Tear down everything (containers + cluster + STUDENT PROGRESS)
+	@echo "This removes the postgres volume: every student's saved progress goes with it."
 	@docker compose down -v --remove-orphans
 	@bash scripts/cluster-down.sh

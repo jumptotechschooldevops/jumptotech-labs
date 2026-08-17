@@ -195,8 +195,109 @@ export interface SessionInfo {
   warningSeconds: number;
 }
 
+// --- persistent learning history (PLATFORM-005) ------------------------------
+
+/**
+ * Who the API attributed this request to.
+ *
+ * `authenticated` is always false today and is shown to the student rather than
+ * hidden: there is no login yet, and the UI says so instead of implying one.
+ * `durable` is false when the deployment is running without a database, which
+ * means the history on screen will not survive a restart.
+ */
+export interface StudentIdentity {
+  studentId: string;
+  authenticated: boolean;
+  identitySource: string;
+  durable: boolean;
+}
+
+/** A lab's standing for this student. Never a boolean. */
+export type LabProgressStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
+
+/**
+ * The lifecycle of one attempt.
+ *
+ * `PASSED` outranks the sandbox: an attempt that passed and was then ended or
+ * expired is still PASSED, and carries both timestamps.
+ */
+export type AttemptStatus = 'IN_PROGRESS' | 'PASSED' | 'FAILED' | 'ENDED' | 'EXPIRED';
+
+export interface LabProgressEntry {
+  labId: string;
+  title: string;
+  status: LabProgressStatus;
+  attemptCount: number;
+  completionCount: number;
+  /** When the lab was first completed. */
+  completedAt: string | null;
+  lastCompletedAt: string | null;
+}
+
+export interface TrackProgress {
+  track: string;
+  title: string;
+  total: number;
+  completed: number;
+  inProgress: number;
+  notStarted: number;
+  percent: number;
+  labs: LabProgressEntry[];
+}
+
+export interface ProgressSnapshot {
+  student: StudentIdentity;
+  overall: {
+    total: number;
+    completed: number;
+    inProgress: number;
+    notStarted: number;
+    percent: number;
+  };
+  tracks: TrackProgress[];
+}
+
+/**
+ * One attempt at one lab.
+ *
+ * There is deliberately no session id here: the API does not serve one, because
+ * possessing a session id is what authorises acting on a sandbox.
+ */
+export interface AttemptSummary {
+  attemptId: string;
+  labId: string;
+  labTitle: string;
+  track: string;
+  status: AttemptStatus;
+  statusReason?: string;
+  startedAt: string;
+  /** When the verifier first returned PASS. */
+  completedAt: string | null;
+  /** When the sandbox went away. Independent of `completedAt`. */
+  endedAt: string | null;
+  checkCount: number;
+  resetCount: number;
+}
+
+export interface AttemptDetail extends AttemptSummary {
+  hints: Array<{ level: number; revealedAt: string }>;
+  hintsUsed: number;
+}
+
+/** The reply to reporting a revealed hint. Idempotent per (attempt, level). */
+export interface HintRecordResponse {
+  /** False when this hint was already recorded — a replay, not a new reveal. */
+  recorded: boolean;
+  /** False when there was nothing to record against, or the store is down. */
+  persisted: boolean;
+  hint?: { level: number; revealedAt: string };
+  revealedCount: number | null;
+}
+
 export interface StartLabResponse {
   session: SessionInfo;
+  /** Absent when the progress store could not record the attempt. */
+  attempt?: AttemptSummary;
   environment: EnvironmentInfo;
   steps: ProvisionStep[];
   terminal: { url: string; token: string };
@@ -223,10 +324,16 @@ export interface VerificationResult {
   checks: CheckResult[];
   checkedAt: string;
   session?: SessionInfo;
+  /** The persisted attempt, absent when nothing could be recorded. */
+  attempt?: AttemptSummary;
+  /** True only for the check that first completed this attempt. */
+  newlyCompleted?: boolean;
 }
 
 export interface ResetResponse {
   message: string;
+  /** Reset increments `resetCount`; it never withdraws a completion. */
+  attempt?: AttemptSummary;
   removed: string[];
   restored: string[];
   steps: ProvisionStep[];
@@ -246,5 +353,7 @@ export interface ResetResponse {
 export interface EndLabResponse {
   message: string;
   session: SessionInfo;
+  /** The attempt as it was closed. A passed attempt stays PASSED. */
+  attempt?: AttemptSummary;
   steps: ProvisionStep[];
 }

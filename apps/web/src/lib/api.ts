@@ -1,7 +1,12 @@
 import type {
   ApiEnvelope,
   ApiError,
+  AttemptDetail,
+  AttemptSummary,
   EndLabResponse,
+  HintRecordResponse,
+  ProgressSnapshot,
+  StudentIdentity,
   LabDetail,
   LabSummary,
   ProviderReadiness,
@@ -120,6 +125,40 @@ export const api = {
 
   endLab: (sessionId: string) =>
     request<EndLabResponse>(session(sessionId), { method: 'DELETE' }),
+
+  /**
+   * Report that a hint was revealed.
+   *
+   * Addressed by session, like every other write: the browser never names an
+   * attempt or a student. Safe to call twice — the server records the same
+   * (attempt, level) once and says whether this call was the one that counted.
+   */
+  recordHint: (sessionId: string, level: number) =>
+    request<HintRecordResponse>(`${session(sessionId)}/hints`, {
+      method: 'POST',
+      body: JSON.stringify({ level }),
+    }),
+
+  /*
+   * Learning history (PLATFORM-005).
+   *
+   * `me`, never `/students/:id` — there is no authentication yet, and a client
+   * that could name a student would be fake security. The server decides who
+   * the caller is.
+   */
+  getIdentity: () => request<{ student: StudentIdentity; notice?: string }>('/api/me'),
+
+  getProgress: () => request<ProgressSnapshot>('/api/me/progress'),
+
+  listAttempts: (limit?: number) =>
+    request<{ student: StudentIdentity; attempts: AttemptSummary[]; count: number }>(
+      `/api/me/attempts${limit ? `?limit=${limit}` : ''}`,
+    ),
+
+  getAttempt: (attemptId: string) =>
+    request<{ student: StudentIdentity; attempt: AttemptDetail }>(
+      `/api/me/attempts/${encodeURIComponent(attemptId)}`,
+    ),
 };
 
 export { API_URL };

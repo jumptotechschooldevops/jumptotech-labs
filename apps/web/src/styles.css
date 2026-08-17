@@ -900,3 +900,156 @@ code {
 .modal__title { margin: 0 0 10px; font-size: 16px; }
 .modal__body { margin: 0 0 20px; font-size: 13px; color: var(--text-dim); line-height: 1.6; }
 .modal__actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+/* --- persistent progress (PLATFORM-005) ----------------------------------- */
+
+/* The catalog's completion state. Green for done, amber for started: the same
+   colour language the session pills already use, so a student does not have to
+   learn a second one. */
+.chip--completed { color: var(--accent); border-color: var(--accent-dim); text-transform: none; }
+.chip--inprogress { color: var(--warn); border-color: #7a6120; text-transform: none; }
+.chip--muted { color: var(--text-dim); text-transform: none; }
+.labcard--completed { border-color: var(--accent-dim); }
+
+.topbar__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+}
+.topbar__progress { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+
+.progress { max-width: 1080px; margin: 0 auto; display: grid; gap: 26px; }
+
+.progress__identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.progress__student { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+
+.progress__overall {
+  padding: 22px 24px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.progress__headline { display: flex; align-items: baseline; gap: 10px; }
+.progress__big { font-size: 34px; font-weight: 600; letter-spacing: -0.02em; color: var(--accent); }
+.progress__of { font-size: 14px; color: var(--text-dim); }
+.progress__meta { margin: 10px 0 0; font-size: 12.5px; color: var(--text-faint); }
+
+/* A bar rather than a number alone: "3 of 12" is a fact, the bar is the
+   feeling of progress, and both are cheap. */
+.meter {
+  position: relative;
+  height: 6px;
+  margin-top: 14px;
+  background: var(--bg-terminal);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.meter--lg { height: 9px; }
+.meter__fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+  transition: width 0.4s ease;
+}
+
+.progress__tracks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.trackcard {
+  padding: 18px 20px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.trackcard__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.trackcard__title { margin: 0; font-size: 15px; font-weight: 600; }
+.trackcard__count { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+.trackcard__count strong { color: var(--accent); }
+.trackcard__meta { margin: 10px 0 0; font-size: 11.5px; color: var(--text-faint); }
+
+.tracklabs { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.tracklabs__item {
+  display: grid;
+  grid-template-columns: 14px auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+.tracklabs__mark { text-align: center; }
+.tracklabs__id { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em; }
+.tracklabs__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tracklabs__repeat { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+.tracklabs__item--completed { color: var(--text); }
+.tracklabs__item--completed .tracklabs__mark { color: var(--accent); }
+.tracklabs__item--in_progress { color: var(--text-dim); }
+.tracklabs__item--in_progress .tracklabs__mark { color: var(--warn); }
+
+.progress__heading {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.progress__empty { margin: 0; font-size: 13px; color: var(--text-faint); }
+
+.attempts { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.attempts__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.attempts__lab {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.attempts__lab:hover .attempts__title { text-decoration: underline; }
+.attempts__id { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--accent); }
+.attempts__title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attempts__when,
+.attempts__counts { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.attempts__status {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-dim);
+}
+.attempts__status--passed { color: var(--accent); border-color: var(--accent-dim); }
+.attempts__status--in_progress { color: var(--warn); border-color: #7a6120; }
+.attempts__status--failed { color: var(--danger); border-color: #7a2b2b; }
+
+@media (max-width: 720px) {
+  .attempts__item { grid-template-columns: 1fr auto; row-gap: 6px; }
+  .attempts__when, .attempts__counts { grid-column: 1 / -1; }
+}

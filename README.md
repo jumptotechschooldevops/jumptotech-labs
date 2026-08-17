@@ -28,6 +28,20 @@ The catalog, the session lifecycle, the timer, the hints, Start / Check / Reset
 / End, the terminal and the cleanup service are the *same code* for all of
 them. See [Multi-track architecture](#multi-track-architecture).
 
+**PLATFORM-005** gave the platform a memory. Sandboxes are still disposable —
+that is the product — but what a student *did* in one is now written to
+PostgreSQL: their attempts, their per-lab progress, and the hints they used. A
+student can complete K8S-001, close the tab, come back tomorrow to a cluster
+that has long since deleted their namespace, and still see **Kubernetes 1/10
+completed**. The dividing line is the whole design:
+
+```text
+   sandbox lifecycle  =  temporary   (namespace, container — deleted on End/expiry)
+   learning progress  =  persistent  (students, attempts, progress, hints)
+```
+
+See [Persistent progress](#persistent-progress).
+
 ---
 
 ## Contents
@@ -48,6 +62,16 @@ them. See [Multi-track architecture](#multi-track-architecture).
   - [Adding a provider](#adding-a-provider)
   - [Adding a lab to an existing provider](#adding-a-lab-to-an-existing-provider)
 - [The lab catalog](#the-lab-catalog)
+- [Persistent progress](#persistent-progress)
+  - [Why progress is its own package](#why-progress-is-its-own-package)
+  - [Database schema](#database-schema)
+  - [Migrations](#migrations)
+  - [The attempt lifecycle](#the-attempt-lifecycle)
+  - [How progress is calculated](#how-progress-is-calculated)
+  - [Hint tracking](#hint-tracking)
+  - [Development student identity](#development-student-identity)
+  - [When the database is unavailable](#when-the-database-is-unavailable)
+  - [Running PostgreSQL locally](#running-postgresql-locally)
 - [Multi-student architecture](#multi-student-architecture)
 - [Session lifecycle](#session-lifecycle)
 - [Cost model](#cost-model)
@@ -143,12 +167,40 @@ Added by PLATFORM-003:
 - **A troubleshooting lab** (K8S-010) that provisions a deliberately broken
   workload the student must investigate and repair.
 
-Deliberately **not** in scope: authentication, payments, AI, AWS, PostgreSQL,
-the JumpToBank application. Session state is still in memory; the store is
-behind an interface so a PostgreSQL implementation is a one-file change.
-Prerequisites and skills are **metadata only** — there are no user accounts and
-no stored progress, so nothing is enforced per student, and the API says so
-explicitly (`prerequisitesEnforced: false`).
+Added by PLATFORM-005:
+
+- **Learning history in PostgreSQL** — `students`, `lab_attempts`,
+  `lab_progress`, `hint_usage` — behind a repository port, with no SQL anywhere
+  above it.
+- **A lab attempt per Start Lab**, with an explicit lifecycle
+  (`IN_PROGRESS → PASSED | FAILED | ENDED | EXPIRED`), a check count, a reset
+  count, and *two* independent timestamps: `completed_at` (learning) and
+  `ended_at` (infrastructure).
+- **Progress that outlives the sandbox.** Deleting a namespace or a container
+  cannot touch a row: nothing in the persistence package knows what either is.
+- **Transactional completion.** A passing check updates the attempt and the
+  student's progress in one transaction, and a repeated PASS records the check
+  without duplicating the completion.
+- **Reset that costs nothing.** `reset_count` goes up; no attempt, check, or
+  completion is withdrawn.
+- **Hint usage**, recorded once per (attempt, hint) by a database constraint, so
+  a replayed request cannot inflate it.
+- **A student dashboard** — overall progress, completed/total per track, and
+  recent attempts — plus completion state on the catalog cards.
+- **`GET /api/me`, `/api/me/progress`, `/api/me/attempts`,
+  `/api/me/attempts/:attemptId`**, none of which expose a database internal or a
+  session id.
+- **PostgreSQL in the compose stack** with a health check, a named volume, and
+  forward-only, checksum-verified migrations that never drop anything.
+
+Deliberately **not** in scope: authentication, payments, subscriptions, AI,
+certificates, AWS, an instructor portal, the JumpToBank application. Sandbox
+session state is still in memory — it describes disposable environments and the
+reaper reconciles it against reality — while *learning* state is in PostgreSQL.
+Prerequisites and skills remain **metadata only**: nothing gates a lab, and the
+API still says so explicitly (`prerequisitesEnforced: false`). Student identity
+is a **development identity**, not a login — see
+[Development student identity](#development-student-identity).
 
 ---
 
@@ -217,6 +269,15 @@ get two sandboxes. Nothing above the provider ever names one: the API, the
 verifier, and the terminal all work from a session id and look the sandbox up
 server-side.
 
+**Learning state is not sandbox state.** They have different lifetimes, so they
+live in different places and in different packages. `services/lab-orchestrator`
+owns sessions and sandboxes, in memory, reconciled against the cluster on every
+sweep. `services/progress` owns students, attempts and progress, in PostgreSQL,
+and imports nothing from the orchestrator — it has never heard of a namespace.
+The one arrow between them points *outward*: the session manager emits "this
+session closed", and the composition root wires that to the attempt. See
+[Persistent progress](#persistent-progress).
+
 **The kind cluster is the substrate, not the sandbox.** Creating a kind cluster
 requires the Docker socket. Rather than hand that capability to a web-facing
 process, the cluster is provisioned once on the host by `npm run cluster:up`,
@@ -259,6 +320,9 @@ jumptotech-labs/
 │   │   │   ├── routes/labs.ts      catalog + Start Lab
 │   │   │   ├── routes/sessions.ts  session-scoped operations
 │   │   │   ├── routes/internal.ts  credential issue (service-to-service)
+│   │   │   ├── routes/me.ts        the student's progress and attempts
+│   │   │   ├── identity.ts         reads the current student from a request
+│   │   │   ├── progress.ts         persistence wiring + the attempt listener
 │   │   │   └── terminal-control.ts closes a shell when its session ends
 │   │   └── test/api.test.ts
 │   └── web/                        React + Vite frontend
@@ -272,7 +336,7 @@ jumptotech-labs/
 │       │   │   ├── LabTimer.tsx        30-minute countdown
 │       │   │   └── StartOverlay.tsx    Start Lab + provisioning progress
 │       │   ├── lib/{api,types}.ts
-│       │   ├── pages/{CatalogPage,LabPage}.tsx
+│       │   ├── pages/{CatalogPage,LabPage,ProgressPage}.tsx
 │       │   └── styles.css
 │       └── vite.config.ts
 │
@@ -312,6 +376,22 @@ jumptotech-labs/
 │   │   │   ├── types.ts            LabProvider + result contracts
 │   │   │   └── validation.ts       lab id allow-list
 │   │   └── test/                   unit + live-cluster integration tests
+│   ├── progress/                   persistent learning state (PLATFORM-005)
+│   │   ├── migrations/
+│   │   │   └── 001_progress.sql    forward-only schema, applied once
+│   │   ├── bin/migrate.ts          npm run db:migrate
+│   │   ├── src/
+│   │   │   ├── types.ts            students, attempts, progress, hint usage
+│   │   │   ├── identity.ts         the development identity (NOT auth)
+│   │   │   ├── repository.ts       the persistence port — use cases, not CRUD
+│   │   │   ├── memory-repository.ts  fallback + reference implementation
+│   │   │   ├── service.ts          the use-case layer routes talk to
+│   │   │   └── postgres/
+│   │   │       ├── config.ts       env → connection settings, no defaults
+│   │   │       ├── database.ts     the pool; the only file importing `pg`
+│   │   │       ├── migrator.ts     forward-only, checksummed, lock-guarded
+│   │   │       └── repository.ts   parameterised SQL + transactions
+│   │   └── test/repository-contract.ts  one suite, both implementations
 │   ├── terminal/                   WebSocket → PTY gateway
 │   │   ├── src/
 │   │   │   ├── credentials.ts      per-session terminal binding fetch
@@ -867,9 +947,11 @@ loader rejects a definition that links to one.
 ### Prerequisites are advice, not a gate
 
 Prerequisites are declared, validated, resolved to titles, and shown in the UI.
-They are **not enforced**, because PLATFORM-003 has no authenticated users and
-no stored progress — so there is nothing to enforce them against. Rather than
-leave that ambiguous, `GET /api/labs` and `GET /api/labs/:id` both return
+They are **not enforced**. PLATFORM-005 added stored progress, so the data a
+gate would need now exists — but there is still no authentication, so
+"completed" is attributable only to a development identity, and gating a lab on
+an unauthenticated claim would be theatre. Rather than leave that ambiguous,
+`GET /api/labs` and `GET /api/labs/:id` both still return
 `prerequisitesEnforced: false`, and the lab page prints "Nothing stops you
 starting this lab now."
 
@@ -1105,6 +1187,330 @@ Two students on K8S-010 get two broken workloads in two namespaces. One
 student's Reset restores their own fault and leaves the other's repair alone;
 that is asserted against a real cluster in
 [`labs-integration.test.ts`](services/lab-orchestrator/test/labs-integration.test.ts).
+
+---
+
+## Persistent progress
+
+PLATFORM-005 answers one question: *what survives?*
+
+```text
+   Student identity          students            ← who (development identity)
+        │
+   Persistent learning       lab_progress        ← 1/10 completed, forever
+        │
+   Lab attempt               lab_attempts        ← one try: checks, resets,
+        │                    hint_usage            passed, ended
+   Temporary sandbox         session (in memory) ← deleted on End / expiry
+        │
+   Provider                  kubernetes | linux | terraform
+```
+
+Every arrow points downwards, and the layers below can be destroyed without
+touching the layers above. Deleting a namespace, restarting the API, losing the
+whole kind cluster: none of it can remove a row, because the package that owns
+the rows cannot address any of those things.
+
+### Why progress is its own package
+
+`services/progress` has **no dependency on `services/lab-orchestrator`**, and a
+grep is the proof: there is no import of it, no `namespace` field, no
+`sandboxRef`, no provider id, and no Kubernetes vocabulary anywhere in the
+package. A `track` is a string. A `session_id` is a string. That is the entire
+extent of its knowledge of the sandbox layer.
+
+The one connection runs the other way, through an interface the *orchestrator*
+declares:
+
+```ts
+// services/lab-orchestrator/src/session/manager.ts
+export interface SessionLifecycleListener {
+  onSessionClosed?(event: SessionClosedEvent): Promise<void> | void;
+}
+```
+
+The session manager emits that event once per session, after the sandbox is
+verifiably gone — from End Lab and from the reaper alike. `apps/api/src/
+progress.ts` supplies the implementation that closes the attempt. So:
+
+- the orchestrator still knows nothing about attempts, students, or SQL;
+- ending a lab and expiring a lab cannot record different things, because they
+  travel the same path;
+- a listener that throws is logged and ignored — bookkeeping is never allowed
+  to stop a sandbox being reclaimed.
+
+Inside the package, the layering is `route → ProgressService →
+ProgressRepository → PostgreSQL`. The port is written as *use cases*
+(`recordCheck`, `recordReset`, `finishAttempt`), not as CRUD setters, so the
+writes that must happen together cannot be separated by a caller. **No SQL
+exists above `postgres/repository.ts`**, and no route handler has ever seen a
+query.
+
+### Database schema
+
+Four tables, plus the migration ledger.
+
+```text
+students                     lab_progress                     lab_attempts
+─────────                    ────────────                     ────────────
+student_id      PK  ◄──────  student_id      PK ┐   ┌───────  student_id   FK
+display_name                 lab_id          PK ┘   │         attempt_id   PK
+identity_source              track                  │         lab_id
+created_at                   status                 │         track
+last_seen_at                 attempt_count          │         session_id   (nullable,
+                             completion_count       │                       no FK)
+                             first_completed_at     │         status
+                             last_completed_at      │         status_reason
+                             last_attempt_id        │         started_at
+                             first_attempt_at       │         completed_at
+                             updated_at             │         ended_at
+                                                    │         check_count
+hint_usage                                          │         reset_count
+──────────                                          │         updated_at
+hint_usage_id   PK                                  │
+student_id      FK ─────────────────────────────────┘
+attempt_id      FK ──► lab_attempts
+lab_id
+hint_index         UNIQUE (attempt_id, hint_index)
+revealed_at
+```
+
+The constraints carry the rules, so no code path can produce a half-truth:
+
+| Constraint | What it makes impossible |
+|---|---|
+| `lab_progress` PK `(student_id, lab_id)` | a duplicate completion row for one lab |
+| `hint_usage` UNIQUE `(attempt_id, hint_index)` | counting the same hint twice |
+| `CHECK ((status = 'PASSED') = (completed_at IS NOT NULL))` | a passed attempt with no completion time, or the reverse |
+| `CHECK ((status = 'COMPLETED') = (first_completed_at IS NOT NULL))` | a lab marked complete that was never completed |
+| partial UNIQUE on `session_id` | two attempts claiming one sandbox |
+| `status IN (…)` on both tables | a status nobody defined |
+
+Two deliberate omissions:
+
+- **`session_id` is not a foreign key**, and never will be. Sessions live in the
+  orchestrator and are deleted on cleanup; a foreign key would make a namespace
+  teardown capable of deleting a student's history, which is the exact failure
+  this story exists to prevent. The column is a historical reference that stops
+  resolving, and that is correct.
+- **No `completed` boolean.** "Ended without passing" and "expired without
+  passing" are different facts, and the dashboard shows the difference.
+
+### Migrations
+
+Forward-only, applied at most once per database, and **never destructive**.
+
+```bash
+npm run db:migrate      # apply anything pending
+npm run db:status       # list applied / PENDING without changing anything
+make db-migrate         # the same, reading credentials from .env
+```
+
+- Files are `migrations/NNN_name.sql`, applied in filename order.
+- Each runs inside a transaction (PostgreSQL DDL is transactional), so a failing
+  migration leaves nothing half-applied.
+- The version *and a SHA-256 of the file* are recorded in `schema_migrations`.
+  Editing an already-applied migration is reported as an error rather than
+  silently ignored — migrations are immutable once applied; add `002_*.sql`.
+- A `pg_advisory_lock` serialises the run, so two API instances starting
+  together cannot apply the same migration twice.
+
+`DATABASE_AUTO_MIGRATE=true` (the default) runs this at startup. It is not a
+"drop and recreate the schema on boot" scheme: on a database that is already
+current it takes a lock, runs one `SELECT`, and does nothing else. The API logs
+which it did:
+
+```text
+[progress] progress database postgres:5432/jumptotech_labs
+[progress] migration applied 001_progress
+[progress] applied 1 migration(s)
+… restart …
+[progress] schema up to date
+```
+
+Deployments that prefer to migrate from a pipeline set
+`DATABASE_AUTO_MIGRATE=false`; the API then only pings the database and tells
+you to run `npm run db:migrate`.
+
+### The attempt lifecycle
+
+```text
+  Start Lab
+      │   attempt row created BEFORE any sandbox exists
+      ▼
+  IN_PROGRESS ──── check (fail) ────► IN_PROGRESS   check_count += 1
+      │       ──── reset ──────────► IN_PROGRESS   reset_count += 1
+      │       ──── check (PASS) ───► PASSED        completed_at set, progress updated
+      │
+      ├──── sandbox never came up ─► FAILED        ended_at set
+      ├──── End Lab ───────────────► ENDED         ended_at set
+      └──── idle / max lifetime ───► EXPIRED       ended_at set
+
+  A PASSED attempt that is later ended or expired stays PASSED and gains an
+  ended_at. The sandbox lifecycle does not get to overwrite a learning result.
+```
+
+There is one path no event can cover: the API restarting while a lab is open.
+Sandbox sessions are in memory, so a restart forgets the session that would have
+emitted `onSessionClosed`. A sweeper — the persistent-side counterpart of the
+reaper — closes attempts that have been `IN_PROGRESS` for longer than the
+absolute session lifetime plus a grace period. Past that deadline no sandbox can
+still exist, so it cannot close an attempt anyone is still working on, and a
+restart therefore costs a student their environment rather than leaving a lab
+"in progress" on their dashboard forever.
+
+The attempt is created **before** `sessions.start()`, which is the architecture
+rule made executable: the attempt is the parent of the session. A start that
+never gets an environment still leaves an honest `FAILED` record instead of a
+row claiming the student is still working, and the sandbox that follows is bound
+to the attempt by `session_id` afterwards.
+
+Recording a check is one transaction with a row lock:
+
+```sql
+SELECT … FROM lab_attempts WHERE attempt_id = $1 FOR UPDATE;
+UPDATE lab_attempts SET check_count = check_count + 1, …;
+-- only when this check is the one that completed it:
+INSERT INTO lab_progress … ON CONFLICT (student_id, lab_id) DO UPDATE …;
+```
+
+The lock is why two Check Solution requests racing on one attempt cannot both
+observe `completed_at IS NULL` and record two completions. A repeated PASS
+increments `check_count` — three checks really did happen — and changes nothing
+else; the API returns `newlyCompleted: false` and the UI stays quiet.
+
+A check that could not *run* (the cluster was unreachable, `503`) is not
+recorded at all. An outage is not something the student did.
+
+### How progress is calculated
+
+The database stores completions. The **catalog** supplies the denominators, and
+the API joins them per request:
+
+```text
+  lab_progress rows  ×  registry.tracks()  →  "Kubernetes 1/10 completed"
+  (what you did)        (what exists now)
+```
+
+Nothing stores a total. Adding K8S-011 moves every student's denominator to
+`1/11` with no migration and no backfill, and a lab removed from the catalog
+stops being counted rather than leaving a completion floating against nothing.
+
+Per-lab status is derived, not stored as a third value: a lab with no row is
+`NOT_STARTED`, a row is `IN_PROGRESS` or `COMPLETED`. Practising a completed lab
+again keeps it `COMPLETED` and increments `attempt_count` — a second pass is
+practice, not new progress, so `completed` stays at `1/10` while
+`completionCount` becomes 2.
+
+### Hint tracking
+
+Revealing a hint posts to `POST /api/sessions/:sessionId/hints` with a level.
+The attempt is resolved from the session server-side; the browser never names an
+attempt or a student.
+
+Idempotence is a schema constraint, not a convention: `UNIQUE (attempt_id,
+hint_index)`. A frontend that replays the request — a double click, a retry, two
+tabs — conflicts instead of writing, and the response says which happened:
+
+```jsonc
+{ "recorded": true,  "revealedCount": 1, "hint": { "level": 1, "revealedAt": "…" } }
+{ "recorded": false, "revealedCount": 1, "hint": { "level": 1, "revealedAt": "…" } }
+```
+
+`HintPanel` did not change to make this work. PLATFORM-003 left an `onReveal`
+callback as "the seam a later story writes to a database through"; the lab page
+forwards it to the API, and the component still owns only what is on screen.
+
+Hints are recorded against an attempt, so a hint revealed before a lab is
+started is not recorded — there is nothing to record it against, and inventing a
+row would be worse than the gap.
+
+### Development student identity
+
+> **This is not authentication.** Nobody proves who they are.
+
+There is no login yet, and history needs an owner, so every request is
+attributed to a configured development student (`dev-student-001` by default).
+Stated plainly:
+
+- **Anyone who can reach the API is that student.** There is no password, no
+  token, no session cookie, and no check of any kind.
+- `DEV_STUDENT_HEADER_ENABLED=true` additionally lets an `x-dev-student-id`
+  header select a *different* student. That exists so two browser tabs can act
+  as two students on a laptop — and it means anyone can read anyone's progress.
+  It is **off by default in code**, off in the compose stack, and must stay off
+  anywhere holding real learner data.
+- The API never hides this. Every `me` response carries
+  `"authenticated": false` and an identity source, and the dashboard prints
+  *"development identity — no sign-in yet"* rather than implying an account.
+
+What is already true, and stays true when real authentication arrives:
+
+- **No student id is ever taken from a query parameter or a request body.** The
+  identity comes from a resolver, from a validated source, in one file
+  (`apps/api/src/identity.ts` → `@jumptotech/progress`'s `DevStudentIdentity`).
+  A test posts `{"studentId": "dev-student-999"}` to Start Lab every way a
+  client could and asserts the attempt still belongs to the caller.
+- **Reads are scoped to the owner in the query**, not by a check a caller might
+  forget: `getAttempt(studentId, attemptId)`. Knowing another student's attempt
+  id returns `404` — the same answer as a nonexistent one, so an id cannot be
+  used to discover whose it is.
+- **Session possession still authorises sandboxes**, exactly as PLATFORM-002
+  described. A student id grants no access to any environment.
+- Replacing this with a verified session cookie or a JWT subject is a change to
+  one class. No repository, service, or route signature moves.
+
+### When the database is unavailable
+
+Bookkeeping must never take the classroom with it.
+
+| Path | Behaviour |
+|---|---|
+| Start / Check / Reset / End / hint | **Succeeds.** The failure is logged; the response simply carries no `attempt`, and the student keeps working. |
+| `GET /api/me/*` | **`503 PROGRESS_UNAVAILABLE`.** A read cannot be faked — an empty dashboard is indistinguishable from "you have done nothing". |
+| Catalog | **Renders.** Progress badges are fetched separately and their absence costs badges, not the page. |
+| `/health` | Reports `progress: { store, ok, durable }`. |
+
+A *configured but unreachable* database is a startup failure, deliberately:
+falling back to memory and telling students their progress is saved when it is
+not would be worse than not starting. An *unconfigured* database is not a
+failure — it is the documented laptop setup, and the API says so at startup, on
+`/health`, and on the dashboard (`durable: false` → *"not saved to a
+database"*).
+
+### Running PostgreSQL locally
+
+`docker compose up` starts it alongside the rest of the stack:
+
+```bash
+make setup          # generates POSTGRES_PASSWORD into .env
+docker compose up   # postgres → healthy → api (migrations run at startup)
+```
+
+```bash
+make db-up          # postgres only
+make db-migrate     # apply pending migrations
+make db-status      # applied / pending
+make db-shell       # psql inside the container
+```
+
+- Only the `api` service holds a database credential. The web and terminal
+  services have none, and PostgreSQL is not on the `kind` network, so no
+  student sandbox can reach it.
+- Data lives in the named volume `jumptotech-labs-postgres-data`.
+  `docker compose down` keeps it; `docker compose down -v` and `make clean`
+  delete it, and `make clean` says so before it does.
+- There is **no default password anywhere in source**. `POSTGRES_PASSWORD` is
+  required, and compose fails with that message if it is missing.
+
+Running the services on your host instead (needed for the Linux and Terraform
+tracks) means pointing `DATABASE_URL` at the published port:
+
+```bash
+make db-up
+DATABASE_URL=postgresql://jumptotech:<password>@localhost:5432/jumptotech_labs \
+  npm run dev:api
+```
 
 ---
 
@@ -1425,6 +1831,7 @@ that cannot run say so with the real reason.
 | Node.js | 22 LTS or 24 | running tests / services outside Docker |
 | Bash | 3.2+ | the `scripts/` helpers |
 | Terraform | 1.9.8 | **inside the sandbox image only** — you do not install it |
+| PostgreSQL | 16 (`postgres:16-alpine`) | **inside the compose stack only** — student progress; you do not install it |
 
 Docker must be running with at least ~4 GB of memory available.
 
@@ -1498,6 +1905,21 @@ marked unavailable in the catalog with a link to this command.
 docker compose up --build
 ```
 
+The stack now includes PostgreSQL, which holds student progress. It needs
+`POSTGRES_PASSWORD` in `.env` — `make setup` generates one, and compose fails
+with that message rather than starting with a default password. The `api` waits
+for the database to report healthy and applies any pending migrations at
+startup:
+
+```text
+[progress] progress database postgres:5432/jumptotech_labs
+[progress] applied 1 migration(s)
+[api] progress store=postgres durable=true student=dev-student-001 (development identity — not authentication)
+```
+
+`docker compose down` keeps the data; `docker compose down -v` deletes it. See
+[Running PostgreSQL locally](#running-postgresql-locally).
+
 > The compose stack serves the **Kubernetes track**. The Linux and Terraform
 > tracks need the services running on your host, because no container in the
 > stack is given access to a container runtime. See
@@ -1531,6 +1953,11 @@ npm run cluster:up
 export KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml"
 export TERMINAL_SESSION_SECRET="$(openssl rand -hex 32)"
 
+# Optional: persistent progress. Without DATABASE_URL the API runs on the
+# in-memory store and says so at startup, on /health, and on the dashboard.
+make db-up
+export DATABASE_URL="postgresql://jumptotech:<password>@localhost:5432/jumptotech_labs"
+
 npm run dev:api        # :4000
 npm run dev:terminal   # :4001  (needs Node 22 for node-pty)
 npm run dev:web        # :3000
@@ -1539,7 +1966,8 @@ npm run dev:web        # :3000
 ### Shutting down
 
 ```bash
-docker compose down          # stop the services
+docker compose down          # stop the services, keep student progress
+docker compose down -v       # …and delete the progress volume too
 npm run cluster:down         # delete the kind cluster
 ```
 
@@ -2156,7 +2584,69 @@ by lab id — two students on the same lab have two different sandboxes.
 | `POST` | `/api/sessions/:sessionId/check` | run the verifier against this session's namespace |
 | `POST` | `/api/sessions/:sessionId/reset` | restore this session's baseline |
 | `POST` | `/api/sessions/:sessionId/activity` | record activity ("Continue Lab") |
+| `POST` | `/api/sessions/:sessionId/hints` | record that a hint was revealed (idempotent) |
 | `DELETE` | `/api/sessions/:sessionId` | End Lab: delete the namespace, release the slot |
+
+### Progress and attempts (PLATFORM-005)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/me` | who this request is attributed to, and whether that is durable |
+| `GET` | `/api/me/progress` | completed / total per track, and per-lab status |
+| `GET` | `/api/me/attempts` | recent attempts, newest first (`?limit=`, capped at 100) |
+| `GET` | `/api/me/attempts/:attemptId` | one attempt, with the hints it used |
+
+`me`, never `/api/students/:id`: there is no authentication yet, and a route that
+took a student id in the path would invite exactly the mistake this story warns
+about. The server decides who the caller is — see
+[Development student identity](#development-student-identity).
+
+```jsonc
+// GET /api/me/progress
+{
+  "student": { "studentId": "dev-student-001", "authenticated": false,
+               "identitySource": "development-default", "durable": true },
+  "overall": { "total": 12, "completed": 1, "inProgress": 0,
+               "notStarted": 11, "percent": 8 },
+  "tracks": [
+    { "track": "kubernetes", "title": "Kubernetes", "total": 10, "completed": 1,
+      "inProgress": 0, "notStarted": 9, "percent": 10,
+      "labs": [
+        { "labId": "K8S-001", "title": "Create Your First Pod",
+          "status": "COMPLETED", "attemptCount": 1, "completionCount": 1,
+          "completedAt": "2026-08-17T19:47:15.418Z", "lastCompletedAt": "…" },
+        { "labId": "K8S-002", "title": "…", "status": "NOT_STARTED", … }
+      ] }
+  ]
+}
+
+// GET /api/me/attempts
+{ "attempts": [
+    { "attemptId": "8d6cefa9-…", "labId": "K8S-001",
+      "labTitle": "Create Your First Pod", "track": "kubernetes",
+      "status": "PASSED", "startedAt": "…",
+      "completedAt": "2026-08-17T19:47:15.418Z",   // learning
+      "endedAt":     "2026-08-17T19:47:22.069Z",   // infrastructure
+      "checkCount": 3, "resetCount": 1 } ] }
+```
+
+`POST /api/labs/:id/start`, `POST /api/sessions/:id/check`,
+`POST /api/sessions/:id/reset` and `DELETE /api/sessions/:id` all now carry the
+same `attempt` object in their response — absent, rather than faked, when
+nothing could be recorded. `check` additionally returns `newlyCompleted`, true
+only for the check that first completed the attempt.
+
+Notes on these endpoints:
+
+- **No database internals cross the boundary.** No row ids beyond the attempt's
+  own UUID, no column names, no table names, no connection details.
+- **No `sessionId`.** Possessing a session id is what authorises acting on a
+  sandbox, so a history endpoint has no business handing them back — least of
+  all in a list. A test asserts every `me` payload is free of them.
+- **Another student's attempt is a `404`**, indistinguishable from one that does
+  not exist.
+- `PROGRESS_UNAVAILABLE` (`503`) means the store could not be read. Lab
+  environments are unaffected, and the message says so.
 
 ### Internal (service-to-service, not reachable from a browser)
 
@@ -2193,7 +2683,8 @@ Notes:
 Error codes you may meet: `INVALID_LAB_ID`, `LAB_NOT_FOUND`, `INVALID_TRACK_ID`,
 `TRACK_NOT_FOUND`, `INVALID_SESSION_ID`, `SESSION_NOT_FOUND`,
 `SESSION_NOT_ACTIVE`, `LAB_CAPACITY_REACHED`, `SESSION_PROVISION_FAILED`,
-`SETUP_FAILED`, `ENVIRONMENT_UNREACHABLE`.
+`SETUP_FAILED`, `ENVIRONMENT_UNREACHABLE`, `INVALID_STUDENT_ID`,
+`INVALID_HINT_INDEX`, `ATTEMPT_NOT_FOUND`, `PROGRESS_UNAVAILABLE`.
 
 Try it:
 
@@ -2206,7 +2697,13 @@ curl -s 'localhost:4000/api/tracks/kubernetes/labs?difficulty=intermediate' \
 SID=$(curl -s -X POST localhost:4000/api/labs/K8S-001/start | jq -r '.data.session.sessionId')
 curl -s "localhost:4000/api/sessions/$SID" | jq '.data.session | {status, secondsRemaining}'
 curl -s -X POST "localhost:4000/api/sessions/$SID/check" | jq '.data.summary'
+curl -s -X POST "localhost:4000/api/sessions/$SID/hints" \
+  -H 'content-type: application/json' -d '{"level":1}' | jq '.data'
 curl -s -X DELETE "localhost:4000/api/sessions/$SID" | jq '.data.message'
+
+# …and the part that outlives all of it
+curl -s localhost:4000/api/me/progress | jq '.data.overall'
+curl -s localhost:4000/api/me/attempts | jq '.data.attempts[] | {labId, status}'
 ```
 
 ---
@@ -2277,6 +2774,40 @@ hardening by reading it back from the daemon:
 
 It skips itself with an explanation when Docker or an image is missing, rather
 than failing a developer who has not built them.
+
+Persistence tests against a **real PostgreSQL** — no cluster and no sandbox
+images needed, just Docker:
+
+```bash
+make test-db
+TEST_DB_PORT=55440 make test-db   # if 55432 is already taken on your machine
+```
+
+That target starts a throwaway `postgres:16-alpine`, runs the migrations against
+it, and executes two suites before removing it again:
+
+```text
+services/progress   the repository contract, run against PostgreSQL itself —
+                    the constraints, the ON CONFLICT clauses, the transaction
+                    boundaries, and the migration runner (idempotence, the
+                    checksum guard)
+apps/api            the headline claim end to end: complete a lab, destroy the
+                    sandbox, throw the whole API process away, and read the
+                    progress back from a brand-new one
+```
+
+The same contract suite runs against the in-memory store in `npm test`, which is
+what stops the fallback quietly becoming a different product. To point the
+suites at a database you already have:
+
+```bash
+RUN_DB_TESTS=1 \
+TEST_DATABASE_URL=postgresql://user:password@localhost:5432/jumptotech_labs_test \
+  npm run test:db
+```
+
+Without `RUN_DB_TESTS=1` they skip themselves with a message, exactly like the
+cluster and sandbox suites.
 
 ### Running the catalog tests only
 
@@ -2377,10 +2908,35 @@ npx vitest run --root apps/web               # catalog UI, lab page, hints
 | 34 | Disabled providers are marked correctly | `multi-track-api.test.ts` |
 | 35 | Labs filter correctly by track | `multi-track-api.test.ts`, `lab-catalog.test.ts` |
 
+### PLATFORM-005 coverage
+
+| # | Requirement | Where |
+|---|---|---|
+| 1 | Student progress survives sandbox deletion | `progress-api.test.ts`, `repository-contract.ts`, `progress-persistence.test.ts` (**real PostgreSQL**) |
+| 2 | Starting a lab creates an attempt | `progress-api.test.ts`, `repository-contract.ts` |
+| 3 | PASS persists completion | `progress-api.test.ts`, `repository-contract.ts` (**both stores**) |
+| 4 | Repeated PASS does not duplicate the completion | `progress-api.test.ts`, `repository-contract.ts` (**both stores**) |
+| 5 | Reset increments `reset_count` and erases nothing | `progress-api.test.ts`, `repository-contract.ts` |
+| 6 | Ending a lab preserves attempt history | `progress-api.test.ts`, `repository-contract.ts` |
+| 7 | Expiration preserves attempt history | `progress-api.test.ts` (**via the reaper**), `repository-contract.ts` |
+| 8 | Hint usage persists | `progress-api.test.ts`, `repository-contract.ts`, `progress-persistence.test.ts` |
+| 9 | A duplicate hint event is idempotent | `progress-api.test.ts`, `repository-contract.ts` (**a DB constraint**) |
+| 10 | Different students have independent progress | `progress-api.test.ts`, `repository-contract.ts` |
+| 11–13 | Kubernetes, Linux and Terraform progress | `progress-api.test.ts` (all three solved through the real verifier) |
+| 14 | PLATFORM-001–004 tests still pass | the suites above, unchanged |
+| — | Migrations are idempotent and non-destructive | `postgres-repository.test.ts` (**real PostgreSQL**) |
+| — | An edited applied migration is refused | `postgres-repository.test.ts` (**real PostgreSQL**) |
+| — | No student id from a query string or body | `progress-api.test.ts` |
+| — | No session id or database internal in any `me` payload | `progress-api.test.ts` |
+| — | A lab still works when the store is down | `progress-api.test.ts` (`BrokenProgressRepository`) |
+| — | An attempt orphaned by an API restart is closed, and a live one is not | `service.test.ts`, `repository-contract.ts` (**both stores**) |
+| — | Dashboard and catalog completion state | `ProgressPage.test.tsx`, `CatalogProgress.test.tsx` |
+
 The web suite additionally renders the components against **verbatim API
-responses** captured in `apps/web/test/fixtures/`, which is what catches a drift
-between what the API sends and what the UI expects — hand-written fixtures
-would hide exactly that.
+responses** captured in `apps/web/test/fixtures/` — including
+`me-progress.json` and `me-attempts.json` — which is what catches a drift
+between what the API sends and what the UI expects; hand-written fixtures would
+hide exactly that.
 
 Anything that depends on the API server actually *enforcing* something — RBAC
 decisions, quota admission, namespace deletion, an image that cannot be pulled,
@@ -2397,6 +2953,35 @@ check that no command-execution endpoint exists.
 
 **`network kind declared as external, but could not be found`**
 The kind cluster does not exist yet. Run `npm run cluster:up` first.
+
+**`required variable POSTGRES_PASSWORD is missing a value`**
+The stack will not start with a default database password. `make setup` adds a
+generated one to `.env` (including to an `.env` you already had), or set it
+yourself:
+
+```bash
+echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" >> .env
+```
+
+**The API exits at startup with a database error**
+A configured-but-unreachable database is a hard failure by design — the
+alternative is telling students their progress is saved when it is not.
+
+```bash
+docker compose ps postgres          # is it healthy?
+docker compose logs postgres
+docker compose logs api | grep progress
+curl -s localhost:4000/health | jq '.data.progress'
+```
+
+To run without a database on purpose, unset `DATABASE_URL`: the API starts on
+the in-memory store and says so at startup, on `/health` (`"store": "memory"`)
+and on the dashboard (*"not saved to a database"*).
+
+**My progress disappeared**
+`docker compose down -v` and `make clean` delete the `postgres-data` volume.
+Plain `docker compose down` does not. Also check `/health` — if it reports
+`"store": "memory"`, nothing was ever being saved.
 
 **Start Lab fails with `ENVIRONMENT_UNREACHABLE`**
 The API cannot reach the cluster. Check:
@@ -2558,6 +3143,24 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
   sessions on idle and absolute timeouts.
 - *WebSocket origin checking* and a CORS allow-list, both from
   `ALLOWED_ORIGINS`. `/internal` is outside CORS and needs a shared secret.
+- *Database credentials stay server-side.* Only the `api` service is given
+  `DATABASE_URL`; the web and terminal services have none, PostgreSQL is not on
+  the `kind` network, and no student sandbox can route to it. There is no
+  default password in application source — an unset one fails loudly rather
+  than connecting somewhere. Nothing logs a connection string: the log-safe
+  form is host/port/database only.
+- *Every database value is a bound parameter.* There is no string
+  concatenation, no template literal, and no identifier taken from a request
+  anywhere in `postgres/repository.ts`; the only channel for a value is the
+  parameter array. Student ids are additionally allow-listed against
+  `^[a-z0-9][a-z0-9._-]{2,63}$`, and attempt ids must be UUIDs before a query
+  is issued.
+- *Progress reads are scoped to the owner in the query itself*
+  (`getAttempt(studentId, attemptId)`), so another student's attempt id returns
+  `404` — the same answer as a nonexistent one.
+- *No student id is ever read from a query string or a request body.* Identity
+  comes from one resolver, from a validated source, and a test posts
+  `studentId` every way a client could to prove it is ignored.
 - *Errors do not leak internals.* Structured codes out, stack traces in the log.
   Kubeconfigs and tokens are never logged and never returned to the browser.
 
@@ -2611,6 +3214,19 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    stopgap, **not production authentication**. A leaked or shoulder-surfed
    session id grants full control of that session. Real identity is a later
    story; the session id becomes a claim exchange rather than a bare capability.
+1b. **The student identity behind stored progress is a development identity,
+   not a login.** PLATFORM-005 needed an owner for the history it writes, so
+   every request is attributed to a configured student id — by default
+   `dev-student-001`. Nobody proves anything: anyone who can reach the API *is*
+   that student and can read and add to that student's history. With
+   `DEV_STUDENT_HEADER_ENABLED=true` (off by default, off in compose) a header
+   selects any other student, which is a laptop-only convenience for testing two
+   students and an obvious data-exposure hole anywhere else. The API states this
+   in every response (`"authenticated": false`) rather than implying an account.
+   What it does *not* do is invent fake security: no student id is accepted from
+   a query string or a body, reads are owner-scoped in the query, and replacing
+   the resolver with a verified session or JWT subject changes one class. See
+   [Development student identity](#development-student-identity).
 2. **Container isolation is not VM-grade tenant isolation, for any track.**
    Namespaces and containers alike share one kernel; a container-escape or
    kernel vulnerability crosses every boundary described above. This is stated
@@ -2635,10 +3251,15 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 4. **The student shell is a normal shell.** It runs as an unprivileged user in a
    container with no host mounts, but there is no sandbox layer beyond Docker's
    defaults, and outbound network access from the shell itself is unrestricted.
-5. **Session state is in memory.** Restarting the API forgets active sessions.
-   Namespaces are *not* leaked when that happens — the reaper reclaims them from
-   their labels — but the student loses their session handle. PostgreSQL is a
-   later story; `SessionStore` is the seam.
+5. **Sandbox session state is in memory.** Restarting the API forgets *active
+   sessions* — a student mid-lab loses their environment handle and starts
+   again. Namespaces are not leaked when that happens (the reaper reclaims them
+   from their labels), and since PLATFORM-005 their *history* is not lost
+   either: attempts and progress are in PostgreSQL. An attempt whose session was
+   forgotten is closed as `EXPIRED` by a sweep that only touches attempts older
+   than the absolute session lifetime — so a restart costs the environment, not
+   a lab stuck "in progress" forever. Moving the session store itself to
+   PostgreSQL is still a later story; `SessionStore` remains the seam.
 6. **The capacity guard is per-process.** `MAX_ACTIVE_SESSIONS` is enforced
    synchronously inside one API instance. Running several instances needs the
    same reservation inside a database transaction.
@@ -2683,8 +3304,26 @@ Beyond the security items above:
   `hashicorp/random`. A lab needing another provider needs it added to the
   image, which is deliberate but does mean a content change can require an
   image rebuild.
-- Session state is in memory; there is no persistence, progress tracking, or
-  attempt history.
+- Sandbox session state is in memory. Learning history is not — see
+  [Persistent progress](#persistent-progress) — but a restart still costs a
+  student their running environment.
+- **Progress is per development student, and there is no way to be a different
+  one from the UI.** The dashboard shows whoever the server says you are.
+  Multi-student testing needs `DEV_STUDENT_HEADER_ENABLED=true` and a header,
+  which is a development affordance and not a feature.
+- **Nothing acts on progress yet.** Prerequisites are still not gated,
+  completion earns no certificate, and no instructor can see anyone's history —
+  there is no instructor surface at all. `prerequisitesEnforced: false` is still
+  served explicitly.
+- **Attempts are never deleted or aged out.** There is no retention policy, no
+  archival, and no `GET /api/me/attempts` pagination beyond a capped `limit`.
+  For a laptop and a classroom that is fine; a real deployment needs a data
+  retention decision, and it is a privacy question, not a storage one.
+- **The attempt count includes starts that never produced an environment.** A
+  provider outage or a full platform records a `FAILED` attempt, which is honest
+  history but does mean "attempts" is not the same number as "labs worked on".
+- **Hints revealed before a lab is started are not recorded**, because there is
+  no attempt to record them against.
 - The capacity guard has no queue. Past `MAX_ACTIVE_SESSIONS` a student is told
   to try again shortly.
 - Lab definitions are read once at API startup; adding a lab needs a restart.
@@ -2701,8 +3340,9 @@ Beyond the security items above:
   or computes exam readiness, because there are no user accounts and no stored
   progress yet. `prerequisitesEnforced: false` is served explicitly so no
   client mistakes display for enforcement.
-- **Hint usage is not persisted.** `HintPanel` reports each reveal through a
-  callback, but nothing stores it; the count resets with the page.
+- **Hint usage is recorded, but nothing uses it.** Since PLATFORM-005 each
+  reveal is stored once per (attempt, hint); no scoring, difficulty adjustment
+  or instructor view reads it yet.
 - **Ten labs are a foundation, not CKA readiness.** The `certification`
   metadata records that a lab is *relevant* to CKA and which domain it touches.
   It does not claim, and must not be presented as claiming, that completing
