@@ -137,7 +137,13 @@ export function CatalogPage({
     [labs],
   );
 
-  /** Group the visible labs by track, preserving catalog order within each. */
+  /**
+   * Group the visible labs by track, preserving catalog order within each.
+   *
+   * Section order follows the API's track ordering rather than the order labs
+   * happen to arrive in, so a track's declared position in `track.yaml` is what
+   * the student sees.
+   */
   const grouped = useMemo(() => {
     const byTrack = new Map<string, LabSummary[]>();
     for (const lab of visible) {
@@ -145,11 +151,15 @@ export function CatalogPage({
       if (bucket) bucket.push(lab);
       else byTrack.set(lab.track, [lab]);
     }
-    return [...byTrack.entries()];
-  }, [visible]);
 
-  const trackTitle = (track: string) =>
-    tracks.find((t) => t.track === track)?.title ?? track;
+    const position = new Map(tracks.map((track, index) => [track.track, index]));
+    return [...byTrack.entries()].sort(
+      ([a], [b]) => (position.get(a) ?? Infinity) - (position.get(b) ?? Infinity),
+    );
+  }, [visible, tracks]);
+
+  const trackOf = (track: string) => tracks.find((t) => t.track === track);
+  const trackTitle = (track: string) => trackOf(track)?.title ?? track;
 
   const trackAvailability = (track: string) =>
     tracks.find((t) => t.track === track)?.availability;
@@ -193,8 +203,8 @@ export function CatalogPage({
         <div className="catalog__intro">
           <h1>Practice environments, not slideshows</h1>
           <p>
-            Launch a disposable Kubernetes, Linux or Terraform environment in your browser, run
-            real commands, and have your work verified against the environment's live state.
+            Launch a disposable, isolated environment in your browser, run real commands, and have
+            your work verified against the environment's live state.
           </p>
         </div>
 
@@ -289,6 +299,11 @@ export function CatalogPage({
                 </span>
               )}
             </div>
+            {/* Taglines come from labs/<track>/track.yaml; a track without one
+                simply renders no subtitle. */}
+            {trackOf(track)?.tagline && (
+              <p className="catalog__track-tagline">{trackOf(track)?.tagline}</p>
+            )}
 
             {/* The reason is stated once per track rather than on every card:
                 it is a property of the backend, not of any individual lab. */}

@@ -205,7 +205,7 @@ export class SessionReaper {
     }
   }
 
-  // --- sandboxes the cluster has but the store does not ---------------------
+  // --- sandboxes the substrate has but the store does not -------------------
 
   async #sweepOrphans(result: SweepResult): Promise<void> {
     const now = this.#now();

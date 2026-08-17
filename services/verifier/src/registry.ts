@@ -29,17 +29,25 @@
  * already scoped to one session's sandbox.
  */
 import {
+  isDockerRequirementType,
   isSupportedRequirementType,
   requirementFamily,
   REQUIREMENT_TYPES,
+  type DockerRequirementType,
   type KubernetesRequirementType,
   type Requirement,
   type RequirementType,
   type SandboxRequirementType,
 } from '@jumptotech/lab-orchestrator';
-import type { CheckResult, SandboxVerifierHandler, VerifierHandler } from './contract.js';
-import type { VerifyReader } from './reader.js';
-import type { SandboxReader } from './sandbox-reader.js';
+import type {
+  CheckResult,
+  DockerVerifierHandler,
+  Handler,
+  SandboxVerifierHandler,
+  VerifierHandler,
+} from './contract.js';
+import { VerifyReader } from './reader.js';
+import { SandboxReader } from './sandbox-reader.js';
 import {
   podExists,
   podImage,
@@ -97,6 +105,27 @@ import {
   terraformOutputEquals,
   terraformResourceExists,
 } from './handlers/terraform.js';
+import {
+  dockerContainerEnv,
+  dockerContainerExists,
+  dockerContainerExitCode,
+  dockerContainerImage,
+  dockerContainerMount,
+  dockerContainerNetwork,
+  dockerContainerPort,
+  dockerContainerResourceLimit,
+  dockerContainerRunning,
+  dockerContainerState,
+} from './handlers/docker-containers.js';
+import {
+  dockerImageConfig,
+  dockerImageExists,
+  dockerNetworkExists,
+  dockerResourceAbsent,
+  dockerVolumeExists,
+} from './handlers/docker-resources.js';
+import { dockerfileValid, workspaceFileExists } from './handlers/docker-workspace.js';
+import { DockerVerifyReader } from './docker-reader.js';
 
 /** Raised when a requirement names a type with no registered handler. */
 export class UnsupportedRequirementError extends Error {
@@ -110,12 +139,12 @@ export class UnsupportedRequirementError extends Error {
 }
 
 /**
- * Every requirement type, mapped to its handler.
+ * Every Kubernetes requirement type, mapped to its handler.
  *
  * The mapped type is the completeness guarantee: TypeScript will not accept
- * this object unless it has exactly one handler per `RequirementType`.
+ * this object unless it has exactly one handler per `KubernetesRequirementType`.
  */
-const HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K> } = {
+const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K> } = {
   pod_exists: podExists,
   pod_image: podImage,
   pod_running: podRunning,
@@ -160,9 +189,9 @@ const HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K> } = {
 /**
  * Every sandbox requirement type, mapped to its handler.
  *
- * Same completeness guarantee as `HANDLERS`, over the other families. These
- * read a real filesystem inside one session's sandbox rather than the
- * Kubernetes API.
+ * Same completeness guarantee as `KUBERNETES_HANDLERS`, over the other
+ * families. These read a real filesystem inside one session's sandbox rather
+ * than the Kubernetes API.
  */
 const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<K> } = {
   file_exists: fileExists,
@@ -177,14 +206,59 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_output_equals: terraformOutputEquals,
 };
 
+/**
+ * Every Docker requirement type, mapped to its handler.
+ *
+ * Same completeness guarantee, enforced independently: adding a Docker
+ * requirement type without a handler fails to compile, and it cannot be
+ * satisfied by a Kubernetes handler because the reader types differ.
+ */
+const DOCKER_HANDLERS: { [K in DockerRequirementType]: DockerVerifierHandler<K> } = {
+  docker_container_exists: dockerContainerExists,
+  docker_container_running: dockerContainerRunning,
+  docker_container_state: dockerContainerState,
+  docker_container_image: dockerContainerImage,
+  docker_container_exit_code: dockerContainerExitCode,
+  docker_container_env: dockerContainerEnv,
+  docker_container_port: dockerContainerPort,
+  docker_container_network: dockerContainerNetwork,
+  docker_container_mount: dockerContainerMount,
+  docker_container_resource_limit: dockerContainerResourceLimit,
+
+  docker_image_exists: dockerImageExists,
+  docker_image_config: dockerImageConfig,
+  docker_volume_exists: dockerVolumeExists,
+  docker_network_exists: dockerNetworkExists,
+
+  workspace_file_exists: workspaceFileExists,
+  dockerfile_valid: dockerfileValid,
+  docker_resource_absent: dockerResourceAbsent,
+};
+
+/** Any reader a handler might be given. */
+export type AnyVerifyReader = VerifyReader | SandboxReader | DockerVerifyReader;
+
 /** Requirement types that currently have a handler. */
 export function registeredRequirementTypes(): RequirementType[] {
-  return [...Object.keys(HANDLERS), ...Object.keys(SANDBOX_HANDLERS)] as RequirementType[];
+  return [
+    ...Object.keys(KUBERNETES_HANDLERS),
+    ...Object.keys(SANDBOX_HANDLERS),
+    ...Object.keys(DOCKER_HANDLERS),
+  ] as RequirementType[];
 }
 
 export function hasHandler(type: string): boolean {
   if (!isSupportedRequirementType(type)) return false;
-  return Object.hasOwn(HANDLERS, type) || Object.hasOwn(SANDBOX_HANDLERS, type);
+  return (
+    Object.hasOwn(KUBERNETES_HANDLERS, type) ||
+    Object.hasOwn(SANDBOX_HANDLERS, type) ||
+    Object.hasOwn(DOCKER_HANDLERS, type)
+  );
+}
+
+/** Is this requirement graded against a Docker daemon? */
+export function isDockerRequirement(requirement: Requirement): boolean {
+  return isDockerRequirementType(requirement.type);
 }
 
 /**
@@ -200,6 +274,7 @@ export function hasHandler(type: string): boolean {
 export interface VerificationReaders {
   kubernetes?: VerifyReader | undefined;
   sandbox?: SandboxReader | undefined;
+  docker?: DockerVerifyReader | undefined;
 }
 
 /** Stable, human-meaningful id for a check, used as the React key. */
@@ -208,21 +283,24 @@ export function checkId(requirement: Requirement, index: number): string {
   return `${index + 1}-${requirement.type}-${name}`;
 }
 
-/** Accept either a bare Kubernetes reader or the full reader set. */
-function toReaders(input: VerifyReader | VerificationReaders): VerificationReaders {
-  return 'namespace' in input ? { kubernetes: input } : input;
+/** Accept a bare Kubernetes reader, a Docker reader, or the full reader set. */
+function toReaders(input: AnyVerifyReader | VerificationReaders): VerificationReaders {
+  if (input instanceof VerifyReader) return { kubernetes: input };
+  if (input instanceof DockerVerifyReader) return { docker: input };
+  if (input instanceof SandboxReader) return { sandbox: input };
+  return input;
 }
 
 /**
  * Run one requirement.
  *
  * Dispatch is by requirement *family*, so the same call site serves a
- * Kubernetes check and a filesystem check without knowing which it has.
- * Throws only for a requirement type with no registered handler at all.
+ * Kubernetes check, a filesystem check and a Docker check without knowing which
+ * it has. Throws only for a requirement type with no registered handler at all.
  */
 export async function verifyRequirement(
   requirement: Requirement,
-  readers: VerifyReader | VerificationReaders,
+  readers: AnyVerifyReader | VerificationReaders,
   index = 0,
 ): Promise<CheckResult> {
   if (!hasHandler(requirement.type)) throw new UnsupportedRequirementError(requirement.type);
@@ -231,8 +309,10 @@ export async function verifyRequirement(
   const id = checkId(requirement, index);
 
   if (family === 'kubernetes') {
-    const handler = HANDLERS[requirement.type as KubernetesRequirementType] as VerifierHandler<RequirementType>;
-    const label = requirement.label ?? handler.label(requirement);
+    const handler = KUBERNETES_HANDLERS[
+      requirement.type as KubernetesRequirementType
+    ] as VerifierHandler<KubernetesRequirementType>;
+    const label = requirement.label ?? handler.label(requirement as never);
     if (!available.kubernetes) {
       return {
         id,
@@ -241,7 +321,29 @@ export async function verifyRequirement(
         detail: 'This lab environment has no Kubernetes API to check against',
       };
     }
-    const outcome = await handler.run(requirement, available.kubernetes);
+    const outcome = await handler.run(requirement as never, available.kubernetes);
+    return {
+      id,
+      label,
+      status: outcome.ok ? 'pass' : 'fail',
+      ...(outcome.detail ? { detail: outcome.detail } : {}),
+    };
+  }
+
+  if (family === 'docker') {
+    const handler = DOCKER_HANDLERS[
+      requirement.type as DockerRequirementType
+    ] as DockerVerifierHandler<DockerRequirementType>;
+    const label = requirement.label ?? handler.label(requirement as never);
+    if (!available.docker) {
+      return {
+        id,
+        label,
+        status: 'skipped',
+        detail: 'This lab environment has no Docker daemon to check against',
+      };
+    }
+    const outcome = await handler.run(requirement as never, available.docker);
     return {
       id,
       label,
@@ -280,7 +382,7 @@ export async function verifyRequirement(
  */
 export async function verifyRequirements(
   requirements: readonly Requirement[],
-  readers: VerifyReader | VerificationReaders,
+  readers: AnyVerifyReader | VerificationReaders,
 ): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   for (const [index, requirement] of requirements.entries()) {

@@ -1,0 +1,136 @@
+id: DOCKER-006
+slug: docker-006-networks
+title: Connect Containers on a Custom Network
+track: docker
+topic: networking
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 6
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-001
+
+story: >
+  The ledger service at JumpToTech Bank is two processes: an HTTP API, and a
+  worker that calls it. On the engineer's machine they are two containers, and
+  the worker keeps failing to reach the API by name.
+
+  The containers are on Docker's default bridge, where automatic name
+  resolution between containers does not happen. Putting them on a user-defined
+  network fixes it, and that is the difference this lab is about.
+
+objectives:
+  - Create a user-defined bridge network
+  - Attach containers to a network at creation time
+  - Explain why containers on a user-defined network can resolve each other by name
+  - Confirm which network a container is attached to
+
+task:
+  summary: Create a bridge network named ledger-net and run ledger-api and ledger-worker on it.
+  description: >
+    Docker's default bridge and a user-defined bridge are not the same thing.
+    On a user-defined network, Docker runs an embedded DNS server, so a
+    container can reach another by its container name. On the default bridge it
+    cannot.
+
+    Build the ledger service's local topology:
+
+      1. Create a bridge network named exactly `ledger-net`.
+      2. Run a container named `ledger-api` from `nginx:1.27-alpine`, attached
+         to that network, and leave it running.
+      3. Run a container named `ledger-worker` from `alpine:3.20`, attached to
+         the same network, and leave it running.
+
+    Then prove the point: from inside `ledger-worker`, reach `ledger-api` by
+    name. `docker exec` gets you a command inside a running container, and
+    `wget -qO- http://ledger-api` is enough — if nginx answers with its
+    welcome page, name resolution is working.
+
+    `docker network ls` lists networks and `docker network inspect ledger-net`
+    shows which containers are attached to it.
+
+setup:
+  docker:
+    images:
+      - nginx:1.27-alpine
+      - alpine:3.20
+  verify:
+    - type: docker_image_exists
+      image: nginx:1.27-alpine
+      label: The nginx:1.27-alpine image is available
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: The alpine:3.20 image is available
+  verify_timeout_seconds: 120
+
+requirements:
+  - type: docker_network_exists
+    name: ledger-net
+    driver: bridge
+    label: Bridge network ledger-net exists
+  - type: docker_container_running
+    name: ledger-api
+    label: Container ledger-api is running
+  - type: docker_container_network
+    name: ledger-api
+    network: ledger-net
+    label: Container ledger-api is attached to ledger-net
+  - type: docker_container_running
+    name: ledger-worker
+    label: Container ledger-worker is running
+  - type: docker_container_network
+    name: ledger-worker
+    network: ledger-net
+    label: Container ledger-worker is attached to ledger-net
+
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Networks, like volumes, are objects you create before you use them. A
+      container joins a network when it is created — you do not have to build
+      the container first and connect it afterwards, although that is also
+      possible.
+  - level: 2
+    text: >
+      The networking documentation covers bridge networks and explains what a
+      user-defined one gives you that the default does not. `docker run` has an
+      option that names the network to join.
+  - level: 3
+    text: >
+      `bridge` is the default driver, so creating the network needs nothing
+      beyond its name. `ledger-worker` runs `alpine:3.20`, which exits
+      immediately unless you give it something to do — a long-running command
+      keeps it up so you can exec into it. Confirm both attachments with
+      `docker network inspect ledger-net` and look at the `Containers` object.
+
+references:
+  - title: Networking overview
+    url: https://docs.docker.com/engine/network/
+  - title: Bridge network driver
+    url: https://docs.docker.com/engine/network/drivers/bridge/
+  - title: Docker CLI reference — docker network create
+    url: https://docs.docker.com/reference/cli/docker/network/create/
+
+skills:
+  - docker.networks.create
+  - docker.networks.attach
+  - docker.containers.exec
+
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - networking

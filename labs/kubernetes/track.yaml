@@ -1,0 +1,5 @@
+# Optional track metadata. The track itself exists because labs declare it;
+# this file only says how it should be presented in the catalog.
+title: Kubernetes
+tagline: Pods, workloads, and the cluster APIs that schedule them.
+order: 10

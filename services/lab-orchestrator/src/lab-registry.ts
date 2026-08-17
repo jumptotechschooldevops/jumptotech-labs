@@ -23,6 +23,11 @@ import {
   type LoadedLabDefinition,
 } from './lab-definition.js';
 import { assertValidLabId } from './validation.js';
+import {
+  TrackDefinitionError,
+  loadTrackDefinition,
+  type TrackDefinition,
+} from './track-definition.js';
 
 /**
  * A prerequisite, resolved against the registry so the UI can render a title
@@ -73,6 +78,10 @@ export interface TrackSummary {
   difficulties: string[];
   /** The providers this track's labs declare, in first-appearance order. */
   providers: string[];
+  /** One-line description from `labs/<track>/track.yaml`, when present. */
+  tagline?: string;
+  /** Catalog sort position. Tracks without one sort last, alphabetically. */
+  order?: number;
 }
 
 export interface LabFilter {
@@ -101,7 +110,15 @@ export function titleCase(slug: string): string {
     .join(' ');
 }
 
-/** Track display names. Falls back to title-casing an unknown track slug. */
+/**
+ * Known track display names, for slugs whose title-cased form is wrong.
+ *
+ * Consulted only when a track declares no title of its own: a track's preferred
+ * title comes from its `track.yaml`, and title-casing covers everything else.
+ * That is why adding `labs/<anything>/` with a valid lab produces a correctly
+ * labelled catalog section with no code change — this table exists for `aws`,
+ * which title-cases to the wrong thing.
+ */
 const TRACK_TITLES: Record<string, string> = {
   kubernetes: 'Kubernetes',
   linux: 'Linux',
@@ -117,6 +134,7 @@ export function trackTitle(track: string): string {
 export class LabRegistry {
   #labs = new Map<string, LoadedLabDefinition>();
   #slugs = new Map<string, string>();
+  #tracks = new Map<string, TrackDefinition>();
   #loaded = false;
   #loadErrors: string[] = [];
 
@@ -136,7 +154,10 @@ export class LabRegistry {
 
     this.#labs.clear();
     this.#slugs.clear();
+    this.#tracks.clear();
     this.#loadErrors = [];
+
+    await this.#loadTrackMetadata();
 
     const files = (await this.#findLabFiles(this.labsDir)).sort();
     for (const file of files) {
@@ -252,6 +273,38 @@ export class LabRegistry {
     return walk(start);
   }
 
+  /**
+   * Read the optional `track.yaml` beside each track's labs.
+   *
+   * A malformed one is recorded as a load error but never prevents the track's
+   * labs from loading: presentation metadata going wrong should not take a
+   * working track out of the catalog.
+   */
+  async #loadTrackMetadata(): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(this.labsDir, { withFileTypes: true });
+    } catch {
+      // The missing-directory case is already reported by `#findLabFiles`.
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const file = path.join(this.labsDir, entry.name, 'track.yaml');
+      try {
+        const definition = await loadTrackDefinition(file);
+        if (definition) this.#tracks.set(entry.name, definition);
+      } catch (cause) {
+        this.#loadErrors.push(
+          cause instanceof TrackDefinitionError
+            ? `${cause.format()}\n(${file})`
+            : `${file}: ${(cause as Error).message}`,
+        );
+      }
+    }
+  }
+
   async #findLabFiles(dir: string): Promise<string[]> {
     let entries;
     try {
@@ -321,6 +374,13 @@ export class LabRegistry {
     });
   }
 
+  /**
+   * Tracks present in the catalog, derived from the labs themselves.
+   *
+   * A track exists because labs declare it. `track.yaml` may then refine how it
+   * is presented — title, tagline, order — but nothing here enumerates a list
+   * of known tracks, so a new one appears purely by adding lab definitions.
+   */
   tracks(): TrackSummary[] {
     const byTrack = new Map<string, LoadedLabDefinition[]>();
     for (const def of this.all()) {
@@ -330,15 +390,20 @@ export class LabRegistry {
     }
 
     return [...byTrack.entries()]
-      .map(([track, labs]) => ({
-        track,
-        title: trackTitle(track),
-        labCount: labs.length,
-        topics: topicsOf(labs),
-        difficulties: [...new Set(labs.map((l) => l.difficulty))].sort(byDifficulty),
-        providers: [...new Set(labs.map((l) => l.environment.provider))],
-      }))
-      .sort((a, b) => a.track.localeCompare(b.track));
+      .map(([track, labs]) => {
+        const meta = this.#tracks.get(track);
+        return {
+          track,
+          title: meta?.title ?? trackTitle(track),
+          labCount: labs.length,
+          topics: topicsOf(labs),
+          difficulties: [...new Set(labs.map((l) => l.difficulty))].sort(byDifficulty),
+          providers: [...new Set(labs.map((l) => l.environment.provider))],
+          ...(meta?.tagline ? { tagline: meta.tagline } : {}),
+          ...(meta?.order !== undefined ? { order: meta.order } : {}),
+        };
+      })
+      .sort(byTrackOrder);
   }
 
   track(name: string): TrackSummary | null {
@@ -377,6 +442,20 @@ const DIFFICULTY_RANK: Record<string, number> = { beginner: 0, intermediate: 1, 
 
 function byDifficulty(a: string, b: string): number {
   return (DIFFICULTY_RANK[a] ?? 99) - (DIFFICULTY_RANK[b] ?? 99);
+}
+
+/**
+ * Catalog order for tracks.
+ *
+ * A track with a declared `order` comes first, lowest first. Undeclared tracks
+ * follow, alphabetically — so a labs directory where only some tracks carry a
+ * `track.yaml` still produces a stable, sensible listing.
+ */
+function byTrackOrder(a: TrackSummary, b: TrackSummary): number {
+  const aOrder = a.order ?? Number.MAX_SAFE_INTEGER;
+  const bOrder = b.order ?? Number.MAX_SAFE_INTEGER;
+  if (aOrder !== bOrder) return aOrder - bOrder;
+  return a.track.localeCompare(b.track);
 }
 
 function byCatalogOrder(a: LoadedLabDefinition, b: LoadedLabDefinition): number {

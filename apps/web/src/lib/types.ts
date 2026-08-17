@@ -65,6 +65,9 @@ export interface TrackSummary {
   /** The providers this track's labs declare. */
   providers?: string[];
   availability?: ProviderAvailability;
+  /** From `labs/<track>/track.yaml`. Absent for tracks that declare none. */
+  tagline?: string;
+  order?: number;
 }
 
 export interface DocumentationLink {

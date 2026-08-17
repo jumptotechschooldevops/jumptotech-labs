@@ -8,11 +8,16 @@
  * hand-written fixtures would happily hide.
  *
  * Refresh them with:
- *   curl -s localhost:4000/api/labs         | jq '.data' > test/fixtures/labs.json
- *   curl -s localhost:4000/api/labs/K8S-010 | jq '.data' > test/fixtures/lab-k8s-010.json
- *   curl -s localhost:4000/api/labs/K8S-006 | jq '.data' > test/fixtures/lab-k8s-006.json
- *   curl -s localhost:4000/api/labs/LINUX-001 | jq '.data' > test/fixtures/lab-linux-001.json
- *   curl -s localhost:4000/api/labs/TF-001    | jq '.data' > test/fixtures/lab-tf-001.json
+ *   curl -s localhost:4000/api/labs             | jq '.data' > test/fixtures/labs.json
+ *   curl -s localhost:4000/api/labs/K8S-010     | jq '.data' > test/fixtures/lab-k8s-010.json
+ *   curl -s localhost:4000/api/labs/K8S-006     | jq '.data' > test/fixtures/lab-k8s-006.json
+ *   curl -s localhost:4000/api/labs/LINUX-001   | jq '.data' > test/fixtures/lab-linux-001.json
+ *   curl -s localhost:4000/api/labs/TF-001      | jq '.data' > test/fixtures/lab-tf-001.json
+ *   curl -s localhost:4000/api/labs/DOCKER-004  | jq '.data' > test/fixtures/lab-docker-004.json
+ *
+ * They cover every shipped track. Each non-Kubernetes fixture is here for the
+ * same reason as the Kubernetes ones: to catch the day a component quietly
+ * starts depending on something only one substrate's payload happens to carry.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -24,12 +29,17 @@ import k8s010 from './fixtures/lab-k8s-010.json';
 import k8s006 from './fixtures/lab-k8s-006.json';
 import linux001 from './fixtures/lab-linux-001.json';
 import tf001 from './fixtures/lab-tf-001.json';
+import docker004 from './fixtures/lab-docker-004.json';
 
 const CATALOG = catalog as unknown as { labs: LabSummary[]; tracks: TrackSummary[]; count: number };
 const TROUBLESHOOTING = k8s010 as unknown as LabDetail;
 const JOBS = k8s006 as unknown as LabDetail;
 const LINUX = linux001 as unknown as LabDetail;
 const TERRAFORM = tf001 as unknown as LabDetail;
+const DOCKERFILE = docker004 as unknown as LabDetail;
+
+const KUBERNETES_LABS = CATALOG.labs.filter((l) => l.track === 'kubernetes');
+const DOCKER_LABS = CATALOG.labs.filter((l) => l.track === 'docker');
 
 const listLabs = vi.fn();
 vi.mock('../src/lib/api', async () => {
@@ -50,10 +60,12 @@ describe('catalog UI against the real API payload (test requirement 34)', () => 
     for (const lab of CATALOG.labs) {
       expect(screen.getByText(lab.title), lab.id).toBeTruthy();
     }
-    // One page, three tracks, no per-technology component anywhere.
-    expect(screen.getByText('10 labs')).toBeTruthy();
+    // One page, four tracks, no per-technology component anywhere.
+    expect(KUBERNETES_LABS).toHaveLength(10);
+    expect(DOCKER_LABS).toHaveLength(10);
+    expect(screen.getAllByText('10 labs')).toHaveLength(2);
     expect(screen.getAllByText('1 lab')).toHaveLength(2);
-    for (const track of ['Kubernetes', 'Linux', 'Terraform']) {
+    for (const track of ['Kubernetes', 'Docker', 'Linux', 'Terraform']) {
       expect(screen.getByRole('heading', { name: track }), track).toBeTruthy();
     }
   });
@@ -64,7 +76,8 @@ describe('catalog UI against the real API payload (test requirement 34)', () => 
 
     expect(screen.getAllByText('beginner').length).toBeGreaterThanOrEqual(7);
     expect(screen.getAllByText('intermediate').length).toBeGreaterThanOrEqual(3);
-    expect(screen.getAllByText('CKA')).toHaveLength(10);
+    expect(screen.getAllByText('CKA')).toHaveLength(KUBERNETES_LABS.length);
+    expect(screen.getAllByText('DCA')).toHaveLength(DOCKER_LABS.length);
     expect(screen.getAllByRole('button', { name: 'Open lab' })).toHaveLength(CATALOG.labs.length);
     // Labs that seed an environment say so.
     expect(screen.getAllByText('prepared environment')).toHaveLength(
@@ -81,7 +94,9 @@ describe('catalog UI against the real API payload (test requirement 34)', () => 
     expect(screen.getByText('Signal Readiness with a Probe')).toBeTruthy();
     expect(screen.getByText('Repair a Broken Deployment')).toBeTruthy();
     expect(screen.queryByText('Create Your First Pod')).toBeNull();
+    // The facet spans the catalog, so both tracks narrow at once.
     expect(screen.getByText('3 labs')).toBeTruthy();
+    expect(screen.getByText('6 labs')).toBeTruthy();
   });
 
   it('opens the lab the student clicked', async () => {
@@ -89,8 +104,12 @@ describe('catalog UI against the real API payload (test requirement 34)', () => 
     render(<CatalogPage onOpenLab={onOpenLab} />);
     await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Open lab' })[9]!);
+    const openButtons = screen.getAllByRole('button', { name: 'Open lab' });
+    fireEvent.click(openButtons[KUBERNETES_LABS.length - 1]!);
     expect(onOpenLab).toHaveBeenCalledWith('K8S-010');
+
+    fireEvent.click(openButtons[KUBERNETES_LABS.length]!);
+    expect(onOpenLab).toHaveBeenCalledWith('DOCKER-001');
   });
 
   it('never renders a lab\'s expected end state on a card', async () => {
@@ -151,9 +170,28 @@ describe('lab page UI against the real API payload (test requirement 35)', () =>
     expect(screen.queryByText('Files, Directories & Permissions')).toBeNull();
   });
 
+  it('renders a Docker lab through the same component', () => {
+    // No component knows what Docker is: the brief is rendered from the same
+    // fields, populated from the same lab.yaml keys.
+    render(<LabBrief lab={DOCKERFILE} />);
+
+    expect(screen.getByText('DOCKER-004')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Build an Image from a Dockerfile' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Scenario' })).toBeTruthy();
+
+    for (const requirement of DOCKERFILE.requirements) {
+      expect(screen.getByText(requirement)).toBeTruthy();
+    }
+    for (const reference of DOCKERFILE.references) {
+      expect(screen.getByRole('link', { name: new RegExp(reference.title) })).toBeTruthy();
+      expect(new URL(reference.url).hostname).toMatch(/docker\.com$/);
+    }
+  });
+
   it('serves a container-backed lab with its provider and readiness', () => {
     expect(LINUX.environment).toEqual({ provider: 'linux', isolation: 'container' });
     expect(TERRAFORM.environment).toEqual({ provider: 'terraform', isolation: 'container' });
+    expect(DOCKERFILE.environment).toEqual({ provider: 'docker', isolation: 'container' });
     expect(LINUX.availability?.available).toBe(true);
     // And still no answer key: requirements arrive as student-facing labels.
     expect(LINUX.requirements.every((r) => typeof r === 'string')).toBe(true);

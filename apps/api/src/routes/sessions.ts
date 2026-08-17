@@ -24,10 +24,12 @@
 import { Router, type Response } from 'express';
 import {
   SessionError,
+  type DockerEngineFactory,
   type KubernetesPort,
   type LabRegistry,
   type LabSession,
   type SessionManager,
+  type WorkspacePort,
 } from '@jumptotech/lab-orchestrator';
 import { verifyLab } from '@jumptotech/verifier';
 import type { ProgressService, StudentIdentityResolver } from '@jumptotech/progress';
@@ -41,6 +43,8 @@ export interface SessionRoutesDeps {
   registry: LabRegistry;
   sessions: SessionManager;
   k8s: KubernetesPort;
+  engines?: DockerEngineFactory;
+  workspace?: WorkspacePort;
   config: ApiConfig;
   /**
    * Persistent learning state (PLATFORM-005).
@@ -127,9 +131,39 @@ export function toSessionPayload(manager: SessionManager, session: LabSession) {
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps): Router {
-  const { registry, sessions, k8s, progress } = deps;
+  const { registry, sessions, k8s, engines, workspace, progress } = deps;
   const log = deps.logger ?? (() => undefined);
   const router = Router();
+
+  /**
+   * Everything the verifier needs, scoped to one session.
+   *
+   * The sandbox and the session id both come from the stored session record,
+   * never from the request — so a Docker check reads the requesting session's
+   * own daemon and its own workspace, and there is no parameter that could
+   * redirect it at somebody else's.
+   */
+  /**
+   * The readers a check may use, built from the session record.
+   *
+   * Each is scoped to *this* session: the Kubernetes reader to its namespace,
+   * the sandbox reader to its container, the Docker reader to its own daemon.
+   * A correct Pod — or a correct file, or a correct container — in someone
+   * else's environment is invisible here, and there is no request field
+   * anywhere that could name another one.
+   */
+  function verificationTargets(session: LabSession) {
+    const sandboxRef = session.sandboxRef ?? session.namespace;
+    const sandboxPort = sessions.sandboxPort(session);
+    return {
+      ...(session.provider === 'kubernetes' ? { k8s } : {}),
+      ...(sandboxPort ? { sandbox: sandboxPort } : {}),
+      ...(session.provider === 'docker' && engines
+        ? { docker: engines.session(sandboxRef) }
+        : {}),
+      ...(workspace ? { workspace: { port: workspace, sessionId: session.sessionId } } : {}),
+    };
+  }
 
   // GET /api/sessions/:sessionId -------------------------------------------
   // Polling this deliberately does NOT count as activity: an abandoned browser
@@ -175,20 +209,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     }
 
     const lab = registry.get(session.labId);
-    /*
-     * The readers are built from the session record, never from the request.
-     *
-     * The Kubernetes reader is scoped to this session's namespace; the sandbox
-     * reader is bound to this session's container. A correct Pod — or a correct
-     * file — in someone else's environment is invisible here, and there is no
-     * request field anywhere that could name another one.
-     */
-    const sandboxPort = sessions.sandboxPort(session);
     const result = await verifyLab({
       lab,
       namespace: session.sandboxRef ?? session.namespace,
-      ...(session.provider === 'kubernetes' ? { k8s } : {}),
-      ...(sandboxPort ? { sandbox: sandboxPort } : {}),
+      ...verificationTargets(session),
     });
     await sessions.touch(session.sessionId, 'check');
 

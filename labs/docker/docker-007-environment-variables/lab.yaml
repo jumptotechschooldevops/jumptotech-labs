@@ -1,0 +1,137 @@
+id: DOCKER-007
+slug: docker-007-environment-variables
+title: Configure a Container with Environment Variables
+track: docker
+topic: configuration
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 7
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-001
+
+story: >
+  The statements generator at JumpToTech Bank runs in every environment the
+  bank has — lab, staging, production — from one image. What changes between
+  them is configuration: which region it writes to, whether it runs in batch or
+  streaming mode, how many statements it processes at a time.
+
+  Baking those into the image would mean three images and three builds. Passing
+  them as environment variables means one image and three configurations.
+
+objectives:
+  - Pass configuration into a container as environment variables
+  - Supply several variables at once from an env file
+  - Explain why configuration belongs outside the image
+  - Read the environment a running container actually received
+
+task:
+  summary: Run a statements container configured with two inline variables and one supplied from an env file.
+  description: >
+    Your workspace already contains `statements.env`, holding the batch size
+    the bank uses in lab environments. Read it before you start.
+
+    Run a container named `statements` from `alpine:3.20`, leave it running,
+    and give it this configuration:
+
+      - `LEDGER_REGION` set to `eu-west-1`
+      - `LEDGER_MODE` set to `batch`
+      - everything defined in `statements.env`
+
+    Set the first two directly on the command line and take the third from the
+    file — the point of the lab is that both routes end up in the same place.
+
+    None of these values is a secret, and that is deliberate: environment
+    variables are visible in `docker inspect` to anyone who can reach the
+    daemon, so they are the wrong place for credentials. Configuration is what
+    they are for.
+
+    `docker inspect statements` shows the resulting environment under
+    `Config.Env`; `docker exec statements env` shows it from inside.
+
+setup:
+  docker:
+    images:
+      - alpine:3.20
+    files:
+      - path: statements.env
+        content: |
+          # Batch size for lab environments. Not a secret.
+          LEDGER_BATCH_SIZE=500
+  verify:
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: The alpine:3.20 image is available
+    - type: workspace_file_exists
+      path: statements.env
+      label: The statements.env file is in the workspace
+  verify_timeout_seconds: 120
+
+requirements:
+  - type: docker_container_running
+    name: statements
+    label: Container statements is running
+  - type: docker_container_env
+    name: statements
+    key: LEDGER_REGION
+    value: eu-west-1
+    label: LEDGER_REGION is set to eu-west-1
+  - type: docker_container_env
+    name: statements
+    key: LEDGER_MODE
+    value: batch
+    label: LEDGER_MODE is set to batch
+  - type: docker_container_env
+    name: statements
+    key: LEDGER_BATCH_SIZE
+    value: "500"
+    label: LEDGER_BATCH_SIZE came through from the env file
+
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      There are two ways to get a variable into a container, and this lab uses
+      both. One sets a single variable inline and can be repeated; the other
+      reads a file of `KEY=value` lines.
+  - level: 2
+    text: >
+      The `docker run` reference lists both options next to each other. Note
+      the difference in what they expect: one takes `KEY=value`, the other
+      takes a path to a file.
+  - level: 3
+    text: >
+      Run the command from your workspace directory so the env file path
+      resolves, and remember `alpine:3.20` needs a long-running command or the
+      container will exit before you can inspect it. Check the result with
+      `docker inspect statements --format '{{json .Config.Env}}'` — all three
+      variables should be listed alongside the image's own `PATH`.
+
+references:
+  - title: Docker CLI reference — docker run environment variables
+    url: https://docs.docker.com/reference/cli/docker/container/run/#env
+  - title: Set environment variables within your container's environment
+    url: https://docs.docker.com/reference/cli/docker/container/run/#env-file
+
+skills:
+  - docker.config.environment
+  - docker.containers.run
+  - docker.containers.inspect
+
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - image-creation-and-registry

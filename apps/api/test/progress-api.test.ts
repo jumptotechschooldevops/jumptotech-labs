@@ -626,8 +626,15 @@ describe('progress works for every track', () => {
         `${track.completed}/${track.total}`,
       ]),
     );
-    expect(byTrack).toEqual({ kubernetes: '1/10', linux: '1/1', terraform: '1/1' });
-    expect(progress.body.data.overall).toMatchObject({ completed: 3, total: 12 });
+    // The Docker track appears with nothing completed: progress counts every
+    // shipped track, not only the ones this test worked through.
+    expect(byTrack).toEqual({
+      kubernetes: '1/10',
+      docker: '0/10',
+      linux: '1/1',
+      terraform: '1/1',
+    });
+    expect(progress.body.data.overall).toMatchObject({ completed: 3, total: 22 });
   });
 });
 
@@ -655,8 +662,8 @@ describe('the progress API', () => {
     const response = await request(app).get('/api/me/progress');
 
     expect(response.status).toBe(200);
-    expect(response.body.data.overall).toMatchObject({ completed: 0, total: 12, percent: 0 });
-    expect(response.body.data.tracks).toHaveLength(3);
+    expect(response.body.data.overall).toMatchObject({ completed: 0, total: 22, percent: 0 });
+    expect(response.body.data.tracks).toHaveLength(4);
     expect(
       (await request(app).get('/api/me/attempts')).body.data.attempts,
     ).toEqual([]);

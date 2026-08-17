@@ -1,0 +1,183 @@
+id: DOCKER-008
+slug: docker-008-multi-container
+title: Run a Multi-Container Application
+track: docker
+topic: compose
+difficulty: intermediate
+level: challenge
+duration_minutes: 45
+order: 8
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-006
+  - DOCKER-007
+
+story: >
+  The ledger service is not one container. It is an API, and a worker that
+  calls the API on a loop, and they have to agree on a network and on how they
+  address each other.
+
+  Starting them by hand works exactly once. The bank keeps the topology in a
+  Compose file instead, so that "run the ledger stack" is one command and the
+  wiring is reviewed like code.
+
+objectives:
+  - Describe a multi-container application declaratively in a Compose file
+  - Explain how services on a shared network address each other
+  - Bring a stack up, inspect it, and take it down
+  - Extend an existing Compose file with a new service
+
+task:
+  summary: Complete the Compose file by adding the ledger-worker service, then bring the stack up.
+  description: >
+    Your workspace contains `compose.yaml`. It already defines one service —
+    `ledger-api`, which runs nginx and is attached to the `ledger-net` network
+    — and it declares that network at the bottom of the file.
+
+    Add a second service so the stack matches the bank's topology:
+
+      - service key `worker`
+      - container name exactly `ledger-worker`
+      - image `alpine:3.20`
+      - attached to the `ledger-net` network
+      - a command that keeps it running rather than exiting immediately
+      - the environment variable `LEDGER_API_URL` set to `http://ledger-api`
+
+    Then bring the stack up in the background with `docker compose up -d`, and
+    confirm it with `docker compose ps`.
+
+    Because both services are on `ledger-net`, the worker can reach the API at
+    the hostname `ledger-api` — the same name resolution you saw in
+    DOCKER-006, now expressed declaratively. Try it with
+    `docker compose exec worker wget -qO- http://ledger-api`.
+
+    `docker compose down` takes the whole stack away again when you want to
+    start over. Note that this lab checks the containers that end up running,
+    so it does not matter whether you edit the file in `vi` or any other way —
+    only that the stack described by it comes up.
+
+setup:
+  docker:
+    images:
+      - nginx:1.27-alpine
+      - alpine:3.20
+    files:
+      - path: compose.yaml
+        content: |
+          # JumpToTech Bank — ledger stack (lab environment)
+          #
+          # `api` is complete. Add a `worker` service below it, on the same
+          # network, per the lab task.
+          services:
+            api:
+              image: nginx:1.27-alpine
+              container_name: ledger-api
+              networks:
+                - ledger-net
+
+          networks:
+            ledger-net:
+              # Pinned so the network has this exact name rather than one
+              # derived from the project directory.
+              name: ledger-net
+              driver: bridge
+  verify:
+    - type: docker_image_exists
+      image: nginx:1.27-alpine
+      label: The nginx:1.27-alpine image is available
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: The alpine:3.20 image is available
+    - type: workspace_file_exists
+      path: compose.yaml
+      label: The compose.yaml file is in the workspace
+  verify_timeout_seconds: 120
+
+requirements:
+  - type: workspace_file_exists
+    path: compose.yaml
+    contains:
+      - ledger-worker
+    label: compose.yaml defines the ledger-worker service
+  - type: docker_network_exists
+    name: ledger-net
+    label: Network ledger-net exists
+  - type: docker_container_running
+    name: ledger-api
+    label: Container ledger-api is running
+  - type: docker_container_network
+    name: ledger-api
+    network: ledger-net
+    label: Container ledger-api is on ledger-net
+  - type: docker_container_running
+    name: ledger-worker
+    label: Container ledger-worker is running
+  - type: docker_container_network
+    name: ledger-worker
+    network: ledger-net
+    label: Container ledger-worker is on ledger-net
+  - type: docker_container_env
+    name: ledger-worker
+    key: LEDGER_API_URL
+    value: http://ledger-api
+    label: ledger-worker knows the API URL
+
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    images: false
+    # Restores the original half-finished compose.yaml, discarding edits.
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      The existing `api` service is a working example of everything the new one
+      needs: a key, an image, a container name, and a network. Start by
+      matching its shape, then add what the task asks for that it does not
+      have.
+  - level: 2
+    text: >
+      The Compose file reference documents each of these as a top-level key on
+      a service. Two are worth reading about specifically: the one that sets
+      environment variables, and the one that overrides the image's default
+      command. Indentation matters — the new service is a sibling of `api`, at
+      the same level.
+  - level: 3
+    text: >
+      `alpine:3.20` exits the moment it starts unless you give it a
+      long-running command, exactly as in DOCKER-006 — Compose expresses that
+      with the `command` key. `container_name` is what fixes the name to
+      `ledger-worker` rather than one Compose derives from the project. If
+      `docker compose up -d` reports a YAML error, the indentation is the first
+      thing to check; if the worker starts and immediately exits, look at
+      `docker compose logs worker`.
+
+references:
+  - title: Docker Compose overview
+    url: https://docs.docker.com/compose/
+  - title: Compose file reference — services
+    url: https://docs.docker.com/reference/compose-file/services/
+  - title: Compose file reference — networks
+    url: https://docs.docker.com/reference/compose-file/networks/
+  - title: Docker CLI reference — docker compose up
+    url: https://docs.docker.com/reference/cli/docker/compose/up/
+
+skills:
+  - docker.compose.author
+  - docker.compose.lifecycle
+  - docker.networks.attach
+  - docker.config.environment
+
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - orchestration
+      - networking

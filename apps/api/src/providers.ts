@@ -6,21 +6,25 @@
  * the verifier, the terminal binding, the catalog — asks the registry rather
  * than naming a backend.
  *
- * Two backends are wired live (`kubernetes`, and the container-backed `linux`
- * and `terraform`), and two are registered but switched off:
+ * Four backends are wired live, and one is registered but switched off:
  *
  * | Provider | State | Why |
  * |---|---|---|
  * | `kubernetes` | live | kind cluster, one namespace per session |
  * | `linux` | live when Docker + the sandbox image are present | one container per session |
  * | `terraform` | live when Docker + the sandbox image are present | one container per session |
- * | `docker` | **disabled** | a per-session daemon is not safe here yet |
+ * | `docker` | live when `DOCKER_TRACK_ENABLED` and a host daemon are present | one `docker:dind` sandbox per session, reached over mutual TLS |
  * | `aws` | **disabled** | no student ever gets real cloud credentials yet |
  *
- * The two disabled providers are registered with `enabled: false` *and* report
- * themselves unavailable from their own `availability()`. Two independent gates
- * on purpose: "we accidentally shipped Docker labs backed by the host socket"
- * is the failure mode worth spending a redundant check on.
+ * PLATFORM-004 shipped `docker` disabled, because neither candidate design for
+ * a per-session daemon was safe enough at the time. It is live now, but on the
+ * same two independent gates the disabled providers use: the registration below
+ * is conditional on configuration, *and* the provider reports itself
+ * unavailable from its own `availability()` unless `sandboxDaemonAvailable` was
+ * passed. "We accidentally shipped Docker labs backed by the host socket" is
+ * still the failure mode worth spending a redundant check on — and the one
+ * thing neither gate can be talked into is mounting the host socket, which no
+ * code path in `DockerLabProvider` contains.
  */
 import {
   AwsLabProvider,
@@ -31,6 +35,9 @@ import {
   DOCKER_PROVIDER_DISABLED_REASON,
   DOCKER_PROVIDER_REMEDIATION,
   LinuxLabProvider,
+  type DockerEngineFactory,
+  type RequirementWaiter,
+  type WorkspacePort,
   ProviderRegistry,
   TerraformLabProvider,
   type ContainerRuntimePort,
@@ -44,6 +51,12 @@ export interface BuildProviderRegistryOptions {
   kubernetes: LabProvider;
   /** Injected in tests so no real daemon is touched. */
   containerRuntime?: ContainerRuntimePort;
+  /** Host Docker access, for the per-session `docker:dind` sandboxes. */
+  engines?: DockerEngineFactory;
+  /** Where Docker-track students author files. */
+  workspace?: WorkspacePort;
+  /** Confirms a lab's declared initial state actually materialised. */
+  waitForRequirements?: RequirementWaiter;
 }
 
 export function buildProviderRegistry(options: BuildProviderRegistryOptions): ProviderRegistry {
@@ -84,12 +97,33 @@ export function buildProviderRegistry(options: BuildProviderRegistryOptions): Pr
         }),
   });
 
-  registry.register({
-    provider: new DockerLabProvider({ runtime, image: config.sandbox.dockerImage }),
-    enabled: false,
-    disabledReason: DOCKER_PROVIDER_DISABLED_REASON,
-    remediation: DOCKER_PROVIDER_REMEDIATION,
-  });
+  /*
+   * The Docker track: one `docker:dind` sandbox per session.
+   *
+   * Registered whether or not it is enabled, so the catalog can say *why* a
+   * Docker lab cannot start here rather than hiding the track. `enabled: false`
+   * and the provider's own `sandboxDaemonAvailable` gate are deliberately
+   * redundant.
+   */
+  if (options.engines) {
+    registry.register({
+      provider: new DockerLabProvider({
+        engines: options.engines,
+        sandboxDaemonAvailable: config.dockerEnabled,
+        ...(options.workspace ? { workspace: options.workspace } : {}),
+        ...(options.waitForRequirements
+          ? { waitForRequirements: options.waitForRequirements }
+          : {}),
+      }),
+      ...(config.dockerEnabled
+        ? {}
+        : {
+            enabled: false,
+            disabledReason: DOCKER_PROVIDER_DISABLED_REASON,
+            remediation: DOCKER_PROVIDER_REMEDIATION,
+          }),
+    });
+  }
 
   registry.register({
     provider: new AwsLabProvider(),

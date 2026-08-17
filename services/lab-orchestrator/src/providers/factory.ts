@@ -11,7 +11,9 @@
  * decision ("this install runs its Kubernetes labs on a local kind cluster");
  * `provider: kubernetes` in a lab is content metadata ("this lab needs a
  * Kubernetes sandbox"). Conflating them is what would force a frontend to know
- * about substrates.
+ * about substrates. The Docker track is likewise not a Kubernetes substrate:
+ * its provider is constructed and registered in the API composition root
+ * (`apps/api/src/providers.ts`), like every other non-Kubernetes provider.
  */
 import { KubernetesClient } from '../k8s/client.js';
 import type { KubernetesPort } from '../k8s/port.js';

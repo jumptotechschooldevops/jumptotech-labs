@@ -30,7 +30,7 @@ import {
   SessionManager,
   TerraformLabProvider,
 } from '@jumptotech/lab-orchestrator';
-import { FakeKubernetes } from '@jumptotech/lab-orchestrator/testing';
+import { FakeDockerEngines, FakeKubernetes } from '@jumptotech/lab-orchestrator/testing';
 import { FakeContainerRuntime } from '@jumptotech/lab-orchestrator/testing/containers';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
@@ -80,8 +80,10 @@ function buildApp(options: HarnessOptions = {}) {
   providers.register({ provider: kubernetes });
   providers.register({ provider: new LinuxLabProvider({ runtime }) });
   providers.register({ provider: new TerraformLabProvider({ runtime }) });
+  // The Docker provider drives a per-session daemon through an engine factory,
+  // not the shared container runtime; this suite leaves it switched off.
   providers.register({
-    provider: new DockerLabProvider({ runtime }),
+    provider: new DockerLabProvider({ engines: new FakeDockerEngines() }),
     enabled: false,
     disabledReason: DOCKER_PROVIDER_DISABLED_REASON,
   });
@@ -116,7 +118,7 @@ async function start(app: ReturnType<typeof buildApp>['app'], labId: string) {
 // --- catalog ----------------------------------------------------------------
 
 describe('the catalog shows every track (test requirements 33–35)', () => {
-  it('lists Kubernetes, Linux and Terraform with their lab counts', async () => {
+  it('lists Kubernetes, Docker, Linux and Terraform with their lab counts', async () => {
     const { app } = buildApp();
     const response = await request(app).get('/api/labs');
 
@@ -128,8 +130,14 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       providers: string[];
     }>;
 
-    expect(tracks.map((t) => t.track).sort()).toEqual(['kubernetes', 'linux', 'terraform']);
+    expect(tracks.map((t) => t.track).sort()).toEqual([
+      'docker',
+      'kubernetes',
+      'linux',
+      'terraform',
+    ]);
     expect(tracks.find((t) => t.track === 'kubernetes')?.labCount).toBe(10);
+    expect(tracks.find((t) => t.track === 'docker')?.labCount).toBe(10);
     expect(tracks.find((t) => t.track === 'linux')?.labCount).toBe(1);
     expect(tracks.find((t) => t.track === 'terraform')?.labCount).toBe(1);
     expect(tracks.find((t) => t.track === 'linux')?.providers).toEqual(['linux']);
@@ -146,7 +154,16 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
 
     expect(labs.find((l) => l.id === 'LINUX-001')?.provider).toBe('linux');
     expect(labs.find((l) => l.id === 'TF-001')?.provider).toBe('terraform');
-    expect(labs.every((l) => l.availability.available)).toBe(true);
+    expect(labs.find((l) => l.id === 'DOCKER-001')?.provider).toBe('docker');
+    // Every lab whose provider this deployment runs is startable. The Docker
+    // ten are the exception here *because this suite switches Docker off* —
+    // which is the point: they are still listed, and marked with the reason.
+    expect(labs.filter((l) => l.provider !== 'docker').every((l) => l.availability.available)).toBe(
+      true,
+    );
+    expect(labs.filter((l) => l.provider === 'docker').every((l) => l.availability.available)).toBe(
+      false,
+    );
   });
 
   it('reports Docker and AWS as registered but not available', async () => {
@@ -164,9 +181,17 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
     expect(docker?.available).toBe(false);
     expect(docker?.reason).toContain('per-session Docker daemon');
     expect(aws?.available).toBe(false);
-    // And neither ships a lab, so nothing claims to be runnable.
-    const labs = response.body.data.labs as Array<{ provider: string }>;
-    expect(labs.some((l) => l.provider === 'docker' || l.provider === 'aws')).toBe(false);
+    // AWS ships no lab at all. Docker ships ten, and every one of them says it
+    // cannot run here rather than offering a button that was going to fail.
+    const labs = response.body.data.labs as Array<{
+      provider: string;
+      availability: { available: boolean; reason?: string };
+    }>;
+    expect(labs.some((l) => l.provider === 'aws')).toBe(false);
+    const dockerLabs = labs.filter((l) => l.provider === 'docker');
+    expect(dockerLabs).toHaveLength(10);
+    expect(dockerLabs.every((l) => !l.availability.available)).toBe(true);
+    expect(dockerLabs[0]?.availability.reason).toContain('per-session Docker daemon');
   });
 
   it('marks a track unavailable when its backend is missing, without hiding it', async () => {
@@ -251,7 +276,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       'terraform',
       'aws',
     ]);
-    expect(response.body.data.labsLoaded).toBe(12);
+    expect(response.body.data.labsLoaded).toBe(22);
   });
 });
 

@@ -11,7 +11,14 @@
  * Security property: every schema below is `.strict()`. A lab definition
  * therefore cannot smuggle extra keys — no `command:`, no `script:`, no
  * `exec:`. There is deliberately no requirement type that runs anything; all
- * verification is a read of the Kubernetes API.
+ * verification is a read of a live API — the Kubernetes API server for the
+ * Kubernetes track, a session's own Docker daemon for the Docker track.
+ *
+ * The vocabulary is split into two objects, `kubernetesRequirementSchemas` and
+ * `dockerRequirementSchemas`, and re-joined into `requirementSchemas` at the
+ * bottom. The split is what lets each substrate's verifier registry prove — at
+ * compile time — that it implements every type it is responsible for, without
+ * either registry having to know the other exists.
  */
 import { z } from 'zod';
 import { isSafeSandboxPath, MAX_SANDBOX_PATH_LENGTH } from './session/sandbox-paths.js';
@@ -129,7 +136,7 @@ const portValue = z.union([
     .regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, 'must be a named port'),
 ]);
 
-const requirementSchemas = {
+const kubernetesRequirementSchemas = {
   // --- Pods --------------------------------------------------------------
   pod_exists: z.object({ type: z.literal('pod_exists'), name: resourceName, ...common }).strict(),
 
@@ -550,6 +557,323 @@ const requirementSchemas = {
     .strict(),
 } as const;
 
+// ---------------------------------------------------------------- Docker
+//
+// The Docker vocabulary, subject to exactly the same rules as the Kubernetes
+// one above: every schema is `.strict()`, no field carries a command, a script,
+// or a shell fragment, and every handler is a *read* of the session's own
+// Docker daemon. A student passes by leaving the right state behind, never by
+// typing a particular command.
+
+/** A Docker object name, as `docker run --name` and friends accept it. */
+const dockerObjectName = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/, 'must be a Docker object name (letters, digits, and _ . -)');
+
+/**
+ * A memory or CPU limit, as the student would have typed it.
+ *
+ * Compared after normalisation to bytes / nano-CPUs, so `--memory 512m`,
+ * `--memory 512M`, and `--memory 536870912` are all the same answer. A lab
+ * grades the constraint the daemon is enforcing, not the spelling.
+ */
+const dockerMemoryValue = z
+  .string()
+  .min(1)
+  .max(24)
+  .regex(/^[0-9]+(\.[0-9]+)?\s*([bkmg]|[kmg]b|bytes)?$/i, 'must be a memory value such as 512m');
+
+const dockerCpuValue = z
+  .string()
+  .min(1)
+  .max(12)
+  .regex(/^[0-9]+(\.[0-9]+)?$/, 'must be a CPU count such as 0.5');
+
+/** Docker object kinds a requirement may name generically. */
+const DOCKER_KINDS = ['container', 'image', 'volume', 'network'] as const;
+
+const dockerRequirementSchemas = {
+  // --- Containers ---------------------------------------------------------
+  docker_container_exists: z
+    .object({ type: z.literal('docker_container_exists'), name: dockerObjectName, ...common })
+    .strict(),
+
+  docker_container_running: z
+    .object({ type: z.literal('docker_container_running'), name: dockerObjectName, ...common })
+    .strict(),
+
+  /**
+   * The container's state, for labs where "running" is the wrong answer.
+   *
+   * The lifecycle lab needs `exited`; the troubleshooting lab needs to confirm
+   * a container the student *stopped* is genuinely stopped rather than removed.
+   */
+  docker_container_state: z
+    .object({
+      type: z.literal('docker_container_state'),
+      name: dockerObjectName,
+      expected: z.enum(['created', 'running', 'paused', 'restarting', 'exited', 'dead']),
+      ...common,
+    })
+    .strict(),
+
+  docker_container_image: z
+    .object({
+      type: z.literal('docker_container_image'),
+      name: dockerObjectName,
+      image: imageReference,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The container's last exit code.
+   *
+   * How a Dockerfile lab confirms the built image "behaves correctly": the
+   * student runs a container from their image and it has to succeed.
+   */
+  docker_container_exit_code: z
+    .object({
+      type: z.literal('docker_container_exit_code'),
+      name: dockerObjectName,
+      expected: z.number().int().min(0).max(255),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * An environment variable is set on the container.
+   *
+   * `value` is optional so a lab can require only that a variable was passed.
+   * Lab content never uses this for anything secret — see the Docker track's
+   * environment lab, which configures an application, not a credential.
+   */
+  docker_container_env: z
+    .object({
+      type: z.literal('docker_container_env'),
+      name: dockerObjectName,
+      key: z
+        .string()
+        .min(1)
+        .max(128)
+        .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be a valid environment variable name'),
+      value: z.string().max(1024).optional(),
+      ...common,
+    })
+    .strict(),
+
+  docker_container_port: z
+    .object({
+      type: z.literal('docker_container_port'),
+      name: dockerObjectName,
+      /** Port inside the container. */
+      container_port: z.number().int().min(1).max(65535),
+      /** Published port on the daemon side. Omit to require only an exposure. */
+      host_port: z.number().int().min(1).max(65535).optional(),
+      protocol: z.enum(['tcp', 'udp']).default('tcp'),
+      ...common,
+    })
+    .strict(),
+
+  docker_container_network: z
+    .object({
+      type: z.literal('docker_container_network'),
+      name: dockerObjectName,
+      network: dockerObjectName,
+      ...common,
+    })
+    .strict(),
+
+  /** A named volume is mounted into the container, optionally at a given path. */
+  docker_container_mount: z
+    .object({
+      type: z.literal('docker_container_mount'),
+      name: dockerObjectName,
+      volume: dockerObjectName,
+      destination: z.string().min(1).max(255).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A resource control the daemon is actually enforcing.
+   *
+   * Read from the container's HostConfig, so it reflects what Docker applied
+   * rather than what the student believes they typed.
+   */
+  docker_container_resource_limit: z
+    .object({
+      type: z.literal('docker_container_resource_limit'),
+      name: dockerObjectName,
+      memory: dockerMemoryValue.optional(),
+      cpus: dockerCpuValue.optional(),
+      pids_limit: z.number().int().min(1).max(100_000).optional(),
+      ...common,
+    })
+    .strict()
+    .refine(
+      (v) => v.memory !== undefined || v.cpus !== undefined || v.pids_limit !== undefined,
+      { message: 'must specify memory, cpus, pids_limit, or a combination' },
+    ),
+
+  // --- Images -------------------------------------------------------------
+  docker_image_exists: z
+    .object({ type: z.literal('docker_image_exists'), image: imageReference, ...common })
+    .strict(),
+
+  /**
+   * Configuration baked into an image by its Dockerfile.
+   *
+   * This is how a Dockerfile lab grades the instructions the student wrote:
+   * `WORKDIR` becomes `working_dir`, `CMD` becomes `cmd`, `ENV` becomes `env`,
+   * `EXPOSE` becomes `exposed_port`. Reading the built image rather than the
+   * source text means a student who achieves the same result differently — a
+   * different base, an ENTRYPOINT instead of a CMD form — is graded on what
+   * they actually produced.
+   */
+  docker_image_config: z
+    .object({
+      type: z.literal('docker_image_config'),
+      image: imageReference,
+      working_dir: z.string().min(1).max(255).optional(),
+      /** Every listed argv element must appear, in order, in CMD or ENTRYPOINT. */
+      cmd_contains: z.array(z.string().min(1).max(255)).max(10).optional(),
+      env: z.record(z.string().min(1).max(128), z.string().max(1024)).optional(),
+      exposed_port: z.number().int().min(1).max(65535).optional(),
+      labels: z.record(z.string().min(1).max(128), z.string().max(256)).optional(),
+      ...common,
+    })
+    .strict()
+    .refine(
+      (v) =>
+        v.working_dir !== undefined ||
+        v.cmd_contains !== undefined ||
+        v.env !== undefined ||
+        v.exposed_port !== undefined ||
+        v.labels !== undefined,
+      { message: 'must assert at least one image configuration field' },
+    ),
+
+  // --- Volumes and networks ------------------------------------------------
+  docker_volume_exists: z
+    .object({ type: z.literal('docker_volume_exists'), name: dockerObjectName, ...common })
+    .strict(),
+
+  docker_network_exists: z
+    .object({
+      type: z.literal('docker_network_exists'),
+      name: dockerObjectName,
+      driver: z.enum(['bridge', 'host', 'none', 'overlay', 'macvlan']).optional(),
+      ...common,
+    })
+    .strict(),
+
+  // --- Workspace -----------------------------------------------------------
+  /**
+   * A file exists in the session workspace.
+   *
+   * Deliberately *not* `file_exists`. That check reads the sandbox filesystem,
+   * which for a Linux or Terraform lab is the container the student's shell
+   * runs in. A Docker lab's authored files live somewhere else entirely — the
+   * terminal service's per-session workspace, which is the build context
+   * `docker build` sees — so it is read through a different reader and named
+   * for what it actually looks at.
+   *
+   * `contains` is a plain substring test over the file's text, used to confirm
+   * the student wrote the thing the lab asked for. It is a *read*: the file is
+   * never executed, sourced, or parsed as code by the platform.
+   */
+  workspace_file_exists: z
+    .object({
+      type: z.literal('workspace_file_exists'),
+      path: z
+        .string()
+        .min(1)
+        .max(255)
+        .regex(/^[A-Za-z0-9._][A-Za-z0-9._/-]*$/, 'must be a relative path inside the lab workspace')
+        .refine((p) => !p.split('/').includes('..'), { message: 'must not traverse upwards' }),
+      contains: z.array(z.string().min(1).max(255)).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A Dockerfile in the workspace parses and carries the required instructions.
+   *
+   * Parsing is structural only — instruction keywords and their arguments. The
+   * platform never builds, runs, or evaluates the file; the student's own
+   * `docker build` is what proves it works, and `docker_image_exists` is what
+   * grades the result.
+   */
+  dockerfile_valid: z
+    .object({
+      type: z.literal('dockerfile_valid'),
+      path: z
+        .string()
+        .min(1)
+        .max(255)
+        .regex(/^[A-Za-z0-9._][A-Za-z0-9._/-]*$/, 'must be a relative path inside the lab workspace')
+        .refine((p) => !p.split('/').includes('..'), { message: 'must not traverse upwards' })
+        .default('Dockerfile'),
+      /** Instructions that must be present, e.g. `[FROM, WORKDIR, CMD]`. */
+      requires: z
+        .array(
+          z.enum([
+            'FROM',
+            'RUN',
+            'CMD',
+            'LABEL',
+            'EXPOSE',
+            'ENV',
+            'ADD',
+            'COPY',
+            'ENTRYPOINT',
+            'VOLUME',
+            'USER',
+            'WORKDIR',
+            'ARG',
+            'HEALTHCHECK',
+          ]),
+        )
+        .max(14)
+        .default([]),
+      /** Require the base image named by `FROM`. */
+      base_image: imageReference.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A named Docker object must NOT exist.
+   *
+   * The Docker counterpart of `resource_absent`: the check a student satisfies
+   * by removing something, which is what `docker rm` labs are about.
+   */
+  docker_resource_absent: z
+    .object({
+      type: z.literal('docker_resource_absent'),
+      kind: z.enum(DOCKER_KINDS),
+      name: z.string().min(1).max(512),
+      ...common,
+    })
+    .strict(),
+} as const;
+
+/**
+ * The complete requirement vocabulary, across every track.
+ *
+ * Kubernetes and Docker requirement types live in separate objects above so
+ * that each substrate's verifier registry can be checked for completeness
+ * independently — see `services/verifier/src/registry.ts`, where the mapped
+ * types make a missing handler a compile error rather than a runtime surprise.
+ */
+const requirementSchemas = {
+  ...kubernetesRequirementSchemas,
+  ...dockerRequirementSchemas,
+} as const;
+
 /** Every requirement type the platform supports, in documentation order. */
 export const REQUIREMENT_TYPES = Object.keys(requirementSchemas) as ReadonlyArray<RequirementType>;
 
@@ -560,7 +884,8 @@ export type RequirementType = keyof typeof requirementSchemas;
  *
  * This is the whole of the verifier's dispatch: `kubernetes` checks read the
  * Kubernetes API in the session's namespace, `filesystem` and `terraform`
- * checks read inside the session's sandbox. Splitting Terraform out from plain
+ * checks read inside the session's sandbox, and `docker` checks read one
+ * session's own Docker daemon and workspace. Splitting Terraform out from plain
  * filesystem checks is not cosmetic — it is what lets `lab-definition.ts` say
  * "the Linux provider cannot verify Terraform state" and refuse the lab.
  *
@@ -568,7 +893,7 @@ export type RequirementType = keyof typeof requirementSchemas;
  * type without classifying it fails to compile, so a new check can never
  * silently fall through to the wrong reader.
  */
-export type RequirementFamily = 'kubernetes' | 'filesystem' | 'terraform';
+export type RequirementFamily = 'kubernetes' | 'filesystem' | 'terraform' | 'docker';
 
 export const REQUIREMENT_FAMILIES = {
   pod_exists: 'kubernetes',
@@ -621,6 +946,30 @@ export const REQUIREMENT_FAMILIES = {
   terraform_output_equals: 'terraform',
 
   resource_absent: 'kubernetes',
+
+  // --- Docker: one session's own daemon --------------------------------
+  docker_container_exists: 'docker',
+  docker_container_running: 'docker',
+  docker_container_state: 'docker',
+  docker_container_image: 'docker',
+  docker_container_exit_code: 'docker',
+  docker_container_env: 'docker',
+  docker_container_port: 'docker',
+  docker_container_network: 'docker',
+  docker_container_mount: 'docker',
+  docker_container_resource_limit: 'docker',
+
+  docker_image_exists: 'docker',
+  docker_image_config: 'docker',
+  docker_volume_exists: 'docker',
+  docker_network_exists: 'docker',
+
+  // Read through the same Docker reader: the session workspace is reached
+  // over the terminal service, not through the sandbox filesystem.
+  workspace_file_exists: 'docker',
+  dockerfile_valid: 'docker',
+
+  docker_resource_absent: 'docker',
   // `as const satisfies` rather than a plain annotation: the literal family of
   // each type has to survive for `RequirementTypeOf` to be able to filter on
   // it, while `satisfies` still enforces that every requirement type is
@@ -645,8 +994,27 @@ export function requirementTypesForFamily(family: RequirementFamily): Requiremen
   return REQUIREMENT_TYPES.filter((type) => REQUIREMENT_FAMILIES[type] === family);
 }
 
+/** Requirement types verified by reading a session's own Docker daemon. */
+export type DockerRequirementType = RequirementTypeOf<'docker'>;
+
+export const KUBERNETES_REQUIREMENT_TYPES = requirementTypesForFamily(
+  'kubernetes',
+) as ReadonlyArray<KubernetesRequirementType>;
+
+export const DOCKER_REQUIREMENT_TYPES = requirementTypesForFamily(
+  'docker',
+) as ReadonlyArray<DockerRequirementType>;
+
 export function isSupportedRequirementType(value: unknown): value is RequirementType {
   return typeof value === 'string' && Object.hasOwn(requirementSchemas, value);
+}
+
+export function isDockerRequirementType(value: unknown): value is DockerRequirementType {
+  return isSupportedRequirementType(value) && requirementFamily(value) === 'docker';
+}
+
+export function isKubernetesRequirementType(value: unknown): value is KubernetesRequirementType {
+  return isSupportedRequirementType(value) && requirementFamily(value) === 'kubernetes';
 }
 
 const schemaValues = Object.values(requirementSchemas) as unknown as [

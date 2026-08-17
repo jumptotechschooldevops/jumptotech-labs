@@ -55,9 +55,16 @@ const ENVIRONMENT_NAMES: Record<string, string> = {
 
 /** A one-line description of whatever kind of environment was created. */
 function describeEnvironment(environment: EnvironmentInfo): string {
-  if (environment.kubernetesVersion) {
-    const nodes = environment.nodes?.length ?? 0;
+  const nodes = environment.nodes?.length ?? 0;
+  // A Kubernetes environment has nodes worth counting. A container-backed
+  // sandbox — a Docker daemon, a Linux or Terraform box — is a single private
+  // environment, so it reports its version or image rather than a node count
+  // that would always read "1 node".
+  if (environment.kubernetesVersion && nodes > 0) {
     return `${environment.provider} · ${environment.kubernetesVersion} · ${nodes} node${nodes === 1 ? '' : 's'}`;
+  }
+  if (environment.kubernetesVersion) {
+    return `${environment.provider} · ${environment.kubernetesVersion} · isolated sandbox`;
   }
   if (environment.image) return `${environment.provider} · ${environment.image}`;
   return environment.provider;

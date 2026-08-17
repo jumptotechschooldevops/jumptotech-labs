@@ -1,0 +1,161 @@
+id: DOCKER-004
+slug: docker-004-dockerfile
+title: Build an Image from a Dockerfile
+track: docker
+topic: dockerfile
+difficulty: intermediate
+level: practice
+duration_minutes: 45
+order: 4
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-001
+  - DOCKER-003
+
+story: >
+  Every service at JumpToTech Bank ships as an image the bank builds itself,
+  from a Dockerfile that is reviewed like any other source file. Pulling
+  somebody else's image and hoping is not how the bank puts software into
+  production.
+
+  Your first build is deliberately tiny: a container that prints the bank's
+  service banner and exits. Small, but built exactly the way the real ones are.
+
+objectives:
+  - Write a Dockerfile using FROM, WORKDIR, COPY, RUN, and CMD
+  - Explain what the build context is and which files a build can see
+  - Build an image and give it a name and tag
+  - Run a container from an image you built yourself
+
+task:
+  summary: Write a Dockerfile that builds jumptotech/greeter:1.0, then run a container from it that exits successfully.
+  description: >
+    Your lab workspace already contains one file, `message.txt`, holding the
+    bank's service banner. Everything you create in this lab goes in the same
+    directory — that directory is the build context, and it is what gets sent
+    to the daemon when you build.
+
+    Write a file named `Dockerfile` in your workspace that:
+
+      - starts `FROM` the `alpine:3.20` image;
+      - sets `WORKDIR` to `/app`;
+      - uses `COPY` to bring `message.txt` into the image;
+      - uses `RUN` to produce `/app/banner.txt` from `message.txt` at build
+        time — copying it, decorating it, or transforming it are all fine;
+      - sets a `CMD` that prints `/app/banner.txt` when the container starts.
+
+    Then:
+
+      1. Build it as `jumptotech/greeter:1.0`.
+      2. Run a container named `greeter` from that image, and let it finish.
+         It must exit with status 0.
+
+    The verifier reads the image you produced and the container you ran, not
+    the text of your Dockerfile beyond checking that the required instructions
+    are there. A Dockerfile that reaches the same result a different way is a
+    correct answer.
+
+setup:
+  docker:
+    images:
+      - alpine:3.20
+    files:
+      - path: message.txt
+        content: |
+          JumpToTech Bank — internal platform services
+          Environment: lab
+          Support: platform-team@jumptotech.invalid
+  verify:
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: The alpine:3.20 base image is available
+    - type: workspace_file_exists
+      path: message.txt
+      label: The message.txt banner file is in the workspace
+  verify_timeout_seconds: 120
+
+requirements:
+  - type: workspace_file_exists
+    path: Dockerfile
+    label: A Dockerfile exists in your workspace
+  - type: dockerfile_valid
+    path: Dockerfile
+    base_image: alpine:3.20
+    requires:
+      - FROM
+      - WORKDIR
+      - COPY
+      - RUN
+      - CMD
+    label: The Dockerfile uses FROM, WORKDIR, COPY, RUN, and CMD
+  - type: docker_image_exists
+    image: jumptotech/greeter:1.0
+    label: Image jumptotech/greeter:1.0 was built
+  - type: docker_image_config
+    image: jumptotech/greeter:1.0
+    working_dir: /app
+    label: The built image sets its working directory to /app
+  - type: docker_container_exists
+    name: greeter
+    label: Container greeter exists
+  - type: docker_container_exit_code
+    name: greeter
+    expected: 0
+    label: Container greeter ran and exited successfully
+
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    # The image the student built is theirs, and a reset should take it away
+    # along with their Dockerfile — otherwise the lab would start half-done.
+    images: true
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Each instruction in a Dockerfile changes the image being built, in order,
+      from the top down. Think about what has to be true before `COPY` can find
+      `message.txt`, and about the difference between something that happens
+      while the image is being built and something that happens when a
+      container starts.
+  - level: 2
+    text: >
+      The Dockerfile reference documents every instruction, including which of
+      them run at build time and which only record configuration for later. The
+      build command needs to be told two things: what to name the result, and
+      where the build context is.
+  - level: 3
+    text: >
+      Build from inside your workspace so the context includes `message.txt`;
+      the `-t` option supplies the `name:tag`. If the build fails on the `COPY`
+      line, the file is not in the context you gave it. If your container exits
+      with a non-zero status, run `docker logs greeter` — the reason is almost
+      always that `CMD` is pointing at a path that does not exist, and
+      `WORKDIR` affects how a relative path is resolved.
+
+references:
+  - title: Dockerfile reference
+    url: https://docs.docker.com/reference/dockerfile/
+  - title: Docker CLI reference — docker build
+    url: https://docs.docker.com/reference/cli/docker/buildx/build/
+  - title: Building images — writing a Dockerfile
+    url: https://docs.docker.com/get-started/docker-concepts/building-images/writing-a-dockerfile/
+
+skills:
+  - docker.dockerfile.author
+  - docker.images.build
+  - docker.images.tag
+  - docker.containers.run
+
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - image-creation-and-registry

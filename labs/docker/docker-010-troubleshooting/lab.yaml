@@ -1,0 +1,171 @@
+id: DOCKER-010
+slug: docker-010-troubleshooting
+title: Repair a Broken Container
+track: docker
+topic: troubleshooting
+difficulty: intermediate
+level: challenge
+duration_minutes: 45
+order: 10
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-002
+  - DOCKER-007
+
+story: >
+  You are on call. The ledger API on the batch host is down: the container is
+  not serving, and the internal clients that depend on it are timing out.
+
+  The last change was made by someone who has since gone off shift, and the
+  pull request said only "config tweak". Nobody has told you what is wrong —
+  finding that out is the job.
+
+  Investigate the container, work out why it is not serving, and restore it.
+  There is more than one thing wrong.
+
+objectives:
+  - Investigate a failing container from its recorded state alone
+  - Read container status, logs, and configuration to locate a fault
+  - Distinguish a container that never started from one that started and exited
+  - Repair a container and confirm the service is genuinely configured correctly
+
+task:
+  summary: Investigate the ledger-api container and restore it to a healthy, correctly configured state.
+  description: >
+    A container named `ledger-api` already exists in your environment. It is
+    not working.
+
+    Your task is to find out why and fix it, so that it ends up:
+
+      - running, from the `nginx:1.27-alpine` image
+      - publishing container port 80 on host port 8080
+      - with the environment variable `LEDGER_MODE` set to `live`
+
+    Everything else you need is discoverable from the environment itself.
+
+    Start by looking at what is there and what state it is in. `docker ps` on
+    its own will not show you this container — think about why, and which flag
+    changes that. `docker logs` shows what the container said before it
+    stopped, and `docker inspect` shows the configuration it was actually given
+    as opposed to the one somebody intended.
+
+    How you repair it is up to you. This lab checks the state of your
+    environment at the end, never the commands you typed to get there — so
+    recreating the container is a perfectly good answer if that is what the
+    fault calls for.
+
+setup:
+  docker:
+    images:
+      - nginx:1.27-alpine
+    containers:
+      - name: ledger-api
+        image: nginx:1.27-alpine
+        # Two faults, both discoverable and neither named in the task:
+        #  - `daemon on;` makes nginx fork and the container exit immediately
+        #  - the published port and LEDGER_MODE are both wrong
+        command: ["nginx", "-g", "daemon on;"]
+        env:
+          LEDGER_MODE: maintenance
+        ports:
+          - container: 80
+            host: 8081
+        state: exited
+  # Deliberately NOT a health check: this lab's starting condition is a
+  # container that cannot stay up, so requiring it to be running here would
+  # fail every provision.
+  verify:
+    - type: docker_container_exists
+      name: ledger-api
+      label: The ledger-api container exists
+  verify_timeout_seconds: 120
+
+# Requirements state the goal, never the injected fault. Each label is written
+# so that reading the checklist before starting does not give away what is
+# broken — the student is told what "working" looks like, and has to discover
+# for themselves why it currently is not.
+requirements:
+  - type: docker_container_exists
+    name: ledger-api
+    label: Container ledger-api exists
+  - type: docker_container_image
+    name: ledger-api
+    image: nginx:1.27-alpine
+    label: Container runs the correct application image
+  - type: docker_container_running
+    name: ledger-api
+    label: Container is running
+  - type: docker_container_port
+    name: ledger-api
+    container_port: 80
+    host_port: 8080
+    label: Port 80 is published on host port 8080
+  - type: docker_container_env
+    name: ledger-api
+    key: LEDGER_MODE
+    value: live
+    label: The service is configured for live mode
+
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Work outside in. First establish that the container exists at all and
+      what state it reports, then narrow down to why it is in that state. Do
+      not change anything until you can say what is wrong — a container that
+      exited has left you evidence, and recreating it destroys that evidence.
+  - level: 2
+    text: >
+      There are two separate problems, and fixing only one will not restore the
+      service. One of them stops the container from staying up at all; the
+      other means that even a running container would be wrong. For the first,
+      compare what the container was told to run against what the image would
+      have run on its own — `docker inspect` shows both `Path`/`Args` and the
+      image's own default. For the second, compare the published port and the
+      environment against what the task says they should be.
+  - level: 3
+    text: >
+      A container's process must stay in the foreground; nginx forks into the
+      background when it is told `daemon on`, its main process exits, and
+      Docker considers the container finished — `docker logs ledger-api` and
+      the exit code in `docker ps -a` both point at this. The image already
+      runs nginx correctly by default, so the override is the problem rather
+      than something to correct. Note that a container's published ports and
+      environment are fixed when it is created and cannot be changed on a
+      container that already exists, which tells you what the repair has to
+      involve.
+
+references:
+  - title: Docker CLI reference — docker logs
+    url: https://docs.docker.com/reference/cli/docker/container/logs/
+  - title: Docker CLI reference — docker inspect
+    url: https://docs.docker.com/reference/cli/docker/inspect/
+  - title: Docker CLI reference — docker ps
+    url: https://docs.docker.com/reference/cli/docker/container/ls/
+  - title: Publishing and exposing ports
+    url: https://docs.docker.com/engine/network/#published-ports
+
+skills:
+  - docker.troubleshooting.containers
+  - docker.troubleshooting.logs
+  - docker.containers.inspect
+  - docker.config.environment
+  - docker.networks.ports
+
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - installation-and-configuration
+      - networking

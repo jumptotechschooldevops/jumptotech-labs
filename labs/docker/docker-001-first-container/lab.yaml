@@ -1,0 +1,143 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# This file is the single source of truth for the lab. The API loads it at
+# runtime and serves it to the frontend; nothing about this task is hardcoded
+# in React or in the verifier.
+#
+# There is deliberately no sandbox name anywhere in this file. Each student
+# session gets its own isolated Docker daemon, and both the terminal and the
+# verifier are scoped to it by the session record. A lab cannot name the
+# environment it runs in — that is what stops one student's lab content from
+# reaching another student's containers.
+#
+# Content is written from the official Docker documentation only.
+# ---------------------------------------------------------------------------
+id: DOCKER-001
+slug: docker-001-first-container
+title: Run Your First Container
+track: docker
+topic: containers
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 1
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites: []
+
+story: >
+  You have joined the platform team at JumpToTech Bank. Before any service the
+  bank runs reaches Kubernetes, it is a container image that somebody built and
+  somebody ran.
+
+  Your team lead wants to see you start a container yourself and confirm it is
+  actually running, using nothing but the Docker CLI. That is the whole task
+  today.
+
+objectives:
+  - Describe the difference between a container image and a running container
+  - Start a container from an existing image and give it a name
+  - Confirm a container is running using the Docker CLI
+
+task:
+  summary: Run a container named web from the nginx:1.27-alpine image and leave it running.
+  description: >
+    A container is a running instance of an image. The image is the packaged
+    filesystem and default configuration; the container is the live process
+    tree Docker starts from it.
+
+    Your environment already has the `nginx:1.27-alpine` image available
+    locally, so nothing needs to be downloaded. Start a container from it,
+    named exactly `web`, and leave it running.
+
+    Two commands are worth running before you start anything: `docker version`
+    tells you which client and daemon you are talking to, and `docker images`
+    lists the images this environment already holds. `docker ps` then shows
+    what is running.
+
+    Your Docker environment is completely your own. `docker ps` here shows your
+    containers and nobody else's.
+
+setup:
+  docker:
+    # Pre-loaded so the lab starts instantly and does not depend on the
+    # student's network. DOCKER-003 is where pulling an image is the exercise.
+    images:
+      - nginx:1.27-alpine
+  verify:
+    - type: docker_image_exists
+      image: nginx:1.27-alpine
+      label: The nginx:1.27-alpine image is available
+  verify_timeout_seconds: 120
+
+# Verification is state-based: the verifier reads the live Docker state in this
+# session's own daemon, and never inspects the student's command history. A
+# container created with `docker run`, or with `docker create` followed by
+# `docker start`, passes identically.
+requirements:
+  - type: docker_container_exists
+    name: web
+    label: Container web exists
+  - type: docker_container_image
+    name: web
+    image: nginx:1.27-alpine
+    label: Container runs the nginx:1.27-alpine image
+  - type: docker_container_running
+    name: web
+    label: Container is running
+
+# `Reset Lab` restores this session's Docker environment to its baseline: every
+# container, volume, and network the student created is removed, and the lab's
+# initial state is applied again. The session, its sandbox, and its terminal
+# all survive.
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    # Images are kept: re-pulling the lab's base images on every reset would
+    # turn a two-second reset into a two-minute one.
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      A container has to be started from an image, and it has to be given a
+      name if you want to refer to it later. Both are things the run command
+      can do for you in one step.
+  - level: 2
+    text: >
+      Consult the official Docker CLI reference for `docker run`. Look for the
+      option that assigns a name, and for the option that returns your prompt
+      instead of attaching your terminal to the container's output.
+  - level: 3
+    text: >
+      The container must end up named exactly `web` and running
+      `nginx:1.27-alpine`. If your terminal appears to hang after you start it,
+      the container is running in the foreground — press Ctrl-C and start it
+      detached instead. Confirm the result with `docker ps`; if it is not
+      listed, `docker ps -a` will show it along with why it stopped.
+
+references:
+  - title: Docker CLI reference — docker run
+    url: https://docs.docker.com/reference/cli/docker/container/run/
+  - title: What is a container?
+    url: https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/
+  - title: Docker CLI reference — docker ps
+    url: https://docs.docker.com/reference/cli/docker/container/ls/
+
+skills:
+  - docker.containers.run
+  - docker.containers.inspect
+
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - image-creation-and-registry
+      - orchestration

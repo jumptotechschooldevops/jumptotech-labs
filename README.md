@@ -62,6 +62,7 @@ See [Persistent progress](#persistent-progress).
   - [Adding a provider](#adding-a-provider)
   - [Adding a lab to an existing provider](#adding-a-lab-to-an-existing-provider)
 - [The lab catalog](#the-lab-catalog)
+- [The Docker track](#the-docker-track)
 - [Persistent progress](#persistent-progress)
   - [Why progress is its own package](#why-progress-is-its-own-package)
   - [Database schema](#database-schema)
@@ -903,21 +904,31 @@ is belt and braces.
                                  │                       discovered at startup
                     ┌────────────┴────────────┐
                     │                         │
-               Kubernetes                Future tracks
-                    │
-   ┌────────┬───────┼───────┬────────┬─────── … ────────┐
-K8S-001  K8S-002  K8S-003  K8S-004  K8S-005          K8S-010
-   └────────┴───────┴───────┴────────┴─────── … ────────┘
+               Kubernetes                  Docker                Future tracks
+                    │                         │
+   ┌───────┬────────┼─── … ───┐  ┌───────┬────┼──── … ───┐
+K8S-001 K8S-002  K8S-003   K8S-010  D-001  D-002  D-003  D-010
+   └───────┴────────┴─── … ───┘  └───────┴────┴──── … ───┘
                                  │
                        Generic Lab Engine          no lab-specific code
                     setup · verify · reset · hints
                                  │
                           Session Manager
                                  │
-                     PLATFORM-002 isolation          namespace per session
-                                 │
-                        Kubernetes cluster
+                        Provider registry            environment.provider
+                    ┌────────────┴────────────┐
+                    │                         │
+            namespace per session      Docker sandbox per session
+                    │                         │
+             Kubernetes cluster         host Docker daemon
 ```
+
+A lab names its substrate in `environment.provider`, and that one field selects
+the `LabProvider` that builds its sandbox and the reader that grades it. Nothing
+above the provider registry branches on a track name: the API has no
+`/api/docker/*`, the frontend has no list of known tracks, and the session
+manager, the reaper, and the catalog are all substrate-agnostic. Adding a
+substrate means adding a `LabProvider` and its requirement handlers.
 
 The rule this section exists to state: **adding a lab does not change the
 application.** No React component, API route, orchestrator method, or verifier
@@ -1187,6 +1198,175 @@ Two students on K8S-010 get two broken workloads in two namespaces. One
 student's Reset restores their own fault and leaves the other's repair alone;
 that is asserted against a real cluster in
 [`labs-integration.test.ts`](services/lab-orchestrator/test/labs-integration.test.ts).
+
+The Docker track gets the same treatment with a different boundary — one
+isolated daemon per session instead of one namespace. See
+[The Docker track](#the-docker-track).
+
+---
+
+## The Docker track
+
+Docker is a **learning track and a provider capability**, not a replacement for
+the lab engine. It sits beside Kubernetes under the same catalog, the same
+session manager, the same reaper, and the same UI.
+
+### The ten Docker labs
+
+| Lab | Title | Topic | Level | Starts from |
+|---|---|---|---|---|
+| DOCKER-001 | Run Your First Container | containers | beginner | `nginx` image pre-loaded |
+| DOCKER-002 | Manage the Container Lifecycle | lifecycle | beginner | two running containers |
+| DOCKER-003 | Pull, Inspect, and Tag Images | images | beginner | empty image store |
+| DOCKER-004 | Build an Image from a Dockerfile | dockerfile | intermediate | a seeded workspace |
+| DOCKER-005 | Persist Data with Volumes | storage | intermediate | base image pre-loaded |
+| DOCKER-006 | Connect Containers on a Custom Network | networking | intermediate | base images pre-loaded |
+| DOCKER-007 | Configure a Container with Environment Variables | configuration | beginner | base image pre-loaded |
+| DOCKER-008 | Run a Multi-Container Application | compose | intermediate | a seeded workspace |
+| DOCKER-009 | Constrain a Container with Resource Limits | resources | intermediate | base image pre-loaded |
+| DOCKER-010 | Repair a Broken Container | troubleshooting | intermediate | **a broken container** |
+
+Every lab is an original JumpToTech scenario on the same fictional banking
+platform, written from the official Docker documentation. The loader enforces
+that per track: a Docker lab must cite `docs.docker.com`, exactly as a
+Kubernetes lab must cite `kubernetes.io`, and a link to a commercial training
+platform is rejected either way.
+
+### The sandbox
+
+One session gets **one container running its own complete Docker daemon**
+(`docker:dind`), with its own image store, container list, volume set, and
+networks.
+
+```text
+  browser terminal ──mTLS──► sandbox lab-a1b2  ──► daemon A ──► student containers A
+  browser terminal ──mTLS──► sandbox lab-c3d4  ──► daemon B ──► student containers B
+```
+
+`docker ps` in session A cannot show session B's containers — not because a
+filter hides them, but because they are registered with a different daemon
+process entirely. Two students on DOCKER-010 get two broken containers in two
+daemons; one student's Reset restores their own and leaves the other's repair
+alone.
+
+**How a student reaches their daemon.** The dind image generates a fresh
+certificate authority per container at startup. The terminal service is handed
+that sandbox's client certificate and sets `DOCKER_HOST=tcp://lab-…:2376`,
+`DOCKER_TLS_VERIFY=1`, and `DOCKER_CERT_PATH`. Pointing that shell at another
+session's sandbox fails TLS verification in **both** directions: that daemon
+does not trust this session's CA, and this session's client does not trust that
+daemon's. Network reachability is therefore not the security boundary; mutual
+TLS is. That is asserted against a real Docker daemon — not a fake — in
+[`docker-integration.test.ts`](services/lab-orchestrator/test/docker-integration.test.ts).
+
+**How the platform reaches it.** Not over TLS at all. The orchestrator runs
+`docker exec <sandbox> docker …` on the host daemon, so it never holds a
+session's private key and cannot leak one.
+
+### Docker sandbox security
+
+The design has exactly one privileged component, and it is worth stating
+plainly what it does and does not protect against.
+
+| Component | Privilege | Why |
+|---|---|---|
+| `api` | host Docker socket | Creates and destroys sandbox containers. No shell, no PTY, no path from student input to a command line. |
+| sandbox container | `--privileged` | Docker-in-Docker requires it: the inner daemon creates cgroups, mounts filesystems, and programs iptables. Created by the platform; no student process runs in it. |
+| `terminal` | **none** | No socket, no `DOCKER_HOST`, no ambient credential. Each PTY gets one session's client certificate, deleted when the shell ends. |
+
+The point of the arrangement: the one process a student can type into cannot
+reach the host daemon, and the one process that can reach the host daemon never
+runs a student's command.
+
+What this **does not** claim:
+
+- **`--privileged` is not a security boundary.** A student who breaks out of a
+  container *inside* their sandbox reaches that sandbox's privileged context,
+  and from there the host kernel. Docker-in-Docker gives isolation between
+  students, not a hardened boundary against a determined attacker. A production
+  deployment should place each sandbox in a VM (Firecracker, Kata, or a
+  per-tenant node) — the `LabProvider` seam exists so that is a provider swap,
+  not a rewrite.
+- **Mounting the host socket into `api` is real privilege.** It is equivalent to
+  root on that host. It is acceptable for a local development stack and is a
+  deployment constraint, not a solved problem. Set `DOCKER_TRACK_ENABLED=false`
+  to run the Kubernetes track with no socket mounted anywhere.
+- **Workspace separation in the terminal is by unguessability.** Every student
+  shell runs as the same OS user, so the per-session workspace directory is
+  named by an HMAC of the session id and the root is `0711` — traversable but
+  not listable. That is containment by unguessability, not kernel enforcement.
+  The isolation that matters for this track — containers, images, volumes,
+  networks — is enforced by separate daemons, not by that directory.
+
+### Docker resource controls
+
+A session's sandbox is one container, and every container the student starts is
+a child of that one process tree. Capping the sandbox therefore caps the whole
+session: a student cannot escape their budget by launching more containers,
+because those containers spend the same budget.
+
+| Setting | Default | Enforced? |
+|---|---|---|
+| `DOCKER_SANDBOX_MEMORY` | `2g` | Yes — cgroup memory limit on the sandbox |
+| `DOCKER_SANDBOX_CPUS` | `2` | Yes — cgroup CPU quota on the sandbox |
+| `DOCKER_SANDBOX_PIDS_LIMIT` | `512` | Yes — hard ceiling on session processes |
+| `DOCKER_SANDBOX_MAX_CONTAINERS` | `10` | **No** — advisory, and reported as such |
+
+`MAX_CONTAINERS` is honest about itself: Docker has no per-daemon container cap,
+so it is displayed in the provisioning step a student sees and is not an
+enforcement point. Memory and pids are the limits that actually bind.
+
+No limit is hardcoded in provider code; every value above is read from the
+environment in [`apps/api/src/config.ts`](apps/api/src/config.ts), so production
+values can be tuned after load testing without a code change.
+
+Cost model, unchanged in spirit from the Kubernetes track: starting a Docker lab
+creates one container, one volume, and (once, shared) one bridge network. It
+never creates a VM, a cluster, a registry, or a public address. Browsing the
+catalog creates nothing at all.
+
+### Reset and cleanup
+
+`Reset Lab` empties the session's own daemon of everything the student created
+and re-applies the lab's declared starting condition. The sandbox container
+survives, so the session, the terminal, and the credentials all survive with it.
+What a reset removes is per lab (`reset.docker` in `lab.yaml`); images are kept
+by default, because re-pulling base images would turn a two-second reset into a
+two-minute one.
+
+`End Lab` and the reaper remove the sandbox container and its data volume.
+Nothing has to enumerate the student's containers, images, or volumes: they
+lived in a daemon that no longer exists. Teardown applies the same four gates as
+the Kubernetes provider — the name must parse as a `lab-…` sandbox, it must not
+be protected, the **live** container must carry `jumptotech.io/managed=true`,
+and when a session id is supplied it must match the container's label. A stale
+store record cannot authorise a delete, and repeat calls are harmless, which is
+what lets the reaper re-enter teardown until it succeeds.
+
+The reaper sweeps every configured provider in one pass, because an orphaned
+sandbox has no session record to resolve a substrate from. One unreachable
+substrate does not stop the other being reclaimed.
+
+### Verification
+
+Same rule as the Kubernetes track: **verification is state-based, and never
+inspects the student's commands.** Every Docker requirement is a read of
+`docker inspect` output from the session's own daemon. A container created with
+`docker run`, with `docker create` + `docker start`, or from a Compose file
+produces identical state and passes identically.
+
+Two requirement types read a file the student wrote — `file_exists` and
+`dockerfile_valid` — and both are reads and only reads. Nothing executes,
+sources, or evaluates a workspace file; `dockerfile_valid` parses instruction
+keywords and stops. The student's own `docker build` is what proves their
+Dockerfile works, and `docker_image_exists` / `docker_image_config` grade the
+resulting image.
+
+The Docker vocabulary is 17 requirement types, listed in
+[`requirements.ts`](services/lab-orchestrator/src/requirements.ts). Every schema
+is `.strict()`, no field carries a command or a shell fragment, and a lab that
+mixes vocabularies — a Docker lab asking for `pod_running` — is rejected at load
+time rather than failing confusingly at check time.
 
 ---
 
@@ -2775,6 +2955,19 @@ hardening by reading it back from the daemon:
 It skips itself with an explanation when Docker or an image is missing, rather
 than failing a developer who has not built them.
 
+Integration tests against a real **Docker** daemon. No cluster is needed; the
+host must permit privileged containers, and the first run pulls `docker:dind`:
+
+```bash
+npm run test:integration:docker
+```
+
+This suite exists because the Docker track's central claims are claims about
+Docker, not about our code — whether two sandboxes genuinely have separate image
+stores, whether one session's client certificate is actually rejected by another
+session's daemon, whether `--memory` is actually applied. A fake that returned
+"denied" would prove none of it, so nothing in that file is faked.
+
 Persistence tests against a **real PostgreSQL** — no cluster and no sandbox
 images needed, just Docker:
 
@@ -2819,6 +3012,22 @@ npx vitest run test/lab-catalog.test.ts test/setup-engine.test.ts \
 npx vitest run --root services/verifier      # every requirement type
 npx vitest run --root apps/api               # catalog + track + session APIs
 npx vitest run --root apps/web               # catalog UI, lab page, hints
+```
+
+### Running the Docker track tests only
+
+None of these need a Docker daemon — they run against `FakeDockerEngines`, which
+models the two-level topology (host daemon → one isolated daemon per sandbox)
+without simulating any kernel behaviour:
+
+```bash
+npx vitest run test/docker-provider.test.ts test/docker-lab-definition.test.ts \
+  test/provider-registry.test.ts --root services/lab-orchestrator
+npx vitest run test/docker-requirements.test.ts --root services/verifier
+npx vitest run test/docker-credentials.test.ts test/workspace.test.ts \
+  --root services/terminal
+npx vitest run test/docker-api.test.ts --root apps/api
+npx vitest run test/multi-track-catalog.test.ts --root apps/web
 ```
 
 ### PLATFORM-001 coverage
@@ -2946,6 +3155,29 @@ mock. A mock that returned "Forbidden" would prove nothing.
 Plus: session-token forgery/expiry/rebinding, terminal protocol fuzzing,
 credential file permissions and cleanup, API routing and error shape, and a
 check that no command-execution endpoint exists.
+
+### PLATFORM-DOCKER coverage
+
+| Area | Where |
+|---|---|
+| Docker lab schema, vocabulary matching, `setup.docker` safety | `lab-orchestrator/test/docker-lab-definition.test.ts` |
+| Per-track documentation rules, `track.yaml`, track discovery | `docker-lab-definition.test.ts`, `lab-catalog.test.ts` |
+| Sandbox create / status / reset / destroy / credentials / cleanup | `lab-orchestrator/test/docker-provider.test.ts` |
+| Resource controls reach the sandbox | `docker-provider.test.ts`, `docker-api.test.ts`, `docker-integration.test.ts` (real) |
+| Provider routing, multi-track sessions, reaper across substrates | `lab-orchestrator/test/provider-registry.test.ts` |
+| Every Docker requirement type; every shipped lab fails empty and passes solved | `verifier/test/docker-requirements.test.ts` |
+| Workspace path safety, per-session directories, size cap | `terminal/test/workspace.test.ts` |
+| Docker credential parsing, file modes, per-session material | `terminal/test/docker-credentials.test.ts` |
+| Start / check / reset / end a Docker lab over HTTP; cross-session checks | `apps/api/test/docker-api.test.ts` |
+| Multi-track catalog, track order and taglines, substrate wording | `apps/web/test/multi-track-catalog.test.tsx` |
+| **Separate daemons, mutual-TLS rejection, real limits, real teardown** | `lab-orchestrator/test/docker-integration.test.ts` (real Docker) |
+
+The same rule as the Kubernetes track applies to what a fake may be used for.
+`FakeDockerEngines` models the topology so provider, session, reaper, and
+verifier logic can be exercised without a daemon; it deliberately simulates no
+kernel behaviour, so no test can "prove" an isolation property against a mock.
+Everything that depends on Docker actually enforcing something is asserted
+against a real daemon.
 
 ---
 
@@ -3282,12 +3514,15 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 
 Beyond the security items above:
 
-- `kind` is the only Kubernetes substrate implemented. The factory rejects
-  anything else.
-- **The Docker track is architecture only.** It has a provider, a registry
-  entry and tests, and it is disabled — see
-  [Docker sandbox strategy](#docker-sandbox-strategy). There is no Docker lab
-  and **no Docker integration test**, because there is nothing real to test.
+- `LAB_PROVIDER` selects the Kubernetes-track substrate and `kind` is the only
+  one implemented; the factory rejects anything else. Every non-Kubernetes
+  track, the Docker one included, is configured separately in the API's
+  provider composition root.
+- **The Docker track needs a host that permits a privileged container**, and is
+  off unless `DOCKER_TRACK_ENABLED=true` — see
+  [The Docker track](#the-docker-track) and
+  [Docker sandbox strategy](#docker-sandbox-strategy). Where it cannot run, the
+  ten Docker labs still appear in the catalog and say why they cannot start.
 - **The AWS track is architecture only.** No credential, role, or resource is
   ever created — see
   [Future AWS provider architecture](#future-aws-provider-architecture). There
@@ -3347,10 +3582,12 @@ Beyond the security items above:
   metadata records that a lab is *relevant* to CKA and which domain it touches.
   It does not claim, and must not be presented as claiming, that completing
   these ten labs prepares anyone for the exam.
-- **Three tracks exist, and two of them have one lab each.** Linux and
-  Terraform are proofs that the multi-track engine works end to end, not
-  curricula. LINUX-001 and TF-001 do not make anyone competent at Linux or
-  Terraform, and must not be presented as doing so.
+- **Four tracks exist, and two of them have one lab each.** The track machinery
+  is generic — a new `labs/<track>/` directory with valid lab definitions
+  appears in the catalog with no code change — but only Kubernetes and Docker
+  have been written as curricula. Linux and Terraform are proofs that the
+  multi-track engine works end to end: LINUX-001 and TF-001 do not make anyone
+  competent at Linux or Terraform, and must not be presented as doing so.
 - The Terraform lab's `certification` metadata records *relevance* to the
   HashiCorp Terraform Associate exam, exactly as the Kubernetes labs do for
   CKA. It is not a claim of exam readiness.
@@ -3365,6 +3602,36 @@ Beyond the security items above:
   Docker Desktop. The images build for amd64 and arm64 but only arm64 was run.
   The sandbox images select their architecture at build time from
   `dpkg --print-architecture`, so they are built per machine rather than pulled.
+
+Docker track specifically:
+
+- **`--privileged` on the sandbox is not a hardened boundary.** It isolates
+  students from each other; it does not stop a determined attacker who escapes a
+  container inside their own sandbox from reaching the host kernel. Production
+  wants a VM per sandbox (Firecracker, Kata, or a per-tenant node) — a provider
+  swap, not a rewrite. See
+  [Docker sandbox security](#docker-sandbox-security).
+- **The `api` service mounts the host Docker socket**, which is equivalent to
+  root on that host. Acceptable for a development stack, a real constraint for
+  deployment. `DOCKER_TRACK_ENABLED=false` removes the need for it entirely.
+- **`DOCKER_SANDBOX_MAX_CONTAINERS` is advisory, not enforced.** Docker has no
+  per-daemon container cap; memory and pids are what bind.
+- **Terminal workspace separation is by unguessability**, not kernel
+  enforcement: every student shell runs as the same OS user, and the per-session
+  directory is named by an HMAC with the root left traversable but not listable.
+- Docker labs pull their base images inside each sandbox, so a session's first
+  start needs working egress unless `DOCKER_SANDBOX_REGISTRY_MIRROR` is set. The
+  images are small (`nginx:1.27-alpine`, `alpine`, `busybox`) but they are not
+  pre-seeded into sandbox volumes.
+- A sandbox's data volume is created per session and destroyed with it. There is
+  no image-layer sharing between sessions, so ten concurrent Docker sessions pull
+  the same base image ten times. A registry mirror is the intended answer.
+- `docker compose` runs client-side, so the Compose plugin is installed in the
+  **terminal** image at a pinned version. DOCKER-008 depends on it; a deployment
+  that swaps the terminal image has to keep it.
+- The terminal image ships the Docker CLI without BuildKit/buildx, so
+  `docker build` uses the classic builder. DOCKER-004 is written and verified
+  against that; BuildKit-only Dockerfile syntax would not work.
 
 ---
 

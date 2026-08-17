@@ -35,11 +35,15 @@ import type { TerminalConfig } from './config.js';
 import {
   CredentialsUnavailableError,
   fetchTerminalContext,
+  removeSessionDockerCerts,
   removeSessionKubeconfig,
+  writeSessionDockerCerts,
   writeSessionKubeconfig,
 } from './credentials.js';
+import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
 import {
   containerSpawnPlan,
+  dockerSpawnPlan,
   kubernetesSpawnPlan,
   TerminalContextError,
   type SpawnPlan,
@@ -62,6 +66,8 @@ interface Session {
   sandboxKind: 'namespace' | 'container';
   /** Present only for Kubernetes sessions; deleted when the shell dies. */
   kubeconfigPath: string | undefined;
+  /** Present only for Docker sessions: the `DOCKER_CERT_PATH` directory. */
+  dockerCertDir: string | undefined;
   term: pty.IPty;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
@@ -71,6 +77,10 @@ export function createTerminalServer(config: TerminalConfig): Server {
   const sessions = new Map<WebSocket, Session>();
   /** sessionId → socket, so the API can close one specific student's shell. */
   const bySessionId = new Map<string, WebSocket>();
+  const workspaces = new SessionWorkspaces({
+    root: config.workspaceRoot,
+    secret: config.sessionSecret,
+  });
 
   const httpServer = createServer((req, res) => {
     if (req.url === '/health') {
@@ -87,6 +97,37 @@ export function createTerminalServer(config: TerminalConfig): Server {
     // Internal control: the API closes a shell when its session ends.
     if (req.url === '/internal/terminate' && req.method === 'POST') {
       handleTerminate(req, res);
+      return;
+    }
+
+    /*
+     * Workspace access for the verifier.
+     *
+     * `file_exists` and `dockerfile_valid` grade a file the student authored,
+     * and that file lives in this container. Rather than share a filesystem
+     * with the API, the API asks for one named file over this endpoint.
+     *
+     * Three properties, all enforced below:
+     *   - it requires the shared service secret, exactly like the API's own
+     *     internal router, so no browser can reach it;
+     *   - it takes a session id and a *relative* path, and resolves that path
+     *     inside that session's own workspace — there is no way to name
+     *     another session's directory or to escape one;
+     *   - reads are size-capped, and this endpoint never writes.
+     */
+    if (req.url === '/internal/workspace/read' && req.method === 'POST') {
+      handleWorkspaceRead(req, res);
+      return;
+    }
+
+    /** Lab reset restores the workspace to the baseline the lab declares. */
+    if (req.url === '/internal/workspace/seed' && req.method === 'POST') {
+      handleWorkspaceSeed(req, res);
+      return;
+    }
+
+    if (req.url === '/internal/workspace/destroy' && req.method === 'POST') {
+      handleWorkspaceDestroy(req, res);
       return;
     }
 
@@ -119,6 +160,146 @@ export function createTerminalServer(config: TerminalConfig): Server {
       const closed = typeof sessionId === 'string' ? closeSession(sessionId) : false;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, data: { terminated: closed } }));
+    });
+  }
+
+  type ServerResponse = import('node:http').ServerResponse;
+
+  function reply(res: ServerResponse, status: number, payload: unknown): void {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(payload));
+  }
+
+  /**
+   * Read a JSON body from an authenticated internal request.
+   *
+   * Returns `null` — having already replied — when the caller is not the API or
+   * the body is not usable, so each handler can bail out on a falsy result.
+   */
+  function readInternalJson(
+    req: IncomingMessage,
+    res: ServerResponse,
+    onBody: (body: Record<string, unknown>) => void,
+  ): void {
+    if (req.headers['x-internal-secret'] !== config.internalServiceSecret) {
+      reply(res, 401, {
+        ok: false,
+        error: { code: 'UNAUTHORIZED', message: 'Internal use only.' },
+      });
+      return;
+    }
+
+    let raw = '';
+    let aborted = false;
+    req.on('data', (chunk: Buffer) => {
+      raw += chunk.toString();
+      // A workspace seed carries file contents, so the cap is larger than the
+      // terminate endpoint's — but it is still a cap.
+      if (raw.length > 256 * 1024) {
+        aborted = true;
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      let body: unknown;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        reply(res, 400, { ok: false, error: { code: 'MALFORMED', message: 'Expected JSON.' } });
+        return;
+      }
+      if (typeof body !== 'object' || body === null) {
+        reply(res, 400, { ok: false, error: { code: 'MALFORMED', message: 'Expected an object.' } });
+        return;
+      }
+      onBody(body as Record<string, unknown>);
+    });
+  }
+
+  function handleWorkspaceRead(req: IncomingMessage, res: ServerResponse): void {
+    readInternalJson(req, res, (body) => {
+      const sessionId = body.sessionId;
+      const filePath = body.path;
+      if (typeof sessionId !== 'string' || typeof filePath !== 'string') {
+        reply(res, 400, {
+          ok: false,
+          error: { code: 'MALFORMED', message: 'Expected sessionId and path.' },
+        });
+        return;
+      }
+
+      void workspaces
+        .read(sessionId, filePath)
+        .then((content) => {
+          reply(res, 200, {
+            ok: true,
+            data: { exists: content !== null, content: content ?? null },
+          });
+        })
+        .catch((error: unknown) => {
+          const invalid = error instanceof WorkspacePathError;
+          reply(res, invalid ? 400 : 500, {
+            ok: false,
+            error: {
+              code: invalid ? 'INVALID_WORKSPACE_PATH' : 'WORKSPACE_READ_FAILED',
+              message: error instanceof Error ? error.message : String(error),
+            },
+          });
+        });
+    });
+  }
+
+  function handleWorkspaceSeed(req: IncomingMessage, res: ServerResponse): void {
+    readInternalJson(req, res, (body) => {
+      const sessionId = body.sessionId;
+      const files = body.files;
+      if (typeof sessionId !== 'string' || !Array.isArray(files)) {
+        reply(res, 400, {
+          ok: false,
+          error: { code: 'MALFORMED', message: 'Expected sessionId and files[].' },
+        });
+        return;
+      }
+
+      const specs = files.filter(
+        (file): file is { path: string; content: string } =>
+          typeof file === 'object' &&
+          file !== null &&
+          typeof (file as { path?: unknown }).path === 'string' &&
+          typeof (file as { content?: unknown }).content === 'string',
+      );
+
+      void workspaces
+        .seed(sessionId, specs)
+        .then(() => reply(res, 200, { ok: true, data: { seeded: specs.length } }))
+        .catch((error: unknown) => {
+          const invalid = error instanceof WorkspacePathError;
+          reply(res, invalid ? 400 : 500, {
+            ok: false,
+            error: {
+              code: invalid ? 'INVALID_WORKSPACE_PATH' : 'WORKSPACE_SEED_FAILED',
+              message: error instanceof Error ? error.message : String(error),
+            },
+          });
+        });
+    });
+  }
+
+  function handleWorkspaceDestroy(req: IncomingMessage, res: ServerResponse): void {
+    readInternalJson(req, res, (body) => {
+      const sessionId = body.sessionId;
+      if (typeof sessionId !== 'string') {
+        reply(res, 400, {
+          ok: false,
+          error: { code: 'MALFORMED', message: 'Expected sessionId.' },
+        });
+        return;
+      }
+      void workspaces
+        .destroy(sessionId)
+        .then(() => reply(res, 200, { ok: true, data: { destroyed: true } }))
+        .catch(() => reply(res, 200, { ok: true, data: { destroyed: false } }));
     });
   }
 
@@ -286,6 +467,14 @@ export function createTerminalServer(config: TerminalConfig): Server {
      */
     let plan: SpawnPlan;
     let kubeconfigPath: string | undefined;
+    let dockerCertDir: string | undefined;
+
+    /** Undo whatever this attempt wrote, on any path that does not start a shell. */
+    const discardCredentials = async (): Promise<void> => {
+      await removeSessionKubeconfig(kubeconfigPath);
+      await removeSessionDockerCerts(dockerCertDir);
+    };
+
     try {
       const context = await fetchTerminalContext({
         apiInternalUrl: config.apiInternalUrl,
@@ -313,6 +502,15 @@ export function createTerminalServer(config: TerminalConfig): Server {
         log(
           `session ${claims.sid}: attaching to sandbox container ${plan.sandboxRef} as ${context.user}`,
         );
+      } else if (context.kind === 'docker-daemon') {
+        dockerCertDir = await writeSessionDockerCerts(config.credentialsDir, claims.sid, context);
+        // The workspace is where `docker build` finds its context, so it has to
+        // exist — and hold the lab's baseline files — before the shell opens.
+        const workspaceDir = await workspaces.seed(claims.sid, context.workspaceFiles ?? []);
+        plan = dockerSpawnPlan(context, dockerCertDir, workspaceDir, planOptions);
+        log(
+          `session ${claims.sid}: issued sandbox-scoped Docker credentials (sandbox=${context.sandboxRef} host=${context.dockerHost} expires=${context.expiresAt})`,
+        );
       } else {
         kubeconfigPath = await writeSessionKubeconfig(
           config.credentialsDir,
@@ -328,19 +526,19 @@ export function createTerminalServer(config: TerminalConfig): Server {
       const code =
         error instanceof CredentialsUnavailableError
           ? error.code
-          : error instanceof TerminalContextError
+          : error instanceof TerminalContextError || error instanceof WorkspacePathError
             ? error.code
             : 'CREDENTIALS_UNAVAILABLE';
       const msg = error instanceof Error ? error.message : String(error);
       log(`session ${claims.sid}: terminal binding failed — ${msg}`);
-      await removeSessionKubeconfig(kubeconfigPath);
+      await discardCredentials();
       send(ws, { type: 'error', code, message: msg });
       ws.close(4403, 'no credentials');
       return false;
     }
 
     if (ws.readyState !== ws.OPEN) {
-      await removeSessionKubeconfig(kubeconfigPath);
+      await discardCredentials();
       return false;
     }
 
@@ -356,7 +554,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`failed to spawn PTY: ${message}`);
-      await removeSessionKubeconfig(kubeconfigPath);
+      await discardCredentials();
       send(ws, {
         type: 'error',
         code: 'PTY_SPAWN_FAILED',
@@ -371,6 +569,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
       sandboxRef: plan.sandboxRef,
       sandboxKind: plan.sandboxKind,
       kubeconfigPath,
+      dockerCertDir,
       term,
       idleTimer: setTimeout(
         () => closeFor(ws, 'IDLE_TIMEOUT', 'Terminal closed after inactivity.'),
@@ -429,8 +628,11 @@ export function createTerminalServer(config: TerminalConfig): Server {
     } catch {
       /* already dead */
     }
-    // The credential file dies with the shell that used it.
+    // Credential material dies with the shell that used it. The workspace does
+    // not: it holds the student's own work, and it is removed when the *session*
+    // ends, not when a socket drops — a reconnect must not lose their Dockerfile.
     void removeSessionKubeconfig(session.kubeconfigPath);
+    void removeSessionDockerCerts(session.dockerCertDir);
     log(`session ${session.claims.sid} ended (${sessions.size} active)`);
   }
 

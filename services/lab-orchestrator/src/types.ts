@@ -195,9 +195,13 @@ export function sandboxRefOf(context: LabSessionContext): string {
  * Namespace-scoped credentials handed to the terminal service, never to the
  * browser.
  *
- * This is the *only* credential a student shell is ever given. It authenticates
- * as the session's ServiceAccount, whose rights stop at the namespace edge, and
- * it carries a bound, short-lived token rather than a long-lived secret.
+ * This is the *only* credential a Kubernetes student shell is ever given. It
+ * authenticates as the session's ServiceAccount, whose rights stop at the
+ * namespace edge, and it carries a bound, short-lived token rather than a
+ * long-lived secret.
+ *
+ * The generic form of this is `TerminalContext` below; this narrower shape is
+ * what the Kubernetes-only internal callers still read.
  */
 export interface StudentCredentials {
   /** A complete kubeconfig YAML document scoped to the session namespace. */
@@ -258,7 +262,66 @@ export type TerminalContext =
       workdir: string;
       env?: Record<string, string>;
       expiresAt: string;
+    }
+  /**
+   * A local PTY pointed at this session's own Docker daemon (Docker labs).
+   *
+   * A Docker lab is different in kind from a Linux or Terraform one: the
+   * student does not merely run commands *inside* a container, they need a
+   * daemon to build images against, run containers on, and inspect. So this
+   * variant is not `container-exec` — the shell runs here, and `DOCKER_HOST`
+   * points at the session's private `docker:dind` sandbox.
+   *
+   * The credential carries the same property as the kubeconfig above: it grants
+   * access to **one** sandbox and nothing else. Each sandbox generates its own
+   * certificate authority at startup, so these certificates are not merely
+   * unauthorised against another session's daemon — they are cryptographically
+   * unusable there, because that daemon does not trust this session's CA and
+   * this session's client does not trust that daemon's. A student who learns
+   * another sandbox's address gains nothing: reaching it still requires a
+   * certificate signed by *its* CA, which exists only inside it.
+   */
+  | {
+      kind: 'docker-daemon';
+      /** `tcp://jtt-lab-<hex>:2376` — the session's own daemon. */
+      dockerHost: string;
+      /** PEM certificate authority for this sandbox only. */
+      ca: string;
+      /** PEM client certificate for this sandbox only. */
+      clientCert: string;
+      /** PEM client key. Written 0600 by the terminal and never logged. */
+      clientKey: string;
+      /** The sandbox container name, which is also the isolation handle. */
+      sandboxRef: string;
+      /** Baseline files the lab seeds into the student's workspace. */
+      workspaceFiles?: Array<{ path: string; content: string }>;
+      env?: Record<string, string>;
+      /** ISO-8601 expiry. Bounded by the session's own deadline. */
+      expiresAt: string;
     };
+
+/** True when this session's shell drives its own private Docker daemon. */
+export function isDockerTerminalContext(
+  context: TerminalContext,
+): context is Extract<TerminalContext, { kind: 'docker-daemon' }> {
+  return context.kind === 'docker-daemon';
+}
+
+/**
+ * Narrow a terminal context to one variant, or fail loudly.
+ *
+ * Used where the caller has already established the track and a mismatch would
+ * be a wiring bug — better to say so than to hand a shell an empty credential.
+ */
+export function asTerminalContext<K extends TerminalContext['kind']>(
+  context: TerminalContext,
+  kind: K,
+): Extract<TerminalContext, { kind: K }> {
+  if (context.kind !== kind) {
+    throw new Error(`Expected a '${kind}' terminal context, got '${context.kind}'`);
+  }
+  return context as Extract<TerminalContext, { kind: K }>;
+}
 
 /** A sandbox as seen by the cleanup reaper, whatever produced it. */
 export interface ManagedSandbox {

@@ -23,6 +23,7 @@ import {
   type Requirement,
 } from '@jumptotech/lab-orchestrator';
 import {
+  FakeDockerDaemon,
   FakeKubernetes,
   cronJobSnapshot,
   deploymentSnapshot,
@@ -47,9 +48,21 @@ async function check(k8s: FakeKubernetes, requirement: Requirement, namespace = 
   return verifyRequirement(requirement, new VerifyReader(k8s, namespace));
 }
 
-/** Run a whole shipped lab against a fake cluster. */
-function runLab(lab: LoadedLabDefinition, k8s: FakeKubernetes, namespace = NS) {
-  return verifyLab({ k8s, lab, namespace });
+/**
+ * Run a whole shipped lab against a fake cluster.
+ *
+ * `verifyLab` picks its reader from the lab's own `environment.provider`, so a
+ * Docker lab needs a Docker daemon supplied alongside the cluster. An empty
+ * daemon is the honest default here: the point of these tests is that a lab does
+ * not pass on state it was not given.
+ */
+function runLab(
+  lab: LoadedLabDefinition,
+  k8s: FakeKubernetes,
+  namespace = NS,
+  docker: FakeDockerDaemon = new FakeDockerDaemon(),
+) {
+  return verifyLab({ k8s, docker, lab, namespace });
 }
 
 const passed = (result: { status: string }) => result.status === 'pass';
@@ -661,9 +674,11 @@ describe('verifier — isolation (test requirements 27, 29)', () => {
     expect((await runLab(registry.get('K8S-010'), k8s, NS)).passed).toBe(false);
   });
 
-  it('reads only the namespace it was given, for every shipped lab', async () => {
+  it('reads only the namespace or sandbox it was given, for every shipped lab', async () => {
     // A single fake holding a correct answer in B must not satisfy A for any
-    // lab in the catalog.
+    // lab in the catalog. For Docker labs the reader is bound to one daemon
+    // rather than one namespace, and the empty daemon supplied here is session
+    // A's — session B's containers are simply not in it to be found.
     for (const lab of registry.all()) {
       const k8s = new FakeKubernetes({
         pods: { [NS_B]: [podSnapshot()] },
