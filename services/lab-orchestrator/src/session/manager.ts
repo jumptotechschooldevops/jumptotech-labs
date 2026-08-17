@@ -20,11 +20,14 @@ import type {
   CreateResult,
   DestroyResult,
   EnvironmentInfo,
+  ExecResult,
   LabSessionContext,
   LabProvider,
   ProvisionStep,
   ResetResult,
+  SandboxListOptions,
   SandboxPathRead,
+  SandboxToolRequest,
   StudentCredentials,
   TerminalContext,
 } from '../types.js';
@@ -78,6 +81,18 @@ export interface SandboxReadPort {
     relativePath: string,
     options?: { maxBytes?: number },
   ): Promise<SandboxPathRead | null>;
+
+  /**
+   * List files under a sandbox directory. Present only for providers that
+   * implement it — Terraform configuration checks need it; nothing else does.
+   */
+  list?(relativeDir: string, options?: SandboxListOptions): Promise<string[]>;
+
+  /**
+   * Run one allow-listed read-only tool in the sandbox. Present only for
+   * providers that allow one; the provider, not the caller, decides which.
+   */
+  runTool?(request: SandboxToolRequest): Promise<ExecResult>;
 }
 
 /** Hook used to close a student's terminal when their session goes away. */
@@ -502,8 +517,15 @@ export class SessionManager {
     if (!provider?.readSandboxPath) return null;
     const context = this.contextFor(session);
     const read = provider.readSandboxPath.bind(provider);
+    const list = provider.listSandboxFiles?.bind(provider);
+    const runTool = provider.runSandboxTool?.bind(provider);
     return {
       read: (relativePath, options) => read(context, relativePath, options),
+      // Both are optional capabilities: a provider that does not implement
+      // them leaves the corresponding checks reported as skipped, with a
+      // reason, rather than failing a student for a platform gap.
+      ...(list ? { list: (dir, options) => list(context, dir, options) } : {}),
+      ...(runTool ? { runTool: (request) => runTool(context, request) } : {}),
     };
   }
 

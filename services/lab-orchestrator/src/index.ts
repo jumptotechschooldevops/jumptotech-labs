@@ -26,6 +26,7 @@ export {
 export {
   ContainerLabProvider,
   type ContainerProviderOptions,
+  type VerifierTool,
 } from './providers/container/sandbox-provider.js';
 export {
   DockerCliRuntime,
@@ -73,6 +74,14 @@ export {
   type AwsSessionCredentials,
 } from './providers/aws-provider.js';
 export * from './session/sandbox-paths.js';
+
+// --- Terraform reading (PLATFORM-TERRAFORM-001) ----------------------------
+// Pure, provider-agnostic modules: a state parser and an HCL block scanner.
+// They hold no runtime and no I/O, so the verifier can depend on them without
+// depending on how a sandbox is produced.
+export * from './terraform/state.js';
+export * from './terraform/hcl.js';
+
 export {
   loadSetupFiles,
   nonExecutableMode,

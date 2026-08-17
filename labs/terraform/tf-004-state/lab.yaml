@@ -1,0 +1,165 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — TF-004
+#
+# State safety note: nothing in this lab puts a secret into Terraform state.
+# The resources write service metadata — names and port numbers — and the
+# verifier reads state attributes, so a lab that needed a credential in state
+# would be a lab that asked the platform to hold one. None do.
+# ---------------------------------------------------------------------------
+id: TF-004
+slug: tf-004-state
+title: Terraform State
+track: terraform
+topic: state
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 4
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-001
+
+story: >
+  You have inherited a Terraform configuration from an engineer who has left
+  JumpToTech Bank. It describes three services. One of them, the legacy
+  statement printer, was decommissioned last quarter — but only in the sense
+  that the team stopped using it. The configuration still describes it, so
+  Terraform still believes it should exist.
+
+  Before you can clean this up you need to understand the thing sitting between
+  the configuration and reality: state. Terraform does not inspect the world to
+  work out what it manages. It reads its own record of what it created, and
+  compares that record to your configuration.
+
+objectives:
+  - Explain what terraform.tfstate records and why Terraform needs it
+  - Inspect managed resources with terraform state list and terraform state show
+  - Predict what happens to state when a resource is removed from configuration
+
+task:
+  summary: Apply an inherited configuration, inspect its state, then retire a decommissioned resource so that both the state and the artefact it created are gone.
+  description: >
+    Work in the `terraform` directory of your lab environment. It already
+    contains the inherited configuration and a `versions.tf`, and every check in
+    this lab looks at that directory.
+
+    That directory already contains a configuration describing three
+    `local_file` resources: `accounts_config`, `ledger_config`, and
+    `legacy_config`.
+
+    Start by making it real. Run `terraform init` and `terraform apply`, then
+    look at what Terraform now knows: `terraform state list` shows every
+    resource address it is tracking, and `terraform state show
+    local_file.ledger_config` shows the recorded attributes of one of them.
+    Compare that output to what the configuration says. Notice that state holds
+    values the configuration never spelled out.
+
+    Now retire the decommissioned service. Remove the `legacy_config` resource
+    from the configuration and apply again. Read the plan before you confirm it
+    — Terraform should tell you it intends to destroy exactly one resource,
+    because a resource that is in state but no longer in configuration is a
+    resource Terraform believes you no longer want.
+
+    When you are done, Terraform should manage exactly two file resources,
+    `legacy-config.txt` should be gone from that directory, and the other two
+    files should still be there. Do not delete `legacy-config.txt` by hand — the
+    point of this lab is that Terraform removes it for you when the
+    configuration says it should no longer exist.
+
+setup:
+  files:
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/main.tf
+      label: The inherited configuration is present
+    - type: file_exists
+      path: terraform/versions.tf
+      label: The provider requirements are present
+
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: The workspace is initialised
+  - type: terraform_valid
+    dir: terraform
+    label: The configuration is valid
+  - type: terraform_state_contains
+    dir: terraform
+    address: local_file.accounts_config
+    label: Terraform still manages accounts_config
+  - type: terraform_state_contains
+    dir: terraform
+    address: local_file.ledger_config
+    label: Terraform still manages ledger_config
+  - type: terraform_state_absent
+    dir: terraform
+    address: local_file.legacy_config
+    label: legacy_config is no longer in state
+  - type: terraform_resource_count
+    dir: terraform
+    resource_type: local_file
+    count: 2
+    label: Exactly two file resources remain under management
+  - type: file_exists
+    path: terraform/accounts.json
+    label: accounts.json still exists
+  - type: file_exists
+    path: terraform/ledger.json
+    label: ledger.json still exists
+  - type: file_absent
+    path: terraform/legacy-config.txt
+    label: legacy-config.txt was removed by Terraform
+
+hints:
+  - level: 1
+    text: >
+      Terraform decides what to do by comparing two things. You have been
+      reading one of them all along; `terraform state list` shows you the other.
+  - level: 2
+    text: >
+      Read the official "State" concept page and the `terraform state list` and
+      `terraform state show` command references. Then think about what it means
+      for a resource to be in one of those two places but not the other — the
+      plan output will tell you directly if you run it after making the change
+      but before applying.
+  - level: 3
+    text: >
+      Delete the whole `legacy_config` resource block from the configuration and
+      run `terraform apply`. The plan should read `Plan: 0 to add, 0 to change,
+      1 to destroy`. If instead it wants to destroy three resources, you removed
+      more than you meant to. If `legacy-config.txt` is still on disk after a
+      successful apply, check whether you removed the resource from the file or
+      only commented out part of it.
+
+references:
+  - title: Terraform language — State
+    url: https://developer.hashicorp.com/terraform/language/state
+  - title: Terraform CLI — terraform state list
+    url: https://developer.hashicorp.com/terraform/cli/commands/state/list
+  - title: Terraform CLI — terraform state show
+    url: https://developer.hashicorp.com/terraform/cli/commands/state/show
+  - title: Terraform CLI — Inspecting state
+    url: https://developer.hashicorp.com/terraform/cli/state/inspect
+
+skills:
+  - terraform.state.inspect
+  - terraform.state.list
+  - terraform.state.lifecycle
+  - terraform.workflow.destroy
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - understand-terraform-state
+      - use-the-terraform-cli

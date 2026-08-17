@@ -1,0 +1,169 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — TF-005
+#
+# The dependency checks here are honest about what they can prove. A check that
+# one resource's content *contains another resource's filename* can only pass
+# if the student wrote a reference — a hardcoded copy of the same string would
+# also pass, so the lab pairs it with a generated value that cannot be guessed.
+# ---------------------------------------------------------------------------
+id: TF-005
+slug: tf-005-multiple-resources
+title: Multiple Resources and Dependencies
+track: terraform
+topic: dependencies
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 5
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-003
+
+story: >
+  Real environments are not one resource. The platform team's smallest
+  environment already involves an identifier that has to be generated once and
+  then never change, a manifest that records it, and a deployment record that
+  points at the manifest.
+
+  The order those things are created in matters, and getting it wrong by hand
+  is how the team used to produce half-built environments at two in the
+  morning. Terraform works the order out for itself — but only if you express
+  the relationships instead of repeating the values.
+
+objectives:
+  - Build a configuration from several interdependent resources
+  - Create an implicit dependency by referring to another resource's attribute
+  - Explain how Terraform derives its apply order from a dependency graph
+
+task:
+  summary: Build a four-resource environment where each resource refers to the one before it, and let Terraform work out the order.
+  description: >
+    Work in the `terraform` directory of your lab environment. It already
+    contains a `versions.tf` declaring the providers you may use, and every check
+    in this lab looks at that directory.
+
+    When one resource's argument refers to another resource's attribute,
+    Terraform records a dependency between them and creates them in the order
+    that implies. You almost never need to state the order yourself.
+
+    Build the following, in one configuration:
+
+      - a `random_pet` resource named `environment_id`, configured to produce a
+        two-word name;
+      - a `local_file` resource named `environment_manifest` writing to
+        `environment.txt`, whose content includes the generated pet name — taken
+        from the resource, not typed in;
+      - a `local_file` resource named `deployment_record` writing to
+        `deployment.txt`, whose content includes the *filename* of the manifest
+        resource above, again taken from the resource;
+      - a `null_resource` named `smoke_test` (the `hashicorp/null` provider,
+        version 3.2.3, is available offline) with a `triggers` map containing a
+        key `environment_id` set to the generated pet name.
+
+    Apply, then run `terraform graph` and read the dependency edges, or simply
+    read the order in which the apply output reports each resource being
+    created. Change the `random_pet` length and plan again: notice how far the
+    change propagates, and why.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: The starter configuration is in place
+
+requirements:
+  - type: terraform_valid
+    dir: terraform
+    label: The configuration is valid
+  - type: terraform_state_contains
+    dir: terraform
+    address: random_pet.environment_id
+    label: Terraform manages a random_pet named environment_id
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: environment_manifest
+    attribute: filename
+    contains: environment.txt
+    label: The manifest resource writes environment.txt
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: deployment_record
+    attribute: content
+    contains: environment.txt
+    label: The deployment record refers to the manifest's filename
+  - type: terraform_state_contains
+    dir: terraform
+    address: null_resource.smoke_test
+    label: Terraform manages a null_resource named smoke_test
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: null_resource
+    name: smoke_test
+    attribute: triggers.environment_id
+    label: The smoke test is triggered by the environment identifier
+  - type: terraform_resource_count
+    dir: terraform
+    resource_type: local_file
+    count: 2
+    label: Exactly two file resources are managed
+  - type: file_exists
+    path: terraform/environment.txt
+    label: environment.txt was created
+  - type: file_exists
+    path: terraform/deployment.txt
+    label: deployment.txt was created
+
+hints:
+  - level: 1
+    text: >
+      Terraform does not need to be told what to build first. It needs to be
+      able to see that one thing uses another — which happens automatically when
+      you refer to it.
+  - level: 2
+    text: >
+      Read the official pages on resource dependencies and on references to
+      resource attributes, then look up `random_pet` and `null_resource` in the
+      registry to find the attribute names you need. `terraform graph` renders
+      the dependency graph Terraform derived; `terraform plan` names the order
+      it will act in.
+  - level: 3
+    text: >
+      Every cross-resource value must be an expression, not a copy. If you paste
+      the pet name into the manifest as a literal, the manifest will not update
+      when the pet name changes — and the graph will show no edge between them.
+      `null_resource` takes a `triggers` map of strings; the key must be exactly
+      `environment_id`. If Terraform reports a cycle, two of your resources are
+      referring to each other.
+
+references:
+  - title: Terraform language — Resource dependencies
+    url: https://developer.hashicorp.com/terraform/language/resources/behavior
+  - title: Terraform language — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+  - title: Terraform CLI — terraform graph
+    url: https://developer.hashicorp.com/terraform/cli/commands/graph
+  - title: null_resource
+    url: https://registry.terraform.io/providers/hashicorp/null/3.2.3/docs/resources/resource
+
+skills:
+  - terraform.resources.multiple
+  - terraform.dependencies.implicit
+  - terraform.expressions.references
+  - terraform.graph.read
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - read-generate-modify-configuration
+      - understand-terraform-basics

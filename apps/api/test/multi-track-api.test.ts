@@ -131,7 +131,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
     expect(tracks.map((t) => t.track).sort()).toEqual(['kubernetes', 'linux', 'terraform']);
     expect(tracks.find((t) => t.track === 'kubernetes')?.labCount).toBe(10);
     expect(tracks.find((t) => t.track === 'linux')?.labCount).toBe(1);
-    expect(tracks.find((t) => t.track === 'terraform')?.labCount).toBe(1);
+    expect(tracks.find((t) => t.track === 'terraform')?.labCount).toBe(10);
     expect(tracks.find((t) => t.track === 'linux')?.providers).toEqual(['linux']);
   });
 
@@ -201,7 +201,21 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
 
     for (const [track, expected] of [
       ['linux', ['LINUX-001']],
-      ['terraform', ['TF-001']],
+      [
+        'terraform',
+        [
+          'TF-001',
+          'TF-002',
+          'TF-003',
+          'TF-004',
+          'TF-005',
+          'TF-006',
+          'TF-007',
+          'TF-008',
+          'TF-009',
+          'TF-010',
+        ],
+      ],
     ] as const) {
       const viaLabs = await request(app).get(`/api/labs?track=${track}`);
       expect((viaLabs.body.data.labs as Array<{ id: string }>).map((l) => l.id)).toEqual(expected);
@@ -251,7 +265,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       'terraform',
       'aws',
     ]);
-    expect(response.body.data.labsLoaded).toBe(12);
+    expect(response.body.data.labsLoaded).toBe(21);
   });
 });
 

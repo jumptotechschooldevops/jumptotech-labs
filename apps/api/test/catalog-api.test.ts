@@ -78,9 +78,10 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    // Catalog order is by track, then by each lab's `order`. PLATFORM-004
-    // added two tracks; the Kubernetes ten are unchanged and still first.
-    expect(res.body.data.count).toBe(12);
+    // Catalog order is by track, then by each lab's `order`. The Kubernetes
+    // ten are unchanged and still first, followed by Linux and the ten-lab
+    // Terraform track.
+    expect(res.body.data.count).toBe(21);
     expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual([
       'K8S-001',
       'K8S-002',
@@ -94,6 +95,15 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
       'K8S-010',
       'LINUX-001',
       'TF-001',
+      'TF-002',
+      'TF-003',
+      'TF-004',
+      'TF-005',
+      'TF-006',
+      'TF-007',
+      'TF-008',
+      'TF-009',
+      'TF-010',
     ]);
     expect(res.body.data.tracks[0]).toMatchObject({ track: 'kubernetes', labCount: 10 });
   });
@@ -127,7 +137,7 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
     expect(byTopic.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-006', 'K8S-007']);
 
     const byDifficulty = await request(app).get('/api/labs?difficulty=intermediate');
-    expect(byDifficulty.body.data.count).toBe(3);
+    expect(byDifficulty.body.data.count).toBe(7);
 
     const byQuery = await request(app).get('/api/labs?q=secret');
     expect(byQuery.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-005']);

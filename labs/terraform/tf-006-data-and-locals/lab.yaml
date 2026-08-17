@@ -1,0 +1,173 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — TF-006
+#
+# The data source here reads a file that already exists in the workspace. That
+# is a deliberate choice: it teaches the data-source *concept* — reading
+# something Terraform does not manage and using it in the configuration —
+# without the sandbox needing network access or a cloud account to read from.
+# ---------------------------------------------------------------------------
+id: TF-006
+slug: tf-006-data-and-locals
+title: Local Values and Data Sources
+track: terraform
+topic: expressions
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 6
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-002
+
+story: >
+  A reviewer has rejected the platform team's latest change. The configuration
+  builds the same service slug — company prefix, service, environment — in four
+  different places, and two of them have already drifted apart. Separately, the
+  team keeps a `platform.json` file describing the region and tier the estate
+  runs in. It is maintained by a different team and Terraform must not manage
+  it, but the configuration needs to read from it.
+
+  These are the two halves of expressing something once: local values name a
+  computed value inside your configuration, and data sources bring in a value
+  from outside it.
+
+objectives:
+  - Define local values and reference them across a configuration
+  - Read an existing artefact with a data source rather than managing it
+  - Combine both into a derived value with Terraform expressions
+
+task:
+  summary: Replace repeated literals with local values, read an existing file with a data source, and combine the two into a derived result.
+  description: >
+    Work in the `terraform` directory of your lab environment. It already
+    contains `platform.json` and a `versions.tf`, and every check in this lab
+    looks at that directory.
+
+    `platform.json` describes the estate:
+    a region, a tier, and an owning team. Terraform must not manage this file —
+    another team owns it — but your configuration needs what is inside it.
+
+    Add a `locals` block defining exactly three names:
+
+      - `environment` — the string `prod`;
+      - `service_prefix` — the string `jumptotech`;
+      - `service_slug` — built from the two above and the literal `ledger`, in
+        the form `<prefix>-ledger-<environment>`. It must be composed from the
+        other locals, not written out by hand.
+
+    Add a `data` block using the `local_file` data source, named `platform`,
+    that reads `platform.json`.
+
+    Then declare a `local_file` resource named `service_summary` writing to
+    `service-summary.txt`, whose content is the service slug, then a space, two
+    colons, and a space, then the estate's tier taken from the data source —
+    which means decoding the JSON you just read. For this estate the result is:
+
+        jumptotech-ledger-prod :: core
+
+    Apply, then edit `platform.json` by hand to a different tier and run
+    `terraform plan`. Notice that Terraform sees the change — data sources are
+    read on every plan, unlike the values Terraform records for resources it
+    manages.
+
+setup:
+  files:
+    - source: setup/platform.json
+      path: terraform/platform.json
+      mode: '644'
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/platform.json
+      label: The platform description is present
+    - type: file_exists
+      path: terraform/versions.tf
+      label: The provider requirements are present
+
+requirements:
+  - type: terraform_valid
+    dir: terraform
+    label: The configuration is valid
+  - type: terraform_locals_declared
+    dir: terraform
+    names:
+      - environment
+      - service_prefix
+      - service_slug
+    label: All three local values are defined
+  - type: terraform_data_source_declared
+    dir: terraform
+    data_type: local_file
+    name: platform
+    label: A local_file data source named platform is declared
+  - type: terraform_state_contains
+    dir: terraform
+    address: data.local_file.platform
+    label: The data source was read
+  - type: terraform_state_contains
+    dir: terraform
+    address: local_file.service_summary
+    label: Terraform manages a local_file named service_summary
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: service_summary
+    attribute: content
+    equals: "jumptotech-ledger-prod :: core"
+    label: The summary combines the local values and the data source
+  - type: file_exists
+    path: terraform/service-summary.txt
+    label: service-summary.txt was created
+
+hints:
+  - level: 1
+    text: >
+      One of the two blocks you need brings a value *into* the configuration
+      from something Terraform does not manage. The other names a value computed
+      *within* it. They are referenced with different prefixes.
+  - level: 2
+    text: >
+      Read the official "Local Values" page and the "Data Sources" page, then
+      look up the `local_file` *data source* in the registry — note that it is a
+      different thing from the `local_file` resource, and that its content comes
+      back as a string. The Terraform function reference has a function for
+      turning a JSON string into an object you can index.
+  - level: 3
+    text: >
+      `service_slug` must be built from `local.service_prefix` and
+      `local.environment`; if you write the finished string as a literal, you
+      have not removed the duplication the reviewer objected to. The content must
+      match exactly, including the single spaces around the two colons and with
+      no trailing newline. If your check fails on content, run `terraform state
+      show local_file.service_summary` and compare character by character —
+      `jsondecode` on the data source's `content` attribute gives you the object
+      to read `tier` from.
+
+references:
+  - title: Terraform language — Local values
+    url: https://developer.hashicorp.com/terraform/language/values/locals
+  - title: Terraform language — Data sources
+    url: https://developer.hashicorp.com/terraform/language/data-sources
+  - title: Terraform functions — jsondecode
+    url: https://developer.hashicorp.com/terraform/language/functions/jsondecode
+  - title: local_file data source
+    url: https://registry.terraform.io/providers/hashicorp/local/2.5.2/docs/data-sources/file
+
+skills:
+  - terraform.locals.declare
+  - terraform.data.sources
+  - terraform.expressions.functions
+  - terraform.expressions.interpolation
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - read-generate-modify-configuration
+      - understand-terraform-basics

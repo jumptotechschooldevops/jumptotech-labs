@@ -32,8 +32,14 @@ ARG SANDBOX_LINUX_IMAGE=jumptotech/lab-linux:latest
 FROM debian:bookworm-slim AS tools
 
 ARG TERRAFORM_VERSION=1.9.8
+# Every version is exact. Provider behaviour and state attribute names change
+# between releases, and the verifier reads state attributes — so a floating
+# constraint would make a lab's checks depend on when the image was built.
 ARG LOCAL_PROVIDER_VERSION=2.5.2
 ARG RANDOM_PROVIDER_VERSION=3.6.3
+# `null_resource` and its `triggers`, used by TF-005 and TF-008 to teach
+# dependency and replacement behaviour without creating anything at all.
+ARG NULL_PROVIDER_VERSION=3.2.3
 
 RUN set -eux; \
     apt-get update; \
@@ -64,11 +70,17 @@ RUN set -eux; \
       arm64) platform=linux_arm64 ;; \
     esac; \
     mkdir -p /tmp/mirror-src /opt/terraform/mirror; \
-    printf 'terraform {\n  required_providers {\n    local  = { source = "hashicorp/local",  version = "%s" }\n    random = { source = "hashicorp/random", version = "%s" }\n  }\n}\n' \
-      "${LOCAL_PROVIDER_VERSION}" "${RANDOM_PROVIDER_VERSION}" > /tmp/mirror-src/providers.tf; \
+    printf 'terraform {\n  required_providers {\n    local  = { source = "hashicorp/local",  version = "%s" }\n    random = { source = "hashicorp/random", version = "%s" }\n    null   = { source = "hashicorp/null",   version = "%s" }\n  }\n}\n' \
+      "${LOCAL_PROVIDER_VERSION}" "${RANDOM_PROVIDER_VERSION}" "${NULL_PROVIDER_VERSION}" > /tmp/mirror-src/providers.tf; \
     cd /tmp/mirror-src; \
     terraform providers mirror -platform="${platform}" /opt/terraform/mirror; \
-    rm -rf /tmp/mirror-src
+    rm -rf /tmp/mirror-src; \
+    # Fail the build here rather than shipping an image whose `terraform init`
+    # would fail inside a student's sandbox with no way to recover.
+    for provider in local random null; do \
+      test -d "/opt/terraform/mirror/registry.terraform.io/hashicorp/${provider}" \
+        || { echo "provider mirror is missing hashicorp/${provider}" >&2; exit 1; }; \
+    done
 
 # --- runtime stage ----------------------------------------------------------
 FROM ${SANDBOX_LINUX_IMAGE}

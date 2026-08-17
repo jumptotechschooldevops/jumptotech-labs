@@ -1,0 +1,15 @@
+JumpToTech Bank — settlement service, port allocation record
+=============================================================
+
+Allocated by:   platform on-call, during the 2026-Q1 migration
+Service:        settlement-api
+Port:           8443
+Allowed range:  8000 - 9000  (per the platform port policy)
+
+Notes
+-----
+This port was chosen by hand at 02:40 during the migration and has been
+hardcoded into the settlement service's firewall rules and three runbooks
+ever since. It must not change.
+
+Terraform does not know about it yet.

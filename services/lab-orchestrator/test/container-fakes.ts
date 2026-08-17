@@ -56,6 +56,10 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
   #images: Set<string>;
   unreachable: string | undefined;
   #seed: Record<string, Partial<FakeEntry>>;
+  /** When set, `terraform validate` reports this diagnostic. */
+  validateError: string | null = null;
+  /** When non-empty, `terraform fmt -check` names these files. */
+  unformattedFiles: string[] = [];
 
   constructor(options: FakeRuntimeOptions = {}) {
     this.#images = new Set(
@@ -203,10 +207,58 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
 
       case '/usr/bin/env': {
         const binary = args[0];
-        if (binary === 'terraform' && container.spec.image.includes('terraform')) {
-          return ok('Terraform v1.9.8\non linux_arm64\n');
+        if (binary !== 'terraform' || !container.spec.image.includes('terraform')) {
+          return fail(`env: '${String(binary)}': No such file or directory`);
         }
-        return fail(`env: '${String(binary)}': No such file or directory`);
+        // The three subcommands the platform itself ever runs: a version probe
+        // at provisioning time, and the two read-only checks.
+        switch (args[1]) {
+          case 'validate':
+            return this.validateError
+              ? {
+                  exitCode: 1,
+                  stdout: JSON.stringify({
+                    valid: false,
+                    diagnostics: [{ severity: 'error', summary: this.validateError }],
+                  }),
+                  stderr: '',
+                  timedOut: false,
+                }
+              : ok(JSON.stringify({ valid: true, diagnostics: [] }));
+          case 'fmt':
+            return this.unformattedFiles.length > 0
+              ? {
+                  exitCode: 3,
+                  stdout: `${this.unformattedFiles.join('\n')}\n`,
+                  stderr: '',
+                  timedOut: false,
+                }
+              : ok('');
+          default:
+            return ok('Terraform v1.9.8\non linux_arm64\n');
+        }
+      }
+
+      /**
+       * `find <dir> -maxdepth N -type f [-name *.suffix]`.
+       *
+       * Only the shape `listSandboxFiles` builds is interpreted; the depth and
+       * the suffix are honoured so a test can prove the bounds are real.
+       */
+      case '/usr/bin/find': {
+        const root = args[0] ?? '';
+        const depth = Number.parseInt(args[args.indexOf('-maxdepth') + 1] ?? '1', 10);
+        const nameIndex = args.indexOf('-name');
+        const pattern = nameIndex === -1 ? null : (args[nameIndex + 1] ?? '');
+        const prefix = `${root.replace(/\/+$/, '')}/`;
+
+        const matches = [...container.files.entries()]
+          .filter(([path, entry]) => entry.type === 'file' && path.startsWith(prefix))
+          .map(([path]) => path)
+          .filter((path) => path.slice(prefix.length).split('/').length <= depth)
+          .filter((path) => (pattern ? path.endsWith(pattern.replace('*', '')) : true))
+          .sort();
+        return ok(matches.length > 0 ? `${matches.join('\n')}\n` : '');
       }
 
       case '/usr/bin/stat': {

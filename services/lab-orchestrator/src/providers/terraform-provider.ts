@@ -27,9 +27,17 @@
  * makes the exercise deterministic.
  *
  * **Verification never trusts the transcript.** `terraform apply` having been
- * typed proves nothing; the checks read `terraform.tfstate` and the artifacts
- * on disk, so a student who reaches the same state another way passes, and a
- * student who typed the command but whose apply failed does not.
+ * typed proves nothing; the checks read `terraform.tfstate`, the `.tf` files
+ * the student wrote, and the artifacts on disk — so a student who reaches the
+ * same state another way passes, and a student who typed the command but whose
+ * apply failed does not.
+ *
+ * The one exception to "verification only reads files" is deliberate and
+ * narrow: `terraform validate` and `terraform fmt -check` answer two questions
+ * no file on disk answers, and both are documented read-only subcommands. They
+ * reach the sandbox through `runSandboxTool`, which this provider allows for
+ * `terraform` and nothing else; `apply`, `destroy`, `init` and `plan` belong to
+ * the student's own terminal and are never invoked by the platform.
  */
 import type { ContainerRuntimePort } from './container/runtime.js';
 import { ContainerLabProvider } from './container/sandbox-provider.js';
@@ -53,6 +61,12 @@ export class TerraformLabProvider extends ContainerLabProvider {
       // Provisioning fails loudly if the CLI is missing, rather than handing a
       // student a Terraform lab with no terraform in it.
       requiredBinaries: ['terraform'],
+      // The only tool the verifier may run in a Terraform sandbox, and only
+      // through two read-only subcommands. `apply`, `destroy`, `init`, `plan`,
+      // `import` and `state` are all absent: they belong to the student's
+      // terminal, and a verification pass that could run them would be a
+      // verification pass that could destroy the work it is grading.
+      verifierTools: [{ name: 'terraform', subcommands: ['validate', 'fmt'] }],
       ...(options.home ? { home: options.home } : {}),
       ...(options.now ? { now: options.now } : {}),
     });

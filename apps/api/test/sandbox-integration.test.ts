@@ -466,3 +466,123 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
     await request(app).delete(`/api/sessions/${terraform.sessionId}`);
   }, 420_000);
 });
+
+/**
+ * The rest of the Terraform track, against real Terraform.
+ *
+ * TF-001 proves the workflow works at all. These two prove the *checks the
+ * ported curriculum actually uses* work on state a real apply wrote: seeded
+ * multi-file projects, configuration scanning, `terraform validate` through the
+ * provider's tool port, resource attributes, counts, and removal.
+ */
+const TF_002_SOLUTION = `
+set -e
+cd terraform
+cat > variables.tf <<'HCL'
+variable "environment" {
+  type        = string
+  description = "Deployment environment this configuration describes."
+  default     = "dev"
+}
+
+variable "service_name" {
+  type        = string
+  description = "Name of the service this configuration manages."
+}
+HCL
+cat > main.tf <<'HCL'
+resource "local_file" "service_manifest" {
+  filename = "service.txt"
+  content  = "\${var.service_name}-\${var.environment}"
+}
+HCL
+cat > terraform.tfvars <<'HCL'
+service_name = "ledger-api"
+environment  = "staging"
+HCL
+terraform init -no-color -input=false
+terraform apply -auto-approve -no-color -input=false
+`;
+
+/** Apply the inherited configuration, then retire the decommissioned service. */
+const TF_004_SOLUTION = `
+set -e
+cd terraform
+terraform init -no-color -input=false
+terraform apply -auto-approve -no-color -input=false
+sed -i '/resource "local_file" "legacy_config"/,$d' main.tf
+terraform apply -auto-approve -no-color -input=false
+`;
+
+describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('the Terraform curriculum', () => {
+  it('passes TF-002 on values that really came from variables', async () => {
+    if (!enabled) return;
+    const { app } = await harness();
+    const session = await startLab(app, 'TF-002');
+
+    const before = await check(app, session.sessionId);
+    expect(before.passed).toBe(false);
+
+    await asStudent(session.sandboxRef, TF_002_SOLUTION);
+
+    const after = await check(app, session.sessionId);
+    expect(after.passed, JSON.stringify(after.checks, null, 2)).toBe(true);
+
+    // The content check is what proves the variables were really used: the
+    // default is `dev`, and only a tfvars-supplied value produces `staging`.
+    const written = await asStudent(session.sandboxRef, 'cat terraform/service.txt');
+    expect(written.stdout).toBe('ledger-api-staging');
+
+    await request(app).delete(`/api/sessions/${session.sessionId}`);
+  }, 300_000);
+
+  it('seeds TF-004 and grades a resource Terraform really destroyed', async () => {
+    if (!enabled) return;
+    const { app } = await harness();
+    const session = await startLab(app, 'TF-004');
+
+    // The inherited project arrives, and the lab is not passed before the work.
+    const seeded = await asStudent(session.sandboxRef, 'ls -A terraform');
+    expect(seeded.stdout.split('\n').map((l) => l.trim()).filter(Boolean).sort()).toEqual([
+      'main.tf',
+      'versions.tf',
+    ]);
+    expect((await check(app, session.sessionId)).passed).toBe(false);
+
+    await asStudent(session.sandboxRef, TF_004_SOLUTION);
+
+    const after = await check(app, session.sessionId);
+    expect(after.passed, JSON.stringify(after.checks, null, 2)).toBe(true);
+
+    // Terraform removed the artefact; the student did not delete it by hand.
+    const listing = await asStudent(session.sandboxRef, 'ls -A terraform');
+    expect(listing.stdout).toContain('accounts.json');
+    expect(listing.stdout).not.toContain('legacy-config.txt');
+
+    await request(app).delete(`/api/sessions/${session.sessionId}`);
+  }, 420_000);
+
+  it('runs only read-only Terraform commands when checking a solution', async () => {
+    if (!enabled) return;
+    const { app } = await harness();
+    const session = await startLab(app, 'TF-002');
+    await asStudent(session.sandboxRef, TF_002_SOLUTION);
+
+    const fingerprint = async () =>
+      (await asStudent(session.sandboxRef, 'md5sum terraform/terraform.tfstate terraform/*.tf'))
+        .stdout;
+
+    const before = await fingerprint();
+    // Three checks in a row: whatever the verifier runs, it runs it repeatedly.
+    for (let i = 0; i < 3; i += 1) {
+      expect((await check(app, session.sessionId)).passed).toBe(true);
+    }
+
+    // Byte-for-byte identical state and configuration. `terraform validate`
+    // and `terraform fmt -check` are the only commands the platform runs, and
+    // neither writes.
+    expect(await fingerprint()).toBe(before);
+
+    await request(app).delete(`/api/sessions/${session.sessionId}`);
+  }, 420_000);
+});

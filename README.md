@@ -126,7 +126,7 @@ Added by PLATFORM-002:
 
 Added by PLATFORM-004:
 
-- **Three live tracks.** Kubernetes (10 labs), Linux (1), Terraform (1), from
+- **Three live tracks.** Kubernetes (10 labs), Linux (1), Terraform (10), from
   one catalog, one lab page and one session API.
 - **A generic sandbox provider contract**, and a registry that resolves a lab's
   declared provider to an implementation. There is no `switch (track)` anywhere
@@ -425,10 +425,14 @@ jumptotech-labs/
 │           └── setup/ledger-api.yaml         the injected fault
 │   ├── linux/
 │   │   └── linux-001-files-permissions/lab.yaml
-│   └── terraform/
-│       └── tf-001-init-plan-apply/
+│   └── terraform/                            TF-001 … TF-010
+│       ├── tf-001-init-plan-apply/
+│       │   ├── lab.yaml
+│       │   └── setup/versions.tf             the starter configuration
+│       ├── tf-002-variables/ … tf-009-import-state/
+│       └── tf-010-troubleshooting/
 │           ├── lab.yaml
-│           └── setup/versions.tf             the starter configuration
+│           └── setup/                        the deliberately broken project
 │
 ├── infrastructure/
 │   ├── docker/
@@ -517,6 +521,15 @@ interface LabProvider {
   // Optional: only providers whose labs declare filesystem or Terraform
   // requirements implement this. Kubernetes labs read the Kubernetes API.
   readSandboxPath?(ctx, path, opts): Promise<SandboxPathRead | null>
+
+  // Optional, for Terraform configuration checks: a bounded, read-only listing
+  // of files the student wrote, since a config question cannot name them.
+  listSandboxFiles?(ctx, dir, opts): Promise<string[]>
+
+  // Optional: one allow-listed read-only tool. The provider decides which tool
+  // and which subcommands; the Terraform provider allows `terraform validate`
+  // and `terraform fmt` and nothing else.
+  runSandboxTool?(ctx, req): Promise<ExecResult>
 }
 ```
 
@@ -628,14 +641,39 @@ installation excluded. Three things follow:
    break a student's lab;
 3. no cloud credential is ever needed, so none can leak.
 
-Adding a provider to a lab means adding it to the mirror in
-[`sandbox-terraform.Dockerfile`](infrastructure/docker/sandbox-terraform.Dockerfile).
-That is deliberate: the set of things a student can reach is a decision, not a
-default.
+The mirror carries `hashicorp/local`, `hashicorp/random` and `hashicorp/null`,
+each pinned to an exact version — provider behaviour and state attribute names
+change between releases, and the verifier reads state attributes, so a floating
+constraint would make a lab's checks depend on when the image was built. Adding
+a provider to a lab means adding it to the mirror in
+[`sandbox-terraform.Dockerfile`](infrastructure/docker/sandbox-terraform.Dockerfile),
+and the image build fails if any of the three is missing. That is deliberate:
+the set of things a student can reach is a decision, not a default.
 
 Provisioning refuses to hand over a Terraform sandbox whose image has no
 working `terraform` in it, rather than presenting a Terraform lab with no
 Terraform.
+
+**The track's shape.** Every Terraform lab works in `terraform/` inside the
+sandbox home. The platform seeds a `versions.tf` there declaring the providers
+that lab may use (and, for labs that begin from an existing project, the rest of
+the starting configuration) through the ordinary `setup.files` mechanism — the
+same one the Linux track uses. Nothing about Terraform reaches the session
+layer: it is a container provider with an image, a required binary, and two
+allow-listed read-only checks.
+
+| Lab | Teaches |
+|---|---|
+| TF-001 | init / plan / apply, and reading state back |
+| TF-002 | input variables, types, defaults, `terraform.tfvars` |
+| TF-003 | outputs, including a value that exists only after apply |
+| TF-004 | what state records, and what removing a resource does |
+| TF-005 | several resources, and implicit dependencies |
+| TF-006 | local values and data sources |
+| TF-007 | authoring a module and calling it twice |
+| TF-008 | `lifecycle`: `prevent_destroy`, `create_before_destroy`, `ignore_changes` |
+| TF-009 | adopting an existing resource with `terraform import` |
+| TF-010 | diagnosing a broken configuration with fmt, validate and plan |
 
 ### Docker sandbox strategy
 
@@ -763,12 +801,20 @@ requirement types of their family, so a requirement type with no handler fails
 to compile — *and* a handler registered against the wrong reader fails to
 compile too.
 
-All 32 Kubernetes requirement types are unchanged. PLATFORM-004 adds nine:
+All 32 Kubernetes requirement types are unchanged. The container-backed tracks
+add twenty-two more:
 
 | Family | Types |
 |---|---|
-| Filesystem | `file_exists`, `directory_exists`, `file_content`, `file_mode`, `file_owner`, `file_group` |
-| Terraform | `terraform_initialized`, `terraform_resource_exists`, `terraform_output_equals` |
+| Filesystem | `file_exists`, `directory_exists`, `file_absent`, `file_content`, `file_mode`, `file_owner`, `file_group` |
+| Terraform — working directory | `terraform_initialized`, `terraform_valid`, `terraform_formatted` |
+| Terraform — state | `terraform_state_contains`, `terraform_state_absent`, `terraform_resource_exists`, `terraform_resource_attribute`, `terraform_resource_count` |
+| Terraform — outputs | `terraform_output_exists`, `terraform_output_equals` |
+| Terraform — configuration | `terraform_variable_declared`, `terraform_locals_declared`, `terraform_data_source_declared`, `terraform_resource_lifecycle`, `terraform_module_exists`, `terraform_module_input` |
+
+Every Terraform check names the working directory it grades (`dir: terraform`
+in the shipped labs), so a student who ran the workflow somewhere else has not
+done the one the lab is checking.
 
 Design points worth stating:
 
@@ -791,6 +837,31 @@ offers `equals` (trailing whitespace ignored) and `contains`.
 contents the student controls. `terraform apply` having been typed proves
 nothing; a resource with no instance in state, or an output that is missing,
 fails.
+
+**Configuration is scanned, never evaluated.** The questions a state file cannot
+answer — did you declare a `variable` or hardcode the value, did you extract a
+module or copy-paste the resource, is a `lifecycle` rule present — are answered
+by an HCL *block scanner*
+([`terraform/hcl.ts`](services/lab-orchestrator/src/terraform/hcl.ts)). It is a
+real lexer rather than a set of regular expressions, because comments, strings
+containing braces and heredocs all make line matching wrong. It reports which
+blocks exist with which arguments; it never evaluates an expression or resolves
+a variable, because every *value* question is answered from state instead.
+
+**Exactly two commands ever run in a student's sandbox on the platform's
+behalf**: `terraform validate` and `terraform fmt -check`, both documented
+read-only subcommands, both answering something no file on disk does. They reach
+the sandbox through an optional provider capability
+(`LabProvider.runSandboxTool`) that the Terraform provider allows for
+`terraform` and those two verbs only — `apply`, `destroy`, `init`, `plan`,
+`import` and `state` are refused at the provider boundary. The Linux and Docker
+providers allow no tool at all, and a lab whose provider offers none reports
+those checks as *skipped* with a reason rather than failing a student for a gap
+in the platform.
+
+**Sensitive outputs are never read.** A student can mark any output `sensitive`;
+`terraform_output_equals` refuses to compare one rather than pulling a secret
+into the platform — the same rule `secret_key` follows on the Kubernetes track.
 
 **Paths cannot escape the sandbox.** Two gates: the lab schema rejects anything
 that is not a plain relative path, and the resolved absolute path is re-checked

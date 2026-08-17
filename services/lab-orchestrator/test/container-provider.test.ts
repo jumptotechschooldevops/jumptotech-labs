@@ -349,3 +349,96 @@ describe('sandbox reads for the verifier', () => {
     expect(runtime.execs.some((e) => JSON.stringify(e.request.argv).includes('passwd'))).toBe(false);
   });
 });
+
+// --------------------------------------------- configuration listing + tools
+
+describe('sandbox listing and the verifier tool port', () => {
+  async function terraformSandbox(): Promise<{
+    runtime: FakeContainerRuntime;
+    provider: TerraformLabProvider;
+    context: LabSessionContext;
+  }> {
+    const lab = await loadLabDefinition(TF_001);
+    const runtime = new FakeContainerRuntime();
+    const provider = new TerraformLabProvider({ runtime });
+    const context = contextFor(lab);
+    await provider.create(context);
+    return { runtime, provider, context };
+  }
+
+  it('lists the .tf files a student wrote, and nothing from the provider cache', async () => {
+    const { runtime, provider, context } = await terraformSandbox();
+
+    runtime.put(SANDBOX_A, `${HOME}/terraform/main.tf`, { content: 'resource "local_file" "x" {}' });
+    runtime.put(SANDBOX_A, `${HOME}/terraform/variables.tf`, { content: 'variable "y" {}' });
+    runtime.put(SANDBOX_A, `${HOME}/terraform/notes.txt`, { content: 'not configuration' });
+    runtime.put(SANDBOX_A, `${HOME}/terraform/.terraform/modules/vendored/main.tf`, {
+      content: 'variable "vendored" {}',
+    });
+
+    const files = await provider.listSandboxFiles(context, 'terraform', { suffix: '.tf' });
+
+    // Paths come back relative to the directory asked about, `.tf` only, and a
+    // downloaded module's configuration is not the student's work.
+    expect(files).toEqual(['main.tf', 'variables.tf', 'versions.tf']);
+  });
+
+  it('refuses to list a directory outside the sandbox home', async () => {
+    const { provider, context } = await terraformSandbox();
+
+    for (const bad of ['../../etc', '/etc', '~/.ssh']) {
+      await expect(provider.listSandboxFiles(context, bad)).rejects.toThrow(/Invalid sandbox path/);
+    }
+  });
+
+  it('runs the two read-only Terraform checks in the lab working directory', async () => {
+    const { runtime, provider, context } = await terraformSandbox();
+
+    const validate = await provider.runSandboxTool(context, {
+      tool: 'terraform',
+      args: ['validate', '-json', '-no-color'],
+      dir: 'terraform',
+    });
+
+    expect(validate.exitCode).toBe(0);
+    const call = runtime.execs.at(-1)!;
+    expect(call.request.argv).toEqual(['/usr/bin/env', 'terraform', 'validate', '-json', '-no-color']);
+    // In the lab's own directory, as the unprivileged student.
+    expect(call.request.workdir).toBe(`${HOME}/terraform`);
+    expect(call.request.user).toBe('student');
+  });
+
+  it('allows only the tools its provider was given, and only in the sandbox', async () => {
+    const { provider, context } = await terraformSandbox();
+
+    // A tool nobody allow-listed cannot be reached, whatever a caller asks for.
+    await expect(
+      provider.runSandboxTool(context, { tool: 'bash', args: ['-c', 'rm -rf /'], dir: 'terraform' }),
+    ).rejects.toThrow(/not an allow-listed verifier tool/);
+
+    // Allowing `terraform` is not allowing `terraform apply`.
+    for (const verb of ['apply', 'destroy', 'init', 'plan', 'state']) {
+      await expect(
+        provider.runSandboxTool(context, { tool: 'terraform', args: [verb], dir: 'terraform' }),
+      ).rejects.toThrow(/is not a read-only check this provider will run/);
+    }
+
+    await expect(
+      provider.runSandboxTool(context, { tool: 'terraform', args: ['validate'], dir: '../../etc' }),
+    ).rejects.toThrow(/Invalid sandbox path/);
+  });
+
+  it('runs no verifier tool at all in a Linux sandbox', async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+    const context = contextFor(lab);
+    await provider.create(context);
+
+    // The Linux track's checks are filesystem reads; it needs no tool, so it
+    // allows none — the capability is opt-in per provider.
+    await expect(
+      provider.runSandboxTool(context, { tool: 'terraform', args: ['validate'], dir: '.' }),
+    ).rejects.toThrow(/runs no verifier tools/);
+  });
+});

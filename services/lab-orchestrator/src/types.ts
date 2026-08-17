@@ -360,6 +360,62 @@ export interface LabProvider {
     relativePath: string,
     options?: { maxBytes?: number },
   ): Promise<SandboxPathRead | null>;
+
+  /**
+   * List files under a directory in the sandbox, for configuration checks.
+   *
+   * `readSandboxPath` answers questions about paths a lab already names. A
+   * Terraform configuration check cannot name them: "is a `variable` block
+   * declared" is a question about *whichever* `.tf` files the student chose to
+   * write. This is the narrowest addition that makes that answerable — a
+   * bounded, read-only listing, resolved against the sandbox root exactly like
+   * a read, with no way to name a directory outside it.
+   */
+  listSandboxFiles?(
+    context: LabSessionContext,
+    relativeDir: string,
+    options?: SandboxListOptions,
+  ): Promise<string[]>;
+
+  /**
+   * Run one allow-listed, read-only CLI tool inside the sandbox.
+   *
+   * The rule the platform keeps is "verification reads, it does not execute" —
+   * and it is kept here too, by construction rather than by care:
+   *
+   *   · the *tool* is allow-listed by the provider (Terraform's provider allows
+   *     `terraform` and nothing else; the Linux provider allows nothing, so it
+   *     does not implement this at all);
+   *   · the *arguments* are built by a shipped handler, never by lab.yaml — a
+   *     requirement carries a working directory and nothing that becomes argv;
+   *   · every invocation is an argv array with `shell: false`.
+   *
+   * It exists for the two questions a state file cannot answer — is the
+   * configuration valid, is it canonically formatted — and both are answered by
+   * documented read-only subcommands that touch no state and no remote object.
+   */
+  runSandboxTool?(context: LabSessionContext, request: SandboxToolRequest): Promise<ExecResult>;
+}
+
+export interface SandboxListOptions {
+  /** Only return files ending in this suffix, e.g. `.tf`. */
+  suffix?: string;
+  /** How far below the directory to descend. Bounded by the implementation. */
+  maxDepth?: number;
+  /** Cap on returned paths. Bounded by the implementation. */
+  maxEntries?: number;
+}
+
+/** One read-only tool invocation inside a session's sandbox. */
+export interface SandboxToolRequest {
+  /** Allow-listed executable name, e.g. `terraform`. Never a path or a shell. */
+  tool: string;
+  /** Arguments, built by a platform handler. Never lab-supplied. */
+  args: string[];
+  /** Working directory, relative to the sandbox home. */
+  dir: string;
+  timeoutMs?: number;
+  maxBytes?: number;
 }
 
 /** What a sandbox path looks like on disk, as seen from inside the sandbox. */

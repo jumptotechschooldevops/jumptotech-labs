@@ -37,7 +37,12 @@ import {
   type RequirementType,
   type SandboxRequirementType,
 } from '@jumptotech/lab-orchestrator';
-import type { CheckResult, SandboxVerifierHandler, VerifierHandler } from './contract.js';
+import type {
+  CheckResult,
+  HandlerOutcome,
+  SandboxVerifierHandler,
+  VerifierHandler,
+} from './contract.js';
 import type { VerifyReader } from './reader.js';
 import type { SandboxReader } from './sandbox-reader.js';
 import {
@@ -86,6 +91,7 @@ import {
 import { resourceAbsent } from './handlers/generic.js';
 import {
   directoryExists,
+  fileAbsent,
   fileContent,
   fileExists,
   fileGroup,
@@ -93,9 +99,22 @@ import {
   fileOwner,
 } from './handlers/filesystem.js';
 import {
+  terraformDataSourceDeclared,
+  terraformFormatted,
   terraformInitialized,
+  terraformLocalsDeclared,
+  terraformModuleExists,
+  terraformModuleInput,
   terraformOutputEquals,
+  terraformOutputExists,
+  terraformResourceAttribute,
+  terraformResourceCount,
   terraformResourceExists,
+  terraformResourceLifecycle,
+  terraformStateAbsent,
+  terraformStateContains,
+  terraformValid,
+  terraformVariableDeclared,
 } from './handlers/terraform.js';
 
 /** Raised when a requirement names a type with no registered handler. */
@@ -171,10 +190,24 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   file_mode: fileMode,
   file_owner: fileOwner,
   file_group: fileGroup,
+  file_absent: fileAbsent,
 
   terraform_initialized: terraformInitialized,
+  terraform_valid: terraformValid,
+  terraform_formatted: terraformFormatted,
   terraform_resource_exists: terraformResourceExists,
+  terraform_state_contains: terraformStateContains,
+  terraform_state_absent: terraformStateAbsent,
+  terraform_resource_attribute: terraformResourceAttribute,
+  terraform_resource_count: terraformResourceCount,
+  terraform_output_exists: terraformOutputExists,
   terraform_output_equals: terraformOutputEquals,
+  terraform_variable_declared: terraformVariableDeclared,
+  terraform_locals_declared: terraformLocalsDeclared,
+  terraform_data_source_declared: terraformDataSourceDeclared,
+  terraform_resource_lifecycle: terraformResourceLifecycle,
+  terraform_module_exists: terraformModuleExists,
+  terraform_module_input: terraformModuleInput,
 };
 
 /** Requirement types that currently have a handler. */
@@ -242,12 +275,7 @@ export async function verifyRequirement(
       };
     }
     const outcome = await handler.run(requirement, available.kubernetes);
-    return {
-      id,
-      label,
-      status: outcome.ok ? 'pass' : 'fail',
-      ...(outcome.detail ? { detail: outcome.detail } : {}),
-    };
+    return toCheckResult(id, label, outcome);
   }
 
   const handler = SANDBOX_HANDLERS[
@@ -263,10 +291,21 @@ export async function verifyRequirement(
     };
   }
   const outcome = await handler.run(requirement as never, available.sandbox);
+  return toCheckResult(id, label, outcome);
+}
+
+/**
+ * A handler's outcome as a student-facing check.
+ *
+ * `skipped` is deliberately not a failure: a handler reports it when the
+ * platform could not perform the check at all — a provider without the sandbox
+ * capability the check needs — and the student has done nothing wrong there.
+ */
+function toCheckResult(id: string, label: string, outcome: HandlerOutcome): CheckResult {
   return {
     id,
     label,
-    status: outcome.ok ? 'pass' : 'fail',
+    status: outcome.skipped ? 'skipped' : outcome.ok ? 'pass' : 'fail',
     ...(outcome.detail ? { detail: outcome.detail } : {}),
   };
 }

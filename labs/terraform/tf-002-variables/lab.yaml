@@ -1,0 +1,163 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — TF-002
+#
+# Verification deliberately inspects *configuration and state*, never command
+# history. A student who supplies a value in terraform.tfvars, with -var, or
+# through an environment variable all reach the same state — and the check that
+# proves the variable was really used is the resulting content, not the
+# command line that produced it.
+# ---------------------------------------------------------------------------
+id: TF-002
+slug: tf-002-variables
+title: Variables and Input Values
+track: terraform
+topic: variables
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 2
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-001
+
+story: >
+  The configuration you wrote for the platform team works, but it only
+  describes one thing: a file with one fixed name and one fixed content. The
+  team runs the same services in development, staging, and production, and
+  nobody wants three copies of a file that differ by a single word.
+
+  Your team lead asks you to parameterise the configuration so the same code
+  describes any of the environments, with the environment supplied at run time
+  rather than edited into the file.
+
+objectives:
+  - Declare input variables with explicit types and descriptions
+  - Distinguish a variable with a default from one that must be supplied
+  - Supply values through terraform.tfvars and understand precedence
+
+task:
+  summary: Parameterise a configuration with typed input variables and supply their values through a terraform.tfvars file.
+  description: >
+    Work in the `terraform` directory of your lab environment. It already
+    contains a `versions.tf` declaring the providers you may use, and every check
+    in this lab looks at that directory.
+
+    Input variables are a configuration's parameters. Declaring one with a
+    `variable` block gives it a name, a type, and optionally a default; supplying
+    a value at run time is what lets the same code describe several
+    environments.
+
+    Build a configuration with two variables. `environment` must be a string,
+    must carry a description, and must default to `dev` — it is the sensible
+    value for someone experimenting locally. `service_name` must also be a
+    typed string with a description, but must have no default at all: there is
+    no sensible default for "which service is this", and Terraform should
+    refuse to run rather than guess.
+
+    Then declare a `local_file` resource named `service_manifest` that writes to
+    `service.txt`. Its content must be the service name and the environment
+    joined by a single hyphen — for example, `payments-dev`.
+
+    Finally, create a `terraform.tfvars` file that sets `service_name` to
+    `ledger-api` and `environment` to `staging`, and apply. Because `staging`
+    overrides the `dev` default, the file that appears proves the values really
+    came from your variables rather than from text you typed into the resource.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: The starter configuration is in place
+
+requirements:
+  - type: terraform_valid
+    dir: terraform
+    label: The configuration is valid
+  - type: terraform_variable_declared
+    dir: terraform
+    name: environment
+    has_type: true
+    has_default: true
+    label: A typed environment variable is declared with a default
+  - type: terraform_variable_declared
+    dir: terraform
+    name: service_name
+    has_type: true
+    has_default: false
+    label: service_name is declared with a type and no default
+  - type: file_exists
+    path: terraform/terraform.tfvars
+    label: terraform.tfvars exists
+  - type: terraform_state_contains
+    dir: terraform
+    address: local_file.service_manifest
+    label: Terraform manages a local_file named service_manifest
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: service_manifest
+    attribute: filename
+    contains: service.txt
+    label: The resource writes service.txt
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: service_manifest
+    attribute: content
+    equals: ledger-api-staging
+    label: The content reflects the supplied variable values
+  - type: file_exists
+    path: terraform/service.txt
+    label: service.txt was actually created
+
+hints:
+  - level: 1
+    text: >
+      A variable has to be declared before it can be used, and referring to one
+      is not the same as declaring it. Two blocks are involved, and they are
+      different blocks.
+  - level: 2
+    text: >
+      Read the official "Input Variables" page, especially the sections on type
+      constraints, default values, and the ways a value can be assigned. Note
+      what Terraform does when a variable has no default and no value is
+      supplied — try it and see. You may put your variable declarations in
+      `main.tf` or in a separate `variables.tf`; Terraform reads every `.tf`
+      file in the directory.
+  - level: 3
+    text: >
+      The final content must be exactly `ledger-api-staging` — the service name,
+      one hyphen, the environment, no trailing newline. Build it from the two
+      variables with string interpolation rather than writing the literal, or
+      the configuration is not actually parameterised. If your content comes out
+      as `ledger-api-dev`, Terraform is not reading your tfvars file: check that
+      it is named exactly `terraform.tfvars` and sits beside your configuration.
+
+references:
+  - title: Terraform language — Input variables
+    url: https://developer.hashicorp.com/terraform/language/values/variables
+  - title: Terraform language — Type constraints
+    url: https://developer.hashicorp.com/terraform/language/expressions/types
+  - title: Terraform language — Strings and templates
+    url: https://developer.hashicorp.com/terraform/language/expressions/strings
+
+skills:
+  - terraform.variables.declare
+  - terraform.variables.types
+  - terraform.variables.tfvars
+  - terraform.expressions.interpolation
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - read-generate-modify-configuration
+      - use-the-terraform-cli

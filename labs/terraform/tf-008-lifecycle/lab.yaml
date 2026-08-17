@@ -1,0 +1,177 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — TF-008
+#
+# Lifecycle rules are read from *configuration*, not state: they shape how
+# Terraform plans a change and leave no trace in the applied result. That is
+# why this lab's checks look at the resource blocks, and why the exercise is
+# safe — a `prevent_destroy` on a local file teaches the same rule as one on a
+# production database, and costs nothing to get wrong.
+# ---------------------------------------------------------------------------
+id: TF-008
+slug: tf-008-lifecycle
+title: Resource Lifecycle Rules
+track: terraform
+topic: lifecycle
+difficulty: advanced
+level: practice
+duration_minutes: 40
+order: 8
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-005
+
+story: >
+  Three incidents in one quarter, all from the same cause: Terraform did
+  exactly what the configuration told it to, and the configuration did not say
+  what the team actually meant.
+
+  Someone ran `terraform destroy` against the compliance environment and took
+  the audit log with it. A release identifier was replaced by destroying the old
+  one first, leaving a window where nothing had a valid identifier. And an
+  incident-drill process keeps rewriting a watcher's trigger, so every plan
+  since has shown a pending change nobody wants to apply.
+
+  All three are `lifecycle` problems. Your task is to write down what the team
+  meant.
+
+objectives:
+  - Protect a resource from accidental destruction with prevent_destroy
+  - Order a replacement safely with create_before_destroy
+  - Stop Terraform reverting an externally managed value with ignore_changes
+
+task:
+  summary: Add lifecycle rules to three resources so that Terraform's plans match what the team actually intends.
+  description: >
+    Work in the `terraform` directory of your lab environment. It already
+    contains the compliance environment's configuration and a `versions.tf`, and
+    every check in this lab looks at that directory.
+
+    A `lifecycle` block is a nested block inside a resource that changes how
+    Terraform plans changes to it. It does not change what gets created — it
+    changes how Terraform gets there.
+
+    The compliance environment's configuration is already there. Run
+    `terraform init` and `terraform apply` first so you have something real to
+    reason about, then add one lifecycle rule to each resource:
+
+      - `local_file.audit_log` must refuse to be destroyed. A `terraform
+        destroy` should fail with an error rather than removing it.
+      - `random_pet.release` must be created before its old instance is
+        destroyed whenever it has to be replaced, so there is never a moment
+        with no valid identifier.
+      - `null_resource.config_watch` must ignore changes to its `triggers`
+        argument, so that the drill process rewriting it does not show up as a
+        pending change forever.
+
+    Then test each one, because reading about them is not the same as watching
+    them work. Run `terraform destroy` and read the error. Change the
+    `random_pet` length and read the order in the plan. Change the
+    `release_channel` variable's default and confirm the plan is now empty.
+
+    Leave all three resources applied and in state when you are done.
+
+setup:
+  files:
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/main.tf
+      label: The compliance configuration is present
+    - type: file_exists
+      path: terraform/versions.tf
+      label: The provider requirements are present
+
+requirements:
+  - type: terraform_valid
+    dir: terraform
+    label: The configuration is valid
+  - type: terraform_resource_lifecycle
+    dir: terraform
+    resource_type: local_file
+    name: audit_log
+    setting: prevent_destroy
+    expected: true
+    label: The audit log is protected from destruction
+  - type: terraform_resource_lifecycle
+    dir: terraform
+    resource_type: random_pet
+    name: release
+    setting: create_before_destroy
+    expected: true
+    label: The release identifier is replaced without a gap
+  - type: terraform_resource_lifecycle
+    dir: terraform
+    resource_type: null_resource
+    name: config_watch
+    setting: ignore_changes
+    attributes:
+      - triggers
+    label: External changes to the watcher's triggers are ignored
+  - type: terraform_state_contains
+    dir: terraform
+    address: local_file.audit_log
+    label: The audit log is still managed
+  - type: terraform_state_contains
+    dir: terraform
+    address: random_pet.release
+    label: The release identifier is still managed
+  - type: terraform_state_contains
+    dir: terraform
+    address: null_resource.config_watch
+    label: The config watcher is still managed
+  - type: file_exists
+    path: terraform/audit.log
+    label: audit.log still exists
+
+hints:
+  - level: 1
+    text: >
+      All three answers are the same kind of thing: a nested block inside the
+      resource, holding a single argument. The three arguments have different
+      shapes — two take a boolean, one takes a list.
+  - level: 2
+    text: >
+      Read the official "The lifecycle Meta-Argument" page. It covers all three
+      arguments and, importantly, explains what each one does *not* do —
+      `prevent_destroy` does not stop every removal, and `ignore_changes` does
+      not stop the first creation.
+  - level: 3
+    text: >
+      Each rule goes inside the resource block it applies to, not at the top
+      level of the file. `ignore_changes` takes a list of attribute names
+      written as bare references, not quoted strings. If `terraform destroy`
+      still removes the audit log, check that the lifecycle block is inside
+      `resource "local_file" "audit_log"` and not inside a neighbouring
+      resource. Run `terraform validate` after each change — a lifecycle block
+      in the wrong place is usually a validation error rather than a silent
+      no-op.
+
+references:
+  - title: Terraform language — The lifecycle meta-argument
+    url: https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle
+  - title: Terraform language — Resource behaviour
+    url: https://developer.hashicorp.com/terraform/language/resources/behavior
+  - title: Terraform CLI — terraform destroy
+    url: https://developer.hashicorp.com/terraform/cli/commands/destroy
+
+skills:
+  - terraform.lifecycle.prevent-destroy
+  - terraform.lifecycle.create-before-destroy
+  - terraform.lifecycle.ignore-changes
+  - terraform.plan.interpret
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - read-generate-modify-configuration
+      - understand-terraform-basics

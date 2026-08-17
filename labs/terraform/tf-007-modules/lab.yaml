@@ -1,0 +1,189 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — TF-007
+#
+# `terraform_module_exists` checks both halves of a module: the call in the root
+# configuration *and* the directory it sources. A module block pointing at
+# nothing is a call to nothing, and a directory nobody calls is dead code —
+# neither one on its own is a module.
+# ---------------------------------------------------------------------------
+id: TF-007
+slug: tf-007-modules
+title: Building a Reusable Module
+track: terraform
+topic: modules
+difficulty: intermediate
+level: challenge
+duration_minutes: 50
+order: 7
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-003
+  - TF-005
+
+story: >
+  Every service the platform team onboards gets the same treatment: a manifest
+  describing the application, named after the service and the environment it
+  runs in. There are eleven services now, and eleven near-identical blocks of
+  configuration. When the manifest format changed last month, three of them
+  were missed.
+
+  A module turns that repeated block into one definition with parameters. Your
+  task is to extract it, then prove it works by onboarding two services from
+  the same module.
+
+objectives:
+  - Structure a module with its own variables, resources, and outputs
+  - Call a module more than once with different inputs
+  - Wire a module's output through to a root output
+
+task:
+  summary: Extract an application manifest into a reusable module, then call it twice with different inputs.
+  description: >
+    Work in the `terraform` directory of your lab environment. It already
+    contains a `versions.tf` declaring the providers you may use, and every path
+    below — including the module directory — is relative to it.
+
+    A module is a directory of Terraform configuration with a defined interface:
+    input variables going in, output values coming out. Calling one is a
+    `module` block in the configuration that uses it.
+
+    Build a module in `modules/application`, split across three files:
+
+      - `variables.tf` declaring `app_name` (a string, no default — every
+        caller must name their application) and `environment` (a string
+        defaulting to `prod`);
+      - `main.tf` with a `local_file` resource named `app_manifest`. Its
+        filename must be the application name, a hyphen, the environment, then
+        `.json` — so `ledger-prod.json`. Its content must be the JSON encoding
+        of an object with an `app` key set to the application name and an
+        `environment` key set to the environment;
+      - `outputs.tf` publishing `manifest_path` — the filename the module
+        created, read from the resource.
+
+    Then, in the root configuration, call it twice. A module named `ledger`
+    onboarding the application `ledger` with the default environment, and a
+    module named `accounts` onboarding the application `accounts` in the
+    `staging` environment. Publish each module's manifest path as a root output
+    named `ledger_manifest` and `accounts_manifest`.
+
+    Run `terraform init` again after adding the module blocks — Terraform has to
+    install a module before it can plan with it, even a local one. Then apply
+    and look at `terraform state list`: notice how the module's resources are
+    addressed.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: The provider requirements are present
+
+requirements:
+  - type: terraform_valid
+    dir: terraform
+    label: The configuration is valid
+  - type: directory_exists
+    path: terraform/modules/application
+    label: The module directory exists
+  - type: file_exists
+    path: terraform/modules/application/variables.tf
+    label: The module declares its inputs in variables.tf
+  - type: file_exists
+    path: terraform/modules/application/outputs.tf
+    label: The module declares its outputs in outputs.tf
+  - type: terraform_module_exists
+    dir: terraform
+    name: ledger
+    source: ./modules/application
+    label: The ledger service is onboarded from the module
+  - type: terraform_module_exists
+    dir: terraform
+    name: accounts
+    source: ./modules/application
+    label: The accounts service is onboarded from the same module
+  - type: terraform_module_input
+    dir: terraform
+    module: accounts
+    input: environment
+    label: The accounts call overrides the environment
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: app_manifest
+    module: ledger
+    label: The ledger module created its manifest
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: app_manifest
+    module: accounts
+    label: The accounts module created its manifest
+  - type: terraform_output_equals
+    dir: terraform
+    name: ledger_manifest
+    value: ledger-prod.json
+    label: The root publishes the ledger manifest path
+  - type: terraform_output_equals
+    dir: terraform
+    name: accounts_manifest
+    value: accounts-staging.json
+    label: The root publishes the accounts manifest path
+  - type: file_exists
+    path: terraform/ledger-prod.json
+    label: ledger-prod.json was created
+  - type: file_exists
+    path: terraform/accounts-staging.json
+    label: accounts-staging.json was created
+
+hints:
+  - level: 1
+    text: >
+      A module is an ordinary directory of configuration. What makes it a module
+      is that something else calls it and passes values in — and that it has
+      somewhere for values to come back out.
+  - level: 2
+    text: >
+      Read the official "Modules" overview, then "Module blocks" for how a
+      caller passes inputs, and "Module outputs" for how a caller reads results
+      back. Note what a local module `source` looks like, and note that
+      `terraform init` must run again whenever you add or move one.
+  - level: 3
+    text: >
+      Both calls must use the same `source`, `./modules/application` — if you
+      copy the directory instead of calling it twice, you have reproduced the
+      duplication you were asked to remove. `accounts` must pass `environment =
+      "staging"` explicitly, while `ledger` relies on the module's default. If a
+      root output comes out empty, check that the module actually declares the
+      output you are reading and that you are referring to it as
+      `module.<name>.<output>`. `terraform state list` shows module resources
+      under a `module.` prefix — a good way to confirm both calls really ran.
+
+references:
+  - title: Terraform language — Modules overview
+    url: https://developer.hashicorp.com/terraform/language/modules
+  - title: Terraform language — Module blocks
+    url: https://developer.hashicorp.com/terraform/language/modules/syntax
+  - title: Terraform language — Module development structure
+    url: https://developer.hashicorp.com/terraform/language/modules/develop/structure
+  - title: Terraform functions — jsonencode
+    url: https://developer.hashicorp.com/terraform/language/functions/jsonencode
+
+skills:
+  - terraform.modules.author
+  - terraform.modules.call
+  - terraform.modules.inputs
+  - terraform.modules.outputs
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - interact-with-terraform-modules
+      - read-generate-modify-configuration

@@ -87,7 +87,27 @@ const INTERNAL_EXEC_ALLOWLIST = new Set([
   '/bin/rm',
   '/usr/bin/id',
   '/usr/bin/env',
+  '/usr/bin/find',
 ]);
+
+/** Bounds on a `listSandboxFiles` sweep. A lab cannot widen either. */
+const MAX_LIST_DEPTH = 6;
+const MAX_LIST_ENTRIES = 200;
+
+/** A tool name the provider may be configured to allow, e.g. `terraform`. */
+const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/**
+ * One read-only tool a provider lets the verifier run.
+ *
+ * `subcommands` is the second half of the gate: allowing `terraform` is not
+ * allowing `terraform apply`. A provider states the exact verbs it will pass
+ * through, and everything else is refused before any argv is built.
+ */
+export interface VerifierTool {
+  name: string;
+  subcommands: string[];
+}
 
 export interface ContainerProviderOptions {
   id: LabProviderId;
@@ -100,6 +120,15 @@ export interface ContainerProviderOptions {
   home?: string;
   /** Binaries a lab's own environment must contain for this provider to be usable. */
   requiredBinaries?: string[];
+  /**
+   * Read-only CLI tools the *verifier* may run in this provider's sandboxes.
+   *
+   * Empty for Linux and Docker: their checks are filesystem reads and need no
+   * tool. The Terraform provider allows `terraform`, and only its two
+   * read-only subcommands — so "a verification pass cannot apply or destroy" is
+   * enforced here, at the boundary, rather than trusted to every caller.
+   */
+  verifierTools?: VerifierTool[];
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -113,6 +142,7 @@ export class ContainerLabProvider implements LabProvider {
   readonly #image: string;
   readonly #home: string;
   readonly #requiredBinaries: string[];
+  readonly #verifierTools: ReadonlyMap<string, ReadonlySet<string>>;
   readonly #now: () => number;
 
   constructor(options: ContainerProviderOptions) {
@@ -122,6 +152,14 @@ export class ContainerLabProvider implements LabProvider {
     this.#image = options.image;
     this.#home = options.home ?? '/home/student';
     this.#requiredBinaries = options.requiredBinaries ?? [];
+    this.#verifierTools = new Map(
+      (options.verifierTools ?? []).map((tool) => {
+        if (!TOOL_NAME_PATTERN.test(tool.name)) {
+          throw new Error(`'${tool.name}' is not a valid verifier tool name`);
+        }
+        return [tool.name, new Set(tool.subcommands)] as const;
+      }),
+    );
     this.#now = options.now ?? (() => Date.now());
   }
 
@@ -532,6 +570,98 @@ export class ContainerLabProvider implements LabProvider {
     read.content = cat.stdout.slice(0, maxBytes);
     if (cat.stdout.length > maxBytes) read.truncated = true;
     return read;
+  }
+
+  /**
+   * List files under one directory in the sandbox.
+   *
+   * Bounded three ways — depth, entry count, and an optional suffix — because
+   * the caller is a verification pass, not a file browser. `find` is given an
+   * argv array with no shell, and the results are re-anchored to the directory
+   * the caller asked about, so nothing outside it can be returned even if the
+   * sandbox contains a symlink pointing elsewhere.
+   */
+  async listSandboxFiles(
+    context: LabSessionContext,
+    relativeDir: string,
+    options: { suffix?: string; maxDepth?: number; maxEntries?: number } = {},
+  ): Promise<string[]> {
+    const ref = this.#ref(context);
+    const absolute = resolveSandboxPath(this.#home, relativeDir);
+    const depth = Math.min(Math.max(options.maxDepth ?? 4, 1), MAX_LIST_DEPTH);
+    const limit = Math.min(options.maxEntries ?? MAX_LIST_ENTRIES, MAX_LIST_ENTRIES);
+
+    const argv = ['/usr/bin/find', absolute, '-maxdepth', String(depth), '-type', 'f'];
+    if (options.suffix !== undefined) {
+      if (!/^\.[A-Za-z0-9]{1,16}$/.test(options.suffix)) {
+        throw new Error(`'${options.suffix}' is not a valid file suffix`);
+      }
+      argv.push('-name', `*${options.suffix}`);
+    }
+
+    const result = await this.#runtime.exec(ref, {
+      argv,
+      user: context.policy.sandbox.user,
+      workdir: this.#home,
+      timeoutMs: 15_000,
+    });
+    if (result.exitCode !== 0) return [];
+
+    const prefix = `${absolute}/`;
+    const seen = new Set<string>();
+    for (const line of result.stdout.split('\n')) {
+      const path = line.trim();
+      if (!path.startsWith(prefix)) continue;
+      const relative = path.slice(prefix.length);
+      // `.terraform/` holds installed provider plugins, not the student's work.
+      if (relative.length === 0 || relative.split('/').some((s) => s.startsWith('.'))) continue;
+      seen.add(relative);
+      if (seen.size >= limit) break;
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * Run one allow-listed read-only tool inside the sandbox.
+   *
+   * The gate is the *tool name*, configured per provider at construction. A
+   * provider that was given no tools refuses everything, so the capability
+   * cannot be reached by a lab that merely declares the wrong requirement.
+   */
+  async runSandboxTool(
+    context: LabSessionContext,
+    request: { tool: string; args: string[]; dir: string; timeoutMs?: number; maxBytes?: number },
+  ): Promise<ExecResult> {
+    const subcommands = this.#verifierTools.get(request.tool);
+    if (!subcommands) {
+      throw new Error(
+        this.#verifierTools.size === 0
+          ? `Provider '${this.id}' runs no verifier tools`
+          : `'${request.tool}' is not an allow-listed verifier tool for provider '${this.id}' (allowed: ${[...this.#verifierTools.keys()].join(', ')})`,
+      );
+    }
+    if (!Array.isArray(request.args) || request.args.some((a) => typeof a !== 'string')) {
+      throw new Error('runSandboxTool() requires args to be an array of strings');
+    }
+    // Allowing `terraform` is not allowing `terraform apply`. The verb is
+    // checked here so that no caller — however it was reached — can turn a
+    // verification pass into something that writes.
+    const subcommand = request.args[0] ?? '';
+    if (!subcommands.has(subcommand)) {
+      throw new Error(
+        `'${request.tool} ${subcommand}' is not a read-only check this provider will run (allowed: ${[...subcommands].join(', ')})`,
+      );
+    }
+
+    return this.#runtime.exec(this.#ref(context), {
+      // `env` resolves the tool from the sandbox PATH without the platform
+      // needing to know where the image put it.
+      argv: ['/usr/bin/env', request.tool, ...request.args],
+      user: context.policy.sandbox.user,
+      workdir: resolveSandboxPath(this.#home, request.dir),
+      timeoutMs: request.timeoutMs ?? 60_000,
+      ...(request.maxBytes !== undefined ? { maxBufferBytes: request.maxBytes } : {}),
+    });
   }
 
   // --------------------------------------------------------------- helpers

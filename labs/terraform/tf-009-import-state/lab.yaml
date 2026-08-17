@@ -1,0 +1,188 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — TF-009
+#
+# The check that proves the import happened is `result equals 8443`. A student
+# who declares the resource and applies without importing gets some other value
+# in the 8000-9000 range; the chance of landing on 8443 by generation is one in
+# a thousand. This is why the exercise imports a *generated* value: it is the
+# one case where "did you adopt the existing thing" is unambiguous from state
+# alone.
+#
+# Nothing here is destructive. `terraform import` only writes to state, and the
+# state it writes to is this session's own — no other student's workspace, and
+# no real infrastructure, is reachable from this sandbox.
+# ---------------------------------------------------------------------------
+id: TF-009
+slug: tf-009-import-state
+title: Importing Existing Resources
+track: terraform
+topic: state
+difficulty: advanced
+level: challenge
+duration_minutes: 45
+order: 9
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-004
+
+story: >
+  During the Q1 migration, someone on call picked port 8443 for the settlement
+  service at 02:40 and wrote it down in a text file. It is now hardcoded into
+  the service's firewall rules and three runbooks, and it must not change.
+
+  The platform team is bringing everything under Terraform. The obvious move —
+  declare the port as a Terraform resource and apply — would generate a *new*
+  port and break the firewall rules. What the team needs is for Terraform to
+  adopt the value that already exists, and then leave it alone.
+
+objectives:
+  - Bring an existing resource under Terraform management without recreating it
+  - Verify an import produced a clean plan
+  - Reference an imported resource's value from another resource
+
+task:
+  summary: Adopt an existing port allocation into Terraform state with terraform import, without changing the value.
+  description: >
+    Work in the `terraform` directory of your lab environment. It already
+    contains `legacy-port.txt` and a `versions.tf`, and every check in this lab
+    looks at that directory.
+
+    `terraform import` associates an existing object with a resource address in
+    your state. It writes to state only: it does not create anything, and it
+    does not write your configuration for you. You declare the resource, import
+    the existing object into it, and then confirm that the plan is empty —
+    which is what proves your configuration matches what is really there.
+
+    `legacy-port.txt` is the hand-written record of the
+    allocation. Read it: the port is 8443, and the platform port policy allows
+    8000 to 9000.
+
+    First, declare a `random_integer` resource named `service_port` with `min`
+    set to 8000 and `max` set to 9000. Do not apply yet — applying would
+    generate a fresh port somewhere in that range, which is exactly the outcome
+    the team is trying to avoid.
+
+    Instead, import the existing allocation. The `random_integer` resource
+    documents its own import ID format; look it up in the registry and work out
+    what to pass. Then run `terraform plan` and confirm it reports no changes.
+
+    Finally, add a `local_file` resource named `port_record` writing to
+    `port-record.txt`, whose content is the port taken from the imported
+    resource's attribute — not typed in as `8443`. Apply, and confirm the file
+    contains 8443.
+
+setup:
+  files:
+    - source: setup/legacy-port.txt
+      path: terraform/legacy-port.txt
+      mode: '644'
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/legacy-port.txt
+      label: The hand-written allocation record is present
+    - type: file_exists
+      path: terraform/versions.tf
+      label: The provider requirements are present
+
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: The workspace is initialised
+  - type: terraform_valid
+    dir: terraform
+    label: The configuration is valid
+  - type: terraform_state_contains
+    dir: terraform
+    address: random_integer.service_port
+    label: The port allocation is under Terraform management
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: random_integer
+    name: service_port
+    attribute: result
+    equals: 8443
+    label: The existing port 8443 was adopted, not regenerated
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: random_integer
+    name: service_port
+    attribute: min
+    equals: 8000
+    label: The allowed range starts at 8000
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: random_integer
+    name: service_port
+    attribute: max
+    equals: 9000
+    label: The allowed range ends at 9000
+  - type: terraform_state_contains
+    dir: terraform
+    address: local_file.port_record
+    label: Terraform manages a local_file named port_record
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: port_record
+    attribute: content
+    equals: "8443"
+    label: The port record carries the adopted port
+  - type: file_exists
+    path: terraform/port-record.txt
+    label: port-record.txt was created
+
+hints:
+  - level: 1
+    text: >
+      Terraform will not adopt something it has no address for. The resource has
+      to be declared in the configuration first — importing tells Terraform that
+      a declared resource already exists, and what it currently is.
+  - level: 2
+    text: >
+      Read the official "Import" CLI page, then the `random_integer` resource
+      page in the registry — scroll to its import section, which documents the
+      exact ID format this resource expects. It is not just the value. Terraform
+      1.5 and later also support declaring imports with an `import` block in
+      configuration; either approach is fine here.
+  - level: 3
+    text: >
+      The import ID for `random_integer` is comma-separated and carries the
+      result together with the bounds the resource was created with — the
+      registry page gives the exact order. After importing, `terraform plan`
+      must report `No changes`; if it wants to replace the resource, the `min`
+      or `max` in your configuration does not match what you imported. If you
+      applied by mistake and got the wrong port, run `terraform state rm
+      random_integer.service_port` and import again — `state rm` removes the
+      record without touching anything else.
+
+references:
+  - title: Terraform CLI — terraform import
+    url: https://developer.hashicorp.com/terraform/cli/commands/import
+  - title: Terraform CLI — Importing infrastructure
+    url: https://developer.hashicorp.com/terraform/cli/import
+  - title: Terraform language — The import block
+    url: https://developer.hashicorp.com/terraform/language/import
+  - title: random_integer resource
+    url: https://registry.terraform.io/providers/hashicorp/random/3.6.3/docs/resources/integer
+  - title: Terraform CLI — terraform state rm
+    url: https://developer.hashicorp.com/terraform/cli/commands/state/rm
+
+skills:
+  - terraform.state.import
+  - terraform.state.manipulate
+  - terraform.plan.interpret
+  - terraform.state.inspect
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - understand-terraform-state
+      - use-terraform-outside-core-workflow

@@ -1,0 +1,153 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — TF-003
+#
+# The verifier reads output values out of Terraform state, which is where
+# `terraform output` reads them from too. One output is deliberately
+# unpredictable (a generated pet name), so the lab checks that it *exists*
+# rather than what it says — which is exactly why outputs are useful.
+# ---------------------------------------------------------------------------
+id: TF-003
+slug: tf-003-outputs
+title: Outputs and Exposed Values
+track: terraform
+topic: outputs
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 3
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-002
+
+story: >
+  The release tooling at JumpToTech Bank needs two things from every
+  environment Terraform builds: where the release notes ended up, and which
+  release channel the environment is on. At the moment somebody reads those out
+  of the configuration by eye and pastes them into a ticket.
+
+  Some values cannot be read out of a configuration at all. The deployment
+  identifier is generated when the environment is created, so it exists only
+  after an apply. Outputs are how a Terraform configuration publishes both
+  kinds of value.
+
+objectives:
+  - Declare output values and give each a description
+  - Publish an attribute of a resource rather than a repeated literal
+  - Read outputs back with terraform output
+
+task:
+  summary: Publish three output values from a configuration, including one whose value only exists after apply.
+  description: >
+    Work in the `terraform` directory of your lab environment. It already
+    contains a `versions.tf` declaring the providers you may use, and every check
+    in this lab looks at that directory.
+
+    An `output` block exposes a value from your configuration to whoever runs
+    it — a person at a terminal, a calling module, or an automation pipeline.
+
+    Build a configuration with a `channel` variable of type string defaulting to
+    `stable`, a `random_pet` resource named `deployment` (the `hashicorp/random`
+    provider, version 3.6.3, is available offline in this sandbox), and a
+    `local_file` resource named `release_notes` that writes to
+    `release-notes.txt`.
+
+    Then declare three outputs, each with a description:
+
+      - `release_file` — the filename the release notes were written to, taken
+        from the resource's own attribute rather than retyped as a literal;
+      - `release_channel` — the value of the `channel` variable;
+      - `deployment_id` — the generated identifier of your `random_pet`
+        resource.
+
+    Apply, then run `terraform output` and `terraform output -json` and compare
+    them. Notice that `deployment_id` had no value at all until apply ran, and
+    that it stays the same on the next plan.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: The starter configuration is in place
+
+requirements:
+  - type: terraform_valid
+    dir: terraform
+    label: The configuration is valid
+  - type: terraform_state_contains
+    dir: terraform
+    address: random_pet.deployment
+    label: Terraform manages a random_pet named deployment
+  - type: terraform_state_contains
+    dir: terraform
+    address: local_file.release_notes
+    label: Terraform manages a local_file named release_notes
+  - type: file_exists
+    path: terraform/release-notes.txt
+    label: release-notes.txt was actually created
+  - type: terraform_output_equals
+    dir: terraform
+    name: release_file
+    value: release-notes.txt
+    label: Output release_file reports the release notes path
+  - type: terraform_output_equals
+    dir: terraform
+    name: release_channel
+    value: stable
+    label: Output release_channel reports the channel
+  - type: terraform_output_exists
+    dir: terraform
+    name: deployment_id
+    label: Output deployment_id publishes the generated identifier
+
+hints:
+  - level: 1
+    text: >
+      An output publishes an expression, and an expression can refer to a
+      resource that already exists in your configuration. You should not need to
+      type the filename twice.
+  - level: 2
+    text: >
+      Read the official "Output Values" page, and the `random_pet` resource page
+      in the registry to find which attribute holds its generated identifier.
+      The Terraform expressions documentation explains how to refer to a
+      resource's attributes.
+  - level: 3
+    text: >
+      `release_file` must come out as exactly `release-notes.txt`. If it comes
+      out as `./release-notes.txt`, your resource's `filename` argument includes
+      a path prefix — the output is faithfully reporting what the resource
+      actually has. Set `filename` to the bare name, or trim it in the output
+      expression. Every output needs a `description`, and `terraform output
+      -json` is the quickest way to see all three values and their types at
+      once.
+
+references:
+  - title: Terraform language — Output values
+    url: https://developer.hashicorp.com/terraform/language/values/outputs
+  - title: Terraform language — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+  - title: Terraform CLI — terraform output
+    url: https://developer.hashicorp.com/terraform/cli/commands/output
+  - title: random_pet resource
+    url: https://registry.terraform.io/providers/hashicorp/random/3.6.3/docs/resources/pet
+
+skills:
+  - terraform.outputs.declare
+  - terraform.outputs.read
+  - terraform.expressions.references
+  - terraform.providers.random
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - read-generate-modify-configuration
+      - use-the-terraform-cli

@@ -1,0 +1,240 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — TF-010
+#
+# The seeded workspace is deliberately broken in five ways. `setup.verify` here
+# checks only that the files arrived — it cannot check that the configuration
+# is *valid*, because the whole point of the lab is that it is not.
+#
+# The requirements below describe the intended end state. They never name the
+# injected faults, and every student-facing label states a goal rather than a
+# symptom, so the checklist does not hand over the diagnosis.
+# ---------------------------------------------------------------------------
+id: TF-010
+slug: tf-010-troubleshooting
+title: Troubleshooting a Broken Configuration
+track: terraform
+topic: troubleshooting
+difficulty: advanced
+level: challenge
+duration_minutes: 55
+order: 10
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-007
+
+story: >
+  A contractor left on Friday. On Monday the ledger service's configuration
+  does not apply, and the pull request that introduced it was approved by
+  somebody who did not run it.
+
+  Nobody has written down what is wrong. You have the configuration, the
+  Terraform CLI, and the same three commands you would use on any broken
+  project: `terraform fmt`, `terraform validate`, and `terraform plan`. Work
+  through them in that order and let each one narrow the problem before you
+  start editing.
+
+objectives:
+  - Diagnose a failing configuration using fmt, validate, and plan
+  - Read a Terraform error message back to the line that caused it
+  - Repair a configuration without changing what it is meant to produce
+
+task:
+  summary: Diagnose and repair a Terraform configuration that does not apply, until it produces the intended settings, runbook, and audit policy.
+  description: >
+    Work in the `terraform` directory of your lab environment. It holds the
+    ledger service configuration as the contractor left it, and every check in
+    this lab looks at that directory.
+
+    The ledger service configuration is there as it was left.
+    It does not work. There is more than one problem, and they are of different
+    kinds — one of them will stop the others from even being reported until it
+    is fixed.
+
+    Work in order. `terraform fmt` will not tell you what is broken, but it will
+    fail to parse a file that is malformed, which is a signal in itself. Then
+    `terraform init`, then `terraform validate`, then `terraform plan`. Fix one
+    thing at a time and re-run: Terraform reports the first blocking error it
+    hits, so the second problem often only becomes visible after the first is
+    gone.
+
+    The configuration is meant to produce three things:
+
+      - `settings.json`, containing the service name and the environment, from
+        the `service_name` and `environment` input variables;
+      - `runbook.md`, whose text refers to the settings file by its actual
+        filename, read from the resource that creates it;
+      - `audit-prod.json`, produced by the `audit` module, recording the
+        environment and a retention period. The compliance policy for this
+        service is **30 days**, and the module has no default — the root
+        configuration must supply it.
+
+    Two outputs must work: `settings_path` and `audit_policy_path`, each
+    reporting where its file was written.
+
+    Do not change what the configuration is meant to produce — the service name
+    in `terraform.tfvars`, the environment default, or the file names. Repair
+    the configuration so that it produces them. Run `terraform fmt` before you
+    finish; canonical formatting is one of the requirements.
+
+setup:
+  files:
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+    - source: setup/modules/audit/main.tf
+      path: terraform/modules/audit/main.tf
+      mode: '644'
+    - source: setup/modules/audit/outputs.tf
+      path: terraform/modules/audit/outputs.tf
+      mode: '644'
+    - source: setup/modules/audit/variables.tf
+      path: terraform/modules/audit/variables.tf
+      mode: '644'
+    - source: setup/outputs.tf
+      path: terraform/outputs.tf
+      mode: '644'
+    - source: setup/terraform.tfvars
+      path: terraform/terraform.tfvars
+      mode: '644'
+    - source: setup/variables.tf
+      path: terraform/variables.tf
+      mode: '644'
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+  # Only file presence is checked here. The configuration is intentionally
+  # invalid at hand-over, so `terraform_valid` would fail the *setup* and the
+  # student would never see the lab.
+  verify:
+    - type: file_exists
+      path: terraform/main.tf
+      label: The ledger configuration is present
+    - type: file_exists
+      path: terraform/outputs.tf
+      label: The outputs file is present
+    - type: file_exists
+      path: terraform/variables.tf
+      label: The variables file is present
+    - type: directory_exists
+      path: terraform/modules/audit
+      label: The audit module is present
+
+requirements:
+  - type: terraform_valid
+    dir: terraform
+    label: The configuration is valid
+  - type: terraform_formatted
+    dir: terraform
+    label: The configuration is canonically formatted
+  - type: terraform_state_contains
+    dir: terraform
+    address: local_file.settings
+    label: The service settings resource is applied
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: settings
+    attribute: content
+    contains: '"environment":"prod"'
+    label: The settings record the environment
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: settings
+    attribute: content
+    contains: '"service":"ledger-api"'
+    label: The settings record the service name
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: runbook
+    attribute: content
+    contains: settings.json
+    label: The runbook refers to the settings file
+  - type: terraform_module_input
+    dir: terraform
+    module: audit
+    input: retention_days
+    label: The audit module is given a retention period
+  - type: terraform_resource_attribute
+    dir: terraform
+    resource_type: local_file
+    name: audit_policy
+    module: audit
+    attribute: content
+    contains: '"retention_days":30'
+    label: The audit policy retains records for 30 days
+  - type: terraform_output_equals
+    dir: terraform
+    name: settings_path
+    value: settings.json
+    label: The settings path is published
+  - type: terraform_output_equals
+    dir: terraform
+    name: audit_policy_path
+    value: audit-prod.json
+    label: The audit policy path is published
+  - type: file_exists
+    path: terraform/settings.json
+    label: settings.json was created
+  - type: file_exists
+    path: terraform/audit-prod.json
+    label: audit-prod.json was created
+
+hints:
+  - level: 1
+    text: >
+      Run the three diagnostic commands in order before changing anything, and
+      read the file and line number in each error. Terraform stops at the first
+      blocking problem, so fixing one will usually reveal the next — this is
+      progress, not a new failure.
+  - level: 2
+    text: >
+      Problems of four different kinds are present: something that stops the
+      configuration parsing at all, a reference to a name that was never
+      declared, a reference to a resource that does not exist under that name,
+      and a module call that is missing something its interface requires. A
+      fifth is cosmetic and `terraform fmt` fixes it for you. The official
+      Terraform troubleshooting page describes this exact sequence.
+  - level: 3
+    text: >
+      Compare every `var.` reference against the names actually declared in
+      `variables.tf`, and every resource reference against the resource labels
+      actually used in `main.tf` — Terraform's "reference to undeclared" errors
+      name the symbol it could not find, and the fix is a spelling change, not a
+      new declaration. Check that every block that opens a brace closes it; the
+      parse error's line number is where Terraform *noticed*, which is often
+      after where the brace is actually missing. Look at what
+      `modules/audit/variables.tf` requires and compare it to what the `module
+      "audit"` block passes. Finish with `terraform fmt`, then `terraform apply`.
+
+references:
+  - title: Terraform CLI — Troubleshooting
+    url: https://developer.hashicorp.com/terraform/cli/commands/validate
+  - title: Terraform CLI — terraform fmt
+    url: https://developer.hashicorp.com/terraform/cli/commands/fmt
+  - title: Terraform CLI — terraform plan
+    url: https://developer.hashicorp.com/terraform/cli/commands/plan
+  - title: Terraform language — Module blocks
+    url: https://developer.hashicorp.com/terraform/language/modules/syntax
+  - title: Terraform language — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+
+skills:
+  - terraform.troubleshoot.validate
+  - terraform.troubleshoot.plan
+  - terraform.troubleshoot.references
+  - terraform.fmt.canonical
+  - terraform.modules.inputs
+
+certification:
+  - certification: TERRAFORM-ASSOCIATE
+    relevant: true
+    domains:
+      - use-the-terraform-cli
+      - read-generate-modify-configuration
+      - interact-with-terraform-modules

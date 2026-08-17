@@ -95,6 +95,54 @@ const common = {
   label: z.string().min(1).max(160).optional(),
 };
 
+// --- Terraform scalars -----------------------------------------------------
+
+/** An HCL identifier: a resource type, a resource name, a variable name. */
+const terraformIdentifier = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(
+    /^[A-Za-z_][A-Za-z0-9_-]*$/,
+    'must be a Terraform identifier (letter or underscore, then letters, digits, - or _)',
+  );
+
+/** A module reference: `application` or `module.application`. */
+const terraformModuleRef = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(
+    /^(module\.)?[A-Za-z_][A-Za-z0-9_-]*(\.module\.[A-Za-z_][A-Za-z0-9_-]*)*$/,
+    'must be a module reference such as application or module.application',
+  );
+
+/**
+ * A resource address as `terraform state list` prints it.
+ *
+ * The character class is deliberately tight — this string is compared against
+ * addresses the platform itself derived from state, never interpolated into a
+ * command or a path.
+ */
+const terraformAddress = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(
+    /^[A-Za-z_][A-Za-z0-9_.\-[\]"]*$/,
+    'must be a Terraform address such as local_file.greeting or module.application.random_pet.name',
+  );
+
+/** A dotted path into an instance's attributes, e.g. `permissions.0.role`. */
+const attributePath = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(
+    /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/,
+    'must be a dotted attribute path such as filename or triggers.environment',
+  );
+
 /** Kubernetes object kinds a requirement may name generically. */
 const CHECKABLE_KINDS = [
   'pod',
@@ -480,7 +528,33 @@ const requirementSchemas = {
     .object({ type: z.literal('file_group'), path: sandboxPath, group: posixName, ...common })
     .strict(),
 
+  /**
+   * A path must NOT exist in the sandbox.
+   *
+   * Proves an apply actually removed something, rather than only dropping it
+   * from state and leaving the artefact behind.
+   */
+  file_absent: z
+    .object({ type: z.literal('file_absent'), path: sandboxPath, ...common })
+    .strict(),
+
   // --- Terraform ---------------------------------------------------------
+  //
+  // Every check below reads one of three things, and nothing else:
+  //
+  //   state   — the parsed `terraform.tfstate` in the lab's working directory
+  //   config  — the block structure of that directory's `.tf` files
+  //   files   — whether a path exists in the sandbox
+  //
+  // Two of them shell out to Terraform itself (`validate`, `fmt -check`), and
+  // both are documented read-only subcommands. Nothing here can apply, destroy,
+  // refresh, or reach a provider API — so a student can never lose work by
+  // pressing Check Solution, and a check can never create a billable resource.
+  //
+  // Every type carries `dir`: the Terraform working directory, relative to the
+  // sandbox home. A student who ran the workflow in the wrong directory has not
+  // done the one the lab grades.
+
   /**
    * `terraform init` completed in this directory.
    *
@@ -490,6 +564,16 @@ const requirementSchemas = {
    */
   terraform_initialized: z
     .object({ type: z.literal('terraform_initialized'), dir: sandboxPath, ...common })
+    .strict(),
+
+  /** `terraform validate` reports the configuration as valid. */
+  terraform_valid: z
+    .object({ type: z.literal('terraform_valid'), dir: sandboxPath, ...common })
+    .strict(),
+
+  /** `terraform fmt -check -recursive` finds nothing to rewrite. */
+  terraform_formatted: z
+    .object({ type: z.literal('terraform_formatted'), dir: sandboxPath, ...common })
     .strict(),
 
   /**
@@ -504,31 +588,202 @@ const requirementSchemas = {
       type: z.literal('terraform_resource_exists'),
       dir: sandboxPath,
       /** Provider resource type, e.g. `local_file`. */
-      resource_type: z
-        .string()
-        .min(1)
-        .max(128)
-        .regex(/^[a-z][a-z0-9_]*$/, 'must be a Terraform resource type such as local_file'),
+      resource_type: terraformIdentifier,
       /** The resource's local name, e.g. `manifest`. */
-      name: z
-        .string()
-        .min(1)
-        .max(128)
-        .regex(/^[a-zA-Z_][a-zA-Z0-9_-]*$/, 'must be a Terraform resource name'),
+      name: terraformIdentifier,
+      /** `application` or `module.application`. Omit for the root module. */
+      module: terraformModuleRef.optional(),
+      mode: z.enum(['managed', 'data']).default('managed'),
+      /** Require an exact instance count, for `count` / `for_each` labs. */
+      instances: z.number().int().min(0).max(100).optional(),
       ...common,
     })
     .strict(),
 
+  /**
+   * A resource address is present in state.
+   *
+   * A bare address (`local_file.report`) matches any instance, so a lab can
+   * require "this is managed" without pinning an index it never asked for.
+   */
+  terraform_state_contains: z
+    .object({
+      type: z.literal('terraform_state_contains'),
+      dir: sandboxPath,
+      address: terraformAddress,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A resource address must NOT be in state.
+   *
+   * The Terraform counterpart of `resource_absent`: the point of a state lab is
+   * often that something was *removed* — a resource deleted from configuration
+   * and applied away, or a `terraform state rm` performed deliberately.
+   */
+  terraform_state_absent: z
+    .object({
+      type: z.literal('terraform_state_absent'),
+      dir: sandboxPath,
+      address: terraformAddress,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * One attribute of a managed resource, as recorded in state.
+   *
+   * State holds what the provider actually produced, which is the honest place
+   * to grade from: a student who hardcodes a value and one who derives it from
+   * a variable both end up here, and both are correct if the result is right.
+   */
+  terraform_resource_attribute: z
+    .object({
+      type: z.literal('terraform_resource_attribute'),
+      dir: sandboxPath,
+      resource_type: terraformIdentifier,
+      name: terraformIdentifier,
+      module: terraformModuleRef.optional(),
+      mode: z.enum(['managed', 'data']).default('managed'),
+      /** Which instance, for a counted resource. Defaults to the first. */
+      index: z.union([z.number().int().min(0).max(99), z.string().min(1).max(64)]).optional(),
+      /** Dotted path into the instance attributes, e.g. `triggers.environment`. */
+      attribute: attributePath,
+      /** Exact match, compared as text so YAML `8080` and `"8080"` agree. */
+      equals: z.union([z.string().max(2048), z.number(), z.boolean()]).optional(),
+      /** Substring match, for generated content whose whole value is not fixed. */
+      contains: z.string().min(1).max(2048).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => !(v.equals !== undefined && v.contains !== undefined), {
+      message: 'specify equals or contains, not both',
+    }),
+
+  /** How many instances of a resource type the state manages, across modules. */
+  terraform_resource_count: z
+    .object({
+      type: z.literal('terraform_resource_count'),
+      dir: sandboxPath,
+      resource_type: terraformIdentifier,
+      count: z.number().int().min(0).max(100),
+      ...common,
+    })
+    .strict(),
+
+  terraform_output_exists: z
+    .object({
+      type: z.literal('terraform_output_exists'),
+      dir: sandboxPath,
+      name: terraformIdentifier,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * An output has a given value in state.
+   *
+   * There is deliberately no way to require the value of a *sensitive* output:
+   * the handler refuses to compare one, so no lab can be written that would
+   * make the platform hold a secret. This mirrors `secret_key`, which likewise
+   * has no `value` field.
+   */
   terraform_output_equals: z
     .object({
       type: z.literal('terraform_output_equals'),
       dir: sandboxPath,
-      name: z
-        .string()
-        .min(1)
-        .max(128)
-        .regex(/^[a-zA-Z_][a-zA-Z0-9_-]*$/, 'must be a Terraform output name'),
-      value: z.string().max(1024),
+      name: terraformIdentifier,
+      value: z.union([z.string().max(2048), z.number(), z.boolean()]),
+      ...common,
+    })
+    .strict(),
+
+  /** A `variable "name"` block is declared in the configuration. */
+  terraform_variable_declared: z
+    .object({
+      type: z.literal('terraform_variable_declared'),
+      dir: sandboxPath,
+      name: terraformIdentifier,
+      /** Require the variable to declare (or deliberately omit) a default. */
+      has_default: z.boolean().optional(),
+      /** Require a `type` argument to be present — teaches typed variables. */
+      has_type: z.boolean().optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** Names that must be defined in a `locals` block. */
+  terraform_locals_declared: z
+    .object({
+      type: z.literal('terraform_locals_declared'),
+      dir: sandboxPath,
+      names: z.array(terraformIdentifier).min(1).max(20),
+      ...common,
+    })
+    .strict(),
+
+  /** A `data "type" "name"` block is declared in the configuration. */
+  terraform_data_source_declared: z
+    .object({
+      type: z.literal('terraform_data_source_declared'),
+      dir: sandboxPath,
+      data_type: terraformIdentifier,
+      name: terraformIdentifier,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A `lifecycle` rule is declared on a resource.
+   *
+   * Read from configuration rather than state, because that is where a
+   * lifecycle rule lives — it shapes how Terraform plans changes and leaves no
+   * trace in the applied result.
+   */
+  terraform_resource_lifecycle: z
+    .object({
+      type: z.literal('terraform_resource_lifecycle'),
+      dir: sandboxPath,
+      resource_type: terraformIdentifier,
+      name: terraformIdentifier,
+      setting: z.enum(['create_before_destroy', 'prevent_destroy', 'ignore_changes']),
+      /** For a boolean setting: the value it must be set to. Defaults to true. */
+      expected: z.boolean().optional(),
+      /** For `ignore_changes`: attribute names the list must mention. */
+      attributes: z.array(terraformIdentifier).min(1).max(20).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A module is both *called* and *present on disk*.
+   *
+   * Both halves matter: a `module` block alone is a call to nothing, and a
+   * directory alone is dead code. A modules lab is only complete when the
+   * student has written the module and wired it in.
+   */
+  terraform_module_exists: z
+    .object({
+      type: z.literal('terraform_module_exists'),
+      dir: sandboxPath,
+      /** The module call's label: `module "application"`. */
+      name: terraformIdentifier,
+      /** Require an exact `source` value, e.g. `./modules/application`. */
+      source: z.string().min(1).max(255).optional(),
+      /** Sandbox directory the module must live in. */
+      directory: sandboxPath.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** A module call passes a named input argument. */
+  terraform_module_input: z
+    .object({
+      type: z.literal('terraform_module_input'),
+      dir: sandboxPath,
+      module: terraformIdentifier,
+      input: terraformIdentifier,
       ...common,
     })
     .strict(),
@@ -615,10 +870,24 @@ export const REQUIREMENT_FAMILIES = {
   file_mode: 'filesystem',
   file_owner: 'filesystem',
   file_group: 'filesystem',
+  file_absent: 'filesystem',
 
   terraform_initialized: 'terraform',
+  terraform_valid: 'terraform',
+  terraform_formatted: 'terraform',
   terraform_resource_exists: 'terraform',
+  terraform_state_contains: 'terraform',
+  terraform_state_absent: 'terraform',
+  terraform_resource_attribute: 'terraform',
+  terraform_resource_count: 'terraform',
+  terraform_output_exists: 'terraform',
   terraform_output_equals: 'terraform',
+  terraform_variable_declared: 'terraform',
+  terraform_locals_declared: 'terraform',
+  terraform_data_source_declared: 'terraform',
+  terraform_resource_lifecycle: 'terraform',
+  terraform_module_exists: 'terraform',
+  terraform_module_input: 'terraform',
 
   resource_absent: 'kubernetes',
   // `as const satisfies` rather than a plain annotation: the literal family of

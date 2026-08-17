@@ -27,6 +27,14 @@ export interface CheckResult {
 export interface HandlerOutcome {
   ok: boolean;
   detail?: string;
+  /**
+   * The check could not be performed at all.
+   *
+   * Reported to the student as `skipped`, never as a failure. A platform that
+   * cannot look at something has learned nothing about the student's work, and
+   * saying "fail" there would blame them for the platform's gap.
+   */
+  skipped?: boolean;
 }
 
 export function pass(detail?: string): HandlerOutcome {
@@ -35,6 +43,11 @@ export function pass(detail?: string): HandlerOutcome {
 
 export function fail(detail: string): HandlerOutcome {
   return { ok: false, detail };
+}
+
+/** The check could not run here — a platform limitation, not a student error. */
+export function skip(detail: string): HandlerOutcome {
+  return { ok: false, detail, skipped: true };
 }
 
 /** Uniform "the object is not there" message across every handler. */

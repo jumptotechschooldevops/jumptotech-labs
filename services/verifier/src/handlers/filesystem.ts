@@ -73,6 +73,24 @@ export const directoryExists: SandboxVerifierHandler<'directory_exists'> = {
   },
 };
 
+/**
+ * Nothing exists at this path.
+ *
+ * The filesystem counterpart of `terraform_state_absent`: an apply that removes
+ * a resource must remove the artefact too, and a lab whose point is a deletion
+ * has to be able to say so. A symlink or a directory left behind is still
+ * something at that path, so any observed type is a failure.
+ */
+export const fileAbsent: SandboxVerifierHandler<'file_absent'> = {
+  type: 'file_absent',
+  label: (r) => `${r.path} has been removed`,
+  async run(requirement, reader) {
+    const read = await reader.path(requirement.path);
+    if (!read) return pass();
+    return fail(`'${requirement.path}' still exists as ${describeType(read)}`);
+  },
+};
+
 export const fileContent: SandboxVerifierHandler<'file_content'> = {
   type: 'file_content',
   label: (r) => `File ${r.path} has the expected contents`,

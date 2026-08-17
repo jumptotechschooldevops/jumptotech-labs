@@ -33,12 +33,16 @@ export * from './registry.js';
 export { VerifyReader } from './reader.js';
 export {
   SandboxReader,
+  SandboxCapabilityMissingError,
   parseTerraformState,
+  TerraformStateParseError,
   TERRAFORM_LOCK_FILE,
   TERRAFORM_STATE_FILE,
   TERRAFORM_WORK_DIR,
   type SandboxPort,
-  type TerraformStateSnapshot,
+  type TerraformFormatResult,
+  type TerraformState,
+  type TerraformValidateResult,
 } from './sandbox-reader.js';
 export { normalizeMode } from './handlers/filesystem.js';
 export { imageMatches, normalizeImageReference } from './image.js';

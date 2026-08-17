@@ -125,8 +125,9 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    // Ten Kubernetes labs from PLATFORM-003, plus the two PLATFORM-004 tracks.
-    expect(registry.size).toBe(12);
+    // Ten Kubernetes labs from PLATFORM-003, the Linux lab from PLATFORM-004,
+    // and the ten-lab Terraform track.
+    expect(registry.size).toBe(21);
     expect(registry.all().map((l) => l.id)).toEqual([
       'K8S-001',
       'K8S-002',
@@ -140,6 +141,15 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
       'K8S-010',
       'LINUX-001',
       'TF-001',
+      'TF-002',
+      'TF-003',
+      'TF-004',
+      'TF-005',
+      'TF-006',
+      'TF-007',
+      'TF-008',
+      'TF-009',
+      'TF-010',
     ]);
   });
 
@@ -253,7 +263,19 @@ describe('catalog — filtering (test requirement 5)', () => {
 
     expect(registry.list({ track: 'kubernetes' })).toHaveLength(10);
     expect(registry.list({ track: 'linux' }).map((l) => l.id)).toEqual(['LINUX-001']);
-    expect(registry.list({ track: 'terraform' }).map((l) => l.id)).toEqual(['TF-001']);
+    expect(registry.list({ track: 'terraform' })).toHaveLength(10);
+    expect(registry.list({ track: 'terraform' }).map((l) => l.id)).toEqual([
+      'TF-001',
+      'TF-002',
+      'TF-003',
+      'TF-004',
+      'TF-005',
+      'TF-006',
+      'TF-007',
+      'TF-008',
+      'TF-009',
+      'TF-010',
+    ]);
     // A track nothing ships yet still matches nothing rather than erroring.
     expect(registry.list({ track: 'ansible' })).toHaveLength(0);
     expect(registry.labsForTrack('kubernetes')).toHaveLength(10);
@@ -267,6 +289,16 @@ describe('catalog — filtering (test requirement 5)', () => {
       'K8S-008',
       'K8S-009',
       'K8S-010',
+      'TF-004',
+      'TF-005',
+      'TF-006',
+      'TF-007',
+    ]);
+    // The Terraform track is the only one that reaches `advanced` today.
+    expect(registry.list({ difficulty: 'advanced' }).map((l) => l.id)).toEqual([
+      'TF-008',
+      'TF-009',
+      'TF-010',
     ]);
     expect(registry.list({ q: 'cronjob' }).map((l) => l.id)).toEqual(['K8S-007']);
   });
