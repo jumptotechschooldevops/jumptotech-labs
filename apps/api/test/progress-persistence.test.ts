@@ -190,7 +190,7 @@ if (!enabled) {
       const progress = await request(second.app).get('/api/me/progress');
       expect(progress.status).toBe(200);
       expect(progress.body.data.student.durable).toBe(true);
-      expect(progress.body.data.overall).toMatchObject({ completed: 1, total: 12 });
+      expect(progress.body.data.overall).toMatchObject({ completed: 1, total: 21 });
       const linux = progress.body.data.tracks.find((t: { track: string }) => t.track === 'linux');
       expect(linux.labs[0]).toMatchObject({ labId: 'LINUX-001', status: 'COMPLETED' });
 
