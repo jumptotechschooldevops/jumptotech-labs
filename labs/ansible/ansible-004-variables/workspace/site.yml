@@ -1,0 +1,24 @@
+---
+# The ledger service playbook, as it was first written.
+#
+# Everything about it is correct except that every value is welded into the
+# task. Adding a fourth server, or promoting staging to production, means
+# editing this file — which is exactly the habit variables exist to break.
+- name: Configure the ledger service
+  hosts: web
+  tasks:
+    - name: Ensure the application directory exists
+      ansible.builtin.file:
+        path: /opt/jumptotech/app
+        state: directory
+        mode: "0755"
+
+    - name: Write the application configuration
+      ansible.builtin.copy:
+        dest: /etc/jumptotech/app.conf
+        mode: "0644"
+        content: |
+          app_name=ledger
+          app_port=8080
+          app_release=2.4.1
+          node_role=primary

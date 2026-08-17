@@ -24,6 +24,7 @@
 import { Router, type Response } from 'express';
 import {
   SessionError,
+  type AnsibleSandboxPort,
   type KubernetesPort,
   type LabRegistry,
   type LabSession,
@@ -37,6 +38,8 @@ export interface SessionRoutesDeps {
   registry: LabRegistry;
   sessions: SessionManager;
   k8s: KubernetesPort;
+  /** Present when the Ansible track is enabled. */
+  ansible?: AnsibleSandboxPort;
   config: ApiConfig;
 }
 
@@ -94,7 +97,7 @@ export function toSessionPayload(manager: SessionManager, session: LabSession) {
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps): Router {
-  const { registry, sessions, k8s } = deps;
+  const { registry, sessions, k8s, ansible } = deps;
   const router = Router();
 
   // GET /api/sessions/:sessionId -------------------------------------------
@@ -141,9 +144,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     }
 
     const lab = registry.get(session.labId);
-    // The namespace comes from the session record, never from the request.
-    // A correct Pod in someone else's namespace is invisible here.
-    const result = await verifyLab({ k8s, lab, namespace: session.namespace });
+    // The sandbox id comes from the session record, never from the request.
+    // A correct Pod — or a correctly configured managed node — in someone
+    // else's sandbox is invisible here.
+    const result = await verifyLab({
+      k8s,
+      ...(ansible ? { ansible } : {}),
+      lab,
+      namespace: session.namespace,
+    });
     await sessions.touch(session.sessionId, 'check');
 
     if (result.error) {

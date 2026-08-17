@@ -9,7 +9,11 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  DEFAULT_ANSIBLE_SANDBOX_LIMITS,
   DEFAULT_SESSION_POLICY,
+  LAB_SUBSTRATES,
+  type AnsibleSandboxLimits,
+  type LabSubstrate,
   type SessionLifetimeConfig,
   type SessionPolicy,
 } from '@jumptotech/lab-orchestrator';
@@ -42,6 +46,36 @@ export interface ApiConfig {
   reaperIntervalSeconds: number;
   sessionRetentionMinutes: number;
   nodeEnv: string;
+  /** Which tracks this deployment can actually provision. */
+  substrates: LabSubstrate[];
+  ansible: AnsibleTrackConfig;
+}
+
+/**
+ * Ansible track configuration.
+ *
+ * Every value is read from the environment with a documented development
+ * default, exactly as the Kubernetes guardrails are: production sizing is a
+ * configuration decision, not a code change.
+ */
+export interface AnsibleTrackConfig {
+  /** Whether the Ansible substrate is offered at all. */
+  enabled: boolean;
+  /** Sandbox node image. Build it with `bash scripts/ansible-image-build.sh`. */
+  image: string;
+  managedNodeCount: number;
+  limits: AnsibleSandboxLimits;
+  /**
+   * Host the terminal service reaches a control node's published SSH port on.
+   *
+   * The port itself is published to the loopback interface only, so this is
+   * `127.0.0.1` when the terminal runs on the same host.
+   */
+  sshHost: string;
+  /** `docker` binary used by the orchestrator. Never taken from a request. */
+  dockerBinary: string;
+  /** Optional non-default daemon endpoint. */
+  dockerHost: string | undefined;
 }
 
 function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -63,6 +97,58 @@ function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): b
   const raw = env[name];
   if (raw === undefined || raw.trim() === '') return fallback;
   return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
+
+function floatFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const raw = env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Environment variable ${name} must be a positive number, got '${raw}'`);
+  }
+  return parsed;
+}
+
+/** Read the Ansible track's sandbox configuration. */
+export function loadAnsibleConfig(env: NodeJS.ProcessEnv = process.env): AnsibleTrackConfig {
+  const base = DEFAULT_ANSIBLE_SANDBOX_LIMITS;
+  const managedNodeCount = intFromEnv(env, 'ANSIBLE_MANAGED_NODES', 2);
+  if (managedNodeCount > 4) {
+    throw new Error('ANSIBLE_MANAGED_NODES must be at most 4 — the labs are written for two nodes.');
+  }
+
+  return {
+    // Off unless explicitly enabled: the Ansible provider needs a Docker
+    // connection, and a deployment that has not decided to give it one should
+    // not half-start the track.
+    enabled: boolFromEnv(env, 'ANSIBLE_TRACK_ENABLED', false),
+    image: strFromEnv(env, 'ANSIBLE_LAB_IMAGE', 'jumptotech/ansible-lab:local'),
+    managedNodeCount,
+    limits: {
+      controlCpus: floatFromEnv(env, 'ANSIBLE_CONTROL_CPUS', base.controlCpus),
+      controlMemory: strFromEnv(env, 'ANSIBLE_CONTROL_MEMORY', base.controlMemory),
+      nodeCpus: floatFromEnv(env, 'ANSIBLE_NODE_CPUS', base.nodeCpus),
+      nodeMemory: strFromEnv(env, 'ANSIBLE_NODE_MEMORY', base.nodeMemory),
+      pidsLimit: intFromEnv(env, 'ANSIBLE_PIDS_LIMIT', base.pidsLimit),
+    },
+    sshHost: strFromEnv(env, 'ANSIBLE_SSH_HOST', '127.0.0.1'),
+    dockerBinary: strFromEnv(env, 'DOCKER_BINARY', 'docker'),
+    dockerHost: env.DOCKER_HOST || undefined,
+  };
+}
+
+/**
+ * Which substrates this deployment serves.
+ *
+ * Kubernetes is always offered — it is the platform's original track and its
+ * absence would break every existing lab. Ansible is added when its track is
+ * enabled. A lab whose substrate is not served fails to start with a clear
+ * message rather than half-provisioning.
+ */
+export function loadSubstrates(env: NodeJS.ProcessEnv = process.env): LabSubstrate[] {
+  const substrates: LabSubstrate[] = ['kubernetes'];
+  if (boolFromEnv(env, 'ANSIBLE_TRACK_ENABLED', false)) substrates.push('ansible');
+  return substrates.filter((substrate) => LAB_SUBSTRATES.includes(substrate));
 }
 
 /** Build the per-session guardrail policy from the environment. */
@@ -177,5 +263,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',
+    substrates: loadSubstrates(env),
+    ansible: loadAnsibleConfig(env),
   };
 }

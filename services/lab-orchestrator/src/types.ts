@@ -136,12 +136,47 @@ export interface LabSessionContext {
  * it carries a bound, short-lived token rather than a long-lived secret.
  */
 export interface StudentCredentials {
-  /** A complete kubeconfig YAML document scoped to the session namespace. */
+  /**
+   * A complete kubeconfig YAML document scoped to the session namespace.
+   *
+   * Empty for sandboxes that have no Kubernetes API at all (the Ansible
+   * track), which is deliberately different from "a kubeconfig we failed to
+   * mint" — the terminal chooses how to attach from `shell`, not from whether
+   * this string happens to be populated.
+   */
   kubeconfig: string;
   namespace: string;
   serviceAccountName: string;
-  /** ISO-8601 expiry of the embedded ServiceAccount token. */
+  /** ISO-8601 expiry of the credential. */
   expiresAt: string;
+  /**
+   * How the terminal service should attach a student to this sandbox.
+   *
+   * `local` (the default, and what every Kubernetes lab uses) means "spawn a
+   * shell here with this kubeconfig". `ssh` means "open a session on the
+   * sandbox's own control node with the key below".
+   */
+  shell?: 'local' | 'ssh';
+  /** Present only when `shell` is `ssh`. */
+  ssh?: SshCredentials;
+}
+
+/**
+ * A session-scoped SSH credential.
+ *
+ * Minted per session, authorised on that session's containers only, and
+ * destroyed with them. It is never persisted, never logged, and never returned
+ * to the browser — the internal credential route is the only way to obtain it.
+ */
+export interface SshCredentials {
+  /** Loopback address the control node's SSH port is published on. */
+  host: string;
+  port: number;
+  user: string;
+  /** PEM private key. Written 0600 by the terminal, removed when the PTY exits. */
+  privateKey: string;
+  /** Directory the shell should start in. */
+  workdir?: string;
 }
 
 /** Outcome of tearing a sandbox down. */

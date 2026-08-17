@@ -1,0 +1,132 @@
+id: ANSIBLE-003
+slug: ansible-003-first-playbook
+title: Write Your First Playbook
+track: ansible
+topic: playbooks
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 3
+
+environment:
+  provider: ansible
+  isolation: container
+
+prerequisites:
+  - ANSIBLE-002
+
+story: >
+  The maintenance notice you dropped onto the web servers last week worked
+  fine — right up to the moment a third server joined the fleet and nobody
+  could remember exactly what had been run on the first two.
+
+  Your team lead's rule is simple: if it has to be true on more than one
+  machine, or true again next month, it goes in a playbook. Today you write
+  the ledger service's first one.
+
+objectives:
+  - Explain how a playbook differs from an ad-hoc command
+  - Write a play with a name, a hosts pattern, and a task list
+  - Run a playbook with ansible-playbook and read its output
+  - Confirm the resulting state on the managed nodes
+
+task:
+  summary: Write site.yml — a playbook that prepares the ledger application directory and configuration on both web hosts.
+  description: >
+    A playbook is a YAML file containing a list of plays. A play says which
+    hosts it applies to and what should be true of them:
+
+    ```
+    ---
+    - name: A description of this play
+      hosts: web
+      tasks:
+        - name: A description of this task
+          ansible.builtin.file:
+            path: /some/path
+            state: directory
+    ```
+
+    Note the shape. The document is a list, so each play begins with `- `. Each
+    play needs `hosts:` and a `tasks:` list. Each task takes a `name:` and one
+    module with its arguments indented underneath.
+
+    Create a playbook called `site.yml` that applies to the `web` group and
+    leaves both nodes in this state:
+
+    A directory `/opt/jumptotech/app` exists.
+
+    A file `/etc/jumptotech/app.conf` exists containing the two lines
+    `app_name=ledger` and `environment=staging`.
+
+    Run it with `ansible-playbook site.yml`. Read the recap at the bottom
+    carefully: `changed` means Ansible altered the node, `ok` means it was
+    already in the desired state. Run the playbook a second time and watch the
+    changed count drop to zero — that is not a quirk, it is the whole idea.
+
+requirements:
+  - type: file_exists
+    path: site.yml
+    label: A playbook named site.yml exists
+  - type: yaml_valid
+    path: site.yml
+    label: The playbook is valid YAML
+  - type: ansible_playbook_valid
+    playbook: site.yml
+    label: Ansible accepts the playbook
+  - type: managed_file_exists
+    path: /opt/jumptotech/app
+    kind: directory
+    hosts: all
+    label: The application directory exists on every web host
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf
+    hosts: all
+    contains:
+      - app_name=ledger
+      - environment=staging
+    label: The configuration names the ledger service and the staging environment
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: ansible_inventory_valid
+      label: Ansible can parse the inventory
+
+hints:
+  - level: 1
+    text: >
+      YAML is whitespace-sensitive and does not accept tabs. If Ansible
+      complains about your file before it runs anything, the problem is almost
+      always indentation.
+  - level: 2
+    text: >
+      Read the "Ansible playbooks" intro page for the structure of a play, then
+      use the same two modules you already met in the ad-hoc lab. Before running
+      the playbook, check it with `ansible-playbook --syntax-check site.yml` —
+      it parses the file without touching a single server.
+  - level: 3
+    text: >
+      One play targeting `web`, with two tasks, is enough. The file must be
+      called exactly `site.yml` and live in the top level of your project. If a
+      task reports `changed` on the first run and `ok` on the second, that task
+      is written correctly.
+
+references:
+  - title: Ansible playbooks
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_intro.html
+  - title: ansible-playbook
+    url: https://docs.ansible.com/ansible/latest/cli/ansible-playbook.html
+  - title: YAML syntax for Ansible
+    url: https://docs.ansible.com/ansible/latest/reference_appendices/YAMLSyntax.html
+
+skills:
+  - ansible.playbooks.write
+  - ansible.playbooks.run
+  - ansible.tasks.structure
+
+certification:
+  - certification: RHCE
+    relevant: true
+    domains:
+      - create-ansible-plays-and-playbooks

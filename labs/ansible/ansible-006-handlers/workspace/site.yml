@@ -1,0 +1,28 @@
+---
+# The ledger service playbook.
+#
+# It writes the configuration correctly. What it does not do is tell anything
+# that the configuration changed — so the running service keeps using the old
+# port until a human notices.
+- name: Configure the ledger service
+  hosts: web
+  tasks:
+    - name: Ensure the configuration directory exists
+      ansible.builtin.file:
+        path: /etc/jumptotech
+        state: directory
+        mode: "0755"
+
+    - name: Ensure the log directory exists
+      ansible.builtin.file:
+        path: /var/log/jumptotech
+        state: directory
+        mode: "0755"
+
+    - name: Write the application configuration
+      ansible.builtin.copy:
+        dest: /etc/jumptotech/app.conf
+        mode: "0644"
+        content: |
+          app_name={{ app_name }}
+          app_port={{ app_port }}

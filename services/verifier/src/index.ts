@@ -18,18 +18,24 @@
  * by the caller from the session record — never by the browser.
  */
 import {
+  AnsibleSandboxUnreachableError,
   KubernetesUnreachableError,
+  type AnsibleSandboxPort,
   type KubernetesPort,
   type LabDefinition,
   type Requirement,
 } from '@jumptotech/lab-orchestrator';
+import { AnsibleVerifyReader } from './ansible-reader.js';
 import { VerifyReader } from './reader.js';
 import { checkId, verifyRequirements } from './registry.js';
-import type { CheckResult } from './contract.js';
+import type { CheckResult, VerifyContext } from './contract.js';
 
 export * from './contract.js';
 export * from './registry.js';
+export * from './ansible-yaml.js';
 export { VerifyReader } from './reader.js';
+export { AnsibleVerifyReader, firstMeaningfulLine, type InventoryReading } from './ansible-reader.js';
+export { parsePingOutput } from './handlers/ansible-inventory.js';
 export { imageMatches, normalizeImageReference } from './image.js';
 export { parseQuantity, quantitiesEqual } from './quantity.js';
 
@@ -46,25 +52,47 @@ export interface VerificationResult {
 }
 
 export interface VerifyOptions {
-  k8s: KubernetesPort;
   lab: LabDefinition;
-  /** The session's private namespace. */
+  /** The session's private sandbox id — its namespace, or its container set. */
   namespace: string;
+  /** Present for Kubernetes labs. */
+  k8s?: KubernetesPort;
+  /** Present for Ansible labs. */
+  ansible?: AnsibleSandboxPort;
   now?: () => Date;
 }
 
+/**
+ * Assemble the readers for one verification run.
+ *
+ * A lab runs on one substrate, so at most one of these is ever used — but both
+ * are built when both ports are supplied, because `verifyLab` is called from
+ * one route for every lab and deciding which is which is the registry's job,
+ * not the caller's.
+ */
+function buildContext(options: VerifyOptions): VerifyContext {
+  return {
+    ...(options.k8s ? { kubernetes: new VerifyReader(options.k8s, options.namespace) } : {}),
+    ...(options.ansible ? { ansible: new AnsibleVerifyReader(options.ansible, options.namespace) } : {}),
+  };
+}
+
 export async function verifyLab(options: VerifyOptions): Promise<VerificationResult> {
-  const { lab, k8s, namespace } = options;
+  const { lab, namespace } = options;
   const checkedAt = (options.now?.() ?? new Date()).toISOString();
-  const reader = new VerifyReader(k8s, namespace);
 
   let checks: CheckResult[];
   try {
-    checks = await verifyRequirements(lab.requirements as readonly Requirement[], reader);
+    checks = await verifyRequirements(
+      lab.requirements as readonly Requirement[],
+      buildContext(options),
+    );
   } catch (error) {
-    // A cluster we cannot read is not a failed lab — it is a broken
+    // An environment we cannot read is not a failed lab — it is a broken
     // environment, and the UI must say so rather than blame the student.
-    if (error instanceof KubernetesUnreachableError) {
+    const unreachable =
+      error instanceof KubernetesUnreachableError || error instanceof AnsibleSandboxUnreachableError;
+    if (unreachable) {
       return {
         labId: lab.id,
         namespace,
@@ -75,9 +103,9 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
           id: checkId(requirement, index),
           label: requirement.label ?? requirement.type,
           status: 'skipped' as const,
-          detail: 'Could not read cluster state',
+          detail: 'Could not read the lab environment',
         })),
-        error: { code: 'ENVIRONMENT_UNREACHABLE', message: error.message },
+        error: { code: 'ENVIRONMENT_UNREACHABLE', message: (error as Error).message },
       };
     }
     throw error;
@@ -103,10 +131,11 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
  * confirmed, so provisioning waits here rather than hoping.
  */
 export async function waitForRequirements(options: {
-  k8s: KubernetesPort;
   namespace: string;
   requirements: readonly Requirement[];
   timeoutMs: number;
+  k8s?: KubernetesPort;
+  ansible?: AnsibleSandboxPort;
   intervalMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -120,8 +149,13 @@ export async function waitForRequirements(options: {
 
   let checks: CheckResult[] = [];
   for (;;) {
-    // A fresh reader each round: the cache must not outlive one observation.
-    checks = await verifyRequirements(options.requirements, new VerifyReader(options.k8s, options.namespace));
+    // Fresh readers each round: the cache must not outlive one observation.
+    checks = await verifyRequirements(options.requirements, {
+      ...(options.k8s ? { kubernetes: new VerifyReader(options.k8s, options.namespace) } : {}),
+      ...(options.ansible
+        ? { ansible: new AnsibleVerifyReader(options.ansible, options.namespace) }
+        : {}),
+    });
     if (checks.every((c) => c.status === 'pass')) return { ok: true, checks };
     if (now() >= deadline) return { ok: false, checks };
     await sleep(intervalMs);

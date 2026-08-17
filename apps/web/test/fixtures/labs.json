@@ -1,6 +1,304 @@
 {
   "labs": [
     {
+      "id": "ANSIBLE-001",
+      "slug": "ansible-001-inventory",
+      "title": "Build Your First Inventory",
+      "track": "ansible",
+      "topic": "fundamentals",
+      "topicTitle": "Fundamentals",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 25,
+      "order": 1,
+      "summary": "Create an inventory containing a `web` group with node1 and node2, and prove Ansible can reach both.",
+      "skills": [
+        "ansible.inventory.create",
+        "ansible.inventory.groups",
+        "ansible.connectivity.verify"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [],
+      "hintCount": 3
+    },
+    {
+      "id": "ANSIBLE-002",
+      "slug": "ansible-002-ad-hoc-commands",
+      "title": "Change Servers With Ad-Hoc Commands",
+      "track": "ansible",
+      "topic": "fundamentals",
+      "topicTitle": "Fundamentals",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 25,
+      "order": 2,
+      "summary": "Use ad-hoc ansible commands to prepare a release directory and a maintenance notice on both web nodes.",
+      "skills": [
+        "ansible.adhoc.run",
+        "ansible.modules.file",
+        "ansible.modules.copy"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [
+        {
+          "id": "ANSIBLE-001",
+          "title": "Build Your First Inventory",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "ANSIBLE-003",
+      "slug": "ansible-003-first-playbook",
+      "title": "Write Your First Playbook",
+      "track": "ansible",
+      "topic": "playbooks",
+      "topicTitle": "Playbooks",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 3,
+      "summary": "Write site.yml — a playbook that prepares the ledger application directory and configuration on both web hosts.",
+      "skills": [
+        "ansible.playbooks.write",
+        "ansible.playbooks.run",
+        "ansible.tasks.structure"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [
+        {
+          "id": "ANSIBLE-002",
+          "title": "Change Servers With Ad-Hoc Commands",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "ANSIBLE-004",
+      "slug": "ansible-004-variables",
+      "title": "Parameterise a Playbook With Variables",
+      "track": "ansible",
+      "topic": "variables-and-logic",
+      "topicTitle": "Variables And Logic",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 35,
+      "order": 4,
+      "summary": "Move the ledger playbook's hard-coded values into group_vars and host_vars, and record each node's real hostname using a registered variable.",
+      "skills": [
+        "ansible.variables.group-vars",
+        "ansible.variables.host-vars",
+        "ansible.variables.register",
+        "ansible.variables.precedence"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [
+        {
+          "id": "ANSIBLE-003",
+          "title": "Write Your First Playbook",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "ANSIBLE-005",
+      "slug": "ansible-005-conditionals-loops",
+      "title": "Conditionals and Loops",
+      "track": "ansible",
+      "topic": "variables-and-logic",
+      "topicTitle": "Variables And Logic",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 35,
+      "order": 5,
+      "summary": "Write a playbook that creates four directories with one looping task and places the scheduler marker only on the primary node.",
+      "skills": [
+        "ansible.logic.loops",
+        "ansible.logic.conditionals",
+        "ansible.variables.register"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [
+        {
+          "id": "ANSIBLE-004",
+          "title": "Parameterise a Playbook With Variables",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "ANSIBLE-006",
+      "slug": "ansible-006-handlers",
+      "title": "Handlers and Idempotent Change",
+      "track": "ansible",
+      "topic": "templates-and-handlers",
+      "topicTitle": "Templates And Handlers",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 35,
+      "order": 6,
+      "summary": "Move the ledger service to port 9090 and add a handler that records a reload only when the configuration actually changes.",
+      "skills": [
+        "ansible.handlers.notify",
+        "ansible.handlers.declare",
+        "ansible.idempotency.verify"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [
+        {
+          "id": "ANSIBLE-005",
+          "title": "Conditionals and Loops",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "ANSIBLE-007",
+      "slug": "ansible-007-templates",
+      "title": "Generate Configuration With Jinja2 Templates",
+      "track": "ansible",
+      "topic": "templates-and-handlers",
+      "topicTitle": "Templates And Handlers",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 35,
+      "order": 7,
+      "summary": "Write templates/app.conf.j2 and deploy it so each node gets a configuration file rendered with its own values.",
+      "skills": [
+        "ansible.templates.jinja2",
+        "ansible.templates.deploy",
+        "ansible.variables.facts"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [
+        {
+          "id": "ANSIBLE-006",
+          "title": "Handlers and Idempotent Change",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "ANSIBLE-008",
+      "slug": "ansible-008-roles",
+      "title": "Refactor a Playbook Into a Role",
+      "track": "ansible",
+      "topic": "roles",
+      "topicTitle": "Roles",
+      "difficulty": "advanced",
+      "level": "practice",
+      "durationMinutes": 40,
+      "order": 8,
+      "summary": "Convert the monolithic site.yml into a reusable `web` role, and reduce the playbook to applying it.",
+      "skills": [
+        "ansible.roles.structure",
+        "ansible.roles.apply",
+        "ansible.roles.defaults",
+        "ansible.idempotency.verify"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [
+        {
+          "id": "ANSIBLE-007",
+          "title": "Generate Configuration With Jinja2 Templates",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "ANSIBLE-009",
+      "slug": "ansible-009-multi-node-deployment",
+      "title": "Deploy Across a Two-Node Web Tier",
+      "track": "ansible",
+      "topic": "multi-node-automation",
+      "topicTitle": "Multi Node Automation",
+      "difficulty": "advanced",
+      "level": "challenge",
+      "durationMinutes": 45,
+      "order": 9,
+      "summary": "Deploy the ledger status page to both web nodes and get nginx serving on each, with a playbook that stays idempotent.",
+      "skills": [
+        "ansible.deployment.multi-node",
+        "ansible.templates.deploy",
+        "ansible.logic.conditionals",
+        "ansible.idempotency.verify"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [
+        {
+          "id": "ANSIBLE-008",
+          "title": "Refactor a Playbook Into a Role",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
+      "id": "ANSIBLE-010",
+      "slug": "ansible-010-troubleshooting",
+      "title": "Repair a Broken Ansible Project",
+      "track": "ansible",
+      "topic": "troubleshooting",
+      "topicTitle": "Troubleshooting",
+      "difficulty": "advanced",
+      "level": "challenge",
+      "durationMinutes": 50,
+      "order": 10,
+      "summary": "Find and fix everything wrong with the inherited project until it deploys the ledger configuration correctly to both nodes.",
+      "skills": [
+        "ansible.troubleshooting.diagnose",
+        "ansible.troubleshooting.syntax",
+        "ansible.troubleshooting.connectivity",
+        "ansible.idempotency.verify"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "RHCE"
+      ],
+      "prerequisites": [
+        {
+          "id": "ANSIBLE-009",
+          "title": "Deploy Across a Two-Node Web Tier",
+          "available": true
+        }
+      ],
+      "hintCount": 3
+    },
+    {
       "id": "K8S-001",
       "slug": "k8s-001-pods",
       "title": "Create Your First Pod",
@@ -311,6 +609,53 @@
   ],
   "tracks": [
     {
+      "track": "ansible",
+      "title": "Ansible",
+      "labCount": 10,
+      "topics": [
+        {
+          "topic": "fundamentals",
+          "title": "Fundamentals",
+          "labCount": 2
+        },
+        {
+          "topic": "playbooks",
+          "title": "Playbooks",
+          "labCount": 1
+        },
+        {
+          "topic": "variables-and-logic",
+          "title": "Variables And Logic",
+          "labCount": 2
+        },
+        {
+          "topic": "templates-and-handlers",
+          "title": "Templates And Handlers",
+          "labCount": 2
+        },
+        {
+          "topic": "roles",
+          "title": "Roles",
+          "labCount": 1
+        },
+        {
+          "topic": "multi-node-automation",
+          "title": "Multi Node Automation",
+          "labCount": 1
+        },
+        {
+          "topic": "troubleshooting",
+          "title": "Troubleshooting",
+          "labCount": 1
+        }
+      ],
+      "difficulties": [
+        "beginner",
+        "intermediate",
+        "advanced"
+      ]
+    },
+    {
       "track": "kubernetes",
       "title": "Kubernetes",
       "labCount": 10,
@@ -362,6 +707,6 @@
       ]
     }
   ],
-  "count": 10,
+  "count": 20,
   "prerequisitesEnforced": false
 }

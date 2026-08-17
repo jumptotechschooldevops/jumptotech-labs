@@ -14,6 +14,13 @@
 # No container here gets the Docker socket. Cluster creation happens on the
 # host, deliberately outside any web-facing process.
 #
+# That rule is also why the **Ansible track is not enabled in this file**.
+# Creating a container per session needs a Docker connection, and handing one to
+# a web-facing container is exactly what this stack has always refused to do.
+# The supported local mode for that track is to run the API on your host with
+# ANSIBLE_TRACK_ENABLED=true — see README → The Ansible track. The Kubernetes
+# track below is unaffected and works exactly as before.
+#
 # PLATFORM-002: only the `api` service holds a cluster credential. The terminal
 # no longer mounts a kubeconfig at all — it fetches a namespace-scoped
 # ServiceAccount kubeconfig per session from the API, over the internal Docker

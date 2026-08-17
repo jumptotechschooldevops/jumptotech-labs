@@ -88,6 +88,17 @@ export class LabNotFoundError extends Error {
   }
 }
 
+/**
+ * Does this lab hand the student a prepared starting state?
+ *
+ * True for a Kubernetes lab that applies manifests and for an Ansible lab that
+ * seeds a project directory — both mean "you are not starting from nothing",
+ * which is the only thing the catalog badge claims.
+ */
+export function labSeedsState(def: LoadedLabDefinition): boolean {
+  return def.setup.manifests.length > 0 || def.setup.workspace_dir !== undefined;
+}
+
 /** `deployments` → `Deployments`, `rolling-update` → `Rolling Update`. */
 export function titleCase(slug: string): string {
   return slug
@@ -100,6 +111,7 @@ export function titleCase(slug: string): string {
 /** Track display names. Falls back to title-casing an unknown track slug. */
 const TRACK_TITLES: Record<string, string> = {
   kubernetes: 'Kubernetes',
+  ansible: 'Ansible',
 };
 
 export function trackTitle(track: string): string {
@@ -410,7 +422,7 @@ function toSummary(def: LoadedLabDefinition): LabSummary {
     order: def.order,
     summary: def.task.summary,
     skills: def.skills,
-    hasSetup: def.setup.manifests.length > 0,
+    hasSetup: labSeedsState(def),
     certifications: def.certification.filter((c) => c.relevant).map((c) => c.certification),
     prerequisites: def.prerequisites.map((id) => ({ id, title: id, available: false })),
     hintCount: def.hints.length,

@@ -27,6 +27,7 @@ adding a lab means adding a `lab.yaml`, and nothing else. See
 - [What is in scope](#what-is-in-scope)
 - [Architecture](#architecture)
 - [The lab catalog](#the-lab-catalog)
+- [The Ansible track](#the-ansible-track)
 - [Multi-student architecture](#multi-student-architecture)
 - [Session lifecycle](#session-lifecycle)
 - [Cost model](#cost-model)
@@ -95,8 +96,31 @@ Added by PLATFORM-003:
 - **A troubleshooting lab** (K8S-010) that provisions a deliberately broken
   workload the student must investigate and repair.
 
+Added by PLATFORM-ANSIBLE-001:
+
+- **A second track.** Ten Ansible labs, from a first inventory to repairing a
+  broken project, discovered by the same registry from the same `labs/` tree.
+  The catalog, the lab page, the check panel and the terminal did not learn
+  about Ansible — they read the data.
+- **A container sandbox per session** — one private Docker network, an
+  `ansible-core` control node, and two managed nodes running `sshd` and
+  `python3`. No VM per node, no cluster per student, no database.
+- **A provider router.** `environment.provider` in a `lab.yaml` decides which
+  substrate a session gets; the session manager, the REST routes and the reaper
+  still hold exactly one `LabProvider`.
+- **Per-session SSH credentials**, generated at start, authorised only on that
+  session's containers, and destroyed with them. The terminal attaches over SSH
+  to the student's own control node, so `ansible-playbook` really runs where the
+  student thinks it does.
+- **Fifteen more requirement types** covering inventories, playbook structure,
+  roles, handlers, templates, managed-node state, real connectivity, and
+  idempotency — read from the sandbox, never from command history.
+- **Idempotency checked from structured results**, including a strict mode that
+  clears the playbook's own directories first so the first run must change
+  something and the second must change nothing.
+
 Deliberately **not** in scope: authentication, payments, AI, AWS, PostgreSQL,
-the JumpToBank application. Session state is still in memory; the store is
+the JumpToBank application, Terraform, Docker, CI/CD, and a Linux track. Session state is still in memory; the store is
 behind an interface so a PostgreSQL implementation is a one-file change.
 Prerequisites and skills are **metadata only** — there are no user accounts and
 no stored progress, so nothing is enforced per student, and the API says so
@@ -243,8 +267,17 @@ jumptotech-labs/
 │       └── vite.config.ts
 │
 ├── services/
-│   ├── lab-orchestrator/           lab lifecycle + Kubernetes access
+│   ├── lab-orchestrator/           lab lifecycle + substrate access
 │   │   ├── src/
+│   │   │   ├── ansible/
+│   │   │   │   ├── docker-port.ts  DockerPort interface (testable seam)
+│   │   │   │   ├── docker-cli.ts   DockerPort backed by the docker CLI
+│   │   │   │   ├── keys.ts         per-session SSH keypair generation
+│   │   │   │   ├── paths.ts        workspace + managed-node path admission
+│   │   │   │   ├── port.ts         AnsibleSandboxPort (what the verifier reads)
+│   │   │   │   ├── sandbox.ts      DockerAnsibleSandbox — sandbox reads
+│   │   │   │   ├── topology.ts     derived network + container names
+│   │   │   │   └── workspace.ts    lab workspace loading + limits
 │   │   │   ├── k8s/client.ts       @kubernetes/client-node adapter
 │   │   │   ├── k8s/port.ts         KubernetesPort interface (testable seam)
 │   │   │   ├── k8s/labels.ts       ownership labels + the cleanup-safety gate
@@ -261,7 +294,9 @@ jumptotech-labs/
 │   │   │   ├── lab-registry.ts     lab discovery
 │   │   │   ├── requirements.ts     closed vocabulary of check types
 │   │   │   ├── providers/
-│   │   │   │   ├── factory.ts      provider selection
+│   │   │   │   ├── factory.ts      provider selection + the provider router
+│   │   │   │   ├── composite-provider.ts  routes by environment.provider
+│   │   │   │   ├── ansible-docker-provider.ts  containers per session
 │   │   │   │   └── kind-provider.ts KindLabProvider implements LabProvider
 │   │   │   ├── session-token.ts    HMAC terminal session tokens
 │   │   │   ├── types.ts            LabProvider + result contracts
@@ -269,16 +304,33 @@ jumptotech-labs/
 │   │   └── test/                   unit + live-cluster integration tests
 │   ├── terminal/                   WebSocket → PTY gateway
 │   │   ├── src/
-│   │   │   ├── credentials.ts      per-session kubeconfig fetch + storage
+│   │   │   ├── credentials.ts      per-session credential fetch + storage
 │   │   │   └── {config,index,protocol,server}.ts
 │   │   └── test/                   protocol, credentials, live-cluster E2E
 │   └── verifier/                   state-based verification
 │       ├── src/
 │       │   ├── handlers/           one handler per requirement type
+│       │   ├── ansible-reader.ts   memoised reads of one Ansible sandbox
+│       │   ├── ansible-yaml.ts     structural reading of Ansible projects
 │       │   └── {index,registry,reader,contract,image,quantity}.ts
-│       └── test/verifier.test.ts
+│       └── test/                   per-requirement-type suites
 │
 ├── labs/                           the catalog — data, not code
+│   ├── ansible/
+│   │   ├── ansible-001-inventory/
+│   │   │   ├── lab.yaml                    single source of truth per lab
+│   │   │   └── workspace/ansible.cfg       the project the student starts from
+│   │   ├── ansible-002-ad-hoc-commands/{lab.yaml,workspace/}
+│   │   ├── ansible-003-first-playbook/{lab.yaml,workspace/}
+│   │   ├── ansible-004-variables/{lab.yaml,workspace/}
+│   │   ├── ansible-005-conditionals-loops/{lab.yaml,workspace/}
+│   │   ├── ansible-006-handlers/{lab.yaml,workspace/}
+│   │   ├── ansible-007-templates/{lab.yaml,workspace/}
+│   │   ├── ansible-008-roles/{lab.yaml,workspace/}
+│   │   ├── ansible-009-multi-node-deployment/{lab.yaml,workspace/}
+│   │   └── ansible-010-troubleshooting/
+│   │       ├── lab.yaml
+│   │       └── workspace/                  the broken project
 │   └── kubernetes/
 │       ├── k8s-001-pods/lab.yaml           single source of truth per lab
 │       ├── k8s-002-deployments/lab.yaml
@@ -325,22 +377,25 @@ jumptotech-labs/
                                  │
                             Lab Catalog                  labs/**/lab.yaml
                                  │                       discovered at startup
-                    ┌────────────┴────────────┐
-                    │                         │
-               Kubernetes                Future tracks
-                    │
-   ┌────────┬───────┼───────┬────────┬─────── … ────────┐
-K8S-001  K8S-002  K8S-003  K8S-004  K8S-005          K8S-010
-   └────────┴───────┴───────┴────────┴─────── … ────────┘
+                ┌────────────────┼────────────────┐
+                │                │                │
+           Kubernetes        Ansible        Future tracks
+                │                │
+    ┌───────┬───┼───┬ … ─┐   ┌───┼───┬ … ─┐
+ K8S-001  …  K8S-010      ANSIBLE-001 … -010
+    └───────┴───┴───┴ … ─┘   └───┴───┴ … ─┘
                                  │
                        Generic Lab Engine          no lab-specific code
                     setup · verify · reset · hints
                                  │
                           Session Manager
                                  │
-                     PLATFORM-002 isolation          namespace per session
-                                 │
-                        Kubernetes cluster
+                        Provider router             environment.provider
+                    ┌────────────┴────────────┐
+                    │                         │
+        namespace per session      containers per session
+                    │                         │
+           Kubernetes cluster          Docker sandbox
 ```
 
 The rule this section exists to state: **adding a lab does not change the
@@ -363,10 +418,30 @@ only test fixtures.
 | K8S-009 | Declare Resource Requests and Limits | scheduling | intermediate | K8S-002 | `reporting` Deployment |
 | K8S-010 | Repair a Broken Deployment | troubleshooting | intermediate | K8S-003, K8S-008 | **a broken workload** |
 
+### The ten Ansible labs
+
+| Lab | Title | Topic | Level | Prerequisites | Starts from |
+|---|---|---|---|---|---|
+| ANSIBLE-001 | Build Your First Inventory | fundamentals | beginner | — | `ansible.cfg`, no inventory |
+| ANSIBLE-002 | Change Servers With Ad-Hoc Commands | fundamentals | beginner | ANSIBLE-001 | a working inventory |
+| ANSIBLE-003 | Write Your First Playbook | playbooks | beginner | ANSIBLE-002 | a working inventory |
+| ANSIBLE-004 | Parameterise a Playbook With Variables | variables-and-logic | intermediate | ANSIBLE-003 | a hard-coded playbook |
+| ANSIBLE-005 | Conditionals and Loops | variables-and-logic | intermediate | ANSIBLE-004 | group_vars + host_vars |
+| ANSIBLE-006 | Handlers and Idempotent Change | templates-and-handlers | intermediate | ANSIBLE-005 | a playbook with no handler |
+| ANSIBLE-007 | Generate Configuration With Jinja2 Templates | templates-and-handlers | intermediate | ANSIBLE-006 | variables, no template |
+| ANSIBLE-008 | Refactor a Playbook Into a Role | roles | advanced | ANSIBLE-007 | a monolithic playbook |
+| ANSIBLE-009 | Deploy Across a Two-Node Web Tier | multi-node-automation | advanced | ANSIBLE-008 | shared settings |
+| ANSIBLE-010 | Repair a Broken Ansible Project | troubleshooting | advanced | ANSIBLE-009 | **a broken project** |
+
+The suggested grouping the catalog renders — Ansible Fundamentals, Playbooks,
+Variables & Logic, Templates & Handlers, Roles, Multi-Node Automation,
+Troubleshooting — comes from each lab's `topic:` field, not from anything in
+the frontend.
+
 Every lab is an original JumpToTech scenario set on a fictional banking
-platform, written from the official Kubernetes documentation. No wording,
-task, or solution is taken from any third-party training platform, and the
-loader rejects a definition that links to one.
+platform, written from the official Kubernetes and Ansible documentation. No
+wording, task, or solution is taken from any third-party training platform, and
+the loader rejects a definition that links to one.
 
 ### Prerequisites are advice, not a gate
 
@@ -400,8 +475,8 @@ duration_minutes: 30
 order: 2                        # sort position within the track
 
 environment:
-  provider: kubernetes
-  isolation: namespace          # the only value; keeps the seam visible
+  provider: kubernetes          # kubernetes | ansible — picks the substrate
+  isolation: namespace          # namespace for kubernetes, container for ansible
 
 prerequisites: [K8S-001]        # advisory — see above
 story: >                        # the realistic situation, rendered as "Scenario"
@@ -460,8 +535,43 @@ Validation runs at startup and is deliberately strict:
 - hints must start at level 1 and ascend without duplicates;
 - at least one reference must point at official documentation for the track,
   and links to commercial training platforms are refused outright;
-- `setup.verify` must be non-empty whenever `setup.manifests` is, so a student
-  is never handed a starting condition nobody checked.
+- `setup.verify` must be non-empty whenever `setup.manifests` or
+  `setup.workspace_dir` is, so a student is never handed a starting condition
+  nobody checked;
+- a lab's requirements must belong to its own substrate — a `pod_exists` check
+  in an Ansible lab is rejected at load time rather than silently skipped when a
+  student presses Check.
+
+An Ansible lab differs in three fields and nothing else:
+
+```yaml
+environment:
+  provider: ansible
+  isolation: container
+
+setup:
+  workspace_dir: workspace      # copied into ~/lab on the control node
+  verify:
+    - type: file_exists
+      path: ansible.cfg
+      label: Ansible configuration is in place
+
+requirements:
+  - type: ansible_group_exists
+    group: web
+    hosts: [node1, node2]
+    label: A 'web' group contains node1 and node2
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf     # must sit under an allowed root
+    hosts: all                          # all | [node1, node2]
+    contains: [app_port=9090]
+    label: Both nodes serve the ledger on port 9090
+```
+
+`workspace_dir` names a directory inside the lab's own folder. Its whole tree is
+copied into the control node before the terminal opens and again on every reset,
+with per-file, total-size and file-count limits, UTF-8 text only, and symlinks
+resolved and re-checked so nothing outside the lab directory can be pulled in.
 
 An invalid lab is skipped, not fatal — the rest of the catalog still loads, and
 the reason is reported on `GET /health` and at startup:
@@ -515,21 +625,27 @@ become available, so asserting health there would fail every provision.
 
 ### How verification works
 
-Verification is **state-based**. The verifier reads `spec` and `status` from the
-Kubernetes API in the session's namespace and never looks at what the student
-typed. `kubectl edit`, `kubectl patch`, `kubectl set`, `kubectl apply -f`, and a
-heredoc all pass identically, because all of them produce the same state.
+Verification is **state-based**. The verifier reads the state the student
+produced and never looks at what they typed. On the Kubernetes track that is
+`spec` and `status` from the API server in the session's namespace, so
+`kubectl edit`, `kubectl patch`, `kubectl set`, `kubectl apply -f`, and a
+heredoc all pass identically. On the Ansible track it is the project on the
+control node and the files and processes on the managed nodes, so an ad-hoc
+command, a playbook, and a role all pass identically too.
 
 ```text
-lab.yaml requirements[]  →  requirement type  →  handler  →  Kubernetes API
-                                                                  │
-                                                       pass / fail + observed detail
+lab.yaml requirements[]  →  requirement type  →  domain  →  handler  →  reader
+                                                                          │
+                                                            ┌─────────────┴────┐
+                                                     Kubernetes API    Ansible sandbox
+                                                            │                  │
+                                                     pass / fail + observed detail
 ```
 
 The requirement vocabulary is closed and shared: `requirements.ts` defines it,
 the lab schema validates against it, and the verifier registry implements one
-handler per type. `HANDLERS` is a mapped type over every `RequirementType`, so a
-requirement type with no handler **fails to compile**.
+handler per type. Each handler table is a mapped type over every requirement
+type in its domain, so a requirement type with no handler **fails to compile**.
 
 | Group | Types |
 |---|---|
@@ -539,6 +655,14 @@ requirement type with no handler **fails to compile**.
 | Configuration | `configmap_exists`, `configmap_key`, `secret_exists`, `secret_key`, `secret_type` |
 | Batch | `job_exists`, `job_completed`, `job_image`, `cronjob_exists`, `cronjob_schedule`, `cronjob_suspended` |
 | Generic | `resource_absent` |
+| Ansible project | `file_exists`, `yaml_valid`, `ansible_playbook_valid`, `ansible_task_exists`, `ansible_role_exists`, `ansible_handler_exists`, `ansible_template_exists` |
+| Ansible inventory | `ansible_inventory_valid`, `ansible_group_exists`, `ansible_host_exists`, `ansible_connectivity` |
+| Ansible managed nodes | `managed_file_exists`, `managed_file_content`, `managed_service_state` |
+| Ansible runtime | `ansible_idempotent` |
+
+A requirement is routed by its domain, and a requirement whose reader is absent
+is reported **skipped**, never failed — a missing reader says nothing about
+whether the student's work is correct, and the UI must not imply otherwise.
 
 Three deliberate design points:
 
@@ -609,6 +733,205 @@ Two students on K8S-010 get two broken workloads in two namespaces. One
 student's Reset restores their own fault and leaves the other's repair alone;
 that is asserted against a real cluster in
 [`labs-integration.test.ts`](services/lab-orchestrator/test/labs-integration.test.ts).
+
+The same holds for the Ansible track with a different substrate underneath it:
+a session id, a derived sandbox id, a private network, a per-session keypair,
+container CPU/memory/PID ceilings, the same two deadlines, and the same reaper.
+See [The Ansible track](#the-ansible-track).
+
+---
+
+## The Ansible track
+
+### What a student gets
+
+```text
+                    ONE DOCKER HOST
+   ┌───────────────────────────────────────────────────┐
+   │                                                   │
+   │   session A                    session B          │
+   │   network lab-a…-net           network lab-b…-net │
+   │   ┌───────────────┐            ┌───────────────┐  │
+   │   │  control      │            │  control      │  │
+   │   │  ansible-core │            │  ansible-core │  │
+   │   └───┬───────┬───┘            └───┬───────┬───┘  │
+   │       │ ssh   │ ssh                │ ssh   │ ssh  │
+   │   ┌───▼───┐ ┌─▼─────┐          ┌───▼───┐ ┌─▼─────┐│
+   │   │ node1 │ │ node2 │          │ node1 │ │ node2 ││
+   │   └───────┘ └───────┘          └───────┘ └───────┘│
+   │                                                   │
+   │   no route between the two networks               │
+   └───────────────────────────────────────────────────┘
+```
+
+Each session gets its own user-defined bridge network, one control node running
+`ansible-core`, and two managed nodes running `sshd` and `python3` — which is
+exactly what Ansible needs on a target and nothing more.
+
+Nothing is simulated. `ansible all -m ping` opens a real SSH session;
+`ansible-playbook site.yml` really runs; a `template` task really renders on the
+control node and really lands on the managed node. The verifier grades the
+result, never the command.
+
+### Why containers and not virtual machines
+
+A managed node needs an SSH daemon and a Python interpreter. One container
+costs tens of megabytes and about a second to start, so five concurrent
+students cost fifteen small containers — not fifteen VMs, not a cluster each,
+and not a database each. `bash scripts/ansible-image-build.sh` builds the one
+image both roles share.
+
+### Where isolation comes from
+
+Docker's embedded DNS is per-network. `node1` resolves inside one session's
+network and nowhere else, and containers on separate user-defined bridges have
+no route to one another. Session A cannot name, resolve, or reach session B's
+nodes — and the only port published to the host at all is session A's own
+control node SSH port, bound to `127.0.0.1` on an ephemeral port.
+
+Names are derived, never supplied: the network and every container are named
+from the sandbox id, which the session manager derives from the session id
+through an HMAC. Nothing a lab definition or a request body contains can
+influence any of them.
+
+### Temporary credentials
+
+```text
+   start ──► generate RSA keypair for this session
+             ├── public  → authorized_keys on control + every node
+             └── private → control node (0600) and, per PTY, the terminal
+   end   ──► containers destroyed ──► both halves cease to exist
+```
+
+The platform never reads, mounts, or forwards a host SSH key. The private half
+is streamed into the control node over stdin rather than passed as an
+environment variable, so it never appears in `docker inspect`; the terminal
+writes it 0600 for exactly as long as one shell runs and deletes it when the
+shell exits. There is nothing to revoke when a session ends, because destroying
+the containers destroys the only places the key was authorised.
+
+### How the student's shell reaches the sandbox
+
+The Kubernetes track spawns a shell in the terminal container with a
+namespace-scoped kubeconfig. The Ansible track cannot: the student's commands
+have to run *inside their sandbox*, or `ansible-playbook` would not be real.
+
+So the credential the API mints for an Ansible session is an SSH credential,
+and the terminal opens a session on the control node with it:
+
+```text
+   auth frame ──► verify HMAC token ──► claims.sid
+                                        └─► API: credentials for THAT session
+                                            └─► host, port, user, private key
+                                                └─► ssh -i … student@127.0.0.1
+```
+
+The terminal service holds no Docker access of any kind. Every value in that
+`ssh` invocation comes from the API's credential response, which derives it
+from the session record; no frame from the browser contributes a host, a port,
+a user, or a key path.
+
+`StrictHostKeyChecking=no` is used deliberately and is safe here: sandbox host
+keys are generated per container, the address is a loopback port that exists
+only while the session does, and a reset replaces the nodes and therefore their
+keys. There is no stable identity to pin and nothing else listening to confuse
+it with.
+
+### Who holds the Docker connection
+
+Only the API process. It is not mounted into the terminal service, the web app,
+or any sandbox container, and no student shell can reach it.
+
+That is also why the Ansible track is **off by default and not enabled in
+`docker compose`**: giving a container the Docker socket is precisely the thing
+this repository has avoided since PLATFORM-001, and the honest local answer is
+to run the API on the host instead.
+
+```bash
+bash scripts/ansible-image-build.sh          # once
+ANSIBLE_TRACK_ENABLED=true npm run dev:api   # API on the host
+npm run dev:terminal                         # terminal on the host
+npm run dev:web
+```
+
+A production deployment would put sandbox creation behind a small privileged
+agent with a narrow API rather than handing the socket to a web-facing service.
+That is out of scope here and is listed under
+[Known limitations](#known-limitations).
+
+### Verification
+
+Ansible requirements are answered from two places: the project the student
+wrote on the control node, and the state their automation actually produced on
+the managed nodes.
+
+| Requirement | Answers |
+|---|---|
+| `file_exists`, `yaml_valid` | the project on the control node |
+| `ansible_inventory_valid`, `ansible_group_exists`, `ansible_host_exists` | `ansible-inventory --list` |
+| `ansible_connectivity` | `ansible <pattern> -m ping` |
+| `ansible_playbook_valid` | `ansible-playbook --syntax-check` |
+| `ansible_task_exists`, `ansible_role_exists`, `ansible_handler_exists`, `ansible_template_exists` | the YAML the student wrote |
+| `managed_file_exists`, `managed_file_content`, `managed_service_state` | the managed nodes |
+| `ansible_idempotent` | two real playbook runs |
+
+Three rules hold across all of them:
+
+- **No arbitrary execution.** A lab selects a check; the argv is ours. There is
+  no requirement field anywhere that carries a command, a script, or a shell
+  fragment, and every requirement schema is `.strict()`.
+- **No arbitrary paths.** Project paths must resolve inside the student's own
+  workspace. Managed-node paths must sit under `/etc/jumptotech`,
+  `/opt/jumptotech`, `/srv/jumptotech`, `/var/log/jumptotech`, `/var/www`, or
+  `/tmp/jumptotech`. `/etc/shadow` is not reachable from a lab.yaml.
+- **No command history.** A student who reaches the desired state with an
+  ad-hoc command, a playbook, or three attempts and a typo in between all pass
+  identically.
+
+### Idempotency, checked properly
+
+Configuration management converges: applying a description to a system that
+already matches it must do nothing. `ansible_idempotent` runs the playbook
+twice and reads Ansible's own per-host counters — ok, changed, failures,
+unreachable — written out as JSON by a platform-owned callback plugin baked
+into the sandbox image. Nothing pattern-matches a `PLAY RECAP` line.
+
+ANSIBLE-010 asks for the strict form. It clears the directories the playbook
+owns first, so the first run *must* report changes and the second *must* report
+none:
+
+```yaml
+- type: ansible_idempotent
+  playbook: site.yml
+  require_initial_change: true
+  reset_paths:
+    - /etc/jumptotech
+    - /var/log/jumptotech
+```
+
+`reset_paths` goes through the same allow-list as every other managed-node
+path, so this can only ever clear directories the labs themselves write into.
+
+### Reset and end
+
+**Reset** replaces the managed nodes outright — a fresh container is the most
+complete undo available and costs about a second — and re-seeds the control
+node's project directory from the lab's `workspace/` tree on disk. The control
+node itself survives, so the student's terminal stays connected. The baseline is
+a repository artefact, not remembered state.
+
+**End** and **expiry** both remove every container and the network, confirm
+they are gone, and drop the session key. Teardown is re-entrant: an
+already-absent sandbox counts as destroyed, which is what makes the reaper safe
+to run repeatedly.
+
+### Container hardening
+
+Every sandbox container runs with `--security-opt no-new-privileges`,
+`--cap-drop ALL` plus a reduced keep-list (enough for `sshd` to bind :22 and
+drop privileges, and for Ansible's file modules to own and mode a file), and
+configurable `--cpus`, `--memory`, and `--pids-limit`. None is privileged, none
+gets a host mount, and only the control node publishes a port — on loopback.
 
 ---
 
@@ -842,6 +1165,21 @@ JumpToTech does **not** create a cluster per student. It creates a namespace.
 | Database | none |
 | Namespace + SA + Role + Binding + Quota + LimitRange + 4 NetworkPolicies | ~9 small API objects |
 
+The Ansible track answers the same question the same way — the unit of
+isolation is a set of containers, not a machine:
+
+| Per student, per Ansible lab | Cost |
+|---|---|
+| Virtual machine per managed node | none — a managed node is a container |
+| Kubernetes cluster | none — the Ansible track does not use one |
+| Database | none |
+| Public address | none — one SSH port, published on `127.0.0.1` only |
+| 1 bridge network + 3 containers | ~200 MB of image, shared, plus a few MB each |
+
+Five concurrent Ansible students cost fifteen small containers from one shared
+image. Each is capped by `--cpus`, `--memory`, and `--pids-limit`, all
+configurable (see `.env.example`).
+
 Browsing the catalog creates nothing at all: no provider method runs until a
 student clicks **Start Lab**.
 
@@ -869,8 +1207,14 @@ frontend changing.
 | kubectl | 1.34 | host-side cluster checks |
 | Node.js | 22 LTS or 24 | only for running tests / services outside Docker |
 | Bash | 3.2+ | the `scripts/` helpers |
+| OpenSSH client | any | the Ansible track only — the terminal attaches over SSH |
 
 Docker must be running with at least ~4 GB of memory available.
+
+The Ansible track needs Docker and an `ssh` client, and no Kubernetes at all.
+The Kubernetes track needs kind and kubectl, and no Ansible at all. Neither
+track requires the other: a deployment that serves only one simply does not
+enable the other.
 
 macOS install:
 
@@ -963,6 +1307,39 @@ npm run dev:api        # :4000
 npm run dev:terminal   # :4001  (needs Node 22 for node-pty)
 npm run dev:web        # :3000
 ```
+
+### Running the Ansible track
+
+The Ansible track is served by the API process talking to Docker directly, and
+the compose stack deliberately does not give a container that access — so this
+track runs with the services on your host. It needs no Kubernetes cluster at
+all.
+
+```bash
+npm install
+bash scripts/ansible-image-build.sh          # once — builds the sandbox image
+
+export TERMINAL_SESSION_SECRET="$(openssl rand -hex 32)"
+export ANSIBLE_TRACK_ENABLED=true
+
+npm run dev:api        # :4000
+npm run dev:terminal   # :4001
+npm run dev:web        # :3000
+```
+
+Open http://localhost:3000, pick **Ansible**, and start ANSIBLE-001. The
+terminal lands you on your session's control node, in `~/lab`, with `node1` and
+`node2` waiting:
+
+```bash
+ansible --version
+ansible-inventory --list
+ansible all -m ping
+```
+
+Why this is not in `docker compose`, and what production would do instead, is
+in [The Ansible track](#the-ansible-track) and
+[Known limitations](#known-limitations).
 
 ### Shutting down
 
@@ -1434,6 +1811,44 @@ The mapped type in the verifier registry makes the compiler refuse the first
 without the second. Nothing else — no route, no component, no lab-specific
 branch anywhere.
 
+### How to add ANSIBLE-011
+
+Identical, with three differences: the directory goes under `labs/ansible/`,
+`environment` names the Ansible substrate, and the starting project is a
+directory rather than a list of manifests.
+
+```yaml
+environment:
+  provider: ansible
+  isolation: container
+
+setup:
+  workspace_dir: workspace        # labs/ansible/ansible-011-…/workspace/**
+  verify:
+    - type: file_exists
+      path: ansible.cfg
+      label: Ansible configuration is in place
+```
+
+Everything under `workspace/` — `ansible.cfg`, an inventory, a half-written
+playbook, a deliberately broken role — is copied into the student's control
+node before the terminal opens and again on every reset. Requirements are drawn
+from the Ansible half of the vocabulary; the loader refuses a Kubernetes check
+in an Ansible lab (and the reverse) at load time.
+
+### How to add a whole new track
+
+A track is not a feature; it is a directory name. `labs/<track>/…` with a valid
+`lab.yaml` produces a track section on the catalog page, a `GET /api/tracks/<track>`
+endpoint, and topic grouping, with no code change at all — the display title
+falls back to a title-cased slug, and one line in `TRACK_TITLES` overrides it.
+
+A new *substrate* is a different matter and is a genuine piece of work: one
+implementation of [`LabProvider`](services/lab-orchestrator/src/types.ts), one
+entry in the provider factory and the router, and — if it is verified
+differently — its own reader and handler table. The Ansible track is the worked
+example of exactly that, and it changed no route and no React component.
+
 ---
 
 ## API reference
@@ -1449,7 +1864,7 @@ All responses use a structured envelope:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health` | service status, labs loaded, lab load errors, session capacity |
+| `GET` | `/health` | service status, labs loaded, lab load errors, the substrates this deployment serves, session capacity |
 | `GET` | `/api/labs` | catalog: lab cards + tracks |
 | `GET` | `/api/labs/:labId` | student-safe lab definition for the UI |
 | `POST` | `/api/labs/:labId/start` | create a session sandbox; returns the session, provisioning steps, and a session-bound terminal token |
@@ -1564,6 +1979,23 @@ KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml" \
   npx vitest run test/terminal-integration.test.ts --root services/terminal
 ```
 
+Integration tests for the Ansible track need Docker and the sandbox image, and
+no Kubernetes at all. They start real containers, run real Ansible, and tear
+everything down again:
+
+```bash
+bash scripts/ansible-image-build.sh          # once
+make ansible-test
+# or:
+RUN_ANSIBLE_INTEGRATION_TESTS=1 \
+  npx vitest run test/ansible-integration.test.ts --root services/lab-orchestrator
+```
+
+If a run is interrupted, `make ansible-clean` removes anything left behind. It
+only ever touches objects that carry the platform's ownership label *and* match
+the sandbox naming rule — `DRY_RUN=1 bash scripts/ansible-sandbox-clean.sh`
+shows what it would remove without removing it.
+
 ### Running the catalog tests only
 
 The catalog, schema, setup-engine and verification suites need no cluster:
@@ -1571,6 +2003,9 @@ The catalog, schema, setup-engine and verification suites need no cluster:
 ```bash
 npx vitest run test/lab-catalog.test.ts test/setup-engine.test.ts \
   --root services/lab-orchestrator          # catalog + schema + setup engine
+npx vitest run test/ansible-labs.test.ts test/ansible-sandbox.test.ts \
+  test/ansible-provider.test.ts \
+  --root services/lab-orchestrator          # Ansible track, against fakes
 npx vitest run --root services/verifier      # every requirement type
 npx vitest run --root apps/api               # catalog + track + session APIs
 npx vitest run --root apps/web               # catalog UI, lab page, hints
@@ -1629,10 +2064,38 @@ npx vitest run --root apps/web               # catalog UI, lab page, hints
 | 36 | Progressive hints reveal one at a time | `HintPanel.test.tsx`, `live-payloads.test.tsx` |
 | 37 | Start / Reset / End / Check still function | `catalog-api.test.ts`, `labs-integration.test.ts`, `StartOverlay.test.tsx`, `CheckPanel.test.tsx` |
 
+### PLATFORM-ANSIBLE-001 coverage
+
+| # | Requirement | Where |
+|---|---|---|
+| 1 | The Ansible track loads | `ansible-labs.test.ts`, `catalog-api.test.ts`, `live-payloads.test.tsx` |
+| 2 | ANSIBLE-001 … ANSIBLE-010 load | `ansible-labs.test.ts` |
+| 3 | A session creates an isolated Ansible environment | `ansible-provider.test.ts` + `ansible-integration.test.ts` (real containers) |
+| 4 | Inventory verification works | `ansible-requirements.test.ts` + `ansible-integration.test.ts` |
+| 5 | Real `ansible -m ping` works | `ansible-integration.test.ts` (real SSH) |
+| 6 | Real ad-hoc command works | `ansible-integration.test.ts` (graded on node state) |
+| 7 | A playbook executes | `ansible-integration.test.ts` |
+| 8 | An invalid playbook fails | `ansible-requirements.test.ts` + `ansible-integration.test.ts` |
+| 9 | A correct playbook passes | `ansible-requirements.test.ts` + `ansible-integration.test.ts` |
+| 10 | Variables verification works | `ansible-requirements.test.ts` + `ansible-integration.test.ts` |
+| 11 | Handler verification works | `ansible-requirements.test.ts` + `ansible-integration.test.ts` |
+| 12 | Template verification works | `ansible-requirements.test.ts` + `ansible-integration.test.ts` |
+| 13 | Role verification works | `ansible-requirements.test.ts` + `ansible-integration.test.ts` |
+| 14 | Multi-node verification works | `ansible-requirements.test.ts` + `ansible-integration.test.ts` |
+| 15 | Idempotency verification works | `ansible-requirements.test.ts` + `ansible-integration.test.ts` (real second run) |
+| 16 | Reset restores the baseline | `ansible-provider.test.ts` + `ansible-integration.test.ts` |
+| 17 | End destroys the environment | `ansible-provider.test.ts` + `ansible-integration.test.ts` |
+| 18 | Expiration destroys the environment | `ansible-integration.test.ts` (through the reaper) |
+| 19 | Cleanup is idempotent | `ansible-provider.test.ts` + `ansible-integration.test.ts` |
+| 20 | Five simultaneous sessions stay isolated | `ansible-provider.test.ts` + `ansible-integration.test.ts` |
+| 21 | Session A cannot modify session B | `ansible-integration.test.ts` (real networks) |
+| 22 | Existing Kubernetes tests still pass | `npm test` + the kind integration suites |
+
 The web suite additionally renders the components against **verbatim API
 responses** captured in `apps/web/test/fixtures/`, which is what catches a drift
 between what the API sends and what the UI expects — hand-written fixtures
-would hide exactly that.
+would hide exactly that. Those fixtures now carry both tracks, so the catalog
+UI is proven to render a multi-track catalog from real data.
 
 Anything that depends on the API server actually *enforcing* something — RBAC
 decisions, quota admission, namespace deletion, an image that cannot be pulled,
@@ -1813,6 +2276,50 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 - *Errors do not leak internals.* Structured codes out, stack traces in the log.
   Kubeconfigs and tokens are never logged and never returned to the browser.
 
+**What the Ansible track adds**
+
+- *Every session gets its own private network.* Container and network names are
+  derived from the same server-side HMAC as a Kubernetes namespace, so nothing a
+  client sends can name another session's sandbox. Docker's embedded DNS is
+  per-network, so `node1` cannot resolve across sessions.
+- *Session-scoped SSH keys, generated per session.* No host SSH key is read,
+  mounted, or forwarded. The private half is streamed into the control node over
+  stdin — never an environment variable, so it is not in `docker inspect` — and
+  the terminal writes it `0600` for the life of one shell. Destroying the
+  containers destroys the only copies that were ever authorised.
+- *Sandboxes are unprivileged.* `no-new-privileges`, `--cap-drop ALL` plus a
+  reduced keep-list, and configurable CPU, memory and PID ceilings. No container
+  is privileged and none receives a host mount.
+- *One loopback port, and only one.* The control node's SSH port is published on
+  `127.0.0.1` on an ephemeral port. Managed nodes publish nothing at all.
+- *The terminal service holds no Docker access.* It attaches over SSH using
+  credentials the API derives from the session record; no browser frame
+  contributes a host, port, user, or key path.
+- *The shell's landing directory is named by the credential.* The API issues
+  `ssh.workdir` (`/home/student/lab`) alongside the session key, and the
+  terminal `cd`s there before exec'ing the login shell. The sandbox image also
+  `cd`s from the student's `.profile`, so on the shipped image the two agree;
+  naming it in the credential means the terminal still lands correctly if that
+  rc file ever changes or is dropped from the image. It is *not* a control over
+  the student: the login shell runs their `.profile` after the `cd`, so a
+  student who edits their own rc files moves their own shell — which is their
+  prerogative inside their own sandbox, and crosses no boundary.
+- *The Docker connection lives only in the API process*, and the compose stack
+  deliberately does not grant it — see limitation 11 below.
+- *Verifier reads are allow-listed by path.* Project paths must resolve inside
+  the student's own workspace; managed-node paths must sit under one of six
+  lab-owned roots. `/etc/shadow` and `/root/.ssh` are unreachable from a
+  `lab.yaml`, and the same functions enforce it at schema time and at read time.
+- *No arbitrary execution on the Ansible side either.* The sandbox exposes a
+  closed set of command variants (`inventory`, `ping`, `syntax-check`,
+  `playbook`); the argv for each is written by the platform. Every value a lab
+  contributes is character-class validated and passed as a separate argv
+  element, never through a shell.
+- *Cleanup cannot delete what it does not own.* The same four gates as the
+  Kubernetes provider — sandbox name shape, protected-name refusal, the live
+  `jumptotech.io/managed` label, and a session-label match — re-read from Docker
+  immediately before every delete. `bridge`, `host`, and `kind` are refused.
+
 **Remaining limitations — do not deploy this as-is**
 
 1. **No authentication.** Anyone who can reach the ports can start a lab.
@@ -1851,6 +2358,29 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 10. **TLS is not configured.** Everything is plain HTTP/WS on localhost, which
     also means the terminal token and the internal service secret travel in
     clear text on the local network.
+11. **The Ansible track needs a Docker connection in the API process.** Creating
+    a container per session requires one, and this repository has always refused
+    to hand a web-facing container the Docker socket — so the track is **off by
+    default and is not enabled in `docker compose`**. The supported local mode is
+    to run the API on your host. Production would put sandbox creation behind a
+    small privileged agent exposing a narrow, allow-listed API, with the
+    web-facing service holding only a client for it. That agent is not in this
+    story.
+12. **Session SSH keys live in memory only.** They are deliberately never
+    persisted, so restarting the API cannot issue new shells for sandboxes that
+    are still running. Those sandboxes are not leaked — the reaper reclaims them
+    from their labels — but an in-flight student loses their terminal and must
+    start the lab again.
+13. **A sandbox node has no init system**, so `managed_service_state` means "a
+    process with this name is running", checked with `pgrep`. That is real
+    observed state on the node and it is documented as such rather than
+    presented as a systemd unit query, which could not be answered here. Labs
+    that need `systemctl` semantics need a different substrate.
+14. **`StrictHostKeyChecking` is off for sandbox SSH.** Host keys are generated
+    per container and a reset replaces the nodes, so there is no stable identity
+    to pin; the target is a loopback port that exists only while the session
+    does. This is safe for a local sandbox and would need revisiting if sandboxes
+    ever moved off the loopback interface.
 
 ---
 
@@ -1858,7 +2388,8 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 
 Beyond the security items above:
 
-- Only `LAB_PROVIDER=kind` is implemented. The factory rejects anything else.
+- Two substrates are implemented: `kind` (Kubernetes labs) and `ansible-docker`
+  (Ansible labs). The factory rejects anything else.
 - Session state is in memory; there is no persistence, progress tracking, or
   attempt history.
 - The capacity guard has no queue. Past `MAX_ACTIVE_SESSIONS` a student is told
@@ -1879,12 +2410,28 @@ Beyond the security items above:
   client mistakes display for enforcement.
 - **Hint usage is not persisted.** `HintPanel` reports each reveal through a
   callback, but nothing stores it; the count resets with the page.
-- **Ten labs are a foundation, not CKA readiness.** The `certification`
-  metadata records that a lab is *relevant* to CKA and which domain it touches.
-  It does not claim, and must not be presented as claiming, that completing
-  these ten labs prepares anyone for the exam.
-- Only one track (`kubernetes`) exists. The track machinery is generic, but
-  nothing else has been written against it.
+- **Ten labs per track are a foundation, not exam readiness.** The
+  `certification` metadata records that a lab is *relevant* to CKA or RHCE and
+  which domain it touches. It does not claim, and must not be presented as
+  claiming, that completing them prepares anyone for either exam.
+- Two tracks (`kubernetes`, `ansible`) exist. The track machinery is generic;
+  adding a third is a directory of `lab.yaml` files plus, if it needs a new
+  substrate, one `LabProvider`.
+- **The catalog does not hide labs whose substrate is disabled.** With
+  `ANSIBLE_TRACK_ENABLED=false` the Ansible labs still appear; pressing Start
+  returns a clear `SESSION_PROVISION_FAILED` naming the missing provider rather
+  than half-creating anything. `GET /health` reports which substrates a
+  deployment actually serves. Filtering the catalog by served substrate is a
+  small follow-up, not done here because it would couple the registry to
+  deployment configuration.
+- **The Ansible labs assume two managed nodes.** `ANSIBLE_MANAGED_NODES` accepts
+  up to four, but the shipped lab content is written for `node1` and `node2`.
+- **Ansible collections beyond `ansible-core` are not installed** in the sandbox
+  image. The labs are written against builtin modules and Jinja2 on purpose; a
+  lab needing `community.general` would need the image extended.
+- **Ansible Vault is not covered.** The variables lab explicitly tells students
+  not to put secrets in variables files, and no lab or requirement type handles
+  encrypted content.
 - K8S-007 checks the CronJob's configured schedule rather than waiting for a
   firing, so that correct work is not left unmarked for five minutes.
 - Lab images are pulled from Docker Hub. `nginx:stable` is pre-pulled into the

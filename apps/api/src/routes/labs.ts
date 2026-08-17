@@ -19,6 +19,7 @@ import {
   LabNotFoundError,
   assertValidLabId,
   issueSessionToken,
+  labSeedsState,
   titleCase,
   type LabRegistry,
   type LoadedLabDefinition,
@@ -78,8 +79,8 @@ export function toLabDetail(def: LoadedLabDefinition, registry?: LabRegistry) {
      * does not exist.
      */
     prerequisitesEnforced: false,
-    /** True when the lab seeds resources the student starts from. */
-    hasSetup: def.setup.manifests.length > 0,
+    /** True when the lab seeds a starting state the student works from. */
+    hasSetup: labSeedsState(def),
   };
 }
 

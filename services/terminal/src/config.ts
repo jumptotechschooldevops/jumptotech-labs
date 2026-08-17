@@ -23,6 +23,14 @@ export interface TerminalConfig {
   /** Kill any PTY after this long, regardless of activity. */
   maxSessionMs: number;
   shell: string;
+  /**
+   * SSH client used to attach a student to a container-backed sandbox.
+   *
+   * Configurable so an operator can pin a path, never taken from a request:
+   * the only values that vary per session are the host, port, user and key,
+   * and all four come from the API's credential response.
+   */
+  sshBinary: string;
   promptUser: string;
   promptHost: string;
 }
@@ -60,6 +68,7 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     idleTimeoutMs: intFromEnv(env, 'TERMINAL_IDLE_TIMEOUT_SECONDS', 1800) * 1000,
     maxSessionMs: intFromEnv(env, 'TERMINAL_MAX_SESSION_SECONDS', 7200) * 1000,
     shell: env.TERMINAL_SHELL ?? '/bin/bash',
+    sshBinary: env.TERMINAL_SSH_BINARY ?? '/usr/bin/ssh',
     promptUser: env.TERMINAL_PROMPT_USER ?? 'student',
     promptHost: env.TERMINAL_PROMPT_HOST ?? 'lab',
   };

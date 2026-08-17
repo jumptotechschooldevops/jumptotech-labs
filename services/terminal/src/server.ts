@@ -32,11 +32,14 @@ import {
   type TerminalSessionClaims,
 } from '@jumptotech/lab-orchestrator/session-token';
 import type { TerminalConfig } from './config.js';
+import { remoteLoginCommand } from './workspace.js';
 import {
   CredentialsUnavailableError,
+  credentialMode,
   fetchStudentCredentials,
   removeSessionKubeconfig,
   writeSessionKubeconfig,
+  writeSessionPrivateKey,
 } from './credentials.js';
 import {
   MAX_FRAME_BYTES,
@@ -52,10 +55,20 @@ const AUTH_GRACE_MS = 10_000;
 interface Session {
   claims: TerminalSessionClaims;
   namespace: string;
-  kubeconfigPath: string;
+  /** The one credential file this PTY was given. Deleted when it exits. */
+  credentialPath: string;
   term: pty.IPty;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
+}
+
+/** What to spawn for one session, and the file that must die with it. */
+interface Attachment {
+  file: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string;
 }
 
 export function createTerminalServer(config: TerminalConfig): Server {
@@ -270,7 +283,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
     // the first rather than running two shells against one sandbox.
     closeSession(claims.sid);
 
-    let kubeconfigPath: string;
+    let attachment: Attachment;
     let namespace: string;
     try {
       const credentials = await fetchStudentCredentials({
@@ -279,13 +292,12 @@ export function createTerminalServer(config: TerminalConfig): Server {
         sessionId: claims.sid,
       });
       namespace = credentials.namespace;
-      kubeconfigPath = await writeSessionKubeconfig(
-        config.credentialsDir,
-        claims.sid,
-        credentials.kubeconfig,
-      );
+      attachment =
+        credentialMode(credentials) === 'ssh'
+          ? await sshAttachment(config, claims, credentials.ssh!)
+          : await localAttachment(config, claims, namespace, credentials.kubeconfig);
       log(
-        `session ${claims.sid}: issued namespace-scoped credentials (ns=${namespace} sa=${credentials.serviceAccountName} expires=${credentials.expiresAt})`,
+        `session ${claims.sid}: issued ${credentialMode(credentials)} credentials (sandbox=${namespace} user=${credentials.serviceAccountName} expires=${credentials.expiresAt})`,
       );
     } catch (error) {
       const code = error instanceof CredentialsUnavailableError ? error.code : 'CREDENTIALS_UNAVAILABLE';
@@ -297,43 +309,23 @@ export function createTerminalServer(config: TerminalConfig): Server {
     }
 
     if (ws.readyState !== ws.OPEN) {
-      await removeSessionKubeconfig(kubeconfigPath);
+      await removeSessionKubeconfig(attachment.file);
       return false;
     }
 
-    const env: Record<string, string> = {
-      // A deliberately minimal environment: nothing from the host process
-      // leaks into the student shell except what is listed here. In
-      // particular, no inherited KUBECONFIG — this one is session-scoped.
-      PATH: '/usr/local/bin:/usr/bin:/bin',
-      HOME: config.workDir,
-      TERM: 'xterm-256color',
-      LANG: 'C.UTF-8',
-      SHELL: config.shell,
-      USER: config.promptUser,
-      HOSTNAME: config.promptHost,
-      PS1: `\\[\\e[32m\\]${config.promptUser}@${config.promptHost}\\[\\e[0m\\]:\\[\\e[34m\\]\\w\\[\\e[0m\\]$ `,
-      KUBECONFIG: kubeconfigPath,
-      // The kubeconfig's context already defaults to this namespace, so plain
-      // `kubectl get pods` is scoped correctly without any -n flag. These are
-      // exported for prompts and scripts that want to display it.
-      JTT_LAB_ID: claims.labId,
-      JTT_NAMESPACE: namespace,
-    };
-
     let term: pty.IPty;
     try {
-      term = pty.spawn(config.shell, ['--norc', '--noprofile'], {
+      term = pty.spawn(attachment.command, attachment.args, {
         name: 'xterm-256color',
         cols: clampCols(cols),
         rows: clampRows(rows),
-        cwd: config.workDir,
-        env,
+        cwd: attachment.cwd,
+        env: attachment.env,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`failed to spawn PTY: ${message}`);
-      await removeSessionKubeconfig(kubeconfigPath);
+      await removeSessionKubeconfig(attachment.file);
       send(ws, {
         type: 'error',
         code: 'PTY_SPAWN_FAILED',
@@ -346,7 +338,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
     const session: Session = {
       claims,
       namespace,
-      kubeconfigPath,
+      credentialPath: attachment.file,
       term,
       idleTimer: setTimeout(
         () => closeFor(ws, 'IDLE_TIMEOUT', 'Terminal closed after inactivity.'),
@@ -400,7 +392,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
       /* already dead */
     }
     // The credential file dies with the shell that used it.
-    void removeSessionKubeconfig(session.kubeconfigPath);
+    void removeSessionKubeconfig(session.credentialPath);
     log(`session ${session.claims.sid} ended (${sessions.size} active)`);
   }
 
@@ -409,6 +401,113 @@ export function createTerminalServer(config: TerminalConfig): Server {
   });
 
   return httpServer;
+}
+
+/**
+ * A shell in this container, scoped by a per-session kubeconfig.
+ *
+ * This is the Kubernetes track, unchanged: nothing from the host process leaks
+ * into the student's environment except what is listed here, and in particular
+ * there is no inherited KUBECONFIG — this one is session-scoped.
+ */
+async function localAttachment(
+  config: TerminalConfig,
+  claims: TerminalSessionClaims,
+  namespace: string,
+  kubeconfig: string,
+): Promise<Attachment> {
+  const file = await writeSessionKubeconfig(config.credentialsDir, claims.sid, kubeconfig);
+
+  return {
+    file,
+    command: config.shell,
+    args: ['--norc', '--noprofile'],
+    cwd: config.workDir,
+    env: {
+      PATH: '/usr/local/bin:/usr/bin:/bin',
+      HOME: config.workDir,
+      TERM: 'xterm-256color',
+      LANG: 'C.UTF-8',
+      SHELL: config.shell,
+      USER: config.promptUser,
+      HOSTNAME: config.promptHost,
+      PS1: `\\[\\e[32m\\]${config.promptUser}@${config.promptHost}\\[\\e[0m\\]:\\[\\e[34m\\]\\w\\[\\e[0m\\]$ `,
+      KUBECONFIG: file,
+      // The kubeconfig's context already defaults to this namespace, so plain
+      // `kubectl get pods` is scoped correctly without any -n flag. These are
+      // exported for prompts and scripts that want to display it.
+      JTT_LAB_ID: claims.labId,
+      JTT_NAMESPACE: namespace,
+    },
+  };
+}
+
+/**
+ * A shell on the sandbox's own control node, over SSH.
+ *
+ * This is the Ansible track. The student's commands run *inside their sandbox*,
+ * not in this container — which is what makes `ansible-playbook site.yml` real
+ * rather than a simulation, and what keeps this service holding no ability to
+ * do anything to the sandbox beyond opening a session on it.
+ *
+ * The connection target comes entirely from the API's credential response,
+ * which derives it from the session record. No frame from the browser
+ * contributes a host, a port, a user, or a key path.
+ *
+ * `StrictHostKeyChecking=no` with a null known-hosts file is deliberate and
+ * safe here for a reason worth stating: sandbox host keys are generated per
+ * container, the address is a loopback port that exists only while this session
+ * does, and a reset replaces the nodes and therefore their keys. There is no
+ * stable identity to pin, and nothing else listening to be confused with.
+ */
+async function sshAttachment(
+  config: TerminalConfig,
+  claims: TerminalSessionClaims,
+  ssh: { host: string; port: number; user: string; privateKey: string; workdir?: string },
+): Promise<Attachment> {
+  const file = await writeSessionPrivateKey(config.credentialsDir, claims.sid, ssh.privateKey);
+
+  return {
+    file,
+    command: config.sshBinary,
+    args: [
+      '-tt',
+      '-i',
+      file,
+      '-p',
+      String(ssh.port),
+      '-o',
+      'IdentitiesOnly=yes',
+      '-o',
+      'StrictHostKeyChecking=no',
+      '-o',
+      'UserKnownHostsFile=/dev/null',
+      '-o',
+      'GlobalKnownHostsFile=/dev/null',
+      '-o',
+      'LogLevel=ERROR',
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      'ConnectTimeout=10',
+      // Nothing about this session should be able to reach back out of it.
+      '-o',
+      'ForwardAgent=no',
+      '-o',
+      'ForwardX11=no',
+      `${ssh.user}@${ssh.host}`,
+      // Land the student in the lab project directory named by the credential.
+      ...remoteLoginCommand(ssh.workdir),
+    ],
+    cwd: config.workDir,
+    env: {
+      PATH: '/usr/local/bin:/usr/bin:/bin',
+      HOME: config.workDir,
+      TERM: 'xterm-256color',
+      LANG: 'C.UTF-8',
+      JTT_LAB_ID: claims.labId,
+    },
+  };
 }
 
 function send(ws: WebSocket, message: ServerMessage): void {

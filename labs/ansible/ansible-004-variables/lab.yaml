@@ -1,0 +1,160 @@
+id: ANSIBLE-004
+slug: ansible-004-variables
+title: Parameterise a Playbook With Variables
+track: ansible
+topic: variables-and-logic
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 4
+
+environment:
+  provider: ansible
+  isolation: container
+
+prerequisites:
+  - ANSIBLE-003
+
+story: >
+  The ledger playbook works, and it has already been copied twice — once for
+  the payments service and once for a colleague's test fleet. Each copy has
+  slightly different numbers welded into it, and last Tuesday somebody deployed
+  release 2.4.1 to a server that was supposed to be running 2.3.9.
+
+  The fix is not more discipline. It is getting the values out of the tasks.
+  Today you separate what the playbook *does* from what is *true of each
+  machine*.
+
+objectives:
+  - Choose between vars, group_vars, and host_vars for a given value
+  - Move hard-coded values out of tasks without changing behaviour
+  - Give two hosts in the same group different values for the same variable
+  - Capture the result of a task with register and use it later
+
+task:
+  summary: Move the ledger playbook's hard-coded values into group_vars and host_vars, and record each node's real hostname using a registered variable.
+  description: >
+    Ansible reads variables from several places. Three of them matter here:
+
+    `vars:` inside a play — values that belong to this playbook alone.
+
+    `group_vars/<group>.yml` — values shared by every host in a group. A file
+    named `group_vars/web.yml` applies to every host in `web`, automatically,
+    with no `vars_files` line needed.
+
+    `host_vars/<host>.yml` — values that belong to one machine. These win over
+    group_vars, which is what lets two servers in one group differ.
+
+    Rework the project so that:
+
+    `group_vars/web.yml` defines `app_port` as 8080 and `app_release` as the
+    string 2.4.1, and `site.yml` uses those variables rather than literals.
+
+    `host_vars/node1.yml` and `host_vars/node2.yml` each define `node_role` —
+    `primary` on node1 and `replica` on node2. The rendered
+    `/etc/jumptotech/app.conf` must differ between the two nodes accordingly.
+
+    A new task runs `hostname` on each node, captures the result with
+    `register:`, and writes `/etc/jumptotech/node.facts` containing a line
+    `detected_hostname=` followed by what that command actually printed. A
+    registered variable holds the whole result; the text the command wrote is
+    in its `stdout`.
+
+    Avoid putting anything secret in a variables file. These are plain text,
+    they belong in version control, and the moment a password lands in one it
+    is in every clone of the repository forever. Secrets get their own
+    mechanism, which is not part of this lab.
+
+requirements:
+  - type: file_exists
+    path: group_vars/web.yml
+    label: Group variables exist for the web group
+  - type: yaml_valid
+    path: group_vars/web.yml
+    label: The group variables file is valid YAML
+  - type: file_exists
+    path: host_vars/node1.yml
+    label: Host variables exist for node1
+  - type: file_exists
+    path: host_vars/node2.yml
+    label: Host variables exist for node2
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf
+    hosts: [node1]
+    contains:
+      - app_port=8080
+      - app_release=2.4.1
+      - node_role=primary
+    label: node1 is configured as the primary on port 8080
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf
+    hosts: [node2]
+    contains:
+      - app_port=8080
+      - node_role=replica
+    label: node2 is configured as the replica
+  - type: managed_file_content
+    path: /etc/jumptotech/node.facts
+    hosts: [node1]
+    contains:
+      - detected_hostname=node1
+    label: node1 recorded its own hostname
+  - type: managed_file_content
+    path: /etc/jumptotech/node.facts
+    hosts: [node2]
+    contains:
+      - detected_hostname=node2
+    label: node2 recorded its own hostname
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: file_exists
+      path: site.yml
+      label: The starting playbook is in place
+    - type: ansible_playbook_valid
+      playbook: site.yml
+      label: The starting playbook is runnable
+
+hints:
+  - level: 1
+    text: >
+      `group_vars` and `host_vars` are directories that sit beside your
+      playbook. Ansible looks for them by name — you never have to tell it
+      where they are.
+  - level: 2
+    text: >
+      Read "Using Variables" in the official documentation, especially the
+      precedence section: host variables beat group variables, which is the
+      mechanism that makes node1 and node2 differ. For the hostname task, read
+      the `register` section of "Conditionals" or the `ansible.builtin.command`
+      module page — the registered result is an object, and command output is
+      one of its fields.
+  - level: 3
+    text: >
+      A registered command result carries its output on `.stdout`. Remember
+      that a command's output usually ends with a newline, so if the check
+      complains about the content of `node.facts`, look at how the value was
+      written into the file rather than at the variable itself. Run
+      `ansible-playbook site.yml` after each edit and inspect a node with
+      `ansible node2 -m command -a "cat /etc/jumptotech/app.conf"`.
+
+references:
+  - title: Using Variables
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html
+  - title: Variable precedence
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html#variable-precedence-where-should-i-put-a-variable
+  - title: ansible.builtin.command module
+    url: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/command_module.html
+
+skills:
+  - ansible.variables.group-vars
+  - ansible.variables.host-vars
+  - ansible.variables.register
+  - ansible.variables.precedence
+
+certification:
+  - certification: RHCE
+    relevant: true
+    domains:
+      - use-ansible-variables-and-facts

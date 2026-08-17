@@ -78,8 +78,14 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.data.count).toBe(10);
-    expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual([
+    expect(res.body.data.count).toBe(20);
+
+    const idsIn = (track: string) =>
+      res.body.data.labs
+        .filter((l: { track: string }) => l.track === track)
+        .map((l: { id: string }) => l.id);
+
+    expect(idsIn('kubernetes')).toEqual([
       'K8S-001',
       'K8S-002',
       'K8S-003',
@@ -91,7 +97,26 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
       'K8S-009',
       'K8S-010',
     ]);
-    expect(res.body.data.tracks[0]).toMatchObject({ track: 'kubernetes', labCount: 10 });
+    expect(idsIn('ansible')).toEqual([
+      'ANSIBLE-001',
+      'ANSIBLE-002',
+      'ANSIBLE-003',
+      'ANSIBLE-004',
+      'ANSIBLE-005',
+      'ANSIBLE-006',
+      'ANSIBLE-007',
+      'ANSIBLE-008',
+      'ANSIBLE-009',
+      'ANSIBLE-010',
+    ]);
+
+    // Track discovery is data-driven — the catalog reports whatever labs/ holds.
+    expect(res.body.data.tracks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ track: 'kubernetes', title: 'Kubernetes', labCount: 10 }),
+        expect.objectContaining({ track: 'ansible', title: 'Ansible', labCount: 10 }),
+      ]),
+    );
   });
 
   it('gives a card everything it needs to render', async () => {
@@ -119,10 +144,13 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
     const byTrack = await request(app).get('/api/labs?track=kubernetes');
     expect(byTrack.body.data.count).toBe(10);
 
+    const byOtherTrack = await request(app).get('/api/labs?track=ansible');
+    expect(byOtherTrack.body.data.count).toBe(10);
+
     const byTopic = await request(app).get('/api/labs?topic=batch');
     expect(byTopic.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-006', 'K8S-007']);
 
-    const byDifficulty = await request(app).get('/api/labs?difficulty=intermediate');
+    const byDifficulty = await request(app).get('/api/labs?track=kubernetes&difficulty=intermediate');
     expect(byDifficulty.body.data.count).toBe(3);
 
     const byQuery = await request(app).get('/api/labs?q=secret');
@@ -291,13 +319,31 @@ describe('GET /api/tracks', () => {
     const res = await request(buildApp().app).get('/api/tracks');
 
     expect(res.status).toBe(200);
-    expect(res.body.data.count).toBe(1);
-    expect(res.body.data.tracks[0]).toMatchObject({
-      track: 'kubernetes',
-      title: 'Kubernetes',
-      labCount: 10,
-    });
-    expect(res.body.data.tracks[0].topics.map((t: { topic: string }) => t.topic)).toContain('batch');
+    expect(res.body.data.count).toBe(2);
+
+    const tracks = res.body.data.tracks as Array<{
+      track: string;
+      title: string;
+      labCount: number;
+      topics: Array<{ topic: string }>;
+    }>;
+    const kubernetes = tracks.find((t) => t.track === 'kubernetes');
+    const ansible = tracks.find((t) => t.track === 'ansible');
+
+    expect(kubernetes).toMatchObject({ track: 'kubernetes', title: 'Kubernetes', labCount: 10 });
+    expect(kubernetes?.topics.map((t) => t.topic)).toContain('batch');
+
+    expect(ansible).toMatchObject({ track: 'ansible', title: 'Ansible', labCount: 10 });
+    expect(ansible?.topics.map((t) => t.topic)).toContain('troubleshooting');
+  });
+
+  it('returns the ansible track with its labs', async () => {
+    const res = await request(buildApp().app).get('/api/tracks/ansible');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.track).toMatchObject({ track: 'ansible', labCount: 10 });
+    expect(res.body.data.labs).toHaveLength(10);
+    expect(res.body.data.labs[0]).toMatchObject({ id: 'ANSIBLE-001', track: 'ansible' });
   });
 
   it('returns one track with its labs', async () => {

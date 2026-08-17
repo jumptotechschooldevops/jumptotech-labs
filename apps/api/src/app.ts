@@ -1,6 +1,11 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
-import type { KubernetesPort, LabRegistry, SessionManager } from '@jumptotech/lab-orchestrator';
+import type {
+  AnsibleSandboxPort,
+  KubernetesPort,
+  LabRegistry,
+  SessionManager,
+} from '@jumptotech/lab-orchestrator';
 import type { ApiConfig } from './config.js';
 import { sendError, sendOk } from './http.js';
 import { createLabRoutes } from './routes/labs.js';
@@ -12,6 +17,8 @@ export interface CreateAppDeps {
   registry: LabRegistry;
   sessions: SessionManager;
   k8s: KubernetesPort;
+  /** Present when the Ansible track is enabled. */
+  ansible?: AnsibleSandboxPort;
   config: ApiConfig;
 }
 
@@ -37,6 +44,9 @@ export function createApp(deps: CreateAppDeps): Express {
       status: 'ok',
       labsLoaded: deps.registry.size,
       labLoadErrors: deps.registry.loadErrors,
+      // Which tracks this deployment can actually provision, so an operator can
+      // tell "the Ansible track is off" from "the Ansible track is broken".
+      substrates: deps.config.substrates,
       sessions: {
         active: deps.sessions.activeCount,
         maxActive: deps.sessions.lifetimes.maxActiveSessions,

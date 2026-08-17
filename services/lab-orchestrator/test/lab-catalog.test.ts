@@ -14,7 +14,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { LabRegistry, parseLabDefinition, LabDefinitionError } from '../src/index.js';
+import {
+  LabRegistry,
+  OFFICIAL_DOC_HOSTS,
+  parseLabDefinition,
+  LabDefinitionError,
+} from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 
 const DOC_URL = 'https://kubernetes.io/docs/concepts/workloads/pods/';
@@ -125,8 +130,8 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.size).toBe(10);
-    expect(registry.all().map((l) => l.id)).toEqual([
+    expect(registry.size).toBe(20);
+    expect(registry.list({ track: 'kubernetes' }).map((l) => l.id)).toEqual([
       'K8S-001',
       'K8S-002',
       'K8S-003',
@@ -137,6 +142,18 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
       'K8S-008',
       'K8S-009',
       'K8S-010',
+    ]);
+    expect(registry.list({ track: 'ansible' }).map((l) => l.id)).toEqual([
+      'ANSIBLE-001',
+      'ANSIBLE-002',
+      'ANSIBLE-003',
+      'ANSIBLE-004',
+      'ANSIBLE-005',
+      'ANSIBLE-006',
+      'ANSIBLE-007',
+      'ANSIBLE-008',
+      'ANSIBLE-009',
+      'ANSIBLE-010',
     ]);
   });
 
@@ -164,8 +181,17 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
   });
 
   it('orders labs by track then declared order', async () => {
-    const orders = (await realRegistry()).all().map((l) => l.order);
-    expect(orders).toEqual([...orders].sort((a, b) => a - b));
+    const all = (await realRegistry()).all();
+
+    // Tracks stay contiguous and alphabetical…
+    const tracks = all.map((l) => l.track);
+    expect(tracks).toEqual([...tracks].sort());
+
+    // …and within each track, labs run in their declared order.
+    for (const track of new Set(tracks)) {
+      const orders = all.filter((l) => l.track === track).map((l) => l.order);
+      expect(orders).toEqual([...orders].sort((a, b) => a - b));
+    }
   });
 });
 
@@ -248,21 +274,49 @@ describe('catalog — filtering (test requirement 5)', () => {
     const registry = await realRegistry();
 
     expect(registry.list({ topic: 'batch' }).map((l) => l.id)).toEqual(['K8S-006', 'K8S-007']);
-    expect(registry.list({ difficulty: 'intermediate' }).map((l) => l.id)).toEqual([
+    expect(registry.list({ track: 'kubernetes', difficulty: 'intermediate' }).map((l) => l.id)).toEqual([
       'K8S-008',
       'K8S-009',
       'K8S-010',
     ]);
     expect(registry.list({ q: 'cronjob' }).map((l) => l.id)).toEqual(['K8S-007']);
+    expect(registry.list({ track: 'ansible', topic: 'fundamentals' }).map((l) => l.id)).toEqual([
+      'ANSIBLE-001',
+      'ANSIBLE-002',
+    ]);
   });
 
   it('reports tracks with their topics and difficulties', async () => {
     const registry = await realRegistry();
-    const [track] = registry.tracks();
 
-    expect(track).toMatchObject({ track: 'kubernetes', title: 'Kubernetes', labCount: 10 });
-    expect(track?.difficulties).toEqual(['beginner', 'intermediate']);
-    expect(track?.topics.map((t) => t.topic)).toContain('troubleshooting');
+    // Track discovery is data-driven: adding a directory under labs/ is the
+    // whole process for adding a track, so this asserts on what is shipped
+    // rather than on a list of tracks written into the code.
+    expect(registry.tracks().map((t) => t.track)).toEqual(['ansible', 'kubernetes']);
+
+    expect(registry.track('kubernetes')).toMatchObject({
+      track: 'kubernetes',
+      title: 'Kubernetes',
+      labCount: 10,
+    });
+    expect(registry.track('kubernetes')?.difficulties).toEqual(['beginner', 'intermediate']);
+    expect(registry.track('kubernetes')?.topics.map((t) => t.topic)).toContain('troubleshooting');
+
+    expect(registry.track('ansible')).toMatchObject({
+      track: 'ansible',
+      title: 'Ansible',
+      labCount: 10,
+    });
+    expect(registry.track('ansible')?.topics.map((t) => t.topic)).toEqual([
+      'fundamentals',
+      'playbooks',
+      'variables-and-logic',
+      'templates-and-handlers',
+      'roles',
+      'multi-node-automation',
+      'troubleshooting',
+    ]);
+
     expect(registry.track('nope')).toBeNull();
   });
 });
@@ -487,8 +541,16 @@ describe('schema — documentation (test requirement 10)', () => {
 
   it('points every shipped lab at official documentation only', async () => {
     for (const lab of (await realRegistry()).all()) {
+      const official = OFFICIAL_DOC_HOSTS[lab.track];
+      expect(official, `no official documentation hosts declared for track '${lab.track}'`).toBeDefined();
       expect(lab.references.length).toBeGreaterThan(0);
-      expect(lab.references.some((ref) => new URL(ref.url).hostname === 'kubernetes.io')).toBe(true);
+
+      const hosts = lab.references.map((ref) => new URL(ref.url).hostname);
+      expect(
+        hosts.some((host) => official!.some((allowed) => host === allowed || allowed.startsWith(`${host}/`))),
+        `${lab.id} cites no official ${lab.track} documentation`,
+      ).toBe(true);
+
       for (const ref of lab.references) expect(ref.url).toMatch(/^https:\/\//);
     }
   });

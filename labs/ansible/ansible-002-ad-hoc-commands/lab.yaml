@@ -1,0 +1,132 @@
+id: ANSIBLE-002
+slug: ansible-002-ad-hoc-commands
+title: Change Servers With Ad-Hoc Commands
+track: ansible
+topic: fundamentals
+difficulty: beginner
+level: practice
+duration_minutes: 25
+order: 2
+
+environment:
+  provider: ansible
+  isolation: container
+
+prerequisites:
+  - ANSIBLE-001
+
+story: >
+  It is 16:40 on a Friday and the change window for the JumpToTech Bank ledger
+  opens in twenty minutes. Operations need a maintenance notice dropped onto
+  both web servers and a release directory prepared, and they need it on both
+  machines identically — not "on node1 now and node2 when someone remembers".
+
+  Nobody is going to write a playbook for a two-minute job. This is what ad-hoc
+  commands are for.
+
+objectives:
+  - Run a module against a group of hosts with a single command
+  - Distinguish -m (which module) from -a (what to tell it)
+  - Use the file and copy modules to change real managed-node state
+  - Understand why an ad-hoc command is not a substitute for a playbook
+
+task:
+  summary: Use ad-hoc ansible commands to prepare a release directory and a maintenance notice on both web nodes.
+  description: >
+    An ad-hoc command runs one module against one pattern of hosts, right now:
+
+    `ansible <pattern> -m <module> -a "<arguments>"`
+
+    The pattern selects hosts from your inventory. `-m` names the module — the
+    unit of work Ansible knows how to do. `-a` carries that module's arguments.
+    With no `-m`, Ansible uses the `command` module, which is why
+    `ansible web -a "uptime"` works.
+
+    Make both hosts in the `web` group end up in this state:
+
+    A directory `/opt/jumptotech/releases` exists.
+
+    A file `/etc/jumptotech/maintenance.txt` exists and contains the line
+    `status=scheduled`.
+
+    Two modules are worth reading about first: `ansible.builtin.file`, which
+    manages paths, and `ansible.builtin.copy`, which can place literal content
+    into a file with its `content:` argument.
+
+    The managed nodes already have `/etc/jumptotech` and `/opt/jumptotech` — the
+    bank's standard layout ships in the base image. Worth knowing anyway:
+    `copy` will not create a missing parent directory for you, so on a machine
+    without that layout you would need `file` first.
+
+    A note on what is being graded. The verifier looks at the two managed nodes
+    and asks whether they are in the state above. It does not read your shell
+    history and does not care which module you used, how many attempts it took,
+    or whether you ran the commands one host at a time — only where the servers
+    ended up.
+
+requirements:
+  - type: ansible_connectivity
+    pattern: web
+    min_hosts: 2
+    label: Both web hosts are reachable
+  - type: managed_file_exists
+    path: /opt/jumptotech/releases
+    kind: directory
+    hosts: all
+    label: The release directory exists on every web host
+  - type: managed_file_exists
+    path: /etc/jumptotech/maintenance.txt
+    hosts: all
+    label: The maintenance notice exists on every web host
+  - type: managed_file_content
+    path: /etc/jumptotech/maintenance.txt
+    hosts: all
+    contains:
+      - status=scheduled
+    label: The maintenance notice announces the scheduled status
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: file_exists
+      path: inventory.ini
+      label: The inventory is in place
+    - type: ansible_inventory_valid
+      label: Ansible can parse the inventory
+
+hints:
+  - level: 1
+    text: >
+      Both changes are things Ansible has a purpose-built module for. Neither
+      needs `command` or `shell`, and neither needs you to log into a server.
+  - level: 2
+    text: >
+      Read the ad-hoc command guide, then the `ansible.builtin.file` and
+      `ansible.builtin.copy` module pages. `file` creates a directory when you
+      tell it the right `state`. `copy` writes literal text when you give it
+      `content` instead of `src`.
+  - level: 3
+    text: >
+      Target the whole group at once — the pattern is the first argument, so
+      `ansible web ...` acts on both nodes. Check your work from the same
+      terminal: `ansible web -m command -a "cat /etc/jumptotech/maintenance.txt"`
+      shows you exactly what each node has, per host.
+
+references:
+  - title: Introduction to ad-hoc commands
+    url: https://docs.ansible.com/ansible/latest/command_guide/intro_adhoc.html
+  - title: ansible.builtin.file module
+    url: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/file_module.html
+  - title: ansible.builtin.copy module
+    url: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/copy_module.html
+
+skills:
+  - ansible.adhoc.run
+  - ansible.modules.file
+  - ansible.modules.copy
+
+certification:
+  - certification: RHCE
+    relevant: true
+    domains:
+      - use-roles-and-modules

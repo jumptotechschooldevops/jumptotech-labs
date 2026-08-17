@@ -21,7 +21,12 @@ import path from 'node:path';
 import { z } from 'zod';
 import { parse as parseYaml } from 'yaml';
 import { LAB_ID_PATTERN } from './validation.js';
-import { isSupportedRequirementType, REQUIREMENT_TYPES, requirementSchema } from './requirements.js';
+import {
+  isSupportedRequirementType,
+  REQUIREMENT_TYPES,
+  requirementDomain,
+  requirementSchema,
+} from './requirements.js';
 
 /**
  * Official documentation hosts, per track.
@@ -32,6 +37,7 @@ import { isSupportedRequirementType, REQUIREMENT_TYPES, requirementSchema } from
  */
 export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
   kubernetes: ['kubernetes.io', 'www.kubernetes.io', 'github.com/kubernetes'],
+  ansible: ['docs.ansible.com', 'www.ansible.com', 'github.com/ansible'],
 };
 
 /**
@@ -105,10 +111,31 @@ const manifestPath = z
   .refine((p) => !p.split('/').includes('..'), { message: 'manifest path must not traverse upwards' })
   .refine((p) => /\.ya?ml$/i.test(p), { message: 'manifest path must be a .yaml file' });
 
+/**
+ * A directory inside the lab's own folder holding the project a student starts
+ * from — `ansible.cfg`, an inventory, playbooks, roles, templates.
+ *
+ * Same confinement rules as a manifest path. The tree itself is read and
+ * size-checked by `ansible/workspace.ts`; this only admits the name.
+ */
+const workspaceDir = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'workspace_dir must be a single directory name')
+  .refine((value) => value !== '.' && value !== '..', {
+    message: 'workspace_dir must name a directory inside the lab folder',
+  });
+
 const setupSchema = z
   .object({
     /** Applied into the session namespace, in order, before the terminal opens. */
     manifests: z.array(manifestPath).max(10).default([]),
+    /**
+     * Copied into the control node's project directory before the terminal
+     * opens, and again on every reset. Ansible labs only.
+     */
+    workspace_dir: workspaceDir.optional(),
     /**
      * Checks that must pass before the lab is handed to the student. Reuses the
      * requirement vocabulary, so setup verification and solution verification
@@ -158,9 +185,17 @@ const labDefinitionSchema = z
 
     environment: z
       .object({
-        provider: z.enum(['kubernetes']),
-        /** Only namespace isolation exists today; the field keeps the seam visible. */
-        isolation: z.enum(['namespace']).default('namespace'),
+        /**
+         * Which substrate this lab needs.
+         *
+         * `kubernetes` → a namespace in the shared cluster.
+         * `ansible`    → a private control node plus managed nodes.
+         *
+         * The composition root routes a session to the matching provider; no
+         * route, verifier rule, or React component branches on this.
+         */
+        provider: z.enum(['kubernetes', 'ansible']),
+        isolation: z.enum(['namespace', 'container']).default('namespace'),
       })
       .strict(),
 
@@ -399,10 +434,60 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
     issues.push(`prerequisites must not include the lab's own id (${def.id})`);
   }
 
-  // A lab whose setup declares manifests but no verification would hand the
+  // A lab whose setup seeds state but verifies none of it would hand the
   // student an environment nobody checked.
-  if (def.setup.manifests.length > 0 && def.setup.verify.length === 0) {
-    issues.push('setup.verify must describe at least one check when setup.manifests is non-empty');
+  const seedsState = def.setup.manifests.length > 0 || def.setup.workspace_dir !== undefined;
+  if (seedsState && def.setup.verify.length === 0) {
+    issues.push(
+      'setup.verify must describe at least one check when setup.manifests or setup.workspace_dir is set',
+    );
+  }
+
+  /*
+   * Provider / substrate coherence.
+   *
+   * These are separate fields because a provider may grow more than one
+   * isolation strategy, but the combinations that exist today are fixed — and a
+   * lab claiming `provider: ansible, isolation: namespace` would silently be
+   * routed somewhere it cannot run.
+   */
+  const validIsolation: Record<string, string> = { kubernetes: 'namespace', ansible: 'container' };
+  const expectedIsolation = validIsolation[def.environment.provider];
+  if (expectedIsolation && def.environment.isolation !== expectedIsolation) {
+    issues.push(
+      `environment.isolation must be '${expectedIsolation}' for provider '${def.environment.provider}'`,
+    );
+  }
+
+  // Setup inputs belong to one substrate each; crossing them would mean a lab
+  // declaring state its provider has no way to create.
+  if (def.environment.provider === 'ansible' && def.setup.manifests.length > 0) {
+    issues.push('setup.manifests is a Kubernetes concept and cannot be used by an ansible lab');
+  }
+  if (def.environment.provider === 'kubernetes' && def.setup.workspace_dir !== undefined) {
+    issues.push('setup.workspace_dir is an Ansible concept and cannot be used by a kubernetes lab');
+  }
+
+  /*
+   * Requirements must be answerable by the lab's own substrate.
+   *
+   * Without this a `pod_exists` check could sit in an Ansible lab, where the
+   * verifier would have no reader to answer it and the student would be told
+   * their correct work was incomplete.
+   */
+  const expectedDomain = def.environment.provider === 'ansible' ? 'ansible' : 'kubernetes';
+  for (const [field, list] of [
+    ['requirements', def.requirements],
+    ['setup.verify', def.setup.verify],
+  ] as const) {
+    list.forEach((requirement, index) => {
+      const domain = requirementDomain(requirement.type);
+      if (domain !== expectedDomain) {
+        issues.push(
+          `${field}[${index}].type '${requirement.type}' is a ${domain} check, but this lab runs on ${def.environment.provider}`,
+        );
+      }
+    });
   }
 
   if (issues.length > 0) {

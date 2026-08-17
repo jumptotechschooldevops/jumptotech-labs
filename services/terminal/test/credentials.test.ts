@@ -11,9 +11,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   CredentialsUnavailableError,
+  credentialMode,
   fetchStudentCredentials,
   removeSessionKubeconfig,
+  removeSessionPrivateKey,
   writeSessionKubeconfig,
+  writeSessionPrivateKey,
 } from '../src/credentials.js';
 import { loadTerminalConfig } from '../src/config.js';
 
@@ -173,6 +176,125 @@ describe('writeSessionKubeconfig', () => {
   });
 });
 
+describe('SSH credentials (Ansible track)', () => {
+  const SSH = {
+    host: '127.0.0.1',
+    port: 33001,
+    user: 'student',
+    privateKey: '-----BEGIN RSA PRIVATE KEY-----\nMII…\n-----END RSA PRIVATE KEY-----',
+    workdir: '/home/student/lab',
+  };
+
+  function sshEnvelope(overrides: Record<string, unknown> = {}) {
+    return {
+      ok: true,
+      data: {
+        kubeconfig: '',
+        namespace: 'lab-0000000000aa',
+        serviceAccountName: 'student',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+        shell: 'ssh',
+        ssh: SSH,
+        ...overrides,
+      },
+    };
+  }
+
+  it('accepts an SSH credential with no kubeconfig at all', async () => {
+    const credentials = await fetchStudentCredentials({
+      apiInternalUrl: 'http://api:4000',
+      secret: 's',
+      sessionId: 'sess-000000000000000a',
+      fetchImpl: async () => jsonResponse(sshEnvelope()),
+    });
+
+    expect(credentialMode(credentials)).toBe('ssh');
+    expect(credentials.ssh?.port).toBe(33001);
+    expect(credentials.kubeconfig).toBe('');
+  });
+
+  it('refuses an SSH credential that is missing its key', async () => {
+    await expect(
+      fetchStudentCredentials({
+        apiInternalUrl: 'http://api:4000',
+        secret: 's',
+        sessionId: 'sess-000000000000000a',
+        fetchImpl: async () => jsonResponse(sshEnvelope({ ssh: { ...SSH, privateKey: '' } })),
+      }),
+    ).rejects.toThrow(/incomplete SSH credentials/);
+  });
+
+  it('refuses an SSH credential with a nonsensical port', async () => {
+    await expect(
+      fetchStudentCredentials({
+        apiInternalUrl: 'http://api:4000',
+        secret: 's',
+        sessionId: 'sess-000000000000000a',
+        fetchImpl: async () => jsonResponse(sshEnvelope({ ssh: { ...SSH, port: 'the usual one' } })),
+      }),
+    ).rejects.toThrow(/incomplete SSH credentials/);
+  });
+
+  it('still requires a kubeconfig when the credential is a local one', async () => {
+    await expect(
+      fetchStudentCredentials({
+        apiInternalUrl: 'http://api:4000',
+        secret: 's',
+        sessionId: 'sess-000000000000000a',
+        fetchImpl: async () => jsonResponse(sshEnvelope({ shell: 'local', ssh: undefined })),
+      }),
+    ).rejects.toThrow(/empty kubeconfig/);
+  });
+
+  it('defaults to a local shell when the response says nothing', async () => {
+    const credentials = await fetchStudentCredentials({
+      apiInternalUrl: 'http://api:4000',
+      secret: 's',
+      sessionId: 'sess-000000000000000a',
+      fetchImpl: async () =>
+        jsonResponse({
+          ok: true,
+          data: {
+            kubeconfig: KUBECONFIG,
+            namespace: 'lab-0000000000aa',
+            serviceAccountName: 'student',
+            expiresAt: '2099-01-01T00:00:00.000Z',
+          },
+        }),
+    });
+
+    expect(credentialMode(credentials)).toBe('local');
+  });
+
+  it('writes the private key 0600 — OpenSSH refuses anything looser', async () => {
+    const dir = await scratch();
+
+    const file = await writeSessionPrivateKey(dir, 'sess-000000000000000a', SSH.privateKey);
+
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(await readFile(file, 'utf8')).toBe(`${SSH.privateKey}\n`);
+  });
+
+  it('sanitises the session id for the key file too', async () => {
+    const dir = await scratch();
+
+    const file = await writeSessionPrivateKey(dir, '../../root/.ssh/id_rsa', SSH.privateKey);
+
+    expect(path.dirname(file)).toBe(dir);
+    expect(path.basename(file)).toBe('rootsshid_rsa.key');
+  });
+
+  it('removes the key, and tolerates removing it twice', async () => {
+    const dir = await scratch();
+    const file = await writeSessionPrivateKey(dir, 'sess-000000000000000a', SSH.privateKey);
+
+    await removeSessionPrivateKey(file);
+    await removeSessionPrivateKey(file);
+
+    await expect(stat(file)).rejects.toThrow();
+  });
+});
+
 describe('terminal configuration', () => {
   it('holds no ambient cluster credential', () => {
     // The old shape read KUBECONFIG from the environment and handed it to every
@@ -188,5 +310,17 @@ describe('terminal configuration', () => {
 
   it('requires a session secret', () => {
     expect(() => loadTerminalConfig({} as NodeJS.ProcessEnv)).toThrow(/TERMINAL_SESSION_SECRET/);
+  });
+
+  it('names an SSH client but no sandbox to point it at', () => {
+    // The binary is operator configuration. Every value that varies per session
+    // — host, port, user, key — comes from the API's credential response, so
+    // there is deliberately no sandbox address anywhere in this config.
+    const config = loadTerminalConfig({
+      TERMINAL_SESSION_SECRET: 'a-long-enough-secret',
+    } as NodeJS.ProcessEnv);
+
+    expect(config.sshBinary).toBe('/usr/bin/ssh');
+    expect(JSON.stringify(config)).not.toMatch(/lab-[0-9a-f]/);
   });
 });

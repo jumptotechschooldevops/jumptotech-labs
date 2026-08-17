@@ -12,7 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@jumptotech/lab-orchestrator": "*"
+    "@jumptotech/lab-orchestrator": "*",
+    "yaml": "^2.6.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

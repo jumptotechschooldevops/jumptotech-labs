@@ -21,11 +21,35 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+export interface SshCredentialsResponse {
+  host: string;
+  port: number;
+  user: string;
+  privateKey: string;
+  workdir?: string;
+}
+
 export interface StudentCredentialsResponse {
   kubeconfig: string;
   namespace: string;
   serviceAccountName: string;
   expiresAt: string;
+  /**
+   * How to attach a student to this sandbox.
+   *
+   * `local` — spawn a shell in this container with the kubeconfig above.
+   * `ssh`   — open a session on the sandbox's own control node.
+   *
+   * Absent means `local`, which is what every Kubernetes lab used before the
+   * Ansible track existed and what they still use.
+   */
+  shell?: 'local' | 'ssh';
+  ssh?: SshCredentialsResponse;
+}
+
+/** Which attachment mode a credential response describes. */
+export function credentialMode(credentials: StudentCredentialsResponse): 'local' | 'ssh' {
+  return credentials.shell === 'ssh' ? 'ssh' : 'local';
 }
 
 export class CredentialsUnavailableError extends Error {
@@ -85,6 +109,24 @@ export async function fetchStudentCredentials(
   }
 
   const data = body.data;
+  if (credentialMode(data) === 'ssh') {
+    const ssh = data.ssh;
+    if (
+      !ssh ||
+      typeof ssh.privateKey !== 'string' ||
+      ssh.privateKey.length === 0 ||
+      typeof ssh.host !== 'string' ||
+      !Number.isInteger(ssh.port) ||
+      typeof ssh.user !== 'string'
+    ) {
+      throw new CredentialsUnavailableError(
+        'CREDENTIALS_UNAVAILABLE',
+        'The lab API returned incomplete SSH credentials.',
+      );
+    }
+    return data;
+  }
+
   if (typeof data.kubeconfig !== 'string' || data.kubeconfig.length === 0) {
     throw new CredentialsUnavailableError(
       'CREDENTIALS_UNAVAILABLE',
@@ -120,3 +162,27 @@ export async function removeSessionKubeconfig(file: string | undefined): Promise
   if (!file) return;
   await rm(file, { force: true }).catch(() => undefined);
 }
+
+/**
+ * Write a session's SSH private key and return its path.
+ *
+ * Same handling rules as a kubeconfig, and one extra that OpenSSH enforces for
+ * us: a key file readable by anyone else is refused by `ssh` outright, so 0600
+ * is not merely good practice here — it is the only mode that works.
+ */
+export async function writeSessionPrivateKey(
+  dir: string,
+  sessionId: string,
+  privateKey: string,
+): Promise<string> {
+  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (safe.length === 0) throw new Error('refusing to write credentials for an unnamed session');
+
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, `${safe}.key`);
+  await writeFile(file, privateKey.endsWith('\n') ? privateKey : `${privateKey}\n`, { mode: 0o600 });
+  return file;
+}
+
+/** Remove a session's private key. Safe to call twice. */
+export const removeSessionPrivateKey = removeSessionKubeconfig;

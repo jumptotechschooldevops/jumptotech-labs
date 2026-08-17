@@ -1,0 +1,152 @@
+id: ANSIBLE-005
+slug: ansible-005-conditionals-loops
+title: Conditionals and Loops
+track: ansible
+topic: variables-and-logic
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 5
+
+environment:
+  provider: ansible
+  isolation: container
+
+prerequisites:
+  - ANSIBLE-004
+
+story: >
+  The ledger service needs four directories on every web node, and exactly one
+  thing that must exist on the primary and must *not* exist on the replica: the
+  scheduler lock marker. Two nodes both believing they are the primary is the
+  failure mode that took payments down for forty minutes last quarter.
+
+  The version of this playbook you inherited has four nearly identical tasks
+  and a comment reading "remember to remove the marker on replicas by hand".
+  You are going to remove the comment as well as the marker.
+
+objectives:
+  - Replace repeated tasks with a single looping task
+  - Gate a task on a host variable using when
+  - Use a registered result to drive a later decision
+  - Verify that a conditional actually excluded the hosts it should have
+
+task:
+  summary: Write a playbook that creates four directories with one looping task and places the scheduler marker only on the primary node.
+  description: >
+    Two constructs carry almost all of Ansible's logic.
+
+    `loop:` repeats one task over a list. Inside the task, `item` is the
+    current element. Four near-identical tasks become one task and a list.
+
+    `when:` decides whether a task runs on a given host at all. It is a Jinja2
+    expression, so the variable names inside it are written bare —
+    `when: node_role == "primary"`, not wrapped in braces.
+
+    Write `site.yml` so that, applied to the `web` group, it produces:
+
+    A directory under `/opt/jumptotech/` for every entry in the
+    `app_directories` variable already defined in `group_vars/web.yml` —
+    `/opt/jumptotech/bin`, `/opt/jumptotech/conf`, `/opt/jumptotech/logs`, and
+    `/opt/jumptotech/releases` — created by **one** looping task.
+
+    A file `/etc/jumptotech/scheduler.lock` on the host whose `node_role` is
+    `primary`, containing the line `owner=node1`. The replica must not have
+    this file at all.
+
+    A file `/etc/jumptotech/release.txt` on every host, containing
+    `release=` followed by the value of `app_release`.
+
+    The `node_role` values are already set in `host_vars/`. Do not hard-code
+    node1 anywhere in the condition — the point is that the playbook keeps
+    working when the primary moves.
+
+requirements:
+  - type: ansible_playbook_valid
+    playbook: site.yml
+    label: Ansible accepts the playbook
+  - type: ansible_task_exists
+    playbook: site.yml
+    module: file
+    has_loop: true
+    label: One task creates the directories by looping over a list
+  - type: ansible_task_exists
+    playbook: site.yml
+    has_when: true
+    label: A task is gated on a condition
+  - type: managed_file_exists
+    path: /opt/jumptotech/bin
+    kind: directory
+    hosts: all
+    label: The bin directory exists on every web host
+  - type: managed_file_exists
+    path: /opt/jumptotech/releases
+    kind: directory
+    hosts: all
+    label: The releases directory exists on every web host
+  - type: managed_file_content
+    path: /etc/jumptotech/release.txt
+    hosts: all
+    contains:
+      - release=2.4.1
+    label: Every host records the deployed release
+  - type: managed_file_content
+    path: /etc/jumptotech/scheduler.lock
+    hosts: [node1]
+    contains:
+      - owner=node1
+    label: The primary holds the scheduler lock
+  - type: managed_file_exists
+    path: /etc/jumptotech/scheduler.lock
+    hosts: [node2]
+    state: absent
+    label: The replica does not hold the scheduler lock
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: yaml_valid
+      path: group_vars/web.yml
+      label: Group variables are in place
+    - type: file_exists
+      path: host_vars/node1.yml
+      label: Host variables are in place
+
+hints:
+  - level: 1
+    text: >
+      Four directories do not need four tasks. One task, one list, and the
+      variable that stands for "whatever we are on right now".
+  - level: 2
+    text: >
+      Read "Loops" and "Conditionals" in the playbook guide. Inside a looping
+      task the current element is available as `item`, and it can be used in the
+      middle of a path. In a `when:` expression variables are referenced without
+      `{{ }}` — the expression is already a Jinja2 context.
+  - level: 3
+    text: >
+      The condition must compare the `node_role` variable, not the host name; a
+      playbook that says `when: inventory_hostname == "node1"` passes today and
+      breaks the day the primary moves. If the replica ends up with the lock
+      file anyway, check that the condition is attached to the task and indented
+      at the same level as the module, not nested inside its arguments.
+
+references:
+  - title: Loops
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_loops.html
+  - title: Conditionals
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_conditionals.html
+  - title: Using filters to manipulate data
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_filters.html
+
+skills:
+  - ansible.logic.loops
+  - ansible.logic.conditionals
+  - ansible.variables.register
+
+certification:
+  - certification: RHCE
+    relevant: true
+    domains:
+      - use-ansible-variables-and-facts
+      - create-ansible-plays-and-playbooks

@@ -122,7 +122,10 @@ suite('PLATFORM-003 integration: the lab catalog on real kind', () => {
     registry = new LabRegistry(path.join(repoRoot, 'labs'));
     await registry.load();
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.size).toBe(10);
+    // This suite runs the Kubernetes track against the real cluster. Other
+    // tracks are in the same registry and are exercised by their own
+    // substrate's integration suite, so only this track's count is asserted.
+    expect(registry.list({ track: 'kubernetes' })).toHaveLength(10);
 
     scratchDir = await mkdtemp(path.join(tmpdir(), 'jtt-labs-integration-'));
     k8s = new KubernetesClient({ kubeconfigPath: HOST_KUBECONFIG });

@@ -6,12 +6,15 @@
  * environments is decided here and nowhere else.
  */
 import {
+  DockerAnsibleSandbox,
+  DockerCli,
   InMemorySessionStore,
   KubernetesClient,
   LabRegistry,
   SessionManager,
   SessionReaper,
-  createLabProvider,
+  createProviderRouter,
+  type AnsibleSandboxPort,
 } from '@jumptotech/lab-orchestrator';
 import { waitForRequirements } from '@jumptotech/verifier';
 import { createApp } from './app.js';
@@ -40,12 +43,40 @@ async function main(): Promise<void> {
   const k8s = new KubernetesClient(
     config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {},
   );
-  const provider = createLabProvider({
+
+  /*
+   * The Ansible sandbox is built here, in the composition root, and handed to
+   * two places: the provider (which creates and destroys containers) and the
+   * verifier (which reads them). The Docker connection lives in this process
+   * and nowhere else — not in the terminal service, not in the web app, and
+   * not inside any sandbox container.
+   */
+  const docker = config.ansible.enabled
+    ? new DockerCli({
+        binary: config.ansible.dockerBinary,
+        ...(config.ansible.dockerHost ? { dockerHost: config.ansible.dockerHost } : {}),
+      })
+    : undefined;
+
+  const ansible: AnsibleSandboxPort | undefined = docker
+    ? new DockerAnsibleSandbox({ docker, managedNodeCount: config.ansible.managedNodeCount })
+    : undefined;
+
+  const provider = createProviderRouter({
+    substrates: config.substrates,
     provider: config.provider,
     clusterName: config.clusterName,
     ...(config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {}),
     k8s,
-    waitForRequirements: (input) => waitForRequirements({ k8s, ...input }),
+    ...(docker ? { docker } : {}),
+    ansibleImage: config.ansible.image,
+    ansibleManagedNodeCount: config.ansible.managedNodeCount,
+    ansibleLimits: config.ansible.limits,
+    ansibleSshHost: config.ansible.sshHost,
+    // One waiter serves both substrates; the registry routes each requirement
+    // to the reader that can answer it.
+    waitForRequirements: (input) =>
+      waitForRequirements({ k8s, ...(ansible ? { ansible } : {}), ...input }),
   });
 
   const terminal = config.terminalControlUrl
@@ -76,13 +107,18 @@ async function main(): Promise<void> {
   });
   reaper.start();
 
-  const app = createApp({ registry, sessions, k8s, config });
+  const app = createApp({ registry, sessions, k8s, ...(ansible ? { ansible } : {}), config });
 
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[api] listening on :${config.port}`);
-    console.log(`[api] provider=${provider.name} cluster=${config.clusterName}`);
+    console.log(`[api] substrates=${config.substrates.join(', ')} cluster=${config.clusterName}`);
     console.log(`[api] labs=${registry.size} from ${config.labsDir}`);
     console.log(`[api] kubernetes=${k8s.serverUrl}`);
+    if (config.ansible.enabled) {
+      console.log(
+        `[api] ansible: image=${config.ansible.image} nodes=${config.ansible.managedNodeCount} ssh-host=${config.ansible.sshHost}`,
+      );
+    }
     console.log(
       `[api] sessions: max=${config.lifetimes.maxActiveSessions} lifetime=${config.lifetimes.maxSessionSeconds / 60}m idle=${config.lifetimes.idleTimeoutSeconds / 60}m warn=${config.lifetimes.warningSeconds / 60}m`,
     );

@@ -1,0 +1,4 @@
+---
+app_name: ledger
+app_port: 9090
+app_release: "2.4.1"

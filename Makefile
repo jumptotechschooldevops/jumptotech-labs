@@ -3,7 +3,10 @@ SHELL := /bin/bash
 
 KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 
-.PHONY: help setup cluster-up cluster-down status up down logs test test-integration typecheck check reset clean
+ANSIBLE_LAB_IMAGE ?= jumptotech/ansible-lab:local
+
+.PHONY: help setup cluster-up cluster-down status up down logs test test-integration typecheck check reset clean \
+	ansible-image ansible-test ansible-clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -39,6 +42,16 @@ test: ## Run unit tests
 test-integration: ## Run tests against the real kind cluster
 	@RUN_INTEGRATION_TESTS=1 KUBECONFIG="$(KUBECONFIG_HOST)" \
 		npx vitest run test/integration.test.ts --root services/lab-orchestrator
+
+ansible-image: ## Build the Ansible sandbox node image
+	@bash scripts/ansible-image-build.sh
+
+ansible-test: ## Run the Ansible track against real containers
+	@RUN_ANSIBLE_INTEGRATION_TESTS=1 ANSIBLE_LAB_IMAGE="$(ANSIBLE_LAB_IMAGE)" \
+		npx vitest run test/ansible-integration.test.ts --root services/lab-orchestrator
+
+ansible-clean: ## Remove any Ansible sandbox containers and networks left behind
+	@bash scripts/ansible-sandbox-clean.sh
 
 typecheck: ## Typecheck every workspace
 	@npm run typecheck

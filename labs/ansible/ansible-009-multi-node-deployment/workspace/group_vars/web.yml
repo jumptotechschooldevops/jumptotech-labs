@@ -1,0 +1,5 @@
+---
+# Shared settings for the ledger status page.
+app_name: ledger
+app_release: "2.4.1"
+status_root: /var/www/status
