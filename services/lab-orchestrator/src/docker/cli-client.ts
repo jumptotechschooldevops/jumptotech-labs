@@ -30,7 +30,7 @@
  *     an argv element, so it cannot name an arbitrary container.
  */
 import { execFile } from 'node:child_process';
-import { isLabNamespace } from '../session/identifiers.js';
+import { isContainerSandboxRef } from '../session/identifiers.js';
 import {
   DockerCommandError,
   DockerUnreachableError,
@@ -573,7 +573,7 @@ export class DockerCliFactory implements DockerEngineFactory {
   }
 
   session(sandbox: string): DockerEnginePort {
-    if (!isLabNamespace(sandbox)) {
+    if (!isContainerSandboxRef(sandbox)) {
       throw new Error(`Refusing to address '${sandbox}': not a JumpToTech lab sandbox name`);
     }
     const cached = this.#sessions.get(sandbox);

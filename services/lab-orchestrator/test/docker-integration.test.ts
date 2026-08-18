@@ -84,12 +84,12 @@ if (!enabled) {
  * exercising the production path.
  */
 const RUN = randomBytes(4).toString('hex');
-const SANDBOX_A = `lab-it${RUN}a`;
-const SANDBOX_B = `lab-it${RUN}b`;
-/** A `lab-`-shaped container the platform did NOT create, for the refusal test. */
-const DECOY = `lab-it${RUN}x`;
+const SANDBOX_A = `jtt-lab-${RUN}aa`;
+const SANDBOX_B = `jtt-lab-${RUN}bb`;
+/** A `jtt-lab-`-shaped container the platform did NOT create, for the refusal test. */
+const DECOY = `jtt-lab-${RUN}cc`;
 /** A managed, lab-named container belonging to a *different* platform component. */
-const IMPOSTOR = `lab-it${RUN}k-control`;
+const IMPOSTOR = `jtt-lab-${RUN}dd`;
 const TEST_NETWORK = `jtt-it-${RUN}-net`;
 const SESSION_A = `sess-${randomBytes(8).toString('hex')}`;
 const SESSION_B = `sess-${randomBytes(8).toString('hex')}`;
