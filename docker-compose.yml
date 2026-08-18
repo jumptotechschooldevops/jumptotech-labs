@@ -21,9 +21,6 @@
 # https://jumptotech-labs-control-plane:6443 — that is exactly the address in
 # the generated `kubeconfig-internal.yaml`.
 #
-# No container here gets the Docker socket. Cluster creation happens on the
-# host, deliberately outside any web-facing process.
-#
 # PLATFORM-002: only the `api` service holds a cluster credential. The terminal
 # no longer mounts a kubeconfig at all — it fetches a namespace-scoped
 # ServiceAccount kubeconfig per session from the API, over the internal Docker
@@ -39,6 +36,25 @@
 #   · its data lives in a named volume, so `docker compose down` keeps the
 #     history. `docker compose down -v` is what deletes it, and `make clean`
 #     says so.
+#
+# PLATFORM-DOCKER: the Docker track needs one component to be able to create
+# containers, and the choice of which one is the central security decision here.
+#
+#   api       ← host Docker socket. Creates and destroys per-session sandboxes.
+#               No shell, no student input path, no PTY.
+#   terminal  ← NO Docker socket, no DOCKER_HOST, no ambient credential at all.
+#               Each PTY is handed a client certificate for its own session's
+#               sandbox, fetched per session and deleted with the shell.
+#
+# So the one process a student can type into cannot reach the host daemon, and
+# the one process that can reach the host daemon never runs a student's command.
+# Cluster creation still happens on the host, outside any web-facing process.
+#
+# Mounting the socket into `api` is nonetheless real privilege: it is equivalent
+# to root on this host. It is acceptable for a local development stack and is
+# documented as a deployment constraint in README → Docker sandbox security.
+# Set DOCKER_TRACK_ENABLED=false to run the Kubernetes track with no socket
+# mounted at all.
 # ---------------------------------------------------------------------------
 
 name: jumptotech-labs
@@ -166,6 +182,18 @@ services:
       # Off by design. Switching it on lets any caller name any student with a
       # header, which is only acceptable on a laptop — see README → Security.
       DEV_STUDENT_HEADER_ENABLED: ${DEV_STUDENT_HEADER_ENABLED:-false}
+      # --- Docker track (PLATFORM-DOCKER) ---
+      DOCKER_TRACK_ENABLED: ${DOCKER_TRACK_ENABLED:-true}
+      DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-docker:27-dind}
+      DOCKER_SANDBOX_MEMORY: ${DOCKER_SANDBOX_MEMORY:-2g}
+      DOCKER_SANDBOX_CPUS: ${DOCKER_SANDBOX_CPUS:-2}
+      DOCKER_SANDBOX_PIDS_LIMIT: ${DOCKER_SANDBOX_PIDS_LIMIT:-512}
+      DOCKER_SANDBOX_MAX_CONTAINERS: ${DOCKER_SANDBOX_MAX_CONTAINERS:-10}
+      DOCKER_SANDBOX_NETWORK: ${DOCKER_SANDBOX_NETWORK:-jumptotech-sandboxes}
+      DOCKER_SANDBOX_DAEMON_PORT: ${DOCKER_SANDBOX_DAEMON_PORT:-2376}
+      DOCKER_SANDBOX_READY_TIMEOUT_SECONDS: ${DOCKER_SANDBOX_READY_TIMEOUT_SECONDS:-180}
+      DOCKER_SANDBOX_RESTART_ATTEMPTS: ${DOCKER_SANDBOX_RESTART_ATTEMPTS:-5}
+      DOCKER_SANDBOX_REGISTRY_MIRROR: ${DOCKER_SANDBOX_REGISTRY_MIRROR:-}
     ports:
       - "${API_PORT:-4000}:4000"
     volumes:
@@ -176,10 +204,27 @@ services:
         source: ./labs
         target: /app/labs
         read_only: true
+      # The host Docker socket — see the header. This is the only service that
+      # gets it, and it is what creates and destroys per-session sandboxes.
+      # Remove this mount (and set DOCKER_TRACK_ENABLED=false) to run the
+      # Kubernetes track with no host Docker access anywhere in the stack.
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    # The socket is root-owned inside the Docker VM, and this service runs as
+    # `node`. Granting the socket's group is what lets a non-root process use it
+    # without running the API as root. On Docker Desktop the socket is
+    # root:root, so 0 is correct; on a Linux host set DOCKER_SOCKET_GID to the
+    # `docker` group's gid (`getent group docker | cut -d: -f3`).
+    group_add:
+      - "${DOCKER_SOCKET_GID:-0}"
     depends_on:
       postgres:
         condition: service_healthy
     networks:
+      # NOT `sandboxes`: the API reaches a session's daemon with `docker exec`
+      # on the host daemon, so it never needs network access to a sandbox and
+      # never holds a session's TLS key.
       - default
       - kind
 
@@ -195,21 +240,27 @@ services:
       - ALL
     # Student shells create files; give them a bounded, non-persistent HOME.
     tmpfs:
-      - /home/student:size=64m,mode=0700,uid=1001,gid=1001
+      # Student shells write here. Larger than the Kubernetes-only stack needed:
+      # a Docker student's build context lives under TERMINAL_WORKSPACE_ROOT.
+      - /home/student:size=256m,mode=0700,uid=1001,gid=1001
       - /tmp:size=64m,mode=1777
-      # Per-session kubeconfigs (0600) live here and vanish with the container.
+      # Per-session kubeconfigs and Docker client certificates (0600) live here
+      # and vanish with the container.
       - /run/jumptotech:size=8m,mode=0700,uid=1001,gid=1001
     pids_limit: 256
     mem_limit: 512m
     environment:
       NODE_ENV: production
       TERMINAL_PORT: 4001
-      # NOTE: no KUBECONFIG. This service holds no ambient cluster credential;
-      # each PTY gets a namespace-scoped kubeconfig fetched per session.
+      # NOTE: no KUBECONFIG, and no DOCKER_HOST. This service holds no ambient
+      # credential for either substrate; each PTY gets a namespace-scoped
+      # kubeconfig, or a sandbox-scoped Docker client certificate, fetched per
+      # session from the API and deleted when the shell ends.
       API_INTERNAL_URL: http://api:4000
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
       TERMINAL_CREDENTIALS_DIR: /run/jumptotech
       TERMINAL_WORKDIR: /home/student
+      TERMINAL_WORKSPACE_ROOT: ${TERMINAL_WORKSPACE_ROOT:-/home/student/workspaces}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       TERMINAL_SESSION_SECRET: ${TERMINAL_SESSION_SECRET:?set TERMINAL_SESSION_SECRET in .env (copy from .env.example)}
       TERMINAL_MAX_SESSIONS: ${TERMINAL_MAX_SESSIONS:-16}
@@ -228,6 +279,11 @@ services:
     networks:
       - default
       - kind
+      # Joined so a student's `docker` client can reach its own sandbox at
+      # tcp://lab-<hash>:2376. Reachability is deliberately NOT the security
+      # boundary: every sandbox mints its own CA at startup, so reaching another
+      # session's address fails TLS verification in both directions.
+      - sandboxes
 
   web:
     build:
@@ -272,3 +328,8 @@ networks:
   kind:
     external: true
     name: kind
+  # The bridge per-session Docker sandboxes join. Declared here so it is created
+  # and torn down with the stack; the orchestrator also creates it idempotently,
+  # so a deployment that runs the API outside Compose still works.
+  sandboxes:
+    name: ${DOCKER_SANDBOX_NETWORK:-jumptotech-sandboxes}

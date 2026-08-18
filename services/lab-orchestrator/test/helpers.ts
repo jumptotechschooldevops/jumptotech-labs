@@ -14,9 +14,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(here, '../../..');
 export const LABS_DIR = path.join(REPO_ROOT, 'labs');
 export const K8S_001_PATH = path.join(LABS_DIR, 'kubernetes', 'k8s-001-pods', 'lab.yaml');
+export const DOCKER_001_PATH = path.join(LABS_DIR, 'docker', 'docker-001-first-container', 'lab.yaml');
 
 export function loadK8s001(): Promise<LoadedLabDefinition> {
   return loadLabDefinition(K8S_001_PATH);
+}
+
+/** The first Docker lab, used wherever a test needs a real Docker-track lab. */
+export function loadDocker001(): Promise<LoadedLabDefinition> {
+  return loadLabDefinition(DOCKER_001_PATH);
 }
 
 export const TEST_POLICY: SessionPolicy = DEFAULT_SESSION_POLICY;

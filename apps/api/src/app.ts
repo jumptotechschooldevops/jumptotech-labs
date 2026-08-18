@@ -1,6 +1,12 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
-import type { KubernetesPort, LabRegistry, SessionManager } from '@jumptotech/lab-orchestrator';
+import type {
+  DockerEngineFactory,
+  KubernetesPort,
+  LabRegistry,
+  SessionManager,
+  WorkspacePort,
+} from '@jumptotech/lab-orchestrator';
 import {
   DevStudentIdentity,
   InMemoryProgressRepository,
@@ -34,6 +40,10 @@ export interface CreateAppDeps {
   registry: LabRegistry;
   sessions: SessionManager;
   k8s: KubernetesPort;
+  /** Session-scoped Docker access, for verifying Docker labs. Optional in tests. */
+  engines?: DockerEngineFactory;
+  /** Reads student-authored files, for Docker workspace checks. */
+  workspace?: WorkspacePort;
   config: ApiConfig;
   progress?: ProgressDeps;
 }

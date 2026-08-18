@@ -122,11 +122,10 @@ suite('PLATFORM-003 integration: the lab catalog on real kind', () => {
     registry = new LabRegistry(path.join(repoRoot, 'labs'));
     await registry.load();
     expect(registry.loadErrors).toEqual([]);
-    // Every shipped lab loads. This suite exercises the ten Kubernetes labs,
-    // which are what needs a real cluster; the Linux and Terraform labs load
-    // from the same registry and are exercised against real containers in
-    // apps/api/test/sandbox-integration.test.ts.
-    expect(registry.size).toBe(21);
+    // Every shipped lab loads. Kubernetes labs are exercised here against a
+    // real cluster; Linux, Terraform, and Docker labs load from the same
+    // registry and are exercised in their own integration suites.
+    expect(registry.size).toBe(31);
     expect(registry.labsForTrack('kubernetes')).toHaveLength(10);
 
     scratchDir = await mkdtemp(path.join(tmpdir(), 'jtt-labs-integration-'));

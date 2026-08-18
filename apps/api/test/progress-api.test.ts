@@ -653,6 +653,7 @@ describe('progress works for every track', () => {
     );
     expect(byTrack).toEqual({
       kubernetes: `1/${trackTotal('kubernetes')}`,
+      docker: `0/${trackTotal('docker')}`,
       linux: `1/${trackTotal('linux')}`,
       terraform: `1/${trackTotal('terraform')}`,
     });

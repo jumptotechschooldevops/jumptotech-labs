@@ -35,6 +35,7 @@ import {
   type IsolationMode,
   type LabProviderId,
 } from './providers/catalog.js';
+import { dockerSetupSchema, isEmptyDockerSetup } from './docker/setup.js';
 
 /**
  * Official documentation hosts, per track.
@@ -65,7 +66,7 @@ export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
     'pubs.opengroup.org',
   ],
   terraform: ['developer.hashicorp.com', 'www.terraform.io', 'terraform.io'],
-  docker: ['docs.docker.com'],
+  docker: ['docs.docker.com', 'docker.com', 'www.docker.com', 'github.com/docker'],
   aws: ['docs.aws.amazon.com', 'aws.amazon.com'],
 };
 
@@ -88,7 +89,9 @@ export const PROVIDER_REQUIREMENT_FAMILIES: Record<LabProviderId, readonly strin
   kubernetes: ['kubernetes'],
   linux: ['filesystem', 'linux'],
   terraform: ['filesystem', 'terraform'],
-  docker: ['filesystem'],
+  // Docker labs are graded against the session's own daemon and its workspace,
+  // never against the sandbox filesystem — see the `docker` family.
+  docker: ['docker'],
   aws: [],
 };
 
@@ -232,6 +235,13 @@ const setupSchema = z
      */
     seed_scripts: z.array(seedScriptPath).max(10).default([]),
     /**
+     * The Docker track's equivalent of `manifests`.
+     *
+     * Structured rather than free text — see `docker/setup.ts` for why no field
+     * in it can carry a shell fragment.
+     */
+    docker: dockerSetupSchema.optional(),
+    /**
      * Checks that must pass before the lab is handed to the student. Reuses the
      * requirement vocabulary, so setup verification and solution verification
      * run through exactly the same registry.
@@ -242,8 +252,30 @@ const setupSchema = z
   })
   .strict();
 
+/**
+ * What a Docker reset is allowed to remove from the session's own daemon.
+ *
+ * Defaults purge everything a student can create *except* images: re-pulling
+ * base images after every reset would make a reset cost minutes rather than
+ * seconds. A lab whose point is image management (`docker rmi`, tagging) opts
+ * into `images: true` so its reset genuinely restores the starting condition.
+ */
+const dockerResetSchema = z
+  .object({
+    containers: z.boolean().default(true),
+    volumes: z.boolean().default(true),
+    networks: z.boolean().default(true),
+    /** Remove images the student built or pulled, keeping the lab's own. */
+    images: z.boolean().default(false),
+    /** Restore workspace files declared in `setup.docker.files`, discarding edits. */
+    workspace: z.boolean().default(true),
+  })
+  .strict();
+
 const resetSchema = z
   .object({
+    /** Docker-track reset policy. Ignored by Kubernetes labs, and vice versa. */
+    docker: dockerResetSchema.default({}),
     /** Namespaced kinds a reset is allowed to purge before re-applying setup. */
     purge_namespaced_resources: z
       .array(z.string().min(1).max(63))
@@ -448,7 +480,13 @@ function checkRequirementTypes(raw: unknown, field: string, issues: string[]): v
  *   1. requirement types from a family the provider cannot verify;
  *   2. Kubernetes setup manifests on a provider with no Kubernetes API;
  *   3. sandbox starter files on a provider with no sandbox filesystem;
- *   4. seed scripts on a provider with no container to run them in.
+ *   4. seed scripts on a provider with no container to run them in;
+ *   5. a `setup.docker` block on a provider with no Docker daemon.
+ *
+ * A Docker lab asking for `pod_running`, or a Kubernetes lab asking for
+ * `docker_image_exists`, would otherwise load happily and then fail at *check*
+ * time with a confusing message — the student would be told their correct
+ * solution was wrong. Catching it here names the exact requirement instead.
  */
 function checkProviderCapabilities(def: LabDefinition, issues: string[]): void {
   const provider = def.environment.provider;
@@ -481,6 +519,11 @@ function checkProviderCapabilities(def: LabDefinition, issues: string[]): void {
   if (def.setup.seed_scripts.length > 0 && PROVIDER_ISOLATION[provider] !== 'container') {
     issues.push(
       `setup.seed_scripts run inside a sandbox container, which the '${provider}' provider does not create`,
+    );
+  }
+  if (!isEmptyDockerSetup(def.setup.docker) && provider !== 'docker') {
+    issues.push(
+      `setup.docker is a Docker-only field, but this lab declares environment.provider '${provider}'`,
     );
   }
 }
@@ -618,16 +661,14 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
     issues.push(`prerequisites must not include the lab's own id (${def.id})`);
   }
 
-  // A lab whose setup seeds anything but verifies nothing would hand the
-  // student an environment nobody checked.
-  if (
-    (def.setup.manifests.length > 0 ||
-      def.setup.files.length > 0 ||
-      def.setup.seed_scripts.length > 0) &&
-    def.setup.verify.length === 0
-  ) {
+  const hasSetupWork =
+    def.setup.manifests.length > 0 ||
+    def.setup.files.length > 0 ||
+    def.setup.seed_scripts.length > 0 ||
+    !isEmptyDockerSetup(def.setup.docker);
+  if (hasSetupWork && def.setup.verify.length === 0) {
     issues.push(
-      'setup.verify must describe at least one check when setup.manifests, setup.files or setup.seed_scripts is non-empty',
+      'setup.verify must describe at least one check when the lab declares an initial state',
     );
   }
 
@@ -705,5 +746,9 @@ export function resolveManifestPath(lab: LoadedLabDefinition, relative: string):
 
 /** True when a lab seeds a starting state the student inherits. */
 export function labHasSetup(def: LabDefinition): boolean {
-  return def.setup.manifests.length > 0 || def.setup.seed_scripts.length > 0;
+  return (
+    def.setup.manifests.length > 0 ||
+    def.setup.seed_scripts.length > 0 ||
+    !isEmptyDockerSetup(def.setup.docker)
+  );
 }

@@ -29,7 +29,7 @@ import {
   SessionManager,
   type TerminalTerminator,
 } from '@jumptotech/lab-orchestrator';
-import { FakeKubernetes } from '@jumptotech/lab-orchestrator/testing';
+import { FakeDockerEngines, FakeKubernetes } from '@jumptotech/lab-orchestrator/testing';
 import { FakeContainerRuntime } from '@jumptotech/lab-orchestrator/testing/containers';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
@@ -92,7 +92,7 @@ function buildApp(options: HarnessOptions = {}) {
     providers.register({ provider: new LinuxLabProvider({ runtime }) });
   }
   providers.register({
-    provider: new DockerLabProvider({ runtime }),
+    provider: new DockerLabProvider({ engines: new FakeDockerEngines() }),
     enabled: false,
     disabledReason: DOCKER_PROVIDER_DISABLED_REASON,
   });

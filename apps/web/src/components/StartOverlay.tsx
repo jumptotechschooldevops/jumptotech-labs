@@ -9,7 +9,7 @@ export type StartPhase = 'idle' | 'starting' | 'ready' | 'active' | 'failed';
 
 interface StartOverlayProps {
   phase: StartPhase;
-  /** Steps reported by the backend (environment, API, kubectl). */
+  /** Steps reported by the backend (environment, daemon/API, CLI). */
   steps: ProvisionStep[];
   /** Status of the browser terminal, rendered as the final step. */
   terminalStep: ProvisionStep;
@@ -22,7 +22,13 @@ interface StartOverlayProps {
    * readiness model exists to prevent.
    */
   availability?: ProviderAvailability | undefined;
-  /** What the environment is called, e.g. `Kubernetes`, `Linux`. */
+  /**
+   * What the environment is called, e.g. `Kubernetes`, `Docker`, `Linux`.
+   *
+   * Supplied by the caller rather than mapped from a provider id here: a new
+   * track names itself and nothing in this component changes. Defaults to the
+   * neutral wording rather than naming the wrong technology.
+   */
   environmentName?: string;
   onStart: () => void;
 }

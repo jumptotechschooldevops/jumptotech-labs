@@ -883,6 +883,13 @@ code {
 .labcard--soon .labcard__summary { flex: 1; }
 
 .overlay__text--hint { color: var(--text-faint); font-size: 12.5px; }
+/* Optional per-track subtitle, supplied by labs/<track>/track.yaml. */
+.catalog__track-tagline {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  max-width: 62ch;
+}
 
 /* --- message card --------------------------------------------------------- */
 

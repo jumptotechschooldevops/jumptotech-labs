@@ -22,6 +22,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:integration": "RUN_INTEGRATION_TESTS=1 vitest run test/integration.test.ts --root services/lab-orchestrator",
+    "test:integration:docker": "RUN_DOCKER_INTEGRATION_TESTS=1 vitest run test/docker-integration.test.ts --root services/lab-orchestrator --testTimeout=900000 --hookTimeout=900000",
     "db:migrate": "npm run migrate --workspace @jumptotech/progress",
     "db:status": "npm run migrate --workspace @jumptotech/progress -- --status",
     "test:db": "vitest run --root services/progress && vitest run test/progress-persistence.test.ts --root apps/api",

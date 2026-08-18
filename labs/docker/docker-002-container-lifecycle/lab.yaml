@@ -1,0 +1,149 @@
+id: DOCKER-002
+slug: docker-002-container-lifecycle
+title: Manage the Container Lifecycle
+track: docker
+topic: lifecycle
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 2
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-001
+
+story: >
+  It is Monday morning on the JumpToTech Bank platform team. Over the weekend
+  somebody left the batch host in a mess: the ledger API container is stopped,
+  and a worker container that was decommissioned last month is still running
+  and still holding its name.
+
+  Nobody is going to rebuild the host. Your job is to bring the environment
+  back to the state it is supposed to be in, using the container lifecycle
+  commands.
+
+objectives:
+  - List containers in every state, not only the running ones
+  - Start, stop, and restart an existing container
+  - Remove a container that is no longer wanted
+  - Explain why a container that has exited still occupies its name
+
+task:
+  summary: Restart the stopped ledger-api, remove the decommissioned stale-worker, and add an audit-log container that runs once and exits cleanly.
+  description: >
+    A container does not disappear when its process exits. It stays on the
+    host, holding its name, its logs, and its exit code, until somebody removes
+    it. That is why `docker ps` and `docker ps -a` give different answers, and
+    it is why a name can be "already in use" by a container you cannot see.
+
+    Your environment starts with two containers:
+
+      - `ledger-api`, which exists but is stopped
+      - `stale-worker`, which is running and should not be
+
+    Bring the environment to its intended state:
+
+      1. `ledger-api` is running again.
+      2. `stale-worker` no longer exists at all.
+      3. A new container named `audit-log` exists, has run to completion, and
+         exited with status 0. Use the `alpine:3.20` image for it; anything it
+         does is fine as long as it finishes successfully rather than staying
+         up.
+
+    This lab checks the state of your environment at the end, never the
+    commands you typed to get there.
+
+setup:
+  docker:
+    images:
+      - alpine:3.20
+    containers:
+      - name: ledger-api
+        image: alpine:3.20
+        command: ["sleep", "3600"]
+        # Left stopped on purpose: restarting it is the first half of the task.
+        state: exited
+      - name: stale-worker
+        image: alpine:3.20
+        command: ["sleep", "3600"]
+        state: running
+  verify:
+    - type: docker_container_exists
+      name: ledger-api
+      label: The ledger-api container exists
+    - type: docker_container_running
+      name: stale-worker
+      label: The stale-worker container is running
+  verify_timeout_seconds: 120
+
+requirements:
+  - type: docker_container_running
+    name: ledger-api
+    label: Container ledger-api is running again
+  - type: docker_resource_absent
+    kind: container
+    name: stale-worker
+    label: Container stale-worker has been removed
+  - type: docker_container_exists
+    name: audit-log
+    label: Container audit-log exists
+  - type: docker_container_state
+    name: audit-log
+    expected: exited
+    label: Container audit-log has finished running
+  - type: docker_container_exit_code
+    name: audit-log
+    expected: 0
+    label: Container audit-log exited successfully
+
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Start by finding out what is actually there. A container that has stopped
+      is invisible to the plain listing command but is still very much present,
+      and the flag that reveals it is the same one you would use to explain a
+      name collision.
+  - level: 2
+    text: >
+      Three separate lifecycle operations are involved: bringing a stopped
+      container back up, taking a running container away permanently, and
+      creating a container whose process ends by itself. The Docker CLI
+      reference groups all of these under container management.
+  - level: 3
+    text: >
+      A running container usually has to be stopped before it can be removed,
+      unless you tell the remove command to force it. For `audit-log`, any
+      short-lived command works — something like running `echo` in
+      `alpine:3.20` starts, prints, and exits 0, which is exactly the end state
+      this lab looks for. Check your work with `docker ps -a`, which shows both
+      the state and the exit code of every container.
+
+references:
+  - title: Docker CLI reference — docker container
+    url: https://docs.docker.com/reference/cli/docker/container/
+  - title: Docker CLI reference — docker rm
+    url: https://docs.docker.com/reference/cli/docker/container/rm/
+  - title: Docker CLI reference — docker restart
+    url: https://docs.docker.com/reference/cli/docker/container/restart/
+
+skills:
+  - docker.containers.lifecycle
+  - docker.containers.remove
+  - docker.containers.inspect
+
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - image-creation-and-registry

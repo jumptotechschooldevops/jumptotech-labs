@@ -1,0 +1,113 @@
+id: DOCKER-003
+slug: docker-003-images
+title: Pull, Inspect, and Tag Images
+track: docker
+topic: images
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 3
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-001
+
+story: >
+  JumpToTech Bank is standardising the small utility image its engineers use
+  for one-off diagnostics inside the platform. The decision has been made:
+  BusyBox, pinned to a specific version, published internally under the bank's
+  own name so that nobody has to remember which upstream tag was blessed.
+
+  You have been asked to bring that image into the environment and publish it
+  under the internal name.
+
+objectives:
+  - Download an image from a registry with a pinned tag
+  - Explain what an image tag is and why a name can point at an image
+  - Give an existing image an additional name without downloading it again
+  - Read an image's configuration with the Docker CLI
+
+task:
+  summary: Pull busybox:1.36 and publish it under the internal name jumptotech/toolbox:1.0.
+  description: >
+    An image tag is a *name that points at an image*, not a copy of it. Two
+    tags can refer to the same image, which is what makes republishing an image
+    under a second name instant and free.
+
+    Do two things:
+
+      1. Download `busybox:1.36` into this environment.
+      2. Give that same image the additional name `jumptotech/toolbox:1.0`.
+
+    The second step must not download anything — it is a naming operation on
+    an image you already hold.
+
+    Along the way, `docker images` shows what you have, and `docker inspect`
+    (or `docker image inspect`) shows an image's full configuration: its
+    architecture, its default command, its layers. Look at the output for
+    `busybox:1.36` before you finish; being able to read it is the point of
+    the lab as much as the tagging is.
+
+    Note that pulling crosses the network, so it may take a moment. Nothing
+    else in this lab does.
+
+requirements:
+  - type: docker_image_exists
+    image: busybox:1.36
+    label: Image busybox:1.36 is present locally
+  - type: docker_image_exists
+    image: jumptotech/toolbox:1.0
+    label: Image jumptotech/toolbox:1.0 exists
+
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    # This lab is *about* images, so a reset genuinely removes the ones the
+    # student pulled and tagged — otherwise "reset" would leave the lab solved.
+    images: true
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Two separate ideas are in play. One command reaches out to a registry and
+      downloads an image; a different command adds a name to an image that is
+      already here. Only the first one touches the network.
+  - level: 2
+    text: >
+      The official CLI reference has a section for image commands. Look for the
+      one that retrieves an image from a registry, and for the one whose entire
+      job is creating a new reference to an existing image.
+  - level: 3
+    text: >
+      The internal name has three parts: a namespace (`jumptotech`), a
+      repository (`toolbox`), and a tag (`1.0`), written as
+      `jumptotech/toolbox:1.0`. After tagging, `docker images` will list both
+      names — and if you compare the IMAGE ID column you will see they are the
+      same image, which is the thing this lab is trying to show you.
+
+references:
+  - title: Docker CLI reference — docker pull
+    url: https://docs.docker.com/reference/cli/docker/image/pull/
+  - title: Docker CLI reference — docker tag
+    url: https://docs.docker.com/reference/cli/docker/image/tag/
+  - title: Docker CLI reference — docker image inspect
+    url: https://docs.docker.com/reference/cli/docker/image/inspect/
+  - title: What is an image?
+    url: https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-an-image/
+
+skills:
+  - docker.images.pull
+  - docker.images.tag
+  - docker.images.inspect
+
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - image-creation-and-registry

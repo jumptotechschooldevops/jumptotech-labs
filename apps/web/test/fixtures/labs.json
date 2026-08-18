@@ -1,6 +1,368 @@
 {
   "labs": [
     {
+      "id": "DOCKER-001",
+      "slug": "docker-001-first-container",
+      "title": "Run Your First Container",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "containers",
+      "topicTitle": "Containers",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 1,
+      "summary": "Run a container named web from the nginx:1.27-alpine image and leave it running.",
+      "skills": [
+        "docker.containers.run",
+        "docker.containers.inspect"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
+      "id": "DOCKER-002",
+      "slug": "docker-002-container-lifecycle",
+      "title": "Manage the Container Lifecycle",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "lifecycle",
+      "topicTitle": "Lifecycle",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 35,
+      "order": 2,
+      "summary": "Restart the stopped ledger-api, remove the decommissioned stale-worker, and add an audit-log container that runs once and exits cleanly.",
+      "skills": [
+        "docker.containers.lifecycle",
+        "docker.containers.remove",
+        "docker.containers.inspect"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [
+        {
+          "id": "DOCKER-001",
+          "title": "Run Your First Container",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
+      "id": "DOCKER-003",
+      "slug": "docker-003-images",
+      "title": "Pull, Inspect, and Tag Images",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "images",
+      "topicTitle": "Images",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 35,
+      "order": 3,
+      "summary": "Pull busybox:1.36 and publish it under the internal name jumptotech/toolbox:1.0.",
+      "skills": [
+        "docker.images.pull",
+        "docker.images.tag",
+        "docker.images.inspect"
+      ],
+      "hasSetup": false,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [
+        {
+          "id": "DOCKER-001",
+          "title": "Run Your First Container",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
+      "id": "DOCKER-004",
+      "slug": "docker-004-dockerfile",
+      "title": "Build an Image from a Dockerfile",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "dockerfile",
+      "topicTitle": "Dockerfile",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 45,
+      "order": 4,
+      "summary": "Write a Dockerfile that builds jumptotech/greeter:1.0, then run a container from it that exits successfully.",
+      "skills": [
+        "docker.dockerfile.author",
+        "docker.images.build",
+        "docker.images.tag",
+        "docker.containers.run"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [
+        {
+          "id": "DOCKER-001",
+          "title": "Run Your First Container",
+          "available": true
+        },
+        {
+          "id": "DOCKER-003",
+          "title": "Pull, Inspect, and Tag Images",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
+      "id": "DOCKER-005",
+      "slug": "docker-005-volumes",
+      "title": "Persist Data with Volumes",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "storage",
+      "topicTitle": "Storage",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 40,
+      "order": 5,
+      "summary": "Create a named volume called ledger-data and run a ledger-db container with it mounted at /var/lib/ledger.",
+      "skills": [
+        "docker.volumes.create",
+        "docker.volumes.mount",
+        "docker.containers.inspect"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [
+        {
+          "id": "DOCKER-002",
+          "title": "Manage the Container Lifecycle",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
+      "id": "DOCKER-006",
+      "slug": "docker-006-networks",
+      "title": "Connect Containers on a Custom Network",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "networking",
+      "topicTitle": "Networking",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 40,
+      "order": 6,
+      "summary": "Create a bridge network named ledger-net and run ledger-api and ledger-worker on it.",
+      "skills": [
+        "docker.networks.create",
+        "docker.networks.attach",
+        "docker.containers.exec"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [
+        {
+          "id": "DOCKER-001",
+          "title": "Run Your First Container",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
+      "id": "DOCKER-007",
+      "slug": "docker-007-environment-variables",
+      "title": "Configure a Container with Environment Variables",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "configuration",
+      "topicTitle": "Configuration",
+      "difficulty": "beginner",
+      "level": "practice",
+      "durationMinutes": 30,
+      "order": 7,
+      "summary": "Run a statements container configured with two inline variables and one supplied from an env file.",
+      "skills": [
+        "docker.config.environment",
+        "docker.containers.run",
+        "docker.containers.inspect"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [
+        {
+          "id": "DOCKER-001",
+          "title": "Run Your First Container",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
+      "id": "DOCKER-008",
+      "slug": "docker-008-multi-container",
+      "title": "Run a Multi-Container Application",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "compose",
+      "topicTitle": "Compose",
+      "difficulty": "intermediate",
+      "level": "challenge",
+      "durationMinutes": 45,
+      "order": 8,
+      "summary": "Complete the Compose file by adding the ledger-worker service, then bring the stack up.",
+      "skills": [
+        "docker.compose.author",
+        "docker.compose.lifecycle",
+        "docker.networks.attach",
+        "docker.config.environment"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [
+        {
+          "id": "DOCKER-006",
+          "title": "Connect Containers on a Custom Network",
+          "available": true
+        },
+        {
+          "id": "DOCKER-007",
+          "title": "Configure a Container with Environment Variables",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
+      "id": "DOCKER-009",
+      "slug": "docker-009-resource-limits",
+      "title": "Constrain a Container with Resource Limits",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "resources",
+      "topicTitle": "Resources",
+      "difficulty": "intermediate",
+      "level": "practice",
+      "durationMinutes": 35,
+      "order": 9,
+      "summary": "Run a reporting container limited to 256m of memory and half a CPU.",
+      "skills": [
+        "docker.resources.limits",
+        "docker.containers.run",
+        "docker.containers.inspect"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [
+        {
+          "id": "DOCKER-001",
+          "title": "Run Your First Container",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
+      "id": "DOCKER-010",
+      "slug": "docker-010-troubleshooting",
+      "title": "Repair a Broken Container",
+      "track": "docker",
+      "provider": "docker",
+      "topic": "troubleshooting",
+      "topicTitle": "Troubleshooting",
+      "difficulty": "intermediate",
+      "level": "challenge",
+      "durationMinutes": 45,
+      "order": 10,
+      "summary": "Investigate the ledger-api container and restore it to a healthy, correctly configured state.",
+      "skills": [
+        "docker.troubleshooting.containers",
+        "docker.troubleshooting.logs",
+        "docker.containers.inspect",
+        "docker.config.environment",
+        "docker.networks.ports"
+      ],
+      "hasSetup": true,
+      "certifications": [
+        "DCA"
+      ],
+      "prerequisites": [
+        {
+          "id": "DOCKER-002",
+          "title": "Manage the Container Lifecycle",
+          "available": true
+        },
+        {
+          "id": "DOCKER-007",
+          "title": "Configure a Container with Environment Variables",
+          "available": true
+        }
+      ],
+      "hintCount": 3,
+      "availability": {
+        "provider": "docker",
+        "available": true
+      }
+    },
+    {
       "id": "K8S-001",
       "slug": "k8s-001-pods",
       "title": "Create Your First Pod",
@@ -744,7 +1106,6 @@
     {
       "track": "kubernetes",
       "title": "Kubernetes",
-      "tagline": "CKA-oriented Kubernetes practice on a live cluster",
       "labCount": 10,
       "topics": [
         {
@@ -795,6 +1156,77 @@
       "providers": [
         "kubernetes"
       ],
+      "tagline": "Pods, workloads, and the cluster APIs that schedule them.",
+      "order": 10,
+      "availability": {
+        "available": true
+      }
+    },
+    {
+      "track": "docker",
+      "title": "Docker",
+      "labCount": 10,
+      "topics": [
+        {
+          "topic": "containers",
+          "title": "Containers",
+          "labCount": 1
+        },
+        {
+          "topic": "lifecycle",
+          "title": "Lifecycle",
+          "labCount": 1
+        },
+        {
+          "topic": "images",
+          "title": "Images",
+          "labCount": 1
+        },
+        {
+          "topic": "dockerfile",
+          "title": "Dockerfile",
+          "labCount": 1
+        },
+        {
+          "topic": "storage",
+          "title": "Storage",
+          "labCount": 1
+        },
+        {
+          "topic": "networking",
+          "title": "Networking",
+          "labCount": 1
+        },
+        {
+          "topic": "configuration",
+          "title": "Configuration",
+          "labCount": 1
+        },
+        {
+          "topic": "compose",
+          "title": "Compose",
+          "labCount": 1
+        },
+        {
+          "topic": "resources",
+          "title": "Resources",
+          "labCount": 1
+        },
+        {
+          "topic": "troubleshooting",
+          "title": "Troubleshooting",
+          "labCount": 1
+        }
+      ],
+      "difficulties": [
+        "beginner",
+        "intermediate"
+      ],
+      "providers": [
+        "docker"
+      ],
+      "tagline": "Containers, images, volumes, and the daemon underneath them.",
+      "order": 20,
       "availability": {
         "available": true
       }
@@ -802,7 +1234,6 @@
     {
       "track": "linux",
       "title": "Linux",
-      "tagline": "Linux for DevOps engineers, on a real shell",
       "labCount": 10,
       "topics": [
         {
@@ -839,6 +1270,7 @@
       "providers": [
         "linux"
       ],
+      "tagline": "Files, permissions, processes, and the shell on a real container.",
       "availability": {
         "available": true
       }
@@ -846,7 +1278,6 @@
     {
       "track": "terraform",
       "title": "Terraform",
-      "tagline": "Infrastructure as code, applied in a private sandbox",
       "labCount": 1,
       "topics": [
         {
@@ -877,8 +1308,7 @@
     },
     {
       "provider": "docker",
-      "available": false,
-      "reason": "Docker labs need a per-session Docker daemon. Sharing the host daemon would give a student root on the host, so this provider ships as architecture only."
+      "available": true
     },
     {
       "provider": "terraform",
@@ -887,9 +1317,10 @@
     {
       "provider": "aws",
       "available": false,
-      "reason": "AWS labs are architecture only."
+      "reason": "AWS labs are architecture only. No student credentials, roles, or resources are created by this platform yet.",
+      "remediation": "See README → Future AWS provider architecture. Enabling it requires scoped STS roles, a permission boundary, session resource tagging, and a budget guard."
     }
   ],
-  "count": 21,
+  "count": 31,
   "prerequisitesEnforced": false
 }

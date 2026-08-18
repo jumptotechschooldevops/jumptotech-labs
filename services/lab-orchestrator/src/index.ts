@@ -3,6 +3,7 @@ export * from './validation.js';
 export * from './requirements.js';
 export * from './lab-definition.js';
 export * from './lab-registry.js';
+export * from './track-definition.js';
 export * from './k8s/port.js';
 export * from './k8s/labels.js';
 export { buildStudentKubeconfig, type StudentKubeconfigInput } from './k8s/student-kubeconfig.js';
@@ -12,8 +13,32 @@ export {
   createLabProvider,
   isSupportedProvider,
   SUPPORTED_PROVIDERS,
+  type ProviderFactoryOptions,
   type SupportedProvider,
 } from './providers/factory.js';
+
+// --- Docker track (PLATFORM-DOCKER-001) ------------------------------------
+export * from './docker/port.js';
+export * from './docker/workspace.js';
+export {
+  DockerCliClient,
+  DockerCliFactory,
+  execFileRunner,
+  toContainerSnapshot,
+  toImageSnapshot,
+  type CliRunner,
+  type DockerCliOptions,
+} from './docker/cli-client.js';
+export {
+  describeDockerSetup,
+  dockerSetupSchema,
+  isEmptyDockerSetup,
+  requiredImages,
+  workspacePath,
+  type DockerSetupContainer,
+  type DockerSetupFile,
+  type DockerSetupPlan,
+} from './docker/setup.js';
 
 // --- multi-track sandbox providers (PLATFORM-004) ---------------------------
 export * from './providers/catalog.js';
@@ -62,6 +87,7 @@ export {
 } from './providers/terraform-provider.js';
 export {
   DockerLabProvider,
+  SANDBOX_LABELS,
   DEFAULT_DOCKER_SANDBOX_IMAGE,
   DOCKER_PROVIDER_DISABLED_REASON,
   DOCKER_PROVIDER_REMEDIATION,

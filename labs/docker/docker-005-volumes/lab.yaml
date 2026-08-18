@@ -1,0 +1,129 @@
+id: DOCKER-005
+slug: docker-005-volumes
+title: Persist Data with Volumes
+track: docker
+topic: storage
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 5
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-002
+
+story: >
+  A JumpToTech Bank engineer ran the ledger's local database as a container,
+  loaded a day of test transactions into it, then removed and recreated the
+  container to change a setting. The data went with it.
+
+  This is not a bug — a container's writable layer is deleted with the
+  container, and that is by design. The fix is to put the data somewhere that
+  outlives any single container.
+
+objectives:
+  - Explain why data written inside a container does not survive its removal
+  - Create a named volume
+  - Attach a volume to a container at a specific path
+  - Confirm where a container's storage actually comes from
+
+task:
+  summary: Create a named volume called ledger-data and run a ledger-db container with it mounted at /var/lib/ledger.
+  description: >
+    A named volume is storage Docker manages, with a life of its own. It is
+    created independently of any container, it survives every container that
+    used it, and mounting it into a container makes one path inside that
+    container read and write the volume instead of the container's own
+    disposable layer.
+
+    Do both halves:
+
+      1. Create a named volume called exactly `ledger-data`.
+      2. Run a container named `ledger-db`, from `alpine:3.20`, with that
+         volume mounted at `/var/lib/ledger`, and leave it running.
+
+    Once it is up, it is worth proving the point to yourself: write a file
+    under `/var/lib/ledger` inside the container, remove the container
+    entirely, start a new one with the same volume mounted, and look again.
+
+    `docker volume ls` lists volumes, and `docker inspect ledger-db` shows the
+    `Mounts` section describing exactly what is attached and where.
+
+setup:
+  docker:
+    images:
+      - alpine:3.20
+  verify:
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: The alpine:3.20 image is available
+  verify_timeout_seconds: 120
+
+requirements:
+  - type: docker_volume_exists
+    name: ledger-data
+    label: Volume ledger-data exists
+  - type: docker_container_exists
+    name: ledger-db
+    label: Container ledger-db exists
+  - type: docker_container_running
+    name: ledger-db
+    label: Container ledger-db is running
+  - type: docker_container_mount
+    name: ledger-db
+    volume: ledger-data
+    destination: /var/lib/ledger
+    label: Volume ledger-data is mounted at /var/lib/ledger
+
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Volumes are managed objects in their own right, like containers,
+      networks, and images — so there is a command group for them. Attaching
+      one to a container is a separate step, done when the container is
+      created.
+  - level: 2
+    text: >
+      The storage documentation explains the difference between a named volume
+      and a bind mount; this lab wants a named volume, which Docker creates and
+      stores itself. Look at the options `docker run` offers for attaching
+      storage — there is a short form and a more explicit one, and either is
+      accepted here.
+  - level: 3
+    text: >
+      The container must stay running, so give it a command that does not exit
+      immediately — `alpine:3.20` on its own exits at once. When you attach the
+      volume, the source is the volume *name* (`ledger-data`) and the
+      destination is the absolute path `/var/lib/ledger`. Verify with
+      `docker inspect ledger-db` and read the `Mounts` array: `"Type": "volume"`
+      is what tells you it is a named volume rather than a path from the host.
+
+references:
+  - title: Volumes
+    url: https://docs.docker.com/engine/storage/volumes/
+  - title: Docker CLI reference — docker volume create
+    url: https://docs.docker.com/reference/cli/docker/volume/create/
+  - title: Persisting container data
+    url: https://docs.docker.com/get-started/docker-concepts/running-containers/persisting-container-data/
+
+skills:
+  - docker.volumes.create
+  - docker.volumes.mount
+  - docker.containers.inspect
+
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - storage-and-volumes

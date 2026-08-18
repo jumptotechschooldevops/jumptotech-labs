@@ -166,12 +166,15 @@ export interface NetworkPolicyConfig {
 }
 
 /**
- * Resource bounds for a container-backed sandbox (Linux, Terraform, Docker).
+ * Resource bounds for a container-exec sandbox (Linux, Terraform).
  *
  * The container equivalent of the Kubernetes ResourceQuota/LimitRange pair:
  * one student cannot exhaust the host, and an abandoned shell cannot fork-bomb
- * it. Centralised here rather than written into each provider so all three
- * container providers are tuned in one place — see PLATFORM-004 §18.
+ * it. Centralised here rather than written into each provider so the
+ * container-exec providers are tuned in one place — see PLATFORM-004 §18.
+ *
+ * The Docker track does not use this: its sandbox runs a whole daemon rather
+ * than a single shell, so it is bounded by `DockerSandboxPolicy` below.
  */
 export interface SandboxContainerPolicy {
   /** CPU cores, as Docker's `--cpus` accepts, e.g. `0.5`. */
@@ -194,9 +197,71 @@ export interface SandboxContainerPolicy {
 }
 
 /**
+ * Resource controls applied to one Docker sandbox.
+ *
+ * A Docker session's sandbox is a single container that runs an isolated Docker
+ * daemon; every container the student creates is a child of that one process
+ * tree. Capping the sandbox therefore caps the *whole session* — a student
+ * cannot escape their memory, CPU, or process budget by launching more
+ * containers, because those containers spend the same budget.
+ *
+ * This is the Docker counterpart of `quota` + `limitRange`, and it is
+ * configured the same way: from the environment, never from literals in
+ * provider code.
+ */
+export interface DockerSandboxPolicy {
+  /** Image providing the isolated daemon, e.g. `docker:27-dind`. */
+  image: string;
+  /**
+   * Whether the sandbox container runs `--privileged`.
+   *
+   * Docker-in-Docker cannot run without it: the inner daemon needs to create
+   * cgroups, mount filesystems, and program iptables. This is the single
+   * privileged component in the design and it exists so that the *student*
+   * never needs any privilege at all — see README → Docker sandbox security.
+   */
+  privileged: boolean;
+  /** `--memory` for the sandbox, e.g. `2g`. Caps the whole session. */
+  memory: string;
+  /** `--cpus` for the sandbox, e.g. `2`. Caps the whole session. */
+  cpus: string;
+  /** `--pids-limit` for the sandbox. The hard ceiling on session processes. */
+  pidsLimit: number;
+  /**
+   * Advisory ceiling on containers a student is expected to create.
+   *
+   * Docker has no per-daemon container cap, so this is reported rather than
+   * enforced; `pidsLimit` and `memory` are the limits that actually bind. See
+   * README → Docker resource controls.
+   */
+  maxContainers: number;
+  /** User-defined bridge every sandbox joins, so the terminal can reach it. */
+  network: string;
+  /** Port the sandbox daemon serves the TLS Docker API on. */
+  daemonPort: number;
+  /** How long to wait for a sandbox's daemon to accept commands, in seconds. */
+  readyTimeoutSeconds: number;
+  /**
+   * Restart attempts for the sandbox container.
+   *
+   * `dockerd` gives its managed containerd a fixed 15s to start and gives up if
+   * it misses that window, which happens on a loaded host. A restart policy
+   * turns that transient failure into a retry instead of a failed lab start.
+   */
+  restartAttempts: number;
+  /** Extra registry mirror the sandbox daemon should prefer, if configured. */
+  registryMirror?: string;
+}
+
+/**
  * Everything that shapes a session's sandbox. Values come from configuration
  * (see `apps/api/src/config.ts`), never from literals buried in provider code,
  * so production values can be tuned after load testing without a code change.
+ *
+ * One policy object covers both substrates. A Kubernetes session reads `quota`,
+ * `limitRange`, and `network`; a Docker session reads `docker`. Neither
+ * provider sees the other's fields, but keeping a single policy type means the
+ * session manager, the API config loader, and the store never branch on track.
  */
 export interface SessionPolicy {
   /** ResourceQuota `spec.hard`, e.g. `{ pods: '15', 'requests.cpu': '2' }`. */
@@ -208,8 +273,10 @@ export interface SessionPolicy {
   serviceAccountName: string;
   /** Lifetime of a minted student ServiceAccount token, in seconds. */
   credentialTtlSeconds: number;
-  /** Bounds applied to container-backed sandboxes. */
+  /** Bounds applied to container-exec sandboxes (Linux, Terraform). */
   sandbox: SandboxContainerPolicy;
+  /** Resource controls for Docker-track sandboxes. */
+  docker: DockerSandboxPolicy;
 }
 
 /**
@@ -257,5 +324,19 @@ export const DEFAULT_SESSION_POLICY: SessionPolicy = {
     user: 'student',
     home: '/home/student',
     network: 'none',
+  },
+  docker: {
+    image: 'docker:27-dind',
+    // Required by Docker-in-Docker. Documented, and confined to this one
+    // platform-created container; no student process ever runs inside it.
+    privileged: true,
+    memory: '2g',
+    cpus: '2',
+    pidsLimit: 512,
+    maxContainers: 10,
+    network: 'jumptotech-sandboxes',
+    daemonPort: 2376,
+    readyTimeoutSeconds: 180,
+    restartAttempts: 5,
   },
 };

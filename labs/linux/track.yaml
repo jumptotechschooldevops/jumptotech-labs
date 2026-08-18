@@ -1,0 +1,4 @@
+# Optional track metadata. The track itself exists because labs declare it;
+# this file only says how it should be presented in the catalog.
+title: Linux
+tagline: Files, permissions, processes, and the shell on a real container.

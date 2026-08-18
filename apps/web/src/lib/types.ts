@@ -65,7 +65,7 @@ export interface TopicSummary {
 export interface TrackSummary {
   track: string;
   title: string;
-  /** One-line description of the track. Absent for tracks with no tagline. */
+  /** One-line description from `labs/<track>/track.yaml`, when present. */
   tagline?: string;
   labCount: number;
   topics: TopicSummary[];
@@ -73,6 +73,8 @@ export interface TrackSummary {
   /** The providers this track's labs declare. */
   providers?: string[];
   availability?: ProviderAvailability;
+  /** Catalog sort position. Tracks without one sort last, alphabetically. */
+  order?: number;
 }
 
 export interface DocumentationLink {

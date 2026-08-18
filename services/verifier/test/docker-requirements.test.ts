@@ -1,0 +1,852 @@
+/**
+ * PLATFORM-DOCKER — Docker verification.
+ *
+ * The Kubernetes suite's counterpart. Same three properties, asserted the same
+ * way:
+ *
+ *   - **State, not commands.** Every check reads `docker inspect` output. A
+ *     container created with `docker run`, with `docker create` + `docker
+ *     start`, or from a Compose file produces identical state and passes
+ *     identically. Nothing here looks at what the student typed.
+ *   - **One daemon, fixed at construction.** A handler is never given the
+ *     chance to name a daemon, so it cannot read outside the session it grades.
+ *   - **A broken environment is not a wrong answer.** A daemon that cannot be
+ *     reached reports `ENVIRONMENT_UNREACHABLE` with skipped checks, rather than
+ *     telling a student their correct work failed.
+ *
+ * Every shipped Docker lab is additionally run twice at the bottom: once against
+ * an empty daemon, where it must fail, and once against a daemon holding the
+ * solution, where it must pass.
+ */
+import { beforeAll, describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  DOCKER_REQUIREMENT_TYPES,
+  InMemoryWorkspace,
+  LabRegistry,
+  type LoadedLabDefinition,
+  type Requirement,
+} from '@jumptotech/lab-orchestrator';
+import { FakeDockerDaemon, containerSpec } from '@jumptotech/lab-orchestrator/testing';
+import {
+  DockerVerifyReader,
+  parseDockerMemory,
+  parseDockerCpus,
+  parseDockerfile,
+  looksLikeDockerfile,
+  registeredRequirementTypes,
+  verifyLab,
+  verifyRequirement,
+} from '../src/index.js';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const SANDBOX_A = 'lab-00000000000a';
+const SANDBOX_B = 'lab-00000000000b';
+const SESSION_A = 'sess-000000000000000a';
+
+let registry: LabRegistry;
+
+beforeAll(async () => {
+  registry = new LabRegistry(path.join(repoRoot, 'labs'));
+  await registry.load();
+  expect(registry.loadErrors).toEqual([]);
+});
+
+/** Run one requirement against a fake daemon and return its result. */
+function check(
+  docker: FakeDockerDaemon,
+  requirement: Requirement,
+  workspace?: { port: InMemoryWorkspace; sessionId: string },
+) {
+  return verifyRequirement(requirement, new DockerVerifyReader(docker, SANDBOX_A, workspace));
+}
+
+const passed = (result: { status: string }) => result.status === 'pass';
+
+// ------------------------------------------------------------- containers
+
+describe('docker verifier — container checks', () => {
+  it('sees a container that exists and reports one that does not', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'web' }));
+
+    expect(
+      passed(await check(docker, { type: 'docker_container_exists', name: 'web' } as Requirement)),
+    ).toBe(true);
+
+    const missing = await check(docker, {
+      type: 'docker_container_exists',
+      name: 'api',
+    } as Requirement);
+    expect(missing.status).toBe('fail');
+    // The message orients without naming the sandbox: a student's `docker ps`
+    // only shows their own daemon, so "in sandbox lab-…" would be noise.
+    expect(missing.detail).toBe("No container named 'api' exists in your Docker environment");
+  });
+
+  it('accepts a container however it was created', async () => {
+    // `docker run`, and `docker create` + `docker start`, leave the same state.
+    const viaRun = new FakeDockerDaemon();
+    viaRun.addContainer(containerSpec({ name: 'web' }), 'running');
+
+    const viaCreateThenStart = new FakeDockerDaemon();
+    viaCreateThenStart.addContainer(containerSpec({ name: 'web' }), 'created');
+    await viaCreateThenStart.startContainer('web');
+
+    for (const docker of [viaRun, viaCreateThenStart]) {
+      expect(
+        passed(await check(docker, { type: 'docker_container_running', name: 'web' } as Requirement)),
+      ).toBe(true);
+    }
+  });
+
+  it('surfaces the exit code of a container that stopped', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'web' }), 'exited', 137);
+
+    const result = await check(docker, {
+      type: 'docker_container_running',
+      name: 'web',
+    } as Requirement);
+
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('exit code 137');
+  });
+
+  it('grades an explicit state, for labs where running is the wrong answer', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'batch' }), 'exited', 0);
+
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_container_state',
+          name: 'batch',
+          expected: 'exited',
+        } as Requirement),
+      ),
+    ).toBe(true);
+    expect(
+      (
+        await check(docker, {
+          type: 'docker_container_state',
+          name: 'batch',
+          expected: 'running',
+        } as Requirement)
+      ).status,
+    ).toBe('fail');
+  });
+
+  it('normalises registry prefixes when matching an image', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'web', image: 'docker.io/library/nginx:1.27-alpine' }));
+
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_container_image',
+          name: 'web',
+          image: 'nginx:1.27-alpine',
+        } as Requirement),
+      ),
+    ).toBe(true);
+  });
+
+  it('grades an exit code, and refuses to guess while a container still runs', async () => {
+    const stopped = new FakeDockerDaemon();
+    stopped.addContainer(containerSpec({ name: 'job' }), 'exited', 0);
+    const running = new FakeDockerDaemon();
+    running.addContainer(containerSpec({ name: 'job' }), 'running');
+
+    expect(
+      passed(
+        await check(stopped, {
+          type: 'docker_container_exit_code',
+          name: 'job',
+          expected: 0,
+        } as Requirement),
+      ),
+    ).toBe(true);
+
+    const early = await check(running, {
+      type: 'docker_container_exit_code',
+      name: 'job',
+      expected: 0,
+    } as Requirement);
+    expect(early.status).toBe('fail');
+    expect(early.detail).toMatch(/still running/);
+  });
+
+  it('checks an environment variable, with or without a value', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'app', env: { APP_MODE: 'production' } }));
+
+    for (const requirement of [
+      { type: 'docker_container_env', name: 'app', key: 'APP_MODE' },
+      { type: 'docker_container_env', name: 'app', key: 'APP_MODE', value: 'production' },
+    ]) {
+      expect(passed(await check(docker, requirement as Requirement))).toBe(true);
+    }
+
+    const wrong = await check(docker, {
+      type: 'docker_container_env',
+      name: 'app',
+      key: 'APP_MODE',
+      value: 'debug',
+    } as Requirement);
+    expect(wrong.status).toBe('fail');
+    expect(wrong.detail).toContain("APP_MODE='production'");
+  });
+
+  it('distinguishes an exposed port from a published one', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(
+      containerSpec({ name: 'web', ports: [{ containerPort: 80, hostPort: 8080 }] }),
+    );
+
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_container_port',
+          name: 'web',
+          container_port: 80,
+          protocol: 'tcp',
+        } as Requirement),
+      ),
+    ).toBe(true);
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_container_port',
+          name: 'web',
+          container_port: 80,
+          host_port: 8080,
+          protocol: 'tcp',
+        } as Requirement),
+      ),
+    ).toBe(true);
+
+    const wrongHost = await check(docker, {
+      type: 'docker_container_port',
+      name: 'web',
+      container_port: 80,
+      host_port: 9090,
+      protocol: 'tcp',
+    } as Requirement);
+    expect(wrongHost.status).toBe('fail');
+    expect(wrongHost.detail).toContain('8080');
+  });
+
+  it('checks network attachment and lists what it found instead', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'api', network: 'ledger-net' }));
+
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_container_network',
+          name: 'api',
+          network: 'ledger-net',
+        } as Requirement),
+      ),
+    ).toBe(true);
+
+    const wrong = await check(docker, {
+      type: 'docker_container_network',
+      name: 'api',
+      network: 'other-net',
+    } as Requirement);
+    expect(wrong.detail).toContain('ledger-net');
+  });
+
+  it('accepts only a named volume, never a bind mount, for a volume check', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(
+      containerSpec({
+        name: 'db',
+        volumes: [{ volume: 'ledger-data', destination: '/var/lib/data' }],
+      }),
+    );
+
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_container_mount',
+          name: 'db',
+          volume: 'ledger-data',
+          destination: '/var/lib/data',
+        } as Requirement),
+      ),
+    ).toBe(true);
+
+    const wrongPath = await check(docker, {
+      type: 'docker_container_mount',
+      name: 'db',
+      volume: 'ledger-data',
+      destination: '/data',
+    } as Requirement);
+    expect(wrongPath.status).toBe('fail');
+    expect(wrongPath.detail).toContain('/var/lib/data');
+  });
+});
+
+// -------------------------------------------------------- resource limits
+
+describe('docker verifier — resource limits are read from what the daemon enforces', () => {
+  it('accepts any spelling of the same limit', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'web', memory: '512m', cpus: '0.5', pidsLimit: 64 }));
+
+    for (const memory of ['512m', '512M', '536870912']) {
+      expect(
+        passed(
+          await check(docker, {
+            type: 'docker_container_resource_limit',
+            name: 'web',
+            memory,
+          } as Requirement),
+        ),
+        `memory spelled '${memory}'`,
+      ).toBe(true);
+    }
+
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_container_resource_limit',
+          name: 'web',
+          cpus: '0.5',
+          pids_limit: 64,
+        } as Requirement),
+      ),
+    ).toBe(true);
+  });
+
+  it('reports an unlimited container as unlimited, not as a mismatch', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'web' }));
+
+    const result = await check(docker, {
+      type: 'docker_container_resource_limit',
+      name: 'web',
+      memory: '512m',
+      cpus: '0.5',
+    } as Requirement);
+
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('memory is unlimited');
+    expect(result.detail).toContain('CPU is unlimited');
+  });
+
+  it('parses Docker\'s binary suffixes the way the daemon does', () => {
+    // `1k` is 1024, not 1000 — as `docker run --help` documents.
+    expect(parseDockerMemory('1k')).toBe(1024);
+    expect(parseDockerMemory('512m')).toBe(536_870_912);
+    expect(parseDockerMemory('2g')).toBe(2_147_483_648);
+    expect(parseDockerCpus('1.5')).toBe(1_500_000_000);
+  });
+});
+
+// -------------------------------------------- images, volumes, networks
+
+describe('docker verifier — image, volume, and network checks', () => {
+  it('finds an image and reports a missing one', async () => {
+    const docker = new FakeDockerDaemon({ images: ['nginx:1.27-alpine'] });
+
+    expect(
+      passed(
+        await check(docker, { type: 'docker_image_exists', image: 'nginx:1.27-alpine' } as Requirement),
+      ),
+    ).toBe(true);
+    expect(
+      (await check(docker, { type: 'docker_image_exists', image: 'redis:7' } as Requirement)).status,
+    ).toBe('fail');
+  });
+
+  it('grades a built image on its configuration, not on the Dockerfile text', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addImage('ledger:1.0', {
+      workingDir: '/app',
+      cmd: ['./run.sh'],
+      env: { APP_ENV: 'production' },
+      exposedPorts: ['8080/tcp'],
+      labels: { maintainer: 'platform' },
+    });
+
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_image_config',
+          image: 'ledger:1.0',
+          working_dir: '/app',
+          cmd_contains: ['./run.sh'],
+          env: { APP_ENV: 'production' },
+          exposed_port: 8080,
+          labels: { maintainer: 'platform' },
+        } as Requirement),
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts ENTRYPOINT and CMD as two ways of writing the same startup', async () => {
+    const viaCmd = new FakeDockerDaemon();
+    viaCmd.addImage('app:1', { cmd: ['python', 'main.py'] });
+    const viaEntrypoint = new FakeDockerDaemon();
+    viaEntrypoint.addImage('app:1', { entrypoint: ['python'], cmd: ['main.py'] });
+
+    for (const docker of [viaCmd, viaEntrypoint]) {
+      expect(
+        passed(
+          await check(docker, {
+            type: 'docker_image_config',
+            image: 'app:1',
+            cmd_contains: ['python', 'main.py'],
+          } as Requirement),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it('finds volumes and networks, and checks a network driver', async () => {
+    const docker = new FakeDockerDaemon();
+    await docker.createVolume('ledger-data');
+    await docker.createNetwork({ name: 'ledger-net', driver: 'bridge' });
+
+    expect(
+      passed(await check(docker, { type: 'docker_volume_exists', name: 'ledger-data' } as Requirement)),
+    ).toBe(true);
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_network_exists',
+          name: 'ledger-net',
+          driver: 'bridge',
+        } as Requirement),
+      ),
+    ).toBe(true);
+
+    const wrongDriver = await check(docker, {
+      type: 'docker_network_exists',
+      name: 'ledger-net',
+      driver: 'overlay',
+    } as Requirement);
+    expect(wrongDriver.status).toBe('fail');
+  });
+
+  it('passes an absence check only once the thing is genuinely gone', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'old' }));
+
+    const stillThere = await check(docker, {
+      type: 'docker_resource_absent',
+      kind: 'container',
+      name: 'old',
+    } as Requirement);
+    expect(stillThere.status).toBe('fail');
+
+    await docker.removeContainer('old');
+    expect(
+      passed(
+        await check(docker, {
+          type: 'docker_resource_absent',
+          kind: 'container',
+          name: 'old',
+        } as Requirement),
+      ),
+    ).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------- workspace
+
+describe('docker verifier — workspace checks read a file and nothing more', () => {
+  function withWorkspace(files: Record<string, string> = {}) {
+    const port = new InMemoryWorkspace();
+    for (const [file, content] of Object.entries(files)) port.write(SESSION_A, file, content);
+    return { port, sessionId: SESSION_A };
+  }
+
+  it('finds a file and checks its content for what the lab asked for', async () => {
+    const docker = new FakeDockerDaemon();
+    const workspace = withWorkspace({ 'compose.yaml': 'services:\n  api:\n    image: alpine\n' });
+
+    expect(
+      passed(
+        await check(
+          docker,
+          { type: 'workspace_file_exists', path: 'compose.yaml', contains: ['services:'] } as Requirement,
+          workspace,
+        ),
+      ),
+    ).toBe(true);
+
+    const missingText = await check(
+      docker,
+      { type: 'workspace_file_exists', path: 'compose.yaml', contains: ['volumes:'] } as Requirement,
+      workspace,
+    );
+    expect(missingText.status).toBe('fail');
+    expect(missingText.detail).toContain("'volumes:'");
+  });
+
+  it('parses a Dockerfile structurally and never evaluates it', () => {
+    const parsed = parseDockerfile(
+      [
+        '# syntax=docker/dockerfile:1',
+        'FROM alpine:3.20 AS build',
+        'WORKDIR /app',
+        'RUN apk add --no-cache curl \\',
+        '    && rm -rf /var/cache/apk/*',
+        'CMD ["./run.sh"]',
+      ].join('\n'),
+    );
+
+    expect(looksLikeDockerfile(parsed)).toBe(true);
+    expect(parsed.instructions).toEqual(['FROM', 'WORKDIR', 'RUN', 'CMD']);
+    // `AS build` is a stage alias, not part of the image name.
+    expect(parsed.baseImages).toEqual(['alpine:3.20']);
+    // A continuation is one logical instruction, not two.
+    expect(parsed.lines.filter((l) => l.instruction === 'RUN')).toHaveLength(1);
+  });
+
+  it('grades a Dockerfile on its instructions and its base image', async () => {
+    const docker = new FakeDockerDaemon();
+    const workspace = withWorkspace({
+      Dockerfile: 'FROM alpine:3.20\nWORKDIR /app\nCMD ["./run.sh"]\n',
+    });
+
+    expect(
+      passed(
+        await check(
+          docker,
+          {
+            type: 'dockerfile_valid',
+            path: 'Dockerfile',
+            requires: ['FROM', 'WORKDIR', 'CMD'],
+            base_image: 'alpine:3.20',
+          } as Requirement,
+          workspace,
+        ),
+      ),
+    ).toBe(true);
+
+    const missing = await check(
+      docker,
+      { type: 'dockerfile_valid', path: 'Dockerfile', requires: ['EXPOSE'] } as Requirement,
+      workspace,
+    );
+    expect(missing.status).toBe('fail');
+    expect(missing.detail).toContain('missing EXPOSE');
+  });
+
+  it('rejects a file that is not a Dockerfile at all', async () => {
+    const docker = new FakeDockerDaemon();
+
+    // Two distinct failures a student can actually produce, told apart so the
+    // message says which one happened.
+    const prose = await check(
+      docker,
+      { type: 'dockerfile_valid', path: 'Dockerfile', requires: [] } as Requirement,
+      withWorkspace({ Dockerfile: 'this is just prose\n' }),
+    );
+    expect(prose.status).toBe('fail');
+    expect(prose.detail).toMatch(/contains no Dockerfile instructions/);
+
+    const noFrom = await check(
+      docker,
+      { type: 'dockerfile_valid', path: 'Dockerfile', requires: [] } as Requirement,
+      withWorkspace({ Dockerfile: 'WORKDIR /app\nCMD ["./run.sh"]\n' }),
+    );
+    expect(noFrom.status).toBe('fail');
+    expect(noFrom.detail).toMatch(/no FROM instruction, so it cannot be built/);
+  });
+
+  it('blames the environment, not the student, when no workspace is available', async () => {
+    const docker = new FakeDockerDaemon();
+
+    const result = await check(
+      docker,
+      { type: 'workspace_file_exists', path: 'Dockerfile' } as Requirement,
+      undefined,
+    );
+
+    expect(result.status).toBe('fail');
+    // A student whose terminal never opened has not made a mistake.
+    expect(result.detail).toMatch(/the lab workspace is not available/);
+  });
+});
+
+// ------------------------------------------------------- broken environment
+
+describe('docker verifier — an unreachable daemon is not a failed lab', () => {
+  it('reports ENVIRONMENT_UNREACHABLE and skips every check', async () => {
+    const docker = new FakeDockerDaemon({ unreachable: 'Cannot connect to the Docker daemon' });
+
+    const result = await verifyLab({
+      lab: registry.get('DOCKER-001'),
+      namespace: SANDBOX_A,
+      docker,
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.error?.code).toBe('ENVIRONMENT_UNREACHABLE');
+    expect(result.checks.every((c) => c.status === 'skipped')).toBe(true);
+    expect(result.checks[0]?.detail).toBe('Could not read Docker state');
+  });
+
+  it('refuses to grade a Docker lab with no Docker engine, rather than guessing', async () => {
+    // A missing reader is a platform problem, not a student's failed lab, so
+    // every check is reported `skipped` with a plain reason and the lab is not
+    // marked passed. This is the same contract a Kubernetes lab gets when it
+    // reaches the verifier with no cluster reader — see `VerificationReaders`.
+    const result = await verifyLab({ lab: registry.get('DOCKER-001'), namespace: SANDBOX_A });
+
+    expect(result.passed).toBe(false);
+    expect(result.checks.length).toBeGreaterThan(0);
+    expect(result.checks.every((c) => c.status === 'skipped')).toBe(true);
+    expect(result.checks[0]?.detail).toBe(
+      'This lab environment has no Docker daemon to check against',
+    );
+  });
+});
+
+// ---------------------------------------------------------- shipped labs
+
+/**
+ * Build the state that solves one shipped lab.
+ *
+ * Deliberately derived from the lab's own requirements rather than hand-written
+ * per lab: a lab that adds a requirement gets it exercised here automatically,
+ * and there is no fixture to drift out of step with the catalog.
+ */
+function solve(lab: LoadedLabDefinition): {
+  docker: FakeDockerDaemon;
+  workspace: { port: InMemoryWorkspace; sessionId: string };
+} {
+  const docker = new FakeDockerDaemon();
+  const port = new InMemoryWorkspace();
+  const specs = new Map<string, Parameters<FakeDockerDaemon['addContainer']>[0]>();
+  const states = new Map<string, { state: string; exitCode: number }>();
+
+  const specFor = (name: string) => {
+    const existing = specs.get(name);
+    if (existing) return existing;
+    const created = containerSpec({ name, image: 'alpine:3.20' });
+    specs.set(name, created);
+    states.set(name, { state: 'running', exitCode: 0 });
+    return created;
+  };
+
+  for (const requirement of lab.requirements as readonly Requirement[]) {
+    switch (requirement.type) {
+      case 'docker_container_exists':
+      case 'docker_container_running':
+        specFor(requirement.name);
+        break;
+      case 'docker_container_state':
+        specFor(requirement.name);
+        states.set(requirement.name, { state: requirement.expected, exitCode: 0 });
+        break;
+      case 'docker_container_exit_code':
+        specFor(requirement.name);
+        states.set(requirement.name, { state: 'exited', exitCode: requirement.expected });
+        break;
+      case 'docker_container_image':
+        specFor(requirement.name).image = requirement.image;
+        break;
+      case 'docker_container_env': {
+        const spec = specFor(requirement.name);
+        spec.env = { ...spec.env, [requirement.key]: requirement.value ?? 'set' };
+        break;
+      }
+      case 'docker_container_port': {
+        const spec = specFor(requirement.name);
+        spec.ports = [
+          ...(spec.ports ?? []),
+          {
+            containerPort: requirement.container_port,
+            protocol: requirement.protocol,
+            ...(requirement.host_port !== undefined ? { hostPort: requirement.host_port } : {}),
+          },
+        ];
+        break;
+      }
+      case 'docker_container_network': {
+        specFor(requirement.name).network = requirement.network;
+        void docker.createNetwork({ name: requirement.network });
+        break;
+      }
+      case 'docker_container_mount': {
+        const spec = specFor(requirement.name);
+        spec.volumes = [
+          ...(spec.volumes ?? []),
+          { volume: requirement.volume, destination: requirement.destination ?? '/data' },
+        ];
+        void docker.createVolume(requirement.volume);
+        break;
+      }
+      case 'docker_container_resource_limit': {
+        const spec = specFor(requirement.name);
+        if (requirement.memory) spec.memory = requirement.memory;
+        if (requirement.cpus) spec.cpus = requirement.cpus;
+        if (requirement.pids_limit) spec.pidsLimit = requirement.pids_limit;
+        break;
+      }
+      case 'docker_image_exists':
+        docker.addImage(requirement.image);
+        break;
+      case 'docker_image_config':
+        docker.addImage(requirement.image, {
+          ...(requirement.working_dir ? { workingDir: requirement.working_dir } : {}),
+          ...(requirement.cmd_contains ? { cmd: [...requirement.cmd_contains] } : {}),
+          ...(requirement.env ? { env: { ...requirement.env } } : {}),
+          ...(requirement.labels ? { labels: { ...requirement.labels } } : {}),
+          ...(requirement.exposed_port ? { exposedPorts: [`${requirement.exposed_port}/tcp`] } : {}),
+        });
+        break;
+      case 'docker_volume_exists':
+        void docker.createVolume(requirement.name);
+        break;
+      case 'docker_network_exists':
+        void docker.createNetwork({
+          name: requirement.name,
+          ...(requirement.driver ? { driver: requirement.driver } : {}),
+        });
+        break;
+      case 'workspace_file_exists':
+        port.write(SESSION_A, requirement.path, `${(requirement.contains ?? []).join('\n')}\n`);
+        break;
+      case 'dockerfile_valid':
+        port.write(
+          SESSION_A,
+          requirement.path,
+          [
+            `FROM ${requirement.base_image ?? 'alpine:3.20'}`,
+            ...requirement.requires
+              .filter((instruction) => instruction !== 'FROM')
+              .map((instruction) => `${instruction} placeholder`),
+          ].join('\n') + '\n',
+        );
+        break;
+      case 'docker_resource_absent':
+        // Already absent in a daemon nothing has been added to.
+        break;
+      default:
+        throw new Error(`solve() does not know how to satisfy '${requirement.type}'`);
+    }
+  }
+
+  for (const [name, spec] of specs) {
+    const state = states.get(name) ?? { state: 'running', exitCode: 0 };
+    docker.addContainer(spec, state.state, state.exitCode);
+  }
+
+  return { docker, workspace: { port, sessionId: SESSION_A } };
+}
+
+/** Full definitions for the Docker track, not the catalog's summary projection. */
+const dockerLabs = (): LoadedLabDefinition[] =>
+  registry.all().filter((lab) => lab.track === 'docker');
+
+describe('docker verifier — every shipped lab', () => {
+
+  it('ships ten Docker labs, all on the Docker substrate', () => {
+    expect(dockerLabs()).toHaveLength(10);
+    for (const lab of dockerLabs()) {
+      expect(lab.environment.provider).toBe('docker');
+      expect(lab.environment.isolation).toBe('container');
+    }
+  });
+
+  it('fails against an empty daemon', async () => {
+    for (const lab of dockerLabs()) {
+      const result = await verifyLab({
+        lab,
+        namespace: SANDBOX_A,
+        docker: new FakeDockerDaemon(),
+        workspace: { port: new InMemoryWorkspace(), sessionId: SESSION_A },
+      });
+      expect(result.passed, `${lab.id} must not pass on an empty environment`).toBe(false);
+      expect(result.summary).toBe('LAB NOT COMPLETE');
+    }
+  });
+
+  it('passes against a daemon holding the solution', async () => {
+    for (const lab of dockerLabs()) {
+      const { docker, workspace } = solve(lab);
+      const result = await verifyLab({ lab, namespace: SANDBOX_A, docker, workspace });
+
+      const failing = result.checks.filter((c) => c.status !== 'pass');
+      expect(
+        failing.map((c) => `${c.label}: ${c.detail ?? ''}`),
+        `${lab.id} should pass when solved`,
+      ).toEqual([]);
+      expect(result.passed).toBe(true);
+      expect(result.summary).toBe('LAB PASSED');
+    }
+  });
+});
+
+// -------------------------------------------------------------- isolation
+
+describe('docker verifier — isolation', () => {
+  it('never passes using another session\'s Docker state', async () => {
+    for (const lab of dockerLabs()) {
+      const solved = solve(lab);
+
+      // Session B did the work. Session A is graded against its *own* daemon,
+      // which is a different object store entirely — not a filtered view of B's.
+      const sessionB = await verifyLab({
+        lab,
+        namespace: SANDBOX_B,
+        docker: solved.docker,
+        workspace: solved.workspace,
+      });
+      const sessionA = await verifyLab({
+        lab,
+        namespace: SANDBOX_A,
+        docker: new FakeDockerDaemon(),
+        workspace: { port: new InMemoryWorkspace(), sessionId: 'sess-000000000000000b' },
+      });
+
+      expect(sessionB.passed, `${lab.id} should pass for the session that did the work`).toBe(true);
+      expect(sessionA.passed, `${lab.id} must not pass for a session that did not`).toBe(false);
+    }
+  });
+
+  it('exposes no way for a Docker requirement to name a sandbox or a session', () => {
+    // Isolation here is structural: the reader is constructed with one daemon
+    // and one session id, and no handler can choose another.
+    for (const lab of dockerLabs()) {
+      for (const requirement of [...lab.requirements, ...lab.setup.verify]) {
+        for (const key of ['namespace', 'sandbox', 'session', 'sessionId', 'dockerHost']) {
+          expect(Object.keys(requirement)).not.toContain(key);
+        }
+      }
+    }
+  });
+});
+
+// ----------------------------------------------------------- completeness
+
+describe('docker verifier — registry completeness', () => {
+  it('has a handler for every Docker requirement type the schema defines', () => {
+    const registered = new Set(registeredRequirementTypes());
+
+    for (const type of DOCKER_REQUIREMENT_TYPES) {
+      expect(registered.has(type), `no handler for '${type}'`).toBe(true);
+    }
+  });
+
+  it('exercises every Docker requirement type across the shipped labs', () => {
+    // A vocabulary word nothing uses is either dead or untested; this keeps the
+    // schema and the catalog honest with each other.
+    const used = new Set<string>();
+    for (const lab of dockerLabs()) {
+      for (const requirement of [...lab.requirements, ...lab.setup.verify]) used.add(requirement.type);
+    }
+
+    expect([...DOCKER_REQUIREMENT_TYPES].filter((type) => !used.has(type))).toEqual([]);
+  });
+});

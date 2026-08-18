@@ -78,10 +78,15 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    // Catalog order is by track, then by each lab's `order`. The Kubernetes
-    // ten are unchanged and still first; Linux is a full ten-lab track.
-    expect(res.body.data.count).toBe(21);
-    expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual([
+    // Catalog order is by track slug, then by each lab's `order`. Assertions
+    // are per track so a new track cannot reshuffle expectations for another.
+    expect(res.body.data.count).toBe(31);
+    const idsForTrack = (track: string) =>
+      res.body.data.labs
+        .filter((l: { track: string }) => l.track === track)
+        .map((l: { id: string }) => l.id);
+
+    expect(idsForTrack('kubernetes')).toEqual([
       'K8S-001',
       'K8S-002',
       'K8S-003',
@@ -92,6 +97,8 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
       'K8S-008',
       'K8S-009',
       'K8S-010',
+    ]);
+    expect(idsForTrack('linux')).toEqual([
       'LINUX-001',
       'LINUX-002',
       'LINUX-003',
@@ -102,13 +109,49 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
       'LINUX-008',
       'LINUX-009',
       'LINUX-010',
-      'TF-001',
     ]);
-    expect(res.body.data.tracks).toEqual([
-      expect.objectContaining({ track: 'kubernetes', title: 'Kubernetes', labCount: 10 }),
-      expect.objectContaining({ track: 'linux', title: 'Linux', labCount: 10 }),
-      expect.objectContaining({ track: 'terraform', title: 'Terraform', labCount: 1 }),
+    expect(idsForTrack('terraform')).toEqual(['TF-001']);
+    expect(idsForTrack('docker')).toEqual([
+      'DOCKER-001',
+      'DOCKER-002',
+      'DOCKER-003',
+      'DOCKER-004',
+      'DOCKER-005',
+      'DOCKER-006',
+      'DOCKER-007',
+      'DOCKER-008',
+      'DOCKER-009',
+      'DOCKER-010',
     ]);
+    // Tracks are ordered by their track.yaml `order`; those without one
+    // (linux, terraform) follow alphabetically.
+    expect(res.body.data.tracks.map((t: { track: string }) => t.track)).toEqual([
+      'kubernetes',
+      'docker',
+      'linux',
+      'terraform',
+    ]);
+    expect(res.body.data.tracks[0]).toMatchObject({ track: 'kubernetes', labCount: 10 });
+    expect(res.body.data.tracks[1]).toMatchObject({ track: 'docker', labCount: 10 });
+    expect(res.body.data.tracks[2]).toMatchObject({ track: 'linux', labCount: 10 });
+    expect(res.body.data.tracks[3]).toMatchObject({ track: 'terraform', labCount: 1 });
+  });
+
+  it('gives a Docker card the same shape as a Kubernetes one', async () => {
+    const res = await request(buildApp().app).get('/api/labs');
+    const card = res.body.data.labs.find((l: { id: string }) => l.id === 'DOCKER-001');
+
+    // Nothing in the catalog projection branches on track: the same fields are
+    // populated from the same lab.yaml keys whatever substrate the lab runs on.
+    expect(card).toMatchObject({
+      id: 'DOCKER-001',
+      title: 'Run Your First Container',
+      track: 'docker',
+      topic: 'containers',
+      difficulty: 'beginner',
+    });
+    expect(card.skills).toContain('docker.containers.run');
+    expect(card.durationMinutes).toBeGreaterThan(0);
   });
 
   it('gives a card everything it needs to render', async () => {
@@ -136,20 +179,24 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
     const byTrack = await request(app).get('/api/labs?track=kubernetes');
     expect(byTrack.body.data.count).toBe(10);
 
+    const byDockerTrack = await request(app).get('/api/labs?track=docker');
+    expect(byDockerTrack.body.data.count).toBe(10);
+
     const byTopic = await request(app).get('/api/labs?topic=batch');
     expect(byTopic.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-006', 'K8S-007']);
 
     const byLinuxTrack = await request(app).get('/api/labs?track=linux');
     expect(byLinuxTrack.body.data.count).toBe(10);
 
-    // Difficulty is orthogonal to track, so it is asserted within one.
-    const byDifficulty = await request(app).get(
-      '/api/labs?track=kubernetes&difficulty=intermediate',
-    );
+    // Difficulty is scoped to a track so the count is about that track alone.
+    const byDifficulty = await request(app).get('/api/labs?track=kubernetes&difficulty=intermediate');
     expect(byDifficulty.body.data.count).toBe(3);
 
     const byQuery = await request(app).get('/api/labs?q=secret');
     expect(byQuery.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-005']);
+
+    const byDockerQuery = await request(app).get('/api/labs?track=docker&topic=storage');
+    expect(byDockerQuery.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['DOCKER-005']);
   });
 
   it('treats an unknown filter value as matching nothing, not as an error', async () => {
@@ -314,9 +361,10 @@ describe('GET /api/tracks', () => {
     const res = await request(buildApp().app).get('/api/tracks');
 
     expect(res.status).toBe(200);
-    expect(res.body.data.count).toBe(3);
+    expect(res.body.data.count).toBe(4);
     expect(res.body.data.tracks.map((t: { track: string }) => t.track)).toEqual([
       'kubernetes',
+      'docker',
       'linux',
       'terraform',
     ]);
@@ -327,10 +375,16 @@ describe('GET /api/tracks', () => {
     });
     expect(res.body.data.tracks[0].topics.map((t: { topic: string }) => t.topic)).toContain('batch');
 
-    // The Linux track carries the five topic groups the catalog navigates by.
-    const linux = res.body.data.tracks[1];
+    // Title, tagline, and position for annotated tracks come from track.yaml.
+    expect(res.body.data.tracks[1]).toMatchObject({
+      track: 'docker',
+      title: 'Docker',
+      labCount: 10,
+    });
+    expect(res.body.data.tracks[1].tagline).toBeTruthy();
+
+    const linux = res.body.data.tracks[2];
     expect(linux).toMatchObject({ track: 'linux', title: 'Linux', labCount: 10 });
-    expect(linux.tagline).toBeTruthy();
     expect(linux.topics.map((t: { topic: string }) => t.topic)).toEqual([
       'linux-fundamentals',
       'linux-administration',
@@ -338,6 +392,15 @@ describe('GET /api/tracks', () => {
       'shell-scripting',
       'troubleshooting',
     ]);
+  });
+
+  it('returns the Docker track with its labs', async () => {
+    const res = await request(buildApp().app).get('/api/tracks/docker');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.track).toMatchObject({ track: 'docker', labCount: 10 });
+    expect(res.body.data.labs).toHaveLength(10);
+    expect(res.body.data.labs.every((l: { track: string }) => l.track === 'docker')).toBe(true);
   });
 
   it('returns one track with its labs', async () => {

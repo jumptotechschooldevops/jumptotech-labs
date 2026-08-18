@@ -1,28 +1,49 @@
 # syntax=docker/dockerfile:1
 #
 # JumpToTech Labs — REST API.
-# Runs as the non-root `node` user. No Docker socket, no host mounts other
-# than a read-only kubeconfig and the read-only labs/ directory.
+#
+# Runs as the non-root `node` user. Host mounts: a read-only kubeconfig, the
+# read-only labs/ directory, and — when the Docker track is enabled — the host
+# Docker socket.
+#
+# The socket is the one significant privilege in this image, and it is here
+# rather than in the terminal service on purpose: this container has no shell,
+# no PTY, and no path by which a student's input reaches a command line. It uses
+# the socket to create and destroy per-session sandbox containers, so that the
+# socket itself never has to be exposed to anything a student can reach. See
+# README → Docker sandbox security.
 
 FROM node:22-bookworm-slim
 
 ARG KUBECTL_VERSION=v1.34.2
+ARG DOCKER_CLI_VERSION=27.3.1
 
-# kubectl is installed for the provider's `kubectl works?` health check only.
+# Two CLIs, both used only by the platform's own provisioning and health checks.
 # Student commands never run in this container.
+#
+#   kubectl — the Kubernetes provider's `kubectl works?` check.
+#   docker  — the Docker provider's entire interface to the host daemon, and to
+#             each session's daemon via `docker exec <sandbox> docker …`. Every
+#             invocation is execFile with an explicit argv array and no shell.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      amd64) karch=amd64 ;; \
-      arm64) karch=arm64 ;; \
+      amd64) karch=amd64; darch=x86_64 ;; \
+      arm64) karch=arm64; darch=aarch64 ;; \
       *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
     esac; \
     curl -fsSLo /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${karch}/kubectl"; \
     chmod 0755 /usr/local/bin/kubectl; \
     kubectl version --client=true --output=yaml >/dev/null; \
+    curl -fsSLo /tmp/docker.tgz \
+      "https://download.docker.com/linux/static/stable/${darch}/docker-${DOCKER_CLI_VERSION}.tgz"; \
+    tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
+    rm -rf /tmp/docker.tgz /tmp/docker; \
+    docker --version; \
     apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*
 

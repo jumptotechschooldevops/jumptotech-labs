@@ -7,6 +7,10 @@
  * namespace finalisation — is tested against real kind in `integration.test.ts`
  * instead; this fake deliberately does not simulate any of that, so no test can
  * accidentally "prove" an authorization property against a mock.
+ *
+ * The Docker track's equivalent lives in `docker-fakes.ts` and is re-exported
+ * here, so `@jumptotech/lab-orchestrator/testing` remains the single import for
+ * every substrate's fake.
  */
 import type {
   ClusterEndpoint,
@@ -26,6 +30,15 @@ import type {
   ServiceSnapshot,
 } from '../src/index.js';
 import { KubernetesUnreachableError } from '../src/index.js';
+
+export {
+  FakeDockerDaemon,
+  FakeDockerEngines,
+  containerSpec,
+  fakeMemoryBytes,
+  type FakeDockerOperation,
+  type FakeDockerOptions,
+} from './docker-fakes.js';
 
 export interface FakeK8sOptions {
   pods?: Record<string, PodSnapshot[]>;

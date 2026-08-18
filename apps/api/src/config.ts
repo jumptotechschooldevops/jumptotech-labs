@@ -13,6 +13,7 @@ import {
   DEFAULT_DOCKER_SANDBOX_IMAGE,
   DEFAULT_SESSION_POLICY,
   DEFAULT_TERRAFORM_SANDBOX_IMAGE,
+  type DockerSandboxPolicy,
   type SessionLifetimeConfig,
   type SessionPolicy,
 } from '@jumptotech/lab-orchestrator';
@@ -54,6 +55,16 @@ export interface ApiConfig {
   reaperIntervalSeconds: number;
   sessionRetentionMinutes: number;
   nodeEnv: string;
+  /**
+   * Whether the Docker track can start sessions.
+   *
+   * Off still loads Docker lab definitions and lists them in the catalog; only
+   * Start Lab refuses, with a message naming what *is* configured. That is the
+   * honest behaviour on a host whose Docker daemon this service cannot reach.
+   */
+  dockerEnabled: boolean;
+  /** `DOCKER_HOST` the orchestrator uses to manage sandboxes. Unset = default socket. */
+  dockerHost: string | undefined;
 }
 
 /**
@@ -208,6 +219,43 @@ export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): Session
       // decision, not a convenience.
       network: strFromEnv(env, 'SANDBOX_NETWORK', base.sandbox.network),
     },
+    docker: loadDockerSandboxPolicy(env),
+  };
+}
+
+/**
+ * Resource controls for Docker sandboxes.
+ *
+ * Same rule as everything else here: no limit is hardcoded in provider code.
+ * The sandbox container's memory, CPU, and process caps bound the *whole*
+ * session, because every container a student starts is a child of that one
+ * process tree — so these three values are the limits that actually bind.
+ */
+export function loadDockerSandboxPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+): DockerSandboxPolicy {
+  const base = DEFAULT_SESSION_POLICY.docker;
+  const mirror = strFromEnv(env, 'DOCKER_SANDBOX_REGISTRY_MIRROR', '');
+
+  return {
+    image: strFromEnv(env, 'DOCKER_SANDBOX_IMAGE', base.image),
+    // Docker-in-Docker cannot run unprivileged. The flag is exposed so an
+    // operator can *turn it off* on a host with a rootless alternative, and so
+    // that the requirement is visible in configuration rather than buried.
+    privileged: boolFromEnv(env, 'DOCKER_SANDBOX_PRIVILEGED', base.privileged),
+    memory: strFromEnv(env, 'DOCKER_SANDBOX_MEMORY', base.memory),
+    cpus: strFromEnv(env, 'DOCKER_SANDBOX_CPUS', base.cpus),
+    pidsLimit: intFromEnv(env, 'DOCKER_SANDBOX_PIDS_LIMIT', base.pidsLimit),
+    maxContainers: intFromEnv(env, 'DOCKER_SANDBOX_MAX_CONTAINERS', base.maxContainers),
+    network: strFromEnv(env, 'DOCKER_SANDBOX_NETWORK', base.network),
+    daemonPort: intFromEnv(env, 'DOCKER_SANDBOX_DAEMON_PORT', base.daemonPort),
+    readyTimeoutSeconds: intFromEnv(
+      env,
+      'DOCKER_SANDBOX_READY_TIMEOUT_SECONDS',
+      base.readyTimeoutSeconds,
+    ),
+    restartAttempts: intFromEnv(env, 'DOCKER_SANDBOX_RESTART_ATTEMPTS', base.restartAttempts),
+    ...(mirror ? { registryMirror: mirror } : {}),
   };
 }
 
@@ -281,5 +329,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',
+    dockerEnabled: boolFromEnv(env, 'DOCKER_TRACK_ENABLED', true),
+    dockerHost: env.DOCKER_HOST || undefined,
   };
 }

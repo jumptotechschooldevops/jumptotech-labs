@@ -1,0 +1,5 @@
+# Optional track metadata. The track itself exists because labs declare it;
+# this file only says how it should be presented in the catalog.
+title: Docker
+tagline: Containers, images, volumes, and the daemon underneath them.
+order: 20

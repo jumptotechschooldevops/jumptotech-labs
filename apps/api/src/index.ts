@@ -6,12 +6,16 @@
  * environments is decided here and nowhere else.
  */
 import {
+  DockerCliFactory,
   InMemorySessionStore,
+  InMemoryWorkspace,
   KubernetesClient,
   LabRegistry,
   SessionManager,
   SessionReaper,
   createLabProvider,
+  type RequirementWaiter,
+  type WorkspacePort,
 } from '@jumptotech/lab-orchestrator';
 import { waitForRequirements } from '@jumptotech/verifier';
 import { createApp } from './app.js';
@@ -23,6 +27,7 @@ import {
   buildProgressRuntime,
 } from './progress.js';
 import { HttpTerminalControl, noopTerminalControl } from './terminal-control.js';
+import { HttpTerminalWorkspace } from './terminal-workspace.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -46,17 +51,52 @@ async function main(): Promise<void> {
   const k8s = new KubernetesClient(
     config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {},
   );
+  /*
+   * Docker sandbox management.
+   *
+   * This factory is the only thing in the platform that holds host Docker
+   * access, and it lives in the API — a service with no shell and no student
+   * input path. The terminal service, which is where student-adjacent code
+   * runs, holds no host Docker credential at all; it is handed a per-session
+   * client certificate instead. See README → Docker sandbox security.
+   */
+  const engines = new DockerCliFactory(config.dockerHost ? { dockerHost: config.dockerHost } : {});
+
+  // Docker-track students author files in the terminal container; the verifier
+  // reads them back over the terminal service's authenticated internal API.
+  const workspace: WorkspacePort = config.terminalControlUrl
+    ? new HttpTerminalWorkspace({
+        baseUrl: config.terminalControlUrl,
+        secret: config.internalServiceSecret,
+      })
+    : new InMemoryWorkspace();
+
+  // The waiter routes itself: a Docker lab's setup checks read the session's
+  // own daemon, a Kubernetes lab's read the cluster.
+  const waitFor: RequirementWaiter = (input) =>
+    waitForRequirements({
+      k8s,
+      docker: engines.session(input.namespace),
+      ...input,
+    });
+
   const kubernetes = createLabProvider({
     provider: config.provider,
     clusterName: config.clusterName,
     ...(config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {}),
     k8s,
-    waitForRequirements: (input) => waitForRequirements({ k8s, ...input }),
+    waitForRequirements: waitFor,
   });
 
   // One registry, every sandbox backend. Which one a lab uses is decided by the
   // lab's own `environment.provider`, not by anything in the application.
-  const providers = buildProviderRegistry({ config, kubernetes });
+  const providers = buildProviderRegistry({
+    config,
+    kubernetes,
+    engines,
+    workspace,
+    waitForRequirements: waitFor,
+  });
 
   const terminal = config.terminalControlUrl
     ? new HttpTerminalControl({
@@ -98,7 +138,8 @@ async function main(): Promise<void> {
   });
 
   // Students are never responsible for cleanup. The reaper reclaims expired,
-  // idle, and orphaned sandboxes; see services/lab-orchestrator/src/session/reaper.ts.
+  // idle, and orphaned sandboxes across *every* substrate; see
+  // services/lab-orchestrator/src/session/reaper.ts.
   const reaper = new SessionReaper({
     sessions,
     providers,
@@ -123,6 +164,8 @@ async function main(): Promise<void> {
     registry,
     sessions,
     k8s,
+    engines,
+    workspace,
     config,
     progress: {
       progress: learning.progress,
@@ -147,6 +190,11 @@ async function main(): Promise<void> {
       `[api] progress store=${learning.store} durable=${learning.durable} student=${config.progress.devStudentId} (development identity — not authentication)`,
     );
     console.log(`[api] kubernetes=${k8s.serverUrl}`);
+    console.log(
+      config.dockerEnabled
+        ? `[api] docker sandboxes: image=${config.policy.docker.image} network=${config.policy.docker.network} memory=${config.policy.docker.memory} cpus=${config.policy.docker.cpus} pids=${config.policy.docker.pidsLimit}`
+        : '[api] docker track disabled (DOCKER_TRACK_ENABLED=false)',
+    );
     console.log(
       `[api] sessions: max=${config.lifetimes.maxActiveSessions} lifetime=${config.lifetimes.maxSessionSeconds / 60}m idle=${config.lifetimes.idleTimeoutSeconds / 60}m warn=${config.lifetimes.warningSeconds / 60}m`,
     );

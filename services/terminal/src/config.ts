@@ -20,10 +20,22 @@ export interface TerminalConfig {
    * decides what may be attached to.
    */
   sandboxBrokerUrl: string;
-  /** Where per-session kubeconfigs are written (0600, deleted on disconnect). */
+  /**
+   * Where per-session credentials are written (0600, deleted on disconnect).
+   *
+   * Holds both kubeconfigs and Docker client certificate directories. Nothing
+   * long-lived lives here: every file in it belongs to exactly one live shell.
+   */
   credentialsDir: string;
-  /** Working directory + HOME for the student shell. */
+  /**
+   * Working directory + HOME for a Kubernetes student shell.
+   *
+   * Docker sessions get a per-session workspace under `workspaceRoot` instead,
+   * because their labs ask them to author files that the verifier then reads.
+   */
   workDir: string;
+  /** Parent directory holding per-session Docker workspaces. */
+  workspaceRoot: string;
   /** Hard cap on concurrent PTYs, so a stuck browser cannot exhaust the host. */
   maxSessions: number;
   /** Kill an idle PTY after this long with no client traffic. */
@@ -86,6 +98,7 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     sandboxBrokerUrl: env.SANDBOX_BROKER_URL ?? 'http://127.0.0.1:4002',
     credentialsDir: env.TERMINAL_CREDENTIALS_DIR ?? '/tmp/jumptotech-credentials',
     workDir: env.TERMINAL_WORKDIR ?? '/home/student',
+    workspaceRoot: env.TERMINAL_WORKSPACE_ROOT ?? '/home/student/workspaces',
     maxSessions: intFromEnv(env, 'TERMINAL_MAX_SESSIONS', 16),
     idleTimeoutMs: intFromEnv(env, 'TERMINAL_IDLE_TIMEOUT_SECONDS', 1800) * 1000,
     maxSessionMs: intFromEnv(env, 'TERMINAL_MAX_SESSION_SECONDS', 7200) * 1000,

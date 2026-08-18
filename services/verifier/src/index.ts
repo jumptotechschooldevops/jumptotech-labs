@@ -18,14 +18,23 @@
  * by the caller from the session record — never by the browser.
  */
 import {
+  DockerUnreachableError,
   KubernetesUnreachableError,
+  type DockerEnginePort,
   type KubernetesPort,
   type LabDefinition,
   type Requirement,
+  type WorkspacePort,
 } from '@jumptotech/lab-orchestrator';
 import { VerifyReader } from './reader.js';
-import { checkId, verifyRequirements, type VerificationReaders } from './registry.js';
+import {
+  checkId,
+  verifyRequirements,
+  type AnyVerifyReader,
+  type VerificationReaders,
+} from './registry.js';
 import { SandboxReader, type SandboxPort } from './sandbox-reader.js';
+import { DockerVerifyReader } from './docker-reader.js';
 import type { CheckResult } from './contract.js';
 
 export * from './contract.js';
@@ -41,8 +50,23 @@ export {
   type TerraformStateSnapshot,
 } from './sandbox-reader.js';
 export { normalizeMode } from './handlers/filesystem.js';
+export { DockerVerifyReader } from './docker-reader.js';
 export { imageMatches, normalizeImageReference } from './image.js';
 export { parseQuantity, quantitiesEqual } from './quantity.js';
+export {
+  formatBytes,
+  formatNanoCpus,
+  memoryEqual,
+  parseDockerCpus,
+  parseDockerMemory,
+} from './docker-quantity.js';
+export {
+  DOCKERFILE_INSTRUCTIONS,
+  looksLikeDockerfile,
+  parseDockerfile,
+  type DockerfileInstruction,
+  type ParsedDockerfile,
+} from './dockerfile.js';
 
 export interface VerificationResult {
   labId: string;
@@ -69,12 +93,16 @@ export interface VerifyOptions {
   k8s?: KubernetesPort;
   /** Required for labs with filesystem or Terraform requirements. */
   sandbox?: SandboxPort;
+  /** Required for Docker labs: a port bound to *this session's* daemon. */
+  docker?: DockerEnginePort;
   lab: LabDefinition;
   /**
    * The session's private sandbox: namespace for Kubernetes labs, container
    * name for container-backed ones. Always resolved from the session record.
    */
   namespace: string;
+  /** Lets workspace checks read files the student authored. */
+  workspace?: { port: WorkspacePort; sessionId: string };
   now?: () => Date;
 }
 
@@ -86,20 +114,26 @@ export interface VerifyOptions {
  * and a Linux lab therefore travel the same code path from the API route down.
  */
 export async function verifyLab(options: VerifyOptions): Promise<VerificationResult> {
-  const { lab, k8s, namespace } = options;
+  const { lab, namespace } = options;
   const checkedAt = (options.now?.() ?? new Date()).toISOString();
   const readers: VerificationReaders = {
-    ...(k8s ? { kubernetes: new VerifyReader(k8s, namespace) } : {}),
+    ...(options.k8s ? { kubernetes: new VerifyReader(options.k8s, namespace) } : {}),
     ...(options.sandbox ? { sandbox: new SandboxReader(options.sandbox) } : {}),
+    ...(options.docker
+      ? { docker: new DockerVerifyReader(options.docker, namespace, options.workspace) }
+      : {}),
   };
 
   let checks: CheckResult[];
   try {
     checks = await verifyRequirements(lab.requirements as readonly Requirement[], readers);
   } catch (error) {
-    // A cluster we cannot read is not a failed lab — it is a broken
+    // An environment we cannot read is not a failed lab — it is a broken
     // environment, and the UI must say so rather than blame the student.
-    if (error instanceof KubernetesUnreachableError) {
+    const unreachable =
+      error instanceof KubernetesUnreachableError || error instanceof DockerUnreachableError;
+    if (unreachable) {
+      const substrate = lab.environment.provider === 'docker' ? 'Docker' : 'cluster';
       return {
         labId: lab.id,
         sandboxRef: namespace,
@@ -111,9 +145,9 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
           id: checkId(requirement, index),
           label: requirement.label ?? requirement.type,
           status: 'skipped' as const,
-          detail: 'Could not read cluster state',
+          detail: `Could not read ${substrate} state`,
         })),
-        error: { code: 'ENVIRONMENT_UNREACHABLE', message: error.message },
+        error: { code: 'ENVIRONMENT_UNREACHABLE', message: (error as Error).message },
       };
     }
     throw error;
@@ -140,10 +174,13 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
  * confirmed, so provisioning waits here rather than hoping.
  */
 export async function waitForRequirements(options: {
-  k8s: KubernetesPort;
   namespace: string;
   requirements: readonly Requirement[];
   timeoutMs: number;
+  /** Supply exactly one of these, matching the lab's substrate. */
+  k8s?: KubernetesPort;
+  docker?: DockerEnginePort;
+  workspace?: { port: WorkspacePort; sessionId: string };
   intervalMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -155,10 +192,18 @@ export async function waitForRequirements(options: {
 
   if (options.requirements.length === 0) return { ok: true, checks: [] };
 
+  const newReader = (): AnyVerifyReader => {
+    if (options.docker) {
+      return new DockerVerifyReader(options.docker, options.namespace, options.workspace);
+    }
+    if (!options.k8s) throw new Error('waitForRequirements needs either a k8s or a docker port');
+    return new VerifyReader(options.k8s, options.namespace);
+  };
+
   let checks: CheckResult[] = [];
   for (;;) {
     // A fresh reader each round: the cache must not outlive one observation.
-    checks = await verifyRequirements(options.requirements, new VerifyReader(options.k8s, options.namespace));
+    checks = await verifyRequirements(options.requirements, newReader());
     if (checks.every((c) => c.status === 'pass')) return { ok: true, checks };
     if (now() >= deadline) return { ok: false, checks };
     await sleep(intervalMs);

@@ -130,9 +130,19 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    // Ten Kubernetes labs, the ten-lab Linux track, and the Terraform lab.
-    expect(registry.size).toBe(21);
+    // Ten Kubernetes, ten Linux, ten Docker, and the Terraform lab.
+    expect(registry.size).toBe(31);
     expect(registry.all().map((l) => l.id)).toEqual([
+      'DOCKER-001',
+      'DOCKER-002',
+      'DOCKER-003',
+      'DOCKER-004',
+      'DOCKER-005',
+      'DOCKER-006',
+      'DOCKER-007',
+      'DOCKER-008',
+      'DOCKER-009',
+      'DOCKER-010',
       'K8S-001',
       'K8S-002',
       'K8S-003',
@@ -155,6 +165,19 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
       'LINUX-010',
       'TF-001',
     ]);
+  });
+
+  it('discovers every shipped track, in its declared order', async () => {
+    const tracks = (await realRegistry()).tracks();
+
+    // Order comes from labs/<track>/track.yaml, not from a table in code —
+    // and a track without one (linux, terraform) still appears, sorting after
+    // the annotated tracks alphabetically.
+    expect(tracks.map((t) => t.track)).toEqual(['kubernetes', 'docker', 'linux', 'terraform']);
+    expect(tracks.map((t) => t.title)).toEqual(['Kubernetes', 'Docker', 'Linux', 'Terraform']);
+    expect(tracks.map((t) => t.labCount)).toEqual([10, 10, 10, 1]);
+    // Only the annotated tracks promise a tagline.
+    for (const track of tracks.slice(0, 2)) expect(track.tagline).toBeTruthy();
   });
 
   it('discovers multiple labs from nested directories', async () => {
@@ -183,18 +206,24 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
   it('orders labs by track then declared order', async () => {
     const labs = (await realRegistry()).all();
 
-    // Tracks come out in a stable order…
-    expect([...new Set(labs.map((l) => l.track))]).toEqual(['kubernetes', 'linux', 'terraform']);
+    // `all()` groups labs by track slug, in a stable order…
+    expect([...new Set(labs.map((l) => l.track))]).toEqual([
+      'docker',
+      'kubernetes',
+      'linux',
+      'terraform',
+    ]);
 
     // …each as one contiguous run, rather than interleaved.
     const trackRuns = labs.map((l) => l.track).filter((track, i, list) => track !== list[i - 1]);
     expect(trackRuns).toEqual([...new Set(trackRuns)]);
 
     // …and within each track, `order` ascends. Checking per track rather than
-    // globally is the point: the second track restarts at 1.
+    // globally is the point: every track restarts at 1.
+
     for (const track of new Set(labs.map((l) => l.track))) {
       const orders = labs.filter((l) => l.track === track).map((l) => l.order);
-      expect(orders, track).toEqual([...orders].sort((a, b) => a - b));
+      expect(orders, `labs in track '${track}'`).toEqual([...orders].sort((a, b) => a - b));
     }
   });
 });
@@ -270,6 +299,7 @@ describe('catalog — filtering (test requirement 5)', () => {
     const registry = await realRegistry();
 
     expect(registry.list({ track: 'kubernetes' })).toHaveLength(10);
+    expect(registry.list({ track: 'docker' })).toHaveLength(10);
     expect(registry.list({ track: 'linux' }).map((l) => l.id)).toEqual([
       'LINUX-001',
       'LINUX-002',
@@ -287,14 +317,27 @@ describe('catalog — filtering (test requirement 5)', () => {
     expect(registry.list({ track: 'ansible' })).toHaveLength(0);
     expect(registry.labsForTrack('kubernetes')).toHaveLength(10);
     expect(registry.labsForTrack('linux')).toHaveLength(10);
+    expect(registry.labsForTrack('docker').map((l) => l.id)).toEqual([
+      'DOCKER-001',
+      'DOCKER-002',
+      'DOCKER-003',
+      'DOCKER-004',
+      'DOCKER-005',
+      'DOCKER-006',
+      'DOCKER-007',
+      'DOCKER-008',
+      'DOCKER-009',
+      'DOCKER-010',
+    ]);
   });
 
   it('filters by topic, difficulty and free text', async () => {
     const registry = await realRegistry();
 
+    // Topic and difficulty are catalog-wide facets, so a second track widens
+    // their results — which is the point of the filter, not a regression. Each
+    // assertion below therefore names a track when it means one track.
     expect(registry.list({ topic: 'batch' }).map((l) => l.id)).toEqual(['K8S-006', 'K8S-007']);
-    // Scoped to one track: the filter is orthogonal to the track, so an
-    // unscoped assertion would have to be rewritten every time a track is added.
     expect(
       registry.list({ track: 'kubernetes', difficulty: 'intermediate' }).map((l) => l.id),
     ).toEqual(['K8S-008', 'K8S-009', 'K8S-010']);
@@ -307,6 +350,25 @@ describe('catalog — filtering (test requirement 5)', () => {
     expect(registry.list({ q: 'cronjob' }).map((l) => l.id)).toEqual(['K8S-007']);
   });
 
+  it('combines a track filter with the other facets', async () => {
+    const registry = await realRegistry();
+
+    expect(registry.list({ track: 'docker', difficulty: 'beginner' }).map((l) => l.id)).toEqual([
+      'DOCKER-001',
+      'DOCKER-002',
+      'DOCKER-003',
+      'DOCKER-007',
+    ]);
+    expect(registry.list({ track: 'docker', topic: 'troubleshooting' }).map((l) => l.id)).toEqual([
+      'DOCKER-010',
+    ]);
+    // A free-text term that only one track uses must not leak across tracks.
+    expect(registry.list({ q: 'dockerfile' }).every((l) => l.track === 'docker')).toBe(true);
+    expect(registry.list({ track: 'kubernetes', q: 'volume' }).every((l) => l.track === 'kubernetes')).toBe(
+      true,
+    );
+  });
+
   it('reports tracks with their topics and difficulties', async () => {
     const registry = await realRegistry();
     const [track] = registry.tracks();
@@ -315,6 +377,16 @@ describe('catalog — filtering (test requirement 5)', () => {
     expect(track?.difficulties).toEqual(['beginner', 'intermediate']);
     expect(track?.topics.map((t) => t.topic)).toContain('troubleshooting');
     expect(registry.track('nope')).toBeNull();
+  });
+
+  it('reports the Docker track the same way, from the same code path', async () => {
+    const docker = (await realRegistry()).track('docker');
+
+    expect(docker).toMatchObject({ track: 'docker', title: 'Docker', labCount: 10 });
+    expect(docker?.difficulties).toEqual(['beginner', 'intermediate']);
+    expect(docker?.topics.map((t) => t.topic)).toEqual(
+      expect.arrayContaining(['containers', 'images', 'storage', 'networking', 'troubleshooting']),
+    );
   });
 });
 
@@ -505,6 +577,11 @@ describe('schema — hints (test requirement 9)', () => {
       // the command that completes the lab.
       for (const hint of lab.hints) {
         expect(hint.text).not.toMatch(/kubectl (run|create deployment|expose|scale)\s+\S/);
+        // The Docker track's equivalent: naming `docker ps` to inspect state is
+        // fine, handing over the `docker run …` that completes the lab is not.
+        expect(hint.text).not.toMatch(
+          /docker (run|build|volume create|network create|image tag)\s+-?-?\S/,
+        );
       }
     }
   });
@@ -536,20 +613,23 @@ describe('schema — documentation (test requirement 10)', () => {
     expectRejected(mutate('https://kubernetes.io', 'http://kubernetes.io'));
   });
 
-  it('points every shipped lab at official documentation only', async () => {
-    // The loader enforces this against `OFFICIAL_DOC_HOSTS`; this asserts the
-    // shipped content actually satisfies it, reading the same table rather than
-    // a second copy that could drift out of step with it.
+  it('points every shipped lab at its own track\'s official documentation only', async () => {
     for (const lab of (await realRegistry()).all()) {
       expect(lab.references.length).toBeGreaterThan(0);
-      // Each track has its own set of upstream authorities; the rule is that
-      // every lab cites at least one of its own track's.
-      const official = OFFICIAL_DOC_HOSTS[lab.track] ?? [];
-      expect(official.length, `no official host declared for track '${lab.track}'`).toBeGreaterThan(0);
+
+      // The rule is per-track, not "kubernetes.io or bust": a Docker lab must
+      // cite docs.docker.com the same way a Kubernetes lab cites kubernetes.io.
+      // `OFFICIAL_DOC_HOSTS` is the same table the loader enforces at parse
+      // time, so this cannot drift away from what is actually accepted.
+      const official = OFFICIAL_DOC_HOSTS[lab.track];
+      expect(official, `track '${lab.track}' has no official documentation hosts`).toBeDefined();
+
+      const cited = lab.references.map((ref) => new URL(ref.url).hostname);
       expect(
-        lab.references.some((ref) => official.includes(new URL(ref.url).hostname)),
-        `${lab.id} must cite official ${lab.track} documentation`,
+        cited.some((host) => (official ?? []).some((allowed) => host === allowed.split('/')[0])),
+        `${lab.id} cites ${cited.join(', ')}, none of which is official for '${lab.track}'`,
       ).toBe(true);
+
       for (const ref of lab.references) expect(ref.url).toMatch(/^https:\/\//);
     }
   });

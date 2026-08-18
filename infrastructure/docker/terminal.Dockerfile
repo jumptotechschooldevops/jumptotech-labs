@@ -4,8 +4,14 @@
 #
 # This is the only container that runs a shell. It therefore gets the
 # tightest treatment: a dedicated unprivileged `student` user, no Docker
-# socket, no host mounts except a read-only kubeconfig, and no source for any
-# other service.
+# socket, no host mounts, and no source for any other service.
+#
+# It carries the `docker` CLI because Docker-track students type `docker`
+# commands — but it carries no way to reach the host daemon. There is no socket
+# mounted and no DOCKER_HOST in the image; each PTY is given `DOCKER_HOST`,
+# `DOCKER_TLS_VERIFY`, and a `DOCKER_CERT_PATH` pointing at a certificate valid
+# for exactly one session's sandbox, fetched per session and deleted with the
+# shell. Pointing the CLI anywhere else fails TLS verification.
 
 FROM node:22-bookworm-slim AS build
 
@@ -34,20 +40,37 @@ RUN npm ci --omit=dev --workspace @jumptotech/terminal --include-workspace-root 
 FROM node:22-bookworm-slim
 
 ARG KUBECTL_VERSION=v1.34.2
+ARG DOCKER_CLI_VERSION=27.3.1
+ARG DOCKER_COMPOSE_VERSION=v2.33.0
 
+# The Compose plugin is installed because it runs *client-side*: `docker compose
+# up` reads the student's compose.yaml out of this container's workspace and
+# talks to their sandbox daemon over TLS. DOCKER-008 depends on it being here,
+# not in the sandbox image.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl less vim-tiny jq; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      amd64) karch=amd64 ;; \
-      arm64) karch=arm64 ;; \
+      amd64) karch=amd64; darch=x86_64 ;; \
+      arm64) karch=arm64; darch=aarch64 ;; \
       *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
     esac; \
     curl -fsSLo /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${karch}/kubectl"; \
     chmod 0755 /usr/local/bin/kubectl; \
     kubectl version --client=true --output=yaml >/dev/null; \
+    curl -fsSLo /tmp/docker.tgz \
+      "https://download.docker.com/linux/static/stable/${darch}/docker-${DOCKER_CLI_VERSION}.tgz"; \
+    tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
+    rm -rf /tmp/docker.tgz /tmp/docker; \
+    install -d -m 0755 /usr/local/libexec/docker/cli-plugins; \
+    curl -fsSLo /usr/local/libexec/docker/cli-plugins/docker-compose \
+      "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${darch}"; \
+    chmod 0755 /usr/local/libexec/docker/cli-plugins/docker-compose; \
+    docker --version; \
+    docker compose version; \
     apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*
 
@@ -68,7 +91,8 @@ RUN chown -R root:root /app && chmod -R a-w /app
 ENV HOME=/home/student \
     NODE_ENV=production \
     TERMINAL_PORT=4001 \
-    TERMINAL_WORKDIR=/home/student
+    TERMINAL_WORKDIR=/home/student \
+    TERMINAL_WORKSPACE_ROOT=/home/student/workspaces
 
 USER student
 WORKDIR /home/student
