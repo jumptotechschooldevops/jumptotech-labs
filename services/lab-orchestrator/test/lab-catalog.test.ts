@@ -130,8 +130,8 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    // Ten Kubernetes, ten Linux, ten Docker, and the Terraform lab.
-    expect(registry.size).toBe(31);
+    // Twelve Kubernetes, ten Linux, ten Docker, and the Terraform lab.
+    expect(registry.size).toBe(33);
     expect(registry.all().map((l) => l.id)).toEqual([
       'DOCKER-001',
       'DOCKER-002',
@@ -153,6 +153,8 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
       'K8S-008',
       'K8S-009',
       'K8S-010',
+      'K8S-011',
+      'K8S-012',
       'LINUX-001',
       'LINUX-002',
       'LINUX-003',
@@ -175,7 +177,7 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
     // the annotated tracks alphabetically.
     expect(tracks.map((t) => t.track)).toEqual(['kubernetes', 'docker', 'linux', 'terraform']);
     expect(tracks.map((t) => t.title)).toEqual(['Kubernetes', 'Docker', 'Linux', 'Terraform']);
-    expect(tracks.map((t) => t.labCount)).toEqual([10, 10, 10, 1]);
+    expect(tracks.map((t) => t.labCount)).toEqual([12, 10, 10, 1]);
     // Only the annotated tracks promise a tagline.
     for (const track of tracks.slice(0, 2)) expect(track.tagline).toBeTruthy();
   });
@@ -298,7 +300,7 @@ describe('catalog — filtering (test requirement 5)', () => {
   it('filters by track', async () => {
     const registry = await realRegistry();
 
-    expect(registry.list({ track: 'kubernetes' })).toHaveLength(10);
+    expect(registry.list({ track: 'kubernetes' })).toHaveLength(12);
     expect(registry.list({ track: 'docker' })).toHaveLength(10);
     expect(registry.list({ track: 'linux' }).map((l) => l.id)).toEqual([
       'LINUX-001',
@@ -315,7 +317,7 @@ describe('catalog — filtering (test requirement 5)', () => {
     expect(registry.list({ track: 'terraform' }).map((l) => l.id)).toEqual(['TF-001']);
     // A track nothing ships yet still matches nothing rather than erroring.
     expect(registry.list({ track: 'ansible' })).toHaveLength(0);
-    expect(registry.labsForTrack('kubernetes')).toHaveLength(10);
+    expect(registry.labsForTrack('kubernetes')).toHaveLength(12);
     expect(registry.labsForTrack('linux')).toHaveLength(10);
     expect(registry.labsForTrack('docker').map((l) => l.id)).toEqual([
       'DOCKER-001',
@@ -340,7 +342,7 @@ describe('catalog — filtering (test requirement 5)', () => {
     expect(registry.list({ topic: 'batch' }).map((l) => l.id)).toEqual(['K8S-006', 'K8S-007']);
     expect(
       registry.list({ track: 'kubernetes', difficulty: 'intermediate' }).map((l) => l.id),
-    ).toEqual(['K8S-008', 'K8S-009', 'K8S-010']);
+    ).toEqual(['K8S-008', 'K8S-009', 'K8S-010', 'K8S-011', 'K8S-012']);
     expect(registry.list({ track: 'linux', difficulty: 'beginner' }).map((l) => l.id)).toEqual([
       'LINUX-001',
       'LINUX-002',
@@ -373,7 +375,7 @@ describe('catalog — filtering (test requirement 5)', () => {
     const registry = await realRegistry();
     const [track] = registry.tracks();
 
-    expect(track).toMatchObject({ track: 'kubernetes', title: 'Kubernetes', labCount: 10 });
+    expect(track).toMatchObject({ track: 'kubernetes', title: 'Kubernetes', labCount: 12 });
     expect(track?.difficulties).toEqual(['beginner', 'intermediate']);
     expect(track?.topics.map((t) => t.topic)).toContain('troubleshooting');
     expect(registry.track('nope')).toBeNull();

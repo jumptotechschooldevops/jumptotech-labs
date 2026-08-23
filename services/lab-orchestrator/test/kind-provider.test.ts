@@ -291,7 +291,7 @@ describe('reset() (test requirement 7)', () => {
 
     expect(result.ok).toBe(true);
     expect(result.removed).toEqual([]);
-    expect(result.steps.map((s) => s.status)).toEqual(['ok', 'ok', 'ok']);
+    expect(result.steps.map((s) => s.status)).toEqual(['ok', 'ok', 'ok', 'ok']);
   });
 
   it('confirms cluster health as part of the reset', async () => {

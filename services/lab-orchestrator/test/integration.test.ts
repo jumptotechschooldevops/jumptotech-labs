@@ -28,6 +28,8 @@ import {
   KindLabProvider,
   KubernetesClient,
   LabRegistry,
+  RBAC_PRACTICE_ROLE,
+  RBAC_PRACTICE_ROLE_BINDING,
   SessionManager,
   SessionReaper,
   STUDENT_ROLE,
@@ -121,8 +123,8 @@ suite('integration: real kind cluster', () => {
     });
   }
 
-  async function start(manager: SessionManager): Promise<LabSession> {
-    const { session } = await manager.start('K8S-001');
+  async function start(manager: SessionManager, labId = 'K8S-001'): Promise<LabSession> {
+    const { session } = await manager.start(labId);
     createdNamespaces.add(session.namespace);
     return session;
   }
@@ -414,6 +416,92 @@ suite('integration: real kind cluster', () => {
       expect(isForbidden(quota)).toBe(true);
       expect(isForbidden(netpol)).toBe(true);
     }, 60_000);
+  });
+
+  describe('RBAC lab security boundary', () => {
+    let manager: SessionManager;
+    let session: LabSession;
+    let kubeconfig: string;
+
+    beforeAll(async () => {
+      manager = managerWith();
+      session = await start(manager, 'K8S-012');
+      kubeconfig = await studentKubeconfig(manager, session);
+    }, 240_000);
+
+    afterAll(async () => {
+      await manager.end(session.sessionId).catch(() => undefined);
+    }, 240_000);
+
+    it('can create a namespaced Role and RoleBinding to a namespaced Role', async () => {
+      const role = await kubectlWith(
+        kubeconfig,
+        'create',
+        'role',
+        'lab-role',
+        '--verb=get',
+        '--resource=configmaps',
+      );
+      const binding = await kubectlWith(
+        kubeconfig,
+        'create',
+        'rolebinding',
+        'lab-binding',
+        `--role=lab-role`,
+        `--serviceaccount=${session.namespace}:inventory-sync`,
+      );
+
+      expect(role.code).toBe(0);
+      expect(binding.code).toBe(0);
+    }, 120_000);
+
+    it('cannot bind any ClusterRole through a RoleBinding', async () => {
+      for (const clusterRole of ['cluster-admin', 'admin', 'edit', 'view']) {
+        const binding = await kubectlWith(
+          kubeconfig,
+          'create',
+          'rolebinding',
+          `deny-${clusterRole}`,
+          `--clusterrole=${clusterRole}`,
+          `--serviceaccount=${session.namespace}:inventory-sync`,
+        );
+        expect(isForbidden(binding)).toBe(true);
+      }
+    }, 180_000);
+
+    it('cannot create ClusterRole or ClusterRoleBinding', async () => {
+      const clusterRole = await kubectlWith(
+        kubeconfig,
+        'create',
+        'clusterrole',
+        'student-cr',
+        '--verb=get',
+        '--resource=pods',
+      );
+      const clusterBinding = await kubectlWith(
+        kubeconfig,
+        'create',
+        'clusterrolebinding',
+        'student-crb',
+        '--clusterrole=view',
+        `--serviceaccount=${session.namespace}:inventory-sync`,
+      );
+
+      expect(isForbidden(clusterRole)).toBe(true);
+      expect(isForbidden(clusterBinding)).toBe(true);
+    }, 120_000);
+
+    it('cannot modify platform-managed RBAC objects', async () => {
+      for (const args of [
+        ['patch', 'role', STUDENT_ROLE, '--type=merge', '-p', '{"rules":[]}'],
+        ['delete', 'role', STUDENT_ROLE],
+        ['delete', 'rolebinding', RBAC_PRACTICE_ROLE_BINDING],
+        ['patch', 'role', RBAC_PRACTICE_ROLE, '--type=merge', '-p', '{"rules":[]}'],
+      ] as const) {
+        const result = await kubectlWith(kubeconfig, ...args);
+        expect(isForbidden(result)).toBe(true);
+      }
+    }, 120_000);
   });
 
   // ------------------------------------- quota + limitrange enforcement
@@ -837,6 +925,28 @@ suite('integration: real kind cluster', () => {
       // The cluster-managed kubernetes Service must survive.
       const services = await k8s.listNamespacedResources(session.namespace, 'services');
       expect(services.map((s) => s.name)).not.toContain('nginx');
+    }, 300_000);
+  });
+
+  describe('K8S-011 initial state provisioning', () => {
+    it('applies setup manifests when the namespace uses the canonical lab-<hex> form', async () => {
+      const manager = managerWith();
+      const started = await manager.start('K8S-011');
+
+      createdNamespaces.add(started.session.namespace);
+      expect(started.session.namespace).toMatch(/^lab-[0-9a-f]{12}$/);
+      expect(started.steps.find((s) => s.id === 'environment-created')?.status).toBe('ok');
+      expect(started.steps.find((s) => s.id === 'kubernetes-api')?.status).toBe('ok');
+      expect(started.steps.find((s) => s.id === 'lab-initial-state')?.status).toBe('ok');
+
+      const deployment = await k8s.getDeployment(started.session.namespace, 'ledger');
+      expect(deployment).not.toBeNull();
+      expect(deployment?.availableReplicas).toBeGreaterThanOrEqual(1);
+
+      const credentials = await manager.issueCredentials(started.session.sessionId);
+      expect(credentials.namespace).toBe(started.session.namespace);
+
+      await manager.end(started.session.sessionId).catch(() => undefined);
     }, 300_000);
   });
 });

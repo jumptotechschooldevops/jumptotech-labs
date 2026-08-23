@@ -136,7 +136,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       'linux',
       'terraform',
     ]);
-    expect(tracks.find((t) => t.track === 'kubernetes')?.labCount).toBe(10);
+    expect(tracks.find((t) => t.track === 'kubernetes')?.labCount).toBe(12);
     expect(tracks.find((t) => t.track === 'docker')?.labCount).toBe(10);
     expect(tracks.find((t) => t.track === 'linux')?.labCount).toBe(10);
     expect(tracks.find((t) => t.track === 'terraform')?.labCount).toBe(1);
@@ -250,7 +250,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
     }
 
     const kubernetes = await request(app).get('/api/labs?track=kubernetes');
-    expect(kubernetes.body.data.labs).toHaveLength(10);
+    expect(kubernetes.body.data.labs).toHaveLength(12);
   });
 
   it('serves per-lab availability on the detail endpoint', async () => {
@@ -290,7 +290,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       'terraform',
       'aws',
     ]);
-    expect(response.body.data.labsLoaded).toBe(31);
+    expect(response.body.data.labsLoaded).toBe(33);
   });
 });
 

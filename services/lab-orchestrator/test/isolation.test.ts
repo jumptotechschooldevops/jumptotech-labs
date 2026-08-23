@@ -11,12 +11,15 @@ import {
   DEFAULT_SESSION_POLICY,
   STUDENT_ROLE,
   assertDeletable,
+  isLabNamespace,
   limitRangeManifest,
   networkPolicyManifests,
   networkPolicyNames,
   ownershipLabels,
   protectedResources,
   resourceQuotaManifest,
+  RBAC_PRACTICE_ROLE,
+  RBAC_PRACTICE_ROLE_BINDING,
   sessionGuardrailManifests,
   studentRbacManifests,
   type SessionPolicy,
@@ -173,6 +176,22 @@ describe('student RBAC', () => {
     expect(rbacRules).toEqual([]);
   });
 
+  it('adds create-only RBAC overlay only when rbac_authoring capability is enabled', () => {
+    const without = sessionGuardrailManifests(POLICY);
+    expect(without.some((m) => m.metadata.name === RBAC_PRACTICE_ROLE)).toBe(false);
+
+    const withOverlay = sessionGuardrailManifests(POLICY, ['rbac_authoring']);
+    const overlayRole = withOverlay.find((m) => m.kind === 'Role' && m.metadata.name === RBAC_PRACTICE_ROLE)!;
+    const overlayRules = (
+      overlayRole as unknown as { rules: Array<{ resources: string[]; verbs: string[] }> }
+    ).rules;
+
+    expect(withOverlay.some((m) => m.metadata.name === RBAC_PRACTICE_ROLE_BINDING)).toBe(true);
+    expect(overlayRules.some((r) => r.resources.includes('roles') && r.verbs.includes('create'))).toBe(true);
+    expect(overlayRules.some((r) => r.resources.includes('rolebindings') && r.verbs.includes('create'))).toBe(true);
+    expect(overlayRules.every((r) => !r.verbs.includes('update') && !r.verbs.includes('delete'))).toBe(true);
+  });
+
   it('makes the quota and network policy readable but not editable', () => {
     const quotaRule = rules.find((r) => r.resources.includes('resourcequotas'))!;
     expect(quotaRule.verbs).toEqual(['get', 'list', 'watch']);
@@ -195,6 +214,12 @@ describe('reset protection', () => {
     for (const name of networkPolicyNames(POLICY.network.name)) {
       expect(protectedSet).toContain(`networkpolicies/${name}`);
     }
+  });
+
+  it('protects RBAC practice overlay when rbac_authoring is enabled', () => {
+    const protectedSet = protectedResources(POLICY, ['rbac_authoring']);
+    expect(protectedSet).toContain(`roles/${RBAC_PRACTICE_ROLE}`);
+    expect(protectedSet).toContain(`rolebindings/${RBAC_PRACTICE_ROLE_BINDING}`);
   });
 });
 
@@ -234,6 +259,19 @@ describe('ownership labels and the cleanup gate (story test 25)', () => {
   it('refuses an unlabelled or absent namespace', () => {
     expect(assertDeletable('lab-0000000000aa', {}).managed).toBe(false);
     expect(assertDeletable('lab-0000000000aa', null).managed).toBe(false);
+  });
+
+  it('refuses a namespace that is not a canonical lab sandbox name', () => {
+    expect(isLabNamespace('student-workspace')).toBe(false);
+    expect(isLabNamespace('default')).toBe(false);
+    expect(isLabNamespace('kube-system')).toBe(false);
+  });
+
+  it('refuses deletion of an unmanaged lab-shaped namespace without ownership labels', () => {
+    const result = assertDeletable('lab-0000000000aa', {});
+
+    expect(result.managed).toBe(false);
+    expect(result.reason).toMatch(/not labelled/);
   });
 
   it('refuses another session’s namespace', () => {

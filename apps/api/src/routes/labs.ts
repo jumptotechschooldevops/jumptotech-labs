@@ -28,6 +28,7 @@ import type { LabAttempt } from '@jumptotech/progress';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { progressErrorResponse, resolveStudent } from '../identity.js';
 import { record } from '../progress.js';
+import { resolveTerminalWsBaseForClient } from '../public-origin.js';
 import { toAttemptPayload } from './me.js';
 import { sessionErrorResponse, toSessionPayload, type SessionRoutesDeps } from './sessions.js';
 
@@ -329,7 +330,10 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       environment: started.environment,
       steps: started.steps,
       terminal: {
-        url: config.terminalWsUrl,
+        url: resolveTerminalWsBaseForClient(req, {
+          publicOrigin: config.publicOrigin,
+          defaultTerminalWsUrl: config.terminalWsUrl,
+        }),
         // Presented to the terminal service over the WebSocket handshake.
         token,
       },

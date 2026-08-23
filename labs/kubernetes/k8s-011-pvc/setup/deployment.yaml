@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger
+  labels:
+    app: ledger
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ledger
+  template:
+    metadata:
+      labels:
+        app: ledger
+    spec:
+      containers:
+        - name: ledger
+          image: nginx:stable
+          ports:
+            - name: http
+              containerPort: 80

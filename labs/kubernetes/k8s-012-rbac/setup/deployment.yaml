@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-sync
+  labels:
+    app: inventory-sync
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inventory-sync
+  template:
+    metadata:
+      labels:
+        app: inventory-sync
+    spec:
+      serviceAccountName: inventory-sync
+      containers:
+        - name: sync
+          image: curlimages/curl:8.5.0
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              NS="$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
+              TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              CA="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+              URL="https://kubernetes.default.svc/api/v1/namespaces/${NS}/configmaps/inventory-config"
+              while true; do
+                CODE="$(curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" --cacert "${CA}" "${URL}" || echo 000)"
+                echo "inventory-config API status: ${CODE}"
+                sleep 15
+              done
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

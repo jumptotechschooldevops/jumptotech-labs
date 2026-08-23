@@ -80,7 +80,7 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
     expect(res.body.ok).toBe(true);
     // Catalog order is by track slug, then by each lab's `order`. Assertions
     // are per track so a new track cannot reshuffle expectations for another.
-    expect(res.body.data.count).toBe(31);
+    expect(res.body.data.count).toBe(33);
     const idsForTrack = (track: string) =>
       res.body.data.labs
         .filter((l: { track: string }) => l.track === track)
@@ -97,6 +97,8 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
       'K8S-008',
       'K8S-009',
       'K8S-010',
+      'K8S-011',
+      'K8S-012',
     ]);
     expect(idsForTrack('linux')).toEqual([
       'LINUX-001',
@@ -131,7 +133,7 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
       'linux',
       'terraform',
     ]);
-    expect(res.body.data.tracks[0]).toMatchObject({ track: 'kubernetes', labCount: 10 });
+    expect(res.body.data.tracks[0]).toMatchObject({ track: 'kubernetes', labCount: 12 });
     expect(res.body.data.tracks[1]).toMatchObject({ track: 'docker', labCount: 10 });
     expect(res.body.data.tracks[2]).toMatchObject({ track: 'linux', labCount: 10 });
     expect(res.body.data.tracks[3]).toMatchObject({ track: 'terraform', labCount: 1 });
@@ -177,7 +179,7 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
     const { app } = buildApp();
 
     const byTrack = await request(app).get('/api/labs?track=kubernetes');
-    expect(byTrack.body.data.count).toBe(10);
+    expect(byTrack.body.data.count).toBe(12);
 
     const byDockerTrack = await request(app).get('/api/labs?track=docker');
     expect(byDockerTrack.body.data.count).toBe(10);
@@ -190,7 +192,7 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
 
     // Difficulty is scoped to a track so the count is about that track alone.
     const byDifficulty = await request(app).get('/api/labs?track=kubernetes&difficulty=intermediate');
-    expect(byDifficulty.body.data.count).toBe(3);
+    expect(byDifficulty.body.data.count).toBe(5);
 
     const byQuery = await request(app).get('/api/labs?q=secret');
     expect(byQuery.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-005']);
@@ -371,7 +373,7 @@ describe('GET /api/tracks', () => {
     expect(res.body.data.tracks[0]).toMatchObject({
       track: 'kubernetes',
       title: 'Kubernetes',
-      labCount: 10,
+      labCount: 12,
     });
     expect(res.body.data.tracks[0].topics.map((t: { topic: string }) => t.topic)).toContain('batch');
 
@@ -407,8 +409,8 @@ describe('GET /api/tracks', () => {
     const res = await request(buildApp().app).get('/api/tracks/kubernetes');
 
     expect(res.status).toBe(200);
-    expect(res.body.data.track).toMatchObject({ track: 'kubernetes', labCount: 10 });
-    expect(res.body.data.labs).toHaveLength(10);
+    expect(res.body.data.track).toMatchObject({ track: 'kubernetes', labCount: 12 });
+    expect(res.body.data.labs).toHaveLength(12);
   });
 
   it('returns the labs in a track', async () => {
@@ -416,7 +418,7 @@ describe('GET /api/tracks', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.track).toBe('kubernetes');
-    expect(res.body.data.count).toBe(10);
+    expect(res.body.data.count).toBe(12);
     expect(res.body.data.prerequisitesEnforced).toBe(false);
   });
 
@@ -427,6 +429,8 @@ describe('GET /api/tracks', () => {
       'K8S-008',
       'K8S-009',
       'K8S-010',
+      'K8S-011',
+      'K8S-012',
     ]);
   });
 
@@ -435,7 +439,7 @@ describe('GET /api/tracks', () => {
     const res = await request(buildApp().app).get('/api/tracks/kubernetes/labs?track=terraform');
 
     expect(res.body.data.track).toBe('kubernetes');
-    expect(res.body.data.count).toBe(10);
+    expect(res.body.data.count).toBe(12);
   });
 
   it('returns 404 for an unknown track and 400 for a malformed one', async () => {

@@ -20,6 +20,9 @@
 import {
   DockerUnreachableError,
   KubernetesUnreachableError,
+  assertValidLabNamespace,
+  requirementsNeedDocker,
+  requirementsNeedKubernetes,
   type DockerEnginePort,
   type KubernetesPort,
   type LabDefinition,
@@ -192,11 +195,27 @@ export async function waitForRequirements(options: {
 
   if (options.requirements.length === 0) return { ok: true, checks: [] };
 
+  const needsDocker = requirementsNeedDocker(options.requirements);
+  const needsKubernetes = requirementsNeedKubernetes(options.requirements);
+
+  if (needsDocker && needsKubernetes) {
+    throw new Error('waitForRequirements cannot verify mixed docker and kubernetes requirements');
+  }
+  if (!needsDocker && !needsKubernetes) {
+    throw new Error('waitForRequirements needs docker or kubernetes requirements');
+  }
+
   const newReader = (): AnyVerifyReader => {
-    if (options.docker) {
+    if (needsDocker) {
+      if (!options.docker) {
+        throw new Error('waitForRequirements needs a docker port for docker requirements');
+      }
       return new DockerVerifyReader(options.docker, options.namespace, options.workspace);
     }
-    if (!options.k8s) throw new Error('waitForRequirements needs either a k8s or a docker port');
+    if (!options.k8s) {
+      throw new Error('waitForRequirements needs a k8s port for kubernetes requirements');
+    }
+    assertValidLabNamespace(options.namespace);
     return new VerifyReader(options.k8s, options.namespace);
   };
 

@@ -17,8 +17,9 @@ import type {
   TrackSummary,
   VerificationResult,
 } from './types';
+import { describeApiTarget, resolveApiBase } from './urls';
 
-const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:4000';
+const API_URL = resolveApiBase();
 
 /** Thrown for any non-success response, carrying the API's structured error. */
 export class ApiRequestError extends Error {
@@ -42,7 +43,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // Network-level failure: the API is not running or is unreachable.
     throw new ApiRequestError(0, {
       code: 'API_UNREACHABLE',
-      message: `Cannot reach the JumpToTech Labs API at ${API_URL}.`,
+      message: `Cannot reach ${describeApiTarget()}.`,
       remediation: 'Is the api service running? Try: docker compose ps',
     });
   }

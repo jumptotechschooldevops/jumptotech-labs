@@ -65,6 +65,14 @@ export interface ApiConfig {
   dockerEnabled: boolean;
   /** `DOCKER_HOST` the orchestrator uses to manage sandboxes. Unset = default socket. */
   dockerHost: string | undefined;
+  /**
+   * Optional browser-facing origin (`https://labs.example.com`).
+   *
+   * When set, start-lab responses point the terminal WebSocket at this host
+   * (via the web proxy). When unset, the API infers the origin from proxy
+   * headers (`X-Forwarded-Proto`, `X-Forwarded-Host`).
+   */
+  publicOrigin: string | undefined;
 }
 
 /**
@@ -331,5 +339,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     nodeEnv: env.NODE_ENV ?? 'development',
     dockerEnabled: boolFromEnv(env, 'DOCKER_TRACK_ENABLED', true),
     dockerHost: env.DOCKER_HOST || undefined,
+    publicOrigin: env.PUBLIC_ORIGIN?.trim() || undefined,
   };
 }

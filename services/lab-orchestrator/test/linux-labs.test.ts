@@ -129,7 +129,7 @@ describe('the catalog carries both tracks (test requirement 2)', () => {
     const registry = await realRegistry();
 
     expect(registry.tracks()).toEqual([
-      expect.objectContaining({ track: 'kubernetes', title: 'Kubernetes', labCount: 10 }),
+      expect.objectContaining({ track: 'kubernetes', title: 'Kubernetes', labCount: 12 }),
       expect.objectContaining({ track: 'docker', title: 'Docker', labCount: 10 }),
       expect.objectContaining({ track: 'linux', title: 'Linux', labCount: 10 }),
       expect.objectContaining({ track: 'terraform', title: 'Terraform' }),
@@ -336,6 +336,6 @@ setup:
     );
 
     expect(def.id).toBe('LINUX-901');
-    expect(def.environment).toEqual({ provider: 'linux', isolation: 'container' });
+    expect(def.environment).toEqual({ provider: 'linux', isolation: 'container', capabilities: [] });
   });
 });

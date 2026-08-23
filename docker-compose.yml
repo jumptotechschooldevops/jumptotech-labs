@@ -125,7 +125,10 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       TERMINAL_SESSION_SECRET: ${TERMINAL_SESSION_SECRET:?set TERMINAL_SESSION_SECRET in .env (copy from .env.example)}
       TERMINAL_SESSION_TTL_SECONDS: ${TERMINAL_SESSION_TTL_SECONDS:-3600}
+      # Fallback when no proxy forwards a public origin (local `npm run dev:*`).
       VITE_TERMINAL_WS_URL: ${VITE_TERMINAL_WS_URL:-ws://localhost:4001}
+      # Optional explicit browser origin for start-lab terminal URLs (tunnel URL).
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
       # Lets the API close a student's shell the moment their session ends.
       TERMINAL_CONTROL_URL: http://terminal:4001
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
@@ -195,7 +198,8 @@ services:
       DOCKER_SANDBOX_RESTART_ATTEMPTS: ${DOCKER_SANDBOX_RESTART_ATTEMPTS:-5}
       DOCKER_SANDBOX_REGISTRY_MIRROR: ${DOCKER_SANDBOX_REGISTRY_MIRROR:-}
     ports:
-      - "${API_PORT:-4000}:4000"
+      # Operator-only: students reach the API through the web proxy on :3000.
+      - "127.0.0.1:${API_PORT:-4000}:4000"
     volumes:
       - <<: *kubeconfig
       # Lab definitions are data, mounted read-only so a running service can
@@ -272,7 +276,8 @@ services:
       # the Docker socket is never mounted into any container in this file.
       TERMINAL_CONTAINER_EXEC_ENABLED: ${TERMINAL_CONTAINER_EXEC_ENABLED:-false}
     ports:
-      - "${TERMINAL_PORT:-4001}:4001"
+      # Operator-only: students reach the terminal WebSocket through the web proxy.
+      - "127.0.0.1:${TERMINAL_PORT:-4001}:4001"
     depends_on:
       api:
         condition: service_healthy
@@ -293,26 +298,14 @@ services:
     init: true
     security_opt:
       - no-new-privileges:true
-    environment:
-      WEB_PORT: 3000
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
-      VITE_TERMINAL_WS_URL: ${VITE_TERMINAL_WS_URL:-ws://localhost:4001}
     ports:
+      # The only port students need. Point Cloudflare Tunnel here.
       - "${WEB_PORT:-3000}:3000"
-    volumes:
-      # Source bind mount for hot reload during development. `node_modules` is
-      # kept inside the image so the host's platform build is not shadowed in.
-      - type: bind
-        source: ./apps/web/src
-        target: /app/apps/web/src
-        read_only: true
-      - type: bind
-        source: ./apps/web/index.html
-        target: /app/apps/web/index.html
-        read_only: true
     depends_on:
       api:
         condition: service_healthy
+      terminal:
+        condition: service_started
     networks:
       - default
 

@@ -14,6 +14,7 @@ import {
   SessionManager,
   SessionReaper,
   createLabProvider,
+  requirementsNeedDocker,
   type RequirementWaiter,
   type WorkspacePort,
 } from '@jumptotech/lab-orchestrator';
@@ -71,12 +72,16 @@ async function main(): Promise<void> {
       })
     : new InMemoryWorkspace();
 
-  // The waiter routes itself: a Docker lab's setup checks read the session's
-  // own daemon, a Kubernetes lab's read the cluster.
+  // Route setup verification to the correct substrate. Kubernetes namespaces
+  // (`lab-…`) and container sandboxes (`jtt-lab-…`) share a waiter but must
+  // never be cross-wired — passing a namespace name to the Docker engine
+  // factory is what broke K8S-011 initial-state provisioning.
   const waitFor: RequirementWaiter = (input) =>
     waitForRequirements({
       k8s,
-      docker: engines.session(input.namespace),
+      ...(requirementsNeedDocker(input.requirements)
+        ? { docker: engines.session(input.namespace) }
+        : {}),
       ...input,
     });
 

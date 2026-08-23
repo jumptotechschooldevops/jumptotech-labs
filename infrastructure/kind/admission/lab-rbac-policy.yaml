@@ -1,0 +1,72 @@
+# JumpToTech Labs — admission controls for student lab namespaces.
+#
+# Applied cluster-wide by scripts/cluster-up.sh. Targets namespaces labelled
+# jumptotech.io/managed=true (every session namespace).
+#
+# These policies enforce the security boundary for untrusted student commands.
+# The verifier grades labs; admission prevents privilege escalation.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: jumptotech-deny-clusterrole-bindings
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings"]
+    matchConditions:
+      - name: lab-service-account
+        expression: "request.userInfo.username.startsWith('system:serviceaccount:lab-')"
+  validations:
+    - expression: "object.roleRef.kind != 'ClusterRole'"
+      message: "RoleBindings referencing ClusterRoles are not permitted in lab namespaces"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: jumptotech-deny-clusterrole-bindings
+spec:
+  policyName: jumptotech-deny-clusterrole-bindings
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        jumptotech.io/managed: "true"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: jumptotech-protect-managed-resources
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: ["UPDATE", "PATCH", "DELETE"]
+        resources: ["*"]
+    matchConditions:
+      - name: lab-service-account
+        expression: "request.userInfo.username.startsWith('system:serviceaccount:lab-')"
+  validations:
+    - expression: |
+        !has(oldObject.metadata.labels) ||
+        !('jumptotech.io/managed' in oldObject.metadata.labels) ||
+        oldObject.metadata.labels['jumptotech.io/managed'] != 'true'
+      message: "Platform-managed resources cannot be modified or deleted by students"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: jumptotech-protect-managed-resources
+spec:
+  policyName: jumptotech-protect-managed-resources
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        jumptotech.io/managed: "true"

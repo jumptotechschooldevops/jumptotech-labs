@@ -8,8 +8,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadLabDefinition, type LabDefinition } from '@jumptotech/lab-orchestrator';
-import { FakeKubernetes, podSnapshot } from '@jumptotech/lab-orchestrator/testing';
-import { imageMatches, normalizeImageReference, verifyLab } from '../src/index.js';
+import { FakeKubernetes, deploymentSnapshot, podSnapshot } from '@jumptotech/lab-orchestrator/testing';
+import { imageMatches, normalizeImageReference, verifyLab, waitForRequirements } from '../src/index.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const K8S001 = path.join(repoRoot, 'labs/kubernetes/k8s-001-pods/lab.yaml');
@@ -216,6 +216,29 @@ describe('verifier — cluster unreachable', () => {
     expect(result.error?.code).toBe('ENVIRONMENT_UNREACHABLE');
     expect(result.error?.message).toContain('ECONNREFUSED');
     expect(result.checks.every((c) => c.status === 'skipped')).toBe(true);
+  });
+});
+
+describe('waitForRequirements substrate routing', () => {
+  it('verifies kubernetes setup checks without a docker port', async () => {
+    const k8s = new FakeKubernetes({
+      deployments: {
+        'lab-2fac4903ce9b': [deploymentSnapshot({ name: 'ledger', namespace: 'lab-2fac4903ce9b' })],
+      },
+    });
+
+    const result = await waitForRequirements({
+      k8s,
+      namespace: 'lab-2fac4903ce9b',
+      timeoutMs: 1_000,
+      requirements: [
+        { type: 'deployment_exists', name: 'ledger', label: 'Deployment ledger exists' },
+        { type: 'deployment_available', name: 'ledger', min_available: 1, label: 'ledger is available' },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.every((c) => c.status === 'pass')).toBe(true);
   });
 });
 

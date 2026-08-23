@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiRequestError, api } from '../lib/api';
+import { resolveTerminalWsBase } from '../lib/urls';
 import { describeEnvironment } from '../lib/environment';
 import type {
   ApiError,
@@ -169,15 +170,21 @@ export function LabPage({
     setTerminalDetail(detail);
   }, []);
 
-  // Only flip to "ready" once the terminal has actually connected, so the UI
-  // never claims the lab is ready before it is. The confirmation is held
-  // briefly, then the overlay clears to reveal the live terminal.
+  // Flip to "ready" once the terminal has actually connected, so the UI never
+  // claims the lab is ready before it is.
   useEffect(() => {
     if (startPhase !== 'starting' || terminalStatus !== 'connected') return;
     setStartPhase('ready');
+  }, [startPhase, terminalStatus]);
+
+  // Hold the confirmation briefly, then clear the overlay to reveal the live
+  // terminal. Kept separate from the transition above: bundling the timeout
+  // into the same effect cleared it when `starting` → `ready` re-ran the effect.
+  useEffect(() => {
+    if (startPhase !== 'ready') return;
     const timeout = setTimeout(() => setStartPhase('active'), 1200);
     return () => clearTimeout(timeout);
-  }, [startPhase, terminalStatus]);
+  }, [startPhase]);
 
   // If the terminal fails while we are still starting, surface the real error.
   useEffect(() => {
@@ -218,7 +225,7 @@ export function LabPage({
     try {
       const response = await api.startLab(labId);
       setSteps(response.steps);
-      setTerminalUrl(response.terminal.url);
+      setTerminalUrl(resolveTerminalWsBase(response.terminal.url));
       setTerminalToken(response.terminal.token);
       adoptSession(response.session);
       // Absent when the progress store could not record the attempt. The lab

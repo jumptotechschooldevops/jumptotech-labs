@@ -10,7 +10,23 @@ import type { VerifierHandler } from '../contract.js';
 import { fail, pass } from '../contract.js';
 import type { VerifyReader } from '../reader.js';
 
-type CheckableKind = 'pod' | 'deployment' | 'service' | 'configmap' | 'secret' | 'job' | 'cronjob';
+type CheckableKind =
+  | 'pod'
+  | 'deployment'
+  | 'service'
+  | 'configmap'
+  | 'secret'
+  | 'job'
+  | 'cronjob'
+  | 'statefulset'
+  | 'daemonset'
+  | 'ingress'
+  | 'persistentvolumeclaim'
+  | 'role'
+  | 'rolebinding'
+  | 'networkpolicy'
+  | 'horizontalpodautoscaler'
+  | 'serviceaccount';
 
 /** How each kind is read, and how it is named in student-facing text. */
 const LOOKUPS: Record<
@@ -24,6 +40,21 @@ const LOOKUPS: Record<
   secret: { title: 'Secret', read: (reader, name) => reader.secret(name) },
   job: { title: 'Job', read: (reader, name) => reader.job(name) },
   cronjob: { title: 'CronJob', read: (reader, name) => reader.cronJob(name) },
+  statefulset: { title: 'StatefulSet', read: (reader, name) => reader.statefulSet(name) },
+  daemonset: { title: 'DaemonSet', read: (reader, name) => reader.daemonSet(name) },
+  ingress: { title: 'Ingress', read: (reader, name) => reader.ingress(name) },
+  persistentvolumeclaim: {
+    title: 'PersistentVolumeClaim',
+    read: (reader, name) => reader.persistentVolumeClaim(name),
+  },
+  role: { title: 'Role', read: (reader, name) => reader.role(name) },
+  rolebinding: { title: 'RoleBinding', read: (reader, name) => reader.roleBinding(name) },
+  networkpolicy: { title: 'NetworkPolicy', read: (reader, name) => reader.networkPolicy(name) },
+  horizontalpodautoscaler: {
+    title: 'HorizontalPodAutoscaler',
+    read: (reader, name) => reader.horizontalPodAutoscaler(name),
+  },
+  serviceaccount: { title: 'ServiceAccount', read: (reader, name) => reader.serviceAccount(name) },
 };
 
 export const resourceAbsent: VerifierHandler<'resource_absent'> = {

@@ -41,6 +41,7 @@ export const ALLOWED_SETUP_KINDS: readonly string[] = [
   'Secret',
   'Ingress',
   'PersistentVolumeClaim',
+  'ServiceAccount',
 ];
 
 function assertManifestObject(

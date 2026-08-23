@@ -1,0 +1,107 @@
+id: K8S-011
+slug: k8s-011-pvc
+title: Persist Data with a PVC
+track: kubernetes
+topic: storage
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 11
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-002
+
+story: >
+  JumpToTech Bank's ledger writer must survive Pod restarts. Today the service
+  stores nothing on disk, so every reschedule wipes its working state.
+
+  Configure persistent storage so the ledger Pod keeps its data across restarts.
+
+objectives:
+  - Create a PersistentVolumeClaim with the required access mode and size
+  - Mount the claim into a Deployment at the correct path
+  - Confirm the workload stays available after the change
+
+task:
+  summary: Create PVC ledger-data and mount it into Deployment ledger at /data.
+  description: >
+    Create a PersistentVolumeClaim named `ledger-data` with access mode
+    `ReadWriteOnce` and storage request `1Gi`. Use the cluster's default
+    StorageClass unless your environment requires `local-path`.
+
+    Update Deployment `ledger` so its container mounts `ledger-data` at `/data`.
+    Wait until the Pod is running and the PVC is Bound.
+
+setup:
+  manifests:
+    - setup/deployment.yaml
+  verify:
+    - type: deployment_exists
+      name: ledger
+    - type: deployment_available
+      name: ledger
+      min_available: 1
+  verify_timeout_seconds: 240
+
+requirements:
+  - type: pvc_exists
+    name: ledger-data
+    label: PVC ledger-data exists
+  - type: pvc_bound
+    name: ledger-data
+    label: PVC ledger-data is Bound
+  - type: pvc_access_modes
+    name: ledger-data
+    accessModes:
+      - ReadWriteOnce
+    label: PVC access mode is ReadWriteOnce
+  - type: pvc_storage_request
+    name: ledger-data
+    storage: 1Gi
+    label: PVC storage request is 1Gi
+  - type: workload_mounts_pvc
+    kind: deployment
+    name: ledger
+    claim: ledger-data
+    mountPath: /data
+    label: Deployment ledger mounts ledger-data at /data
+  - type: deployment_available
+    name: ledger
+    min_available: 1
+    label: ledger is running after the change
+
+hints:
+  - level: 1
+    text: >
+      A PVC requests storage from the cluster; the Pod consumes it through a
+      volume mount. Create the claim before updating the Deployment.
+  - level: 2
+    text: >
+      A volume in the Pod template references the PVC by name, and the container
+      mountPath is where the filesystem appears inside the container.
+  - level: 3
+    text: >
+      `kubectl get pvc ledger-data` shows Bound status once storage is
+      provisioned. `kubectl describe deployment ledger` confirms the volume
+      mount at `/data`.
+
+references:
+  - title: Persistent Volumes
+    url: https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+  - title: Configure a Pod to Use a PersistentVolume for Storage
+    url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-persistent-volume-storage/
+
+skills:
+  - kubernetes.storage.pvc
+  - kubernetes.storage.mount
+  - kubernetes.workloads.update
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - storage

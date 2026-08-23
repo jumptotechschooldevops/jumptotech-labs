@@ -720,6 +720,6 @@ describe('verifier — registry completeness', () => {
   it('covers every requirement type in the vocabulary', () => {
     // The registry is a mapped type over RequirementType, so a missing handler
     // is a compile error; this asserts the runtime object agrees.
-    expect(registeredRequirementTypes().length).toBeGreaterThanOrEqual(30);
+    expect(registeredRequirementTypes().length).toBeGreaterThanOrEqual(80);
   });
 });

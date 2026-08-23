@@ -36,6 +36,7 @@ import {
   type LabProviderId,
 } from './providers/catalog.js';
 import { dockerSetupSchema, isEmptyDockerSetup } from './docker/setup.js';
+import { LAB_CAPABILITIES } from './session/isolation.js';
 
 /**
  * Official documentation hosts, per track.
@@ -291,6 +292,11 @@ const resetSchema = z
         'configmaps',
         'secrets',
         'ingresses',
+        'persistentvolumeclaims',
+        'roles',
+        'rolebindings',
+        'serviceaccounts',
+        'horizontalpodautoscalers',
       ]),
     /** Objects the cluster or the platform owns, which must survive a reset. */
     protected_resources: z.array(z.string().min(1).max(253)).default([]),
@@ -328,6 +334,11 @@ const labDefinitionSchema = z
          * rather than a silently ignored field.
          */
         isolation: z.enum(ISOLATION_MODES).optional(),
+        /**
+         * Optional session capabilities beyond the base student Role.
+         * `rbac_authoring` activates the create-only RBAC overlay for RBAC labs.
+         */
+        capabilities: z.array(z.enum(LAB_CAPABILITIES)).max(4).default([]),
       })
       .strict(),
 
@@ -395,7 +406,11 @@ const labDefinitionSchema = z
  * consumer sees a concrete value rather than an optional one.
  */
 export type LabDefinition = Omit<z.infer<typeof labDefinitionSchema>, 'environment'> & {
-  environment: { provider: LabProviderId; isolation: IsolationMode };
+  environment: {
+    provider: LabProviderId;
+    isolation: IsolationMode;
+    capabilities: (typeof LAB_CAPABILITIES)[number][];
+  };
 };
 export type LabReference = z.infer<typeof referenceSchema>;
 export type LabHint = z.infer<typeof hintSchema>;
@@ -606,7 +621,11 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
 
   const def: LabDefinition = {
     ...result.data,
-    environment: { provider: providerId, isolation: declaredIsolation ?? providerIsolation },
+    environment: {
+      provider: providerId,
+      isolation: declaredIsolation ?? providerIsolation,
+      capabilities: result.data.environment.capabilities,
+    },
   };
   const issues: string[] = [];
 

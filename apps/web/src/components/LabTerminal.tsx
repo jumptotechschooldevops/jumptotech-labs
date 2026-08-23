@@ -137,101 +137,114 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
   // --- connect when we have a url + token ---------------------------------
   useEffect(() => {
     if (!url || !token) return;
-    const term = termRef.current;
-    if (!term) return;
 
-    statusCbRef.current('connecting');
-    const socket = new WebSocket(`${url.replace(/\/$/, '')}/terminal`);
-    socketRef.current = socket;
-
+    let cancelled = false;
+    let socket: WebSocket | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
     let keepAlive: ReturnType<typeof setInterval> | null = null;
 
-    socket.onopen = () => {
-      try {
-        fitRef.current?.fit();
-      } catch {
-        /* ignore */
-      }
-      socket.send(
-        JSON.stringify({ type: 'auth', token, cols: term.cols, rows: term.rows }),
-      );
-    };
-
-    socket.onmessage = (event) => {
-      let msg: Record<string, unknown>;
-      try {
-        msg = JSON.parse(String(event.data)) as Record<string, unknown>;
-      } catch {
+    const connect = () => {
+      if (cancelled) return;
+      const term = termRef.current;
+      if (!term) {
+        requestAnimationFrame(connect);
         return;
       }
 
-      switch (msg.type) {
-        case 'ready':
-          statusCbRef.current('connected');
-          inputDisposable = term.onData((data) => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: 'input', data }));
-            }
-          });
-          keepAlive = setInterval(() => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: 'ping' }));
-            }
-          }, 30_000);
-          term.focus();
-          break;
+      statusCbRef.current('connecting');
+      socket = new WebSocket(`${url.replace(/\/$/, '')}/terminal`);
+      socketRef.current = socket;
 
-        case 'reattached':
-          // A Linux reset replaces the sandbox container, so the shell inside
-          // it is a new one. Deliberately not a second `ready`: the input
-          // handler and keep-alive are already wired to this socket and must
-          // not be attached twice.
-          term.writeln('\r\n\x1b[36mEnvironment reset — reconnected to a fresh shell.\x1b[0m');
-          statusCbRef.current('connected');
-          term.focus();
-          break;
+      socket.onopen = () => {
+        try {
+          fitRef.current?.fit();
+        } catch {
+          /* ignore */
+        }
+        socket!.send(
+          JSON.stringify({ type: 'auth', token, cols: term.cols, rows: term.rows }),
+        );
+      };
 
-        case 'output':
-          term.write(String(msg.data ?? ''));
-          break;
-
-        case 'error': {
-          const detail = String(msg.message ?? 'Terminal error');
-          term.writeln(`\r\n\x1b[31m✗ ${detail}\x1b[0m`);
-          statusCbRef.current('error', detail);
-          break;
+      socket.onmessage = (event) => {
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(String(event.data)) as Record<string, unknown>;
+        } catch {
+          return;
         }
 
-        case 'exit':
-          term.writeln(`\r\n\x1b[33mShell exited (code ${String(msg.exitCode ?? '?')}).\x1b[0m`);
-          statusCbRef.current('closed', 'Shell exited');
-          break;
+        switch (msg.type) {
+          case 'ready':
+            try {
+              fitRef.current?.fit();
+            } catch {
+              /* ignore */
+            }
+            statusCbRef.current('connected');
+            inputDisposable = term.onData((data) => {
+              if (socket!.readyState === WebSocket.OPEN) {
+                socket!.send(JSON.stringify({ type: 'input', data }));
+              }
+            });
+            keepAlive = setInterval(() => {
+              if (socket!.readyState === WebSocket.OPEN) {
+                socket!.send(JSON.stringify({ type: 'ping' }));
+              }
+            }, 30_000);
+            term.focus();
+            break;
 
-        default:
-          break;
-      }
+          case 'reattached':
+            term.writeln('\r\n\x1b[36mEnvironment reset — reconnected to a fresh shell.\x1b[0m');
+            statusCbRef.current('connected');
+            term.focus();
+            break;
+
+          case 'output':
+            termRef.current?.write(String(msg.data ?? ''));
+            break;
+
+          case 'error': {
+            const detail = String(msg.message ?? 'Terminal error');
+            term.writeln(`\r\n\x1b[31m✗ ${detail}\x1b[0m`);
+            statusCbRef.current('error', detail);
+            break;
+          }
+
+          case 'exit':
+            term.writeln(`\r\n\x1b[33mShell exited (code ${String(msg.exitCode ?? '?')}).\x1b[0m`);
+            statusCbRef.current('closed', 'Shell exited');
+            break;
+
+          default:
+            break;
+        }
+      };
+
+      socket.onerror = () => {
+        statusCbRef.current('error', `Could not connect to the terminal service at ${url}.`);
+      };
+
+      socket.onclose = (event) => {
+        inputDisposable?.dispose();
+        if (keepAlive) clearInterval(keepAlive);
+        if (event.code !== 1000) {
+          statusCbRef.current('closed', event.reason || `Connection closed (${event.code})`);
+        } else {
+          statusCbRef.current('closed');
+        }
+      };
     };
 
-    socket.onerror = () => {
-      statusCbRef.current('error', `Could not connect to the terminal service at ${url}.`);
-    };
-
-    socket.onclose = (event) => {
-      inputDisposable?.dispose();
-      if (keepAlive) clearInterval(keepAlive);
-      if (event.code !== 1000) {
-        statusCbRef.current('closed', event.reason || `Connection closed (${event.code})`);
-      } else {
-        statusCbRef.current('closed');
-      }
-    };
+    connect();
 
     return () => {
+      cancelled = true;
       inputDisposable?.dispose();
       if (keepAlive) clearInterval(keepAlive);
       socketRef.current = null;
-      socket.close(1000, 'component unmounted');
+      socket?.close(1000, 'component unmounted');
     };
   }, [url, token, reconnectNonce]);
 

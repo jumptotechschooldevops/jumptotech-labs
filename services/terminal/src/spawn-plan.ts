@@ -26,9 +26,11 @@
  *
  * Nothing goes through a shell: `node-pty` is given a program and an argv array.
  */
+import { CONTAINER_SANDBOX_PATTERN } from '@jumptotech/lab-orchestrator';
 
-/** Container sandbox names the orchestrator can mint, and nothing else. */
-export const CONTAINER_REF_PATTERN = /^jtt-lab-[0-9a-f]{6,40}$/;
+/** Re-exported for tests that import from this module. */
+export const CONTAINER_REF_PATTERN = CONTAINER_SANDBOX_PATTERN;
+
 const USER_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/;
 const WORKDIR_PATTERN = /^\/[A-Za-z0-9._\-/]{0,255}$/;
 const ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,63}$/;

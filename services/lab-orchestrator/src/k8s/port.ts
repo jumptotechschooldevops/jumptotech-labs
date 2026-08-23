@@ -77,6 +77,25 @@ export interface ResourceRequirementsSnapshot {
   limits?: Record<string, string>;
 }
 
+export interface TolerationSnapshot {
+  key: string;
+  operator: string;
+  effect?: string;
+  value?: string;
+}
+
+export interface AffinityTermSnapshot {
+  topologyKey: string;
+  matchLabels: Record<string, string>;
+}
+
+export interface VolumeMountSnapshot {
+  name: string;
+  mountPath: string;
+  /** PersistentVolumeClaim name when the volume uses a claim. */
+  claimName?: string;
+}
+
 export interface PodSnapshot {
   name: string;
   namespace: string;
@@ -90,6 +109,20 @@ export interface PodSnapshot {
   ready: boolean;
   /** ConfigMaps / Secrets this Pod consumes. */
   configRefs?: ConfigReference[];
+  /** `spec.nodeName` when pinned. */
+  nodeName?: string;
+  /** `spec.nodeSelector`. */
+  nodeSelector?: Record<string, string>;
+  /** `spec.tolerations`. */
+  tolerations?: TolerationSnapshot[];
+  /** Node the kubelet scheduled the Pod onto. */
+  scheduledNode?: string;
+  /** Required pod affinity terms from the Pod spec. */
+  requiredAffinity?: AffinityTermSnapshot[];
+  /** Required pod anti-affinity terms from the Pod spec. */
+  requiredAntiAffinity?: AffinityTermSnapshot[];
+  /** Volume mounts from the Pod spec. */
+  volumeMounts?: VolumeMountSnapshot[];
 }
 
 export interface DeploymentSnapshot {
@@ -117,6 +150,12 @@ export interface DeploymentSnapshot {
    * what the student declared.
    */
   configRefs?: ConfigReference[];
+  /** Pod template `spec.nodeSelector`. */
+  nodeSelector?: Record<string, string>;
+  /** Pod template `spec.tolerations`. */
+  tolerations?: TolerationSnapshot[];
+  /** Pod template volume mounts. */
+  volumeMounts?: VolumeMountSnapshot[];
 }
 
 /**
@@ -207,6 +246,156 @@ export interface SecretSnapshot {
   keys: string[];
 }
 
+export interface RoleRuleSnapshot {
+  apiGroups: string[];
+  resources: string[];
+  verbs: string[];
+}
+
+export interface RoleSnapshot {
+  name: string;
+  namespace: string;
+  rules: RoleRuleSnapshot[];
+  deleting: boolean;
+}
+
+export interface RoleBindingSubjectSnapshot {
+  kind: string;
+  name: string;
+}
+
+export interface RoleBindingSnapshot {
+  name: string;
+  namespace: string;
+  roleRef: { kind: string; name: string; apiGroup: string };
+  subjects: RoleBindingSubjectSnapshot[];
+  deleting: boolean;
+}
+
+export interface ServiceAccountSnapshot {
+  name: string;
+  namespace: string;
+  deleting: boolean;
+}
+
+export interface AuthorizationResult {
+  allowed: boolean;
+  reason?: string;
+}
+
+export interface PersistentVolumeClaimSnapshot {
+  name: string;
+  namespace: string;
+  phase: string;
+  storageClassName?: string;
+  accessModes: string[];
+  storage?: string;
+  volumeMode?: string;
+  deleting: boolean;
+}
+
+export interface StorageClassSnapshot {
+  name: string;
+  provisioner: string;
+}
+
+export interface IngressRuleSnapshot {
+  host: string;
+  path: string;
+  pathType?: string;
+  service: string;
+  port: number | string;
+}
+
+export interface IngressTlsSnapshot {
+  hosts: string[];
+  secretName: string;
+}
+
+export interface IngressSnapshot {
+  name: string;
+  namespace: string;
+  ingressClassName?: string;
+  rules: IngressRuleSnapshot[];
+  tls: IngressTlsSnapshot[];
+  defaultBackend?: { service: string; port: number | string };
+  deleting: boolean;
+}
+
+export interface NetworkPolicyPortSnapshot {
+  port?: number;
+  protocol?: string;
+}
+
+export interface NetworkPolicyPeerSnapshot {
+  podSelector?: Record<string, string>;
+  namespaceSelector?: Record<string, string>;
+}
+
+export interface NetworkPolicyRuleSnapshot {
+  peers: NetworkPolicyPeerSnapshot[];
+  ports: NetworkPolicyPortSnapshot[];
+}
+
+export interface NetworkPolicySnapshot {
+  name: string;
+  namespace: string;
+  podSelector: Record<string, string>;
+  policyTypes: string[];
+  ingress: NetworkPolicyRuleSnapshot[];
+  egress: NetworkPolicyRuleSnapshot[];
+  deleting: boolean;
+}
+
+export interface StatefulSetVolumeClaimTemplateSnapshot {
+  name: string;
+  storageClassName?: string;
+  accessModes: string[];
+  storage?: string;
+}
+
+export interface StatefulSetSnapshot {
+  name: string;
+  namespace: string;
+  desiredReplicas: number;
+  readyReplicas: number;
+  serviceName?: string;
+  labels: Record<string, string>;
+  selector: Record<string, string>;
+  containers: ContainerSnapshot[];
+  volumeClaimTemplates: StatefulSetVolumeClaimTemplateSnapshot[];
+  volumeMounts?: VolumeMountSnapshot[];
+  deleting: boolean;
+}
+
+export interface DaemonSetSnapshot {
+  name: string;
+  namespace: string;
+  desiredScheduled: number;
+  numberReady: number;
+  selector: Record<string, string>;
+  containers: ContainerSnapshot[];
+  deleting: boolean;
+}
+
+export interface HorizontalPodAutoscalerSnapshot {
+  name: string;
+  namespace: string;
+  minReplicas?: number;
+  maxReplicas: number;
+  targetKind: string;
+  targetName: string;
+  cpuAverageUtilization?: number;
+  resourceMetrics: Array<{ resource: string; averageUtilization?: number }>;
+  deleting: boolean;
+}
+
+export interface ServiceReachabilityResult {
+  ok: boolean;
+  detail?: string;
+  statusCode?: number;
+}
+
 export interface NamespacedResourceRef {
   /** Plural resource name, e.g. `pods`, `deployments`. */
   resource: string;
@@ -293,6 +482,43 @@ export interface KubernetesPort {
   getSecret(namespace: string, name: string): Promise<SecretSnapshot | null>;
   getJob(namespace: string, name: string): Promise<JobSnapshot | null>;
   getCronJob(namespace: string, name: string): Promise<CronJobSnapshot | null>;
+  getRole(namespace: string, name: string): Promise<RoleSnapshot | null>;
+  getRoleBinding(namespace: string, name: string): Promise<RoleBindingSnapshot | null>;
+  getServiceAccount(namespace: string, name: string): Promise<ServiceAccountSnapshot | null>;
+  getPersistentVolumeClaim(namespace: string, name: string): Promise<PersistentVolumeClaimSnapshot | null>;
+  getIngress(namespace: string, name: string): Promise<IngressSnapshot | null>;
+  getNetworkPolicy(namespace: string, name: string): Promise<NetworkPolicySnapshot | null>;
+  getStatefulSet(namespace: string, name: string): Promise<StatefulSetSnapshot | null>;
+  getDaemonSet(namespace: string, name: string): Promise<DaemonSetSnapshot | null>;
+  getHorizontalPodAutoscaler(namespace: string, name: string): Promise<HorizontalPodAutoscalerSnapshot | null>;
+  getStorageClass(name: string): Promise<StorageClassSnapshot | null>;
+
+  /** SubjectAccessReview against the API server (platform credentials). */
+  createSubjectAccessReview(params: {
+    namespace: string;
+    user: string;
+    verb: string;
+    resource: string;
+    apiGroup: string;
+    name?: string;
+    subresource?: string;
+  }): Promise<AuthorizationResult>;
+
+  /** HTTP GET to a Service ClusterIP in the session namespace. */
+  checkServiceHttp(
+    namespace: string,
+    service: string,
+    port: number,
+    options?: { path?: string; expectedStatus?: number; bodyContains?: string; timeoutSeconds?: number },
+  ): Promise<ServiceReachabilityResult>;
+
+  /** TCP connect to a Service ClusterIP in the session namespace. */
+  checkServiceTcp(
+    namespace: string,
+    service: string,
+    port: number,
+    options?: { timeoutSeconds?: number },
+  ): Promise<ServiceReachabilityResult>;
 
   // --- writes used by setup / reset / isolation ---------------------------
 

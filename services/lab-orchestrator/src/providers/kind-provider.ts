@@ -351,6 +351,19 @@ export class KindLabProvider implements LabProvider {
       return this.#failedReset(context, steps, removed, restored, purgeStep.error);
     }
 
+    const reconcileStep = await this.#runStep(
+      steps,
+      'reconcile-guardrails',
+      'Platform guardrails restored',
+      async () => {
+        await this.#reconcileGuardrails(context);
+        return 'quota, limits, network policy and RBAC reconciled';
+      },
+    );
+    if (!reconcileStep.ok) {
+      return this.#failedReset(context, steps, removed, restored, reconcileStep.error);
+    }
+
     const drainStep = await this.#runStep(steps, 'drain', 'Namespace drained', async () => {
       const remaining = await this.#waitForPodsGone(context.namespace);
       if (remaining > 0) {
@@ -692,7 +705,15 @@ export class KindLabProvider implements LabProvider {
    * cluster-scoped residue to garbage-collect separately).
    */
   async #applyGuardrails(context: LabSessionContext): Promise<void> {
-    await this.#k8s.applyObjects(context.namespace, sessionGuardrailManifests(context.policy));
+    await this.#k8s.applyObjects(
+      context.namespace,
+      sessionGuardrailManifests(context.policy, context.lab.environment.capabilities),
+    );
+  }
+
+  /** Re-apply platform guardrails after purge so malicious edits cannot persist. */
+  async #reconcileGuardrails(context: LabSessionContext): Promise<void> {
+    await this.#applyGuardrails(context);
   }
 
   /** Apply the lab's initial manifests, then confirm they took effect. */
@@ -729,7 +750,7 @@ export class KindLabProvider implements LabProvider {
     // The platform's own guardrails are always protected, whatever the lab says:
     // a reset must not be able to strip a session of its quota or its RBAC.
     const protectedSet = new Set([
-      ...protectedResources(context.policy),
+      ...protectedResources(context.policy, context.lab.environment.capabilities),
       ...context.lab.reset.protected_resources,
     ]);
     const removed: string[] = [];

@@ -95,6 +95,74 @@ import {
 } from './handlers/batch.js';
 import { resourceAbsent } from './handlers/generic.js';
 import {
+  authAllowed,
+  authForbidden,
+  roleBindingExists,
+  roleBindingRoleRef,
+  roleBindingSubject,
+  roleExists,
+  roleRule,
+  serviceAccountExists,
+} from './handlers/rbac.js';
+import {
+  pvcAccessModes,
+  pvcBound,
+  pvcExists,
+  pvcStorageClass,
+  pvcStorageRequest,
+  pvcVolumeMode,
+  storageClassExists,
+  workloadMountsPvc,
+} from './handlers/storage.js';
+import {
+  ingressClass,
+  ingressDefaultBackend,
+  ingressExists,
+  ingressRule,
+  ingressTls,
+} from './handlers/ingress.js';
+import {
+  networkPolicyAllowsDns,
+  networkPolicyEgressRule,
+  networkPolicyExists,
+  networkPolicyIngressRule,
+  networkPolicyPodSelector,
+  networkPolicyPolicyTypes,
+} from './handlers/networkpolicy.js';
+import {
+  statefulSetExists,
+  statefulSetImage,
+  statefulSetReady,
+  statefulSetReplicas,
+  statefulSetServiceName,
+  statefulSetVolumeClaimTemplate,
+} from './handlers/statefulset.js';
+import {
+  daemonSetExists,
+  daemonSetImage,
+  daemonSetReady,
+  daemonSetScheduled,
+  daemonSetSelector,
+} from './handlers/daemonset.js';
+import {
+  deploymentNodeSelector,
+  deploymentTolerations,
+  podAffinityRequired,
+  podAntiAffinityRequired,
+  podNodeName,
+  podNodeSelector,
+  podScheduledOnNode,
+  podTolerations,
+} from './handlers/scheduling.js';
+import {
+  hpaExists,
+  hpaMetricCpu,
+  hpaMetricResource,
+  hpaReplicas,
+  hpaTarget,
+} from './handlers/hpa.js';
+import { serviceHttp, serviceTcp } from './handlers/reachability.js';
+import {
   directoryExists,
   fileContent,
   fileExists,
@@ -199,6 +267,68 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
   cronjob_exists: cronJobExists,
   cronjob_schedule: cronJobSchedule,
   cronjob_suspended: cronJobSuspended,
+
+  role_exists: roleExists,
+  role_rule: roleRule,
+  rolebinding_exists: roleBindingExists,
+  rolebinding_subject: roleBindingSubject,
+  rolebinding_role_ref: roleBindingRoleRef,
+  serviceaccount_exists: serviceAccountExists,
+  auth_allowed: authAllowed,
+  auth_forbidden: authForbidden,
+
+  pvc_exists: pvcExists,
+  pvc_bound: pvcBound,
+  pvc_storage_class: pvcStorageClass,
+  pvc_access_modes: pvcAccessModes,
+  pvc_storage_request: pvcStorageRequest,
+  pvc_volume_mode: pvcVolumeMode,
+  workload_mounts_pvc: workloadMountsPvc,
+  storageclass_exists: storageClassExists,
+
+  ingress_exists: ingressExists,
+  ingress_class: ingressClass,
+  ingress_rule: ingressRule,
+  ingress_tls: ingressTls,
+  ingress_default_backend: ingressDefaultBackend,
+
+  networkpolicy_exists: networkPolicyExists,
+  networkpolicy_pod_selector: networkPolicyPodSelector,
+  networkpolicy_policy_types: networkPolicyPolicyTypes,
+  networkpolicy_ingress_rule: networkPolicyIngressRule,
+  networkpolicy_egress_rule: networkPolicyEgressRule,
+  networkpolicy_allows_dns: networkPolicyAllowsDns,
+
+  statefulset_exists: statefulSetExists,
+  statefulset_replicas: statefulSetReplicas,
+  statefulset_ready: statefulSetReady,
+  statefulset_image: statefulSetImage,
+  statefulset_service_name: statefulSetServiceName,
+  statefulset_volume_claim_template: statefulSetVolumeClaimTemplate,
+
+  daemonset_exists: daemonSetExists,
+  daemonset_image: daemonSetImage,
+  daemonset_selector: daemonSetSelector,
+  daemonset_scheduled: daemonSetScheduled,
+  daemonset_ready: daemonSetReady,
+
+  pod_node_selector: podNodeSelector,
+  pod_tolerations: podTolerations,
+  pod_node_name: podNodeName,
+  deployment_node_selector: deploymentNodeSelector,
+  deployment_tolerations: deploymentTolerations,
+  pod_affinity_required: podAffinityRequired,
+  pod_anti_affinity_required: podAntiAffinityRequired,
+  pod_scheduled_on_node: podScheduledOnNode,
+
+  hpa_exists: hpaExists,
+  hpa_target: hpaTarget,
+  hpa_replicas: hpaReplicas,
+  hpa_metric_cpu: hpaMetricCpu,
+  hpa_metric_resource: hpaMetricResource,
+
+  service_http: serviceHttp,
+  service_tcp: serviceTcp,
 
   resource_absent: resourceAbsent,
 };

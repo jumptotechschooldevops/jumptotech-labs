@@ -1,0 +1,136 @@
+id: K8S-012
+slug: k8s-012-rbac
+title: Configure Namespace RBAC for an API Client
+track: kubernetes
+topic: rbac
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 12
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+  capabilities:
+    - rbac_authoring
+
+prerequisites:
+  - K8S-004
+
+story: >
+  The inventory-sync service polls the Kubernetes API at runtime to read its
+  inventory-config ConfigMap. Its ServiceAccount currently has no permissions,
+  so API calls return Forbidden even though the Pod keeps running.
+
+  Grant the workload the minimum RBAC it needs to read that ConfigMap through
+  the API — not by changing how the ConfigMap is consumed in the Pod spec.
+
+objectives:
+  - Create a namespaced Role with read access to ConfigMaps
+  - Bind the workload ServiceAccount to that Role with a RoleBinding
+  - Confirm the ServiceAccount is authorized to read inventory-config
+
+task:
+  summary: Grant inventory-sync ServiceAccount read access to ConfigMap inventory-config via RBAC.
+  description: >
+    Deployment `inventory-sync` runs a loop that calls the Kubernetes API using
+    its mounted ServiceAccount token. Without RBAC, those calls are rejected.
+
+    Create Role `inventory-reader` allowing `get`, `list`, and `watch` on
+    ConfigMaps. Create RoleBinding `inventory-reader-binding` that binds
+    ServiceAccount `inventory-sync` to Role `inventory-reader`.
+
+    The binding must reference a namespaced Role, not a ClusterRole.
+
+setup:
+  manifests:
+    - setup/configmap.yaml
+    - setup/serviceaccount.yaml
+    - setup/deployment.yaml
+  verify:
+    - type: deployment_exists
+      name: inventory-sync
+    - type: deployment_available
+      name: inventory-sync
+      min_available: 1
+  verify_timeout_seconds: 240
+
+requirements:
+  - type: role_exists
+    name: inventory-reader
+    label: Role inventory-reader exists
+  - type: role_rule
+    name: inventory-reader
+    apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+    label: Role grants read access to ConfigMaps
+  - type: rolebinding_exists
+    name: inventory-reader-binding
+    label: RoleBinding inventory-reader-binding exists
+  - type: rolebinding_subject
+    name: inventory-reader-binding
+    kind: ServiceAccount
+    subjectName: inventory-sync
+    label: RoleBinding binds ServiceAccount inventory-sync
+  - type: rolebinding_role_ref
+    name: inventory-reader-binding
+    roleName: inventory-reader
+    roleKind: Role
+    label: RoleBinding references namespaced Role inventory-reader
+  - type: auth_allowed
+    serviceAccount: inventory-sync
+    verb: get
+    resource: configmaps
+    apiGroup: ""
+    name: inventory-config
+    label: inventory-sync may get ConfigMap inventory-config
+  - type: auth_forbidden
+    serviceAccount: inventory-sync
+    verb: delete
+    resource: configmaps
+    apiGroup: ""
+    name: inventory-config
+    label: inventory-sync cannot delete ConfigMap inventory-config
+  - type: deployment_available
+    name: inventory-sync
+    min_available: 1
+    label: inventory-sync Deployment is available
+
+hints:
+  - level: 1
+    text: >
+      RBAC connects three objects — permissions in a Role, who gets them in a
+      RoleBinding, and which account the workload runs as. Identify all three
+      before creating anything.
+  - level: 2
+    text: >
+      A Role lists API resources and verbs. A RoleBinding names the Role and
+      the subject ServiceAccount. Both objects are namespaced.
+  - level: 3
+    text: >
+      After applying your Role and RoleBinding, `kubectl auth can-i get
+      configmap/inventory-config --as=system:serviceaccount:<ns>:inventory-sync`
+      should answer yes.
+
+references:
+  - title: Using RBAC Authorization
+    url: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+  - title: Role and ClusterRole
+    url: https://kubernetes.io/docs/reference/access-authn-authz/rbac/#role-and-clusterrole
+
+skills:
+  - kubernetes.rbac.role
+  - kubernetes.rbac.rolebinding
+  - kubernetes.rbac.authorization
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - cluster-architecture

@@ -5,6 +5,7 @@
  * to *decide* anything, so verification results cannot be influenced by shell
  * parsing quirks or by what the student typed into their terminal.
  */
+import { connect as netConnect } from 'node:net';
 import { readFileSync } from 'node:fs';
 import * as k8s from '@kubernetes/client-node';
 import type { NodeInfo } from '../types.js';
@@ -13,20 +14,35 @@ import {
   ManifestApplyError,
   type ClusterEndpoint,
   type ClusterVersion,
+  type AuthorizationResult,
   type ConfigMapSnapshot,
   type ConfigReference,
   type CronJobSnapshot,
+  type DaemonSetSnapshot,
   type DeploymentSnapshot,
   type EndpointsSnapshot,
+  type HorizontalPodAutoscalerSnapshot,
+  type IngressSnapshot,
   type JobSnapshot,
   type KubernetesManifestObject,
   type KubernetesPort,
   type NamespaceSnapshot,
   type NamespacedResourceRef,
+  type NetworkPolicySnapshot,
+  type PersistentVolumeClaimSnapshot,
   type PodSnapshot,
   type ProbeSnapshot,
+  type RoleBindingSnapshot,
+  type RoleSnapshot,
   type SecretSnapshot,
+  type ServiceReachabilityResult,
+  type ServiceAccountSnapshot,
   type ServiceSnapshot,
+  type StatefulSetSnapshot,
+  type StorageClassSnapshot,
+  type TolerationSnapshot,
+  type AffinityTermSnapshot,
+  type VolumeMountSnapshot,
 } from './port.js';
 
 function statusCodeOf(error: unknown): number | undefined {
@@ -84,6 +100,9 @@ export class KubernetesClient implements KubernetesPort {
   readonly #networking: k8s.NetworkingV1Api;
   readonly #rbac: k8s.RbacAuthorizationV1Api;
   readonly #discovery: k8s.DiscoveryV1Api;
+  readonly #autoscaling: k8s.AutoscalingV2Api;
+  readonly #authorization: k8s.AuthorizationV1Api;
+  readonly #storage: k8s.StorageV1Api;
   readonly #version: k8s.VersionApi;
   readonly #objects: k8s.KubernetesObjectApi;
   readonly #handlers: Map<string, ResourceHandlers>;
@@ -109,6 +128,9 @@ export class KubernetesClient implements KubernetesPort {
     this.#networking = kc.makeApiClient(k8s.NetworkingV1Api);
     this.#rbac = kc.makeApiClient(k8s.RbacAuthorizationV1Api);
     this.#discovery = kc.makeApiClient(k8s.DiscoveryV1Api);
+    this.#autoscaling = kc.makeApiClient(k8s.AutoscalingV2Api);
+    this.#authorization = kc.makeApiClient(k8s.AuthorizationV1Api);
+    this.#storage = kc.makeApiClient(k8s.StorageV1Api);
     this.#version = kc.makeApiClient(k8s.VersionApi);
     this.#objects = k8s.KubernetesObjectApi.makeApiClient(kc);
     this.#handlers = this.#buildHandlers();
@@ -128,6 +150,7 @@ export class KubernetesClient implements KubernetesPort {
     const batch = this.#batch;
     const networking = this.#networking;
     const rbac = this.#rbac;
+    const autoscaling = this.#autoscaling;
     const names = (res: { items: Array<{ metadata?: { name?: string } }> }): string[] =>
       res.items.map((i) => i.metadata?.name).filter((n): n is string => Boolean(n));
 
@@ -274,6 +297,14 @@ export class KubernetesClient implements KubernetesPort {
           list: async (ns) => names(await core.listNamespacedPersistentVolumeClaim({ namespace: ns })),
           remove: async (ns, name) =>
             void (await core.deleteNamespacedPersistentVolumeClaim({ name, namespace: ns })),
+        },
+      ],
+      [
+        'horizontalpodautoscalers',
+        {
+          list: async (ns) => names(await autoscaling.listNamespacedHorizontalPodAutoscaler({ namespace: ns })),
+          remove: async (ns, name) =>
+            void (await autoscaling.deleteNamespacedHorizontalPodAutoscaler({ name, namespace: ns })),
         },
       ],
     ]);
@@ -529,6 +560,247 @@ export class KubernetesClient implements KubernetesPort {
       if (statusCodeOf(error) === 404) return null;
       asUnreachable(`reading secret ${namespace}/${name}`, error);
     }
+  }
+
+  async getRole(namespace: string, name: string): Promise<RoleSnapshot | null> {
+    try {
+      const role = await this.#rbac.readNamespacedRole({ name, namespace });
+      return toRoleSnapshot(role, namespace, name);
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading role ${namespace}/${name}`, error);
+    }
+  }
+
+  async getRoleBinding(namespace: string, name: string): Promise<RoleBindingSnapshot | null> {
+    try {
+      const binding = await this.#rbac.readNamespacedRoleBinding({ name, namespace });
+      return toRoleBindingSnapshot(binding, namespace, name);
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading rolebinding ${namespace}/${name}`, error);
+    }
+  }
+
+  async getServiceAccount(namespace: string, name: string): Promise<ServiceAccountSnapshot | null> {
+    try {
+      const sa = await this.#core.readNamespacedServiceAccount({ name, namespace });
+      return {
+        name: sa.metadata?.name ?? name,
+        namespace: sa.metadata?.namespace ?? namespace,
+        deleting: Boolean(sa.metadata?.deletionTimestamp),
+      };
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading serviceaccount ${namespace}/${name}`, error);
+    }
+  }
+
+  async getPersistentVolumeClaim(
+    namespace: string,
+    name: string,
+  ): Promise<PersistentVolumeClaimSnapshot | null> {
+    try {
+      const pvc = await this.#core.readNamespacedPersistentVolumeClaim({ name, namespace });
+      return toPersistentVolumeClaimSnapshot(pvc, namespace, name);
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading persistentvolumeclaim ${namespace}/${name}`, error);
+    }
+  }
+
+  async getIngress(namespace: string, name: string): Promise<IngressSnapshot | null> {
+    try {
+      const ingress = await this.#networking.readNamespacedIngress({ name, namespace });
+      return toIngressSnapshot(ingress, namespace, name);
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading ingress ${namespace}/${name}`, error);
+    }
+  }
+
+  async getNetworkPolicy(namespace: string, name: string): Promise<NetworkPolicySnapshot | null> {
+    try {
+      const policy = await this.#networking.readNamespacedNetworkPolicy({ name, namespace });
+      return toNetworkPolicySnapshot(policy, namespace, name);
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading networkpolicy ${namespace}/${name}`, error);
+    }
+  }
+
+  async getStatefulSet(namespace: string, name: string): Promise<StatefulSetSnapshot | null> {
+    try {
+      const sts = await this.#apps.readNamespacedStatefulSet({ name, namespace });
+      return toStatefulSetSnapshot(sts, namespace, name);
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading statefulset ${namespace}/${name}`, error);
+    }
+  }
+
+  async getDaemonSet(namespace: string, name: string): Promise<DaemonSetSnapshot | null> {
+    try {
+      const ds = await this.#apps.readNamespacedDaemonSet({ name, namespace });
+      return toDaemonSetSnapshot(ds, namespace, name);
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading daemonset ${namespace}/${name}`, error);
+    }
+  }
+
+  async getHorizontalPodAutoscaler(
+    namespace: string,
+    name: string,
+  ): Promise<HorizontalPodAutoscalerSnapshot | null> {
+    try {
+      const hpa = await this.#autoscaling.readNamespacedHorizontalPodAutoscaler({ name, namespace });
+      return toHorizontalPodAutoscalerSnapshot(hpa, namespace, name);
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading horizontalpodautoscaler ${namespace}/${name}`, error);
+    }
+  }
+
+  async getStorageClass(name: string): Promise<StorageClassSnapshot | null> {
+    try {
+      const sc = await this.#storage.readStorageClass({ name });
+      return {
+        name: sc.metadata?.name ?? name,
+        provisioner: sc.provisioner ?? '',
+      };
+    } catch (error) {
+      if (statusCodeOf(error) === 404) return null;
+      asUnreachable(`reading storageclass ${name}`, error);
+    }
+  }
+
+  async createSubjectAccessReview(params: {
+    namespace: string;
+    user: string;
+    verb: string;
+    resource: string;
+    apiGroup: string;
+    name?: string;
+    subresource?: string;
+  }): Promise<AuthorizationResult> {
+    try {
+      const review = await this.#authorization.createSubjectAccessReview({
+        body: {
+          apiVersion: 'authorization.k8s.io/v1',
+          kind: 'SubjectAccessReview',
+          spec: {
+            user: params.user,
+            ...(params.name || params.subresource
+              ? {
+                  resourceAttributes: {
+                    namespace: params.namespace,
+                    verb: params.verb,
+                    resource: params.resource,
+                    group: params.apiGroup || undefined,
+                    ...(params.name ? { name: params.name } : {}),
+                    ...(params.subresource ? { subresource: params.subresource } : {}),
+                  },
+                }
+              : {
+                  resourceAttributes: {
+                    namespace: params.namespace,
+                    verb: params.verb,
+                    resource: params.resource,
+                    group: params.apiGroup || undefined,
+                  },
+                }),
+          },
+        },
+      });
+      return {
+        allowed: review.status?.allowed ?? false,
+        ...(review.status?.reason ? { reason: review.status.reason } : {}),
+      };
+    } catch (error) {
+      asUnreachable(`creating SubjectAccessReview for ${params.user}`, error);
+    }
+  }
+
+  async checkServiceHttp(
+    namespace: string,
+    service: string,
+    port: number,
+    options: {
+      path?: string;
+      expectedStatus?: number;
+      bodyContains?: string;
+      timeoutSeconds?: number;
+    } = {},
+  ): Promise<ServiceReachabilityResult> {
+    const svc = await this.getService(namespace, service);
+    if (!svc?.clusterIP || svc.clusterIP === 'None') {
+      return { ok: false, detail: `Service '${service}' has no ClusterIP to probe` };
+    }
+
+    const timeoutMs = (options.timeoutSeconds ?? 5) * 1000;
+    const path = options.path ?? '/';
+    const url = `http://${svc.clusterIP}:${port}${path}`;
+
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { Accept: '*/*' },
+      });
+      const body = await response.text();
+      const expectedStatus = options.expectedStatus ?? 200;
+      if (response.status !== expectedStatus) {
+        return {
+          ok: false,
+          detail: `HTTP ${response.status} from ${service}:${port}${path}, expected ${expectedStatus}`,
+          statusCode: response.status,
+        };
+      }
+      if (options.bodyContains && !body.includes(options.bodyContains)) {
+        return {
+          ok: false,
+          detail: `Response body from ${service}:${port}${path} does not contain '${options.bodyContains}'`,
+          statusCode: response.status,
+        };
+      }
+      return { ok: true, statusCode: response.status };
+    } catch (error) {
+      return {
+        ok: false,
+        detail: `Could not reach ${service}:${port}${path} — ${messageOf(error)}`,
+      };
+    }
+  }
+
+  async checkServiceTcp(
+    namespace: string,
+    service: string,
+    port: number,
+    options: { timeoutSeconds?: number } = {},
+  ): Promise<ServiceReachabilityResult> {
+    const svc = await this.getService(namespace, service);
+    if (!svc?.clusterIP || svc.clusterIP === 'None') {
+      return { ok: false, detail: `Service '${service}' has no ClusterIP to probe` };
+    }
+
+    const timeoutMs = (options.timeoutSeconds ?? 5) * 1000;
+    return new Promise((resolve) => {
+      const socket = netConnect({ host: svc.clusterIP!, port, timeout: timeoutMs });
+      const timer = setTimeout(() => {
+        socket.destroy();
+        resolve({ ok: false, detail: `TCP connect to ${service}:${port} timed out after ${timeoutMs}ms` });
+      }, timeoutMs);
+
+      socket.once('connect', () => {
+        clearTimeout(timer);
+        socket.end();
+        resolve({ ok: true });
+      });
+      socket.once('error', (error) => {
+        clearTimeout(timer);
+        resolve({ ok: false, detail: `TCP connect to ${service}:${port} failed — ${error.message}` });
+      });
+    });
   }
 
   // --- writes -------------------------------------------------------------
@@ -922,7 +1194,10 @@ export function toCronJobSnapshot(
 
 /** Normalise a V1Pod into the minimal snapshot the lab engine reasons about. */
 export function toPodSnapshot(pod: k8s.V1Pod, namespace: string, name: string): PodSnapshot {
-  const containers = toContainerSnapshots(pod.spec?.containers ?? [], pod.status?.containerStatuses ?? []);
+  const spec = pod.spec;
+  const containers = toContainerSnapshots(spec?.containers ?? [], pod.status?.containerStatuses ?? []);
+  const affinity = schedulingAffinityOf(spec);
+  const mounts = volumeMountsOf(spec);
   return {
     name: pod.metadata?.name ?? name,
     namespace: pod.metadata?.namespace ?? namespace,
@@ -931,7 +1206,16 @@ export function toPodSnapshot(pod: k8s.V1Pod, namespace: string, name: string): 
     containers,
     deleting: Boolean(pod.metadata?.deletionTimestamp),
     ready: containers.length > 0 && containers.every((c) => c.ready),
-    configRefs: configReferencesOf(pod.spec),
+    configRefs: configReferencesOf(spec),
+    ...(spec?.nodeName ? { nodeName: spec.nodeName } : {}),
+    ...(spec?.nodeSelector ? { nodeSelector: { ...spec.nodeSelector } } : {}),
+    ...(spec?.tolerations?.length ? { tolerations: tolerationsOf(spec.tolerations) } : {}),
+    ...(spec?.nodeName ? { scheduledNode: spec.nodeName } : {}),
+    ...(affinity.requiredAffinity.length ? { requiredAffinity: affinity.requiredAffinity } : {}),
+    ...(affinity.requiredAntiAffinity.length
+      ? { requiredAntiAffinity: affinity.requiredAntiAffinity }
+      : {}),
+    ...(mounts.length ? { volumeMounts: mounts } : {}),
   };
 }
 
@@ -942,6 +1226,8 @@ export function toDeploymentSnapshot(
   name: string,
 ): DeploymentSnapshot {
   const status = deployment.status ?? {};
+  const templateSpec = deployment.spec?.template?.spec;
+  const mounts = volumeMountsOf(templateSpec);
   return {
     name: deployment.metadata?.name ?? name,
     namespace: deployment.metadata?.namespace ?? namespace,
@@ -954,7 +1240,7 @@ export function toDeploymentSnapshot(
     labels: deployment.metadata?.labels ?? {},
     selector: deployment.spec?.selector?.matchLabels ?? {},
     podLabels: deployment.spec?.template?.metadata?.labels ?? {},
-    containers: toContainerSnapshots(deployment.spec?.template?.spec?.containers ?? []),
+    containers: toContainerSnapshots(templateSpec?.containers ?? []),
     conditions: (status.conditions ?? []).map((c) => ({
       type: c.type,
       status: c.status,
@@ -964,6 +1250,292 @@ export function toDeploymentSnapshot(
     generation: deployment.metadata?.generation ?? 0,
     observedGeneration: status.observedGeneration ?? 0,
     deleting: Boolean(deployment.metadata?.deletionTimestamp),
-    configRefs: configReferencesOf(deployment.spec?.template?.spec),
+    configRefs: configReferencesOf(templateSpec),
+    ...(templateSpec?.nodeSelector ? { nodeSelector: { ...templateSpec.nodeSelector } } : {}),
+    ...(templateSpec?.tolerations?.length
+      ? { tolerations: tolerationsOf(templateSpec.tolerations) }
+      : {}),
+    ...(mounts.length ? { volumeMounts: mounts } : {}),
+  };
+}
+
+function tolerationsOf(tolerations: k8s.V1Toleration[]): TolerationSnapshot[] {
+  return tolerations.map((t) => ({
+    key: t.key ?? '',
+    operator: t.operator ?? 'Equal',
+    ...(t.effect ? { effect: t.effect } : {}),
+    ...(t.value !== undefined ? { value: t.value } : {}),
+  }));
+}
+
+function schedulingAffinityOf(spec: k8s.V1PodSpec | undefined): {
+  requiredAffinity: AffinityTermSnapshot[];
+  requiredAntiAffinity: AffinityTermSnapshot[];
+} {
+  const requiredAffinity = affinityTermsOf(spec?.affinity?.podAffinity?.requiredDuringSchedulingIgnoredDuringExecution);
+  const requiredAntiAffinity = affinityTermsOf(
+    spec?.affinity?.podAntiAffinity?.requiredDuringSchedulingIgnoredDuringExecution,
+  );
+  return { requiredAffinity, requiredAntiAffinity };
+}
+
+function affinityTermsOf(
+  terms: k8s.V1PodAffinityTerm[] | undefined,
+): AffinityTermSnapshot[] {
+  return (terms ?? []).map((term) => ({
+    topologyKey: term.topologyKey ?? 'kubernetes.io/hostname',
+    matchLabels: { ...(term.labelSelector?.matchLabels ?? {}) },
+  }));
+}
+
+function volumeMountsOf(spec: k8s.V1PodSpec | undefined): VolumeMountSnapshot[] {
+  if (!spec) return [];
+  const volumeByName = new Map((spec.volumes ?? []).map((volume) => [volume.name, volume] as const));
+  const mounts: VolumeMountSnapshot[] = [];
+  for (const container of spec.containers ?? []) {
+    for (const mount of container.volumeMounts ?? []) {
+      const volume = volumeByName.get(mount.name);
+      mounts.push({
+        name: mount.name,
+        mountPath: mount.mountPath,
+        ...(volume?.persistentVolumeClaim?.claimName
+          ? { claimName: volume.persistentVolumeClaim.claimName }
+          : {}),
+      });
+    }
+  }
+  return mounts;
+}
+
+function toRoleSnapshot(role: k8s.V1Role, namespace: string, name: string): RoleSnapshot {
+  return {
+    name: role.metadata?.name ?? name,
+    namespace: role.metadata?.namespace ?? namespace,
+    rules: (role.rules ?? []).map((rule) => ({
+      apiGroups: rule.apiGroups ?? [''],
+      resources: rule.resources ?? [],
+      verbs: rule.verbs ?? [],
+    })),
+    deleting: Boolean(role.metadata?.deletionTimestamp),
+  };
+}
+
+function toRoleBindingSnapshot(
+  binding: k8s.V1RoleBinding,
+  namespace: string,
+  name: string,
+): RoleBindingSnapshot {
+  return {
+    name: binding.metadata?.name ?? name,
+    namespace: binding.metadata?.namespace ?? namespace,
+    roleRef: {
+      kind: binding.roleRef.kind,
+      name: binding.roleRef.name,
+      apiGroup: binding.roleRef.apiGroup ?? 'rbac.authorization.k8s.io',
+    },
+    subjects: (binding.subjects ?? []).map((subject) => ({
+      kind: subject.kind,
+      name: subject.name,
+    })),
+    deleting: Boolean(binding.metadata?.deletionTimestamp),
+  };
+}
+
+function toPersistentVolumeClaimSnapshot(
+  pvc: k8s.V1PersistentVolumeClaim,
+  namespace: string,
+  name: string,
+): PersistentVolumeClaimSnapshot {
+  const spec = pvc.spec;
+  const status = pvc.status;
+  return {
+    name: pvc.metadata?.name ?? name,
+    namespace: pvc.metadata?.namespace ?? namespace,
+    phase: status?.phase ?? 'Pending',
+    ...(spec?.storageClassName !== undefined ? { storageClassName: spec.storageClassName } : {}),
+    accessModes: [...(spec?.accessModes ?? status?.accessModes ?? [])],
+    ...(spec?.resources?.requests?.storage ? { storage: spec.resources.requests.storage } : {}),
+    ...(spec?.volumeMode ? { volumeMode: spec.volumeMode } : {}),
+    deleting: Boolean(pvc.metadata?.deletionTimestamp),
+  };
+}
+
+function toIngressSnapshot(ingress: k8s.V1Ingress, namespace: string, name: string): IngressSnapshot {
+  const spec = ingress.spec;
+  const rules: IngressSnapshot['rules'] = [];
+  for (const rule of spec?.rules ?? []) {
+    const host = rule.host ?? '';
+    for (const path of rule.http?.paths ?? []) {
+      const backend = path.backend;
+      const serviceName = backend.service?.name ?? backend.resource?.name ?? '';
+      const port = backend.service?.port?.number ?? backend.service?.port?.name ?? 0;
+      rules.push({
+        host,
+        path: path.path ?? '/',
+        ...(path.pathType ? { pathType: path.pathType } : {}),
+        service: serviceName,
+        port,
+      });
+    }
+  }
+
+  const defaultBackend = spec?.defaultBackend;
+  return {
+    name: ingress.metadata?.name ?? name,
+    namespace: ingress.metadata?.namespace ?? namespace,
+    ...(spec?.ingressClassName ? { ingressClassName: spec.ingressClassName } : {}),
+    rules,
+    tls: (spec?.tls ?? []).map((entry) => ({
+      hosts: [...(entry.hosts ?? [])],
+      secretName: entry.secretName ?? '',
+    })),
+    ...(defaultBackend?.service?.name
+      ? {
+          defaultBackend: {
+            service: defaultBackend.service.name,
+            port: defaultBackend.service.port?.number ?? defaultBackend.service.port?.name ?? 0,
+          },
+        }
+      : {}),
+    deleting: Boolean(ingress.metadata?.deletionTimestamp),
+  };
+}
+
+function toNetworkPolicySnapshot(
+  policy: k8s.V1NetworkPolicy,
+  namespace: string,
+  name: string,
+): NetworkPolicySnapshot {
+  const spec = policy.spec;
+  return {
+    name: policy.metadata?.name ?? name,
+    namespace: policy.metadata?.namespace ?? namespace,
+    podSelector: { ...(spec?.podSelector?.matchLabels ?? {}) },
+    policyTypes: [...(spec?.policyTypes ?? [])],
+    ingress: (spec?.ingress ?? []).map((rule) => networkPolicyIngressRuleOf(rule)),
+    egress: (spec?.egress ?? []).map((rule) => networkPolicyEgressRuleOf(rule)),
+    deleting: Boolean(policy.metadata?.deletionTimestamp),
+  };
+}
+
+function networkPolicyIngressRuleOf(
+  rule: k8s.V1NetworkPolicyIngressRule,
+): NetworkPolicySnapshot['ingress'][number] {
+  return {
+    peers: (rule._from ?? []).map((peer: k8s.V1NetworkPolicyPeer) => networkPolicyPeerOf(peer)),
+    ports: networkPolicyPortsOf(rule.ports),
+  };
+}
+
+function networkPolicyEgressRuleOf(
+  rule: k8s.V1NetworkPolicyEgressRule,
+): NetworkPolicySnapshot['egress'][number] {
+  return {
+    peers: (rule.to ?? []).map((peer: k8s.V1NetworkPolicyPeer) => networkPolicyPeerOf(peer)),
+    ports: networkPolicyPortsOf(rule.ports),
+  };
+}
+
+function networkPolicyPeerOf(peer: k8s.V1NetworkPolicyPeer): NetworkPolicySnapshot['ingress'][number]['peers'][number] {
+  return {
+    ...(peer.podSelector?.matchLabels ? { podSelector: { ...peer.podSelector.matchLabels } } : {}),
+    ...(peer.namespaceSelector?.matchLabels
+      ? { namespaceSelector: { ...peer.namespaceSelector.matchLabels } }
+      : {}),
+  };
+}
+
+function networkPolicyPortsOf(
+  ports: k8s.V1NetworkPolicyPort[] | undefined,
+): NetworkPolicySnapshot['ingress'][number]['ports'] {
+  return (ports ?? []).flatMap((port) => {
+    const numericPort = typeof port.port === 'number' ? port.port : undefined;
+    if (numericPort === undefined && port.protocol === undefined) return [];
+    return [
+      {
+        ...(numericPort !== undefined ? { port: numericPort } : {}),
+        ...(port.protocol ? { protocol: port.protocol } : {}),
+      },
+    ];
+  });
+}
+
+function toStatefulSetSnapshot(
+  sts: k8s.V1StatefulSet,
+  namespace: string,
+  name: string,
+): StatefulSetSnapshot {
+  const templateSpec = sts.spec?.template?.spec;
+  return {
+    name: sts.metadata?.name ?? name,
+    namespace: sts.metadata?.namespace ?? namespace,
+    desiredReplicas: sts.spec?.replicas ?? 1,
+    readyReplicas: sts.status?.readyReplicas ?? 0,
+    ...(sts.spec?.serviceName ? { serviceName: sts.spec.serviceName } : {}),
+    labels: sts.metadata?.labels ?? {},
+    selector: sts.spec?.selector?.matchLabels ?? {},
+    containers: toContainerSnapshots(templateSpec?.containers ?? []),
+    volumeClaimTemplates: (sts.spec?.volumeClaimTemplates ?? []).map((template) => ({
+      name: template.metadata?.name ?? '',
+      ...(template.spec?.storageClassName !== undefined
+        ? { storageClassName: template.spec.storageClassName }
+        : {}),
+      accessModes: [...(template.spec?.accessModes ?? [])],
+      ...(template.spec?.resources?.requests?.storage
+        ? { storage: template.spec.resources.requests.storage }
+        : {}),
+    })),
+    ...(volumeMountsOf(templateSpec).length ? { volumeMounts: volumeMountsOf(templateSpec) } : {}),
+    deleting: Boolean(sts.metadata?.deletionTimestamp),
+  };
+}
+
+function toDaemonSetSnapshot(ds: k8s.V1DaemonSet, namespace: string, name: string): DaemonSetSnapshot {
+  return {
+    name: ds.metadata?.name ?? name,
+    namespace: ds.metadata?.namespace ?? namespace,
+    desiredScheduled: ds.status?.desiredNumberScheduled ?? 0,
+    numberReady: ds.status?.numberReady ?? 0,
+    selector: ds.spec?.selector?.matchLabels ?? {},
+    containers: toContainerSnapshots(ds.spec?.template?.spec?.containers ?? []),
+    deleting: Boolean(ds.metadata?.deletionTimestamp),
+  };
+}
+
+function toHorizontalPodAutoscalerSnapshot(
+  hpa: k8s.V2HorizontalPodAutoscaler,
+  namespace: string,
+  name: string,
+): HorizontalPodAutoscalerSnapshot {
+  const spec = hpa.spec;
+  const targetRef = spec?.scaleTargetRef;
+  const resourceMetrics: HorizontalPodAutoscalerSnapshot['resourceMetrics'] = [];
+  let cpuAverageUtilization: number | undefined;
+
+  for (const metric of spec?.metrics ?? []) {
+    if (metric.type === 'Resource' && metric.resource) {
+      const target = metric.resource.target;
+      const utilization =
+        target.type === 'Utilization' ? target.averageUtilization : undefined;
+      if (metric.resource.name === 'cpu' && utilization !== undefined) {
+        cpuAverageUtilization = utilization;
+      }
+      resourceMetrics.push({
+        resource: metric.resource.name,
+        ...(utilization !== undefined ? { averageUtilization: utilization } : {}),
+      });
+    }
+  }
+
+  return {
+    name: hpa.metadata?.name ?? name,
+    namespace: hpa.metadata?.namespace ?? namespace,
+    ...(spec?.minReplicas !== undefined ? { minReplicas: spec.minReplicas } : {}),
+    maxReplicas: spec?.maxReplicas ?? 1,
+    targetKind: targetRef?.kind?.toLowerCase() ?? '',
+    targetName: targetRef?.name ?? '',
+    ...(cpuAverageUtilization !== undefined ? { cpuAverageUtilization } : {}),
+    resourceMetrics,
+    deleting: Boolean(hpa.metadata?.deletionTimestamp),
   };
 }

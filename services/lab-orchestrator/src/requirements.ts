@@ -147,6 +147,15 @@ const CHECKABLE_KINDS = [
   'secret',
   'job',
   'cronjob',
+  'statefulset',
+  'daemonset',
+  'ingress',
+  'persistentvolumeclaim',
+  'role',
+  'rolebinding',
+  'networkpolicy',
+  'horizontalpodautoscaler',
+  'serviceaccount',
 ] as const;
 
 /**
@@ -237,6 +246,36 @@ const commandArgument = z
 
 /** Which account a check observes the sandbox as. */
 const asUser = z.enum(['student', 'root']).default('student');
+
+/** Kubernetes label selector — empty object matches every Pod. */
+const selectorLabels = z
+  .record(
+    z.string().min(1).max(63 + 253 + 1),
+    z.string().max(63).regex(/^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$/, 'invalid label value'),
+  )
+  .default({});
+
+const rbacSubjectKind = z.enum(['ServiceAccount', 'User', 'Group']);
+
+const rbacRoleKind = z.enum(['Role', 'ClusterRole']);
+
+const tolerationSpec = z
+  .object({
+    key: z.string().min(1).max(253),
+    operator: z.enum(['Equal', 'Exists']),
+    effect: z.enum(['NoSchedule', 'PreferNoSchedule', 'NoExecute']).optional(),
+    value: z.string().max(253).optional(),
+  })
+  .strict();
+
+const authCheckFields = {
+  serviceAccount: resourceName,
+  verb: z.string().min(1).max(32),
+  resource: z.string().min(1).max(64),
+  apiGroup: z.string().max(64),
+  name: resourceName.optional(),
+  subresource: z.string().min(1).max(64).optional(),
+};
 
 const kubernetesRequirementSchemas = {
   // --- Pods --------------------------------------------------------------
@@ -533,6 +572,453 @@ const kubernetesRequirementSchemas = {
       type: z.literal('cronjob_suspended'),
       name: resourceName,
       expected: z.boolean(),
+      ...common,
+    })
+    .strict(),
+
+  // --- RBAC --------------------------------------------------------------
+  role_exists: z.object({ type: z.literal('role_exists'), name: resourceName, ...common }).strict(),
+
+  role_rule: z
+    .object({
+      type: z.literal('role_rule'),
+      name: resourceName,
+      apiGroups: z.array(z.string().max(64)).min(1).max(8),
+      resources: z.array(z.string().min(1).max(64)).min(1).max(16),
+      verbs: z.array(z.string().min(1).max(32)).min(1).max(16),
+      ...common,
+    })
+    .strict(),
+
+  rolebinding_exists: z
+    .object({ type: z.literal('rolebinding_exists'), name: resourceName, ...common })
+    .strict(),
+
+  rolebinding_subject: z
+    .object({
+      type: z.literal('rolebinding_subject'),
+      name: resourceName,
+      kind: rbacSubjectKind,
+      subjectName: z.string().min(1).max(253),
+      ...common,
+    })
+    .strict(),
+
+  rolebinding_role_ref: z
+    .object({
+      type: z.literal('rolebinding_role_ref'),
+      name: resourceName,
+      roleName: resourceName,
+      roleKind: rbacRoleKind,
+      ...common,
+    })
+    .strict(),
+
+  serviceaccount_exists: z
+    .object({ type: z.literal('serviceaccount_exists'), name: resourceName, ...common })
+    .strict(),
+
+  auth_allowed: z.object({ type: z.literal('auth_allowed'), ...authCheckFields, ...common }).strict(),
+
+  auth_forbidden: z
+    .object({ type: z.literal('auth_forbidden'), ...authCheckFields, ...common })
+    .strict(),
+
+  // --- Storage -----------------------------------------------------------
+  pvc_exists: z.object({ type: z.literal('pvc_exists'), name: resourceName, ...common }).strict(),
+
+  pvc_bound: z.object({ type: z.literal('pvc_bound'), name: resourceName, ...common }).strict(),
+
+  pvc_storage_class: z
+    .object({
+      type: z.literal('pvc_storage_class'),
+      name: resourceName,
+      storageClassName: z.string().max(253),
+      ...common,
+    })
+    .strict(),
+
+  pvc_access_modes: z
+    .object({
+      type: z.literal('pvc_access_modes'),
+      name: resourceName,
+      accessModes: z
+        .array(z.enum(['ReadWriteOnce', 'ReadOnlyMany', 'ReadWriteMany', 'ReadWriteOncePod']))
+        .min(1)
+        .max(4),
+      ...common,
+    })
+    .strict(),
+
+  pvc_storage_request: z
+    .object({
+      type: z.literal('pvc_storage_request'),
+      name: resourceName,
+      storage: quantity,
+      ...common,
+    })
+    .strict(),
+
+  pvc_volume_mode: z
+    .object({
+      type: z.literal('pvc_volume_mode'),
+      name: resourceName,
+      volumeMode: z.enum(['Filesystem', 'Block']),
+      ...common,
+    })
+    .strict(),
+
+  workload_mounts_pvc: z
+    .object({
+      type: z.literal('workload_mounts_pvc'),
+      kind: z.enum(['pod', 'deployment', 'statefulset']),
+      name: resourceName,
+      claim: resourceName,
+      mountPath: z.string().min(1).max(253).regex(/^\//, 'mountPath must be absolute'),
+      container: resourceName.optional(),
+      ...common,
+    })
+    .strict(),
+
+  storageclass_exists: z
+    .object({ type: z.literal('storageclass_exists'), name: resourceName, ...common })
+    .strict(),
+
+  // --- Ingress -----------------------------------------------------------
+  ingress_exists: z
+    .object({ type: z.literal('ingress_exists'), name: resourceName, ...common })
+    .strict(),
+
+  ingress_class: z
+    .object({
+      type: z.literal('ingress_class'),
+      name: resourceName,
+      ingressClassName: z.string().min(1).max(253),
+      ...common,
+    })
+    .strict(),
+
+  ingress_rule: z
+    .object({
+      type: z.literal('ingress_rule'),
+      name: resourceName,
+      host: z.string().min(1).max(253),
+      path: z.string().min(1).max(512),
+      pathType: z.enum(['Prefix', 'Exact', 'ImplementationSpecific']).optional(),
+      service: resourceName,
+      port: portValue,
+      ...common,
+    })
+    .strict(),
+
+  ingress_tls: z
+    .object({
+      type: z.literal('ingress_tls'),
+      name: resourceName,
+      hosts: z.array(z.string().min(1).max(253)).min(1).max(16),
+      secretName: resourceName,
+      ...common,
+    })
+    .strict(),
+
+  ingress_default_backend: z
+    .object({
+      type: z.literal('ingress_default_backend'),
+      name: resourceName,
+      service: resourceName,
+      port: portValue,
+      ...common,
+    })
+    .strict(),
+
+  // --- NetworkPolicy -----------------------------------------------------
+  networkpolicy_exists: z
+    .object({ type: z.literal('networkpolicy_exists'), name: resourceName, ...common })
+    .strict(),
+
+  networkpolicy_pod_selector: z
+    .object({
+      type: z.literal('networkpolicy_pod_selector'),
+      name: resourceName,
+      matchLabels: selectorLabels,
+      ...common,
+    })
+    .strict(),
+
+  networkpolicy_policy_types: z
+    .object({
+      type: z.literal('networkpolicy_policy_types'),
+      name: resourceName,
+      policyTypes: z.array(z.enum(['Ingress', 'Egress'])).min(1).max(2),
+      ...common,
+    })
+    .strict(),
+
+  networkpolicy_ingress_rule: z
+    .object({
+      type: z.literal('networkpolicy_ingress_rule'),
+      name: resourceName,
+      fromPodSelector: selectorLabels.optional(),
+      fromNamespaceSelector: selectorLabels.optional(),
+      port: z.number().int().min(1).max(65535).optional(),
+      protocol: z.enum(['TCP', 'UDP', 'SCTP']).optional(),
+      ...common,
+    })
+    .strict(),
+
+  networkpolicy_egress_rule: z
+    .object({
+      type: z.literal('networkpolicy_egress_rule'),
+      name: resourceName,
+      toPodSelector: selectorLabels.optional(),
+      toNamespaceSelector: selectorLabels.optional(),
+      port: z.number().int().min(1).max(65535).optional(),
+      protocol: z.enum(['TCP', 'UDP', 'SCTP']).optional(),
+      ...common,
+    })
+    .strict(),
+
+  networkpolicy_allows_dns: z
+    .object({ type: z.literal('networkpolicy_allows_dns'), name: resourceName, ...common })
+    .strict(),
+
+  // --- StatefulSet -------------------------------------------------------
+  statefulset_exists: z
+    .object({ type: z.literal('statefulset_exists'), name: resourceName, ...common })
+    .strict(),
+
+  statefulset_replicas: z
+    .object({
+      type: z.literal('statefulset_replicas'),
+      name: resourceName,
+      replicas: z.number().int().min(0).max(20),
+      ...common,
+    })
+    .strict(),
+
+  statefulset_ready: z
+    .object({
+      type: z.literal('statefulset_ready'),
+      name: resourceName,
+      min_ready: z.number().int().min(1).max(20).optional(),
+      ...common,
+    })
+    .strict(),
+
+  statefulset_image: z
+    .object({
+      type: z.literal('statefulset_image'),
+      name: resourceName,
+      container: resourceName.optional(),
+      image: imageReference,
+      ...common,
+    })
+    .strict(),
+
+  statefulset_service_name: z
+    .object({
+      type: z.literal('statefulset_service_name'),
+      name: resourceName,
+      serviceName: resourceName,
+      ...common,
+    })
+    .strict(),
+
+  statefulset_volume_claim_template: z
+    .object({
+      type: z.literal('statefulset_volume_claim_template'),
+      name: resourceName,
+      claimName: resourceName,
+      storageClassName: z.string().max(253).optional(),
+      accessModes: z
+        .array(z.enum(['ReadWriteOnce', 'ReadOnlyMany', 'ReadWriteMany', 'ReadWriteOncePod']))
+        .min(1)
+        .max(4)
+        .optional(),
+      storage: quantity.optional(),
+      ...common,
+    })
+    .strict(),
+
+  // --- DaemonSet ---------------------------------------------------------
+  daemonset_exists: z
+    .object({ type: z.literal('daemonset_exists'), name: resourceName, ...common })
+    .strict(),
+
+  daemonset_image: z
+    .object({
+      type: z.literal('daemonset_image'),
+      name: resourceName,
+      container: resourceName.optional(),
+      image: imageReference,
+      ...common,
+    })
+    .strict(),
+
+  daemonset_selector: z
+    .object({
+      type: z.literal('daemonset_selector'),
+      name: resourceName,
+      selector: labelMap,
+      ...common,
+    })
+    .strict(),
+
+  daemonset_scheduled: z
+    .object({
+      type: z.literal('daemonset_scheduled'),
+      name: resourceName,
+      min_scheduled: z.number().int().min(1).max(50).optional(),
+      ...common,
+    })
+    .strict(),
+
+  daemonset_ready: z
+    .object({
+      type: z.literal('daemonset_ready'),
+      name: resourceName,
+      min_ready: z.number().int().min(1).max(50).optional(),
+      ...common,
+    })
+    .strict(),
+
+  // --- Scheduling --------------------------------------------------------
+  pod_node_selector: z
+    .object({
+      type: z.literal('pod_node_selector'),
+      name: resourceName,
+      nodeSelector: labelMap,
+      ...common,
+    })
+    .strict(),
+
+  pod_tolerations: z
+    .object({
+      type: z.literal('pod_tolerations'),
+      name: resourceName,
+      tolerations: z.array(tolerationSpec).min(1).max(16),
+      ...common,
+    })
+    .strict(),
+
+  pod_node_name: z
+    .object({
+      type: z.literal('pod_node_name'),
+      name: resourceName,
+      nodeName: z.string().min(1).max(253),
+      ...common,
+    })
+    .strict(),
+
+  deployment_node_selector: z
+    .object({
+      type: z.literal('deployment_node_selector'),
+      name: resourceName,
+      nodeSelector: labelMap,
+      ...common,
+    })
+    .strict(),
+
+  deployment_tolerations: z
+    .object({
+      type: z.literal('deployment_tolerations'),
+      name: resourceName,
+      tolerations: z.array(tolerationSpec).min(1).max(16),
+      ...common,
+    })
+    .strict(),
+
+  pod_affinity_required: z
+    .object({
+      type: z.literal('pod_affinity_required'),
+      name: resourceName,
+      topologyKey: z.string().min(1).max(253),
+      matchLabels: selectorLabels.optional(),
+      ...common,
+    })
+    .strict(),
+
+  pod_anti_affinity_required: z
+    .object({
+      type: z.literal('pod_anti_affinity_required'),
+      name: resourceName,
+      topologyKey: z.string().min(1).max(253),
+      matchLabels: selectorLabels.optional(),
+      ...common,
+    })
+    .strict(),
+
+  pod_scheduled_on_node: z
+    .object({
+      type: z.literal('pod_scheduled_on_node'),
+      name: resourceName,
+      nodeName: z.string().min(1).max(253),
+      ...common,
+    })
+    .strict(),
+
+  // --- HPA ---------------------------------------------------------------
+  hpa_exists: z.object({ type: z.literal('hpa_exists'), name: resourceName, ...common }).strict(),
+
+  hpa_target: z
+    .object({
+      type: z.literal('hpa_target'),
+      name: resourceName,
+      targetKind: z.enum(['deployment', 'statefulset']),
+      targetName: resourceName,
+      ...common,
+    })
+    .strict(),
+
+  hpa_replicas: z
+    .object({
+      type: z.literal('hpa_replicas'),
+      name: resourceName,
+      minReplicas: z.number().int().min(1).max(100).optional(),
+      maxReplicas: z.number().int().min(1).max(100).optional(),
+      ...common,
+    })
+    .strict(),
+
+  hpa_metric_cpu: z
+    .object({
+      type: z.literal('hpa_metric_cpu'),
+      name: resourceName,
+      averageUtilization: z.number().int().min(1).max(100).optional(),
+      ...common,
+    })
+    .strict(),
+
+  hpa_metric_resource: z
+    .object({
+      type: z.literal('hpa_metric_resource'),
+      name: resourceName,
+      resource: z.enum(['cpu', 'memory']),
+      averageUtilization: z.number().int().min(1).max(100).optional(),
+      ...common,
+    })
+    .strict(),
+
+  // --- Reachability ------------------------------------------------------
+  service_http: z
+    .object({
+      type: z.literal('service_http'),
+      service: resourceName,
+      port: z.number().int().min(1).max(65535),
+      path: z.string().max(512).regex(/^\//, 'path must start with /').optional(),
+      expected_status: z.number().int().min(100).max(599).optional(),
+      body_contains: z.string().min(1).max(256).optional(),
+      timeout_seconds: z.number().int().min(1).max(15).optional(),
+      ...common,
+    })
+    .strict(),
+
+  service_tcp: z
+    .object({
+      type: z.literal('service_tcp'),
+      service: resourceName,
+      port: z.number().int().min(1).max(65535),
+      timeout_seconds: z.number().int().min(1).max(15).optional(),
       ...common,
     })
     .strict(),
@@ -1193,6 +1679,68 @@ export const REQUIREMENT_FAMILIES = {
   cronjob_schedule: 'kubernetes',
   cronjob_suspended: 'kubernetes',
 
+  role_exists: 'kubernetes',
+  role_rule: 'kubernetes',
+  rolebinding_exists: 'kubernetes',
+  rolebinding_subject: 'kubernetes',
+  rolebinding_role_ref: 'kubernetes',
+  serviceaccount_exists: 'kubernetes',
+  auth_allowed: 'kubernetes',
+  auth_forbidden: 'kubernetes',
+
+  pvc_exists: 'kubernetes',
+  pvc_bound: 'kubernetes',
+  pvc_storage_class: 'kubernetes',
+  pvc_access_modes: 'kubernetes',
+  pvc_storage_request: 'kubernetes',
+  pvc_volume_mode: 'kubernetes',
+  workload_mounts_pvc: 'kubernetes',
+  storageclass_exists: 'kubernetes',
+
+  ingress_exists: 'kubernetes',
+  ingress_class: 'kubernetes',
+  ingress_rule: 'kubernetes',
+  ingress_tls: 'kubernetes',
+  ingress_default_backend: 'kubernetes',
+
+  networkpolicy_exists: 'kubernetes',
+  networkpolicy_pod_selector: 'kubernetes',
+  networkpolicy_policy_types: 'kubernetes',
+  networkpolicy_ingress_rule: 'kubernetes',
+  networkpolicy_egress_rule: 'kubernetes',
+  networkpolicy_allows_dns: 'kubernetes',
+
+  statefulset_exists: 'kubernetes',
+  statefulset_replicas: 'kubernetes',
+  statefulset_ready: 'kubernetes',
+  statefulset_image: 'kubernetes',
+  statefulset_service_name: 'kubernetes',
+  statefulset_volume_claim_template: 'kubernetes',
+
+  daemonset_exists: 'kubernetes',
+  daemonset_image: 'kubernetes',
+  daemonset_selector: 'kubernetes',
+  daemonset_scheduled: 'kubernetes',
+  daemonset_ready: 'kubernetes',
+
+  pod_node_selector: 'kubernetes',
+  pod_tolerations: 'kubernetes',
+  pod_node_name: 'kubernetes',
+  deployment_node_selector: 'kubernetes',
+  deployment_tolerations: 'kubernetes',
+  pod_affinity_required: 'kubernetes',
+  pod_anti_affinity_required: 'kubernetes',
+  pod_scheduled_on_node: 'kubernetes',
+
+  hpa_exists: 'kubernetes',
+  hpa_target: 'kubernetes',
+  hpa_replicas: 'kubernetes',
+  hpa_metric_cpu: 'kubernetes',
+  hpa_metric_resource: 'kubernetes',
+
+  service_http: 'kubernetes',
+  service_tcp: 'kubernetes',
+
   file_exists: 'filesystem',
   directory_exists: 'filesystem',
   file_content: 'filesystem',
@@ -1302,6 +1850,20 @@ export function isDockerRequirementType(value: unknown): value is DockerRequirem
 
 export function isKubernetesRequirementType(value: unknown): value is KubernetesRequirementType {
   return isSupportedRequirementType(value) && requirementFamily(value) === 'kubernetes';
+}
+
+/** True when every requirement in a batch needs the Docker engine reader. */
+export function requirementsNeedDocker(requirements: readonly { type: string }[]): boolean {
+  return requirements.some(
+    (r) => isSupportedRequirementType(r.type) && requirementFamily(r.type) === 'docker',
+  );
+}
+
+/** True when every requirement in a batch needs the Kubernetes API reader. */
+export function requirementsNeedKubernetes(requirements: readonly { type: string }[]): boolean {
+  return requirements.some(
+    (r) => isSupportedRequirementType(r.type) && requirementFamily(r.type) === 'kubernetes',
+  );
 }
 
 const schemaValues = Object.values(requirementSchemas) as unknown as [

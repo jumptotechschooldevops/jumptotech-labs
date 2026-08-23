@@ -9,6 +9,7 @@ import {
   DNS_1123_LABEL,
   InvalidNamespaceError,
   InvalidSessionIdError,
+  LAB_NAMESPACE_PATTERN,
   PROTECTED_NAMESPACES,
   assertValidLabNamespace,
   assertValidSessionId,
@@ -131,6 +132,24 @@ describe('namespace validation', () => {
   it('accepts a well-formed sandbox namespace', () => {
     expect(assertValidLabNamespace('lab-3f9c1a7b2d40')).toBe('lab-3f9c1a7b2d40');
     expect(isLabNamespace('lab-3f9c1a7b2d40')).toBe(true);
+  });
+
+  it('accepts a canonical generated namespace such as lab-2fac4903ce9b', () => {
+    expect(assertValidLabNamespace('lab-2fac4903ce9b')).toBe('lab-2fac4903ce9b');
+    expect('lab-2fac4903ce9b').toMatch(LAB_NAMESPACE_PATTERN);
+  });
+
+  it('rejects an arbitrary namespace that is not lab-<hex>', () => {
+    expect(() => assertValidLabNamespace('my-app-production')).toThrow(InvalidNamespaceError);
+    expect(() => assertValidLabNamespace('lab-not-hex!')).toThrow(InvalidNamespaceError);
+  });
+
+  it('generated session namespaces always pass the canonical validator', () => {
+    for (let i = 0; i < 100; i += 1) {
+      const namespace = deriveNamespace({ sessionId: newSessionId(), secret: SECRET });
+      expect(assertValidLabNamespace(namespace)).toBe(namespace);
+      expect(namespace).toMatch(LAB_NAMESPACE_PATTERN);
+    }
   });
 
   it('treats the whole kube-* space as reserved', () => {

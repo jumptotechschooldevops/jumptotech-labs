@@ -34,6 +34,21 @@ export const STUDENT_SERVICE_ACCOUNT = 'student';
 export const STUDENT_ROLE = 'jumptotech-student';
 export const STUDENT_ROLE_BINDING = 'jumptotech-student';
 
+/** Lab-scoped overlay Role granting create-only RBAC authoring rights. */
+export const RBAC_PRACTICE_ROLE = 'jumptotech-rbac-practice';
+export const RBAC_PRACTICE_ROLE_BINDING = 'jumptotech-rbac-practice';
+
+/** Optional capabilities a lab may declare under `environment.capabilities`. */
+export const LAB_CAPABILITIES = ['rbac_authoring'] as const;
+export type LabCapability = (typeof LAB_CAPABILITIES)[number];
+
+export function labHasCapability(
+  lab: { environment: { capabilities?: readonly LabCapability[] } },
+  capability: LabCapability,
+): boolean {
+  return lab.environment.capabilities?.includes(capability) ?? false;
+}
+
 export const DEFAULT_RESOURCE_QUOTA_NAME = 'jumptotech-session-quota';
 export const DEFAULT_LIMIT_RANGE_NAME = 'jumptotech-session-limits';
 export const DEFAULT_NETWORK_POLICY_NAME = 'jumptotech-session-isolation';
@@ -51,8 +66,11 @@ export function networkPolicyNames(base: string): string[] {
  * Reset purges student resources; these must survive it, or the second half of
  * a lab would run without a quota, without RBAC, or without its network policy.
  */
-export function protectedResources(policy: SessionPolicy): string[] {
-  return [
+export function protectedResources(
+  policy: SessionPolicy,
+  capabilities: readonly LabCapability[] = [],
+): string[] {
+  const resources = [
     `resourcequotas/${policy.quotaName}`,
     `limitranges/${policy.limitRange.name}`,
     `serviceaccounts/${policy.serviceAccountName}`,
@@ -63,6 +81,12 @@ export function protectedResources(policy: SessionPolicy): string[] {
     'configmaps/kube-root-ca.crt',
     'services/kubernetes',
   ];
+
+  if (capabilities.includes('rbac_authoring')) {
+    resources.push(`roles/${RBAC_PRACTICE_ROLE}`, `rolebindings/${RBAC_PRACTICE_ROLE_BINDING}`);
+  }
+
+  return resources;
 }
 
 export function resourceQuotaManifest(policy: SessionPolicy): KubernetesManifestObject {
@@ -273,16 +297,59 @@ export function studentRbacManifests(policy: SessionPolicy): KubernetesManifestO
 }
 
 /**
+ * Create-only RBAC authoring rights for RBAC labs.
+ *
+ * Granted through a separate protected Role so the base student Role stays
+ * unchanged for every other lab. No update/patch/delete: students cannot tamper
+ * with platform RBAC, and reset purges their own Roles/RoleBindings instead.
+ */
+export function rbacPracticeOverlayManifests(policy: SessionPolicy): KubernetesManifestObject[] {
+  const readCreate = ['create', 'get', 'list', 'watch'];
+  const labels = componentLabels('rbac');
+
+  return [
+    {
+      apiVersion: 'rbac.authorization.k8s.io/v1',
+      kind: 'Role',
+      metadata: { name: RBAC_PRACTICE_ROLE, labels },
+      rules: [
+        {
+          apiGroups: ['rbac.authorization.k8s.io'],
+          resources: ['roles'],
+          verbs: readCreate,
+        },
+        {
+          apiGroups: ['rbac.authorization.k8s.io'],
+          resources: ['rolebindings'],
+          verbs: readCreate,
+        },
+      ],
+    },
+    {
+      apiVersion: 'rbac.authorization.k8s.io/v1',
+      kind: 'RoleBinding',
+      metadata: { name: RBAC_PRACTICE_ROLE_BINDING, labels },
+      roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name: RBAC_PRACTICE_ROLE },
+      subjects: [{ kind: 'ServiceAccount', name: policy.serviceAccountName }],
+    },
+  ];
+}
+
+/**
  * Everything applied into a fresh session namespace, in dependency order.
  *
  * LimitRange before ResourceQuota, so that the first Pod created after the
  * quota lands already has defaulted requests to satisfy it.
  */
-export function sessionGuardrailManifests(policy: SessionPolicy): KubernetesManifestObject[] {
+export function sessionGuardrailManifests(
+  policy: SessionPolicy,
+  capabilities: readonly LabCapability[] = [],
+): KubernetesManifestObject[] {
   return [
     limitRangeManifest(policy),
     resourceQuotaManifest(policy),
     ...(policy.network.enabled ? networkPolicyManifests(policy) : []),
     ...studentRbacManifests(policy),
+    ...(capabilities.includes('rbac_authoring') ? rbacPracticeOverlayManifests(policy) : []),
   ];
 }

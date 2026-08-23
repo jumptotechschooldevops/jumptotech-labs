@@ -20,6 +20,9 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 export const SESSION_ID_PREFIX = 'sess-';
 export const NAMESPACE_PREFIX = 'lab-';
 
+/** Canonical Kubernetes session namespace shape: `lab-` + lowercase hex suffix. */
+export const LAB_NAMESPACE_PATTERN = /^lab-[0-9a-f]{6,40}$/;
+
 /**
  * Prefix for container-backed sandboxes (Linux, Terraform, Docker).
  *
@@ -164,6 +167,12 @@ export function assertValidLabNamespace(input: unknown, prefix = NAMESPACE_PREFI
   }
   if (isProtectedNamespace(input)) {
     throw new InvalidNamespaceError(input, 'is a protected cluster namespace');
+  }
+  if (!LAB_NAMESPACE_PATTERN.test(input)) {
+    throw new InvalidNamespaceError(
+      input,
+      `must match canonical lab sandbox format ${LAB_NAMESPACE_PATTERN.source}`,
+    );
   }
   return input;
 }

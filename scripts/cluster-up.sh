@@ -54,5 +54,23 @@ KUBECONFIG="${HOST_KUBECONFIG}" kubectl wait --for=condition=Ready nodes --all -
 KUBECONFIG="${HOST_KUBECONFIG}" kubectl get nodes
 ok "Cluster '${CLUSTER_NAME}' is ready."
 
+ADMISSION_MANIFEST="${REPO_ROOT}/infrastructure/kind/admission/lab-rbac-policy.yaml"
+if [[ -f "${ADMISSION_MANIFEST}" ]]; then
+  log "Applying lab admission policies..."
+  KUBECONFIG="${HOST_KUBECONFIG}" kubectl apply -f "${ADMISSION_MANIFEST}"
+  ok "Admission policies applied."
+fi
+
+if ! KUBECONFIG="${HOST_KUBECONFIG}" kubectl get storageclass local-path >/dev/null 2>&1; then
+  log "Installing local-path-provisioner for PVC labs..."
+  KUBECONFIG="${HOST_KUBECONFIG}" kubectl apply -f \
+    "https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml"
+  KUBECONFIG="${HOST_KUBECONFIG}" kubectl annotate storageclass local-path \
+    storageclass.kubernetes.io/is-default-class=true --overwrite
+  ok "StorageClass local-path installed and marked default."
+else
+  ok "StorageClass local-path already present — reusing it."
+fi
+
 echo
 echo "Next: docker compose up --build"
