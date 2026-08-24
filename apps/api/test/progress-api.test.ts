@@ -651,12 +651,22 @@ describe('progress works for every track', () => {
         `${track.completed}/${track.total}`,
       ]),
     );
-    expect(byTrack).toEqual({
-      kubernetes: `1/${trackTotal('kubernetes')}`,
-      docker: `0/${trackTotal('docker')}`,
-      linux: `1/${trackTotal('linux')}`,
-      terraform: `1/${trackTotal('terraform')}`,
-    });
+    // Every discovered track appears on the dashboard with its own total. The
+    // three named here are named because this test completed a lab in each;
+    // any other track — including one added later — shows up as 0/n rather
+    // than failing an assertion that had nothing to do with it.
+    const completedTracks = new Set(['kubernetes', 'linux', 'terraform']);
+    expect(Object.keys(byTrack).sort()).toEqual(
+      registry
+        .tracks()
+        .map((t) => t.track)
+        .sort(),
+    );
+    for (const { track } of registry.tracks()) {
+      expect(byTrack[track], track).toBe(
+        `${completedTracks.has(track) ? 1 : 0}/${trackTotal(track)}`,
+      );
+    }
     expect(progress.body.data.overall).toMatchObject({ completed: 3, total: catalogTotal() });
   });
 });

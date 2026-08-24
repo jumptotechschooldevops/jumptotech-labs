@@ -19,6 +19,7 @@ import {
   type LoadedLabDefinition,
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
+import { scanLabsDirectory } from './catalog-shape.js';
 
 const LINUX_IDS = [
   'LINUX-001',
@@ -125,15 +126,22 @@ describe('Linux lab definitions load (test requirement 1)', () => {
 // --------------------------------------------------- 2. they reach the catalog
 
 describe('the catalog carries both tracks (test requirement 2)', () => {
-  it('lists Linux as a full ten-lab track alongside the others', async () => {
+  it('lists Linux as a full track alongside every other shipped track', async () => {
     const registry = await realRegistry();
+    const disk = await scanLabsDirectory();
 
-    expect(registry.tracks()).toEqual([
-      expect.objectContaining({ track: 'kubernetes', title: 'Kubernetes', labCount: 12 }),
-      expect.objectContaining({ track: 'docker', title: 'Docker', labCount: 10 }),
-      expect.objectContaining({ track: 'linux', title: 'Linux', labCount: 10 }),
-      expect.objectContaining({ track: 'terraform', title: 'Terraform' }),
-    ]);
+    // The other tracks are asserted from disk, never from a number typed here:
+    // a Kubernetes or Docker lab landing in another worktree must not fail the
+    // Linux suite. What this suite owns is the Linux track's own shape.
+    expect(registry.tracks().map((t) => t.track)).toEqual(disk.trackIds);
+    for (const track of registry.tracks()) {
+      expect(track.labCount, track.track).toBe(disk.labCountForTrack(track.track));
+    }
+    expect(registry.track('linux')).toMatchObject({
+      track: 'linux',
+      title: 'Linux',
+      labCount: LINUX_IDS.length,
+    });
   });
 
   it('groups the Linux track into the five topics the catalog navigates by', async () => {
@@ -147,7 +155,7 @@ describe('the catalog carries both tracks (test requirement 2)', () => {
       'Shell Scripting',
       'Troubleshooting',
     ]);
-    expect(track?.topics.reduce((total, t) => total + t.labCount, 0)).toBe(10);
+    expect(track?.topics.reduce((total, t) => total + t.labCount, 0)).toBe(LINUX_IDS.length);
   });
 
   it('carries a tagline the catalog can show on the track card', async () => {
@@ -159,9 +167,10 @@ describe('the catalog carries both tracks (test requirement 2)', () => {
     const registry = await realRegistry();
     const summaries = registry.labsForTrack('linux');
 
-    // LINUX-001 starts from an empty home directory; the other nine are seeded.
+    // LINUX-001 starts from an empty home directory; every other Linux lab is
+    // seeded, which is the property — the count follows from the track.
     expect(summaries.find((l) => l.id === 'LINUX-001')?.hasSetup).toBe(false);
-    expect(summaries.filter((l) => l.hasSetup)).toHaveLength(9);
+    expect(summaries.filter((l) => l.hasSetup)).toHaveLength(summaries.length - 1);
   });
 
   it('describes a prerequisite path through the track', async () => {

@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./session-token": "./src/session-token.ts",
     "./testing": "./test/fakes.ts",
+    "./testing/catalog": "./test/catalog-shape.ts",
     "./testing/containers": "./test/container-fakes.ts"
   },
   "scripts": {

@@ -393,7 +393,10 @@ describe('a deployment that does not run the Linux track', () => {
     const response = await request(app).get('/api/labs?track=linux');
 
     expect(response.status).toBe(200);
-    expect(response.body.data.labs).toHaveLength(10);
+    // The whole Linux track is still listed — the count is the track's own, so
+    // a Linux lab landing does not fail this on an unrelated assertion.
+    expect(response.body.data.labs).toHaveLength(registry.labsForTrack('linux').length);
+    expect(response.body.data.labs.length).toBeGreaterThan(0);
     const card = response.body.data.labs[0] as { availability?: { available: boolean } };
     expect(card.availability?.available).toBe(false);
   });

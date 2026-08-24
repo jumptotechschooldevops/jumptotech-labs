@@ -9,8 +9,14 @@
  * The cluster is faked here: these tests assert routing, projection, and the
  * catalog-safety rules. Cluster behaviour is proved against real kind in the
  * orchestrator's integration suite.
+ *
+ * What the catalog *contains* is never restated here. Counts and id lists are
+ * derived from the labs directory (`scanLabsDirectory`), so the assertion is
+ * "the API serves the catalog that was actually discovered" rather than "the
+ * API serves the four tracks we happened to ship the day this was written".
+ * Adding a track or a lab therefore needs no edit in this file.
  */
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
@@ -22,6 +28,13 @@ import {
   SessionManager,
 } from '@jumptotech/lab-orchestrator';
 import { FakeKubernetes, podSnapshot } from '@jumptotech/lab-orchestrator/testing';
+import {
+  fixtureLabYaml,
+  labsDirPlus,
+  scanLabsDirectory,
+  temporaryLabsDirs,
+} from '@jumptotech/lab-orchestrator/testing/catalog';
+import { rm } from 'node:fs/promises';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 
@@ -29,11 +42,23 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const SECRET = 'integration-test-secret-value';
 
 let registry: LabRegistry;
+/** The catalog as it is on disk — the source every expected count comes from. */
+let disk: Awaited<ReturnType<typeof scanLabsDirectory>>;
 
-function buildApp(k8s = new FakeKubernetes()) {
+interface BuildOptions {
+  k8s?: FakeKubernetes;
+  /** Serve a different catalog, for the "a new track just appears" tests. */
+  registry?: LabRegistry;
+  labsDir?: string;
+}
+
+function buildApp(options: FakeKubernetes | BuildOptions = {}) {
+  const opts: BuildOptions = options instanceof FakeKubernetes ? { k8s: options } : options;
+  const k8s = opts.k8s ?? new FakeKubernetes();
+  const catalog = opts.registry ?? registry;
   const config = loadConfig({
     TERMINAL_SESSION_SECRET: SECRET,
-    LABS_DIR: path.join(repoRoot, 'labs'),
+    LABS_DIR: opts.labsDir ?? path.join(repoRoot, 'labs'),
     ALLOWED_ORIGINS: 'http://localhost:3000',
   } as NodeJS.ProcessEnv);
 
@@ -53,7 +78,7 @@ function buildApp(k8s = new FakeKubernetes()) {
   });
 
   const sessions = new SessionManager({
-    registry,
+    registry: catalog,
     provider,
     store: new InMemorySessionStore(),
     policy: DEFAULT_SESSION_POLICY,
@@ -61,82 +86,57 @@ function buildApp(k8s = new FakeKubernetes()) {
     namespaceSecret: config.namespaceSecret,
   });
 
-  return { app: createApp({ registry, sessions, k8s, config }), k8s, sessions };
+  return { app: createApp({ registry: catalog, sessions, k8s, config }), k8s, sessions };
 }
 
 beforeAll(async () => {
   registry = new LabRegistry(path.join(repoRoot, 'labs'));
   await registry.load();
   expect(registry.loadErrors).toEqual([]);
+  disk = await scanLabsDirectory();
+});
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryLabsDirs().map((dir) => rm(dir, { recursive: true, force: true })),
+  );
 });
 
 // -------------------------------------------------------- 30. GET /api/labs
 
 describe('GET /api/labs — the catalog (test requirement 30)', () => {
-  it('returns every lab with its tracks', async () => {
+  it('returns every discovered lab, grouped into every discovered track', async () => {
     const res = await request(buildApp().app).get('/api/labs');
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    // Catalog order is by track slug, then by each lab's `order`. Assertions
-    // are per track so a new track cannot reshuffle expectations for another.
-    expect(res.body.data.count).toBe(33);
+
+    // The count is the catalog's, not a number remembered here.
+    expect(res.body.data.count).toBe(disk.labCount);
+    expect(res.body.data.labs).toHaveLength(disk.labCount);
+    expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual(disk.ids);
+
+    // Catalog order is by track slug, then by each lab's `order`, so each
+    // track's labs come back as one contiguous run in its own declared order.
     const idsForTrack = (track: string) =>
       res.body.data.labs
         .filter((l: { track: string }) => l.track === track)
         .map((l: { id: string }) => l.id);
+    for (const track of disk.trackIds) {
+      expect(idsForTrack(track), track).toEqual(disk.idsForTrack(track));
+    }
 
-    expect(idsForTrack('kubernetes')).toEqual([
-      'K8S-001',
-      'K8S-002',
-      'K8S-003',
-      'K8S-004',
-      'K8S-005',
-      'K8S-006',
-      'K8S-007',
-      'K8S-008',
-      'K8S-009',
-      'K8S-010',
-      'K8S-011',
-      'K8S-012',
-    ]);
-    expect(idsForTrack('linux')).toEqual([
-      'LINUX-001',
-      'LINUX-002',
-      'LINUX-003',
-      'LINUX-004',
-      'LINUX-005',
-      'LINUX-006',
-      'LINUX-007',
-      'LINUX-008',
-      'LINUX-009',
-      'LINUX-010',
-    ]);
-    expect(idsForTrack('terraform')).toEqual(['TF-001']);
-    expect(idsForTrack('docker')).toEqual([
-      'DOCKER-001',
-      'DOCKER-002',
-      'DOCKER-003',
-      'DOCKER-004',
-      'DOCKER-005',
-      'DOCKER-006',
-      'DOCKER-007',
-      'DOCKER-008',
-      'DOCKER-009',
-      'DOCKER-010',
-    ]);
-    // Tracks are ordered by their track.yaml `order`; those without one
-    // (linux, terraform) follow alphabetically.
-    expect(res.body.data.tracks.map((t: { track: string }) => t.track)).toEqual([
-      'kubernetes',
-      'docker',
-      'linux',
-      'terraform',
-    ]);
-    expect(res.body.data.tracks[0]).toMatchObject({ track: 'kubernetes', labCount: 12 });
-    expect(res.body.data.tracks[1]).toMatchObject({ track: 'docker', labCount: 10 });
-    expect(res.body.data.tracks[2]).toMatchObject({ track: 'linux', labCount: 10 });
-    expect(res.body.data.tracks[3]).toMatchObject({ track: 'terraform', labCount: 1 });
+    // Tracks are ordered by their track.yaml `order`; those without one follow
+    // alphabetically. Both the order and the counts come from disk.
+    expect(res.body.data.tracks.map((t: { track: string }) => t.track)).toEqual(disk.trackIds);
+    expect(res.body.data.tracks.map((t: { labCount: number }) => t.labCount)).toEqual(
+      disk.tracks.map((t) => t.labCount),
+    );
+    // Every lab belongs to a track the payload also describes: no lab can be
+    // served under a track the catalog does not list.
+    expect([...new Set(res.body.data.labs.map((l: { track: string }) => l.track))].sort()).toEqual(
+      [...disk.trackIds].sort(),
+    );
   });
 
   it('gives a Docker card the same shape as a Kubernetes one', async () => {
@@ -178,27 +178,48 @@ describe('GET /api/labs — the catalog (test requirement 30)', () => {
   it('filters by track, topic, difficulty and free text', async () => {
     const { app } = buildApp();
 
-    const byTrack = await request(app).get('/api/labs?track=kubernetes');
-    expect(byTrack.body.data.count).toBe(12);
+    // Per-track counts come from disk, so a new track or lab changes both sides.
+    for (const track of disk.trackIds) {
+      const byTrack = await request(app).get(`/api/labs?track=${track}`);
+      expect(byTrack.body.data.count, track).toBe(disk.labCountForTrack(track));
+      expect(byTrack.body.data.labs.map((l: { id: string }) => l.id), track).toEqual(
+        disk.idsForTrack(track),
+      );
+    }
 
-    const byDockerTrack = await request(app).get('/api/labs?track=docker');
-    expect(byDockerTrack.body.data.count).toBe(10);
+    // The other facets are checked against the catalog the API just served,
+    // rather than against a remembered answer that a second track would widen.
+    const all = (await request(app).get('/api/labs')).body.data.labs as Array<{
+      id: string;
+      track: string;
+      topic: string;
+      difficulty: string;
+    }>;
 
-    const byTopic = await request(app).get('/api/labs?topic=batch');
-    expect(byTopic.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-006', 'K8S-007']);
+    const topic = all[0]!.topic;
+    const byTopic = await request(app).get(`/api/labs?topic=${topic}`);
+    expect(byTopic.body.data.labs.map((l: { id: string }) => l.id)).toEqual(
+      all.filter((l) => l.topic === topic).map((l) => l.id),
+    );
 
-    const byLinuxTrack = await request(app).get('/api/labs?track=linux');
-    expect(byLinuxTrack.body.data.count).toBe(10);
+    for (const track of disk.trackIds) {
+      const inTrack = all.filter((l) => l.track === track);
+      for (const difficulty of new Set(inTrack.map((l) => l.difficulty))) {
+        const scoped = await request(app).get(`/api/labs?track=${track}&difficulty=${difficulty}`);
+        expect(scoped.body.data.count, `${track}/${difficulty}`).toBe(
+          inTrack.filter((l) => l.difficulty === difficulty).length,
+        );
+        expect(
+          scoped.body.data.labs.every((l: { track: string }) => l.track === track),
+          `${track}/${difficulty}`,
+        ).toBe(true);
+      }
+    }
 
-    // Difficulty is scoped to a track so the count is about that track alone.
-    const byDifficulty = await request(app).get('/api/labs?track=kubernetes&difficulty=intermediate');
-    expect(byDifficulty.body.data.count).toBe(5);
-
-    const byQuery = await request(app).get('/api/labs?q=secret');
-    expect(byQuery.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['K8S-005']);
-
-    const byDockerQuery = await request(app).get('/api/labs?track=docker&topic=storage');
-    expect(byDockerQuery.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['DOCKER-005']);
+    // Free text: an id is the narrowest query there is.
+    const one = all[0]!;
+    const byQuery = await request(app).get(`/api/labs?q=${one.id}`);
+    expect(byQuery.body.data.labs.map((l: { id: string }) => l.id)).toEqual([one.id]);
   });
 
   it('treats an unknown filter value as matching nothing, not as an error', async () => {
@@ -359,92 +380,106 @@ describe('GET /api/labs/:id — unknown labs (test requirement 32)', () => {
 // -------------------------------------------------------------- tracks API
 
 describe('GET /api/tracks', () => {
-  it('lists tracks', async () => {
+  it('lists every discovered track, with the metadata each declares', async () => {
     const res = await request(buildApp().app).get('/api/tracks');
 
     expect(res.status).toBe(200);
-    expect(res.body.data.count).toBe(4);
-    expect(res.body.data.tracks.map((t: { track: string }) => t.track)).toEqual([
-      'kubernetes',
-      'docker',
-      'linux',
-      'terraform',
-    ]);
-    expect(res.body.data.tracks[0]).toMatchObject({
-      track: 'kubernetes',
-      title: 'Kubernetes',
-      labCount: 12,
-    });
-    expect(res.body.data.tracks[0].topics.map((t: { topic: string }) => t.topic)).toContain('batch');
+    // Count and order are the catalog's, so a new track is additive here.
+    expect(res.body.data.count).toBe(disk.trackCount);
+    expect(res.body.data.tracks.map((t: { track: string }) => t.track)).toEqual(disk.trackIds);
 
-    // Title, tagline, and position for annotated tracks come from track.yaml.
-    expect(res.body.data.tracks[1]).toMatchObject({
-      track: 'docker',
-      title: 'Docker',
-      labCount: 10,
-    });
-    expect(res.body.data.tracks[1].tagline).toBeTruthy();
-
-    const linux = res.body.data.tracks[2];
-    expect(linux).toMatchObject({ track: 'linux', title: 'Linux', labCount: 10 });
-    expect(linux.topics.map((t: { topic: string }) => t.topic)).toEqual([
-      'linux-fundamentals',
-      'linux-administration',
-      'linux-networking',
-      'shell-scripting',
-      'troubleshooting',
-    ]);
+    for (const [index, track] of (
+      res.body.data.tracks as Array<{
+        track: string;
+        title: string;
+        tagline?: string;
+        labCount: number;
+        topics: Array<{ topic: string; labCount: number }>;
+      }>
+    ).entries()) {
+      const onDisk = disk.tracks[index]!;
+      expect(track.labCount, track.track).toBe(onDisk.labCount);
+      // Title, tagline, and position come from track.yaml when it declares
+      // them; a track without one is still given a usable title.
+      if (onDisk.declaredTitle) expect(track.title, track.track).toBe(onDisk.declaredTitle);
+      else expect(track.title, track.track).toBeTruthy();
+      if (onDisk.declaredTagline) expect(track.tagline, track.track).toBe(onDisk.declaredTagline);
+      // A track's topics account for exactly its own labs.
+      expect(track.topics.length, track.track).toBeGreaterThan(0);
+      expect(
+        track.topics.reduce((sum, t) => sum + t.labCount, 0),
+        track.track,
+      ).toBe(track.labCount);
+    }
   });
 
-  it('returns the Docker track with its labs', async () => {
-    const res = await request(buildApp().app).get('/api/tracks/docker');
+  it('returns each track with its own labs, and only its own', async () => {
+    const { app } = buildApp();
 
-    expect(res.status).toBe(200);
-    expect(res.body.data.track).toMatchObject({ track: 'docker', labCount: 10 });
-    expect(res.body.data.labs).toHaveLength(10);
-    expect(res.body.data.labs.every((l: { track: string }) => l.track === 'docker')).toBe(true);
-  });
+    for (const track of disk.trackIds) {
+      const res = await request(app).get(`/api/tracks/${track}`);
 
-  it('returns one track with its labs', async () => {
-    const res = await request(buildApp().app).get('/api/tracks/kubernetes');
-
-    expect(res.status).toBe(200);
-    expect(res.body.data.track).toMatchObject({ track: 'kubernetes', labCount: 12 });
-    expect(res.body.data.labs).toHaveLength(12);
+      expect(res.status, track).toBe(200);
+      expect(res.body.data.track, track).toMatchObject({
+        track,
+        labCount: disk.labCountForTrack(track),
+      });
+      expect(res.body.data.labs.map((l: { id: string }) => l.id), track).toEqual(
+        disk.idsForTrack(track),
+      );
+      expect(
+        res.body.data.labs.every((l: { track: string }) => l.track === track),
+        track,
+      ).toBe(true);
+    }
   });
 
   it('returns the labs in a track', async () => {
-    const res = await request(buildApp().app).get('/api/tracks/kubernetes/labs');
+    const { app } = buildApp();
 
-    expect(res.status).toBe(200);
-    expect(res.body.data.track).toBe('kubernetes');
-    expect(res.body.data.count).toBe(12);
-    expect(res.body.data.prerequisitesEnforced).toBe(false);
+    for (const track of disk.trackIds) {
+      const res = await request(app).get(`/api/tracks/${track}/labs`);
+
+      expect(res.status, track).toBe(200);
+      expect(res.body.data.track, track).toBe(track);
+      expect(res.body.data.count, track).toBe(disk.labCountForTrack(track));
+      expect(res.body.data.prerequisitesEnforced, track).toBe(false);
+    }
   });
 
   it('applies filters within the track', async () => {
-    const res = await request(buildApp().app).get('/api/tracks/kubernetes/labs?difficulty=intermediate');
+    const { app } = buildApp();
+    const track = disk.trackIds[0]!;
+    const all = (await request(app).get(`/api/tracks/${track}/labs`)).body.data.labs as Array<{
+      id: string;
+      difficulty: string;
+    }>;
+    const difficulty = all[all.length - 1]!.difficulty;
 
-    expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual([
-      'K8S-008',
-      'K8S-009',
-      'K8S-010',
-      'K8S-011',
-      'K8S-012',
-    ]);
+    const res = await request(app).get(`/api/tracks/${track}/labs?difficulty=${difficulty}`);
+    expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual(
+      all.filter((l) => l.difficulty === difficulty).map((l) => l.id),
+    );
   });
 
   it('ignores a track query parameter that contradicts the path', async () => {
     // The path pins the track; a query parameter must not widen the result.
-    const res = await request(buildApp().app).get('/api/tracks/kubernetes/labs?track=terraform');
+    const [first, second] = disk.trackIds;
+    const res = await request(buildApp().app).get(
+      `/api/tracks/${first}/labs?track=${second ?? first}`,
+    );
 
-    expect(res.body.data.track).toBe('kubernetes');
-    expect(res.body.data.count).toBe(12);
+    expect(res.body.data.track).toBe(first);
+    expect(res.body.data.count).toBe(disk.labCountForTrack(first!));
+    expect(res.body.data.labs.map((l: { id: string }) => l.id)).toEqual(
+      disk.idsForTrack(first!),
+    );
   });
 
   it('returns 404 for an unknown track and 400 for a malformed one', async () => {
-    // `ansible` is a track nothing ships yet — `terraform` used to serve as the
-    // unknown one here, and now exists.
+    // A track nothing ships — asserted, not assumed, so this test starts
+    // failing the day `ansible` becomes real rather than silently passing.
+    expect(disk.trackIds).not.toContain('ansible');
     const missing = await request(buildApp().app).get('/api/tracks/ansible');
     expect(missing.status).toBe(404);
     expect(missing.body.error.code).toBe('TRACK_NOT_FOUND');
@@ -457,12 +492,135 @@ describe('GET /api/tracks', () => {
     expect(missingLabs.status).toBe(404);
   });
 
-  it('never leaks lab internals through the track endpoints', async () => {
-    const body = JSON.stringify((await request(buildApp().app).get('/api/tracks/kubernetes/labs')).body);
+  it('never leaks lab internals through the track endpoints, on any track', async () => {
+    const { app } = buildApp();
 
-    expect(body).not.toContain('requirements');
-    expect(body).not.toContain('setup/');
-    expect(body).not.toContain('nginx:stabel');
+    // Every track, not just the first one written: catalog safety is a property
+    // of the projection, so a new track must not be able to opt out of it.
+    for (const track of disk.trackIds) {
+      const body = JSON.stringify((await request(app).get(`/api/tracks/${track}/labs`)).body);
+
+      expect(body, track).not.toContain('requirements');
+      expect(body, track).not.toContain('setup/');
+      expect(body, track).not.toContain('nginx:stabel');
+    }
+  });
+});
+
+// ------------------------------- the API follows the catalog it discovered
+
+/**
+ * The API contract is a *shape*, not a track list.
+ *
+ * `/api/labs`, `/api/tracks`, `/api/tracks/:track` and `/api/labs/:id` are
+ * generic routes over whatever the registry found. These tests prove that by
+ * serving a labs directory with one extra track in it and asserting the same
+ * generic properties — no route added, no response field added, no count typed
+ * anywhere. That is what lets a curriculum worktree add `labs/<track>/` without
+ * touching this file or any other shared test.
+ */
+describe('the catalog API serves whatever the labs directory contains', () => {
+  async function extendedApp(files: Record<string, string>) {
+    const labsDir = await labsDirPlus(files);
+    const extended = new LabRegistry(labsDir);
+    await extended.load();
+    return {
+      ...buildApp({ registry: extended, labsDir }),
+      registry: extended,
+      extendedDisk: await scanLabsDirectory(labsDir),
+    };
+  }
+
+  it('serves an additional valid track through the same routes, with no code change', async () => {
+    const { app, registry: extended, extendedDisk } = await extendedApp({
+      'fixture-track/track.yaml':
+        'title: Fixture Track\ntagline: A track that exists only in a temp directory.\norder: 5\n',
+      'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml(),
+    });
+
+    expect(extended.loadErrors).toEqual([]);
+
+    // /api/labs — one more lab, one more track, everything else unchanged.
+    const labs = await request(app).get('/api/labs');
+    expect(labs.body.data.count).toBe(extendedDisk.labCount);
+    expect(labs.body.data.count).toBe(disk.labCount + 1);
+    expect(labs.body.data.tracks.map((t: { track: string }) => t.track)).toEqual(
+      extendedDisk.trackIds,
+    );
+    expect(labs.body.data.tracks).toHaveLength(disk.trackCount + 1);
+    for (const track of disk.trackIds) {
+      const ids = labs.body.data.labs
+        .filter((l: { track: string }) => l.track === track)
+        .map((l: { id: string }) => l.id);
+      expect(ids, track).toEqual(disk.idsForTrack(track));
+    }
+
+    // /api/tracks — the new track carries the metadata it declared for itself.
+    const tracks = await request(app).get('/api/tracks');
+    expect(tracks.body.data.count).toBe(disk.trackCount + 1);
+    expect(
+      tracks.body.data.tracks.find((t: { track: string }) => t.track === 'fixture-track'),
+    ).toMatchObject({ track: 'fixture-track', title: 'Fixture Track', labCount: 1 });
+
+    // /api/tracks/:track and /api/labs/:id — no new route, no special case.
+    const one = await request(app).get('/api/tracks/fixture-track');
+    expect(one.status).toBe(200);
+    expect(one.body.data.labs.map((l: { id: string }) => l.id)).toEqual(['FIXTURE-901']);
+
+    const detail = await request(app).get('/api/labs/FIXTURE-901');
+    expect(detail.status).toBe(200);
+    expect(detail.body.data).toMatchObject({ id: 'FIXTURE-901', track: 'fixture-track' });
+
+    // And it is student-safe on exactly the same terms as every shipped lab:
+    // the requirement's *label* is served, never the machine-readable check.
+    expect(detail.body.data.requirements).toEqual(['The project directory exists']);
+    const serialised = JSON.stringify(detail.body);
+    expect(serialised).not.toContain('file_exists');
+    expect(serialised).not.toContain('"path"');
+
+    // /health counts what was loaded, not a constant.
+    const health = await request(app).get('/health');
+    expect(health.body.data.labsLoaded).toBe(extendedDisk.labCount);
+  });
+
+  it('does not serve an additional track whose lab is invalid', async () => {
+    const { app, registry: extended } = await extendedApp({
+      'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml({ extra: 'command: rm -rf /\n' }),
+    });
+
+    // Discovery being data-driven does not make the YAML trusted: the lab is
+    // refused, the track never reaches the catalog, and the API still serves
+    // exactly the shipped one.
+    expect(extended.loadErrors.join('\n')).toContain('LAB_DEFINITION_INVALID');
+
+    const labs = await request(app).get('/api/labs');
+    expect(labs.body.data.count).toBe(disk.labCount);
+    expect(labs.body.data.tracks.map((t: { track: string }) => t.track)).toEqual(disk.trackIds);
+
+    expect((await request(app).get('/api/tracks/fixture-track')).status).toBe(404);
+    expect((await request(app).get('/api/labs/FIXTURE-901')).status).toBe(404);
+  });
+
+  it('does not serve an additional track that reuses a shipped lab id', async () => {
+    const shipped = [...disk.labs].sort((a, b) => a.file.localeCompare(b.file))[0]!;
+    const { app, registry: extended } = await extendedApp({
+      // `zz-` so the fixture is always walked after the shipped definition.
+      'zz-fixture/fixture-901-demo/lab.yaml': fixtureLabYaml({
+        id: shipped.id,
+        track: 'zz-fixture',
+      }),
+    });
+
+    expect(extended.loadErrors.join('\n')).toContain('duplicate lab id');
+
+    const labs = await request(app).get('/api/labs');
+    expect(labs.body.data.count).toBe(disk.labCount);
+    expect(labs.body.data.tracks.map((t: { track: string }) => t.track)).toEqual(disk.trackIds);
+
+    // `/api/labs/:id` stays unambiguous: the id resolves to its own track.
+    const detail = await request(app).get(`/api/labs/${shipped.id}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.track).toBe(shipped.track);
   });
 });
 

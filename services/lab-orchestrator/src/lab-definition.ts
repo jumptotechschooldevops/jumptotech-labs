@@ -69,6 +69,90 @@ export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
   terraform: ['developer.hashicorp.com', 'www.terraform.io', 'terraform.io'],
   docker: ['docs.docker.com', 'docker.com', 'www.docker.com', 'github.com/docker'],
   aws: ['docs.aws.amazon.com', 'aws.amazon.com'],
+  /*
+   * Networking is the one track whose primary sources are standards bodies
+   * rather than a vendor: addressing, DHCP, NAT and DNS behaviour is *defined*
+   * by the IETF and the numbers are *assigned* by IANA, so an RFC is the
+   * upstream document here in the way kubernetes.io is for a Kubernetes lab.
+   *
+   * Every host below is required by a lab in the track's own curriculum plan:
+   *   rfc-editor.org  NET-002 (RFC 4632/1918/1122/950/3927), NET-010 (RFC 2131
+   *                   DHCP), NET-019 (RFC 2663/3022/6888 NAT)
+   *   iana.org        NET-002 — the IPv4 Special-Purpose Address Registry, the
+   *                   assignment authority the RFCs delegate to
+   *   man7.org        NET-002 `ip-route(8)`, NET-021 `ip-netns(8)` — iproute2
+   *   docs.kernel.org NET-021 — network namespaces, documented by the kernel
+   *   kubernetes.io   NET-024/025/026/027/032/033 — Services, EndpointSlices,
+   *                   NetworkPolicy, CoreDNS, Ingress, Gateway API
+   *   docs.docker.com NET-010/019/021/022/023 — IPAM, network drivers,
+   *                   published ports, the embedded DNS resolver
+   *   docs.aws.amazon.com  the plan grounds its AWS-flavoured labs in AWS
+   *                   technical documentation only, and claims no AWS exam
+   */
+  networking: [
+    'www.rfc-editor.org',
+    'rfc-editor.org',
+    'www.iana.org',
+    'iana.org',
+    'man7.org',
+    'www.man7.org',
+    'docs.kernel.org',
+    'kubernetes.io',
+    'docs.docker.com',
+    'docs.aws.amazon.com',
+  ],
+  /*
+   * Computer Science fundamentals is a `FOUNDATIONAL SKILL` track that claims
+   * no certification, so its authorities are the primary specifications and
+   * reference manuals for the things it teaches — each one named in the
+   * track's own source review:
+   *   docs.python.org     the language and standard library (~40 pages cited)
+   *   peps.python.org / packaging.python.org / pip.pypa.io
+   *                       dependency specification and resolution
+   *   man7.org            syscalls, `proc(5)`, signals, inodes, limits
+   *   docs.kernel.org     memory management, cgroup v2, the scheduler, procfs
+   *   gnu.org             Bash (redirection, exit status, environment) and
+   *                       coreutils (block size, MB vs MiB)
+   *   rfc-editor.org      HTTP, JSON, URI, UTF-8, ASCII, TCP, bearer tokens
+   *   iana.org            the HTTP status code and character set registries
+   *   unicode.org         The Unicode Standard
+   *   yaml.org            the YAML 1.2.2 specification
+   *   sqlite.org          the engine students actually run — SQL, planner, txns
+   *   postgresql.org      the production engine — indexes, MVCC, connections
+   *   kubernetes.io / docs.docker.com
+   *                       where these concepts are consumed (Pod lifecycle,
+   *                       container resource limits)
+   *
+   * Deliberately absent: training.linuxfoundation.org. The track's source
+   * review read the LFCS page once, in order to *decline* claiming LFCS
+   * coverage. A certification vendor's training site is not a technical source
+   * of truth, and this allowlist is what "official documentation" means.
+   */
+  cs: [
+    'docs.python.org',
+    'peps.python.org',
+    'packaging.python.org',
+    'pip.pypa.io',
+    'man7.org',
+    'www.man7.org',
+    'docs.kernel.org',
+    'www.gnu.org',
+    'gnu.org',
+    'www.rfc-editor.org',
+    'rfc-editor.org',
+    'www.iana.org',
+    'iana.org',
+    'www.unicode.org',
+    'unicode.org',
+    'yaml.org',
+    'www.yaml.org',
+    'www.sqlite.org',
+    'sqlite.org',
+    'www.postgresql.org',
+    'postgresql.org',
+    'kubernetes.io',
+    'docs.docker.com',
+  ],
 };
 
 /**

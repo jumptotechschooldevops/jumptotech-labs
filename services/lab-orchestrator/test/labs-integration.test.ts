@@ -33,6 +33,7 @@ import {
   type LabSession,
 } from '../src/index.js';
 import { verifyLab, waitForRequirements } from '@jumptotech/verifier';
+import { scanLabsDirectory } from './catalog-shape.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -124,9 +125,13 @@ suite('PLATFORM-003 integration: the lab catalog on real kind', () => {
     expect(registry.loadErrors).toEqual([]);
     // Every shipped lab loads. Kubernetes labs are exercised here against a
     // real cluster; Linux, Terraform, and Docker labs load from the same
-    // registry and are exercised in their own integration suites.
-    expect(registry.size).toBe(33);
-    expect(registry.labsForTrack('kubernetes')).toHaveLength(10);
+    // registry and are exercised in their own integration suites. The expected
+    // size is read off disk so a new lab in any track does not edit this file.
+    const disk = await scanLabsDirectory();
+    expect(registry.size).toBe(disk.labCount);
+    expect(registry.labsForTrack('kubernetes').map((l) => l.id)).toEqual(
+      disk.idsForTrack('kubernetes'),
+    );
 
     scratchDir = await mkdtemp(path.join(tmpdir(), 'jtt-labs-integration-'));
     k8s = new KubernetesClient({ kubeconfigPath: HOST_KUBECONFIG });

@@ -33,6 +33,7 @@ import {
   requiredImages,
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
+import { scanLabsDirectory } from './catalog-shape.js';
 
 const DOC_URL = 'https://docs.docker.com/reference/cli/docker/container/run/';
 
@@ -420,13 +421,19 @@ describe('track metadata is optional presentation, never a registry of tracks', 
   it('reads the shipped tracks straight off disk', async () => {
     const registry = new LabRegistry(LABS_DIR);
     await registry.load();
+    const disk = await scanLabsDirectory(LABS_DIR);
 
-    expect(registry.tracks().map((t) => ({ track: t.track, title: t.title, order: t.order }))).toEqual([
-      { track: 'kubernetes', title: 'Kubernetes', order: 10 },
-      { track: 'docker', title: 'Docker', order: 20 },
-      // No track.yaml: still listed, titled from the slug, ordered last.
-      { track: 'linux', title: 'Linux', order: undefined },
-      { track: 'terraform', title: 'Terraform', order: undefined },
-    ]);
+    // Every shipped track, in catalog order, with the title and order it
+    // declares for itself — read from the same `track.yaml` files the loader
+    // read, so adding a track needs no edit here. A track that declares no
+    // `track.yaml` is still listed, titled from its slug and ordered last.
+    expect(registry.tracks().map((t) => ({ track: t.track, order: t.order }))).toEqual(
+      disk.tracks.map((t) => ({ track: t.track, order: t.declaredOrder })),
+    );
+    for (const track of registry.tracks()) {
+      const declared = disk.tracks.find((t) => t.track === track.track)?.declaredTitle;
+      if (declared) expect(track.title, track.track).toBe(declared);
+      else expect(track.title, track.track).toBeTruthy();
+    }
   });
 });

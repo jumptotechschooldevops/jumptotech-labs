@@ -31,6 +31,7 @@ import {
   TerraformLabProvider,
 } from '@jumptotech/lab-orchestrator';
 import { FakeDockerEngines, FakeKubernetes } from '@jumptotech/lab-orchestrator/testing';
+import { scanLabsDirectory } from '@jumptotech/lab-orchestrator/testing/catalog';
 import { FakeContainerRuntime } from '@jumptotech/lab-orchestrator/testing/containers';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
@@ -39,10 +40,14 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const SECRET = 'integration-test-secret-value';
 
 let registry: LabRegistry;
+/** The catalog as it is on disk — where every expected count comes from. */
+let disk: Awaited<ReturnType<typeof scanLabsDirectory>>;
 
 beforeAll(async () => {
   registry = new LabRegistry(path.join(repoRoot, 'labs'));
   await registry.load();
+  expect(registry.loadErrors).toEqual([]);
+  disk = await scanLabsDirectory();
 });
 
 interface HarnessOptions {
@@ -118,7 +123,7 @@ async function start(app: ReturnType<typeof buildApp>['app'], labId: string) {
 // --- catalog ----------------------------------------------------------------
 
 describe('the catalog shows every track (test requirements 33–35)', () => {
-  it('lists Kubernetes, Docker, Linux and Terraform with their lab counts', async () => {
+  it('lists every discovered track with its lab count and its providers', async () => {
     const { app } = buildApp();
     const response = await request(app).get('/api/labs');
 
@@ -130,17 +135,20 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       providers: string[];
     }>;
 
-    expect(tracks.map((t) => t.track).sort()).toEqual([
-      'docker',
-      'kubernetes',
-      'linux',
-      'terraform',
-    ]);
-    expect(tracks.find((t) => t.track === 'kubernetes')?.labCount).toBe(12);
-    expect(tracks.find((t) => t.track === 'docker')?.labCount).toBe(10);
-    expect(tracks.find((t) => t.track === 'linux')?.labCount).toBe(10);
-    expect(tracks.find((t) => t.track === 'terraform')?.labCount).toBe(1);
-    expect(tracks.find((t) => t.track === 'linux')?.providers).toEqual(['linux']);
+    // No track is named in a literal here: the list and the counts are read off
+    // disk, so a new track appears in this assertion by existing.
+    expect(tracks.map((t) => t.track)).toEqual(disk.trackIds);
+    for (const track of tracks) {
+      expect(track.labCount, track.track).toBe(disk.labCountForTrack(track.track));
+      // A track's providers are the providers its own labs declare, in
+      // first-appearance order — never a mapping held somewhere in code.
+      expect(track.providers, track.track).toEqual([
+        ...new Set(
+          disk.labs.filter((l) => l.track === track.track).map((l) => l.provider),
+        ),
+      ]);
+      expect(track.providers.length, track.track).toBeGreaterThan(0);
+    }
   });
 
   it('marks each lab with its provider and whether it can run here', async () => {
@@ -152,15 +160,26 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       availability: { available: boolean; reason?: string };
     }>;
 
-    expect(labs.find((l) => l.id === 'LINUX-001')?.provider).toBe('linux');
-    expect(labs.find((l) => l.id === 'TF-001')?.provider).toBe('terraform');
-    expect(labs.find((l) => l.id === 'DOCKER-001')?.provider).toBe('docker');
-    // Every lab whose provider this deployment runs is startable. The Docker
-    // ten are the exception here *because this suite switches Docker off* —
-    // which is the point: they are still listed, and marked with the reason.
-    expect(labs.filter((l) => l.provider !== 'docker').every((l) => l.availability.available)).toBe(
-      true,
+    // Every lab is marked with the provider its own definition declares.
+    for (const onDisk of disk.labs) {
+      expect(labs.find((l) => l.id === onDisk.id)?.provider, onDisk.id).toBe(onDisk.provider);
+    }
+    /*
+     * A lab is startable exactly when its provider is. Docker is switched off in
+     * this suite, and its labs are still listed — marked with the reason rather
+     * than hidden. Reading the provider states out of the same payload is what
+     * keeps this true when a provider is switched on, or when a track ships its
+     * first lab for a provider that has none today.
+     */
+    const readiness = new Map(
+      (response.body.data.providers as Array<{ provider: string; available: boolean }>).map(
+        (p) => [p.provider, p.available],
+      ),
     );
+    for (const lab of labs) {
+      expect(lab.availability.available, lab.id).toBe(readiness.get(lab.provider) ?? false);
+    }
+    expect(labs.filter((l) => l.provider === 'docker').length).toBeGreaterThan(0);
     expect(labs.filter((l) => l.provider === 'docker').every((l) => l.availability.available)).toBe(
       false,
     );
@@ -181,15 +200,23 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
     expect(docker?.available).toBe(false);
     expect(docker?.reason).toContain('per-session Docker daemon');
     expect(aws?.available).toBe(false);
-    // AWS ships no lab at all. Docker ships ten, and every one of them says it
-    // cannot run here rather than offering a button that was going to fail.
+    // AWS ships no lab at all. Every Docker lab there is says it cannot run
+    // here rather than offering a button that was going to fail.
     const labs = response.body.data.labs as Array<{
       provider: string;
       availability: { available: boolean; reason?: string };
     }>;
-    expect(labs.some((l) => l.provider === 'aws')).toBe(false);
+    // A provider is reported whether or not a lab uses it — `aws` is registered
+    // here and ships nothing today. Asserted against disk rather than pinned,
+    // so the day an AWS lab lands this describes the new truth instead of
+    // failing an unrelated suite.
+    expect(providers.map((p) => p.provider)).toContain('aws');
+    expect(labs.some((l) => l.provider === 'aws')).toBe(
+      disk.labs.some((l) => l.provider === 'aws'),
+    );
     const dockerLabs = labs.filter((l) => l.provider === 'docker');
-    expect(dockerLabs).toHaveLength(10);
+    expect(dockerLabs).toHaveLength(disk.labs.filter((l) => l.provider === 'docker').length);
+    expect(dockerLabs.length).toBeGreaterThan(0);
     expect(dockerLabs.every((l) => !l.availability.available)).toBe(true);
     expect(dockerLabs[0]?.availability.reason).toContain('per-session Docker daemon');
   });
@@ -221,36 +248,22 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
     expect(tracks.find((t) => t.track === 'kubernetes')?.availability.available).toBe(true);
   });
 
-  it('filters labs by track', async () => {
+  it('filters labs by track, the same way through both routes', async () => {
     const { app } = buildApp();
 
-    for (const [track, expected] of [
-      [
-        'linux',
-        [
-          'LINUX-001',
-          'LINUX-002',
-          'LINUX-003',
-          'LINUX-004',
-          'LINUX-005',
-          'LINUX-006',
-          'LINUX-007',
-          'LINUX-008',
-          'LINUX-009',
-          'LINUX-010',
-        ],
-      ],
-      ['terraform', ['TF-001']],
-    ] as const) {
+    for (const track of disk.trackIds) {
+      const expected = disk.idsForTrack(track);
+
       const viaLabs = await request(app).get(`/api/labs?track=${track}`);
-      expect((viaLabs.body.data.labs as Array<{ id: string }>).map((l) => l.id)).toEqual(expected);
+      expect((viaLabs.body.data.labs as Array<{ id: string }>).map((l) => l.id), track).toEqual(
+        expected,
+      );
 
       const viaTrack = await request(app).get(`/api/tracks/${track}/labs`);
-      expect((viaTrack.body.data.labs as Array<{ id: string }>).map((l) => l.id)).toEqual(expected);
+      expect((viaTrack.body.data.labs as Array<{ id: string }>).map((l) => l.id), track).toEqual(
+        expected,
+      );
     }
-
-    const kubernetes = await request(app).get('/api/labs?track=kubernetes');
-    expect(kubernetes.body.data.labs).toHaveLength(12);
   });
 
   it('serves per-lab availability on the detail endpoint', async () => {
@@ -290,7 +303,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       'terraform',
       'aws',
     ]);
-    expect(response.body.data.labsLoaded).toBe(33);
+    expect(response.body.data.labsLoaded).toBe(disk.labCount);
   });
 });
 

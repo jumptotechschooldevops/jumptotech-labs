@@ -9,18 +9,34 @@
  * The registry is exercised against real fixtures written to a temp directory,
  * not against a mock, so "the loader rejects this" means the loader actually
  * read the bytes and refused.
+ *
+ * Nothing here restates the current curriculum. What the catalog *contains* is
+ * read off disk by `scanLabsDirectory` and compared against what the registry
+ * produced, so adding a track or a lab needs no edit in this file — while a lab
+ * that fails to load, or is dropped as a duplicate, still fails loudly. See
+ * `catalog-shape.ts` for why that is stronger than the counts it replaced.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  DISALLOWED_DOC_HOSTS,
   LabRegistry,
   OFFICIAL_DOC_HOSTS,
   parseLabDefinition,
   LabDefinitionError,
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
+import {
+  fixtureLabYaml,
+  labsDirPlus,
+  scanLabsDirectory,
+  temporaryLabsDirs,
+} from './catalog-shape.js';
+
+/** The order `TrackSummary.difficulties` promises. */
+const DIFFICULTY_ORDER = ['beginner', 'intermediate', 'advanced'];
 
 const DOC_URL = 'https://kubernetes.io/docs/concepts/workloads/pods/';
 
@@ -120,66 +136,72 @@ async function realRegistry(): Promise<LabRegistry> {
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  const dirs = [...tempDirs.splice(0), ...temporaryLabsDirs()];
+  await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 // ---------------------------------------------------------------- discovery
 
 describe('catalog — discovery (test requirements 1, 2)', () => {
-  it('discovers every lab in the real labs/ directory', async () => {
+  it('registers exactly the labs that are on disk, and nothing else', async () => {
     const registry = await realRegistry();
+    const disk = await scanLabsDirectory();
 
     expect(registry.loadErrors).toEqual([]);
-    // Twelve Kubernetes, ten Linux, ten Docker, and the Terraform lab.
-    expect(registry.size).toBe(33);
-    expect(registry.all().map((l) => l.id)).toEqual([
-      'DOCKER-001',
-      'DOCKER-002',
-      'DOCKER-003',
-      'DOCKER-004',
-      'DOCKER-005',
-      'DOCKER-006',
-      'DOCKER-007',
-      'DOCKER-008',
-      'DOCKER-009',
-      'DOCKER-010',
-      'K8S-001',
-      'K8S-002',
-      'K8S-003',
-      'K8S-004',
-      'K8S-005',
-      'K8S-006',
-      'K8S-007',
-      'K8S-008',
-      'K8S-009',
-      'K8S-010',
-      'K8S-011',
-      'K8S-012',
-      'LINUX-001',
-      'LINUX-002',
-      'LINUX-003',
-      'LINUX-004',
-      'LINUX-005',
-      'LINUX-006',
-      'LINUX-007',
-      'LINUX-008',
-      'LINUX-009',
-      'LINUX-010',
-      'TF-001',
-    ]);
+    // Both sides are derived: the left from the loader, the right from a plain
+    // walk of labs/. Adding a lab changes both together and needs no edit here,
+    // but a lab that fails to load — or loses a duplicate-id race — leaves its
+    // file on disk with its id missing from the registry, and fails.
+    expect(registry.size).toBe(disk.labCount);
+    expect(registry.all().map((l) => l.id)).toEqual(disk.ids);
+
+    // Every id is unique, and every lab belongs to the track whose directory
+    // holds it: `labs/<track>/<lab>/lab.yaml` must agree with `track:` inside.
+    expect(new Set(disk.ids).size).toBe(disk.ids.length);
+    for (const lab of registry.all()) {
+      const onDisk = disk.labs.find((l) => l.id === lab.id);
+      expect(onDisk, `${lab.id} is registered but not on disk`).toBeDefined();
+      expect(lab.track, lab.id).toBe(onDisk?.track);
+      expect(path.dirname(path.dirname(onDisk!.file)), lab.id).toBe(
+        path.join(LABS_DIR, lab.track),
+      );
+    }
+  });
+
+  it('loads deterministically: two loads of one directory agree exactly', async () => {
+    const [a, b] = [await realRegistry(), await realRegistry()];
+
+    expect(a.all().map((l) => l.id)).toEqual(b.all().map((l) => l.id));
+    expect(a.tracks()).toEqual(b.tracks());
   });
 
   it('discovers every shipped track, in its declared order', async () => {
     const tracks = (await realRegistry()).tracks();
+    const disk = await scanLabsDirectory();
 
-    // Order comes from labs/<track>/track.yaml, not from a table in code —
-    // and a track without one (linux, terraform) still appears, sorting after
-    // the annotated tracks alphabetically.
-    expect(tracks.map((t) => t.track)).toEqual(['kubernetes', 'docker', 'linux', 'terraform']);
-    expect(tracks.map((t) => t.title)).toEqual(['Kubernetes', 'Docker', 'Linux', 'Terraform']);
-    expect(tracks.map((t) => t.labCount)).toEqual([12, 10, 10, 1]);
-    // Only the annotated tracks promise a tagline.
-    for (const track of tracks.slice(0, 2)) expect(track.tagline).toBeTruthy();
+    // Order comes from labs/<track>/track.yaml, not from a table in code — and
+    // a track without one still appears, sorting after the annotated tracks
+    // alphabetically. Both the list and the counts are read off disk.
+    expect(tracks.map((t) => t.track)).toEqual(disk.trackIds);
+    expect(tracks.map((t) => t.labCount)).toEqual(disk.tracks.map((t) => t.labCount));
+
+    for (const [index, track] of tracks.entries()) {
+      const onDisk = disk.tracks[index]!;
+      // Declared presentation metadata is honoured verbatim; a track that
+      // declares none is still given a usable title rather than nothing.
+      if (onDisk.declaredTitle) expect(track.title, track.track).toBe(onDisk.declaredTitle);
+      else expect(track.title, track.track).toBeTruthy();
+      if (onDisk.declaredTagline) expect(track.tagline, track.track).toBe(onDisk.declaredTagline);
+      expect(track.order, track.track).toBe(onDisk.declaredOrder);
+
+      // A track's own numbers are internally consistent: its topics account for
+      // every one of its labs, and it declares at least one difficulty.
+      expect(track.labCount, track.track).toBe(onDisk.labs.length);
+      expect(track.topics.reduce((sum, t) => sum + t.labCount, 0), track.track).toBe(
+        track.labCount,
+      );
+      expect(track.difficulties.length, track.track).toBeGreaterThan(0);
+    }
   });
 
   it('discovers multiple labs from nested directories', async () => {
@@ -209,12 +231,9 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
     const labs = (await realRegistry()).all();
 
     // `all()` groups labs by track slug, in a stable order…
-    expect([...new Set(labs.map((l) => l.track))]).toEqual([
-      'docker',
-      'kubernetes',
-      'linux',
-      'terraform',
-    ]);
+    expect([...new Set(labs.map((l) => l.track))]).toEqual(
+      [...new Set(labs.map((l) => l.track))].sort((a, b) => a.localeCompare(b)),
+    );
 
     // …each as one contiguous run, rather than interleaved.
     const trackRuns = labs.map((l) => l.track).filter((track, i, list) => track !== list[i - 1]);
@@ -227,6 +246,143 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
       const orders = labs.filter((l) => l.track === track).map((l) => l.order);
       expect(orders, `labs in track '${track}'`).toEqual([...orders].sort((a, b) => a - b));
     }
+  });
+});
+
+// ------------------------------------------ adding a track is a data change
+
+/**
+ * The property the whole platform rests on: a new track is *added*, never
+ * *declared*.
+ *
+ * Each test here starts from a copy of the real labs directory and adds files
+ * to it, so the new track has to coexist with everything already shipped rather
+ * than being discovered in an empty directory. None of the assertions name a
+ * count — the same derived checks that describe the shipped catalog describe
+ * the extended one, which is exactly what makes a curriculum worktree able to
+ * add `labs/<track>/` without touching a shared test.
+ */
+describe('catalog — a valid new track is discovered without a code or test change', () => {
+  it('picks up an additional track, additively, with no expected count edited', async () => {
+    const baseline = await scanLabsDirectory();
+    const root = await labsDirPlus({
+      'fixture-track/track.yaml':
+        'title: Fixture Track\ntagline: A track that exists only in a temp directory.\norder: 5\n',
+      'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml(),
+    });
+    const registry = new LabRegistry(root);
+    await registry.load();
+    const disk = await scanLabsDirectory(root);
+
+    // The shipped-catalog assertions, verbatim, against a catalog with one more
+    // track in it.
+    expect(registry.loadErrors).toEqual([]);
+    expect(registry.size).toBe(disk.labCount);
+    expect(registry.all().map((l) => l.id)).toEqual(disk.ids);
+    expect(registry.tracks().map((t) => t.track)).toEqual(disk.trackIds);
+    expect(registry.tracks().map((t) => t.labCount)).toEqual(disk.tracks.map((t) => t.labCount));
+
+    // …and it really is additive: one more track, one more lab, and every track
+    // that already shipped keeps exactly the labs it had.
+    expect(disk.trackCount).toBe(baseline.trackCount + 1);
+    expect(disk.labCount).toBe(baseline.labCount + 1);
+    for (const track of baseline.trackIds) {
+      expect(registry.labsForTrack(track).map((l) => l.id), track).toEqual(
+        baseline.idsForTrack(track),
+      );
+    }
+
+    // The new track's own metadata is honoured, including where it sorts.
+    expect(registry.track('fixture-track')).toMatchObject({
+      track: 'fixture-track',
+      title: 'Fixture Track',
+      labCount: 1,
+      order: 5,
+    });
+    expect(registry.tracks()[0]?.track).toBe('fixture-track');
+    expect(registry.get('FIXTURE-901').track).toBe('fixture-track');
+    expect(registry.list({ track: 'fixture-track' }).map((l) => l.id)).toEqual(['FIXTURE-901']);
+  });
+
+  it('appears with no track.yaml at all, titled from its slug', async () => {
+    const root = await labsDirPlus({
+      'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml(),
+    });
+    const registry = new LabRegistry(root);
+    await registry.load();
+
+    expect(registry.loadErrors).toEqual([]);
+    // No declared order, so it sorts after the annotated tracks, alphabetically.
+    expect(registry.track('fixture-track')).toMatchObject({
+      track: 'fixture-track',
+      title: 'Fixture Track',
+      labCount: 1,
+    });
+    expect(registry.track('fixture-track')?.order).toBeUndefined();
+  });
+
+  it('rejects an invalid lab in a new track, and keeps the rest of the catalog', async () => {
+    const baseline = await scanLabsDirectory();
+    const root = await labsDirPlus({
+      // Two ways to be invalid, one per lab: a key the schema does not know
+      // (and which could carry a command), and a substrate with no provider.
+      'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml({ extra: 'command: rm -rf /\n' }),
+      'fixture-track/fixture-902-demo/lab.yaml': fixtureLabYaml({
+        id: 'FIXTURE-902',
+        slug: 'fixture-902-demo',
+      }).replace('provider: linux', 'provider: firecracker'),
+    });
+    const registry = new LabRegistry(root);
+    await registry.load();
+
+    // A new track being data-driven does not make its YAML trusted: neither lab
+    // registers, the track never reaches the catalog, and the shipped catalog
+    // is untouched.
+    expect(registry.has('FIXTURE-901')).toBe(false);
+    expect(registry.has('FIXTURE-902')).toBe(false);
+    expect(registry.tracks().map((t) => t.track)).toEqual(baseline.trackIds);
+    expect(registry.size).toBe(baseline.labCount);
+    expect(registry.loadErrors).toHaveLength(2);
+    expect(registry.loadErrors.join('\n')).toContain('LAB_DEFINITION_INVALID');
+  });
+
+  it('rejects a new track reusing a shipped lab id, and keeps the original', async () => {
+    const baseline = await scanLabsDirectory();
+    // The lab whose file sorts first, so the shipped definition is the one that
+    // registers and the impostor is the one refused. `zz-` guarantees the
+    // fixture directory is walked last whatever tracks ship.
+    const shipped = [...baseline.labs].sort((a, b) => a.file.localeCompare(b.file))[0]!;
+    const root = await labsDirPlus({
+      'zz-fixture/fixture-901-demo/lab.yaml': fixtureLabYaml({
+        id: shipped.id,
+        track: 'zz-fixture',
+      }),
+    });
+    const registry = new LabRegistry(root);
+    await registry.load();
+
+    expect(registry.loadErrors.join('\n')).toContain('duplicate lab id');
+    expect(registry.size).toBe(baseline.labCount);
+    // `/api/labs/:id` stays unambiguous: the id still resolves to its own track.
+    expect(registry.get(shipped.id).track).toBe(shipped.track);
+    expect(registry.tracks().map((t) => t.track)).toEqual(baseline.trackIds);
+  });
+
+  it('rejects a new track reusing a shipped slug, so catalog links stay stable', async () => {
+    const baseline = await scanLabsDirectory();
+    const shipped = [...baseline.labs].sort((a, b) => a.file.localeCompare(b.file))[0]!;
+    const root = await labsDirPlus({
+      'zz-fixture/fixture-901-demo/lab.yaml': fixtureLabYaml({
+        slug: shipped.slug,
+        track: 'zz-fixture',
+      }),
+    });
+    const registry = new LabRegistry(root);
+    await registry.load();
+
+    expect(registry.loadErrors.join('\n')).toContain(`duplicate slug '${shipped.slug}'`);
+    expect(registry.size).toBe(baseline.labCount);
+    expect(registry.getBySlug(shipped.slug)?.id).toBe(shipped.id);
   });
 });
 
@@ -297,98 +453,121 @@ describe('catalog — duplicate ids and slugs are rejected (test requirement 4)'
 // ------------------------------------------------------------------ filters
 
 describe('catalog — filtering (test requirement 5)', () => {
-  it('filters by track', async () => {
+  it('filters by track, returning exactly that track’s labs in catalog order', async () => {
     const registry = await realRegistry();
+    const disk = await scanLabsDirectory();
 
-    expect(registry.list({ track: 'kubernetes' })).toHaveLength(12);
-    expect(registry.list({ track: 'docker' })).toHaveLength(10);
-    expect(registry.list({ track: 'linux' }).map((l) => l.id)).toEqual([
-      'LINUX-001',
-      'LINUX-002',
-      'LINUX-003',
-      'LINUX-004',
-      'LINUX-005',
-      'LINUX-006',
-      'LINUX-007',
-      'LINUX-008',
-      'LINUX-009',
-      'LINUX-010',
-    ]);
-    expect(registry.list({ track: 'terraform' }).map((l) => l.id)).toEqual(['TF-001']);
-    // A track nothing ships yet still matches nothing rather than erroring.
+    // Every shipped track, checked the same way — no track named in a literal.
+    for (const track of disk.trackIds) {
+      expect(registry.list({ track }).map((l) => l.id), track).toEqual(disk.idsForTrack(track));
+      expect(registry.labsForTrack(track).map((l) => l.id), track).toEqual(
+        disk.idsForTrack(track),
+      );
+    }
+
+    // A track nothing ships yet matches nothing rather than erroring.
+    expect(disk.trackIds).not.toContain('ansible');
     expect(registry.list({ track: 'ansible' })).toHaveLength(0);
-    expect(registry.labsForTrack('kubernetes')).toHaveLength(12);
-    expect(registry.labsForTrack('linux')).toHaveLength(10);
-    expect(registry.labsForTrack('docker').map((l) => l.id)).toEqual([
-      'DOCKER-001',
-      'DOCKER-002',
-      'DOCKER-003',
-      'DOCKER-004',
-      'DOCKER-005',
-      'DOCKER-006',
-      'DOCKER-007',
-      'DOCKER-008',
-      'DOCKER-009',
-      'DOCKER-010',
-    ]);
   });
 
-  it('filters by topic, difficulty and free text', async () => {
+  it('filters by topic, difficulty and level consistently with the catalog', async () => {
     const registry = await realRegistry();
+    const all = registry.list();
 
-    // Topic and difficulty are catalog-wide facets, so a second track widens
-    // their results — which is the point of the filter, not a regression. Each
-    // assertion below therefore names a track when it means one track.
-    expect(registry.list({ topic: 'batch' }).map((l) => l.id)).toEqual(['K8S-006', 'K8S-007']);
-    expect(
-      registry.list({ track: 'kubernetes', difficulty: 'intermediate' }).map((l) => l.id),
-    ).toEqual(['K8S-008', 'K8S-009', 'K8S-010', 'K8S-011', 'K8S-012']);
-    expect(registry.list({ track: 'linux', difficulty: 'beginner' }).map((l) => l.id)).toEqual([
-      'LINUX-001',
-      'LINUX-002',
-      'LINUX-003',
-      'LINUX-004',
-    ]);
-    expect(registry.list({ q: 'cronjob' }).map((l) => l.id)).toEqual(['K8S-007']);
+    // Each facet is checked against the catalog itself, not against a
+    // remembered answer — so a second track widening a facet is the filter
+    // working, not a regression to edit out.
+    const facets: Array<[string, (lab: (typeof all)[number]) => string]> = [
+      ['topic', (l) => l.topic],
+      ['difficulty', (l) => l.difficulty],
+      ['level', (l) => l.level],
+    ];
+    for (const [facet, valueOf] of facets) {
+      for (const value of new Set(all.map(valueOf))) {
+        expect(
+          registry.list({ [facet]: value }).map((l) => l.id),
+          `${facet}=${value}`,
+        ).toEqual(all.filter((l) => valueOf(l) === value).map((l) => l.id));
+      }
+    }
   });
 
-  it('combines a track filter with the other facets', async () => {
+  it('matches free text over id, title, summary and topic', async () => {
     const registry = await realRegistry();
+    const all = registry.list();
+    const lab = all[0]!;
 
-    expect(registry.list({ track: 'docker', difficulty: 'beginner' }).map((l) => l.id)).toEqual([
-      'DOCKER-001',
-      'DOCKER-002',
-      'DOCKER-003',
-      'DOCKER-007',
-    ]);
-    expect(registry.list({ track: 'docker', topic: 'troubleshooting' }).map((l) => l.id)).toEqual([
-      'DOCKER-010',
-    ]);
-    // A free-text term that only one track uses must not leak across tracks.
-    expect(registry.list({ q: 'dockerfile' }).every((l) => l.track === 'docker')).toBe(true);
-    expect(registry.list({ track: 'kubernetes', q: 'volume' }).every((l) => l.track === 'kubernetes')).toBe(
-      true,
-    );
+    // An id is the narrowest query there is: it must select exactly one lab.
+    expect(registry.list({ q: lab.id }).map((l) => l.id)).toEqual([lab.id]);
+
+    // Any term drawn from a real title selects a set that all genuinely contain
+    // it, which is the property — the size of that set is curriculum, not
+    // behaviour.
+    const term = lab.title.split(' ')[0]!.toLowerCase();
+    const hits = registry.list({ q: term });
+    expect(hits.length).toBeGreaterThan(0);
+    for (const hit of hits) {
+      expect(`${hit.id} ${hit.title} ${hit.summary} ${hit.topic}`.toLowerCase()).toContain(term);
+    }
+    expect(registry.list({ q: 'no-lab-anywhere-mentions-this' })).toEqual([]);
   });
 
-  it('reports tracks with their topics and difficulties', async () => {
+  it('combines a track filter with the other facets without leaking across tracks', async () => {
     const registry = await realRegistry();
-    const [track] = registry.tracks();
+    const disk = await scanLabsDirectory();
 
-    expect(track).toMatchObject({ track: 'kubernetes', title: 'Kubernetes', labCount: 12 });
-    expect(track?.difficulties).toEqual(['beginner', 'intermediate']);
-    expect(track?.topics.map((t) => t.topic)).toContain('troubleshooting');
+    for (const track of disk.trackIds) {
+      const inTrack = registry.list({ track });
+
+      for (const difficulty of new Set(inTrack.map((l) => l.difficulty))) {
+        const combined = registry.list({ track, difficulty });
+        expect(combined.map((l) => l.id), `${track}/${difficulty}`).toEqual(
+          inTrack.filter((l) => l.difficulty === difficulty).map((l) => l.id),
+        );
+        expect(combined.every((l) => l.track === track)).toBe(true);
+      }
+      for (const topic of new Set(inTrack.map((l) => l.topic))) {
+        const combined = registry.list({ track, topic });
+        expect(combined.map((l) => l.id), `${track}/${topic}`).toEqual(
+          inTrack.filter((l) => l.topic === topic).map((l) => l.id),
+        );
+      }
+      // A free-text term never widens a track filter back out again.
+      expect(registry.list({ track, q: 'a' }).every((l) => l.track === track)).toBe(true);
+    }
+  });
+
+  it('reports every track with its own topics, difficulties and providers', async () => {
+    const registry = await realRegistry();
+
+    for (const track of registry.tracks()) {
+      const labs = registry.labsForTrack(track.track);
+
+      expect(track.labCount, track.track).toBe(labs.length);
+      // Topics and providers are in first-appearance order; difficulties are
+      // ranked, easiest first.
+      expect(track.topics.map((t) => t.topic), track.track).toEqual([
+        ...new Set(labs.map((l) => l.topic)),
+      ]);
+      expect(track.providers, track.track).toEqual([...new Set(labs.map((l) => l.provider))]);
+      expect(track.difficulties, track.track).toEqual(
+        [...new Set(labs.map((l) => l.difficulty))].sort(
+          (a, b) => DIFFICULTY_ORDER.indexOf(a) - DIFFICULTY_ORDER.indexOf(b),
+        ),
+      );
+    }
+
     expect(registry.track('nope')).toBeNull();
   });
 
-  it('reports the Docker track the same way, from the same code path', async () => {
-    const docker = (await realRegistry()).track('docker');
+  it('reports every track through one code path, with no per-track special case', async () => {
+    const registry = await realRegistry();
 
-    expect(docker).toMatchObject({ track: 'docker', title: 'Docker', labCount: 10 });
-    expect(docker?.difficulties).toEqual(['beginner', 'intermediate']);
-    expect(docker?.topics.map((t) => t.topic)).toEqual(
-      expect.arrayContaining(['containers', 'images', 'storage', 'networking', 'troubleshooting']),
-    );
+    // `track(name)` and `tracks()` are the same projection; if a track ever
+    // needed a branch, these would drift.
+    for (const summary of registry.tracks()) {
+      expect(registry.track(summary.track), summary.track).toEqual(summary);
+    }
   });
 });
 
@@ -624,7 +803,13 @@ describe('schema — documentation (test requirement 10)', () => {
       // `OFFICIAL_DOC_HOSTS` is the same table the loader enforces at parse
       // time, so this cannot drift away from what is actually accepted.
       const official = OFFICIAL_DOC_HOSTS[lab.track];
-      expect(official, `track '${lab.track}' has no official documentation hosts`).toBeDefined();
+      expect(
+        official,
+        `track '${lab.track}' has no entry in OFFICIAL_DOC_HOSTS. A new track is ` +
+          'discovered from its labs alone, but the documentation-host allowlist ' +
+          'is a deliberate gate: add the track\'s official hosts to ' +
+          'OFFICIAL_DOC_HOSTS in src/lab-definition.ts before shipping its labs.',
+      ).toBeDefined();
 
       const cited = lab.references.map((ref) => new URL(ref.url).hostname);
       expect(
@@ -634,6 +819,63 @@ describe('schema — documentation (test requirement 10)', () => {
 
       for (const ref of lab.references) expect(ref.url).toMatch(/^https:\/\//);
     }
+  });
+});
+
+/**
+ * The allowlist itself, independent of which tracks currently ship labs.
+ *
+ * Entries are added ahead of a track's first lab, so nothing else exercises
+ * them until that lab lands. This is the guard in the meantime: an entry is
+ * only allowed to name concrete documentation hosts, and adding a track must
+ * never be a way to smuggle a commercial training platform onto the official
+ * list or to open the policy up with a wildcard.
+ */
+describe('schema — the official documentation allowlist cannot be widened', () => {
+  it('lists only concrete hostnames, with no wildcard or scheme', () => {
+    for (const [track, hosts] of Object.entries(OFFICIAL_DOC_HOSTS)) {
+      expect(hosts.length, track).toBeGreaterThan(0);
+      expect(new Set(hosts).size, track).toBe(hosts.length);
+
+      for (const host of hosts) {
+        // An entry is a hostname, optionally narrowed by a path prefix
+        // (`github.com/kubernetes`). Never a scheme, never a wildcard, and
+        // never a bare label that would match more than one site.
+        const bare = host.split('/')[0]!;
+        expect(host, `${track}: ${host}`).not.toContain('*');
+        expect(host, `${track}: ${host}`).not.toContain('://');
+        expect(bare, `${track}: ${host}`).toMatch(
+          /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9-]+)+$/,
+        );
+      }
+    }
+  });
+
+  it('never names a host the platform has explicitly disallowed', () => {
+    // The two tables must not intersect: a commercial training platform must
+    // not be able to become "official" by appearing in a new track's entry.
+    for (const [track, hosts] of Object.entries(OFFICIAL_DOC_HOSTS)) {
+      for (const host of hosts) {
+        const bare = host.split('/')[0]!;
+        for (const banned of DISALLOWED_DOC_HOSTS) {
+          expect(
+            bare === banned || bare.endsWith(`.${banned}`),
+            `${track} lists '${host}', which is a disallowed host`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('still refuses a lab citing a disallowed host, whatever else it cites', () => {
+    // The official-host rule is satisfied here; the ban is what refuses it.
+    expectIssue(
+      mutate(
+        'references:\n  - title: Kubernetes Pods',
+        'references:\n  - title: A course\n    url: https://www.udemy.com/course/k8s\n  - title: Kubernetes Pods',
+      ),
+      /udemy\.com/,
+    );
   });
 });
 
