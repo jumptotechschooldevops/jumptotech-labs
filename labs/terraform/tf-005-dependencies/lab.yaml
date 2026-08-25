@@ -29,9 +29,13 @@
 # check requires `depends_on`, and adding one would not help: the reference
 # already creates the edge, which is the point the lab is making.
 #
-# A student could in principle compute SHA-256 of the exact rendered bytes by
-# hand and paste it. That is the same answer reached another way, and it costs
-# more effort than the reference — the platform's usual bargain.
+# Applied state alone could not close one gap: pasting the digest reaches the
+# same state as deriving it, and only one of those is a dependency Terraform
+# will honour when the configuration changes. Two `terraform_resource_references`
+# checks close it by reading the configuration semantically — a literal that
+# merely looks like an address does not count, and a reference routed through a
+# local value does, because Terraform draws the same edge either way. Every
+# other check here still grades the applied result.
 #
 # Content is written from the official HashiCorp Terraform documentation.
 # Verified: 2026-08-25
@@ -193,6 +197,27 @@ requirements:
     path: terraform/build/deploy-manifest.txt
     contains: build/integrity.txt
     label: The deploy manifest names the integrity record it accompanies
+
+  # Applied state proves the values are right. It cannot prove *how* they got
+  # there, and that is the whole subject of this lab — so these two read the
+  # configuration semantically. A reference through a local value counts;
+  # a literal that merely looks like an address does not.
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: integrity_record
+    attribute: content
+    references: local_file.service_config
+    referenced_attribute: content_sha256
+    label: The integrity record derives its checksum from the configuration resource
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: deploy_manifest
+    attribute: content
+    references: local_file.integrity_record
+    label: The deploy manifest derives the integrity record's path from that resource
 
   - type: terraform_output_equals
     dir: terraform

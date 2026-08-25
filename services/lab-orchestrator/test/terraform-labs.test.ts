@@ -571,14 +571,46 @@ describe('TF-005 — Multiple Resources and Dependencies', () => {
     expect(parsed.fingerprint).toBe(DIGEST);
   });
 
-  it('never requires depends_on, and never reads the student’s configuration', async () => {
-    const definition = await tf005();
+  it('never requires depends_on', async () => {
     // A reference already creates the edge; requiring `depends_on` as well
     // would teach the habit the lab exists to argue against.
-    const serialised = JSON.stringify(definition.requirements);
+    const serialised = JSON.stringify((await tf005()).requirements);
     expect(serialised).not.toContain('depends_on');
-    // And nothing opens a `.tf` file, so equivalent configurations pass.
-    const paths = definition.requirements
+  });
+
+  it('proves the dependency semantically, not just from applied values', async () => {
+    // Applied state cannot tell a pasted digest from a derived one. These two
+    // checks can, and they are what closed the lab's original limitation.
+    const references = (await tf005()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    expect(references).toHaveLength(2);
+
+    const integrity = references.find((r) => r.name === 'integrity_record');
+    expect(integrity).toMatchObject({
+      attribute: 'content',
+      references: 'local_file.service_config',
+      referenced_attribute: 'content_sha256',
+    });
+
+    const manifest = references.find((r) => r.name === 'deploy_manifest');
+    expect(manifest).toMatchObject({
+      attribute: 'content',
+      references: 'local_file.integrity_record',
+    });
+
+    // Still graded from applied state as well — the configuration checks were
+    // added alongside, not instead.
+    const kinds = new Set((await tf005()).requirements.map((r) => r.type));
+    expect(kinds.has('terraform_resource_exists')).toBe(true);
+    expect(kinds.has('terraform_output_equals')).toBe(true);
+    expect(kinds.has('file_content')).toBe(true);
+  });
+
+  it('names no source file, so how the configuration is laid out cannot matter', async () => {
+    // Configuration checks name a *directory*; the scanner reads every `.tf`
+    // file in it. Nothing pins a filename.
+    const paths = (await tf005()).requirements
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
