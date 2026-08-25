@@ -26,7 +26,7 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 
-const TERRAFORM_IDS = ['TF-001', 'TF-004', 'TF-011', 'TF-012'];
+const TERRAFORM_IDS = ['TF-001', 'TF-003', 'TF-004', 'TF-011', 'TF-012'];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {
@@ -389,5 +389,93 @@ describe('TF-004 — Terraform State', () => {
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-003
+
+describe('TF-003 — Outputs and Exposed Values', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf003(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-003-outputs', 'lab.yaml'));
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf003();
+    expect(definition.id).toBe('TF-003');
+    expect(definition.topic).toBe('outputs');
+    expect(definition.order).toBe(6);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.certification).toBe('TERRAFORM-ASSOCIATE-004');
+    expect(entry?.domains).toEqual(['4']);
+  });
+
+  it('seeds a configuration that builds something and exposes nothing', async () => {
+    const files = await loadSetupFiles(await tf003());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    // The raw material for the three reference kinds the lab teaches...
+    expect(main.content).toContain('variable "channel"');
+    expect(main.content).toContain('locals');
+    expect(main.content).toContain('"local_file"');
+    // ...and no outputs at all, which is the gap the student closes.
+    expect(main.content).not.toContain('output "');
+  });
+
+  it('grades every one of the five contracted outputs', async () => {
+    const outputs = (await tf003()).requirements
+      .filter((r) => r.type === 'terraform_output_equals')
+      .map((r) => ('name' in r ? r.name : ''));
+    expect(outputs.sort()).toEqual(
+      ['deploy_token', 'manifest_path', 'release_channel', 'release_summary', 'service_name'].sort(),
+    );
+  });
+
+  it('grades the object output structurally, so key order cannot decide', async () => {
+    const summary = (await tf003()).requirements.find(
+      (r) => r.type === 'terraform_output_equals' && 'name' in r && r.name === 'release_summary',
+    );
+    const value = (summary as Record<string, unknown> | undefined)?.value;
+    expect(typeof value).toBe('string');
+    // Valid JSON is what makes the comparison structural rather than textual.
+    const parsed = JSON.parse(String(value)) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual(['channel', 'manifest', 'service']);
+  });
+
+  it('verifies the sensitive marking from an artifact, not from the source', async () => {
+    const requirements = (await tf003()).requirements;
+    const listing = requirements.filter((r) => 'path' in r && r.path === 'terraform/outputs.txt');
+    // `terraform output` redacts a sensitive value; both halves are asserted.
+    expect(
+      listing.some((r) => r.type === 'file_content' && 'contains' in r && r.contains === '<sensitive>'),
+    ).toBe(true);
+    expect(
+      listing.some(
+        (r) =>
+          r.type === 'file_content_absent' &&
+          'contains' in r &&
+          String(r.contains).includes('not-a-real-token'),
+      ),
+    ).toBe(true);
+  });
+
+  it('reads no student configuration, so equivalent configurations pass', async () => {
+    // The contract is the output names and their values. Nothing pins a
+    // resource, local or variable name, and no check opens a `.tf` file — a
+    // student may restructure freely.
+    const paths = (await tf003()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+
+  it('keeps the expected token out of every published label', async () => {
+    // PLATFORM-SEC: a label is student-facing. The one output whose value is a
+    // stand-in credential must not have that value restated in its checklist.
+    for (const requirement of (await tf003()).requirements) {
+      const label = (requirement as Record<string, unknown>).label;
+      if (typeof label === 'string') expect(label).not.toContain('not-a-real-token-placeholder');
+    }
   });
 });

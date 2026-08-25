@@ -131,24 +131,32 @@ describe('PLATFORM-SEC — expected values stay on the server', () => {
     }
   });
 
-  it('never seeds a graded output value into the student sandbox', async () => {
-    // Setup files are the only lab-authored content that reaches a sandbox.
-    // Scoped to `terraform_output_equals` — the requirement type whose values
-    // are the sensitive class PLATFORM-SEC is about — so that an unrelated lab
-    // legitimately seeding a path it later asserts does not trip this.
-    for (const summary of registry.list({ track: 'terraform' })) {
-      const definition = registry.get(summary.id);
-      const files = await loadSetupFiles(definition);
-      const seeded = files.map((file) => file.content).join('\n');
-      for (const requirement of definition.requirements) {
-        if (requirement.type !== 'terraform_output_equals') continue;
-        const value = (requirement as Record<string, unknown>).value;
-        if (typeof value !== 'string' || value.length < 4) continue;
-        expect(
-          seeded.includes(value),
-          `${summary.id} seeds the expected value of an output check into the sandbox`,
-        ).toBe(false);
-      }
+  it('the verification path cannot write to the sandbox at all', async () => {
+    // Requirement 5 of PLATFORM-SEC is that the *fix* must not move expected
+    // values into the sandbox — into student-visible files, environment
+    // variables, generated checker scripts or Terraform configuration. It does
+    // not, and cannot: the port verification is handed exposes `read` and two
+    // optional read-only inspection capabilities, with no write of any kind, so
+    // there is no mechanism by which a requirement could reach a sandbox.
+    //
+    // Deliberately *not* asserted here: that no seeded file ever contains a
+    // string a check also asserts. TF-003 seeds `deploy_token`'s default
+    // precisely so the student can reference it, and the lab cannot be done
+    // without seeing it — the same distinction as DOCKER-007's label above.
+    // Instructing is not disclosing, and a test that conflated the two would
+    // forbid a whole class of correct labs.
+    const { SandboxReader } = await import('@jumptotech/verifier');
+    const reader = new SandboxReader({ read: async () => null });
+    const surface = [
+      ...Object.getOwnPropertyNames(Object.getPrototypeOf(reader)),
+      ...Object.getOwnPropertyNames(reader),
+    ];
+    for (const forbidden of ['write', 'put', 'exec', 'run', 'apply', 'delete', 'remove']) {
+      expect(
+        surface.some((name) => name.toLowerCase() === forbidden),
+        `the verifier's sandbox reader exposes '${forbidden}'`,
+      ).toBe(false);
     }
+    expect(surface).toContain('path');
   });
 });

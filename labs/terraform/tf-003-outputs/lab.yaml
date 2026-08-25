@@ -1,0 +1,276 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-003 — outputs: publishing what a configuration knows.
+#
+# Official objectives this lab practises:
+#   Terraform Associate (004), domain 4 "Terraform configuration"
+#   4b — "Refer to resource attributes and create cross-resource references"
+#   4c — "Use variables and outputs"
+#
+# Official sources, read on 2026-08-25:
+#   · Output values — outputs "make information about your infrastructure
+#     available on the command line, and can expose information for other
+#     Terraform configurations to use"
+#   · Command: output — prints output values; naming one prints just that one
+#   · References to values — how an output refers to a resource attribute, a
+#     local value, or an input variable
+#
+# ## What is graded, and what is deliberately not
+#
+# Only the *outputs* are a contract. Their names are the interface the release
+# pipeline consumes, so those are fixed. Everything else is the student's
+# choice: they may rename the seeded resource, replace the local with a
+# variable, compose the summary however they like. Two students with different
+# configurations that produce the same outputs both pass, which is the point —
+# this grades resulting Terraform behaviour, not source formatting.
+#
+# The object output is graded structurally, so key order does not matter.
+#
+# `deploy_token` is graded while marked sensitive, which is worth stating
+# plainly: the platform compares the value server-side and never prints it, on
+# a pass or a failure. Its value is an obviously fake placeholder — a lab that
+# needed a real secret to teach this would be teaching the wrong habit.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-003
+slug: tf-003-outputs
+title: Outputs and Exposed Values
+track: terraform
+topic: outputs
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 6
+
+environment:
+  provider: terraform
+  isolation: container
+
+# The approved curriculum lists TF-002 here. TF-002 is not on this branch yet;
+# TF-001 is the honest prerequisite today. Revisit when TF-002 lands.
+prerequisites:
+  - TF-001
+
+story: >
+  The release pipeline needs four facts out of this configuration every time it
+  runs: which service was built, which channel it went to, where the manifest
+  landed, and the token it should use to publish. Today it gets none of them.
+
+  So somebody wrote a script that opens `terraform.tfstate`, walks the JSON and
+  digs the values out. It broke the first time a resource was renamed, and it
+  will break again — state is Terraform's working file, not an interface.
+
+  Outputs are the interface. Your job is to publish what this configuration
+  already knows, so nothing downstream has to go rummaging for it.
+
+objectives:
+  - Declare outputs that publish values a configuration already holds
+  - Refer to a resource attribute, a local value and an input variable from outputs
+  - Read outputs back with terraform output, including one at a time
+  - Publish a structured output, and mark a credential as sensitive
+
+task:
+  summary: >
+    Add the outputs the release pipeline needs, then read them back from the
+    command line.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf` and
+    a `main.tf` that already builds the release manifest. It declares a
+    `channel` variable, a `deploy_token` variable, a `service` local value and
+    a `local_file` resource — and it exposes none of them.
+
+    Initialise and apply first, so there is something real to publish. Then add
+    outputs. The pipeline reads them by name, so these five names are the
+    contract:
+
+    - `service_name` — the service that was built. Take it from the local value,
+      not by retyping the string.
+    - `release_channel` — the channel, from the input variable.
+    - `manifest_path` — where the manifest was written. Take it from the
+      resource's own attribute, so it stays correct if the filename changes.
+    - `release_summary` — a single object gathering the three above, under the
+      keys `service`, `channel` and `manifest`. One value the pipeline can read
+      in one go.
+    - `deploy_token` — the token, from its variable, and marked **sensitive**.
+
+    Everything else is yours. Rename the resource, restructure the locals,
+    compose the summary however you prefer — only the output names and the
+    values behind them are being checked.
+
+    Apply again so the outputs reach state, then read them back: `terraform
+    output` shows them all, and `terraform output NAME` shows one. Notice what
+    happens to the sensitive one when you print them all, and what happens when
+    you ask for it by name.
+
+    Then capture both readings. Write the full listing to `outputs.txt`, and
+    write the manifest path — and only that one value — to `manifest-path.txt`,
+    both in the terraform directory and both produced with `terraform output`
+    rather than typed by hand.
+
+    Look at `outputs.txt` before you finish. The token is not in it, and what
+    stands in its place is the whole reason to mark an output sensitive.
+
+    A note on the token: it is a deliberately fake placeholder. Marking an
+    output sensitive keeps it out of console output; it does **not** encrypt it,
+    and it is still stored in plain text in `terraform.tfstate`. That gap is
+    worth seeing now — it is the subject of a later lab.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The release configuration is in place
+
+# Graded from the outputs Terraform recorded in state, plus the artifacts on
+# disk. No check reads the student's configuration, so any configuration that
+# produces these outputs passes.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  - type: terraform_output_equals
+    dir: terraform
+    name: service_name
+    value: ledger-api
+    label: Output service_name publishes the service that was built
+
+  - type: terraform_output_equals
+    dir: terraform
+    name: release_channel
+    value: stable
+    label: Output release_channel publishes the channel from the input variable
+
+  - type: terraform_output_equals
+    dir: terraform
+    name: manifest_path
+    value: build/release-manifest.txt
+    label: Output manifest_path publishes where the manifest was written
+
+  # Compared structurally: key order is Terraform's business, not the student's.
+  - type: terraform_output_equals
+    dir: terraform
+    name: release_summary
+    value: '{"service":"ledger-api","channel":"stable","manifest":"build/release-manifest.txt"}'
+    label: Output release_summary gathers the three values into one object
+
+  # Verified server-side and never printed, whether it matches or not.
+  - type: terraform_output_equals
+    dir: terraform
+    name: deploy_token
+    value: not-a-real-token-placeholder
+    label: Output deploy_token publishes the token from its variable
+
+  - type: file_exists
+    path: terraform/build/release-manifest.txt
+    label: The release manifest was applied to disk
+
+  - type: file_content
+    path: terraform/build/release-manifest.txt
+    contains: ledger-api
+    label: The manifest names the service
+
+  - type: file_exists
+    path: terraform/outputs.txt
+    label: The full output listing was read back to a file
+
+  # `terraform output` prints `<sensitive>` in place of an output marked
+  # sensitive. Its presence is the proof the student marked one, and its
+  # absence is what a forgotten `sensitive = true` looks like.
+  - type: file_content
+    path: terraform/outputs.txt
+    contains: <sensitive>
+    label: An output is marked sensitive, so the listing redacts it
+
+  - type: file_content_absent
+    path: terraform/outputs.txt
+    contains: not-a-real-token-placeholder
+    label: The token itself never appears in the listing
+
+  - type: file_exists
+    path: terraform/manifest-path.txt
+    label: A single output was read back to a file
+
+  - type: file_content
+    path: terraform/manifest-path.txt
+    contains: build/release-manifest.txt
+    label: That file holds the manifest path, read from the output
+
+hints:
+  - level: 1
+    text: >
+      An output is its own top-level block, separate from the resource it
+      describes — look up the output value block in the language documentation.
+      Outputs only reach state when you apply, so adding them is not enough on
+      its own.
+
+      For the last step, `terraform output` takes the name of a single output.
+  - level: 2
+    text: >
+      Refer to things rather than retyping them: a local value is
+      `local.<name>`, an input variable is `var.<name>`, and a resource
+      attribute is `<type>.<name>.<attribute>` — the `local_file` resource has a
+      `filename` attribute holding exactly the path you need.
+
+      An object value is written with braces and `key = value` pairs. An output
+      block accepts a `sensitive` argument alongside its `value`.
+
+      `terraform output NAME` prints one value; redirect it to the file the task
+      asks for.
+  - level: 3
+    text: >
+      Five `output` blocks. `service_name` takes `local.service`,
+      `release_channel` takes `var.channel`, and `manifest_path` takes
+      `local_file.release_manifest.filename` — adjust that address if you
+      renamed the resource.
+
+      `release_summary` takes an object built from the same three references:
+      `{ service = local.service, channel = var.channel, manifest =
+      local_file.release_manifest.filename }`.
+
+      `deploy_token` takes `var.deploy_token` and adds `sensitive = true`.
+
+      Then `terraform apply`, then `terraform output > outputs.txt` and
+      `terraform output -raw manifest_path > manifest-path.txt`. Without
+      `-raw` the value is printed with quotes around it, which still contains
+      the path the check looks for.
+
+references:
+  - title: Terraform — Output values
+    url: https://developer.hashicorp.com/terraform/language/values/outputs
+  - title: 'Terraform — Command: output'
+    url: https://developer.hashicorp.com/terraform/cli/commands/output
+  - title: Terraform — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+  - title: Terraform — Local values
+    url: https://developer.hashicorp.com/terraform/language/values/locals
+  - title: Terraform — Input variables
+    url: https://developer.hashicorp.com/terraform/language/values/variables
+  - title: Terraform — Type constraints
+    url: https://developer.hashicorp.com/terraform/language/expressions/types
+
+skills:
+  - terraform.language.outputs
+  - terraform.language.references
+  - terraform.workflow.apply
+  - terraform.state.inspect
+
+# Objectives 4b and 4c of the Terraform Associate (004) exam content list.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '4'
