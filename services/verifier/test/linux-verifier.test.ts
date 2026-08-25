@@ -416,6 +416,7 @@ describe('every shipped Linux lab', () => {
     'linux-015-sudo-policy',
     'linux-016-text-sweeps',
     'linux-017-systemd-unit',
+    'linux-018-cron',
   ];
 
   it.each(DIRS)('fails %s on an untouched sandbox, and never names the fix', async (dir) => {
@@ -598,12 +599,21 @@ function worldSatisfying(requirements: readonly Requirement[]): FakeWorld {
         };
         break;
 
-      case 'command_output':
-        world.commands[[requirement.command, ...requirement.args].join(' ')] = {
+      case 'command_output': {
+        /*
+         * Accumulate rather than overwrite. One command is often asserted
+         * several times with different expected text — LINUX-018 reads three
+         * separate facts out of one `cat` of a crontab — and a world that kept
+         * only the last of them could never satisfy the lab it was built from.
+         */
+        const key = [requirement.command, ...requirement.args].join(' ');
+        const previous = world.commands[key]?.stdout ?? '';
+        world.commands[key] = {
           exitCode: 0,
-          stdout: `${requirement.contains}\n`,
+          stdout: `${previous}${requirement.contains}\n`,
         };
         break;
+      }
 
       /*
        * The systemd checks read one parsed file, so satisfying them means

@@ -1,0 +1,326 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# HOW THIS LAB IS GRADED, AND WHY A CRONTAB ENTRY IS NOT THE ANSWER
+#
+# A correct-looking crontab proves nothing. The seeded entry is syntactically
+# valid, parses without complaint, and has never once produced output. So this
+# lab grades the scheduler's *effect*, and the checks fall into three groups:
+#
+#   the cause      the crontab's schedule, the absolute path, the redirect —
+#                  read as root, because a user crontab is 0600
+#   the enabling   the tool is executable and cron is running
+#   the effect     the rollup's status file says it ran, says cron ran it, and
+#                  was written within the last few minutes
+#
+# PROVING THE SCHEDULER RAN IT, NOT THE STUDENT
+#
+# The rollup tool walks its own process ancestry through /proc until pid 1 and
+# records whether `cron` was among its ancestors. Run from a terminal it
+# records RUNBY=shell; run by the scheduler it records RUNBY=cron. Verified in
+# the sandbox image: a hand-run reports `RUNBY=shell CHAIN: sh su sh`, a
+# scheduled run reports `RUNBY=cron CHAIN: sh cron`.
+#
+# That is what makes "just run the tool yourself" not a solution. It is
+# kernel-observed rather than asserted, and it is the one fact about an
+# invocation that the person starting it cannot choose. The verifier never runs
+# the student's job — the scheduler has to.
+#
+# The usual caveat still holds and is worth stating rather than implying
+# otherwise: the student is root in their own container by design, so the
+# status file can be written by hand. What the requirement list does is make
+# that strictly more work than fixing the crontab, and pair it with a freshness
+# check so a forgery has to be maintained rather than written once.
+#
+# TIMING
+#
+# cron's finest granularity is one minute, so a student who has just fixed the
+# entry waits up to sixty seconds for the first run. The task text says so. The
+# freshness window is three minutes rather than one, so that a check landing
+# just after a run — or just after a slow minute on a loaded host — is not
+# failed for a timing artifact it cannot control. `verify_timeout_seconds` is
+# raised only for the *setup* checks, which do not wait for a cron run at all:
+# the seeded job never runs, and setup asserts exactly that.
+#
+# Content is written from the Debian cron package's own manual pages and the
+# Linux man-pages project.
+# ---------------------------------------------------------------------------
+id: LINUX-018
+slug: linux-018-cron
+title: Cron and Scheduled Jobs
+track: linux
+topic: linux-administration
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 15
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-014
+
+story: >
+  The event rollup has never produced anything. It was set up during the
+  migration, the entry is in the right account's crontab, and by eye it reads
+  correctly — which is why nobody has looked at it properly in three weeks.
+
+  Ops noticed this morning because the incident dashboard has been showing the
+  same numbers since it was built. There is no error anywhere: no mail, no
+  log line, nothing on any terminal. Just a job that does not happen.
+
+objectives:
+  - Read a cron schedule field by field and say when the entry would next fire
+  - Explain why a job that works when typed by hand fails under the scheduler
+  - Capture a scheduled job's output so a silent failure becomes a readable one
+  - Distinguish a crontab that is correct from a job that has actually run
+
+task:
+  summary: The event rollup is scheduled but has never run. Find out why, fix it, and show the scheduler actually executing it.
+  description: >
+    You have a shell on the host and passwordless `sudo`.
+
+    The rollup is supposed to condense `/var/log/jumptotech/app-events.log` into
+    `/var/lib/jumptotech/rollup/status.txt`. The entry that should be doing it
+    lives in the `student` account's own crontab. The scheduler is running —
+    that part is not the problem, and you can confirm it rather than taking my
+    word for it.
+
+    `/srv/jumptotech/runbooks/rollup-schedule.md` is the operational contract:
+    how often the rollup must run during an incident window, and two standards
+    this estate adopted after previous outages. Both of those standards are
+    about scheduled jobs specifically, and the current entry honours neither.
+
+    A cron field is `minute hour day-of-month month day-of-week`, and each
+    accepts more than a single number. Work out from the runbook how often this
+    has to fire, then write the schedule that does it.
+
+    One thing worth understanding before you start hunting. When a scheduled job
+    fails, cron mails the output to the account that owns the entry. There is no
+    mail system on this host, so that output goes nowhere at all — which is why
+    a job can fail every time for three weeks and leave no trace. Until you
+    arrange for that output to land somewhere you can read, you are debugging
+    blind, and the runbook tells you where the estate expects it to go.
+
+    Expect more than one thing to be wrong, and expect the first fix to change
+    what you can see rather than to finish the job.
+
+    Finally: cron's finest granularity is one minute. Once the entry is right,
+    the next run happens at the top of the next minute — so give it up to a
+    minute before concluding a change did not work. Checking too quickly is not
+    the same as the job not running, and this lab checks that the rollup was
+    produced *by the scheduler*, not by you running the tool yourself.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: process_running
+      pattern: /usr/sbin/cron
+      label: The scheduler is running
+    - type: file_exists
+      path: /srv/jumptotech/runbooks/rollup-schedule.md
+      label: The scheduling runbook is present
+    - type: file_exists
+      path: /usr/local/lib/jumptotech/jtt-rollup
+      label: The rollup tool is installed
+    - type: file_exists
+      path: /var/log/jumptotech/app-events.log
+      label: The event log the rollup reads is present
+    # The baseline: an entry exists and has produced nothing. Neither of these
+    # waits on a cron run — the seeded job never fires.
+    - type: command_output
+      command: cat
+      args:
+        - /var/spool/cron/crontabs/student
+      as_user: root
+      contains: jtt-rollup
+      label: A rollup entry is already scheduled
+    - type: path_absent
+      path: /var/lib/jumptotech/rollup/status.txt
+      label: The rollup has never produced anything
+  # Raised for the setup checks only. Nothing here waits for the scheduler;
+  # the budget covers a slow container start on a loaded host.
+  verify_timeout_seconds: 180
+
+# Verification is state-based and reads the live host. Nothing inspects the
+# student's shell history, and the verifier never runs the student's job — the
+# scheduler has to, and the rollup records which of the two invoked it.
+requirements:
+  # --- the scheduler is still doing its job -------------------------------
+  - type: process_running
+    pattern: /usr/sbin/cron
+    label: The scheduler is still running
+  - type: script_executable
+    path: /usr/local/lib/jumptotech/jtt-rollup
+    label: The rollup tool can actually be executed
+
+  # --- the cause: the entry itself ----------------------------------------
+  #
+  # Read as root: a user crontab is mode 0600 in a spool directory the account
+  # cannot list, so `stat` answers but `cat` needs the elevated read.
+  - type: command_output
+    command: cat
+    args:
+      - /var/spool/cron/crontabs/student
+    as_user: root
+    contains: "* * * * *"
+    label: The entry fires as often as the incident window requires
+  - type: command_output
+    command: cat
+    args:
+      - /var/spool/cron/crontabs/student
+    as_user: root
+    contains: /usr/local/lib/jumptotech/jtt-rollup
+    label: The entry names the tool by its absolute path
+  - type: command_output
+    command: cat
+    args:
+      - /var/spool/cron/crontabs/student
+    as_user: root
+    contains: /var/log/jumptotech/rollup-cron.log
+    label: The job's output is sent somewhere a person can read it
+
+  # --- the effect: it actually ran -----------------------------------------
+  - type: file_content
+    path: /var/lib/jumptotech/rollup/status.txt
+    contains: ROLLUP=OK
+    label: The rollup produced a result
+  # The check that makes this a lab about scheduling. The tool records its own
+  # process ancestry: `cron` if the scheduler started it, `shell` if a person
+  # did. Running the tool by hand produces a status file that fails here.
+  - type: file_content
+    path: /var/lib/jumptotech/rollup/status.txt
+    contains: RUNBY=cron
+    label: The scheduler ran the rollup, rather than a person running it by hand
+  - type: file_content
+    path: /var/lib/jumptotech/rollup/status.txt
+    contains: RECORDS=1440
+    label: The rollup read the whole event log
+  # A file check is timeless. Three minutes against a one-minute schedule keeps
+  # a stale result from standing in for a running one, without failing a check
+  # that lands on a slow minute.
+  - type: command_output
+    command: find
+    args:
+      - /var/lib/jumptotech/rollup/status.txt
+      - -mmin
+      - "-3"
+    contains: /var/lib/jumptotech/rollup/status.txt
+    label: That result is from a recent run rather than a leftover
+  # The redirect is not decoration: this line only exists if the job's standard
+  # output reached the log, which is what makes a future failure visible.
+  - type: file_content
+    path: /var/log/jumptotech/rollup-cron.log
+    contains: "rollup complete"
+    label: The job's own output is landing in the log
+
+hints:
+  - level: 1
+    text: >
+      Two questions, in this order. When would the entry as written next fire —
+      read the fields left to right and say the answer out loud. And if it did
+      fire, where would anything it printed actually go?
+
+      The second question is the one that unblocks you. Until the job's output
+      lands somewhere you can read, every failure looks identical to a job that
+      never started, and you cannot tell which you are looking at.
+  - level: 2
+    text: >
+      `man 5 crontab` describes the five time fields and what each accepts
+      besides a plain number; `man 1 crontab` covers editing an account's own
+      entries. Read the field list rather than pattern-matching an example —
+      the runbook tells you the frequency in words and the translation is
+      yours to make.
+
+      For the silence: a shell sends a command's output to your terminal, and a
+      scheduled job has no terminal. `man 5 crontab` says where the output goes
+      instead, and the runbook says where this estate wants it put. The usual
+      shell redirection operators are what you need, and you want both output
+      streams rather than just one.
+
+      Once the log starts filling, read it. It will tell you the next thing that
+      is wrong, and then probably the one after that.
+  - level: 3
+    text: >
+      There are three separate faults and they hide behind each other. One is
+      the schedule, which fires far less often than the runbook requires. One is
+      how the program is named — the scheduler runs with a much shorter search
+      path than your login shell, which is why the entry works when you type it
+      and not when cron does; the runbook's first standard says how to avoid
+      that. And one is a property of the tool itself rather than of the entry:
+      look at what `ls -l` says about it and ask whether cron could run it at
+      all.
+
+      Fix the redirect first even though it is not the failure — it is what
+      makes the other two visible.
+
+      After each change, wait for the top of the next minute before deciding
+      whether it worked, and read the rollup's status file rather than assuming.
+      Running the tool yourself will produce a status file, but not one that
+      satisfies this lab: it records who invoked it.
+
+references:
+  - title: crontab(5) — tables for driving cron
+    url: https://manpages.debian.org/bookworm/cron/crontab.5.en.html
+  - title: crontab(1) — maintain crontab files for individual users
+    url: https://manpages.debian.org/bookworm/cron/crontab.1.en.html
+  - title: cron(8) — daemon to execute scheduled commands
+    url: https://manpages.debian.org/bookworm/cron/cron.8.en.html
+  - title: proc(5) — the /proc filesystem
+    url: https://man7.org/linux/man-pages/man5/proc.5.html
+  - title: GNU Bash manual — Redirections
+    url: https://www.gnu.org/software/bash/manual/html_node/Redirections.html
+
+skills:
+  - linux.cron.schedule-syntax
+  - linux.cron.user-crontab
+  - linux.cron.environment
+  - linux.cron.output-capture
+  - linux.cron.troubleshooting
+  - linux.permissions.chmod
+
+# ---------------------------------------------------------------------------
+# SOURCE VERIFICATION
+#
+# Recorded as comments rather than schema fields: a `sources:` / `last_verified:`
+# block would be a change to the shared lab schema, which this track is not
+# permitted to make unilaterally.
+#
+# last_verified: 2026-08-25
+#
+# CLASSIFICATION
+#
+#   CERTIFICATION OBJECTIVE  yes — "Manage or schedule jobs for executing
+#                            commands", published under Operations Deployment
+#                            (25%) in the current LFCS competency list, read
+#                            from the Linux Foundation's certification page on
+#                            2026-08-25 and enumerated in full there.
+#   PRODUCTION SKILL         yes; a scheduled job that fails silently is one of
+#                            the most common and longest-lived faults on a real
+#                            estate
+#   FOUNDATIONAL KNOWLEDGE   process environment and inheritance, standard
+#                            streams and redirection, the execute bit
+#
+# This is the first lab in the track since LINUX-003 whose subject is named
+# outright by a published exam competency, and unlike LINUX-017 it is examined
+# the way it is taught here: the scheduler really runs, the job really executes,
+# and the grading is of the result.
+#
+# Technical objectives verified 2026-08-25, empirically inside the sandbox
+# image because it is the same image the lab runs on:
+#   process ancestry   a hand-run of the tool reported `RUNBY=shell CHAIN: sh
+#                      su sh`; a run started by cron reported `RUNBY=cron
+#                      CHAIN: sh cron`. This is what the execution check reads.
+#   cron under runit   `/usr/sbin/cron -f` supervised by runsvdir starts and
+#                      executes a user crontab installed with crontab(1).
+#   user crontab path  Debian stores it at /var/spool/cron/crontabs/<user>,
+#                      mode 0600, in a directory the account cannot list —
+#                      hence the elevated read in the requirement list.
+# ---------------------------------------------------------------------------
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - operations-deployment
