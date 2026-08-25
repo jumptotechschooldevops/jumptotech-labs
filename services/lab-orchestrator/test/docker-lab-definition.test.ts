@@ -98,6 +98,7 @@ describe('schema — a lab declares its substrate', () => {
       // its sandboxes share a segment with the terminal service.
       network: 'none',
       sandbox_capabilities: [],
+      peer: false,
       capabilities: [],
     });
   });

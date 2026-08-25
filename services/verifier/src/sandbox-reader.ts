@@ -38,6 +38,19 @@ export interface SandboxPort {
     options?: { asRoot?: boolean; timeoutMs?: number },
   ): Promise<SandboxInspectResult>;
   /**
+   * Ask this session's peer to make one HTTP request to this session's sandbox.
+   *
+   * Optional, and offered only by a provider that created a peer. A lab that
+   * asks for it without one gets a failed check rather than a silent pass: the
+   * platform could not measure reachability, which is not the same as having
+   * measured it and found it good.
+   */
+  httpFromPeer?(request: {
+    port: number;
+    path: string;
+    timeoutSeconds?: number;
+  }): Promise<{ reached: boolean; status?: number; detail?: string }>;
+  /**
    * Run one path *the student wrote* inside their own sandbox, as themselves.
    *
    * Deliberately a separate capability from `inspect` rather than a widened
@@ -201,6 +214,27 @@ export class SandboxReader {
       return parseListeningSockets(result.stdout);
     });
     return this.#sockets;
+  }
+
+  /** Whether this sandbox has a peer that can make requests on its behalf. */
+  get canRequestFromPeer(): boolean {
+    return typeof this.port.httpFromPeer === 'function';
+  }
+
+  /**
+   * One request from the session's peer. Never memoised: a lab may check the
+   * same endpoint before and after a repair, and a cached answer would report
+   * the state of the world as it was.
+   */
+  async httpFromPeer(request: {
+    port: number;
+    path: string;
+    timeoutSeconds?: number;
+  }): Promise<{ reached: boolean; status?: number; detail?: string }> {
+    if (!this.port.httpFromPeer) {
+      throw new SandboxUnreachableError('this lab environment has no peer host to ask');
+    }
+    return this.port.httpFromPeer(request);
   }
 
   /**

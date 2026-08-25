@@ -460,6 +460,23 @@ export interface LabProvider {
     args: readonly string[],
     options?: { timeoutMs?: number },
   ): Promise<ExecResult>;
+
+  /**
+   * Ask this session's peer to make one HTTP request to this session's sandbox.
+   *
+   * Offered only by a provider that created a peer, which is only a provider
+   * running a lab that declared one. It exists because reachability from
+   * another machine is not observable from the machine in question, and a
+   * student's own account of it is not evidence.
+   *
+   * The target is fixed: this session's sandbox, by its own container name.
+   * There is no parameter for naming a different host, so this cannot be used
+   * to make the platform issue requests anywhere else.
+   */
+  requestFromPeer?(
+    context: LabSessionContext,
+    request: { port: number; path: string; timeoutSeconds?: number },
+  ): Promise<{ reached: boolean; status?: number; detail?: string }>;
 }
 
 /** What a sandbox path looks like on disk, as seen from inside the sandbox. */

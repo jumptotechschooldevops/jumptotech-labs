@@ -559,6 +559,7 @@ export class SessionManager {
     const read = provider.readSandboxPath.bind(provider);
     const inspect = provider.inspectSandbox?.bind(provider);
     const runScript = provider.runSandboxScript?.bind(provider);
+    const httpFromPeer = provider.requestFromPeer?.bind(provider);
     return {
       read: (relativePath, options) => read(context, relativePath, options),
       ...(inspect
@@ -566,6 +567,15 @@ export class SessionManager {
         : {}),
       ...(runScript
         ? { runScript: (scriptPath, args, options) => runScript(context, scriptPath, args, options) }
+        : {}),
+      // Offered only by a provider that created a peer for this session. A lab
+      // asking for a peer request without one fails the check rather than
+      // passing it: the platform could not measure, which is not a pass.
+      ...(httpFromPeer
+        ? {
+            httpFromPeer: (request: { port: number; path: string; timeoutSeconds?: number }) =>
+              httpFromPeer(context, request),
+          }
         : {}),
     };
   }

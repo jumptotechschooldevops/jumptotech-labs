@@ -1,0 +1,184 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# The first lab with a peer. `environment.peer` gives this session a second
+# container on its own private segment — platform-owned, no capabilities, no
+# shell attached — because the thing this lab teaches cannot be observed from
+# the machine it is about. "Reachable from another host" is a claim only
+# another host can settle.
+#
+# That is also what makes the grade honest. `http_request` is issued by the
+# peer against this session's sandbox, so a student controls neither end of the
+# measurement: no file, transcript or command history can make it pass. The
+# only way to satisfy it is for the service to actually answer someone else.
+#
+# No kernel capability is requested. The peer needs none, and neither does the
+# student: this lab is about where a socket is bound, not about mutating the
+# network. `NET_RAW` is not requested and `NET_ADMIN` is not grantable.
+#
+# Content is written from RFC 1122 (section 3.2.1.3, the loopback address) and
+# the bind(2), ss(8) and socket(7) man pages. Scenario, service, configuration
+# and task wording are original JumpToTech content.
+#
+# Classification: PRODUCTION SKILL (this incident happens constantly) and
+# FOUNDATIONAL KNOWLEDGE (bind addresses, refused versus timed out). No
+# certification objective is claimed.
+# ---------------------------------------------------------------------------
+id: NET-007
+slug: net-007-bind-address-incident
+title: The Bind Address Incident — It Works Here and Nowhere Else
+track: networking
+topic: sockets
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 7
+
+environment:
+  provider: linux
+  network: link
+  peer: true
+
+prerequisites:
+  - NET-006
+
+story: >
+  The deploy is finished and the engineer who did it has evidence: the health
+  check returns 200 on the box, and returned 200 again while the incident call
+  was open. Every other machine gets connection refused, and the load balancer
+  has taken the service out of rotation.
+
+  Both are true. The service is healthy, it is answering, and it is answering
+  to exactly one address — which is not one anybody else can use.
+
+objectives:
+  - Reproduce a symptom from the host and from another machine, and keep both
+  - Read a socket's bind address and say who can reach it
+  - Explain why the far side saw a refusal rather than a timeout
+  - Repair a bind address in configuration and restart the service
+  - Prove reachability from somewhere other than the machine being repaired
+
+task:
+  summary: Work out why a healthy service is unreachable from everywhere except this host, repair it, and prove it from the other machine.
+  description: >
+    Your working directory is `/home/student/incident`. Read `brief.txt` first.
+
+    Reproduce the engineer's result from this host and save it into
+    `evidence/local.txt` — the health check is on port 8080 and the service is
+    running, so this part will succeed, and that is the point.
+
+    Then find out where the service is actually listening. The socket table
+    will tell you in one column, and it explains why anything that is not this
+    host is refused rather than kept waiting.
+
+    There is a second machine on this segment. You have no shell on it, and you
+    do not need one: repair the service so it is reachable from the segment
+    rather than only from this host, restart it through the supervisor, and the
+    platform will ask that machine whether it can reach you. That answer is the
+    grade — not a file, and not a description of what you did.
+
+    Finally write `diagnosis.txt` containing the word `refused` and the word
+    `bind`, in whatever sentences you like.
+
+setup:
+  files:
+    - source: setup/brief.txt
+      path: incident/brief.txt
+      mode: "0644"
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: directory_exists
+      path: /home/student/incident/evidence
+      label: The working directory exists
+    - type: port_listening
+      port: 8080
+      address: 127.0.0.1
+      label: The API starts on loopback only
+    - type: file_content
+      path: /etc/ledger/api.conf
+      contains: "127.0.0.1"
+      label: The misconfigured bind address is in place
+
+requirements:
+  # --- the measurement a student cannot forge -------------------------------
+  #
+  # Issued by this session's peer against this session's sandbox. The student
+  # has no shell on the peer and controls neither end of the request, so the
+  # only way to pass is for the service to genuinely answer another machine.
+  - type: http_request
+    port: 8080
+    path: /health
+    expected_status: 200
+    label: The other machine on this segment can reach the service
+
+  # --- and the local state that explains it ---------------------------------
+  - type: port_listening
+    port: 8080
+    address: [0.0.0.0, "::"]
+    label: The service listens where the segment can reach it
+  - type: port_not_listening
+    port: 8080
+    address: 127.0.0.1
+    label: The service no longer listens on loopback alone
+  - type: file_content_absent
+    path: /etc/ledger/api.conf
+    contains: "127.0.0.1"
+    label: The loopback address is gone from the configuration
+
+  # --- the evidence the incident review will read ---------------------------
+  - type: file_content
+    path: /home/student/incident/evidence/local.txt
+    contains: "200"
+    label: The result from this host was captured
+  - type: file_content
+    path: /home/student/incident/diagnosis.txt
+    contains: "refused"
+    label: The diagnosis names what the far side actually observed
+  - type: file_content
+    path: /home/student/incident/diagnosis.txt
+    contains: "bind"
+    label: The diagnosis names what was actually wrong
+
+hints:
+  - level: 1
+    text: >
+      Two people are both right, which means they are measuring different
+      things. One of them is on the machine and one of them is not, and the
+      only thing that differs between them is where the service agreed to
+      listen. Look at that before you look at anything else.
+  - level: 2
+    text: >
+      `man ss` covers listing listening sockets; the column you want is the
+      local address, not the port. RFC 1122 section 3.2.1.3 explains what the
+      loopback range is for and why an address in it never leaves the host.
+      `man bind` covers what a service is doing when it chooses one. When you
+      have found it, look at what configures this service rather than at the
+      service itself.
+  - level: 3
+    text: >
+      `ss -ltn` shows the local address beside each port; compare what 8080 is
+      bound to with what you would need for another machine to reach it.
+      `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/health`
+      gives you the local result to save. The service reads
+      `/etc/ledger/api.conf` at startup, so change the address there and then
+      `sv restart ledger-api`.
+
+references:
+  - title: RFC 1122 — Requirements for Internet Hosts, section 3.2.1.3 (addressing)
+    url: https://www.rfc-editor.org/rfc/rfc1122.html
+  - title: bind(2) — Linux manual page
+    url: https://man7.org/linux/man-pages/man2/bind.2.html
+  - title: ss(8) — another utility to investigate sockets
+    url: https://man7.org/linux/man-pages/man8/ss.8.html
+  - title: socket(7) — Linux socket interface
+    url: https://man7.org/linux/man-pages/man7/socket.7.html
+
+skills:
+  - net.troubleshoot.bind-address
+  - linux.net.sockets
+  - net.l4.loopback
+  - net.troubleshoot.evidence
+  - net.troubleshoot.refused-vs-timeout
+
+certification: []

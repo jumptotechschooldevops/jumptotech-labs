@@ -33,7 +33,7 @@ import { execFile } from 'node:child_process';
 import {
   CONTAINER_NETWORK_PATTERN,
   assertValidContainerNetworkRef,
-  assertValidContainerSandboxRef,
+  assertValidManagedContainerRef,
 } from '../../session/identifiers.js';
 import { MANAGED_LABEL } from '../../k8s/labels.js';
 
@@ -219,7 +219,7 @@ export class DockerCliRuntime implements ContainerRuntimePort {
   }
 
   async create(spec: ContainerSpec): Promise<ContainerInfo> {
-    assertValidContainerSandboxRef(spec.name);
+    assertValidManagedContainerRef(spec.name);
     assertImageReference(spec.image);
 
     const argv = [
@@ -291,7 +291,7 @@ export class DockerCliRuntime implements ContainerRuntimePort {
   }
 
   async inspect(name: string): Promise<ContainerInfo | null> {
-    assertValidContainerSandboxRef(name);
+    assertValidManagedContainerRef(name);
     const result = await this.#docker([
       'inspect',
       '--type',
@@ -338,7 +338,7 @@ export class DockerCliRuntime implements ContainerRuntimePort {
       // Name-shape gate first: a container someone else labelled by hand never
       // enters the cleanup work list.
       try {
-        assertValidContainerSandboxRef(name);
+        assertValidManagedContainerRef(name);
       } catch {
         continue;
       }
@@ -349,7 +349,7 @@ export class DockerCliRuntime implements ContainerRuntimePort {
   }
 
   async remove(name: string): Promise<void> {
-    assertValidContainerSandboxRef(name);
+    assertValidManagedContainerRef(name);
     const result = await this.#docker(['rm', '--force', '--volumes', name], {
       timeoutMs: 60_000,
     });
@@ -449,7 +449,7 @@ export class DockerCliRuntime implements ContainerRuntimePort {
   }
 
   async exec(name: string, request: ContainerExecRequest): Promise<ContainerExecResult> {
-    assertValidContainerSandboxRef(name);
+    assertValidManagedContainerRef(name);
     if (!Array.isArray(request.argv) || request.argv.length === 0) {
       throw new ContainerRuntimeError('exec requires a non-empty argv array');
     }

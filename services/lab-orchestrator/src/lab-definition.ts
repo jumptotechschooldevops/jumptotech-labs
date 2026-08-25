@@ -450,6 +450,20 @@ const labDefinitionSchema = z
          * narrow set its provider grants unconditionally.
          */
         sandbox_capabilities: z.array(z.enum(SANDBOX_CAPABILITIES)).max(2).default([]),
+        /**
+         * A second host on this session's segment.
+         *
+         * Some lessons are only true from somewhere else: "this service
+         * answers on the box and nowhere else" cannot be demonstrated from the
+         * box. A lab that declares a peer gets one more container on its own
+         * private bridge, which the platform owns — the student has no shell in
+         * it and cannot reach it except over the network, which is the point.
+         *
+         * Needs `network: link` for the same reason the capture capability
+         * does: a peer with no segment to sit on is meaningless, and a peer on
+         * a shared segment would be reachable from another session.
+         */
+        peer: z.boolean().default(false),
       })
       .strict(),
 
@@ -522,6 +536,7 @@ export type LabDefinition = Omit<z.infer<typeof labDefinitionSchema>, 'environme
     isolation: IsolationMode;
     network: LabNetworkMode;
     sandbox_capabilities: SandboxCapability[];
+    peer: boolean;
     capabilities: (typeof LAB_CAPABILITIES)[number][];
   };
 };
@@ -670,6 +685,20 @@ function checkProviderCapabilities(def: LabDefinition, issues: string[]): void {
     }
   }
 
+  // A peer is a second container on the session's own segment. Same two
+  // conditions as the capture capability, for the same reason: it needs a
+  // segment to sit on, and that segment must belong to one session.
+  if (def.environment.peer) {
+    if (provider !== 'linux') {
+      issues.push(`environment.peer is only available to the 'linux' provider, not '${provider}'`);
+    }
+    if (def.environment.network !== 'link') {
+      issues.push(
+        "environment.peer requires environment.network 'link': a peer needs a private segment to be a peer on",
+      );
+    }
+  }
+
   // A lab network is a container on a private bridge. A provider that creates
   // no container cannot be given one, and saying so here turns a silently
   // ignored field into a precise authoring error.
@@ -804,6 +833,7 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
       isolation: declaredIsolation ?? providerIsolation,
       network: result.data.environment.network,
       sandbox_capabilities: result.data.environment.sandbox_capabilities,
+      peer: result.data.environment.peer,
       capabilities: result.data.environment.capabilities,
     },
   };

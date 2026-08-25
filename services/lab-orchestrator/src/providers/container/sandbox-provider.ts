@@ -62,6 +62,7 @@ import {
   assertValidContainerSandboxRef,
   isContainerSandboxRef,
   networkRefForSandbox,
+  peerRefForSandbox,
   sandboxRefForNetwork,
   isContainerNetworkRef,
 } from '../../session/identifiers.js';
@@ -301,6 +302,7 @@ export class ContainerLabProvider implements LabProvider {
     }
 
     const capAdd = this.#capabilitiesFor(context);
+    const peer = this.#peer(context);
 
     const createStep = await this.#runStep(steps, 'environment-created', 'Environment created', async () => {
       // Re-entrant by design: a create over an existing sandbox replaces it
@@ -350,6 +352,41 @@ export class ContainerLabProvider implements LabProvider {
           remediation: `Check that Docker is running and that '${this.#image}' exists: npm run sandbox:build`,
         }),
       };
+    }
+
+    if (peer && labNetwork) {
+      const peerStep = await this.#runStep(steps, 'peer-created', 'Peer host created', async () => {
+        await this.#runtime.remove(peer).catch(() => undefined);
+        await this.#runtime.create({
+          name: peer,
+          image: this.#image,
+          hostname: 'jumptotech-peer',
+          // The peer is the platform's, not the student's: no capabilities at
+          // all, and no shell is ever attached to it. A student reaches it the
+          // only way a second host is reachable — over the network.
+          user: context.policy.sandbox.user,
+          workdir: this.#home,
+          cpus: context.policy.sandbox.cpus,
+          memory: context.policy.sandbox.memory,
+          pidsLimit: context.policy.sandbox.pidsLimit,
+          network: labNetwork,
+          noNewPrivileges: true,
+          labels: { ...ownership },
+          command: ['sleep', 'infinity'],
+        });
+        return `peer host ${peer} created on ${labNetwork}`;
+      });
+      if (!peerStep.ok) {
+        await this.#runtime.remove(peer).catch(() => undefined);
+        await this.#runtime.remove(ref).catch(() => undefined);
+        await this.#removeLabNetwork(labNetwork, context.sessionId, steps);
+        return {
+          ok: false,
+          environment: this.#environment(context, 'error', { message: peerStep.detail }),
+          steps,
+          error: this.#toLabError(peerStep.error, 'PROVISION_FAILED'),
+        };
+      }
     }
 
     const toolingStep = await this.#runStep(steps, 'sandbox-tooling', 'Sandbox tooling ready', async () =>
@@ -509,9 +546,10 @@ export class ContainerLabProvider implements LabProvider {
 
     if (info === null) {
       steps.push({ id: 'delete-sandbox', label: 'Sandbox deleted', status: 'ok', detail: 'already absent' });
-      // The container may be gone while its network is not — a hand-removed
-      // sandbox, or a create that failed halfway. Teardown is idempotent, so
-      // reclaim whatever is left rather than leaving an orphan.
+      // The container may be gone while its peer and network are not — a
+      // hand-removed sandbox, or a create that failed halfway. Teardown is
+      // idempotent, so reclaim whatever is left rather than leaving orphans.
+      await this.#removePeer(peerRefForSandbox(sandboxRef), expectedSessionId, steps);
       await this.#removeLabNetwork(networkRefForSandbox(sandboxRef), expectedSessionId, steps);
       return { ok: true, namespaceGone: true, steps };
     }
@@ -538,8 +576,10 @@ export class ContainerLabProvider implements LabProvider {
       detail: gone ? sandboxRef : `${sandboxRef} is still shutting down`,
     });
 
-    // The network goes with the sandbox it belonged to. Ordered after the
-    // container, because Docker refuses to remove a network still in use.
+    // The peer, then the network. Ordered after the sandbox and before the
+    // bridge, because Docker refuses to remove a network still in use and a
+    // peer left behind would hold one open forever.
+    await this.#removePeer(peerRefForSandbox(sandboxRef), expectedSessionId, steps);
     await this.#removeLabNetwork(networkRefForSandbox(sandboxRef), expectedSessionId, steps);
 
     return {
@@ -584,9 +624,116 @@ export class ContainerLabProvider implements LabProvider {
     return [...new Set([...this.#capabilities, ...declared])];
   }
 
+  /**
+   * This session's peer container, or `undefined`.
+   *
+   * Only a lab that declared one gets a name here, and only on the Linux
+   * provider — the schema refuses the field elsewhere, and this refuses to
+   * honour it elsewhere even if the schema were bypassed.
+   */
+  #peer(context: LabSessionContext): string | undefined {
+    if (!context.lab.environment.peer || this.id !== 'linux') return undefined;
+    return peerRefForSandbox(this.#ref(context));
+  }
+
   #labNetwork(context: LabSessionContext): string | undefined {
     if (context.lab.environment.network !== 'link') return undefined;
     return networkRefForSandbox(this.#ref(context));
+  }
+
+  /**
+   * Delete one session's peer, having proved it is ours and theirs.
+   *
+   * The same gates the sandbox teardown applies: the name shape first, then the
+   * live ownership labels re-read from the daemon, then the session label when
+   * one was named. A peer that fails any of them is left alone.
+   */
+  async #removePeer(
+    peerRef: string,
+    expectedSessionId: string | undefined,
+    steps: ProvisionStep[],
+  ): Promise<void> {
+    let info: ContainerInfo | null;
+    try {
+      info = await this.#runtime.inspect(peerRef);
+    } catch {
+      return;
+    }
+    if (!info) return;
+
+    if (info.labels[MANAGED_CONTAINER_LABEL] !== 'true') {
+      steps.push({
+        id: 'delete-peer',
+        label: 'Peer host deleted',
+        status: 'failed',
+        detail: `${peerRef} is not managed by JumpToTech — left alone`,
+      });
+      return;
+    }
+    const owner = info.labels[CONTAINER_SESSION_LABEL];
+    if (expectedSessionId && owner && owner !== expectedSessionId) {
+      steps.push({
+        id: 'delete-peer',
+        label: 'Peer host deleted',
+        status: 'failed',
+        detail: `${peerRef} belongs to another session — left alone`,
+      });
+      return;
+    }
+
+    try {
+      await this.#runtime.remove(peerRef);
+      steps.push({ id: 'delete-peer', label: 'Peer host deleted', status: 'ok', detail: peerRef });
+    } catch (error) {
+      steps.push({
+        id: 'delete-peer',
+        label: 'Peer host deleted',
+        status: 'failed',
+        detail: describe(error),
+      });
+    }
+  }
+
+  /**
+   * Ask this session's peer to make one HTTP request to this session's sandbox.
+   *
+   * The whole point of a peer: "reachable from another machine" is a claim only
+   * another machine can settle, and the student controls neither end of this
+   * measurement. The argv is built here from validated parts — a port, a path
+   * and a status — and the target is the sandbox's own container name, resolved
+   * by the segment's embedded DNS rather than by anything a lab supplies.
+   */
+  async requestFromPeer(
+    context: LabSessionContext,
+    request: { port: number; path: string; timeoutSeconds?: number },
+  ): Promise<{ reached: boolean; status?: number; detail?: string }> {
+    const peer = this.#peer(context);
+    if (!peer) return { reached: false, detail: 'this lab has no peer host' };
+
+    const target = this.#ref(context);
+    const timeout = Math.max(1, Math.min(30, request.timeoutSeconds ?? 5));
+    const result = await this.#runtime.exec(peer, {
+      argv: [
+        'curl',
+        '--silent',
+        '--show-error',
+        '--max-time',
+        String(timeout),
+        '--output',
+        '/dev/null',
+        '--write-out',
+        '%{http_code}',
+        `http://${target}:${request.port}${request.path}`,
+      ],
+      user: context.policy.sandbox.user,
+      timeoutMs: (timeout + 5) * 1000,
+    });
+
+    const code = Number.parseInt(result.stdout.trim(), 10);
+    if (!Number.isInteger(code) || code === 0) {
+      return { reached: false, detail: 'the peer could not reach the service' };
+    }
+    return { reached: true, status: code };
   }
 
   /**

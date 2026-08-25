@@ -1531,6 +1531,38 @@ const sandboxRequirementSchemas = {
       message: "absent: true needs the 'address' it is asserting the absence of",
     }),
 
+  /**
+   * One HTTP request, made by this session's peer against this session's
+   * sandbox.
+   *
+   * The check a reachability lab needs and no local observation can answer.
+   * "This service is reachable from another machine" is a claim only another
+   * machine can settle, and a student controls neither end of the measurement:
+   * the request is issued by a container the platform owns, on the session's
+   * own segment, against the sandbox's own container name.
+   *
+   * There is no `host` field, deliberately. The target is always this
+   * session's sandbox, so a lab cannot aim the platform's HTTP client at an
+   * address of its choosing — the one shape that would turn a grading check
+   * into a request forgery primitive.
+   */
+  http_request: z
+    .object({
+      type: z.literal('http_request'),
+      port: z.number().int().min(1).max(65535),
+      /** Request path. Never a full URL, and never a host. */
+      path: z
+        .string()
+        .min(1)
+        .max(255)
+        .regex(/^\/[A-Za-z0-9._~\-/]*$/, 'must be a path beginning with / and free of query syntax')
+        .default('/'),
+      expected_status: z.number().int().min(100).max(599).default(200),
+      timeout_seconds: z.number().int().min(1).max(30).default(5),
+      ...common,
+    })
+    .strict(),
+
   // --- Allow-listed inspection commands -----------------------------------
   command_exit_code: z
     .object({
@@ -2041,6 +2073,7 @@ export const REQUIREMENT_FAMILIES = {
   command_exit_code: 'linux',
   command_output: 'linux',
   neighbour_state: 'linux',
+  http_request: 'linux',
 
   // --- Docker: one session's own daemon --------------------------------
   docker_container_exists: 'docker',

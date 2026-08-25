@@ -176,6 +176,7 @@ import {
   terraformResourceExists,
 } from './handlers/terraform.js';
 import { neighbourState } from './handlers/neighbours.js';
+import { httpRequest } from './handlers/reachability-peer.js';
 import {
   commandExitCode,
   commandOutput,
@@ -369,6 +370,7 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   command_exit_code: commandExitCode,
   command_output: commandOutput,
   neighbour_state: neighbourState,
+  http_request: httpRequest,
 };
 
 /**

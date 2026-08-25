@@ -52,6 +52,21 @@ export const CONTAINER_SANDBOX_PATTERN = /^jtt-lab-[0-9a-f]{6,40}$/;
  */
 export const CONTAINER_NETWORK_PATTERN = /^jtt-net-[0-9a-f]{6,40}$/;
 
+/**
+ * A session's peer container — a second host on its own segment.
+ *
+ * Some lessons are only true from somewhere else. "This service answers on the
+ * box and nowhere else" cannot be shown from the box, so a lab that teaches it
+ * needs a second machine on the same link, and this is that machine's name.
+ *
+ * Derived from the session's sandbox reference like the network is, so the
+ * three names rise and fall together and none of them can be pointed at
+ * another session. The distinct prefix is what keeps a peer from ever being
+ * mistaken for a sandbox: `listManagedSandboxes` matches sandbox names, and a
+ * peer must never be handed to the reaper as though it were one.
+ */
+export const CONTAINER_PEER_PATTERN = /^jtt-peer-[0-9a-f]{6,40}$/;
+
 /** Hex characters of entropy in a session id. 16 → 64 bits. */
 export const DEFAULT_SESSION_ID_ENTROPY_CHARS = 16;
 
@@ -314,6 +329,29 @@ export function assertValidContainerNetworkRef(input: unknown): string {
 
 export function isContainerNetworkRef(input: unknown): input is string {
   return typeof input === 'string' && CONTAINER_NETWORK_PATTERN.test(input);
+}
+
+/** The peer container name for a sandbox reference. */
+export function peerRefForSandbox(sandboxRef: string): string {
+  const ref = assertValidContainerSandboxRef(sandboxRef);
+  return `jtt-peer-${ref.slice('jtt-lab-'.length)}`;
+}
+
+export function isContainerPeerRef(input: unknown): input is string {
+  return typeof input === 'string' && CONTAINER_PEER_PATTERN.test(input);
+}
+
+/**
+ * A container this platform manages: a session sandbox, or a session's peer.
+ *
+ * The runtime gates every container name it is given through here. Widening it
+ * from "sandbox" to "sandbox or peer" is the entire concession the peer
+ * capability needed at this layer — the shapes stay closed, and a name that is
+ * neither still cannot reach an argv.
+ */
+export function assertValidManagedContainerRef(input: unknown): string {
+  if (isContainerPeerRef(input)) return input;
+  return assertValidContainerSandboxRef(input);
 }
 
 /** Constant-time session id comparison, for anywhere ids are matched. */
