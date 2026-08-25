@@ -1,0 +1,334 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# EXECUTION MODEL: simulated Phase-0. AWS-008 runs in the ordinary Linux
+# sandbox. It creates no AWS resources, holds no AWS credentials, calls no AWS
+# API, and deploys nothing. The template is parsed and the layout it describes
+# is graded in the verifier.
+#
+# The approved curriculum classes AWS-008 as R-CHEAP (real AWS). It is built
+# here as SIM because the objective it carries — 5.1.1, configure a VPC:
+# subnets — is a *configuration* skill that a parsed template grades honestly
+# and completely. Nothing about placing two tiers across two zones needs an
+# AWS API call to be judged correct. What SIM cannot cover is observing the
+# created state in a real account, which is recorded as a remaining gap rather
+# than claimed here.
+#
+# GRADING: semantic throughout, with no answer key. Every check states a
+# property of the resulting layout — a capacity, a containment, an overlap, a
+# zone count, a pairing, an output that resolves to a named subnet — so any
+# second zone that satisfies the incident's asks passes, whichever zone and
+# whichever ranges the student picks.
+#
+# Certification claim: SOA-C03 Task 5.1 — skill 5.1.1, "Configure a VPC",
+# specifically its subnets. Objectives read from the official exam guide on
+# 2026-08-25.
+#
+# The AWS facts these checks rest on are documented, not inferred:
+#   · "Each subnet must reside entirely within one Availability Zone and
+#     cannot span zones."
+#   · "By launching AWS resources in separate Availability Zones, you can
+#     protect your applications from the failure of a single Availability
+#     Zone."
+#   · The reference layout is "a VPC with subnets in two Availability Zones
+#     ... Each Availability Zone has a public subnet and a private subnet."
+#   · AWS reserves five addresses in every subnet; a subnet block lies between
+#     a /28 and a /16 netmask.
+# — Amazon VPC User Guide, "Subnets for your VPC" and "Subnet CIDR blocks",
+#   read 2026-08-25.
+# ---------------------------------------------------------------------------
+id: AWS-008
+slug: aws-008-two-az-subnets
+title: One Zone Went Dark
+track: aws
+topic: aws-networking
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 8
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-007
+
+story: >
+  The payments VPC was addressed carefully, reviewed, and deployed. It ran for
+  months. Then an Availability Zone in eu-west-1 became unavailable at 04:12,
+  and every payments instance became unreachable at the same moment — because
+  every payments instance was in that zone.
+
+  There was no failover because there was nowhere to fail over to. The VPC has
+  a public subnet and a private subnet, and both of them are in one zone. The
+  addressing is not the problem; the addressing is fine. The design has one
+  zone, and a design with one zone is available exactly as often as that zone
+  is.
+
+  Extend it to two, so that either zone can serve on its own.
+
+objectives:
+  - Extend a single-zone VPC to a second Availability Zone
+  - Keep each zone self-sufficient by pairing its public and private subnets
+  - Hold the design to exactly the number of zones it is planned for
+  - Size and place new subnets without disturbing deployed ones
+  - Publish subnets so that another stack can actually find them
+
+task:
+  summary: >
+    Extend a deployed single-zone VPC into a second Availability Zone, pairing
+    the tiers per zone, sizing and placing the new subnets correctly, and
+    publishing them so the application stack can find them.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. There are no
+    credentials here, nothing is deployed, and no AWS API is called. Your
+    template is graded by parsing it and checking the layout it describes.
+
+    Everything is in `~/network`. Read `incident-4471.txt` for what happened
+    and the seven things operations asked for, and `platform-notes.txt` for how
+    the application stack consumes this template. `vpc.yaml` is the deployed
+    VPC and the file you edit.
+
+    Add a second Availability Zone to `vpc.yaml`: a public subnet and a private
+    subnet, with the logical IDs the incident names, plus the outputs the
+    platform notes describe. The zone you pick is yours to choose and so are
+    the ranges — what is graded is whether the result is a layout that
+    survives losing a zone.
+
+    Two things the incident is specific about, because they are the two that
+    look fine and are not. A zone whose public subnet is in one place and whose
+    private subnet is in another cannot serve a request end to end, so the two
+    subnets of a zone must be in the same zone. And the design is planned,
+    staffed and paid for at two zones, so it must end up using exactly two —
+    a stray third zone is capacity nobody is watching.
+
+    Do not renumber, resize or move the subnets that are already there.
+    Changing a deployed subnet's CIDR block means replacing the subnet.
+
+    **How this is graded.** The template is parsed, not searched. Resource
+    order, property order, indentation, quoting and YAML-versus-JSON make no
+    difference to the result, and no particular zone or range is expected.
+
+hints:
+  - level: 1
+    text: >
+      Read the first zone before you write the second. Everything you need to
+      copy is already in the template once: a subnet declares which VPC it
+      belongs to, which zone it sits in, what range it covers, and whether it
+      hands out public addresses. The second zone is the same four decisions
+      with two of the answers changed.
+  - level: 2
+    text: >
+      Work out the ranges from what is already allocated rather than from
+      round numbers. The two deployed subnets occupy part of the VPC; your two
+      must fit in the space that is left, must not touch what is there, and
+      must still leave half the VPC free. Laying the new pair immediately after
+      the existing ones, rather than at an arbitrary offset, makes all three of
+      those easy to satisfy at once.
+  - level: 3
+    text: >
+      The two requirements that catch people are about zones, not addresses.
+      Requirement A2 means the public and private subnet you add must name the
+      *same* zone as each other — not the zone the first pair uses. Requirement
+      A3 means that once you are finished, exactly two distinct zone names may
+      appear across all four subnets; picking a third zone for the new private
+      subnet satisfies A2 for nobody and fails A3.
+  - level: 4
+    text: >
+      An output is not decoration here — the platform notes say the application
+      stack reads outputs by name to find its subnets. Follow the naming that
+      already exists for the first zone, and make each new output's value
+      identify the subnet it is named after. An output that names one subnet
+      and returns another is the failure mode the notes warn about.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/network/vpc.yaml
+      label: The deployed template is in place
+    - type: file_exists
+      path: /home/student/network/incident-4471.txt
+      label: The incident record is in place
+    - type: cfn_template_valid
+      path: /home/student/network/vpc.yaml
+      label: The template parses before any change
+    - type: cfn_resource_exists
+      path: /home/student/network/vpc.yaml
+      logical_id: PublicSubnetA
+      resource_type: AWS::EC2::Subnet
+      label: The first zone's public subnet is present at the start
+
+requirements:
+  - type: cfn_template_valid
+    path: /home/student/network/vpc.yaml
+    format_version: '2010-09-09'
+    min_resources: 5
+    label: The template is still valid and now declares both zones
+
+  # --- A1: the second zone's subnets exist -----------------------------------
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetB
+    resource_type: AWS::EC2::Subnet
+    label: A1 — PublicSubnetB is declared
+
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetB
+    resource_type: AWS::EC2::Subnet
+    label: A1 — PrivateSubnetB is declared
+
+  # --- A4: sized like their counterparts in the first zone --------------------
+  - type: cfn_cidr_valid
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetB
+    property: CidrBlock
+    prefix_min: 16
+    prefix_max: 28
+    min_usable: 251
+    label: A4 — PublicSubnetB can assign at least 251 addresses
+
+  - type: cfn_cidr_valid
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetB
+    property: CidrBlock
+    prefix_min: 16
+    prefix_max: 28
+    min_usable: 4091
+    label: A4 — PrivateSubnetB can assign at least 4,091 addresses
+
+  # --- A5: inside the VPC, clear of what is deployed, room still left --------
+  - type: cfn_cidr_within
+    path: /home/student/network/vpc.yaml
+    parent: Vpc
+    parent_property: CidrBlock
+    logical_ids: [PublicSubnetA, PrivateSubnetA, PublicSubnetB, PrivateSubnetB]
+    property: CidrBlock
+    label: A5 — every subnet lies inside the VPC
+
+  - type: cfn_cidr_disjoint
+    path: /home/student/network/vpc.yaml
+    logical_ids: [PublicSubnetA, PrivateSubnetA, PublicSubnetB, PrivateSubnetB]
+    property: CidrBlock
+    label: A5 — the new subnets do not overlap the deployed ones
+
+  - type: cfn_cidr_free_space
+    path: /home/student/network/vpc.yaml
+    parent: Vpc
+    parent_property: CidrBlock
+    logical_ids: [PublicSubnetA, PrivateSubnetA, PublicSubnetB, PrivateSubnetB]
+    property: CidrBlock
+    min_free_percent: 50
+    label: A5 — at least half the VPC is still unallocated
+
+  # --- A1, A2, A3: the zone layout -------------------------------------------
+  # Three properties, and each needs its own bound: the tiers must be spread
+  # across zones, each zone's pair must be together, and the whole design must
+  # land on exactly two zones.
+  - type: cfn_property_distinct
+    path: /home/student/network/vpc.yaml
+    logical_ids: [PublicSubnetA, PublicSubnetB]
+    property: AvailabilityZone
+    min_distinct: 2
+    label: A1 — the public subnets are in different Availability Zones
+
+  - type: cfn_property_distinct
+    path: /home/student/network/vpc.yaml
+    logical_ids: [PrivateSubnetA, PrivateSubnetB]
+    property: AvailabilityZone
+    min_distinct: 2
+    label: A1 — the private subnets are in different Availability Zones
+
+  - type: cfn_property_distinct
+    path: /home/student/network/vpc.yaml
+    logical_ids: [PublicSubnetA, PrivateSubnetA]
+    property: AvailabilityZone
+    max_distinct: 1
+    label: A2 — the first zone's public and private subnets are in one zone
+
+  - type: cfn_property_distinct
+    path: /home/student/network/vpc.yaml
+    logical_ids: [PublicSubnetB, PrivateSubnetB]
+    property: AvailabilityZone
+    max_distinct: 1
+    label: A2 — the second zone's public and private subnets are in one zone
+
+  - type: cfn_property_distinct
+    path: /home/student/network/vpc.yaml
+    logical_ids: [PublicSubnetA, PrivateSubnetA, PublicSubnetB, PrivateSubnetB]
+    property: AvailabilityZone
+    min_distinct: 2
+    max_distinct: 2
+    label: A3 — the design uses exactly two Availability Zones
+
+  # --- A6: public means public, private means private ------------------------
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetB
+    property: MapPublicIpOnLaunch
+    equals: 'true'
+    label: A6 — PublicSubnetB gives instances a public address
+
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetB
+    property: MapPublicIpOnLaunch
+    equals: 'false'
+    label: A6 — PrivateSubnetB does not give instances a public address
+
+  # --- the new subnets belong to this VPC ------------------------------------
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetB
+    property: VpcId
+    references: Vpc
+    via: Ref
+    label: PublicSubnetB belongs to this VPC
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetB
+    property: VpcId
+    references: Vpc
+    via: Ref
+    label: PrivateSubnetB belongs to this VPC
+
+  # --- A7: the application stack can find them -------------------------------
+  - type: cfn_output_exists
+    path: /home/student/network/vpc.yaml
+    name: PublicSubnetBId
+    references: PublicSubnetB
+    label: A7 — PublicSubnetBId is published and identifies PublicSubnetB
+
+  - type: cfn_output_exists
+    path: /home/student/network/vpc.yaml
+    name: PrivateSubnetBId
+    references: PrivateSubnetB
+    label: A7 — PrivateSubnetBId is published and identifies PrivateSubnetB
+
+  - type: cfn_references_resolve
+    path: /home/student/network/vpc.yaml
+    label: Every reference in the template resolves
+
+skills:
+  - aws.networking.multi-az
+  - aws.networking.subnet-placement
+  - aws.cloudformation.stack-outputs
+
+certification:
+  - certification: SOA-C03
+    relevant: true
+    domains:
+      - networking-and-content-delivery
+
+references:
+  - title: "Amazon VPC User Guide: Subnets for your VPC"
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html
+  - title: "Amazon VPC User Guide: Subnet CIDR blocks"
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html
+  - title: "Amazon EC2 User Guide: Regions and Zones"
+    url: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html
+  - title: "AWS CloudFormation User Guide: AWS::EC2::Subnet"
+    url: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html

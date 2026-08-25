@@ -1501,10 +1501,12 @@ const sandboxRequirementSchemas = {
     .strict(),
 
   /**
-   * The listed resources hold different values for a property.
+   * How many different values the listed resources hold for a property.
    *
-   * Spreading subnets across Availability Zones is the case this exists for,
-   * but nothing here is CIDR- or AZ-specific.
+   * Bounded from either side, which is what lets a lab state both halves of a
+   * multi-AZ layout: subnets of one tier must be spread (`min_distinct`), and
+   * the two tiers of one zone must sit together (`max_distinct`). Setting both
+   * pins the count exactly. Nothing here is CIDR- or AZ-specific.
    */
   cfn_property_distinct: z
     .object({
@@ -1512,11 +1514,19 @@ const sandboxRequirementSchemas = {
       path: sandboxPath,
       logical_ids: z.array(cfnLogicalId).min(2).max(64),
       property: cfnPropertyPath,
-      /** How many different values the set must contain. */
-      min_distinct: z.number().int().min(2).max(64),
+      /** Floor on the number of different values across the set. */
+      min_distinct: z.number().int().min(1).max(64).optional(),
+      /** Ceiling on the number of different values across the set. */
+      max_distinct: z.number().int().min(1).max(64).optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((v) => v.min_distinct !== undefined || v.max_distinct !== undefined, {
+      message: 'must specify min_distinct, max_distinct, or both',
+    })
+    .refine((v) => v.min_distinct === undefined || v.max_distinct === undefined || v.min_distinct <= v.max_distinct, {
+      message: 'min_distinct must not exceed max_distinct',
+    }),
 
   // =========================================================================
   // Linux sandbox family

@@ -383,7 +383,19 @@ export const cfnCidrFreeSpace: SandboxVerifierHandler<'cfn_cidr_free_space'> = {
 
 export const cfnPropertyDistinct: SandboxVerifierHandler<'cfn_property_distinct'> = {
   type: 'cfn_property_distinct',
-  label: (r) => `${r.property} takes at least ${r.min_distinct} different values`,
+  label: (r) => {
+    if (r.min_distinct !== undefined && r.max_distinct !== undefined) {
+      return r.min_distinct === r.max_distinct
+        ? `${r.property} takes exactly ${r.min_distinct} different values`
+        : `${r.property} takes between ${r.min_distinct} and ${r.max_distinct} different values`;
+    }
+    if (r.max_distinct !== undefined) {
+      return r.max_distinct === 1
+        ? `${r.property} is the same across those resources`
+        : `${r.property} takes at most ${r.max_distinct} different values`;
+    }
+    return `${r.property} takes at least ${r.min_distinct} different values`;
+  },
   async run(requirement, reader) {
     const result = await readTemplate(reader, requirement.path);
     if ('outcome' in result) return result.outcome;
@@ -401,10 +413,12 @@ export const cfnPropertyDistinct: SandboxVerifierHandler<'cfn_property_distinct'
       values.add(typeof raw === 'string' ? raw : JSON.stringify(raw));
     }
 
-    if (values.size < requirement.min_distinct) {
-      return fail(
-        `${requirement.property} takes ${values.size} different value${values.size === 1 ? '' : 's'} across those resources, not ${requirement.min_distinct}`,
-      );
+    const found = `${requirement.property} takes ${values.size} different value${values.size === 1 ? '' : 's'} across those resources`;
+    if (requirement.min_distinct !== undefined && values.size < requirement.min_distinct) {
+      return fail(`${found}, fewer than the ${requirement.min_distinct} required`);
+    }
+    if (requirement.max_distinct !== undefined && values.size > requirement.max_distinct) {
+      return fail(`${found}, more than the ${requirement.max_distinct} allowed`);
     }
     return pass();
   },
