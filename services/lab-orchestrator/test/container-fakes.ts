@@ -53,6 +53,13 @@ export interface FakeRuntimeOptions {
   processes?: string[];
   /** Listening sockets, as `ss -H -lntu` lines. */
   sockets?: string[];
+  /**
+   * Raw `/proc/<pid>/environ` bytes per pid, for `process_environ`.
+   *
+   * NUL-separated `NAME=value`, exactly as the kernel exposes it, so a test
+   * exercises the same parsing the real reader performs.
+   */
+  environs?: Record<number, string>;
   /** `getent <db> <key>` answers, keyed `db:key`. */
   accounts?: Record<string, string>;
   /** Seed scripts that should fail, keyed by basename, with their exit code. */
@@ -77,6 +84,13 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
   processes: string[];
   sockets: string[];
   accounts: Record<string, string>;
+  /**
+   * Raw `/proc/<pid>/environ` bytes per pid, for `process_environ`.
+   *
+   * Stated as the NUL-separated bytes the kernel actually exposes, rather than
+   * as a parsed map, so a test exercises the same parsing the real reader does.
+   */
+  environs: Record<number, string>;
   #failingSeedScripts: Record<string, { exitCode: number; stderr: string }>;
 
   constructor(options: FakeRuntimeOptions = {}) {
@@ -88,6 +102,7 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
     this.processes = options.processes ?? [];
     this.sockets = options.sockets ?? [];
     this.accounts = options.accounts ?? {};
+    this.environs = options.environs ?? {};
     this.#failingSeedScripts = options.failingSeedScripts ?? {};
   }
 
@@ -319,6 +334,15 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
       }
 
       // --- allow-listed inspection commands, for the `linux` family ---------
+      case 'cat': {
+        // Only `/proc/<pid>/environ` is modelled here; everything else a lab
+        // reads goes through the filesystem port, not an inspection command.
+        const match = /^\/proc\/(\d+)\/environ$/.exec(String(args[0] ?? ''));
+        if (!match) return fail(`fake runtime: unexpected cat target '${String(args[0])}'`);
+        const bytes = this.environs[Number(match[1])];
+        return bytes === undefined ? fail('No such file or directory') : ok(bytes);
+      }
+
       case 'ps':
         return ok(this.processes.join('\n') + (this.processes.length ? '\n' : ''));
 

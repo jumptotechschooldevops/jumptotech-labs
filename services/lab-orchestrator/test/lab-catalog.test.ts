@@ -799,6 +799,32 @@ describe('schema — documentation (test requirement 10)', () => {
     );
   });
 
+  it('treats a path-narrowed entry as a path, not as its bare host', () => {
+    /*
+     * `OFFICIAL_DOC_HOSTS.kubernetes` contains `github.com/kubernetes`, meaning
+     * the Kubernetes project on GitHub. Before PLATFORM-006 the matcher
+     * compared it against the *hostname*, so every github.com URL satisfied the
+     * official-documentation rule — a stranger's cheatsheet repo and the bare
+     * site root included.
+     */
+    const withUrl = (url: string) => mutate(DOC_URL, url);
+
+    // The entry's own project still qualifies, at the root and below it.
+    expect(() => parseLabDefinition(withUrl('https://github.com/kubernetes'))).not.toThrow();
+    expect(() =>
+      parseLabDefinition(withUrl('https://github.com/kubernetes/kubernetes')),
+    ).not.toThrow();
+
+    // Anything else on the same host does not.
+    for (const url of [
+      'https://github.com/some-random-user/k8s-cheatsheet',
+      'https://github.com/',
+      'https://github.com/kubernetes-sigs-lookalike/x',
+    ]) {
+      expectIssue(withUrl(url), /official kubernetes documentation link/);
+    }
+  });
+
   it('rejects links to commercial training platforms', () => {
     expectIssue(
       mutate(

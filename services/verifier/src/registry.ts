@@ -189,6 +189,7 @@ import {
   scriptRuns,
   userExists,
   userInGroup,
+  processEnviron,
 } from './handlers/linux.js';
 import {
   dockerContainerEnv,
@@ -357,6 +358,7 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   script_executable: scriptExecutable,
   script_runs: scriptRuns,
   process_running: processRunning,
+  process_environ: processEnviron,
   process_not_running: processNotRunning,
   port_listening: portListening,
   port_not_listening: portNotListening,

@@ -202,6 +202,64 @@ const literalText = z
   .refine((v) => !v.includes('\0'), { message: 'must not contain null bytes' });
 
 /**
+ * How many matching processes `process_environ` will read.
+ *
+ * A bound, not a preference: without one, a lab pointed at a common pattern
+ * would make the verifier read `/proc/<pid>/environ` once per matching process,
+ * and a student could inflate that number at will.
+ */
+const MAX_ENVIRON_PROCESSES = 20;
+
+/** An environment variable name, as the kernel and POSIX allow one to be. */
+const environName = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be a valid environment variable name');
+
+/**
+ * One assertion about one variable.
+ *
+ * Exactly one predicate per entry, so a check can never be ambiguous about what
+ * it is asserting. `present` and `absent` compare nothing, which is what makes
+ * them the right choice for a variable whose value is a secret.
+ */
+const environAssertion = z
+  .object({
+    name: environName,
+    /** The variable must exist. Its value is not read. */
+    present: z.literal(true).optional(),
+    /** The variable must not exist. */
+    absent: z.literal(true).optional(),
+    /** The variable must equal this exactly. For non-secret values only. */
+    equals: literalText.optional(),
+    /** The variable must not equal this. */
+    not_equals: literalText.optional(),
+    /**
+     * Suppress the variable name in failure detail.
+     *
+     * The verifier never emits a *value*. This additionally withholds the
+     * *name*, for a lab where even naming the variable would say too much.
+     */
+    sensitive: z.boolean().default(false),
+  })
+  .strict()
+  .superRefine((entry, ctx) => {
+    const predicates = (['present', 'absent', 'equals', 'not_equals'] as const).filter(
+      (key) => entry[key] !== undefined,
+    );
+    if (predicates.length !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          predicates.length === 0
+            ? `variable '${entry.name}' must state one of present, absent, equals or not_equals`
+            : `variable '${entry.name}' states ${predicates.join(', ')}; exactly one is allowed`,
+      });
+    }
+  });
+
+/**
  * Inspection binaries a lab may name in `command_exit_code` / `command_output`.
  *
  * All of them read state; none of them mutate it. A lab cannot name `rm`,
@@ -1207,6 +1265,46 @@ const sandboxRequirementSchemas = {
     .object({ type: z.literal('process_not_running'), pattern: processPattern, ...common })
     .strict(),
 
+  /**
+   * Assertions about the environment a *running process* actually has.
+   *
+   * Why this exists: a lab that teaches "configure the service's environment"
+   * could previously only be graded by reading a file the service was supposed
+   * to have written — which a student with a shell can simply write by hand.
+   * This reads `/proc/<pid>/environ` of the process itself, so the only way to
+   * pass is for the service to genuinely be running with that environment.
+   *
+   * What it deliberately is *not*: a way to read an environment. A lab must
+   * name every variable it asks about, and the handler returns a verdict —
+   * never a value. See `environForPid` in the verifier's sandbox reader.
+   */
+  process_environ: z
+    .object({
+      type: z.literal('process_environ'),
+      /** Which process. Matched against the command line, as `process_running`. */
+      pattern: processPattern,
+      /** How many processes must match. Every match must satisfy `variables`. */
+      min_count: z.number().int().min(1).max(MAX_ENVIRON_PROCESSES).default(1),
+      variables: z
+        .array(environAssertion)
+        .min(1)
+        .max(20)
+        .superRefine((list, ctx) => {
+          const seen = new Set<string>();
+          for (const entry of list) {
+            if (seen.has(entry.name)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: `variables contains duplicate entries for '${entry.name}'`,
+              });
+            }
+            seen.add(entry.name);
+          }
+        }),
+      ...common,
+    })
+    .strict(),
+
   port_listening: z
     .object({
       type: z.literal('port_listening'),
@@ -1763,6 +1861,7 @@ export const REQUIREMENT_FAMILIES = {
   script_executable: 'filesystem',
 
   process_running: 'linux',
+  process_environ: 'linux',
   process_not_running: 'linux',
   port_listening: 'linux',
   port_not_listening: 'linux',

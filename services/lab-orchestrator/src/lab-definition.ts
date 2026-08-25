@@ -636,6 +636,24 @@ function checkReferences(def: LabDefinition, issues: string[]): void {
     }
   });
 
+  /*
+   * Host *and* path, for matching entries that narrow a host to one project.
+   *
+   * `github.com/kubernetes` means "the Kubernetes project on GitHub", not
+   * "GitHub". Matching it against the hostname alone accepted every github.com
+   * URL there is — including a stranger's cheatsheet repo and the bare site
+   * root — which quietly defeated the rule that lab content is written from
+   * official documentation.
+   */
+  const hostPaths = def.references.map((ref) => {
+    try {
+      const url = new URL(ref.url);
+      return `${url.hostname}${url.pathname}`.toLowerCase().replace(/\/+$/, '');
+    } catch {
+      return '';
+    }
+  });
+
   for (const [index, host] of hosts.entries()) {
     const banned = DISALLOWED_DOC_HOSTS.find((bad) => host === bad || host.endsWith(`.${bad}`));
     if (banned) {
@@ -646,7 +664,19 @@ function checkReferences(def: LabDefinition, issues: string[]): void {
   }
 
   const official = OFFICIAL_DOC_HOSTS[def.track];
-  if (official && !hosts.some((host) => official.some((allowed) => host === allowed || allowed.startsWith(`${host}/`)))) {
+  /*
+   * A bare entry matches the hostname exactly. An entry carrying a path is a
+   * prefix the reference's own path must actually be under — never something a
+   * bare hostname can satisfy.
+   */
+  const matchesOfficial = (allowed: string): boolean => {
+    const normalised = allowed.toLowerCase().replace(/\/+$/, '');
+    if (!normalised.includes('/')) return hosts.some((host) => host === normalised);
+    return hostPaths.some(
+      (hostPath) => hostPath === normalised || hostPath.startsWith(`${normalised}/`),
+    );
+  };
+  if (official && !official.some(matchesOfficial)) {
     issues.push(
       `references must include at least one official ${def.track} documentation link (${official.join(', ')})`,
     );

@@ -108,6 +108,20 @@ export const terraformOutputEquals: SandboxVerifierHandler<'terraform_output_equ
     // the state file's JSON typing is not what the exercise is teaching.
     const actual = renderOutput(output.value);
     if (actual !== requirement.value) {
+      /*
+       * A sensitive output's value never enters the failure detail.
+       *
+       * Terraform stores outputs marked `sensitive = true` in state in
+       * cleartext, and this handler reads state directly — so interpolating
+       * the value here would put a secret into the check result, which the API
+       * spreads into its response and the UI renders. The state file already
+       * carries the flag; the only thing that was missing was reading it.
+       */
+      if (output.sensitive === true) {
+        return fail(
+          `Output '${requirement.name}' does not have the expected value (the value is withheld because the output is marked sensitive)`,
+        );
+      }
       return fail(`Output '${requirement.name}' is ${actual === '' ? 'empty' : `'${actual}'`}`);
     }
     return pass();
