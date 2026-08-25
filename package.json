@@ -31,7 +31,9 @@
     "dev:terminal": "npm run dev --workspace @jumptotech/terminal",
     "dev:web": "npm run dev --workspace @jumptotech/web",
     "test:integration:terminal": "RUN_INTEGRATION_TESTS=1 vitest run test/terminal-integration.test.ts --root services/terminal",
-    "test:integration:sandbox": "RUN_INTEGRATION_TESTS=1 vitest run test/sandbox-integration.test.ts --root apps/api"
+    "test:integration:sandbox": "RUN_INTEGRATION_TESTS=1 vitest run test/sandbox-integration.test.ts --root apps/api",
+    "test:composition": "vitest run test/composition.test.ts --root apps/api",
+    "verify:api-image": "bash scripts/verify-api-image-composition.sh"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

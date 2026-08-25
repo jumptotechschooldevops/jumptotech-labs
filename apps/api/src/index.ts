@@ -6,25 +6,17 @@
  * environments is decided here and nowhere else.
  */
 import {
-  DockerCliFactory,
   InMemorySessionStore,
-  InMemoryWorkspace,
   PostgresSessionStore,
-  KubernetesClient,
   LabRegistry,
   SessionManager,
   SessionReaper,
-  createLabProvider,
-  requirementsNeedDocker,
-  type RequirementWaiter,
-  type WorkspacePort,
 } from '@jumptotech/lab-orchestrator';
-import { waitForRequirements } from '@jumptotech/verifier';
 import { buildIdentityResolver } from './auth/resolvers.js';
+import { buildSandboxComposition } from './composition.js';
 import { OidcTokenVerifier } from './auth/oidc.js';
 import { InMemoryUserRepository, PostgresUserRepository } from './auth/users.js';
 import { createApp } from './app.js';
-import { buildProviderRegistry } from './providers.js';
 import { loadConfig } from './config.js';
 import {
   AbandonedAttemptSweeper,
@@ -32,7 +24,6 @@ import {
   buildProgressRuntime,
 } from './progress.js';
 import { HttpTerminalControl, noopTerminalControl } from './terminal-control.js';
-import { HttpTerminalWorkspace } from './terminal-workspace.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -53,59 +44,7 @@ async function main(): Promise<void> {
     console.error(`[api] No labs loaded from ${config.labsDir}. Check LABS_DIR.`);
   }
 
-  const k8s = new KubernetesClient(
-    config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {},
-  );
-  /*
-   * Docker sandbox management.
-   *
-   * This factory is the only thing in the platform that holds host Docker
-   * access, and it lives in the API — a service with no shell and no student
-   * input path. The terminal service, which is where student-adjacent code
-   * runs, holds no host Docker credential at all; it is handed a per-session
-   * client certificate instead. See README → Docker sandbox security.
-   */
-  const engines = new DockerCliFactory(config.dockerHost ? { dockerHost: config.dockerHost } : {});
-
-  // Docker-track students author files in the terminal container; the verifier
-  // reads them back over the terminal service's authenticated internal API.
-  const workspace: WorkspacePort = config.terminalControlUrl
-    ? new HttpTerminalWorkspace({
-        baseUrl: config.terminalControlUrl,
-        secret: config.internalServiceSecret,
-      })
-    : new InMemoryWorkspace();
-
-  // Route setup verification to the correct substrate. Kubernetes namespaces
-  // (`lab-…`) and container sandboxes (`jtt-lab-…`) share a waiter but must
-  // never be cross-wired — passing a namespace name to the Docker engine
-  // factory is what broke K8S-011 initial-state provisioning.
-  const waitFor: RequirementWaiter = (input) =>
-    waitForRequirements({
-      k8s,
-      ...(requirementsNeedDocker(input.requirements)
-        ? { docker: engines.session(input.namespace) }
-        : {}),
-      ...input,
-    });
-
-  const kubernetes = createLabProvider({
-    provider: config.provider,
-    clusterName: config.clusterName,
-    ...(config.kubeconfigPath ? { kubeconfigPath: config.kubeconfigPath } : {}),
-    k8s,
-    waitForRequirements: waitFor,
-  });
-
-  // One registry, every sandbox backend. Which one a lab uses is decided by the
-  // lab's own `environment.provider`, not by anything in the application.
-  const providers = buildProviderRegistry({
-    config,
-    kubernetes,
-    engines,
-    workspace,
-    waitForRequirements: waitFor,
-  });
+  const { k8s, engines, workspace, kubernetes, providers } = buildSandboxComposition({ config });
 
   const terminal = config.terminalControlUrl
     ? new HttpTerminalControl({
@@ -246,7 +185,7 @@ async function main(): Promise<void> {
     console.log(
       `[api] progress store=${learning.store} durable=${learning.durable} student=${config.progress.devStudentId} (development identity — not authentication)`,
     );
-    console.log(`[api] kubernetes=${k8s.serverUrl}`);
+    console.log(`[api] kubernetes=${k8s.clusterEndpoint().server}`);
     console.log(
       config.dockerEnabled
         ? `[api] docker sandboxes: image=${config.policy.docker.image} network=${config.policy.docker.network} memory=${config.policy.docker.memory} cpus=${config.policy.docker.cpus} pids=${config.policy.docker.pidsLimit}`

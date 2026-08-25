@@ -2403,6 +2403,20 @@ marked unavailable in the catalog with a link to this command.
 docker compose up --build
 ```
 
+> **Rebuild after platform source changes.** The API, terminal, and web
+> services are baked into Docker images at build time — there is no bind-mount
+> of application source into the `api` container. After pulling or editing
+> platform code (`apps/api`, `services/*`), rebuild before manual testing:
+>
+> ```bash
+> make rebuild
+> # or: docker compose up --build -d
+> npm run verify:api-image   # optional: confirm the running API matches source
+> ```
+>
+> Unit tests on the host exercise fresh source; a stale running container does
+> not.
+
 The stack now includes PostgreSQL, which holds student progress. It needs
 `POSTGRES_PASSWORD` in `.env` — `make setup` generates one, and compose fails
 with that message rather than starting with a default password. The `api` waits

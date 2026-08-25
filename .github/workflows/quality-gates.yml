@@ -56,5 +56,11 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Production composition wiring
+        run: |
+          npm run test:composition
+          grep -q 'buildSandboxComposition' apps/api/src/index.ts
+          grep -q 'buildRequirementWaiter' apps/api/src/composition.ts
+
       - name: Build
         run: npm run build

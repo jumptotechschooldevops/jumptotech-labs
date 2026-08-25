@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 
-.PHONY: help setup cluster-up cluster-down sandbox-build sandbox-clean status up down logs test test-integration test-sandbox test-db db-up db-migrate db-status db-shell typecheck check reset clean
+.PHONY: help setup cluster-up cluster-down sandbox-build sandbox-clean status up rebuild verify-api-image down logs test test-integration test-sandbox test-db db-up db-migrate db-status db-shell typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -36,6 +36,12 @@ status: ## Health report for cluster + services
 
 up: ## Start the application (http://localhost:3000)
 	@docker compose up --build
+
+rebuild: ## Rebuild and restart the compose stack (required after platform source changes)
+	@docker compose up --build -d
+
+verify-api-image: ## Confirm the running API container has current composition wiring
+	@bash scripts/verify-api-image-composition.sh
 
 down: ## Stop the application
 	@docker compose down
