@@ -536,6 +536,19 @@ const kubernetesRequirementSchemas = {
     })
     .strict(),
 
+  /**
+   * A Service with no cluster IP of its own.
+   *
+   * `spec.clusterIP: "None"` is what makes a Service headless: kube-proxy
+   * allocates no virtual IP and does no load balancing, and DNS returns the
+   * Pod addresses directly instead of one VIP. That is the property a
+   * StatefulSet's governing Service must have for per-Pod DNS names to exist,
+   * and it is invisible to `service_type` — a headless Service is still of
+   * type `ClusterIP`, so the two checks answer different questions.
+   */
+  service_headless: z
+    .object({ type: z.literal('service_headless'), name: resourceName, ...common })
+    .strict(),
   service_selector: z
     .object({ type: z.literal('service_selector'), name: resourceName, selector: labelMap, ...common })
     .strict(),
@@ -1904,6 +1917,7 @@ export const REQUIREMENT_FAMILIES = {
   service_type: 'kubernetes',
   service_port: 'kubernetes',
   service_selector: 'kubernetes',
+  service_headless: 'kubernetes',
   service_endpoints: 'kubernetes',
 
   configmap_exists: 'kubernetes',

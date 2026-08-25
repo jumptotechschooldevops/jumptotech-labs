@@ -75,6 +75,7 @@ import {
 import {
   serviceEndpoints,
   serviceExists,
+  serviceHeadless,
   servicePort,
   serviceSelector,
   serviceType,
@@ -257,6 +258,7 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
   service_type: serviceType,
   service_port: servicePort,
   service_selector: serviceSelector,
+  service_headless: serviceHeadless,
   service_endpoints: serviceEndpoints,
 
   configmap_exists: configMapExists,

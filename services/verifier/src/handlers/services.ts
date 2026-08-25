@@ -117,3 +117,36 @@ export const serviceEndpoints: VerifierHandler<'service_endpoints'> = {
     );
   },
 };
+
+/**
+ * A Service that is headless — `spec.clusterIP: "None"`.
+ *
+ * Deliberately separate from `service_type`. A headless Service still reports
+ * type `ClusterIP`, so asking about the type cannot tell you whether the
+ * Service has a virtual IP; only `clusterIP` can. The distinction matters
+ * because a StatefulSet with a non-headless governing Service is silently
+ * wrong: the workload runs, but every Pod resolves to one load-balanced VIP
+ * instead of getting its own stable DNS name.
+ *
+ * An absent `clusterIP` is not headless. `ExternalName` Services carry none at
+ * all, and reporting that as headless would let one satisfy a requirement it
+ * has nothing to do with.
+ */
+export const serviceHeadless: VerifierHandler<'service_headless'> = {
+  type: 'service_headless',
+  label: (r) => `Service ${r.name} is headless`,
+  async run(r, reader) {
+    const service = await reader.service(r.name);
+    if (!service) return missing('Service', r.name, reader.namespace);
+
+    if (service.clusterIP === 'None') return pass();
+    if (service.clusterIP === undefined) {
+      return fail(
+        `Service '${r.name}' has no clusterIP field at all (type '${service.type}'), so it is not headless — a headless Service sets clusterIP to 'None'`,
+      );
+    }
+    return fail(
+      `Service '${r.name}' has clusterIP '${service.clusterIP}', expected 'None' — it is a load-balanced Service, not a headless one`,
+    );
+  },
+};
