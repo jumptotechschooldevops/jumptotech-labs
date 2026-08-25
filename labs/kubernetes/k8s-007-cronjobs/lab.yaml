@@ -99,8 +99,32 @@ skills:
   - kubernetes.workloads.batch
   - kubernetes.jobs.history
 
+# ---------------------------------------------------------------------------
+# CLASSIFICATION (official-source curriculum policy)
+#
+# classification:      PRODUCTION SKILL
+# official_objective:  none, for the same reason as K8S-006: no CKA v1.35
+#                      competency bullet names Jobs or CronJobs. Scheduled batch
+#                      work is a CKAD topic.
+#
+#                      This lab previously claimed the "self-healing primitives"
+#                      bullet in Workloads & Scheduling. That mapping was wrong
+#                      and has been corrected.
+#
+#                      The lab is kept: schedules, concurrency policy, and
+#                      history limits are things an on-call engineer gets wrong
+#                      in production, and teaching them is worth a slot whether
+#                      or not an exam asks.
+# objective_version:   checked against CKA v1.35 (CNCF curriculum)
+# official_source:     https://training.linuxfoundation.org/certification/certified-kubernetes-administrator-cka/
+#                      https://github.com/cncf/curriculum
+# technical_docs:      https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/
+# last_verified:       2026-08-23
+#
+# Recorded as a comment because `labDefinitionSchema` is `.strict()`. A shared
+# source-metadata contract is being designed across all tracks; this moves into
+# real fields then.
+# ---------------------------------------------------------------------------
 certification:
   - certification: CKA
-    relevant: true
-    domains:
-      - workloads-and-scheduling
+    relevant: false
