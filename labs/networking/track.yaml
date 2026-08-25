@@ -1,0 +1,5 @@
+# Optional track metadata. The track itself exists because labs declare it;
+# this file only says how it should be presented in the catalog.
+title: Networking
+tagline: Addresses, routes, names, and the layer a failure actually lives in.
+order: 30

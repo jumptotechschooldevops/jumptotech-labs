@@ -1,0 +1,60 @@
+JumpToTech Bank — incident triage drill
+=======================================
+
+Last month an outage took forty minutes to resolve. Thirty-eight of those were
+spent restarting an application whose problem was a route. The post-incident
+review asked for one thing: before anyone touches a service, say which layer
+the evidence points at.
+
+This host has four failures on it right now. All four are real, all four are
+reproducible from this shell, and none of them needs a network you do not have
+— this container has no route off itself, which is exactly why two of the four
+behave the way they do.
+
+Your job is to reproduce each one, record what the system actually said, and
+then classify it.
+
+
+THE FOUR FAILURES
+-----------------
+
+  refused       Open a TCP connection to port 9110 on this host's loopback
+                address. Nothing is bound there.
+
+  unreachable   Open a TCP connection to 10.99.99.99, or ping it. There is no
+                route to that address from here.
+
+  resolution    Look up the name ledger.bank.invalid.
+
+  app_503       The ledger API is listening on port 9109 on loopback. It is up.
+                Speak HTTP to it and read what it answers. A bare TCP connection
+                is not enough — you have to send a request and read the reply,
+                or you will never see the thing that matters.
+
+
+WHAT TO RECORD
+--------------
+
+Four files in this directory, one per failure. Put the tool's actual output in
+each — the message the system produced, not a summary of it:
+
+  refused.txt        unreachable.txt        resolution.txt        app.txt
+
+Then complete the two templates that are already here:
+
+  triage.txt   which layer each failure came from, and which of the four is
+               not a network problem at all
+  model.txt    how the layer numbers map onto the four layer names RFC 1122
+               uses, and the order of encapsulation
+
+
+ANSWER FORMAT — this matters
+----------------------------
+
+Every answer line in the templates ends with "= ". Type your value immediately
+after the space and change nothing else. A completed line looks exactly like:
+
+    refused_layer = L2
+
+Answer each line once. A line that lists several values is wrong even if the
+right one is among them — the point of the drill is to commit to a diagnosis.

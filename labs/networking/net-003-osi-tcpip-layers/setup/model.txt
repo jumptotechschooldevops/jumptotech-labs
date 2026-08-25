@@ -1,0 +1,21 @@
+JumpToTech Bank — the two models
+Fill in the value after each "= ". Do not change the labels.
+
+Part 1 — the same layers, two vocabularies.
+RFC 1122 does not number the layers; it names four of them. Which name goes
+with each OSI number?
+Allowed values: application  transport  internet  link
+
+  L4_rfc1122_name = 
+  L3_rfc1122_name = 
+
+Part 2 — encapsulation.
+Order these four from what an application hands down, to what leaves the
+interface. 1 is the outermost thing the application produced; 4 is what is on
+the wire.
+Allowed values: request  segment  packet  frame
+
+  1 = 
+  2 = 
+  3 = 
+  4 = 

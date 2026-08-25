@@ -1,0 +1,41 @@
+JumpToTech Bank — addressing plan
+Fill in each value after the "= ". Do not change the labels.
+
+--- Part 1: existing blocks -------------------------------------------------
+
+BLOCK A  10.20.16.0/20
+  network = 
+  broadcast = 
+  first_usable = 
+  last_usable = 
+  usable_count = 
+
+BLOCK B  10.20.5.128/26
+  network = 
+  broadcast = 
+  first_usable = 
+  last_usable = 
+  usable_count = 
+
+BLOCK C  172.16.8.0/22
+  network = 
+  broadcast = 
+  first_usable = 
+  last_usable = 
+  usable_count = 
+
+BLOCK D  192.168.100.64/28
+  network = 
+  broadcast = 
+  first_usable = 
+  last_usable = 
+  usable_count = 
+
+--- Part 2: new allocation --------------------------------------------------
+Three non-overlapping /20 blocks inside 10.20.0.0/16.
+Consecutive, ascending, starting at the first address of 10.20.0.0/16.
+Write each as a block in CIDR notation, for example 10.20.240.0/20.
+
+  prod = 
+  staging = 
+  dev = 

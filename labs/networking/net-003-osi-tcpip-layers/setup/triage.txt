@@ -1,0 +1,17 @@
+JumpToTech Bank — layer triage
+Fill in the value after each "= ". Do not change the labels.
+
+Which layer did each failure come from? Give the OSI layer number of the
+protocol that reported it.
+Allowed values: L1  L2  L3  L4  L5  L6  L7
+
+  refused_layer = 
+  unreachable_layer = 
+  resolution_layer = 
+  app_503_layer = 
+
+One of these four is not a network problem at all: the request arrived, and the
+far side answered. Which one?
+Allowed values: refused  unreachable  resolution  app_503
+
+  not_a_network_problem = 

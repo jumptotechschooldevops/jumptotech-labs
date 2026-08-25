@@ -1,0 +1,262 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Network scope. This lab runs in the standard Linux sandbox, which is created
+# with `--network none`. It has a loopback interface and no route off itself.
+# Nothing here scans, probes, or contacts anything outside the student's own
+# container, and the lab needs no network to work — the one piece of live state
+# it reads is the kernel's own local routing table, which exists whether or not
+# a host has any connectivity at all.
+#
+# Content is written from IETF standards (RFC 4632, RFC 1918, RFC 1122,
+# RFC 950, RFC 3927), the IANA IPv4 Special-Purpose Address Registry, and the
+# iproute2 man pages. Scenario, task wording, templates and answers are
+# original JumpToTech content.
+#
+# Classification: FOUNDATIONAL SKILL. This lab is deliberately *not* mapped to
+# a certification objective — addressing arithmetic underpins the LFCS
+# networking domain but is not itself one of its objectives. See
+# labs/networking/CURRICULUM.md section 4.3.
+# ---------------------------------------------------------------------------
+id: NET-002
+slug: net-002-cidr-subnetting
+title: IPv4, CIDR and Subnet Masks — Who Is On My Network
+track: networking
+topic: addressing
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 2
+
+environment:
+  provider: linux
+
+# NET-001 is designed but not yet implemented, and the registry refuses a
+# prerequisite that does not resolve. This stays empty until NET-001 lands.
+prerequisites: []
+
+story: >
+  The ledger service moves to a new environment next quarter, and Networking
+  has asked for the addressing work up front. Their reasoning is that an
+  overlapping range costs nothing to fix on paper and costs a weekend to fix
+  once three environments are running on it.
+
+  Nobody is going to check your arithmetic by hand. But the machine you are
+  sitting on will: it has a network prefix configured on it right now, and its
+  kernel has already worked out that prefix's broadcast address the same way
+  you are about to work out four others.
+
+objectives:
+  - Derive the network and broadcast address of an IPv4 block from its prefix length
+  - Work out the assignable host range and host count for a given CIDR block
+  - Classify an address as private, public, loopback or link-local from the reserved ranges
+  - Allocate non-overlapping subnets inside a larger block
+  - Read a prefix and its broadcast address out of the kernel's own routing table
+
+task:
+  summary: Complete the addressing plan and classification, and check your broadcast arithmetic against this host's own kernel.
+  description: >
+    Your working directory is `/home/student/subnets`. Read `brief.txt` first —
+    it states the job and, importantly, the answer format.
+
+    `plan.txt` and `classify.txt` are templates that are already there. Every
+    answer line ends with `= `; type your value immediately after that space
+    and leave the labels and addresses alone. A completed line looks exactly
+    like `usable_count = 30`, with one space either side of the `=`.
+
+    In `plan.txt`, complete all four blocks — network address, broadcast
+    address, first and last assignable host address, and the number of
+    assignable addresses — then propose the three consecutive `/20` blocks for
+    prod, staging and dev inside `10.20.0.0/16`, ascending from the first
+    address of that range, each written in CIDR notation.
+
+    In `classify.txt`, mark each of the six addresses `private`, `public`,
+    `loopback` or `link-local`. One of them is commonly assumed to be private
+    and is not; the IANA registry linked in the references is the authority.
+
+    Then create `kernel.txt` yourself, and do two things in it.
+
+    First, capture this host's *local* routing table into it — the table the
+    kernel keeps for addresses that belong to the machine itself. `ip route`
+    can show a specific table, and `/proc/net/fib_trie` is the same information
+    straight from the kernel; either is fine, as long as the file ends up
+    containing the real output. You are looking for a prefix and, alongside it,
+    an address the kernel derived from that prefix and labelled as a broadcast
+    address. It should be the last address of the prefix — the same rule you
+    just applied four times.
+
+    Second, add one more line to `kernel.txt`, in the same format as the other
+    files:
+
+      loopback_addresses = <total number of addresses in that prefix>
+
+    That is every address the prefix covers, not just the assignable ones.
+
+    None of this needs the network. This container has no route off itself,
+    and nothing in the task requires one.
+
+setup:
+  files:
+    - source: setup/brief.txt
+      path: subnets/brief.txt
+      mode: "0644"
+    - source: setup/plan.txt
+      path: subnets/plan.txt
+      mode: "0644"
+    - source: setup/classify.txt
+      path: subnets/classify.txt
+      mode: "0644"
+  verify:
+    - type: directory_exists
+      path: /home/student/subnets
+      label: The working directory exists
+    - type: file_content
+      path: /home/student/subnets/brief.txt
+      contains: "10.20.0.0/16"
+      label: The brief was seeded
+    - type: file_content
+      path: /home/student/subnets/plan.txt
+      contains: "BLOCK D  192.168.100.64/28"
+      label: The plan template was seeded
+    - type: file_content
+      path: /home/student/subnets/classify.txt
+      contains: "169.254.10.5 ="
+      label: The classification template was seeded
+    # The live reference this lab teaches against: the kernel's own routing
+    # table, which carries the loopback prefix and the broadcast address it
+    # derived from it. Read here so a broken baseline fails setup rather than
+    # failing a student.
+    - type: file_content
+      path: /proc/net/fib_trie
+      contains: "BROADCAST"
+      label: The kernel's local routing table is readable
+
+requirements:
+  # --- plan.txt, part 1: the four existing blocks --------------------------
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "10.20.31.255"
+    label: "Block A: the broadcast address of 10.20.16.0/20"
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "usable_count = 4094"
+    label: "Block A: the number of assignable addresses"
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "10.20.5.191"
+    label: "Block B: the broadcast address of 10.20.5.128/26"
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "10.20.5.190"
+    label: "Block B: the last assignable address"
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "172.16.11.255"
+    label: "Block C: the broadcast address of 172.16.8.0/22"
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "usable_count = 1022"
+    label: "Block C: the number of assignable addresses"
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "192.168.100.79"
+    label: "Block D: the broadcast address of 192.168.100.64/28"
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "192.168.100.65"
+    label: "Block D: the first assignable address"
+
+  # --- plan.txt, part 2: the new allocation --------------------------------
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "staging = 10.20.16.0/20"
+    label: The second /20 follows the first without overlapping it
+  - type: file_content
+    path: /home/student/subnets/plan.txt
+    contains: "dev = 10.20.32.0/20"
+    label: The third /20 follows the second without overlapping it
+
+  # --- classify.txt --------------------------------------------------------
+  - type: file_content
+    path: /home/student/subnets/classify.txt
+    contains: "10.20.31.254 = private"
+    label: An address inside 10.0.0.0/8 is private
+  - type: file_content
+    path: /home/student/subnets/classify.txt
+    contains: "172.32.5.1 = public"
+    label: 172.32.5.1 is outside the reserved 172.16.0.0/12 block
+  - type: file_content
+    path: /home/student/subnets/classify.txt
+    contains: "127.0.0.1 = loopback"
+    label: 127.0.0.1 is a loopback address
+  - type: file_content
+    path: /home/student/subnets/classify.txt
+    contains: "169.254.10.5 = link-local"
+    label: 169.254.10.5 is link-local, not private
+
+  # --- kernel.txt: the live check ------------------------------------------
+  - type: file_content
+    path: /home/student/subnets/kernel.txt
+    contains: "127.0.0.0/8"
+    label: The kernel's local routing table was captured
+  - type: file_content
+    path: /home/student/subnets/kernel.txt
+    contains: "127.255.255.255"
+    label: The capture shows the broadcast address the kernel derived
+  - type: file_content
+    path: /home/student/subnets/kernel.txt
+    contains: "loopback_addresses = 16777216"
+    label: The total address count of that prefix was computed
+
+hints:
+  - level: 1
+    text: >
+      A prefix length is a boundary, not a lookup. The bits it covers are fixed
+      for every address in the block; the bits below it are free. Set every
+      free bit to zero and you have named the block itself; set every free bit
+      to one and you have its broadcast address. Everything else in part 1
+      follows from those two addresses.
+  - level: 2
+    text: >
+      For the host counts, the free bits give you the total — two to the power
+      of however many there are. RFC 1122 section 3.2.1.3 explains why two of
+      those addresses cannot be given to a host: the all-zeros one names the
+      network and the all-ones one is the directed broadcast. For part 2, the
+      distance between the start of one /20 and the start of the next is the
+      size of a /20. For `classify.txt`, check the reserved ranges against the
+      IANA registry rather than from memory — one of the six is a near miss.
+  - level: 3
+    text: >
+      `man ip-route` covers selecting a routing table; the kernel keeps
+      machine-local addresses in the table named `local`, and `cat
+      /proc/net/fib_trie` shows the same entries with their prefix lengths.
+      Redirect whichever you use into `kernel.txt` with `>`, then append your
+      computed line with `>>` — and check that the address the kernel marked
+      BROADCAST is exactly the last address of the prefix printed beside it.
+      For the count, a /8 leaves 24 free bits.
+
+references:
+  - title: RFC 4632 — Classless Inter-domain Routing (CIDR), BCP 122
+    url: https://www.rfc-editor.org/info/rfc4632
+  - title: RFC 1918 — Address Allocation for Private Internets, BCP 5
+    url: https://www.rfc-editor.org/info/rfc1918
+  - title: RFC 1122 — Requirements for Internet Hosts, section 3.2.1.3 (Addressing)
+    url: https://www.rfc-editor.org/rfc/rfc1122.html
+  - title: RFC 950 — Internet Standard Subnetting Procedure, STD 5
+    url: https://www.rfc-editor.org/info/rfc950
+  - title: RFC 3927 — Dynamic Configuration of IPv4 Link-Local Addresses
+    url: https://www.rfc-editor.org/info/rfc3927
+  - title: IANA IPv4 Special-Purpose Address Registry
+    url: https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
+  - title: ip-route(8) — iproute2 manual page
+    url: https://man7.org/linux/man-pages/man8/ip-route.8.html
+
+skills:
+  - net.cidr.prefix-length
+  - net.cidr.broadcast-address
+  - net.cidr.host-range
+  - net.subnet.allocation
+  - net.addressing.reserved-ranges
+  - net.tools.routing-table
+
+certification: []
