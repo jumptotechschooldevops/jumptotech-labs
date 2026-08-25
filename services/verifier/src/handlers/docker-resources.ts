@@ -12,6 +12,13 @@ import type { DockerVerifierHandler } from '../contract.js';
 import { fail, missingDocker, pass } from '../contract.js';
 import { imageMatches } from '../image.js';
 
+/** Render an argv the way a Dockerfile would, for a readable detail. */
+const showArgv = (argv: readonly string[]): string =>
+  argv.length === 0 ? '(none)' : `[${argv.map((a) => JSON.stringify(a)).join(', ')}]`;
+
+const sameArgv = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
+
 export const dockerImageExists: DockerVerifierHandler<'docker_image_exists'> = {
   type: 'docker_image_exists',
   label: (r) => `Image ${r.image} exists`,
@@ -46,6 +53,16 @@ export const dockerImageConfig: DockerVerifierHandler<'docker_image_config'> = {
           `start command is [${argv.join(' ')}], which is missing ${missing.map((m) => `'${m}'`).join(', ')}`,
         );
       }
+    }
+
+    // Exact, and separately: the point of asserting these rather than
+    // `cmd_contains` is to show which half a value came from, and to tell exec
+    // form from shell form.
+    if (r.entrypoint !== undefined && !sameArgv(image.entrypoint, r.entrypoint)) {
+      problems.push(`ENTRYPOINT is ${showArgv(image.entrypoint)}`);
+    }
+    if (r.cmd !== undefined && !sameArgv(image.cmd, r.cmd)) {
+      problems.push(`CMD is ${showArgv(image.cmd)}`);
     }
 
     for (const [key, value] of Object.entries(r.env ?? {})) {

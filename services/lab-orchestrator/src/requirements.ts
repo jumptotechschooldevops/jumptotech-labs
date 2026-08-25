@@ -1351,6 +1351,19 @@ const containerAbsolutePath = z
     message: 'no path segment may begin with -',
   });
 
+/**
+ * One element of an argv a requirement compares against.
+ *
+ * Compared, never executed: this describes what a container's start command
+ * *is*, and no handler ever runs it. Control characters are excluded so a
+ * value cannot smuggle a newline into a check's detail.
+ */
+const argvToken = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(noControlCharacters, 'must not contain control characters');
+
 /** Docker object kinds a requirement may name generically. */
 const DOCKER_KINDS = ['container', 'image', 'volume', 'network'] as const;
 
@@ -1402,6 +1415,35 @@ const dockerRequirementSchemas = {
       ...common,
     })
     .strict(),
+
+  /**
+   * The command and entrypoint a container was created with.
+   *
+   * Read from `Config.Entrypoint` and `Config.Cmd` — what the daemon holds for
+   * this container, which is the image's values unless the run overrode them.
+   * That is exactly the pair DOCKER-014 teaches: a runtime argument replaces
+   * `Cmd` and leaves `Entrypoint` alone, so the two fields together show
+   * whether a student built a tool that takes arguments or one that ignores
+   * them.
+   *
+   * Compared as **exact argv arrays**, not membership, because the distinction
+   * that matters here is invisible to a looser test. `ENTRYPOINT ["/app/x"]`
+   * gives `["/app/x"]`; the shell form `ENTRYPOINT /app/x` gives
+   * `["/bin/sh","-c","/app/x"]` and silently discards every runtime argument.
+   * Both run, both exit 0, and only the array tells them apart.
+   */
+  docker_container_command: z
+    .object({
+      type: z.literal('docker_container_command'),
+      name: dockerObjectName,
+      command: z.array(argvToken).max(20).optional(),
+      entrypoint: z.array(argvToken).max(20).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.command !== undefined || v.entrypoint !== undefined, {
+      message: 'must assert a command, an entrypoint, or both',
+    }),
 
   /**
    * The kernel's OOM killer stopped the container's last run.
@@ -1579,6 +1621,16 @@ const dockerRequirementSchemas = {
       working_dir: z.string().min(1).max(255).optional(),
       /** Every listed argv element must appear, in order, in CMD or ENTRYPOINT. */
       cmd_contains: z.array(z.string().min(1).max(255)).max(10).optional(),
+      /**
+       * `ENTRYPOINT` and `CMD` as exact argv arrays, separately.
+       *
+       * `cmd_contains` deliberately merges the two and tests membership, which
+       * is right for "does this image start the thing it should". It cannot
+       * show which half a value came from, or tell exec form from shell form —
+       * so a lab teaching the difference asserts these instead.
+       */
+      entrypoint: z.array(argvToken).max(20).optional(),
+      cmd: z.array(argvToken).max(20).optional(),
       env: z.record(z.string().min(1).max(128), z.string().max(1024)).optional(),
       exposed_port: z.number().int().min(1).max(65535).optional(),
       labels: z.record(z.string().min(1).max(128), z.string().max(256)).optional(),
@@ -1589,6 +1641,8 @@ const dockerRequirementSchemas = {
       (v) =>
         v.working_dir !== undefined ||
         v.cmd_contains !== undefined ||
+        v.entrypoint !== undefined ||
+        v.cmd !== undefined ||
         v.env !== undefined ||
         v.exposed_port !== undefined ||
         v.labels !== undefined,
@@ -1888,6 +1942,7 @@ export const REQUIREMENT_FAMILIES = {
   docker_container_image: 'docker',
   docker_container_exit_code: 'docker',
   docker_container_oom_killed: 'docker',
+  docker_container_command: 'docker',
   docker_container_file_content: 'docker',
   docker_container_env: 'docker',
   docker_container_port: 'docker',

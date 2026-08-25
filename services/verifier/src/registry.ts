@@ -191,6 +191,7 @@ import {
   userInGroup,
 } from './handlers/linux.js';
 import {
+  dockerContainerCommand,
   dockerContainerEnv,
   dockerContainerExists,
   dockerContainerExitCode,
@@ -383,6 +384,7 @@ const DOCKER_HANDLERS: { [K in DockerRequirementType]: DockerVerifierHandler<K> 
   docker_container_image: dockerContainerImage,
   docker_container_exit_code: dockerContainerExitCode,
   docker_container_oom_killed: dockerContainerOomKilled,
+  docker_container_command: dockerContainerCommand,
   docker_container_file_content: dockerContainerFileContent,
   docker_container_env: dockerContainerEnv,
   docker_container_port: dockerContainerPort,

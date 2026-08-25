@@ -953,6 +953,12 @@ function solve(lab: LoadedLabDefinition): {
         containerFiles.push({ container: requirement.container, path: requirement.path, content });
         break;
       }
+      case 'docker_container_command': {
+        const spec = specFor(requirement.name);
+        if (requirement.command) spec.command = [...requirement.command];
+        if (requirement.entrypoint) spec.entrypoint = [...requirement.entrypoint];
+        break;
+      }
       case 'docker_container_oom_killed':
         specFor(requirement.name);
         states.set(requirement.name, {
@@ -1006,6 +1012,8 @@ function solve(lab: LoadedLabDefinition): {
         break;
       case 'docker_image_config':
         docker.addImage(requirement.image, {
+          ...(requirement.entrypoint ? { entrypoint: [...requirement.entrypoint] } : {}),
+          ...(requirement.cmd ? { cmd: [...requirement.cmd] } : {}),
           ...(requirement.working_dir ? { workingDir: requirement.working_dir } : {}),
           ...(requirement.cmd_contains ? { cmd: [...requirement.cmd_contains] } : {}),
           ...(requirement.env ? { env: { ...requirement.env } } : {}),
