@@ -1124,6 +1124,41 @@ const kubernetesRequirementSchemas = {
    * and omitting `rollingUpdate` entirely under Recreate. The handler reads
    * what is actually stored.
    */
+  /**
+   * One container inside a workload's Pod template.
+   *
+   * `collection` is what makes this precise rather than approximate: a Pod has
+   * two independent lists and a name may appear in either, so the requirement
+   * says which one it means. `containers` is the default because that is the
+   * common case.
+   *
+   * `restartPolicy` here is the *container's* field, which only an init
+   * container may set and only to `Always` — that is what makes it a native
+   * sidecar. It is not the Pod's `restartPolicy`, which every Deployment
+   * template carries as `Always` anyway.
+   *
+   * `kind` is a closed enum, and there is no `namespace` field: reads are bound
+   * to the session's own namespace by the reader.
+   */
+  workload_container: z
+    .object({
+      type: z.literal('workload_container'),
+      kind: z.enum(['pod', 'deployment']),
+      name: resourceName,
+      container: resourceName,
+      collection: z.enum(['containers', 'initContainers']).default('containers'),
+      image: imageReference.optional(),
+      // Kubernetes accepts `Always` on an init container; `OnFailure` and
+      // `Never` are Pod-level values and are rejected on a container.
+      restartPolicy: z.literal('Always').optional(),
+      command: z.array(z.string().min(1).max(1024)).min(1).max(16).optional(),
+      args: z.array(z.string().max(1024)).min(1).max(16).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.restartPolicy === undefined || v.collection === 'initContainers', {
+      message: 'restartPolicy applies to init containers only — a native sidecar sets it, a normal container cannot',
+    }),
   deployment_strategy: z
     .object({
       type: z.literal('deployment_strategy'),
@@ -1911,6 +1946,7 @@ export const REQUIREMENT_FAMILIES = {
 
   workload_annotation: 'kubernetes',
   deployment_strategy: 'kubernetes',
+  workload_container: 'kubernetes',
 
   file_exists: 'filesystem',
   directory_exists: 'filesystem',

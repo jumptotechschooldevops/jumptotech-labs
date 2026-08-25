@@ -163,7 +163,7 @@ import {
   hpaTarget,
 } from './handlers/hpa.js';
 import { serviceHttp, serviceTcp } from './handlers/reachability.js';
-import { workloadAnnotation } from './handlers/metadata.js';
+import { workloadAnnotation, workloadContainer } from './handlers/metadata.js';
 import {
   directoryExists,
   fileContent,
@@ -335,6 +335,7 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
   service_tcp: serviceTcp,
 
   workload_annotation: workloadAnnotation,
+  workload_container: workloadContainer,
 
   resource_absent: resourceAbsent,
 };

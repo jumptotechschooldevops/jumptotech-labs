@@ -16,8 +16,11 @@
  *     platform's own credentials, exactly as every other Kubernetes check does.
  *     No student RBAC changes, and nothing here needs cluster scope.
  */
+import type { ContainerSnapshot } from '@jumptotech/lab-orchestrator';
 import type { VerifierHandler } from '../contract.js';
 import { fail, missing, pass } from '../contract.js';
+import { imageMatches } from '../image.js';
+import { selectContainer } from './pods.js';
 
 /**
  * How much of an observed annotation value may appear in a failure message.
@@ -96,3 +99,86 @@ export const workloadAnnotation: VerifierHandler<'workload_annotation'> = {
       : fail(`Annotation '${r.key}' is ${parsed}, expected at least ${floor}`);
   },
 };
+
+/**
+ * One container inside a workload, in whichever list the requirement names.
+ *
+ * The two collections are kept strictly apart. A Pod may carry the same name in
+ * both `containers` and `initContainers`, and "is there an init container called
+ * X" is a different question from "is there a container called X" — answering
+ * the wrong one would let a lab pass with the app container doing the init
+ * container's job.
+ *
+ * Image comparison reuses `imageMatches`, so this handler inherits exactly the
+ * platform's existing normalisation and adds none of its own: registry prefixes
+ * for Docker Hub are stripped and a missing tag reads as `:latest`, which makes
+ * `nginx`, `nginx:latest` and `docker.io/library/nginx:latest` the same image.
+ * A different registry is a different image — `registry.example.com/nginx:latest`
+ * does not match `nginx:latest` — and a different tag never matches.
+ */
+export const workloadContainer: VerifierHandler<'workload_container'> = {
+  type: 'workload_container',
+  label: (r) => {
+    const where = r.collection === 'initContainers' ? 'init container' : 'container';
+    const kind = r.kind === 'pod' ? 'Pod' : 'Deployment';
+    if (r.restartPolicy) return `${kind} ${r.name} runs ${r.container} as a native sidecar`;
+    if (r.image) return `${kind} ${r.name} has ${where} ${r.container} running ${r.image}`;
+    return `${kind} ${r.name} has ${where} ${r.container}`;
+  },
+  async run(r, reader) {
+    const workload =
+      r.kind === 'pod' ? await reader.pod(r.name) : await reader.deployment(r.name);
+    if (!workload) return missing(r.kind === 'pod' ? 'Pod' : 'Deployment', r.name, reader.namespace);
+
+    const list: ContainerSnapshot[] =
+      r.collection === 'initContainers' ? (workload.initContainers ?? []) : workload.containers;
+    const where = r.collection === 'initContainers' ? 'init container' : 'container';
+
+    if (list.length === 0) {
+      return fail(`${r.name} declares no ${where}s`);
+    }
+
+    // `selectContainer` already formats "no container named X — found ..." and
+    // is reused so both messages read the same way across the track.
+    const { container, detail } = selectContainer({ containers: list }, r.container);
+    if (!container) return fail(`No ${where} named '${r.container}' — ${detail ?? 'not found'}`);
+
+    const problems: string[] = [];
+
+    if (r.image !== undefined && !imageMatches(r.image, container.image)) {
+      problems.push(`image is '${container.image}', expected '${r.image}'`);
+    }
+
+    if (r.restartPolicy !== undefined && container.restartPolicy !== r.restartPolicy) {
+      /*
+       * Deliberately reads the container's own field. A Deployment's Pod
+       * template always sets `restartPolicy: Always` at Pod level, so reading
+       * that instead would report every init container as a native sidecar.
+       */
+      problems.push(
+        container.restartPolicy === undefined
+          ? `restartPolicy is not set on the container, expected '${r.restartPolicy}'`
+          : `restartPolicy is '${container.restartPolicy}', expected '${r.restartPolicy}'`,
+      );
+    }
+
+    const listsMatch = (a: string[] | undefined, b: string[]): boolean =>
+      a !== undefined && a.length === b.length && a.every((v, i) => v === b[i]);
+
+    if (r.command !== undefined && !listsMatch(container.command, r.command)) {
+      problems.push(`command is ${describeArgv(container.command)}, expected ${describeArgv(r.command)}`);
+    }
+    if (r.args !== undefined && !listsMatch(container.args, r.args)) {
+      problems.push(`args are ${describeArgv(container.args)}, expected ${describeArgv(r.args)}`);
+    }
+
+    return problems.length === 0 ? pass() : fail(problems.join('; '));
+  },
+};
+
+/** Render an argv for a failure message, bounded so a long one cannot flood it. */
+function describeArgv(argv: string[] | undefined): string {
+  if (argv === undefined) return 'unset';
+  const rendered = JSON.stringify(argv);
+  return rendered.length > 120 ? `${rendered.slice(0, 120)}… (truncated)` : rendered;
+}

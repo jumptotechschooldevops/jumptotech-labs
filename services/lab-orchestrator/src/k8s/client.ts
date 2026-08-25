@@ -1116,6 +1116,12 @@ function toContainerSnapshots(
       ready: status?.ready ?? false,
       restartCount: status?.restartCount ?? 0,
       state,
+      ...(container.command ? { command: [...container.command] } : {}),
+      ...(container.args ? { args: [...container.args] } : {}),
+      // The container's own restartPolicy. `V1Container.restartPolicy` is only
+      // meaningful on an init container, where `Always` makes it a native
+      // sidecar. Read from the container, never from the Pod spec.
+      ...(container.restartPolicy ? { restartPolicy: container.restartPolicy } : {}),
       ...(reason ? { reason } : {}),
       ...(resources?.requests || resources?.limits
         ? {
@@ -1204,6 +1210,14 @@ export function toPodSnapshot(pod: k8s.V1Pod, namespace: string, name: string): 
     phase: pod.status?.phase ?? 'Unknown',
     labels: pod.metadata?.labels ?? {},
     containers,
+    ...(spec?.initContainers?.length
+      ? {
+          initContainers: toContainerSnapshots(
+            spec.initContainers,
+            pod.status?.initContainerStatuses ?? [],
+          ),
+        }
+      : {}),
     deleting: Boolean(pod.metadata?.deletionTimestamp),
     ready: containers.length > 0 && containers.every((c) => c.ready),
     configRefs: configReferencesOf(spec),
@@ -1255,6 +1269,9 @@ export function toDeploymentSnapshot(
     selector: deployment.spec?.selector?.matchLabels ?? {},
     podLabels: deployment.spec?.template?.metadata?.labels ?? {},
     containers: toContainerSnapshots(templateSpec?.containers ?? []),
+    ...(templateSpec?.initContainers?.length
+      ? { initContainers: toContainerSnapshots(templateSpec.initContainers) }
+      : {}),
     conditions: (status.conditions ?? []).map((c) => ({
       type: c.type,
       status: c.status,

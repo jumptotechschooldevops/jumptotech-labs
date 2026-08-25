@@ -68,6 +68,22 @@ export interface ContainerSnapshot {
   reason?: string;
   /** `spec.containers[].resources`, verbatim quantity strings. */
   resources?: ResourceRequirementsSnapshot;
+  /** `command` — the container's entrypoint override. */
+  command?: string[];
+  /** `args` — arguments passed to the entrypoint. */
+  args?: string[];
+  /**
+   * The container's OWN `restartPolicy`, not the Pod's.
+   *
+   * Only init containers may set this, and only to `Always`, which is what
+   * makes one a native sidecar: it starts in init order but keeps running
+   * alongside the app instead of having to complete. A Pod-level
+   * `restartPolicy` is a different field with a different meaning and is
+   * deliberately not folded in here — every Deployment's template carries
+   * `Always` at Pod level, so conflating them would make every init container
+   * look like a sidecar.
+   */
+  restartPolicy?: string;
   /** Probes declared on this container. Optional so older fixtures stay valid. */
   probes?: ProbeSnapshot[];
 }
@@ -103,6 +119,8 @@ export interface PodSnapshot {
   phase: string;
   labels: Record<string, string>;
   containers: ContainerSnapshot[];
+  /** `spec.initContainers`, in declaration order — which is run order. */
+  initContainers?: ContainerSnapshot[];
   /** Set while the Pod is terminating. */
   deleting: boolean;
   /** True when every container reports Ready. */
@@ -147,6 +165,8 @@ export interface DeploymentSnapshot {
   selector: Record<string, string>;
   podLabels: Record<string, string>;
   containers: ContainerSnapshot[];
+  /** Pod template `spec.initContainers`, in declaration order. */
+  initContainers?: ContainerSnapshot[];
   conditions: Array<{ type: string; status: string; reason?: string; message?: string }>;
   generation: number;
   observedGeneration: number;
