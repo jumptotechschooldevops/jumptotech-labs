@@ -188,6 +188,9 @@ const cfnResourceType = z
   .regex(/^[A-Za-z0-9]+::[A-Za-z0-9]+::[A-Za-z0-9]+$/, 'must look like AWS::S3::Bucket');
 
 /** A dotted property path, where a numeric segment indexes a list. */
+/** An IPv4 netmask length. */
+const cidrPrefixLength = z.number().int().min(0).max(32);
+
 const cfnPropertyPath = z
   .string()
   .min(1)
@@ -1417,6 +1420,104 @@ const sandboxRequirementSchemas = {
     })
     .strict(),
 
+  // ------------------------------------------------------------------ CIDR
+  //
+  // Network *design* checks. These grade the addressing a template lays out,
+  // not the text it lays it out in, so any plan that satisfies the stated
+  // constraints passes and no particular set of ranges is privileged.
+  //
+  // The AWS bounds they express are documented: a VPC or subnet IPv4 block
+  // lies between a /16 and a /28 netmask, and AWS reserves five addresses in
+  // every subnet. See Amazon VPC User Guide, "VPC CIDR blocks" and "Subnet
+  // CIDR blocks".
+
+  /** A property parses as an IPv4 CIDR block, within optional bounds. */
+  cfn_cidr_valid: z
+    .object({
+      type: z.literal('cfn_cidr_valid'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      property: cfnPropertyPath,
+      /** Inclusive netmask bounds. `prefix_min: 16` forbids anything wider. */
+      prefix_min: cidrPrefixLength.optional(),
+      prefix_max: cidrPrefixLength.optional(),
+      /** Floor on addresses the block holds, reserved ones included. */
+      min_addresses: z.number().int().min(1).max(4_294_967_296).optional(),
+      /** Floor on *assignable* addresses: five fewer than the block holds. */
+      min_usable: z.number().int().min(1).max(4_294_967_296).optional(),
+      /** Require the block to sit inside an RFC 1918 private range. */
+      rfc1918: z.boolean().optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.prefix_min === undefined || v.prefix_max === undefined || v.prefix_min <= v.prefix_max, {
+      message: 'prefix_min must not exceed prefix_max',
+    }),
+
+  /** Every listed resource's CIDR lies wholly inside another resource's. */
+  cfn_cidr_within: z
+    .object({
+      type: z.literal('cfn_cidr_within'),
+      path: sandboxPath,
+      /** The containing resource, e.g. the VPC. */
+      parent: cfnLogicalId,
+      parent_property: cfnPropertyPath,
+      /** The contained resources, e.g. the subnets. */
+      logical_ids: z.array(cfnLogicalId).min(1).max(64),
+      property: cfnPropertyPath,
+      ...common,
+    })
+    .strict(),
+
+  /** No two of the listed resources' CIDRs share an address. */
+  cfn_cidr_disjoint: z
+    .object({
+      type: z.literal('cfn_cidr_disjoint'),
+      path: sandboxPath,
+      logical_ids: z.array(cfnLogicalId).min(2).max(64),
+      property: cfnPropertyPath,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The listed resources leave room inside the parent for later growth.
+   *
+   * A VPC's CIDR cannot be resized after creation, so how much of it a first
+   * design consumes is a decision the student has to make on purpose.
+   */
+  cfn_cidr_free_space: z
+    .object({
+      type: z.literal('cfn_cidr_free_space'),
+      path: sandboxPath,
+      parent: cfnLogicalId,
+      parent_property: cfnPropertyPath,
+      logical_ids: z.array(cfnLogicalId).min(1).max(64),
+      property: cfnPropertyPath,
+      /** Share of the parent that must remain unallocated, 1-99. */
+      min_free_percent: z.number().int().min(1).max(99),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The listed resources hold different values for a property.
+   *
+   * Spreading subnets across Availability Zones is the case this exists for,
+   * but nothing here is CIDR- or AZ-specific.
+   */
+  cfn_property_distinct: z
+    .object({
+      type: z.literal('cfn_property_distinct'),
+      path: sandboxPath,
+      logical_ids: z.array(cfnLogicalId).min(2).max(64),
+      property: cfnPropertyPath,
+      /** How many different values the set must contain. */
+      min_distinct: z.number().int().min(2).max(64),
+      ...common,
+    })
+    .strict(),
+
   // =========================================================================
   // Linux sandbox family
   // =========================================================================
@@ -2039,6 +2140,11 @@ export const REQUIREMENT_FAMILIES = {
   cfn_resource_reference: 'cloudformation',
   cfn_references_resolve: 'cloudformation',
   cfn_output_exists: 'cloudformation',
+  cfn_cidr_valid: 'cloudformation',
+  cfn_cidr_within: 'cloudformation',
+  cfn_cidr_disjoint: 'cloudformation',
+  cfn_cidr_free_space: 'cloudformation',
+  cfn_property_distinct: 'cloudformation',
 
   resource_absent: 'kubernetes',
 

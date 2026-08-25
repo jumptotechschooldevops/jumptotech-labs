@@ -51,7 +51,12 @@ import type {
 import { VerifyReader } from './reader.js';
 import { SandboxReader } from './sandbox-reader.js';
 import {
+  cfnCidrDisjoint,
+  cfnCidrFreeSpace,
+  cfnCidrValid,
+  cfnCidrWithin,
   cfnOutputExists,
+  cfnPropertyDistinct,
   cfnReferencesResolve,
   cfnResourceExists,
   cfnResourceProperty,
@@ -379,6 +384,11 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   cfn_resource_reference: cfnResourceReference,
   cfn_references_resolve: cfnReferencesResolve,
   cfn_output_exists: cfnOutputExists,
+  cfn_cidr_valid: cfnCidrValid,
+  cfn_cidr_within: cfnCidrWithin,
+  cfn_cidr_disjoint: cfnCidrDisjoint,
+  cfn_cidr_free_space: cfnCidrFreeSpace,
+  cfn_property_distinct: cfnPropertyDistinct,
 
   path_absent: pathAbsent,
   file_content_absent: fileContentAbsent,

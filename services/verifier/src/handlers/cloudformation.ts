@@ -15,6 +15,16 @@
  * is asking the student to supply.
  */
 import { fail, missingPath, pass, type HandlerOutcome, type SandboxVerifierHandler } from '../contract.js';
+import {
+  AWS_RESERVED_ADDRESSES_PER_SUBNET,
+  cidrContains,
+  firstOverlappingPair,
+  freeAddresses,
+  isRfc1918,
+  parseIpv4Cidr,
+  usableAddresses,
+  type Ipv4Cidr,
+} from '../cidr.js';
 import type { SandboxReader } from '../sandbox-reader.js';
 import {
   CloudFormationParseError,
@@ -204,6 +214,197 @@ export const cfnOutputExists: SandboxVerifierHandler<'cfn_output_exists'> = {
       if (reference.target !== requirement.references) {
         return fail(`output '${requirement.name}' references '${reference.target}'`);
       }
+    }
+    return pass();
+  },
+};
+
+// ---------------------------------------------------------------- CIDR ----
+//
+// Network design checks. The rule from the top of this file applies with more
+// force here: these grade *addressing*, so any plan that satisfies the stated
+// constraints passes. Failure detail reports the arithmetic that failed — the
+// range that escaped the VPC, the pair that overlapped, the capacity that fell
+// short — and never a range the student was supposed to choose.
+
+/**
+ * Read one resource's property and parse it as an IPv4 CIDR.
+ *
+ * Every distinguishable way this can go wrong gets its own message, because
+ * "not a valid CIDR" is the one failure a student cannot act on.
+ */
+function readCidr(
+  template: CfnTemplate,
+  logicalId: string,
+  property: string,
+  path: string,
+): { cidr: Ipv4Cidr } | { outcome: HandlerOutcome } {
+  const resource = template.resources[logicalId];
+  if (!resource) {
+    return { outcome: fail(`no resource named '${logicalId}' in '${path}'; ${declared(template)}`) };
+  }
+  const raw = readPath(resource.properties, property);
+  if (raw === undefined) {
+    return { outcome: fail(`'${logicalId}' does not set ${property}`) };
+  }
+  if (typeof raw !== 'string') {
+    // A `!Ref` or `!Sub` here is a real answer, but not one that can be graded
+    // as addressing: the value is only known at deploy time.
+    return {
+      outcome: fail(
+        `'${logicalId}' sets ${property} to an intrinsic function rather than a literal CIDR block`,
+      ),
+    };
+  }
+  const cidr = parseIpv4Cidr(raw);
+  if (!cidr) return { outcome: fail(`'${logicalId}' sets ${property} to '${raw}', which is not a valid IPv4 CIDR block`) };
+  return { cidr };
+}
+
+/** Read a whole set of resources' CIDRs, failing on the first unreadable one. */
+function readCidrSet(
+  template: CfnTemplate,
+  logicalIds: readonly string[],
+  property: string,
+  path: string,
+): { entries: Array<{ logicalId: string; cidr: Ipv4Cidr }> } | { outcome: HandlerOutcome } {
+  const entries: Array<{ logicalId: string; cidr: Ipv4Cidr }> = [];
+  for (const logicalId of logicalIds) {
+    const read = readCidr(template, logicalId, property, path);
+    if ('outcome' in read) return { outcome: read.outcome };
+    entries.push({ logicalId, cidr: read.cidr });
+  }
+  return { entries };
+}
+
+export const cfnCidrValid: SandboxVerifierHandler<'cfn_cidr_valid'> = {
+  type: 'cfn_cidr_valid',
+  label: (r) => `${r.logical_id} sets ${r.property} to a usable CIDR block`,
+  async run(requirement, reader) {
+    const result = await readTemplate(reader, requirement.path);
+    if ('outcome' in result) return result.outcome;
+
+    const read = readCidr(result.template, requirement.logical_id, requirement.property, requirement.path);
+    if ('outcome' in read) return read.outcome;
+    const { cidr } = read;
+
+    if (requirement.prefix_min !== undefined && cidr.prefixLength < requirement.prefix_min) {
+      return fail(
+        `'${requirement.logical_id}' is a /${cidr.prefixLength}, which is wider than the /${requirement.prefix_min} allowed here`,
+      );
+    }
+    if (requirement.prefix_max !== undefined && cidr.prefixLength > requirement.prefix_max) {
+      return fail(
+        `'${requirement.logical_id}' is a /${cidr.prefixLength}, which is narrower than the /${requirement.prefix_max} allowed here`,
+      );
+    }
+    if (requirement.min_addresses !== undefined && cidr.addressCount < requirement.min_addresses) {
+      return fail(
+        `'${requirement.logical_id}' holds ${cidr.addressCount} addresses, short of the ${requirement.min_addresses} required`,
+      );
+    }
+    if (requirement.min_usable !== undefined) {
+      const usable = usableAddresses(cidr);
+      if (usable < requirement.min_usable) {
+        return fail(
+          `'${requirement.logical_id}' offers ${usable} assignable addresses (${cidr.addressCount} less the ${AWS_RESERVED_ADDRESSES_PER_SUBNET} AWS reserves), short of the ${requirement.min_usable} required`,
+        );
+      }
+    }
+    if (requirement.rfc1918 === true && !isRfc1918(cidr)) {
+      return fail(`'${requirement.logical_id}' is not inside any RFC 1918 private range`);
+    }
+    return pass();
+  },
+};
+
+export const cfnCidrWithin: SandboxVerifierHandler<'cfn_cidr_within'> = {
+  type: 'cfn_cidr_within',
+  label: (r) => `every ${r.property} lies inside ${r.parent}`,
+  async run(requirement, reader) {
+    const result = await readTemplate(reader, requirement.path);
+    if ('outcome' in result) return result.outcome;
+
+    const parent = readCidr(result.template, requirement.parent, requirement.parent_property, requirement.path);
+    if ('outcome' in parent) return parent.outcome;
+    const children = readCidrSet(result.template, requirement.logical_ids, requirement.property, requirement.path);
+    if ('outcome' in children) return children.outcome;
+
+    const escaped = children.entries.filter((entry) => !cidrContains(parent.cidr, entry.cidr));
+    if (escaped.length > 0) {
+      const names = escaped.map((entry) => `'${entry.logicalId}' (${entry.cidr.text})`).join(', ');
+      return fail(`${names} ${escaped.length === 1 ? 'is' : 'are'} not inside ${requirement.parent} (${parent.cidr.text})`);
+    }
+    return pass();
+  },
+};
+
+export const cfnCidrDisjoint: SandboxVerifierHandler<'cfn_cidr_disjoint'> = {
+  type: 'cfn_cidr_disjoint',
+  label: (r) => `no two ${r.property} values overlap`,
+  async run(requirement, reader) {
+    const result = await readTemplate(reader, requirement.path);
+    if ('outcome' in result) return result.outcome;
+
+    const read = readCidrSet(result.template, requirement.logical_ids, requirement.property, requirement.path);
+    if ('outcome' in read) return read.outcome;
+
+    const clash = firstOverlappingPair(read.entries);
+    if (clash) {
+      const [a, b] = clash;
+      return fail(`'${a.logicalId}' (${a.cidr.text}) overlaps '${b.logicalId}' (${b.cidr.text})`);
+    }
+    return pass();
+  },
+};
+
+export const cfnCidrFreeSpace: SandboxVerifierHandler<'cfn_cidr_free_space'> = {
+  type: 'cfn_cidr_free_space',
+  label: (r) => `${r.parent} keeps at least ${r.min_free_percent}% of its range unallocated`,
+  async run(requirement, reader) {
+    const result = await readTemplate(reader, requirement.path);
+    if ('outcome' in result) return result.outcome;
+
+    const parent = readCidr(result.template, requirement.parent, requirement.parent_property, requirement.path);
+    if ('outcome' in parent) return parent.outcome;
+    const children = readCidrSet(result.template, requirement.logical_ids, requirement.property, requirement.path);
+    if ('outcome' in children) return children.outcome;
+
+    const free = freeAddresses(parent.cidr, children.entries.map((entry) => entry.cidr));
+    const percent = (free / parent.cidr.addressCount) * 100;
+    if (percent < requirement.min_free_percent) {
+      return fail(
+        `the subnets leave ${percent.toFixed(1)}% of ${requirement.parent} (${parent.cidr.text}) unallocated, short of ${requirement.min_free_percent}%`,
+      );
+    }
+    return pass();
+  },
+};
+
+export const cfnPropertyDistinct: SandboxVerifierHandler<'cfn_property_distinct'> = {
+  type: 'cfn_property_distinct',
+  label: (r) => `${r.property} takes at least ${r.min_distinct} different values`,
+  async run(requirement, reader) {
+    const result = await readTemplate(reader, requirement.path);
+    if ('outcome' in result) return result.outcome;
+
+    const values = new Set<string>();
+    for (const logicalId of requirement.logical_ids) {
+      const resource = result.template.resources[logicalId];
+      if (!resource) {
+        return fail(`no resource named '${logicalId}' in '${requirement.path}'; ${declared(result.template)}`);
+      }
+      const raw = readPath(resource.properties, requirement.property);
+      if (raw === undefined) return fail(`'${logicalId}' does not set ${requirement.property}`);
+      // Intrinsics are compared by their canonical form, so `!Select [0, …]`
+      // and the long-form spelling of the same call count as one value.
+      values.add(typeof raw === 'string' ? raw : JSON.stringify(raw));
+    }
+
+    if (values.size < requirement.min_distinct) {
+      return fail(
+        `${requirement.property} takes ${values.size} different value${values.size === 1 ? '' : 's'} across those resources, not ${requirement.min_distinct}`,
+      );
     }
     return pass();
   },

@@ -93,6 +93,18 @@ export { DockerVerifyReader } from './docker-reader.js';
 export { imageMatches, normalizeImageReference } from './image.js';
 export { parseQuantity, quantitiesEqual } from './quantity.js';
 export {
+  AWS_MAX_PREFIX_LENGTH,
+  AWS_MIN_PREFIX_LENGTH,
+  AWS_RESERVED_ADDRESSES_PER_SUBNET,
+  cidrContains,
+  cidrsOverlap,
+  freeAddresses,
+  isRfc1918,
+  parseIpv4Cidr,
+  usableAddresses,
+  type Ipv4Cidr,
+} from './cidr.js';
+export {
   formatBytes,
   formatNanoCpus,
   memoryEqual,
