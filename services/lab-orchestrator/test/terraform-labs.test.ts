@@ -26,7 +26,7 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 
-const TERRAFORM_IDS = ['TF-001', 'TF-011'];
+const TERRAFORM_IDS = ['TF-001', 'TF-011', 'TF-012'];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {
@@ -196,5 +196,92 @@ describe('TF-011 — Reading and Saving an Execution Plan', () => {
     expect(definition.hints.map((hint) => hint.level)).toEqual([1, 2, 3]);
     expect(definition.hints[0]!.text).not.toContain('-out=tfplan');
     expect(definition.hints[2]!.text).toContain('-out=tfplan');
+  });
+});
+
+// ------------------------------------------------------------------- TF-012
+
+describe('TF-012 — Destroying Infrastructure Safely', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf012(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-012-destroy', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('follows TF-011 and covers the destroy step of the core workflow', async () => {
+    const definition = await tf012();
+    expect(definition.id).toBe('TF-012');
+    expect(definition.topic).toBe('workflow');
+    expect(definition.prerequisites).toEqual(['TF-011']);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.certification).toBe('TERRAFORM-ASSOCIATE-004');
+    expect(entry?.domains).toEqual(['3']);
+  });
+
+  it('seeds a three-resource stack the student has to create before destroying', async () => {
+    const definition = await tf012();
+    const files = await loadSetupFiles(definition);
+    expect(files.map((f) => f.path)).toEqual(['terraform/versions.tf', 'terraform/main.tf']);
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    for (const name of ['draft_report', 'summary_report', 'audit_log']) {
+      expect(main.content).toContain(`"local_file" "${name}"`);
+    }
+  });
+
+  it('grades the destroy from state, not from the absence of a state file', async () => {
+    const requirements = (await tf012()).requirements;
+    // The full-destroy assertion: no address, so it means "nothing managed".
+    const whole = requirements.find(
+      (r) => r.type === 'terraform_state_absent' && !('address' in r && r.address),
+    );
+    expect(whole).toBeDefined();
+
+    // A file check for the state file's *absence* would be the wrong shape
+    // entirely — a completed destroy leaves one behind.
+    const forbids = requirements.some(
+      (r) => r.type === 'path_absent' && 'path' in r && String(r.path).endsWith('terraform.tfstate'),
+    );
+    expect(forbids).toBe(false);
+  });
+
+  it('proves the targeted destroy happened first, from the state the last destroy replaced', async () => {
+    const requirements = (await tf012()).requirements;
+    const sequencing = requirements.find(
+      (r) =>
+        r.type === 'terraform_state_absent' &&
+        'state_file' in r &&
+        r.state_file === 'terraform.tfstate.backup' &&
+        'address' in r &&
+        r.address === 'local_file.draft_report',
+    );
+    expect(sequencing).toBeDefined();
+
+    // ...and that the two survivors were still managed at that point, so a
+    // hand-written empty backup cannot stand in for the real one.
+    const survivors = requirements.filter(
+      (r) =>
+        r.type === 'terraform_resource_exists' &&
+        'state_file' in r &&
+        r.state_file === 'terraform.tfstate.backup',
+    );
+    expect(survivors).toHaveLength(2);
+  });
+
+  it('requires the artifacts to be gone from disk, and the directory to remain as evidence', async () => {
+    const requirements = (await tf012()).requirements;
+    const absent = requirements
+      .filter((r) => r.type === 'path_absent')
+      .map((r) => ('path' in r ? r.path : ''));
+    expect(absent).toEqual([
+      'terraform/out/draft-report.txt',
+      'terraform/out/summary-report.txt',
+      'terraform/out/audit-log.txt',
+    ]);
+    expect(
+      requirements.some((r) => r.type === 'directory_exists' && 'path' in r && r.path === 'terraform/out'),
+    ).toBe(true);
   });
 });
