@@ -609,3 +609,69 @@ hard-coded for one fails the other; plus two `file_content_absent` checks on the
 source, because `output_contains` is a substring test over the whole of stdout
 and a program printing both batches' answers would otherwise satisfy both
 invocations. Same pairing as CS-002, and for the same reason.
+
+### CS-004 — Files, File Descriptors, and "Too Many Open Files"
+
+```text
+LAB ID:              CS-004
+TITLE:               Files, File Descriptors, and "Too Many Open Files"
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Describe what a file descriptor is and why 0, 1 and 2 are always spoken for;
+  read a running process's descriptor table out of /proc; tell a leaked socket
+  from an ordinary open file and work out which dominates; find the soft and
+  hard limits a process is actually running under; reproduce the descriptor
+  ceiling deliberately and see that it counts every descriptor a process holds;
+  and say why raising the limit postpones a leak rather than fixing it.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  "Too many open files" is among the most common production failures there is,
+  and it is almost never about files — it is leaked sockets or connections. The
+  reflex fix (raise the limit, restart) postpones the crash and hides the leak,
+  which is exactly the loop this lab's fictional on-call engineer is stuck in.
+
+OFFICIAL / PRIMARY SOURCES:
+  proc(5)                   https://man7.org/linux/man-pages/man5/proc.5.html
+  proc_pid_fd(5)            https://man7.org/linux/man-pages/man5/proc_pid_fd.5.html
+  proc_pid_limits(5)        https://man7.org/linux/man-pages/man5/proc_pid_limits.5.html
+  getrlimit(2)              https://man7.org/linux/man-pages/man2/getrlimit.2.html
+  open(2)                   https://man7.org/linux/man-pages/man2/open.2.html
+  socket(2)                 https://man7.org/linux/man-pages/man2/socket.2.html
+  errno(3)                  https://man7.org/linux/man-pages/man3/errno.3.html
+  GNU Bash — ulimit         https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html
+  Python — resource         https://docs.python.org/3/library/resource.html
+  Python — errno            https://docs.python.org/3/library/errno.html
+
+LAST VERIFIED:       2026-08-25   (all ten fetched, HTTP 200)
+```
+
+**Fixture design — a bounded, per-session connection leak**
+
+| Property | How it is achieved |
+|---|---|
+| realistic | holds a listener and leaks both ends of a loopback connection per batch, plus two spool files — the mixed table a real leak produces |
+| bounded | stops at 60 batches (~126 descriptors) against its own soft limit of 256, so it never dies mid-lab and never approaches a host ceiling |
+| student-owned | started with `su student`, because `/proc/<pid>/fd` is readable only by the process owner — a root fixture would hide the very thing being investigated |
+| isolated | one container per session; verified two concurrent sessions each have their own collector and descriptor table, and ending one leaves the other running |
+| disposable | a child of the container's init; End Lab reclaims it, Reset restarts it fresh |
+
+**Answer non-disclosure.** `COLLECTOR_SOFT_LIMIT` is set by the seed script,
+which the provider deletes from a root-only directory before the terminal
+opens — afterwards the number exists only in the running process, and appears
+in no file the student can read. `LEAK_KIND` cannot be inferred from the
+service's source because the service leaks *both* sockets and files; only
+counting `/proc/<pid>/fd` answers which dominates. Verified that no expected
+value appears in the lab payload, the failure details, the hints or any
+student-visible text.
+
+**Why `OPENED` is deterministic and worth grading:** `script_runs` execs the
+program with exactly three descriptors open, so a program that lowers its own
+soft limit to N and opens until the kernel refuses always manages **N − 3** —
+64 → 61, 128 → 125, measured stable over five consecutive runs and confirmed
+identical for a socket-based implementation. That difference of three *is* the
+lesson: the ceiling counts stdin, stdout and stderr too.
+
+**Runtime dependency:** Python 3.11 standard library only (`os`, `sys`,
+`errno`, `resource`, `socket`). No pip, no third-party package, no network.

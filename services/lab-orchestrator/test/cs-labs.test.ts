@@ -41,7 +41,7 @@ async function cs001(): Promise<LoadedLabDefinition> {
 }
 
 /** Every CS lab shipped so far, so track-wide rules are checked once. */
-const CS_IDS = ['CS-001', 'CS-002', 'CS-003'];
+const CS_IDS = ['CS-001', 'CS-002', 'CS-003', 'CS-004'];
 
 async function csLabs(): Promise<LoadedLabDefinition[]> {
   const registry = await realRegistry();
@@ -58,12 +58,25 @@ describe('the CS track loads', () => {
     expect(registry.labsForTrack('cs').map((l) => l.id)).toEqual(CS_IDS);
   });
 
-  it('sequences the track, each lab requiring the one before it', async () => {
+  it('sequences the track, each lab building on one that comes before it', async () => {
     const labs = await csLabs();
 
     for (const [index, lab] of labs.entries()) {
-      expect(lab.prerequisites, lab.id).toEqual(index === 0 ? [] : [CS_IDS[index - 1]]);
       expect(lab.order, lab.id).toBe(index + 1);
+      if (index === 0) {
+        expect(lab.prerequisites, lab.id).toEqual([]);
+        continue;
+      }
+      // The curriculum plan's prerequisite graph is a DAG rather than a strict
+      // chain — a lab may build on an earlier one without depending on its
+      // immediate predecessor. What must hold is that it never depends on
+      // itself or on something later in the track.
+      expect(lab.prerequisites.length, lab.id).toBeGreaterThan(0);
+      for (const prerequisite of lab.prerequisites) {
+        const position = CS_IDS.indexOf(prerequisite);
+        expect(position, `${lab.id} requires ${prerequisite}`).toBeGreaterThanOrEqual(0);
+        expect(position, `${lab.id} requires ${prerequisite}`).toBeLessThan(index);
+      }
     }
   });
 
@@ -167,6 +180,7 @@ describe('CS-001 content policy', () => {
     const graded: Record<string, string[]> = {
       'CS-001': ['15885', '16656', 'SCAN01_CPUS', 'VERDICT=', '/var'],
       'CS-002': ['536870912', '536.87', '512.00', '1073.74', '4d69', '537M', 'VERDICT='],
+      'CS-004': ['OPENED=61', 'OPENED=125', 'ERRNO=24', 'EMFILE', 'LEAK_KIND=', 'COLLECTOR_SOFT_LIMIT', 'REAL_FIX=', '256'],
       'CS-003': [
         'c3bc',
         'e69db1',
@@ -225,22 +239,92 @@ describe('CS-001 baseline script', () => {
 
   it('plants the evidence without pre-creating the student’s working directory', async () => {
     // Making the directory they are going to work in is the student's first
-    // act on the machine; seeding it would remove that.
+    // act on the machine; seeding it would remove that. Where the evidence
+    // itself lives is up to the lab — CS-001 to CS-003 stage files under
+    // /srv/kestrel, CS-004 installs a running service — so only the student's
+    // own home is off limits.
     for (const lab of await csLabs()) {
       const script = (await loadSeedScripts(lab)).at(0)!;
-      expect(script.content, lab.id).toContain('/srv/kestrel/');
       expect(script.content, lab.id).not.toMatch(/install -d[^\n]*\/home\/student\//);
+      expect(script.content, lab.id).not.toMatch(/mkdir[^\n]*\/home\/student\/(ops|py)/);
     }
   });
 
   it('states the lab’s starting condition through setup verification', async () => {
     // Setup checks run before the student is let in, so evidence that failed to
-    // land is reported as a broken environment rather than as their fault.
+    // land is reported as a broken environment rather than as their fault. They
+    // must describe platform-seeded state — never anything under the student's
+    // home, which is empty at that point and is theirs to fill.
     for (const lab of await csLabs()) {
       expect(lab.setup.verify.length, lab.id).toBeGreaterThanOrEqual(4);
       for (const check of lab.setup.verify) {
-        expect(String((check as { path?: string }).path ?? ''), lab.id).toMatch(/^\/srv\/kestrel\//);
+        const target = String((check as { path?: string }).path ?? '');
+        if (target) expect(target, `${lab.id}: ${target}`).not.toMatch(/^\/home\/student\//);
       }
     }
+  });
+});
+
+// ------------------------------------------------- CS-004's leaking fixture
+
+describe('CS-004 seeded leaking process', () => {
+  async function seed(): Promise<string> {
+    const registry = await realRegistry();
+    const scripts = await loadSeedScripts(registry.get('CS-004'));
+    return scripts.at(0)!.content;
+  }
+
+  it('is confirmed running before the student is let in', async () => {
+    const lab = (await realRegistry()).get('CS-004');
+    const types = lab.setup.verify.map((c) => c.type);
+
+    // A lab whose whole subject is a running process must not hand the student
+    // a sandbox where that process failed to start: setup verification checks
+    // the process table and the listening socket, not just files on disk.
+    expect(types).toContain('process_running');
+    expect(types).toContain('port_listening');
+  });
+
+  it('runs as the student, because /proc/<pid>/fd is only readable by its owner', async () => {
+    const content = await seed();
+
+    // Running the fixture as root would leave the student unable to see the
+    // descriptor table they are asked to investigate.
+    expect(content).toMatch(/su student -c/);
+  });
+
+  it('bounds the leak well below the limit it runs under', async () => {
+    const content = await seed();
+    const soft = Number(/SOFT_LIMIT=(\d+)/.exec(content)?.[1]);
+    const batches = Number(/LEAK_BATCHES=(\d+)/.exec(content)?.[1]);
+
+    expect(Number.isFinite(soft)).toBe(true);
+    expect(Number.isFinite(batches)).toBe(true);
+    // Two descriptors per batch plus a listener, a couple of spool files and
+    // the three standard ones. It must stop short of its own ceiling so the
+    // process stays alive to be investigated — and nowhere near a host one.
+    expect(batches * 2 + 8).toBeLessThan(soft);
+  });
+
+  it('keeps the graded soft limit out of every file the student can read', async () => {
+    const content = await seed();
+    const soft = /SOFT_LIMIT=(\d+)/.exec(content)?.[1] ?? '';
+
+    // The number is set here, in a script the provider deletes from a
+    // root-only directory before the terminal opens, so afterwards it exists
+    // only in the running process. The service the student *can* read must not
+    // repeat it.
+    const service = content.slice(content.indexOf('scan-collector <<'), content.indexOf('chmod 0755 /usr/local/bin'));
+    expect(service).not.toContain(soft);
+    expect(service).not.toMatch(/RLIMIT|ulimit|setrlimit/);
+  });
+
+  it('leaks a mix, so the dominant kind has to be counted rather than guessed', async () => {
+    const content = await seed();
+
+    // Sockets and ordinary files both, which is why reading the service's
+    // source cannot answer "which kind dominates".
+    expect(content).toMatch(/create_connection/);
+    expect(content).toMatch(/\.spool/);
   });
 });
