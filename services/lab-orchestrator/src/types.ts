@@ -427,6 +427,22 @@ export interface LabProvider {
   ): Promise<SandboxPathRead | null>;
 
   /**
+   * List files under one directory in the sandbox, for configuration checks.
+   *
+   * `readSandboxPath` answers questions about paths a lab already names. A
+   * Terraform configuration check cannot name them: "is a `variable` block
+   * declared" is a question about *whichever* `.tf` files the student chose to
+   * write, and Terraform reads every one in the directory. This is the
+   * narrowest addition that makes that answerable — a bounded, read-only
+   * listing resolved against the sandbox root exactly like a read.
+   */
+  listSandboxFiles?(
+    context: LabSessionContext,
+    relativeDir: string,
+    options?: SandboxListOptions,
+  ): Promise<string[]>;
+
+  /**
    * Ask the sandbox one allow-listed, read-only inspection question.
    *
    * Only providers whose labs declare `linux` requirements implement it — the
@@ -460,6 +476,15 @@ export interface LabProvider {
     args: readonly string[],
     options?: { timeoutMs?: number },
   ): Promise<ExecResult>;
+}
+
+export interface SandboxListOptions {
+  /** Only return files ending in this suffix, e.g. `.tf`. */
+  suffix?: string;
+  /** How far below the directory to descend. Bounded by the implementation. */
+  maxDepth?: number;
+  /** Cap on returned paths. Bounded by the implementation. */
+  maxEntries?: number;
 }
 
 /** What a sandbox path looks like on disk, as seen from inside the sandbox. */

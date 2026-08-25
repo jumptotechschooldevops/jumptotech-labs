@@ -24,6 +24,7 @@ import type {
   LabProvider,
   ProvisionStep,
   ResetResult,
+  SandboxListOptions,
   SandboxPathRead,
   StudentCredentials,
   TerminalContext,
@@ -93,6 +94,14 @@ export interface SandboxReadPort {
     args: readonly string[],
     options?: { asRoot?: boolean; timeoutMs?: number },
   ): Promise<SandboxInspectResult>;
+  /**
+   * List files under a sandbox directory, for configuration checks.
+   *
+   * Present only for providers that implement it. Terraform configuration
+   * checks need it because Terraform reads every `.tf` file in a directory and
+   * a lab cannot know which ones a student wrote; nothing else needs it.
+   */
+  list?(relativeDir: string, options?: SandboxListOptions): Promise<string[]>;
   /** Run a script the student wrote, for the `script_runs` check. */
   runScript?(
     scriptPath: string,
@@ -541,8 +550,13 @@ export class SessionManager {
     const read = provider.readSandboxPath.bind(provider);
     const inspect = provider.inspectSandbox?.bind(provider);
     const runScript = provider.runSandboxScript?.bind(provider);
+    const list = provider.listSandboxFiles?.bind(provider);
     return {
       read: (relativePath, options) => read(context, relativePath, options),
+      // Optional: a provider that does not implement it leaves configuration
+      // checks reported as skipped, with a reason, rather than failing a
+      // student for a gap in the platform.
+      ...(list ? { list: (dir, options) => list(context, dir, options) } : {}),
       ...(inspect
         ? { inspect: (command, args, options) => inspect(context, command, args, options) }
         : {}),

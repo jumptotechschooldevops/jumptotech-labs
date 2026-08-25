@@ -28,12 +28,25 @@ export interface CheckResult {
 
 /** What a handler returns: a verdict, plus the observation behind it. */
 export interface HandlerOutcome {
+  /** True when the check could not be performed at all. Never a student's fault. */
+  skipped?: boolean;
   ok: boolean;
   detail?: string;
 }
 
 export function pass(detail?: string): HandlerOutcome {
   return detail === undefined ? { ok: true } : { ok: true, detail };
+}
+
+/**
+ * The platform could not look, so the student is not told they failed.
+ *
+ * A capability a provider does not offer is a platform gap, and reporting it
+ * as a failed check would blame the student for it. The lab loader already
+ * refuses a lab whose provider cannot verify its family, so this is a backstop.
+ */
+export function skip(detail: string): HandlerOutcome {
+  return { ok: false, skipped: true, detail };
 }
 
 export function fail(detail: string): HandlerOutcome {

@@ -177,6 +177,16 @@ import {
   terraformStateAbsent,
 } from './handlers/terraform.js';
 import {
+  terraformCheckDeclared,
+  terraformDataSourceDeclared,
+  terraformLocalsDeclared,
+  terraformResourceCondition,
+  terraformResourceDependsOn,
+  terraformResourceReferences,
+  terraformVariableDeclared,
+  terraformVariableValidation,
+} from './handlers/terraform-config.js';
+import {
   commandExitCode,
   commandOutput,
   fileContentAbsent,
@@ -354,6 +364,15 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_output_equals: terraformOutputEquals,
   terraform_state_absent: terraformStateAbsent,
 
+  terraform_resource_references: terraformResourceReferences,
+  terraform_variable_declared: terraformVariableDeclared,
+  terraform_locals_declared: terraformLocalsDeclared,
+  terraform_data_source_declared: terraformDataSourceDeclared,
+  terraform_resource_depends_on: terraformResourceDependsOn,
+  terraform_variable_validation: terraformVariableValidation,
+  terraform_resource_condition: terraformResourceCondition,
+  terraform_check_declared: terraformCheckDeclared,
+
   path_absent: pathAbsent,
   file_content_absent: fileContentAbsent,
   script_executable: scriptExecutable,
@@ -488,7 +507,7 @@ export async function verifyRequirement(
     return {
       id,
       label,
-      status: outcome.ok ? 'pass' : 'fail',
+      status: outcome.skipped ? 'skipped' : outcome.ok ? 'pass' : 'fail',
       ...(outcome.detail ? { detail: outcome.detail } : {}),
     };
   }
@@ -510,7 +529,7 @@ export async function verifyRequirement(
     return {
       id,
       label,
-      status: outcome.ok ? 'pass' : 'fail',
+      status: outcome.skipped ? 'skipped' : outcome.ok ? 'pass' : 'fail',
       ...(outcome.detail ? { detail: outcome.detail } : {}),
     };
   }
@@ -555,7 +574,7 @@ export async function verifyRequirement(
   return {
     id,
     label,
-    status: outcome.ok ? 'pass' : 'fail',
+    status: outcome.skipped ? 'skipped' : outcome.ok ? 'pass' : 'fail',
     ...(outcome.detail ? { detail: outcome.detail } : {}),
   };
 }

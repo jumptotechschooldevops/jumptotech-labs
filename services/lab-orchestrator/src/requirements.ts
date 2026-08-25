@@ -134,6 +134,42 @@ const resourceList = z
  * state the goal ("Service routes to the application Pods") without naming the
  * injected fault, which the generated default label might otherwise hint at.
  */
+/** A provider resource or data-source type, e.g. `local_file`. */
+const terraformTypeName = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z][a-z0-9_]*$/, 'must be a Terraform type such as local_file');
+
+/** A block label or identifier, e.g. `service_config`, `channel`. */
+const terraformLabel = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-zA-Z_][a-zA-Z0-9_-]*$/, 'must be a Terraform identifier');
+
+/**
+ * The object a reference points at, without an attribute.
+ *
+ * Deliberately a closed shape rather than free text: it is parsed into parts
+ * and compared field by field, so nothing a lab writes ever becomes a pattern.
+ */
+const terraformReferenceTarget = z
+  .string()
+  .min(3)
+  .max(200)
+  .regex(
+    /^(var\.[a-zA-Z_][a-zA-Z0-9_-]*|local\.[a-zA-Z_][a-zA-Z0-9_-]*|module\.[a-zA-Z_][a-zA-Z0-9_-]*|data\.[a-z][a-z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_-]*|[a-z][a-z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_-]*)$/,
+    'must be a Terraform address such as local_file.config, var.channel or data.local_file.seed',
+  );
+
+/** A dotted attribute path on a referenced object, e.g. `content_sha256`. */
+const terraformAttributePath = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[a-zA-Z_][a-zA-Z0-9_.-]*$/, 'must be an attribute path');
+
 const common = {
   label: z.string().min(1).max(160).optional(),
 };
@@ -1177,6 +1213,160 @@ const sandboxRequirementSchemas = {
    * that called such a state "destroyed" would be teaching the opposite of the
    * lesson.
    */
+  // =========================================================================
+  // Terraform configuration (static, semantic)
+  // =========================================================================
+  //
+  // These read the student's `.tf` files instead of state, because some things
+  // a Terraform course teaches leave no trace in an applied result: whether a
+  // variable was declared or a value hardcoded, whether a dependency came from
+  // a reference or a pasted string, whether a validation rule exists at all.
+  //
+  // Read is all they do. The scanner behind them evaluates nothing, calls no
+  // function, resolves no variable and reaches nothing outside the text it was
+  // given — see `terraform/hcl.ts` and `terraform/references.ts`. There is no
+  // path from a lab definition to running a student's configuration.
+
+  /**
+   * A resource attribute *refers to* another Terraform object.
+   *
+   * The check a dependency lab needs, and the one state cannot answer.
+   * `content = "sha: ${local_file.config.content_sha256}"` creates an edge in
+   * Terraform's graph; `content = "sha: d0e6aa15…"` does not, and the two
+   * produce identical state. Only the configuration distinguishes them.
+   *
+   * A literal that merely looks like an address never counts — the reference
+   * has to be live, meaning bare or inside `${…}` interpolation.
+   */
+  terraform_resource_references: z
+    .object({
+      type: z.literal('terraform_resource_references'),
+      dir: sandboxPath,
+      resource_type: terraformTypeName,
+      name: terraformLabel,
+      /** Which argument must carry the reference, e.g. `content`. */
+      attribute: terraformLabel,
+      /**
+       * The object that must be referred to: `local_file.config`,
+       * `var.channel`, `local.service`, `data.local_file.seed`, `module.app`.
+       */
+      references: terraformReferenceTarget,
+      /** Require the reference to reach a particular attribute of that object. */
+      referenced_attribute: terraformAttributePath.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** A `variable "name"` block is declared, optionally with a shape. */
+  terraform_variable_declared: z
+    .object({
+      type: z.literal('terraform_variable_declared'),
+      dir: sandboxPath,
+      name: terraformLabel,
+      /** Require the variable to declare (or deliberately omit) a default. */
+      has_default: z.boolean().optional(),
+      /** Require a `type` argument to be present — teaches typed variables. */
+      has_type: z.boolean().optional(),
+      /**
+       * A substring the declared type expression must contain, e.g.
+       * `map(object(`. A substring rather than an exact match because a complex
+       * type is written across several lines with the author's own spacing, and
+       * a lab teaching a map of objects cares that the student reached for one,
+       * not that they laid it out a particular way. Compared against the type
+       * expression's source with whitespace collapsed; nothing is evaluated.
+       */
+      type_contains: z.string().min(1).max(200).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** Names that must be defined in a `locals` block. */
+  terraform_locals_declared: z
+    .object({
+      type: z.literal('terraform_locals_declared'),
+      dir: sandboxPath,
+      names: z.array(terraformLabel).min(1).max(20),
+      ...common,
+    })
+    .strict(),
+
+  /** A `data "type" "name"` block is declared. */
+  terraform_data_source_declared: z
+    .object({
+      type: z.literal('terraform_data_source_declared'),
+      dir: sandboxPath,
+      data_type: terraformTypeName,
+      name: terraformLabel,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A resource declares `depends_on`, naming given addresses.
+   *
+   * Configuration, not state: an explicit dependency exists precisely because
+   * no attribute reference implies it, so it leaves no trace in the applied
+   * result. That is also what distinguishes it from
+   * `terraform_resource_references`.
+   */
+  terraform_resource_depends_on: z
+    .object({
+      type: z.literal('terraform_resource_depends_on'),
+      dir: sandboxPath,
+      resource_type: terraformTypeName,
+      name: terraformLabel,
+      /** Addresses the list must mention, e.g. `null_resource.database`. */
+      references: z.array(terraformReferenceTarget).min(1).max(10),
+      ...common,
+    })
+    .strict(),
+
+  /** A variable declares at least one `validation` block. */
+  terraform_variable_validation: z
+    .object({
+      type: z.literal('terraform_variable_validation'),
+      dir: sandboxPath,
+      name: terraformLabel,
+      /** Minimum number of `validation` blocks. Defaults to 1. */
+      min_rules: z.number().int().min(1).max(10).default(1),
+      /** Identifiers or function names the conditions must between them mention. */
+      condition_mentions: z.array(terraformLabel).min(1).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A resource or data source declares a custom condition.
+   *
+   * `precondition` and `postcondition` live inside a `lifecycle` block, and are
+   * looked for there.
+   */
+  terraform_resource_condition: z
+    .object({
+      type: z.literal('terraform_resource_condition'),
+      dir: sandboxPath,
+      resource_type: terraformTypeName,
+      name: terraformLabel,
+      mode: z.enum(['managed', 'data']).default('managed'),
+      condition: z.enum(['precondition', 'postcondition']),
+      /** Identifiers or function names the condition must mention. */
+      condition_mentions: z.array(terraformLabel).min(1).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** A `check "name"` block with at least one `assert`. */
+  terraform_check_declared: z
+    .object({
+      type: z.literal('terraform_check_declared'),
+      dir: sandboxPath,
+      name: terraformLabel,
+      /** Minimum number of `assert` blocks. Defaults to 1. */
+      min_assertions: z.number().int().min(1).max(10).default(1),
+      ...common,
+    })
+    .strict(),
+
   terraform_state_absent: z
     .object({
       type: z.literal('terraform_state_absent'),
@@ -1824,6 +2014,14 @@ export const REQUIREMENT_FAMILIES = {
   terraform_resource_exists: 'terraform',
   terraform_output_equals: 'terraform',
   terraform_state_absent: 'terraform',
+  terraform_resource_references: 'terraform',
+  terraform_variable_declared: 'terraform',
+  terraform_locals_declared: 'terraform',
+  terraform_data_source_declared: 'terraform',
+  terraform_resource_depends_on: 'terraform',
+  terraform_variable_validation: 'terraform',
+  terraform_resource_condition: 'terraform',
+  terraform_check_declared: 'terraform',
 
   resource_absent: 'kubernetes',
 

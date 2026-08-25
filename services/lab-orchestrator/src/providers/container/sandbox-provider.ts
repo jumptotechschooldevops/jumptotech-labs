@@ -46,6 +46,7 @@ import {
   type CreateResult,
   type DestroyResult,
   type EnvironmentInfo,
+  type SandboxListOptions,
   type ExecRequest,
   type ExecResult,
   type LabError,
@@ -79,6 +80,10 @@ import {
 } from './runtime.js';
 
 /** Binaries the provider itself may run inside a sandbox, for reads and setup. */
+/** Bounds on a `listSandboxFiles` sweep. A lab cannot widen either. */
+const MAX_LIST_DEPTH = 6;
+const MAX_LIST_ENTRIES = 200;
+
 const INTERNAL_EXEC_ALLOWLIST = new Set([
   '/usr/bin/stat',
   '/bin/cat',
@@ -89,6 +94,7 @@ const INTERNAL_EXEC_ALLOWLIST = new Set([
   '/usr/bin/id',
   '/usr/bin/env',
   '/bin/sh',
+  '/usr/bin/find',
 ]);
 
 /**
@@ -574,6 +580,66 @@ export class ContainerLabProvider implements LabProvider {
    * the student can see — no privileged bypass of the permissions the lab is
    * teaching.
    */
+  /**
+   * List files under one directory in the sandbox.
+   *
+   * Bounded four ways — a fixed root, a depth ceiling, an entry cap and an
+   * optional suffix — because the caller is a verification pass, not a file
+   * browser. Four properties make it safe against a student's own filesystem:
+   *
+   *   · the root is `resolveSandboxPath`, the same resolution every read uses,
+   *     so `..` cannot climb out and an absolute path cannot be named;
+   *   · `find` is given an argv array with no shell, so no argument can become
+   *     syntax;
+   *   · `-type f` matches regular files only, so a symlink pointing outside
+   *     the workspace is not a match and its target is never read;
+   *   · results are re-anchored to the requested directory and anything that
+   *     does not start with it is dropped, so nothing outside can be returned
+   *     even if the sandbox contrives to emit it.
+   *
+   * Dot-prefixed segments are skipped: `.terraform/` holds installed provider
+   * plugins, which are not the student's work and would swamp any listing.
+   */
+  async listSandboxFiles(
+    context: LabSessionContext,
+    relativeDir: string,
+    options: SandboxListOptions = {},
+  ): Promise<string[]> {
+    const ref = this.#ref(context);
+    const absolute = resolveSandboxPath(this.#home, relativeDir);
+    const depth = Math.min(Math.max(options.maxDepth ?? 4, 1), MAX_LIST_DEPTH);
+    const limit = Math.min(Math.max(options.maxEntries ?? MAX_LIST_ENTRIES, 1), MAX_LIST_ENTRIES);
+
+    const argv = ['/usr/bin/find', absolute, '-maxdepth', String(depth), '-type', 'f'];
+    if (options.suffix !== undefined) {
+      if (!/^\.[A-Za-z0-9]{1,16}$/.test(options.suffix)) {
+        throw new Error(`'${options.suffix}' is not a valid file suffix`);
+      }
+      argv.push('-name', `*${options.suffix}`);
+    }
+
+    const result = await this.#runtime.exec(ref, {
+      argv,
+      user: context.policy.sandbox.user,
+      workdir: this.#home,
+      timeoutMs: 15_000,
+    });
+    if (result.exitCode !== 0) return [];
+
+    const prefix = `${absolute}/`;
+    const seen = new Set<string>();
+    for (const line of result.stdout.split('\n')) {
+      const found = line.trim();
+      if (!found.startsWith(prefix)) continue;
+      const relative = found.slice(prefix.length);
+      if (relative.length === 0) continue;
+      if (relative.split('/').some((segment) => segment.startsWith('.'))) continue;
+      seen.add(relative);
+      if (seen.size >= limit) break;
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }
+
   async readSandboxPath(
     context: LabSessionContext,
     relativePath: string,
