@@ -36,6 +36,7 @@ const TERRAFORM_IDS = [
   'TF-011',
   'TF-012',
   'TF-016',
+  'TF-017',
 ];
 
 let cached: LabRegistry | undefined;
@@ -885,5 +886,93 @@ describe('TF-016 — Explicit Dependencies with depends_on', () => {
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-017
+
+describe('TF-017 — Complex Types', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf017(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-017-complex-types', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf017();
+    expect(definition.id).toBe('TF-017');
+    expect(definition.topic).toBe('types');
+    expect(definition.order).toBe(13);
+    expect(definition.prerequisites).toEqual(['TF-006']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds loose variables with stale defaults, and the data that outgrew them', async () => {
+    const files = await loadSetupFiles(await tf017());
+    expect(files.map((f) => f.path).sort()).toEqual([
+      'terraform/main.tf',
+      'terraform/terraform.tfvars',
+      'terraform/versions.tf',
+    ]);
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    // The problem: separate variables, and no structure to put the new data in.
+    expect(main.content).toContain('variable "env_region"');
+    expect(main.content).not.toContain('environments');
+    // The defaults are deliberately stale, so the seeded lab does not already
+    // produce the values the task asks for.
+    expect(main.content).toContain('us-east-1');
+
+    const tfvars = files.find((f) => f.path.endsWith('.tfvars'))!;
+    // `production` omits debug — which is what forces `optional()`. Sliced from
+    // the block itself, not the first mention of the word, since the file's
+    // header comment explains the omission.
+    const block = tfvars.content.slice(tfvars.content.indexOf('production = {'));
+    expect(block).toContain('replicas');
+    expect(block).not.toContain('debug');
+  });
+
+  it('requires a collection type and a structural type together', async () => {
+    const declared = (await tf017()).requirements.filter(
+      (r) => r.type === 'terraform_variable_declared',
+    ) as Array<Record<string, unknown>>;
+    const environments = declared.filter((r) => r.name === 'environments');
+    const shapes = environments.map((r) => r.type_contains);
+    expect(shapes).toContain('map(object(');
+    // Matched against the type expression with whitespace collapsed, so a
+    // student's layout does not decide.
+    expect(shapes).toContain('optional(');
+    expect(declared.some((r) => r.name === 'target' && r.has_type === true)).toBe(true);
+  });
+
+  it('proves optional() through its effect, not only its spelling', async () => {
+    // The platform team never wrote a debug value for production, so the
+    // manifest can only carry one if the attribute was declared optional with
+    // a default.
+    const contents = (await tf017()).requirements
+      .filter((r) => r.type === 'file_content' && 'contains' in r)
+      .map((r) => ('contains' in r ? String(r.contains) : ''));
+    expect(contents).toContain('"debug":false');
+    expect(contents).toContain('"region":"eu-central-1"');
+    expect(contents).toContain('"replicas":6');
+  });
+
+  it('requires the manifest to be built from the structure, not from literals', async () => {
+    const references = (await tf017()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
+    expect(pairs).toEqual(['content->var.environments', 'filename->var.target']);
+  });
+
+  it('grades applied state as well, and names no source file', async () => {
+    const requirements = (await tf017()).requirements;
+    expect(requirements.some((r) => r.type === 'terraform_resource_exists')).toBe(true);
+    const paths = requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf') || p.endsWith('.tfvars'))).toBe(false);
   });
 });

@@ -1,0 +1,263 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-017 — complex types: describing a shape instead of a pile of strings.
+#
+# Official objective this lab practises:
+#   Terraform Associate (004), domain 4 "Terraform configuration"
+#   4d — "Understand and use complex types"
+#
+# Official sources, read on 2026-08-25:
+#   · Type constraints — the primitive types, the collection types
+#     (`list`, `map`, `set`) and the structural types (`object`, `tuple`),
+#     and `optional()` for object attributes that may be omitted
+#   · Input variables — the `type` argument and what Terraform does when a
+#     supplied value does not match
+#
+# ## Why the type is the work
+#
+# The data is given. `terraform.tfvars` is the platform team's interface and
+# the student does not write it — which is the realistic shape of the problem
+# and also removes any chance of grading a typo. What the student writes is a
+# *type that accepts that data*, which is the objective.
+#
+# The `optional()` half is graded through its effect rather than its spelling:
+# `production` says nothing about debug, so the manifest can only carry
+# `"debug":false` if the attribute was declared optional with that default. A
+# student who declares it required cannot apply at all — Terraform refuses the
+# value — and one who edits the platform team's file to add it fails the type
+# check instead.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-017
+slug: tf-017-complex-types
+title: Complex Types
+track: terraform
+topic: types
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 13
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-006
+
+story: >
+  The platform team has changed how they publish environment settings. What
+  used to be a handful of loose values is now one structure describing every
+  environment at once, and they will keep adding environments to it.
+
+  Your configuration has not noticed. It still declares a region and a replica
+  count as separate variables with defaults baked in, so it plans and applies
+  quite happily while ignoring everything the platform team supplies. The
+  values it writes are the ones somebody typed months ago.
+
+  It also has no way to complain. If a new environment arrives missing its
+  region, nothing here would say so — the manifest would simply be built from
+  a default and be wrong in production.
+
+objectives:
+  - Declare a variable whose type describes a nested structure
+  - Use a collection type and a structural type together
+  - Allow an attribute to be omitted, with a default, using optional()
+  - Let the type constraint reject malformed input before anything is created
+
+task:
+  summary: >
+    Replace the loose variables with one typed structure that accepts the
+    platform team's data, and build the manifest from it.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf`, a
+    `main.tf` with the loose variables, and `terraform.tfvars` — the platform
+    team's file. Read the tfvars first: it is the shape you have to accept, and
+    you are not to edit it. It is their interface, not yours.
+
+    Declare a variable named `environments` whose **type** describes that data:
+    a map, keyed by environment name, of objects with a `region` string, a
+    `replicas` number, and a `debug` boolean. Look at `production` before you
+    decide how to declare `debug` — it is not there. Most environments will not
+    have it, so the type has to allow the attribute to be omitted and supply a
+    value when it is, rather than forcing every environment to spell out a
+    default.
+
+    Keep `target`, still typed as a string; it selects which environment to
+    build.
+
+    Then rewrite the resource. The manifest still goes to
+    `build/<target>.json`, and its content becomes four keys — `environment`,
+    `region`, `replicas`, `debug` — every one taken from the selected entry of
+    your new structure, not from a loose variable and not from a literal.
+
+    When you are done, the manifest should describe production as the platform
+    team described it, including a debug flag they never wrote.
+
+    Worth doing before you finish: temporarily change one `replicas` to a word
+    rather than a number and run `terraform plan`. The point of a type
+    constraint is that this fails at plan time with a clear message, instead of
+    quietly building something wrong. Put it back afterwards.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+    - source: setup/terraform.tfvars
+      path: terraform/terraform.tfvars
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The loose-variable configuration is in place
+    - type: file_exists
+      path: terraform/terraform.tfvars
+      label: The platform team's settings file is in place
+
+# The declared type is read from the configuration; everything else is read
+# from what the apply produced. Nothing is graded from a file the student wrote
+# as evidence, and no check opens a `.tf` file by name.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  # A map of objects: a collection type and a structural type together, which
+  # is what the objective asks for.
+  - type: terraform_variable_declared
+    dir: terraform
+    name: environments
+    has_type: true
+    type_contains: map(object(
+    label: The environments variable is typed as a map of objects
+
+  # Graded here as a declaration, and below through its effect.
+  - type: terraform_variable_declared
+    dir: terraform
+    name: environments
+    type_contains: optional(
+    label: The debug attribute is declared optional rather than required
+
+  - type: terraform_variable_declared
+    dir: terraform
+    name: target
+    has_type: true
+    label: The target variable is still typed
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: environment_manifest
+    attribute: filename
+    references: var.target
+    label: The manifest is written for the selected environment
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: environment_manifest
+    attribute: content
+    references: var.environments
+    label: The manifest content comes from the structured settings
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: environment_manifest
+    label: The manifest resource was applied
+
+  - type: file_exists
+    path: terraform/build/production.json
+    label: The production manifest was written
+
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"environment":"production"'
+    label: It names the environment it was built for
+
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"region":"eu-central-1"'
+    label: Its region came from the platform team's settings
+
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"replicas":6'
+    label: Its replica count came from the platform team's settings
+
+  # The platform team never wrote a debug value for production. It can only be
+  # here if the attribute was declared optional with a default.
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"debug":false'
+    label: Its debug flag came from the optional attribute's default
+
+hints:
+  - level: 1
+    text: >
+      Look at the shape of the data in `terraform.tfvars` and describe it. The
+      type constraints documentation lists the collection types and the
+      structural types; you need one of each, nested.
+
+      Then compare the `staging` entry with the `production` one. They are not
+      the same shape, and that difference decides how one attribute is
+      declared.
+  - level: 2
+    text: >
+      A map of objects is written `map(object({ ... }))`, with the object's
+      attributes and their types inside the braces.
+
+      For the attribute that is missing from one entry, there is a modifier
+      that marks an object attribute as not required and takes the value to use
+      when it is absent. Look it up in the type constraints documentation
+      rather than adding the value to the platform team's file.
+
+      An entry of a map is selected with `var.<name>[<key>]`, and its
+      attributes are reached with a further `.`.
+  - level: 3
+    text: >
+      `variable "environments"` with
+      `type = map(object({ region = string, replicas = number, debug = optional(bool, false) }))`,
+      and `variable "target"` still `type = string`.
+
+      The resource keeps `filename = "build/${var.target}.json"` and its content
+      becomes a `jsonencode` of `environment = var.target`,
+      `region = var.environments[var.target].region`, and the same for
+      `replicas` and `debug`.
+
+      The loose `env_region` and `env_replicas` variables are no longer used by
+      anything.
+
+references:
+  - title: Terraform — Type constraints
+    url: https://developer.hashicorp.com/terraform/language/expressions/types
+  - title: Terraform — Input variables
+    url: https://developer.hashicorp.com/terraform/language/values/variables
+  - title: Terraform — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+  - title: 'Terraform — Function: jsonencode'
+    url: https://developer.hashicorp.com/terraform/language/functions/jsonencode
+  - title: Terraform — Expressions
+    url: https://developer.hashicorp.com/terraform/language/expressions
+
+skills:
+  - terraform.language.types
+  - terraform.language.variables
+  - terraform.language.expressions
+
+# Objective 4d of the Terraform Associate (004) exam content list.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '4'
