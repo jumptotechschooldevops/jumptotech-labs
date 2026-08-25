@@ -585,6 +585,13 @@ export const GRANTABLE_CAPABILITIES = new Set([
   'SETPCAP',
   'KILL',
   'AUDIT_WRITE',
+  // Raw and packet sockets, for labs that teach packet capture. Grantable is
+  // not granted: no provider adds it by default, and the lab schema refuses it
+  // unless the lab is a Linux lab on its own per-session bridge — a segment
+  // holding exactly one container, so capture sees only the student's own
+  // traffic. `NET_ADMIN` is deliberately not here; mutating interfaces, routes
+  // and firewall rules is a different risk and a separate review.
+  'NET_RAW',
 ]);
 
 export function assertCapabilityName(capability: unknown): string {

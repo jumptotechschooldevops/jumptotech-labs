@@ -26,7 +26,9 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import {
   CONTAINER_NETWORK_PATTERN,
+  GRANTABLE_CAPABILITIES,
   LAB_NETWORK_MODES,
+  SANDBOX_CAPABILITIES,
   LabDefinitionError,
   LabRegistry,
   LinuxLabProvider,
@@ -426,5 +428,132 @@ describe('two sessions never share a topology', () => {
     const managed = await runtime.networkList(MANAGED_CONTAINER_SELECTOR);
 
     expect(managed.map((n) => n.name)).toEqual([NETWORK_A]);
+  });
+});
+
+// -------------------------------------------- 6. the capture capability gate
+
+/** A lab asking for a kernel capability, with each guard independently movable. */
+function capabilityLab(
+  overrides: { provider?: string; network?: string; caps?: string } = {},
+): LoadedLabDefinition {
+  const network = overrides.network ?? 'link';
+  const yaml = `
+id: NET-904
+slug: net-904-probe
+title: Capture probe
+track: networking
+topic: layering
+difficulty: beginner
+duration_minutes: 10
+environment:
+  provider: ${overrides.provider ?? 'linux'}
+${network === '' ? '' : `  network: ${network}`}
+  sandbox_capabilities: ${overrides.caps ?? '[NET_RAW]'}
+task:
+  summary: s
+  description: d
+requirements:
+  - type: file_exists
+    path: /home/student/x
+    label: l
+references:
+  - title: RFC 826
+    url: https://www.rfc-editor.org/info/rfc826
+skills:
+  - net.l2.arp
+`;
+  return {
+    ...parseLabDefinition(yaml),
+    directory: '/labs/net-904',
+    sourcePath: '/labs/net-904/lab.yaml',
+  };
+}
+
+describe('a lab may only be granted a capture capability where capture is safe', () => {
+  it('offers exactly one capability, and NET_ADMIN is not it', () => {
+    expect([...SANDBOX_CAPABILITIES]).toEqual(['NET_RAW']);
+    expect(SANDBOX_CAPABILITIES).not.toContain('NET_ADMIN');
+  });
+
+  it('is grantable by the runtime, alongside the unconditional set', () => {
+    expect(GRANTABLE_CAPABILITIES.has('NET_RAW')).toBe(true);
+    // The boundary that has not moved: mutation is still not on the table.
+    expect(GRANTABLE_CAPABILITIES.has('NET_ADMIN')).toBe(false);
+    expect(GRANTABLE_CAPABILITIES.has('SYS_ADMIN')).toBe(false);
+  });
+
+  it('accepts NET_RAW on a Linux lab with its own segment', () => {
+    expect(capabilityLab().environment.sandbox_capabilities).toEqual(['NET_RAW']);
+  });
+
+  it('refuses NET_RAW without a private segment', () => {
+    // Capture on `--network none` is pointless; capture on a shared segment is
+    // dangerous. Neither is offered.
+    expect(() => capabilityLab({ network: 'none' })).toThrow(LabDefinitionError);
+    expect(() => capabilityLab({ network: '' })).toThrow(LabDefinitionError);
+  });
+
+  it.each(['docker', 'kubernetes', 'terraform', 'aws'])('refuses NET_RAW on the %s provider', (provider) => {
+    expect(() => capabilityLab({ provider })).toThrow(LabDefinitionError);
+  });
+
+  it.each([
+    ['NET_ADMIN', '[NET_ADMIN]'],
+    ['SYS_ADMIN', '[SYS_ADMIN]'],
+    ['ALL', '[ALL]'],
+    ['a lowercase spelling', '[net_raw]'],
+    ['a shell fragment', '["NET_RAW; id"]'],
+  ])('refuses %s outright', (_name, caps) => {
+    expect(() => capabilityLab({ caps })).toThrow(LabDefinitionError);
+  });
+
+  it('defaults to nothing when a lab says nothing', () => {
+    expect(networkedLab().environment.sandbox_capabilities).toEqual([]);
+    expect(networkedLab({ network: '' }).environment.sandbox_capabilities).toEqual([]);
+  });
+});
+
+describe('the capability reaches the container only where it was allowed', () => {
+  it('adds NET_RAW to the provider set, and still drops everything first', async () => {
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+
+    const result = await provider.create(contextFor(capabilityLab()));
+
+    expect(result.ok).toBe(true);
+    const spec = runtime.created.at(-1)!;
+    expect(spec.capAdd).toContain('NET_RAW');
+    // The lab's capability is added *to* the provider's set, never instead of
+    // it: a capture lab still needs sudo to work.
+    expect(spec.capAdd).toEqual(expect.arrayContaining(['SETUID', 'SETGID', 'CHOWN']));
+    // And the sandbox is still on its own private bridge.
+    expect(spec.network).toBe(NETWORK_A);
+  });
+
+  it('grants nothing extra to a lab that asked for nothing', async () => {
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+
+    await provider.create(contextFor(networkedLab()));
+
+    expect(runtime.created.at(-1)!.capAdd).not.toContain('NET_RAW');
+  });
+
+  it('refuses at the daemon boundary even if a capability slipped past the schema', async () => {
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+    // Hand the provider a lab object whose validation was bypassed entirely.
+    const forged = {
+      ...networkedLab(),
+      environment: { ...networkedLab().environment, sandbox_capabilities: ['NET_ADMIN'] },
+    } as unknown as LoadedLabDefinition;
+
+    const result = await provider.create(contextFor(forged));
+
+    // The runtime's own allowlist is the last gate, and it is independent of
+    // the schema that was skipped.
+    expect(result.ok).toBe(false);
+    expect(runtime.containers.size).toBe(0);
   });
 });

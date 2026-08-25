@@ -31,10 +31,12 @@ import {
 import {
   ISOLATION_MODES,
   LAB_NETWORK_MODES,
+  SANDBOX_CAPABILITIES,
   LAB_PROVIDERS,
   PROVIDER_ISOLATION,
   type IsolationMode,
   type LabNetworkMode,
+  type SandboxCapability,
   type LabProviderId,
 } from './providers/catalog.js';
 import { dockerSetupSchema, isEmptyDockerSetup } from './docker/setup.js';
@@ -434,6 +436,20 @@ const labDefinitionSchema = z
          * `rbac_authoring` activates the create-only RBAC overlay for RBAC labs.
          */
         capabilities: z.array(z.enum(LAB_CAPABILITIES)).max(4).default([]),
+        /**
+         * Linux kernel capabilities the sandbox container is granted back
+         * after `--cap-drop ALL`.
+         *
+         * Not the same thing as `capabilities` above, which is a session
+         * concept the Kubernetes provider reads. This one reaches `--cap-add`
+         * on a container, so it is validated three times over: a closed
+         * vocabulary here, the provider/network gate below, and
+         * `GRANTABLE_CAPABILITIES` at the daemon boundary.
+         *
+         * Absent means what every lab has always had: nothing beyond the
+         * narrow set its provider grants unconditionally.
+         */
+        sandbox_capabilities: z.array(z.enum(SANDBOX_CAPABILITIES)).max(2).default([]),
       })
       .strict(),
 
@@ -505,6 +521,7 @@ export type LabDefinition = Omit<z.infer<typeof labDefinitionSchema>, 'environme
     provider: LabProviderId;
     isolation: IsolationMode;
     network: LabNetworkMode;
+    sandbox_capabilities: SandboxCapability[];
     capabilities: (typeof LAB_CAPABILITIES)[number][];
   };
 };
@@ -627,6 +644,32 @@ function checkProviderCapabilities(def: LabDefinition, issues: string[]): void {
       `setup.files are seeded into a sandbox filesystem, which the '${provider}' provider does not have`,
     );
   }
+  // A kernel capability reaches `--cap-add` on a real container, so where it is
+  // allowed *is* the security control rather than a convenience.
+  //
+  // `NET_RAW` lets a student capture every frame on their link. That is safe
+  // only where the link carries nothing but their own traffic, which is exactly
+  // what `network: link` provides — a per-session `--internal` bridge holding
+  // one container. On a shared segment the same capability would let one
+  // student read another's traffic, so the two are required together rather
+  // than merely recommended.
+  //
+  // The Docker provider is refused by the same rule without needing to be named:
+  // its sandboxes sit on the shared `jumptotech-sandboxes` network, which also
+  // carries the terminal service, and it cannot declare `network: link`.
+  if (def.environment.sandbox_capabilities.length > 0) {
+    if (provider !== 'linux') {
+      issues.push(
+        `environment.sandbox_capabilities is only available to the 'linux' provider, not '${provider}'`,
+      );
+    }
+    if (def.environment.network !== 'link') {
+      issues.push(
+        "environment.sandbox_capabilities requires environment.network 'link': a capture capability on a shared or absent segment is not a boundary this platform offers",
+      );
+    }
+  }
+
   // A lab network is a container on a private bridge. A provider that creates
   // no container cannot be given one, and saying so here turns a silently
   // ignored field into a precise authoring error.
@@ -760,6 +803,7 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
       provider: providerId,
       isolation: declaredIsolation ?? providerIsolation,
       network: result.data.environment.network,
+      sandbox_capabilities: result.data.environment.sandbox_capabilities,
       capabilities: result.data.environment.capabilities,
     },
   };

@@ -285,6 +285,8 @@ export class ContainerLabProvider implements LabProvider {
       }
     }
 
+    const capAdd = this.#capabilitiesFor(context);
+
     const createStep = await this.#runStep(steps, 'environment-created', 'Environment created', async () => {
       // Re-entrant by design: a create over an existing sandbox replaces it
       // rather than failing, which is what makes a retried Start Lab safe.
@@ -299,7 +301,7 @@ export class ContainerLabProvider implements LabProvider {
         memory: context.policy.sandbox.memory,
         pidsLimit: context.policy.sandbox.pidsLimit,
         network: labNetwork ?? context.policy.sandbox.network,
-        ...(this.#capabilities.length > 0 ? { capAdd: [...this.#capabilities] } : {}),
+        ...(capAdd.length > 0 ? { capAdd } : {}),
         noNewPrivileges: this.#noNewPrivileges,
         labels: {
           [MANAGED_CONTAINER_LABEL]: 'true',
@@ -545,6 +547,27 @@ export class ContainerLabProvider implements LabProvider {
    * name is derived from the session's own sandbox reference — trusted platform
    * output, never a string from a lab definition or a browser.
    */
+  /**
+   * The capabilities this container is created with.
+   *
+   * The provider's own unconditional set, plus anything the *lab* declared —
+   * merged here rather than at construction because a capability like
+   * `NET_RAW` belongs to one lab, not to every lab the provider ever runs.
+   *
+   * Three gates stand between a lab definition and `--cap-add`, and this is the
+   * middle one. The schema refuses `sandbox_capabilities` to any provider but
+   * `linux` and to any lab that has not also asked for its own segment; this
+   * method refuses to honour it for any provider but `linux` even if the schema
+   * were somehow bypassed; and the runtime checks every name against
+   * `GRANTABLE_CAPABILITIES` before it reaches an argv. `--cap-drop ALL` is
+   * applied unconditionally by the runtime regardless of any of this.
+   */
+  #capabilitiesFor(context: LabSessionContext): string[] {
+    const declared = context.lab.environment.sandbox_capabilities ?? [];
+    if (declared.length === 0 || this.id !== 'linux') return [...this.#capabilities];
+    return [...new Set([...this.#capabilities, ...declared])];
+  }
+
   #labNetwork(context: LabSessionContext): string | undefined {
     if (context.lab.environment.network !== 'link') return undefined;
     return networkRefForSandbox(this.#ref(context));

@@ -93,8 +93,11 @@ describe('schema — a lab declares its substrate', () => {
     expect(parseLabDefinition(dockerYaml()).environment).toEqual({
       provider: 'docker',
       isolation: 'container',
-      // A Docker lab asks for no lab network, and therefore gets none.
+      // A Docker lab asks for no lab network, and therefore gets none — and
+      // could not be granted a capture capability even if it asked, because
+      // its sandboxes share a segment with the terminal service.
       network: 'none',
+      sandbox_capabilities: [],
       capabilities: [],
     });
   });

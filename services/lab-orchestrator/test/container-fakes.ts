@@ -22,7 +22,7 @@ import type {
   NetworkInfo,
   NetworkSpec,
 } from '../src/index.js';
-import { assertValidContainerNetworkRef } from '../src/index.js';
+import { assertCapabilityName, assertValidContainerNetworkRef } from '../src/index.js';
 
 interface FakeEntry {
   type: 'file' | 'directory';
@@ -142,6 +142,11 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
   }
 
   async create(spec: ContainerSpec): Promise<ContainerInfo> {
+    // The real runtime refuses any capability outside `GRANTABLE_CAPABILITIES`
+    // before it builds an argv. A fake that accepted one would hide precisely
+    // the bug that gate exists to catch, so it is modelled here too.
+    for (const capability of spec.capAdd ?? []) assertCapabilityName(capability);
+
     if (this.unreachable) throw new Error(this.unreachable);
     if (!this.#images.has(spec.image)) {
       throw new Error(`Unable to find image '${spec.image}' locally`);

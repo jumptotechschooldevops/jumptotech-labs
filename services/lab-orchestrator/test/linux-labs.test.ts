@@ -351,6 +351,10 @@ setup:
       provider: 'linux',
       isolation: 'container',
       network: 'none',
+      // Both defaults are the point of the assertion: a lab that declares
+      // neither keeps the boundary it has always had — no network, and no
+      // kernel capability beyond what its provider grants unconditionally.
+      sandbox_capabilities: [],
       capabilities: [],
     });
   });
