@@ -1087,6 +1087,41 @@ const kubernetesRequirementSchemas = {
    * Used by clean-up and troubleshooting labs ("the failed Job was removed"),
    * and by labs whose point is that a resource was replaced rather than added.
    */
+  /**
+   * An annotation on a workload's own metadata.
+   *
+   * Deliberately has no `namespace` field. The reader is constructed for one
+   * session's namespace and every read goes through it, so there is no way to
+   * express "look in another student's namespace" — the check cannot reach one
+   * even if a lab definition tried. `kind` is a closed enum over the three
+   * workloads the reader already fetches, so this is not a general API
+   * traversal primitive either.
+   *
+   * Exactly one of `value` (exact match) or `min_int` (numeric floor) is
+   * required. `min_int` exists because the useful annotations are often
+   * counters — `deployment.kubernetes.io/revision` is the motivating case, and
+   * asserting an exact revision would fail a student who simply rolled twice.
+   */
+  workload_annotation: z
+    .object({
+      type: z.literal('workload_annotation'),
+      kind: z.enum(['deployment', 'statefulset', 'daemonset']),
+      name: resourceName,
+      // Annotation keys may carry a DNS-subdomain prefix, e.g.
+      // `deployment.kubernetes.io/revision`, so `/` is permitted here.
+      key: z
+        .string()
+        .min(1)
+        .max(253)
+        .regex(/^[-._a-zA-Z0-9]+(\/[-._a-zA-Z0-9]+)?$/, 'invalid annotation key'),
+      value: z.string().max(1024).optional(),
+      min_int: z.number().int().min(0).max(1_000_000).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => (v.value !== undefined) !== (v.min_int !== undefined), {
+      message: 'must specify exactly one of value or min_int',
+    }),
   resource_absent: z
     .object({
       type: z.literal('resource_absent'),
@@ -1838,6 +1873,8 @@ export const REQUIREMENT_FAMILIES = {
 
   service_http: 'kubernetes',
   service_tcp: 'kubernetes',
+
+  workload_annotation: 'kubernetes',
 
   file_exists: 'filesystem',
   directory_exists: 'filesystem',

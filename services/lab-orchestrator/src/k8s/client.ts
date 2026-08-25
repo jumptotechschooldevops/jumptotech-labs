@@ -1231,6 +1231,7 @@ export function toDeploymentSnapshot(
   return {
     name: deployment.metadata?.name ?? name,
     namespace: deployment.metadata?.namespace ?? namespace,
+    annotations: deployment.metadata?.annotations ?? {},
     // An unset spec.replicas means 1 in the Kubernetes API.
     desiredReplicas: deployment.spec?.replicas ?? 1,
     readyReplicas: status.readyReplicas ?? 0,
@@ -1469,6 +1470,7 @@ function toStatefulSetSnapshot(
   return {
     name: sts.metadata?.name ?? name,
     namespace: sts.metadata?.namespace ?? namespace,
+    annotations: sts.metadata?.annotations ?? {},
     desiredReplicas: sts.spec?.replicas ?? 1,
     readyReplicas: sts.status?.readyReplicas ?? 0,
     ...(sts.spec?.serviceName ? { serviceName: sts.spec.serviceName } : {}),
@@ -1494,6 +1496,7 @@ function toDaemonSetSnapshot(ds: k8s.V1DaemonSet, namespace: string, name: strin
   return {
     name: ds.metadata?.name ?? name,
     namespace: ds.metadata?.namespace ?? namespace,
+    annotations: ds.metadata?.annotations ?? {},
     desiredScheduled: ds.status?.desiredNumberScheduled ?? 0,
     numberReady: ds.status?.numberReady ?? 0,
     selector: ds.spec?.selector?.matchLabels ?? {},

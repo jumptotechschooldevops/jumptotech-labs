@@ -136,6 +136,14 @@ export interface DeploymentSnapshot {
   /** `status.replicas` — total pods owned, including old ones mid-rollout. */
   currentReplicas: number;
   labels: Record<string, string>;
+  /**
+   * `metadata.annotations`, as the API reports them.
+   *
+   * Optional so every existing snapshot builder and test fake stays valid;
+   * a reader that does not populate it is indistinguishable from an object
+   * that carries none, which is the honest reading either way.
+   */
+  annotations?: Record<string, string>;
   selector: Record<string, string>;
   podLabels: Record<string, string>;
   containers: ContainerSnapshot[];
@@ -361,6 +369,14 @@ export interface StatefulSetSnapshot {
   readyReplicas: number;
   serviceName?: string;
   labels: Record<string, string>;
+  /**
+   * `metadata.annotations`, as the API reports them.
+   *
+   * Optional so every existing snapshot builder and test fake stays valid;
+   * a reader that does not populate it is indistinguishable from an object
+   * that carries none, which is the honest reading either way.
+   */
+  annotations?: Record<string, string>;
   selector: Record<string, string>;
   containers: ContainerSnapshot[];
   volumeClaimTemplates: StatefulSetVolumeClaimTemplateSnapshot[];
@@ -374,6 +390,14 @@ export interface DaemonSetSnapshot {
   desiredScheduled: number;
   numberReady: number;
   selector: Record<string, string>;
+  /**
+   * `metadata.annotations`, as the API reports them.
+   *
+   * Optional so every existing snapshot builder and test fake stays valid;
+   * a reader that does not populate it is indistinguishable from an object
+   * that carries none, which is the honest reading either way.
+   */
+  annotations?: Record<string, string>;
   containers: ContainerSnapshot[];
   deleting: boolean;
 }

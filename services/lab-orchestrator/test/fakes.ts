@@ -472,6 +472,7 @@ export function deploymentSnapshot(overrides: Partial<DeploymentSnapshot> = {}):
   return {
     name: 'frontend',
     namespace: 'lab-000000000001',
+    annotations: {},
     desiredReplicas: desired,
     readyReplicas: desired,
     availableReplicas: desired,
