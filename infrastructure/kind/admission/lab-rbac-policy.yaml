@@ -18,9 +18,13 @@ spec:
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE"]
         resources: ["rolebindings"]
-    matchConditions:
-      - name: lab-service-account
-        expression: "request.userInfo.username.startsWith('system:serviceaccount:lab-')"
+  # `matchConditions` is a field of ValidatingAdmissionPolicySpec, not of
+  # `matchConstraints`. Nested one level deeper the API server rejects the whole
+  # object with a strict-decoding error, which silently left both policies
+  # uninstalled — see the regression test in test/admission-policy.test.ts.
+  matchConditions:
+    - name: lab-service-account
+      expression: "request.userInfo.username.startsWith('system:serviceaccount:lab-')"
   validations:
     - expression: "object.roleRef.kind != 'ClusterRole'"
       message: "RoleBindings referencing ClusterRoles are not permitted in lab namespaces"
@@ -47,11 +51,16 @@ spec:
     resourceRules:
       - apiGroups: ["*"]
         apiVersions: ["*"]
-        operations: ["UPDATE", "PATCH", "DELETE"]
+        # PATCH is not an admission operation. The API server normalises an
+        # HTTP PATCH to UPDATE before admission runs, so UPDATE already covers
+        # both — listing "PATCH" made the whole object invalid without ever
+        # widening what it caught.
+        operations: ["UPDATE", "DELETE"]
         resources: ["*"]
-    matchConditions:
-      - name: lab-service-account
-        expression: "request.userInfo.username.startsWith('system:serviceaccount:lab-')"
+  # Same correction as above: a sibling of `matchConstraints`, not a child.
+  matchConditions:
+    - name: lab-service-account
+      expression: "request.userInfo.username.startsWith('system:serviceaccount:lab-')"
   validations:
     - expression: |
         !has(oldObject.metadata.labels) ||
