@@ -57,6 +57,8 @@ const SANDBOX_MAN_PAGES = [
   'useradd', 'usermod', 'groupadd', 'sudo', 'visudo', 'sudoers',
   // scheduled jobs — LINUX-018
   'crontab', 'cron',
+  // packages — LINUX-019
+  'dpkg', 'dpkg-deb', 'dpkg-query',
   // the shell itself, and the section-7 pages LINUX-013/014 quote
   'bash', 'environ', 'signal', 'group',
 ] as const;
@@ -135,7 +137,7 @@ describe('the Linux hints only send students to pages the sandbox has', () => {
     // `environ` and `signal` are cited as references rather than as `man foo`,
     // so they are allowed to sit here uncited by the prose scan.
     const referenceOnly = new Set(['sudoers', 'group', 'environ', 'signal', 'visudo', 'xargs', 'wc',
-      'cat', 'ls', 'sort', 'uniq', 'cut', 'ln', 'env', 'chown', 'stat', 'top', 'bash', 'cron']);
+      'cat', 'ls', 'sort', 'uniq', 'cut', 'ln', 'env', 'chown', 'stat', 'top', 'bash', 'cron', 'dpkg-query']);
     const orphaned = SANDBOX_MAN_PAGES.filter((p) => !cited.has(p) && !referenceOnly.has(p));
 
     expect(orphaned).toEqual([]);

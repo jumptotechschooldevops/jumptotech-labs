@@ -98,8 +98,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # unpacked without their pages and have to be reinstalled. That is the
 # `--reinstall` list, and it holds exactly the packages that own a page the
 # curriculum cites (coreutils covers mkdir/mv/touch/chmod/stat/df/du/head/tail/
-# test/ln/env, passwd covers useradd/usermod/groupadd, and `bash` is there
-# because a student who reaches for documentation reaches for `man bash` first).
+# test/ln/env, passwd covers useradd/usermod/groupadd, `dpkg` covers
+# dpkg/dpkg-deb/dpkg-query for LINUX-019, and `bash` is there because a student
+# who reaches for documentation reaches for `man bash` first).
 # Everything installed below gets its pages from the drop-in alone.
 RUN set -eux; \
     printf '%s\n' \
@@ -112,6 +113,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends --reinstall \
       bash \
       coreutils \
+      dpkg \
       findutils \
       grep \
       hostname \

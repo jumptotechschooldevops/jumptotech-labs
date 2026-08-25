@@ -417,6 +417,7 @@ describe('every shipped Linux lab', () => {
     'linux-016-text-sweeps',
     'linux-017-systemd-unit',
     'linux-018-cron',
+    'linux-019-package-integrity',
   ];
 
   it.each(DIRS)('fails %s on an untouched sandbox, and never names the fix', async (dir) => {
