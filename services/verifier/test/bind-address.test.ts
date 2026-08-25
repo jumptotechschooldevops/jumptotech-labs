@@ -390,3 +390,67 @@ describe('the address a lab may name', () => {
     ).toThrow(LabDefinitionError);
   });
 });
+
+// ------------------------------------------- 9. unreadable state fails safely
+
+describe('a socket table the sandbox cannot produce never becomes a pass', () => {
+  it('raises a broken environment rather than passing when ss fails', async () => {
+    // The platform's convention: a sandbox that cannot answer is an
+    // environment fault, reported as such, and never dressed up as a student
+    // who failed. What matters here is that it cannot become a pass.
+    const sandbox = new FakeSandbox({
+      commands: { 'ss -H -lntu': { exitCode: 1, stderr: 'ss: command failed' } },
+    });
+
+    await expect(
+      verifyLab({ lab: labWith(LOOPBACK), sandbox, namespace: 'jtt-lab-000000000001' }),
+    ).rejects.toThrow(/command failed/i);
+  });
+
+  it('does not pass when the sandbox cannot be inspected at all', async () => {
+    // A reader with no `inspect` is what a provider offering no inspection
+    // commands hands over.
+    const noInspect = {
+      async read() {
+        return null;
+      },
+    };
+
+    const result = await verifyLab({
+      lab: labWith(LOOPBACK),
+      sandbox: noInspect,
+      namespace: 'jtt-lab-000000000001',
+    });
+
+    expect(passed(result)).toBe(false);
+  });
+
+  it.each([
+    ['empty output', ''],
+    ['a header with no rows', 'Netid State Recv-Q Send-Q Local Address:Port\n'],
+    ['rows with too few columns', 'tcp LISTEN\n'],
+    ['a local address with no port separator', 'tcp LISTEN 0 5 garbage 0.0.0.0:*\n'],
+    ['a non-numeric port', 'tcp LISTEN 0 5 127.0.0.1:abc 0.0.0.0:*\n'],
+    ['an out-of-range port', 'tcp LISTEN 0 5 127.0.0.1:99999 0.0.0.0:*\n'],
+  ])('fails rather than throwing on %s', async (_name, stdout) => {
+    const sandbox = new FakeSandbox({ commands: { 'ss -H -lntu': { stdout } } });
+
+    const result = await verifyLab({
+      lab: labWith(LOOPBACK),
+      sandbox,
+      namespace: 'jtt-lab-000000000001',
+    });
+
+    expect(passed(result)).toBe(false);
+  });
+
+  it('fails the next check once the listener has stopped', async () => {
+    // A pass is never cached: the verdict comes from the table as it is now.
+    const before = await verify(LOOPBACK, [{ protocol: 'tcp', port: 8080, address: '127.0.0.1' }]);
+    expect(passed(before)).toBe(true);
+
+    const after = await verify(LOOPBACK, []);
+    expect(passed(after)).toBe(false);
+    expect(detailOf(after)).toBe('Nothing is listening on tcp port 8080');
+  });
+});
