@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LabRegistry,
   MAX_SEED_SCRIPT_BYTES,
+  OFFICIAL_DOC_HOSTS,
   PROVIDER_REQUIREMENT_FAMILIES,
   loadSeedScripts,
   requirementFamily,
@@ -40,7 +41,7 @@ async function cs001(): Promise<LoadedLabDefinition> {
 }
 
 /** Every CS lab shipped so far, so track-wide rules are checked once. */
-const CS_IDS = ['CS-001', 'CS-002'];
+const CS_IDS = ['CS-001', 'CS-002', 'CS-003'];
 
 async function csLabs(): Promise<LoadedLabDefinition[]> {
   const registry = await realRegistry();
@@ -145,7 +146,10 @@ describe('CS-001 content policy', () => {
   });
 
   it('cites primary documentation and nothing commercial', async () => {
-    const primary = ['man7.org', 'docs.kernel.org', 'www.gnu.org', 'kubernetes.io', 'docs.python.org'];
+    // Derived from the platform's own per-track allowlist rather than a copy
+    // of it, so this test cannot drift away from what the loader enforces.
+    const primary = OFFICIAL_DOC_HOSTS.cs ?? [];
+    expect(primary.length, 'OFFICIAL_DOC_HOSTS has no cs entry').toBeGreaterThan(0);
 
     for (const lab of await csLabs()) {
       expect(lab.references.length, lab.id).toBeGreaterThan(0);
@@ -163,6 +167,17 @@ describe('CS-001 content policy', () => {
     const graded: Record<string, string[]> = {
       'CS-001': ['15885', '16656', 'SCAN01_CPUS', 'VERDICT=', '/var'],
       'CS-002': ['536870912', '536.87', '512.00', '1073.74', '4d69', '537M', 'VERDICT='],
+      'CS-003': [
+        'c3bc',
+        'e69db1',
+        'U+00FC',
+        'CHARS=18',
+        'BYTES=37',
+        'TOTAL_BYTES=87',
+        'TOTAL_CHARS=61',
+        'OVER_LIMIT_LINE=',
+        'LIMIT_COUNTS=',
+      ],
     };
 
     for (const lab of await csLabs()) {
@@ -184,7 +199,9 @@ describe('CS-001 content policy', () => {
       // A label is shown before the student has solved anything, so it may name
       // what is being checked but never what the value is.
       for (const label of labels) {
-        expect(label, lab.id).not.toMatch(/15885|16656|jumptotech-lab|536870912|4d69|537M|=8\b/);
+        expect(label, lab.id).not.toMatch(
+          /15885|16656|jumptotech-lab|536870912|4d69|537M|c3bc|e69db1|00FC|=8\b/,
+        );
       }
     }
   });

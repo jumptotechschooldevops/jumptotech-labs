@@ -1,0 +1,325 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-003 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# Content is written from the Unicode Standard, RFC 3629, RFC 20, the Linux
+# man-pages project, the GNU coreutils manual and the Python documentation.
+# The scenario, the batches, the failing line and every word of the task are
+# original JumpToTech content.
+#
+# Sources verified 2026-08-24. Every graded value was measured by running the
+# real tools against this lab's own seeded batches rather than reasoned about:
+#   batch-1: 18/18, 14/15, 16/17, 13/37 chars/bytes; totals 61/87; longest in
+#            characters is line 1, longest in bytes is line 4
+#   batch-2: 13/13, 13/15; totals 26/28; longest in bytes is line 2
+#   printf 'A' | od -An -tx1  -> 41
+#   printf 'ü' | od -An -tx1  -> c3 bc
+#   printf '東' | od -An -tx1 -> e6 9d b1
+#   ord('ü') -> U+00FC
+#
+# --- Why the batch is shaped the way it is ---------------------------------
+#
+# Line 4 is the *shortest* line in the file by characters and the *only* line
+# over the partner API's 20-byte field. Line 1 is the longest by characters and
+# sails through. A student cannot reach that from intuition; they have to
+# measure both, which is the point of the lab.
+#
+# --- Grading ---------------------------------------------------------------
+#
+# The student's own program is run against both batches, whose answers differ,
+# so a program hard-coded for one fails the other. `output_contains` is a
+# substring test over the whole of stdout, so a program printing both batches'
+# answers at once would satisfy both invocations — the two `file_content_absent`
+# checks are what make that a losing strategy, exactly as in CS-002. Both are
+# needed; neither is redundant.
+#
+# No expected value exists anywhere inside the sandbox: the numbers below live
+# in this file, on the API host. The student runs without root
+# (`unprivileged_shell`), so the binaries the verifier reads state back with
+# cannot be replaced either.
+# ---------------------------------------------------------------------------
+id: CS-003
+slug: cs-003-text-encoding
+title: "Text, Encoded: ASCII, UTF-8 and Unicode"
+track: cs
+topic: computer-basics
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 3
+
+environment:
+  provider: linux
+  # This lab reads text and writes a small program; it never administers the
+  # machine. The verifier reads state back by running binaries inside this
+  # container, so a student who could become root could replace them and forge
+  # a pass — see the platform's grading-integrity note in the README.
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-002
+
+story: >
+  Kestrel Logistics forwards every delivery address to a partner carrier's API.
+  That API's address field accepts at most 20 bytes.
+
+  Overnight the importer rejected one line out of a four-line batch. The
+  rejected line is one of the *shortest* addresses in the file — visibly
+  shorter than the Manchester address on line 1, which went through without
+  complaint.
+
+  The developer on call has re-read the code twice and found nothing wrong with
+  it. Their message in the channel: "the field takes 20, the address is 13, and
+  it still bounces."
+
+  They are both right, and that is the whole problem. Two different things are
+  being counted, and until somebody measures both, the argument has nowhere to
+  go.
+
+objectives:
+  - Tell characters and bytes apart, and measure both for the same piece of text
+  - See that ASCII characters take one byte while other characters take more
+  - Read the actual bytes of a character with od, and recognise a multi-byte UTF-8 sequence when you see one
+  - Connect a character to its Unicode code point, and the code point to the bytes UTF-8 stores it as
+  - Write a program that reports both counts for any file, and use it to find which line a byte limit rejects
+
+task:
+  summary: Measure the failing address batch in both characters and bytes, write a program that reports both, and identify the line the 20-byte field rejects.
+  description: >
+    The batches are in `/srv/kestrel/import`, read-only. Start with
+    `README.txt`. You will need `/home/student/py` and `/home/student/ops`,
+    neither of which exists yet.
+
+
+    **Part 1 — look at the bytes.** `printf` writes exactly the text you give
+    it, with no trailing newline, and `od` shows you what came out. Send a
+    single character into `od -An -tx1` and read its bytes back in
+    hexadecimal. Do that for a plain letter `A`, for `ü`, and for `東`, and
+    notice that the three answers are not the same length. Then find the
+    Unicode code point of `ü` — Python's `ord` gives you the number, and the
+    conventional way to write a code point is `U+` followed by four uppercase
+    hexadecimal digits.
+
+
+    **Part 2 — measure the batches.** Write `/home/student/py/encoding.py`,
+    taking a file path as its first argument and printing one line per input
+    line, then four summary lines:
+
+
+    ```
+
+    LINE=<n> CHARS=<c> BYTES=<b>
+
+    ...
+
+    TOTAL_CHARS=<n>
+
+    TOTAL_BYTES=<n>
+
+    MAX_CHARS_LINE=<n>
+
+    MAX_BYTES_LINE=<n>
+
+    ```
+
+
+    `CHARS` counts characters; `BYTES` counts the bytes those characters occupy
+    when encoded as UTF-8. `MAX_CHARS_LINE` and `MAX_BYTES_LINE` are the line
+    numbers holding the most of each — and they are not obliged to be the same
+    line. Ignore the line ending itself; count only the text on the line.
+
+
+    Python hands you text as characters when you read a file and as bytes when
+    you encode it, and the two are different objects with different lengths.
+    That difference is the lab.
+
+
+    Your program is run against both batches, whose answers differ, so it has to
+    measure rather than remember. A program that contains the expected output
+    instead of working it out is rejected.
+
+
+    Give it a `#!/usr/bin/env python3` first line and make it executable, as in
+    CS-002.
+
+
+    **Part 3 — settle it.** Write `/home/student/ops/encoding.txt`, one
+    `KEY=value` per line:
+
+
+    ```
+
+    ASCII_HEX=<hex bytes of A, lower case, no spaces>
+
+    UMLAUT_HEX=<hex bytes of ü, lower case, no spaces>
+
+    CJK_HEX=<hex bytes of 東, lower case, no spaces>
+
+    UMLAUT_CODEPOINT=<U+ and four uppercase hex digits>
+
+    OVER_LIMIT_LINE=<the batch-1 line the 20-byte field rejects>
+
+    LIMIT_COUNTS=<characters|bytes>
+
+    ```
+
+
+    `LIMIT_COUNTS` is what the partner's 20 is counting. Line order does not
+    matter and extra lines are ignored.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/import/README.txt
+      label: The import batches have been placed on this machine
+    - type: file_content
+      path: /srv/kestrel/import/batch-1.txt
+      contains: "Manchester England"
+      label: The failing batch is present
+    - type: file_content
+      path: /srv/kestrel/import/batch-1.txt
+      contains: "Zürich Schweiz"
+      label: The failing batch carries its non-ASCII addresses
+    - type: file_exists
+      path: /srv/kestrel/import/batch-2.txt
+      label: The sanity-check batch is present
+
+requirements:
+  # --- Part 2: the measuring program, graded by running it -------------------
+  - type: script_executable
+    path: /home/student/py/encoding.py
+    label: The measuring program exists and can be run as a program
+  - type: script_runs
+    path: /home/student/py/encoding.py
+    args: ["/srv/kestrel/import/batch-1.txt"]
+    expected_exit_code: 0
+    timeout_seconds: 10
+    output_contains:
+      - "LINE=1 CHARS=18 BYTES=18"
+      - "LINE=2 CHARS=14 BYTES=15"
+      - "LINE=3 CHARS=16 BYTES=17"
+      - "LINE=4 CHARS=13 BYTES=37"
+      - "TOTAL_CHARS=61"
+      - "TOTAL_BYTES=87"
+      - "MAX_CHARS_LINE=1"
+      - "MAX_BYTES_LINE=4"
+    label: The program measures the failing batch correctly
+  - type: script_runs
+    path: /home/student/py/encoding.py
+    args: ["/srv/kestrel/import/batch-2.txt"]
+    expected_exit_code: 0
+    timeout_seconds: 10
+    output_contains:
+      - "LINE=1 CHARS=13 BYTES=13"
+      - "LINE=2 CHARS=13 BYTES=15"
+      - "TOTAL_CHARS=26"
+      - "TOTAL_BYTES=28"
+      - "MAX_BYTES_LINE=2"
+    label: The program measures the sanity-check batch correctly
+  # A measuring program computes its answers. One that contains them is a
+  # table, and would otherwise satisfy both invocations above at once.
+  - type: file_content_absent
+    path: /home/student/py/encoding.py
+    contains: "CHARS=13 BYTES=37"
+    label: The program measures the text rather than containing the answer
+  - type: file_content_absent
+    path: /home/student/py/encoding.py
+    contains: "CHARS=13 BYTES=15"
+    label: The program is not a table of expected output
+
+  # --- Parts 1 and 3: the findings ------------------------------------------
+  - type: file_exists
+    path: /home/student/ops/encoding.txt
+    label: The findings file exists
+  - type: file_content
+    path: /home/student/ops/encoding.txt
+    contains: "ASCII_HEX=41"
+    label: The findings record the bytes of an ASCII letter
+  - type: file_content
+    path: /home/student/ops/encoding.txt
+    contains: "UMLAUT_HEX=c3bc"
+    label: The findings record the bytes of a two-byte character
+  - type: file_content
+    path: /home/student/ops/encoding.txt
+    contains: "CJK_HEX=e69db1"
+    label: The findings record the bytes of a three-byte character
+  - type: file_content
+    path: /home/student/ops/encoding.txt
+    contains: "UMLAUT_CODEPOINT=U+00FC"
+    label: The findings record the code point behind those bytes
+  - type: file_content
+    path: /home/student/ops/encoding.txt
+    contains: "OVER_LIMIT_LINE=4"
+    label: The findings identify the line the byte limit rejects
+  - type: file_content
+    path: /home/student/ops/encoding.txt
+    contains: "LIMIT_COUNTS=bytes"
+    label: The findings say what the partner's limit is counting
+
+hints:
+  - level: 1
+    text: >
+      Nothing here needs the network. Read the README first, then look at the
+      batch with `cat` — and notice that looking at it tells you how it reads,
+      not how much room it takes. Those are different questions, and only one
+      of them is what the partner's field is measuring. Start by sending a
+      single character through `od` and seeing how many numbers come back.
+  - level: 2
+    text: >
+      `printf '%s' X` writes exactly X and nothing else, which matters when you
+      are counting; `echo` would add a newline you did not ask for. `od -An
+      -tx1` prints one hexadecimal number per byte and no offsets — `man od`
+      explains both options. In Python, a string you read from a file is a
+      sequence of characters and `len()` counts those; calling `.encode("utf-8")`
+      on it gives you a bytes object, and `len()` on that counts something else.
+      `man 7 utf-8` describes how many bytes each kind of character takes.
+  - level: 3
+    text: >
+      A file opened in text mode gives you characters; the same content opened
+      or encoded as bytes gives you the storage. Reading with
+      `open(path, encoding="utf-8")` and comparing `len(line)` against
+      `len(line.encode("utf-8"))` line by line is the whole measurement — and
+      `str.splitlines()` will hand you the lines without their line endings.
+      For the code point, `ord()` returns an integer and a format spec like
+      `04X` prints it as four uppercase hexadecimal digits. When you compare
+      your two totals against a limit of 20, only one of them explains which
+      line was rejected.
+
+references:
+  - title: The Unicode Standard
+    url: https://www.unicode.org/versions/latest/
+  - title: RFC 3629 — UTF-8, a transformation format of ISO 10646
+    url: https://www.rfc-editor.org/rfc/rfc3629
+  - title: RFC 20 — ASCII format for network interchange
+    url: https://www.rfc-editor.org/rfc/rfc20
+  - title: utf-8(7) — an ASCII compatible multibyte Unicode encoding
+    url: https://man7.org/linux/man-pages/man7/utf-8.7.html
+  - title: ascii(7) — the ASCII character set
+    url: https://man7.org/linux/man-pages/man7/ascii.7.html
+  - title: od(1) — dump files in octal and other formats
+    url: https://man7.org/linux/man-pages/man1/od.1.html
+  - title: GNU coreutils — printf
+    url: https://www.gnu.org/software/coreutils/manual/html_node/printf-invocation.html
+  - title: Python — Unicode HOWTO
+    url: https://docs.python.org/3/howto/unicode.html
+  - title: Python — built-in types, str and bytes
+    url: https://docs.python.org/3/library/stdtypes.html
+
+skills:
+  - cs.data.characters-vs-bytes
+  - cs.data.ascii
+  - cs.data.unicode
+  - cs.data.utf8
+  - cs.programming.encode-decode
+
+# certification: deliberately absent.
+#
+# CS-003 is FOUNDATIONAL SKILL content. The failure it explains — a byte limit
+# rejecting a short-looking string — turns up in database columns, API fields
+# and log pipelines, but it covers no published objective of any certification
+# and claims none.

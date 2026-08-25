@@ -547,3 +547,65 @@ program that prints every answer set and ignores its argument — satisfies ever
 of stdout. CS-002 therefore also requires the program's *source* to be free of
 the expected output strings, and says so in the task. Both halves are needed;
 neither is redundant.
+
+### CS-003 — Text, Encoded: ASCII, UTF-8 and Unicode
+
+```text
+LAB ID:              CS-003
+TITLE:               Text, Encoded: ASCII, UTF-8 and Unicode
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Tell characters and bytes apart and measure both for the same text; see that
+  an ASCII character takes one byte while others take more; read a character's
+  actual bytes with od and recognise a multi-byte UTF-8 sequence; connect a
+  character to its Unicode code point and the code point to the bytes UTF-8
+  stores it as; and write a program that reports both counts for any file.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  A byte-limited field rejecting a short-looking string is a recurring and
+  badly-diagnosed failure: database columns, partner API fields, log pipelines
+  and fixed-width exports all count bytes while humans count characters. The
+  same confusion is behind UnicodeDecodeError in an importer and a regex that
+  drops the interesting log lines.
+
+OFFICIAL / PRIMARY SOURCES:
+  The Unicode Standard      https://www.unicode.org/versions/latest/
+  RFC 3629 (UTF-8)          https://www.rfc-editor.org/rfc/rfc3629
+  RFC 20 (ASCII)            https://www.rfc-editor.org/rfc/rfc20
+  utf-8(7)                  https://man7.org/linux/man-pages/man7/utf-8.7.html
+  ascii(7)                  https://man7.org/linux/man-pages/man7/ascii.7.html
+  od(1)                     https://man7.org/linux/man-pages/man1/od.1.html
+  GNU coreutils — printf    https://www.gnu.org/software/coreutils/manual/html_node/printf-invocation.html
+  Python — Unicode HOWTO    https://docs.python.org/3/howto/unicode.html
+  Python — str and bytes    https://docs.python.org/3/library/stdtypes.html
+
+LAST VERIFIED:       2026-08-24   (all nine fetched, HTTP 200)
+```
+
+**Every value measured by running the real tools against this lab's own seeded
+batches, never reasoned about:**
+
+| Batch | Per line (chars/bytes) | Totals | Longest chars / bytes |
+|---|---|---|---|
+| `batch-1.txt` | 18/18, 14/15, 16/17, **13/37** | 61 / 87 | line 1 / **line 4** |
+| `batch-2.txt` | 13/13, 13/15 | 26 / 28 | line 1 / line 2 |
+
+`printf 'A' \| od -An -tx1` → `41` · `printf 'ü'` → `c3 bc` · `printf '東'` →
+`e6 9d b1` · `ord('ü')` → `U+00FC`.
+
+**Why the batch is shaped this way:** line 4 is the *shortest* line by
+characters (13) and the *only* line over the partner API's 20-byte field (37
+bytes), while line 1 is the longest by characters and passes untouched. A
+student cannot reach that from intuition — they have to measure both, which is
+the lab.
+
+**Runtime dependency:** Python 3.11 standard library only (`sys`, `str`,
+`bytes`). No pip, no third-party package, no network.
+
+**Grading note:** graded against two batches whose answers differ, so a program
+hard-coded for one fails the other; plus two `file_content_absent` checks on the
+source, because `output_contains` is a substring test over the whole of stdout
+and a program printing both batches' answers would otherwise satisfy both
+invocations. Same pairing as CS-002, and for the same reason.
