@@ -1,0 +1,280 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-009 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# --- How "catch narrowly" is graded without reading the source -------------
+#
+# Grading `except Exception` by grepping the student's file would be grading
+# what they typed. Instead one of the four ledger paths is a *directory*.
+# Opening it raises IsADirectoryError, which is neither a missing file nor a
+# malformed record, so:
+#
+#   narrow catching   the error escapes, Python prints a traceback and the
+#                     process exits 1  — which is what the lab requires
+#   except OSError    catches it and reports missing-input, exit 2  — fails
+#   except Exception  catches it and reports whatever it reports      — fails
+#
+# Over-broad catching therefore becomes a wrong exit status, which is a
+# behaviour the verifier can see. Verified: IsADirectoryError is not a subclass
+# of FileNotFoundError, so a correctly narrow handler lets it through.
+#
+# --- Why the answers are barred from the source ----------------------------
+#
+# Four ledger paths with four fixed outcomes is a table, and a table is
+# typeable: a shell script matching on `$1` and echoing the four answers passes
+# every `script_runs` check without reading a ledger. `file_content_absent` on
+# the two computed values and the line number is what makes that shortcut cost
+# more than reconciling actually would. A correct program contains none of
+# them — it prints `RECONCILED={count} TOTAL={total}` and `line={number}`.
+#
+# Values computed from the shipped fixture:
+#   ledger-2026-08-24  RECONCILED=6 TOTAL=8484
+#   ledger-torn        malformed record on line 3
+#   ledger-archive/    IsADirectoryError, errno 21, uncaught exit status 1
+#   ledger-2026-08-25  absent, which is why it is a setup check
+# ---------------------------------------------------------------------------
+id: CS-009
+slug: cs-009-errors-exceptions
+title: Errors, Exceptions and Failing Usefully
+track: cs
+topic: programming-foundations
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 9
+
+environment:
+  provider: linux
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-008
+
+story: >
+  Kestrel's nightly reconciliation has exited successfully every night for
+  three weeks. The ledger has not reconciled once in that time, and nobody has
+  seen an error message, because there has not been one.
+
+  The job wraps its whole body in a `try` and an `except` that does nothing,
+  then returns zero. Every failure it has ever had — a ledger that was not
+  there, a record with no amount, a path that was not a file at all — has
+  looked exactly like success to the scheduler that runs it.
+
+  Failing is not the problem. Failing silently is.
+
+objectives:
+  - Say what an exception is and what happens to a program that does not handle one
+  - Read a traceback and know which end of it names the thing that actually went wrong
+  - Catch the failures you can describe, and let the ones you cannot describe reach the caller
+  - Map distinguishable failures to distinct exit statuses, so a caller can tell them apart
+  - Explain why a job that swallows exceptions and exits zero is worse than one that crashes
+
+task:
+  summary: Rewrite the reconciliation so each kind of failure is distinguishable, and let the failures you cannot describe escape.
+  description: >
+    The job is in `/srv/kestrel/ledger`, read-only. Read `README.txt`, then run
+    the production `reconcile.py` against each of the three ledger paths and
+    watch it report success every time. You will need `/home/student/py` and
+    `/home/student/ops`, neither of which exists yet.
+
+
+    A ledger is one record per line: `parcel,depot,pence`.
+
+
+    Write `/home/student/py/reconcile.py`, taking a ledger path as its first
+    argument:
+
+
+    | situation | goes to | exit |
+
+    | --- | --- | --- |
+
+    | every record reconciles | `RECONCILED=<n> TOTAL=<pence>` on **stdout** | `0` |
+
+    | the ledger is not there | `RECONCILE_ERROR=missing-input` on **stderr** | `2` |
+
+    | a record has no usable amount | `RECONCILE_ERROR=malformed-record line=<n>` on **stderr** | `3` |
+
+    | anything else | **do not catch it** | whatever Python does |
+
+
+    Line numbers start at 1 and count every line in the file.
+
+
+    That last row is the one that matters. You can describe a missing file and
+    you can describe a bad record, so you handle those. You cannot describe
+    everything else, and a program that pretends to is how this job ended up
+    reporting three weeks of success. Let those failures escape, with the
+    traceback intact, and the caller will at least know something happened.
+
+
+    One of the paths in `/srv/kestrel/ledger` is not a ledger and not missing.
+    Run your program against it and read what comes back, bottom line first.
+
+
+    Then write `/home/student/ops/errors.txt`:
+
+
+    ```
+
+    UNCAUGHT_TYPE=<the exception type named in that traceback>
+
+    UNCAUGHT_EXIT=<the exit status the process returned>
+
+    ```
+
+
+    Give the program a `#!/usr/bin/env python3` first line and make it
+    executable.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/ledger/reconcile.py
+      label: The production reconciliation job is present
+    - type: file_exists
+      path: /srv/kestrel/ledger/ledger-2026-08-24
+      label: Last night's ledger is present
+    - type: file_content
+      path: /srv/kestrel/ledger/ledger-torn
+      contains: "n/a"
+      label: The torn ledger carries the record that has no amount
+    - type: directory_exists
+      path: /srv/kestrel/ledger/ledger-archive
+      label: The archive directory is present, and is not a ledger
+    # Tonight's ledger has not arrived. That absence is graded, so it is part of
+    # the starting condition rather than something to be assumed.
+    - type: path_absent
+      path: /srv/kestrel/ledger/ledger-2026-08-25
+      label: Tonight's ledger has not arrived yet
+
+requirements:
+  - type: script_executable
+    path: /home/student/py/reconcile.py
+    label: The reconciliation exists and can be run as a program
+
+  - type: script_runs
+    path: /home/student/py/reconcile.py
+    args: ["/srv/kestrel/ledger/ledger-2026-08-24"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "RECONCILED=6 TOTAL=8484"
+    label: A ledger that reconciles reports its totals and succeeds
+  - type: script_runs
+    path: /home/student/py/reconcile.py
+    args: ["/srv/kestrel/ledger/ledger-2026-08-25"]
+    expected_exit_code: 2
+    timeout_seconds: 15
+    output_contains:
+      - "RECONCILE_ERROR=missing-input"
+    label: A ledger that is not there is reported as a missing input
+  - type: script_runs
+    path: /home/student/py/reconcile.py
+    args: ["/srv/kestrel/ledger/ledger-torn"]
+    expected_exit_code: 3
+    timeout_seconds: 15
+    output_contains:
+      - "RECONCILE_ERROR=malformed-record line=3"
+    label: A record with no usable amount is reported, with the line it was on
+  # The path that is neither missing nor malformed. A narrow handler lets it
+  # escape; `except OSError` or `except Exception` swallows it and reports one
+  # of the codes above instead, which shows up here as the wrong exit status.
+  - type: script_runs
+    path: /home/student/py/reconcile.py
+    args: ["/srv/kestrel/ledger/ledger-archive"]
+    expected_exit_code: 1
+    timeout_seconds: 15
+    output_contains:
+      - "Traceback"
+      - "IsADirectoryError"
+    label: A failure the program cannot describe is allowed to reach the caller
+
+  # Four paths with four fixed outcomes is a table a shell script could type
+  # out, so the computed values are barred from the source. A real solution
+  # never contains them: it prints `RECONCILED={count} TOTAL={total}` and
+  # `line={number}`, which is not the same text.
+  - type: file_content_absent
+    path: /home/student/py/reconcile.py
+    contains: "RECONCILED=6"
+    label: The reconciliation counts the records rather than containing the count
+  - type: file_content_absent
+    path: /home/student/py/reconcile.py
+    contains: "TOTAL=8484"
+    label: The reconciliation adds the amounts rather than containing the sum
+  - type: file_content_absent
+    path: /home/student/py/reconcile.py
+    contains: "line=3"
+    label: The reconciliation locates the bad record rather than containing its position
+
+  - type: file_exists
+    path: /home/student/ops/errors.txt
+    label: The traceback was read and written up
+  - type: file_content
+    path: /home/student/ops/errors.txt
+    contains: "UNCAUGHT_TYPE=IsADirectoryError"
+    label: The write-up names the exception the traceback ended with
+  - type: file_content
+    path: /home/student/ops/errors.txt
+    contains: "UNCAUGHT_EXIT=1"
+    label: The write-up records what an uncaught exception does to the exit status
+
+hints:
+  - level: 1
+    text: >
+      Run the production job against all three ledger paths first and look at
+      what it prints and what `$?` says afterwards. It behaves identically for a
+      ledger that reconciles, a ledger that is not there and a path that is not
+      a ledger — and that sameness is the bug. Then try the same three paths
+      with a one-line Python program that just opens the file and does nothing
+      else, and read what Python says when nobody catches anything.
+  - level: 2
+    text: >
+      A traceback is printed innermost-last: the top frames are how the program
+      got there and the bottom line is what actually went wrong, which is why
+      it is the line to read first. `try`/`except` can name the exception it is
+      willing to handle, and naming one means the others carry on up. The
+      exceptions here are all in the built-in hierarchy — `man`-style
+      documentation for them is the built-in exceptions page, and the tree at
+      the bottom of it tells you which ones are relatives.
+  - level: 3
+    text: >
+      Two of the three failures you can describe come from different places: one
+      happens when you open the file, the other when you try to interpret a
+      field. Handling them separately, close to where each occurs, is easier
+      than one large handler around everything and is the reason the exit codes
+      can differ at all. Be careful choosing how wide to cast: the parent of the
+      "no such file" exception also covers the path that is not a file, so
+      catching the parent will quietly swallow the case the lab wants to escape.
+
+references:
+  - title: Python tutorial — errors and exceptions
+    url: https://docs.python.org/3/tutorial/errors.html
+  - title: Python — built-in exceptions, and the exception hierarchy
+    url: https://docs.python.org/3/library/exceptions.html
+  - title: Python — sys.exit and sys.stderr
+    url: https://docs.python.org/3/library/sys.html
+  - title: Python — os and the errors raised by file operations
+    url: https://docs.python.org/3/library/os.html
+  - title: GNU Bash manual — exit status
+    url: https://www.gnu.org/software/bash/manual/html_node/Exit-Status.html
+  - title: errno(3) — error numbers and their names
+    url: https://man7.org/linux/man-pages/man3/errno.3.html
+
+skills:
+  - cs.programming.exceptions
+  - cs.programming.tracebacks
+  - cs.programming.narrow-catching
+  - cs.os.exit-status
+  - cs.troubleshooting.silent-failure
+
+# certification: deliberately absent.
+#
+# CS-009 is FOUNDATIONAL SKILL content. A job that swallows exceptions and
+# exits zero is a recurring production failure, but it is not a published
+# objective of any certification and this lab claims none.

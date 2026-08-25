@@ -918,3 +918,86 @@ catches. `DROPPED` is graded at zero so that answering a smaller question
 counts as a failure rather than as a rounding error.
 
 **Runtime dependency:** Python 3.11 standard library only.
+
+### CS-009 — Errors, Exceptions and Failing Usefully
+
+```text
+LAB ID:              CS-009
+TITLE:               Errors, Exceptions and Failing Usefully
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Say what an exception is and what an unhandled one does to a process; read a
+  traceback and know which end of it names the failure; catch the failures you
+  can describe and let the ones you cannot describe reach the caller; map
+  distinguishable failures to distinct exit statuses; and explain why a job
+  that swallows exceptions and exits zero is worse than one that crashes.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  A tool that swallows exceptions and exits 0 turns every failure into a green
+  pipeline and a later incident. The seeded job has "succeeded" for three weeks
+  without reconciling anything, which is the failure mode exactly. Reading a
+  traceback bottom-up is the most transferable debugging skill in the track.
+
+OFFICIAL / PRIMARY SOURCES:
+  Python tutorial — errors and exceptions  https://docs.python.org/3/tutorial/errors.html
+  Python — built-in exceptions             https://docs.python.org/3/library/exceptions.html
+  Python — sys.exit and sys.stderr         https://docs.python.org/3/library/sys.html
+  Python — os and file-operation errors    https://docs.python.org/3/library/os.html
+  GNU Bash manual — exit status            https://www.gnu.org/software/bash/manual/html_node/Exit-Status.html
+  errno(3) — error numbers and names       https://man7.org/linux/man-pages/man3/errno.3.html
+
+LAST VERIFIED:       2026-08-25   (all six fetched, HTTP 200)
+```
+
+| ledger path | expected |
+|---|---|
+| `ledger-2026-08-24` | `RECONCILED=6 TOTAL=8484` on stdout, exit `0` |
+| `ledger-2026-08-25` | absent — `RECONCILE_ERROR=missing-input` on stderr, exit `2` |
+| `ledger-torn` | `RECONCILE_ERROR=malformed-record line=3` on stderr, exit `3` |
+| `ledger-archive/` | uncaught `IsADirectoryError`, traceback on stderr, exit `1` |
+
+**How "catch narrowly" is graded without reading the source.** Grepping the
+student's file for `except Exception` would grade what they typed, and would
+fail a correct solution that mentions the phrase in a comment. Instead the
+fourth ledger path is a *directory*, and where the resulting error ends up is a
+behaviour the verifier can see:
+
+| the student wrote | what happens to IsADirectoryError | archive exit |
+|---|---|---|
+| `except FileNotFoundError` | escapes — traceback printed by Python | `1` ✓ |
+| `except OSError` | swallowed, reported as a missing input | `2` ✗ |
+| `except Exception` | swallowed, reported as whatever it reports | `2` ✗ |
+
+Confirmed on Python 3.11.2 in the real sandbox image, not assumed:
+`IsADirectoryError` is a subclass of `OSError` but **not** of
+`FileNotFoundError` (errno 21, `EISDIR`). So a handler narrow enough to be
+correct cannot catch it by accident, and one wide enough to be wrong cannot
+avoid catching it. Over-broad catching becomes a wrong exit status rather than
+a source pattern to match on.
+
+**Forged evidence and typed-out answers cannot pass.** Four paths with four
+fixed outcomes is a table a shell script could type out, and one does pass every
+`script_runs` check — verified against real Docker before the guards existed.
+Three `file_content_absent` checks bar `RECONCILED=6`, `TOTAL=8484` and `line=3`
+from the program, and a correct solution contains none of them because it prints
+`RECONCILED={count} TOTAL={total}` and `line={number}`. The write-up in
+`errors.txt` is student-written and so is only safe to grade because the program
+is graded independently by being run: a perfect write-up behind a program that
+does nothing reaches 7 of 11 — it clears the three checks that bar the answers
+from the source, vacuously, because it contains no source worth barring — and
+fails all four of the checks that run it. Measured on the real platform, not
+estimated.
+
+**Runtime dependency:** Python 3.11 standard library only.
+
+**Known limitation, accepted deliberately.** A student who catches
+`IsADirectoryError` *by name* and prints a traceback themselves reaches exit 1
+with both tokens on stderr, and passes. Verified against real Docker. This is
+not defended against, because writing it requires knowing which exception
+escapes, that it is `IsADirectoryError`, that an uncaught exception exits 1,
+and what a traceback looks like — which is the objective in full. It cannot be
+discovered without running the program and reading the traceback, so it is a
+longer way round rather than a shortcut. Closing it would mean grading source
+shape, which is the thing this lab is built to avoid.
