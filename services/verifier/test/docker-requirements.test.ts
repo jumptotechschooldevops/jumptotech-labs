@@ -25,6 +25,7 @@ import {
   DOCKER_REQUIREMENT_TYPES,
   InMemoryWorkspace,
   LabRegistry,
+  requirementSchema,
   type LoadedLabDefinition,
   type Requirement,
 } from '@jumptotech/lab-orchestrator';
@@ -346,6 +347,286 @@ describe('docker verifier — resource limits are read from what the daemon enfo
     expect(parseDockerMemory('2g')).toBe(2_147_483_648);
     expect(parseDockerCpus('1.5')).toBe(1_500_000_000);
   });
+
+  /*
+   * DOCKER-009 grades three controls on one container, and the lab's whole
+   * point is that a partially-correct budget is *not* a pass. A student who
+   * sets memory and CPU but forgets the process limit has to be told which one
+   * is missing, so the check must fail and the detail must name it.
+   */
+  it('fails a partial budget and names the control that is missing', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'reporting', memory: '256m', cpus: '0.5' }));
+
+    const result = await check(docker, {
+      type: 'docker_container_resource_limit',
+      name: 'reporting',
+      memory: '256m',
+      cpus: '0.5',
+      pids_limit: 64,
+    } as Requirement);
+
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('process count is unlimited');
+    // The two controls the student *did* get right are not reported as problems.
+    expect(result.detail).not.toContain('memory');
+    expect(result.detail).not.toContain('CPU');
+  });
+
+  it('fails a process limit set to the wrong value', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'reporting', pidsLimit: 128 }));
+
+    const result = await check(docker, {
+      type: 'docker_container_resource_limit',
+      name: 'reporting',
+      pids_limit: 64,
+    } as Requirement);
+
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('process limit is 128, expected 64');
+  });
+});
+
+/*
+ * DOCKER-009's second half asks the student to observe a limit being enforced:
+ * `memory-probe` must be a container the kernel stopped, not one that ran to
+ * completion. Exit code is the observable that separates those two outcomes, so
+ * these tests pin the behaviour the lab depends on.
+ */
+/*
+ * DOCKER-009's second half asks the student to observe a memory limit being
+ * enforced. Exit code 137 does NOT establish that: it means "killed by
+ * SIGKILL", and the kernel is only one of the things that sends it. Verified
+ * against a real daemon (Docker 28.4.0, cgroup v2) — every row below produced
+ * exit code 137, and only the first had OOMKilled true:
+ *
+ *   legitimate OOM                     exited 137  OOMKilled=true
+ *   docker kill                        exited 137  OOMKilled=false
+ *   docker stop (SIGTERM honoured)     exited 137  OOMKilled=false
+ *   docker stop -> SIGKILL escalation  exited 137  OOMKilled=false
+ *   application called exit(137)       exited 137  OOMKilled=false
+ *
+ * These tests pin that distinction, because without it the lab is satisfiable
+ * with a single `docker kill`.
+ */
+describe('docker verifier — OOM kill is not the same as exit code 137', () => {
+  const probe = (state: string, exitCode: number, oomKilled: boolean) => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(
+      containerSpec({ name: 'memory-probe', image: 'alpine:3.20', memory: '16m' }),
+      state,
+      exitCode,
+      oomKilled,
+    );
+    return docker;
+  };
+  const oomCheck = (name = 'memory-probe', expected = true) =>
+    ({ type: 'docker_container_oom_killed', name, expected }) as Requirement;
+
+  it('legitimate OOM passes', async () => {
+    expect(passed(await check(probe('exited', 137, true), oomCheck()))).toBe(true);
+  });
+
+  it('docker kill fails — same exit code, no OOM', async () => {
+    const result = await check(probe('exited', 137, false), oomCheck());
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('exit code 137');
+    expect(result.detail).toContain('does not report it as killed');
+  });
+
+  it('docker stop fails, whether or not it escalated to SIGKILL', async () => {
+    // Both spellings observed on a real daemon: 143 when the process handles
+    // SIGTERM, 137 when the grace period runs out and the daemon escalates.
+    for (const exitCode of [143, 137]) {
+      const result = await check(probe('exited', exitCode, false), oomCheck());
+      expect(result.status, `exit ${exitCode}`).toBe('fail');
+    }
+  });
+
+  it('a normal exit fails', async () => {
+    expect((await check(probe('exited', 0, false), oomCheck())).status).toBe('fail');
+  });
+
+  it('an application that exits 137 by itself fails', async () => {
+    // The nastiest false positive the old check had: the student writes a
+    // program that returns 137 and never touches the memory limit.
+    const result = await check(probe('exited', 137, false), oomCheck());
+    expect(result.status).toBe('fail');
+  });
+
+  it('a still-running container fails, and says so plainly', async () => {
+    const result = await check(probe('running', 0, false), oomCheck());
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('still running');
+  });
+
+  it('a differently-named container does not satisfy the check', async () => {
+    // A compliant decoy alongside a wrong target must not be substituted in.
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'memory-probe', memory: '16m' }), 'exited', 137, false);
+    docker.addContainer(containerSpec({ name: 'other-probe', memory: '16m' }), 'exited', 137, true);
+
+    expect(passed(await check(docker, oomCheck('other-probe')))).toBe(true);
+    expect((await check(docker, oomCheck('memory-probe'))).status).toBe('fail');
+  });
+
+  it('a missing container fails without inventing a verdict', async () => {
+    const result = await check(new FakeDockerDaemon(), oomCheck('nope'));
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain("No container named 'nope'");
+  });
+
+  it('grades the negative form for production labs', async () => {
+    // `expected: false` is "this must NOT have been OOM-killed".
+    expect(passed(await check(probe('exited', 0, false), oomCheck('memory-probe', false)))).toBe(true);
+    const wasKilled = await check(probe('exited', 137, true), oomCheck('memory-probe', false));
+    expect(wasKilled.status).toBe('fail');
+    expect(wasKilled.detail).toContain('was killed for exceeding its memory limit');
+  });
+
+  it('reads the flag per-run, so a past OOM does not linger', async () => {
+    // Verified on a real daemon: a container that was OOM-killed and then
+    // started again reports OOMKilled=false for the new run.
+    expect((await check(probe('exited', 0, false), oomCheck())).status).toBe('fail');
+  });
+});
+
+/*
+ * Untrusted identifiers. The new requirement carries a container *name*, and a
+ * name is the only thing that could conceivably travel toward an argv, so the
+ * closed character class is asserted here rather than assumed. Note the
+ * property being proved is at the schema layer: a malformed name never reaches
+ * a handler at all, because the lab fails to load.
+ */
+describe('docker verifier — untrusted container identifiers', () => {
+  const parse = (name: string) =>
+    requirementSchema.safeParse({
+      type: 'docker_container_oom_killed',
+      name,
+      expected: true,
+      label: 'x',
+    });
+
+  it('rejects every injection-shaped container name', () => {
+    for (const name of [
+      'probe; rm -rf /',
+      'probe && curl evil',
+      'probe | tee /etc/passwd',
+      'probe$(whoami)',
+      'probe`whoami`',
+      'probe\nkill',
+      'probe\rkill',
+      '../../etc/shadow',
+      '/etc/shadow',
+      '--privileged',
+      '-v /:/host',
+      'other-sandbox/probe',
+      'probe:latest',
+      'probe@sha256:abc',
+      'probe *',
+      "probe'",
+      'probe"',
+      'probe\\x',
+      'probé',
+      'p'.repeat(129),
+      '',
+    ]) {
+      expect(parse(name).success, JSON.stringify(name)).toBe(false);
+    }
+  });
+
+  it('accepts the names a lab legitimately needs', () => {
+    for (const name of ['memory-probe', 'ledger_db', 'app.1', 'a', 'A0-_.']) {
+      expect(parse(name).success, name).toBe(true);
+    }
+  });
+
+  it('refuses an unknown field, so the schema cannot be widened by a lab', () => {
+    const withExtra = requirementSchema.safeParse({
+      type: 'docker_container_oom_killed',
+      name: 'memory-probe',
+      expected: true,
+      command: 'docker inspect memory-probe',
+    });
+    expect(withExtra.success).toBe(false);
+  });
+
+  it('cannot be satisfied by another session holding the OOM-killed container', async () => {
+    // Session B did the work. Session A is graded against its own daemon, which
+    // is a different object store — not a filtered view of B's.
+    const sessionB = new FakeDockerDaemon();
+    sessionB.addContainer(containerSpec({ name: 'memory-probe', memory: '16m' }), 'exited', 137, true);
+
+    const requirement = {
+      type: 'docker_container_oom_killed',
+      name: 'memory-probe',
+      expected: true,
+    } as Requirement;
+
+    expect(passed(await verifyRequirement(requirement, new DockerVerifyReader(sessionB, SANDBOX_B)))).toBe(
+      true,
+    );
+    const sessionA = await verifyRequirement(
+      requirement,
+      new DockerVerifyReader(new FakeDockerDaemon(), SANDBOX_A),
+    );
+    expect(sessionA.status).toBe('fail');
+  });
+});
+
+/*
+ * The exit-code and limit checks DOCKER-009 keeps alongside the OOM check.
+ * They are not redundant: together they tell a student whether the container
+ * stopped, with what code, and whether the kernel is the one that stopped it.
+ */
+describe('docker verifier — the checks that surround the OOM signal', () => {
+  it('passes the full memory-probe requirement set for a genuine OOM', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(
+      containerSpec({ name: 'memory-probe', image: 'alpine:3.20', memory: '16m' }),
+      'exited',
+      137,
+      true,
+    );
+
+    for (const requirement of [
+      { type: 'docker_container_state', name: 'memory-probe', expected: 'exited' },
+      { type: 'docker_container_exit_code', name: 'memory-probe', expected: 137 },
+      { type: 'docker_container_resource_limit', name: 'memory-probe', memory: '16m' },
+      { type: 'docker_container_oom_killed', name: 'memory-probe', expected: true },
+    ] as Requirement[]) {
+      expect(passed(await check(docker, requirement)), requirement.type).toBe(true);
+    }
+  });
+
+  it('fails a probe that ran to completion instead of being killed', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'memory-probe', memory: '16m' }), 'exited', 0);
+
+    const result = await check(docker, {
+      type: 'docker_container_exit_code',
+      name: 'memory-probe',
+      expected: 137,
+    } as Requirement);
+
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('exited with code 0, expected 137');
+  });
+
+  it('fails a probe given no memory limit at all', async () => {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(containerSpec({ name: 'memory-probe' }), 'exited', 137, true);
+
+    const result = await check(docker, {
+      type: 'docker_container_resource_limit',
+      name: 'memory-probe',
+      memory: '16m',
+    } as Requirement);
+
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('memory is unlimited');
+  });
 });
 
 // -------------------------------------------- images, volumes, networks
@@ -627,14 +908,14 @@ function solve(lab: LoadedLabDefinition): {
   const docker = new FakeDockerDaemon();
   const port = new InMemoryWorkspace();
   const specs = new Map<string, Parameters<FakeDockerDaemon['addContainer']>[0]>();
-  const states = new Map<string, { state: string; exitCode: number }>();
+  const states = new Map<string, { state: string; exitCode: number; oomKilled?: boolean }>();
 
   const specFor = (name: string) => {
     const existing = specs.get(name);
     if (existing) return existing;
     const created = containerSpec({ name, image: 'alpine:3.20' });
     specs.set(name, created);
-    states.set(name, { state: 'running', exitCode: 0 });
+    states.set(name, { state: 'running', exitCode: 0, oomKilled: false });
     return created;
   };
 
@@ -646,11 +927,25 @@ function solve(lab: LoadedLabDefinition): {
         break;
       case 'docker_container_state':
         specFor(requirement.name);
-        states.set(requirement.name, { state: requirement.expected, exitCode: 0 });
+        states.set(requirement.name, {
+          ...(states.get(requirement.name) ?? { state: 'running', exitCode: 0, oomKilled: false }),
+          state: requirement.expected,
+        });
         break;
       case 'docker_container_exit_code':
         specFor(requirement.name);
-        states.set(requirement.name, { state: 'exited', exitCode: requirement.expected });
+        states.set(requirement.name, {
+          ...(states.get(requirement.name) ?? { state: 'exited', exitCode: 0, oomKilled: false }),
+          state: 'exited',
+          exitCode: requirement.expected,
+        });
+        break;
+      case 'docker_container_oom_killed':
+        specFor(requirement.name);
+        states.set(requirement.name, {
+          ...(states.get(requirement.name) ?? { state: 'exited', exitCode: 137, oomKilled: false }),
+          oomKilled: requirement.expected,
+        });
         break;
       case 'docker_container_image':
         specFor(requirement.name).image = requirement.image;
@@ -738,8 +1033,8 @@ function solve(lab: LoadedLabDefinition): {
   }
 
   for (const [name, spec] of specs) {
-    const state = states.get(name) ?? { state: 'running', exitCode: 0 };
-    docker.addContainer(spec, state.state, state.exitCode);
+    const state = states.get(name) ?? { state: 'running', exitCode: 0, oomKilled: false };
+    docker.addContainer(spec, state.state, state.exitCode, state.oomKilled ?? false);
   }
 
   return { docker, workspace: { port, sessionId: SESSION_A } };

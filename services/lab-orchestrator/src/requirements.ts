@@ -1375,6 +1375,34 @@ const dockerRequirementSchemas = {
     .strict(),
 
   /**
+   * The kernel's OOM killer stopped the container's last run.
+   *
+   * Read from `State.OOMKilled`, which is the daemon's own report of a cgroup
+   * memory-limit kill. This is the **only** field that distinguishes one: a
+   * `docker kill`, a `docker stop` that escalates past its grace period, and an
+   * application that exits 137 by itself all produce exit code 137 with
+   * `OOMKilled` false. A lab that graded exit code 137 alone would accept all
+   * four, which is why this exists as its own check rather than as a detail on
+   * `docker_container_exit_code`.
+   *
+   * Per-run, not cumulative: a container that was OOM-killed and then started
+   * again reports false for the new run, so a student cannot OOM once and keep
+   * the flag.
+   *
+   * `expected: false` is the form a production lab wants — "this worker must
+   * run without being OOM-killed" — so the field is a boolean rather than the
+   * check being implicitly positive.
+   */
+  docker_container_oom_killed: z
+    .object({
+      type: z.literal('docker_container_oom_killed'),
+      name: dockerObjectName,
+      expected: z.boolean().default(true),
+      ...common,
+    })
+    .strict(),
+
+  /**
    * An environment variable is set on the container.
    *
    * `value` is optional so a lab can require only that a variable was passed.
@@ -1779,6 +1807,7 @@ export const REQUIREMENT_FAMILIES = {
   docker_container_state: 'docker',
   docker_container_image: 'docker',
   docker_container_exit_code: 'docker',
+  docker_container_oom_killed: 'docker',
   docker_container_env: 'docker',
   docker_container_port: 'docker',
   docker_container_network: 'docker',

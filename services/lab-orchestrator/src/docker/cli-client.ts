@@ -610,6 +610,8 @@ interface RawContainer {
     Status?: string;
     Running?: boolean;
     ExitCode?: number;
+    /** Set by the daemon when the kernel OOM-killed this run. */
+    OOMKilled?: boolean;
     Error?: string;
     StartedAt?: string;
     FinishedAt?: string;
@@ -743,6 +745,9 @@ export function toContainerSnapshot(raw: RawContainer): DockerContainerSnapshot 
     state,
     running: raw.State?.Running ?? state === 'running',
     exitCode: raw.State?.ExitCode ?? 0,
+    // Absent on a daemon that does not report it; absent means "not an OOM",
+    // never "unknown", so the default is the safe one.
+    oomKilled: raw.State?.OOMKilled ?? false,
     ...(raw.State?.Error ? { errorMessage: raw.State.Error } : {}),
     restartPolicy: raw.HostConfig?.RestartPolicy?.Name || 'no',
     env: envListToMap(raw.Config?.Env),

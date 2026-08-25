@@ -90,6 +90,19 @@ export interface DockerContainerSnapshot {
   running: boolean;
   /** Exit code of the last run. 0 while the container has never exited. */
   exitCode: number;
+  /**
+   * True when the kernel's OOM killer stopped the container's **last run**.
+   *
+   * This is the daemon's own report of a cgroup memory-limit kill, and it is
+   * the only field that distinguishes one from an ordinary SIGKILL: `docker
+   * kill`, a `docker stop` that escalates past its grace period, and an
+   * application that exits 137 on its own all produce exit code 137 with this
+   * flag `false`. Exit code alone proves nothing.
+   *
+   * Per-run, not cumulative: a container that was OOM-killed and is then
+   * started again reports `false` for the new run.
+   */
+  oomKilled: boolean;
   /** Set when the container stopped because of an error. */
   errorMessage?: string;
   /** `--restart` policy name, e.g. `no`, `always`, `on-failure`. */

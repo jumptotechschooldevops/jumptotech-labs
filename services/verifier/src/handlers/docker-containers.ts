@@ -82,6 +82,44 @@ export const dockerContainerExitCode: DockerVerifierHandler<'docker_container_ex
   },
 };
 
+/**
+ * Was this container's last run stopped by the kernel's OOM killer?
+ *
+ * The whole value of this check is that it is *not* the exit code. Exit 137 is
+ * "killed by SIGKILL", and the kernel is only one of the things that sends it —
+ * `docker kill`, a `docker stop` that runs out of grace period, and an
+ * application that calls `exit(137)` itself all land on the same code. Only the
+ * daemon knows which of those happened, and `State.OOMKilled` is where it says
+ * so.
+ *
+ * The flag describes the **last run**. A container that was OOM-killed and then
+ * started again reports false, so this cannot be satisfied by an OOM that
+ * happened at some point in the past.
+ */
+export const dockerContainerOomKilled: DockerVerifierHandler<'docker_container_oom_killed'> = {
+  type: 'docker_container_oom_killed',
+  label: (r) =>
+    r.expected
+      ? `Container ${r.name} was killed for exceeding its memory limit`
+      : `Container ${r.name} was not killed for exceeding its memory limit`,
+  async run(r, reader) {
+    const container = await reader.container(r.name);
+    if (!container) return missingDocker('container', r.name);
+    if (container.oomKilled === r.expected) return pass();
+
+    if (r.expected) {
+      // Say what was observed, and — because this is the exact confusion the
+      // check exists to resolve — say that the exit code did not settle it.
+      return container.running
+        ? fail(`Container '${r.name}' is still running, so it has not been stopped by anything`)
+        : fail(
+            `Container '${r.name}' stopped with exit code ${container.exitCode}, but the daemon does not report it as killed for exceeding its memory limit`,
+          );
+    }
+    return fail(`Container '${r.name}' was killed for exceeding its memory limit`);
+  },
+};
+
 export const dockerContainerEnv: DockerVerifierHandler<'docker_container_env'> = {
   type: 'docker_container_env',
   label: (r) =>

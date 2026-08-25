@@ -83,6 +83,8 @@ interface FakeContainer {
   id: string;
   state: string;
   exitCode: number;
+  /** Whether the kernel OOM-killed the last run. Never set by `runContainer`. */
+  oomKilled?: boolean;
   createdAt: string;
   /** Files readable with `execInContainer(['cat', path])`. */
   files: Map<string, string>;
@@ -171,12 +173,15 @@ export class FakeDockerDaemon implements DockerEnginePort {
   }
 
   /** Pretend a container exists in whatever state a test needs. */
-  addContainer(spec: RunContainerSpec, state = 'running', exitCode = 0): void {
+  addContainer(spec: RunContainerSpec, state = 'running', exitCode = 0, oomKilled = false): void {
     this.containers.set(spec.name, {
       spec,
       id: nextId('c'),
       state,
       exitCode,
+      // Per-run, exactly as the daemon reports it: a test that wants a real
+      // OOM says so, and every other way of reaching exit 137 leaves it false.
+      oomKilled,
       createdAt: new Date(0).toISOString(),
       files: new Map(),
     });
@@ -538,6 +543,7 @@ function toSnapshot(container: FakeContainer): DockerContainerSnapshot {
     state: container.state,
     running: container.state === 'running',
     exitCode: container.exitCode,
+    oomKilled: container.oomKilled ?? false,
     restartPolicy: spec.restartPolicy ?? 'no',
     env: { ...(spec.env ?? {}) },
     labels: { ...(spec.labels ?? {}) },
