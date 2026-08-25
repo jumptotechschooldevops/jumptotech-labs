@@ -136,8 +136,11 @@ export const iamPolicyStatement: SandboxVerifierHandler<'iam_policy_statement'> 
     if (requirement.condition !== undefined) {
       const withoutCondition = findStatements(policy, { ...selector, condition: undefined });
       if (withoutCondition.length > 0) {
+        // Deliberately does not name the operator, the key or the value: a
+        // lab may require the student to find the right condition key, and a
+        // failure message is not the place to hand it over.
         return fail(
-          `a matching statement exists in '${requirement.path}', but none carries a ${requirement.condition.operator} condition on ${requirement.condition.key}`,
+          `a matching statement exists in '${requirement.path}', but none carries the required condition`,
         );
       }
     }

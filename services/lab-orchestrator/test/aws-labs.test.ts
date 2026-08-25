@@ -42,13 +42,13 @@ describe('AWS lab definitions load', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004']);
+    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005']);
   });
 
   it('declares the Linux sandbox, and gets container isolation for free', async () => {
     const registry = await realRegistry();
 
-    for (const id of ['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004']) {
+    for (const id of ['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005']) {
       const lab = registry.get(id);
       // Simulated: an AWS-track lab, deliberately backed by a local container.
       expect(lab.environment.provider, id).toBe('linux');
@@ -64,7 +64,7 @@ describe('AWS lab definitions load', () => {
 
     expect(track).toBeDefined();
     expect(track?.title).toBe('AWS');
-    expect(track?.labCount).toBe(4);
+    expect(track?.labCount).toBe(5);
   });
 });
 
@@ -214,12 +214,15 @@ describe('AWS-001 official documentation validation', () => {
     }
   });
 
-  it('claims no certification objective for AWS-001', async () => {
+  it('claims no certification objective for the production-skill labs', async () => {
     const registry = await realRegistry();
 
-    // SOA-C03 has no task statement for ARN anatomy or the CLI credential
-    // provider chain. Claiming one would overstate coverage.
+    // AWS-001: SOA-C03 has no task statement for ARN anatomy or the CLI
+    // credential provider chain. AWS-005: privilege-escalation analysis via
+    // iam:PassRole is likewise unnamed by any current task statement, and
+    // 4.1.2 requires AWS tools neither lab uses.
     expect(registry.get('AWS-001').certification).toEqual([]);
+    expect(registry.get('AWS-005').certification).toEqual([]);
   });
 
   it('claims only SOA-C03 for the policy-authoring labs', async () => {

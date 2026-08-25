@@ -372,6 +372,30 @@ describe('the handlers grade through the same model', () => {
     expect(leaked.status).toBe('fail');
   });
 
+  it('never names the required condition in a failure detail', async () => {
+    // A lab may require the student to find the right condition key. The
+    // failure message says a condition is missing; it does not say which.
+    const noCondition = JSON.stringify({
+      Statement: { Effect: 'Allow', Action: 's3:PutObject', Resource: OBJECTS },
+    });
+    const result = await verifyRequirement(
+      {
+        type: 'iam_policy_statement',
+        path: POLICY_PATH,
+        effect: 'Allow',
+        actions: ['s3:PutObject'],
+        condition: { operator: 'StringEquals', key: 's3:x-amz-server-side-encryption', value: 'aws:kms' },
+      },
+      reader(noCondition),
+    );
+
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('condition');
+    expect(result.detail).not.toContain('StringEquals');
+    expect(result.detail).not.toContain('s3:x-amz-server-side-encryption');
+    expect(result.detail).not.toContain('aws:kms');
+  });
+
   it('rejects the bare wildcard and accepts a scoped one', async () => {
     const clean = await verifyRequirement(
       { type: 'iam_policy_no_wildcard', path: POLICY_PATH, field: 'Action' },
