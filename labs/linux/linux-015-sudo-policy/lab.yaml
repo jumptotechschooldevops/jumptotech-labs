@@ -1,0 +1,317 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# HOW THIS LAB IS GRADED
+#
+# A sudo policy is not a file, it is what sudo does. A drop-in can exist, be
+# owned by root, carry mode 0440, and contain exactly the right-looking text
+# while granting nothing at all — because one token is misspelled and sudo
+# refused to parse it. A checklist made of `file_content` would pass that host.
+#
+# So the baseline ships a supervised probe running *as the on-call account*
+# which asks sudo four questions every few seconds and publishes the answers:
+#
+#   may oncall check the ledger service?       must end up permitted
+#   may oncall restart the ledger service?     must end up permitted
+#   may oncall read /etc/shadow?               must end up denied
+#   may oncall restart a *different* service?  must end up denied
+#
+# The fourth is the lesson. A rule naming the control binary without
+# constraining its arguments satisfies the first three and fails that one —
+# which is the most common way a "least privilege" sudo rule turns out to
+# delegate the whole host.
+#
+# The probe asks with `sudo -n -l <command>`, which resolves the policy and
+# reports whether an invocation would be permitted *without executing it*, so
+# the probe has no side effects and cannot restart anything.
+#
+# Two consequences worth stating, because they are why this lab needs no new
+# requirement type:
+#
+#   · a syntactically broken drop-in — or one writable by group or other —
+#     makes sudo refuse the file, so the permitted checks fail. Syntax and
+#     mode are enforced by sudo itself, with no `visudo` check needed;
+#   · the probe's answers come from sudo itself, not from anything the student
+#     asserts, so the graded evidence is the enforced policy.
+#
+# The file checks that remain — owner, group, mode 0440 — are not decoration.
+# sudo refuses to read a drop-in that is writable by group or other, verified
+# here: at mode 0666 it logs "is world writable" and the account is left with
+# no authority at all. Mode 0644 is still read, so the 0440 check is the
+# conventional mode `visudo` writes rather than the exact refusal threshold —
+# worth knowing when reading the requirement list.
+#
+# Content is written from the sudo project's own manual pages and Debian
+# documentation only.
+# ---------------------------------------------------------------------------
+id: LINUX-015
+slug: linux-015-sudo-policy
+title: Least-Privilege sudo Delegation
+track: linux
+topic: linux-administration
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 12
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-003
+
+story: >
+  Three weeks ago the on-call rotation could not restart the ledger service
+  without waking a platform engineer, so somebody fixed it in the fastest way
+  available and moved on. The access review has now caught up with them.
+
+  The finding is one line long: the on-call account can do anything, on the
+  whole host, without a password. Nobody disputes that the rotation needs to
+  restart that one service. What they do not need is everything else.
+
+objectives:
+  - Read a sudoers drop-in and say exactly what authority it grants
+  - Scope a rule to specific commands *and their arguments*, not just a binary
+  - Explain why sudo ignores a drop-in with the wrong ownership or mode
+  - Verify a policy by what it denies, not only by what it permits
+
+task:
+  summary: Replace a blanket sudo rule with one that grants the on-call rotation exactly two commands and nothing else.
+  description: >
+    You have a shell on the host and passwordless `sudo`.
+
+    The on-call rotation uses the account `oncall`. Its authority is granted by
+    `/etc/sudoers.d/020-oncall`, which currently gives that account every
+    command on the host. Rewrite that file so it grants exactly two things and
+    nothing more:
+
+        /usr/local/sbin/jtt-service-control status ledger-api
+        /usr/local/sbin/jtt-service-control restart ledger-api
+
+    Both must still run without a password — the rotation is paged at three in
+    the morning and there is no shared password to type.
+
+    Everything else must be refused. That includes the same control tool
+    pointed at a different service: `restart payments-api` is not the rotation's
+    to run, and a rule that names the binary without pinning its arguments will
+    hand it to them. This is the part that is easy to get wrong and easy to
+    miss, because the policy still looks correct and still does the thing you
+    tested.
+
+    Two things about how sudo reads these files are worth knowing before you
+    start. It refuses to read a drop-in that is writable by group or other —
+    it says so and then grants that account nothing at all — so keep the file
+    owned by `root` and mode `0440`, which is what `visudo` writes. And a
+    syntax error does not fail quietly in the way you might hope: sudo stops
+    trusting the file, and the account loses the authority you meant to grant.
+
+    Leave your own access alone. `/etc/sudoers.d/010-student` is what gives you
+    the `sudo` you are using; removing it ends your ability to fix anything
+    else in this lab.
+
+    You do not have to take anyone's word for whether the policy is right. A
+    service on this host called `sudo-probe` runs as `oncall`, asks sudo what
+    that account may and may not do, and republishes the answer to
+    `/var/lib/jumptotech/probe/sudo-probe.status` every few seconds. Read it,
+    change the policy, wait about ten seconds, and read it again. It never runs
+    the commands it asks about, so it cannot restart anything.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: user_exists
+      name: oncall
+      label: The on-call account exists
+    - type: file_exists
+      path: /etc/sudoers.d/020-oncall
+      label: The on-call sudo policy is present
+    - type: file_exists
+      path: /etc/sudoers.d/010-student
+      label: Your own sudo access is present
+    - type: file_exists
+      path: /usr/local/sbin/jtt-service-control
+      label: The service control tool is installed
+    - type: process_running
+      pattern: /usr/local/lib/jumptotech/sudo-probe
+      label: The policy probe is running
+    # The finding the student has to correct, stated by sudo itself rather
+    # than by reading the file: the rotation can currently read /etc/shadow.
+    - type: file_content
+      path: /var/lib/jumptotech/probe/sudo-probe.status
+      contains: FORBIDDEN_CMD=allowed
+      label: The on-call account currently has authority it should not have
+    - type: file_content
+      path: /var/lib/jumptotech/probe/sudo-probe.status
+      contains: PERMITTED_STATUS=ok
+      label: The probe has published a complete reading
+  verify_timeout_seconds: 120
+
+# Verification is state-based and reads the live host. Nothing inspects the
+# student's shell history or the commands they typed.
+#
+# The graded evidence for what the policy *does* comes from sudo, via a probe
+# running as the on-call account — not from anything the student writes. The
+# file checks cover what the policy *is*, and the ownership and mode checks are
+# preconditions sudo itself enforces rather than housekeeping.
+requirements:
+  # --- the drop-in sudo will actually honour ------------------------------
+  - type: file_exists
+    path: /etc/sudoers.d/020-oncall
+    label: The on-call sudo policy is still in place
+  - type: file_owner
+    path: /etc/sudoers.d/020-oncall
+    owner: root
+    label: The policy file belongs to root, as sudo requires
+  - type: file_group
+    path: /etc/sudoers.d/020-oncall
+    group: root
+    label: The policy file's group is root, as sudo requires
+  - type: file_mode
+    path: /etc/sudoers.d/020-oncall
+    mode: "440"
+    label: The policy file is not writable by anyone but root
+  # Read as root, because a drop-in sudo will honour is 0440 root:root and the
+  # unprivileged student the verifier reads as cannot open it — `stat` answers
+  # the three checks above, but the *content* needs the elevated read.
+  #
+  # There is deliberately no "the blanket grant is gone" text check here. The
+  # probe below already proves it, and proves it better: a blanket grant in
+  # *any* file under /etc/sudoers.d would show up as FORBIDDEN_CMD=allowed,
+  # while a text check could only ever speak for this one path.
+  - type: command_output
+    command: cat
+    args:
+      - /etc/sudoers.d/020-oncall
+    as_user: root
+    contains: /usr/local/sbin/jtt-service-control
+    label: The policy names the service control tool
+  - type: file_exists
+    path: /etc/sudoers.d/010-student
+    label: Your own sudo access survived the change
+
+  # --- what sudo actually enforces, reported by a probe running as oncall --
+  - type: file_content
+    path: /var/lib/jumptotech/probe/sudo-probe.status
+    contains: PERMITTED_STATUS=ok
+    label: The rotation may check the ledger service
+  - type: file_content
+    path: /var/lib/jumptotech/probe/sudo-probe.status
+    contains: PERMITTED_RESTART=ok
+    label: The rotation may restart the ledger service
+  - type: file_content
+    path: /var/lib/jumptotech/probe/sudo-probe.status
+    contains: FORBIDDEN_CMD=denied
+    label: The rotation may no longer run commands outside its remit
+  # The one a rule that names the binary without pinning its arguments fails.
+  - type: file_content
+    path: /var/lib/jumptotech/probe/sudo-probe.status
+    contains: FORBIDDEN_ARG=denied
+    label: The rotation may not point the control tool at another service
+
+  # A file check is timeless: a status file left saying the right thing would
+  # satisfy the four checks above forever. `find -mmin -1` prints the path only
+  # when it was written in the last minute, against a five-second probe cycle.
+  - type: command_output
+    command: find
+    args:
+      - /var/lib/jumptotech/probe/sudo-probe.status
+      - -mmin
+      - "-1"
+    contains: /var/lib/jumptotech/probe/sudo-probe.status
+    label: That reading is current rather than a leftover from earlier
+
+hints:
+  - level: 1
+    text: >
+      Start by reading what the policy grants today, and then read what the
+      probe says the account can actually do. They agree, and that agreement is
+      the finding.
+
+      When you change the rule, do not stop at "the two commands work". Ask the
+      opposite question — what can this account still do that it should not? —
+      and let the probe answer it rather than reasoning about it.
+  - level: 2
+    text: >
+      The sudoers format is documented in `man 5 sudoers`, and the section on
+      command specifications is the one you want: a rule can name a command
+      alone, or a command together with the arguments it may be given. Those
+      are different grants, and only one of them is least privilege.
+
+      `man sudo` covers the option that asks whether an invocation would be
+      permitted without running it, which is how the probe forms its questions
+      and is worth trying by hand.
+
+      Note also what `man 5 sudoers` says about the ownership and mode of files
+      under `/etc/sudoers.d` — sudo refuses to read one that is writable beyond
+      its owner, and a file it refuses to read grants nothing at all.
+  - level: 3
+    text: >
+      One rule for the `oncall` account, naming the two full invocations —
+      binary *and* arguments — separated by a comma, with `NOPASSWD:` in front
+      of them so the rotation is not prompted. A `Cmnd_Alias` is a tidy way to
+      write it and is not required. Leave the file owned by `root:root` with
+      mode `0440`.
+
+      Check yourself with `sudo -n -l -U oncall`, which prints the policy as
+      sudo resolves it for that account, and then wait a few seconds and re-read
+      the probe's status file. If the permitted lines went to `denied` after an
+      edit, the file no longer parses and sudo has stopped trusting it —
+      `visudo -c -f /etc/sudoers.d/020-oncall` will say where.
+
+references:
+  - title: sudoers(5) — the sudoers policy file format
+    url: https://manpages.debian.org/bookworm/sudo/sudoers.5.en.html
+  - title: sudo(8) — execute a command as another user
+    url: https://manpages.debian.org/bookworm/sudo/sudo.8.en.html
+  - title: visudo(8) — edit and validate the sudoers file
+    url: https://manpages.debian.org/bookworm/sudo/visudo.8.en.html
+  - title: Ubuntu Server documentation — user management and sudo
+    url: https://help.ubuntu.com/community/Sudoers
+
+skills:
+  - linux.sudo.sudoers-drop-in
+  - linux.sudo.command-scoping
+  - linux.sudo.least-privilege
+  - linux.sudo.file-ownership-rules
+  - linux.accounts.inspect
+
+# ---------------------------------------------------------------------------
+# SOURCE VERIFICATION
+#
+# Recorded as comments rather than schema fields: a `sources:` / `last_verified:`
+# block would be a change to the shared lab schema, which this track is not
+# permitted to make unilaterally.
+#
+# last_verified: 2026-08-24
+#
+# CLASSIFICATION: PRODUCTION SKILL — deliberately *not* a certification
+# objective.
+#
+# The current official LFCS competency list was read on 2026-08-24 from
+# https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+# (domains: Operations Deployment 25%, Networking 25%, Storage 20%, Essential
+# Commands 20%, Users and Groups 10%). The words `sudo`, `sudoers`, privilege
+# delegation and least privilege appear nowhere in it. The nearest access
+# control competency is "Configure and manage ACLs", which is a different
+# mechanism and is not what this lab teaches.
+#
+# So this lab claims no exam coverage. It is here because delegating a narrow
+# capability to an on-call rotation is ordinary production work and a recurring
+# audit finding — not because an exam asks for it. `certification.relevant` is
+# recorded as false rather than omitted, so the check is on the record.
+#
+# Technical objectives verified on 2026-08-24 against the sudo project's own
+# manual pages as published by Debian:
+#   sudoers(5)  a command specification may name a command with the arguments
+#               it may be given; a bare command name permits any arguments.
+#               Files in an #includedir are ignored unless owned by root and
+#               not writable by group or other.
+#   sudo(8)     `-l` lists or tests the policy without executing; `-n` refuses
+#               to prompt. Together they resolve a policy with no side effects,
+#               which is what makes a continuous probe safe here.
+# ---------------------------------------------------------------------------
+certification:
+  - certification: LFCS
+    relevant: false
+    domains: []
