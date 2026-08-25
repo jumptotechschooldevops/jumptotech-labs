@@ -26,7 +26,7 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 
-const TERRAFORM_IDS = ['TF-001', 'TF-011', 'TF-012'];
+const TERRAFORM_IDS = ['TF-001', 'TF-004', 'TF-011', 'TF-012'];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {
@@ -47,7 +47,13 @@ describe('the Terraform lab catalog', () => {
   it('loads every Terraform lab with no definition errors', async () => {
     const registry = await realRegistry();
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.list({ track: 'terraform' }).map((lab) => lab.id)).toEqual(TERRAFORM_IDS);
+    // Compared as a set: the catalog orders by each lab's `order`, and the
+    // teaching sequence is asserted separately below. TF-004 sits at order 9
+    // because the approved curriculum puts it there, even though it shipped
+    // after TF-011 and TF-012.
+    expect(registry.list({ track: 'terraform' }).map((lab) => lab.id).sort()).toEqual(
+      [...TERRAFORM_IDS].sort(),
+    );
   });
 
   it('orders the track by its teaching sequence, with no two labs claiming one slot', async () => {
@@ -283,5 +289,105 @@ describe('TF-012 — Destroying Infrastructure Safely', () => {
     expect(
       requirements.some((r) => r.type === 'directory_exists' && 'path' in r && r.path === 'terraform/out'),
     ).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------------- TF-004
+
+describe('TF-004 — Terraform State', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf004(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-004-state', 'lab.yaml'));
+    return lab;
+  }
+
+  it('keeps the curriculum sequence: state topic, intermediate, order 9', async () => {
+    const definition = await tf004();
+    expect(definition.id).toBe('TF-004');
+    expect(definition.topic).toBe('state');
+    expect(definition.difficulty).toBe('intermediate');
+    // The approved plan places TF-004 at order 9, after the labs that fill
+    // orders 4–8. Implementing it early must not move it in the catalog.
+    expect(definition.order).toBe(9);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.certification).toBe('TERRAFORM-ASSOCIATE-004');
+    expect(entry?.domains).toEqual(['2', '7']);
+  });
+
+  it('seeds the three resources the refactor operates on', async () => {
+    const files = await loadSetupFiles(await tf004());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    for (const name of ['legacy_report', 'metrics', 'scratch_notes']) {
+      expect(main.content).toContain(`"local_file" "${name}"`);
+    }
+    // The target name must not be pre-written for them.
+    expect(main.content).not.toContain('quarterly_report');
+  });
+
+  it('grades the rename from state, both the new address and the old one', async () => {
+    const requirements = (await tf004()).requirements;
+    expect(
+      requirements.some(
+        (r) => r.type === 'terraform_resource_exists' && 'name' in r && r.name === 'quarterly_report',
+      ),
+    ).toBe(true);
+    expect(
+      requirements.some(
+        (r) =>
+          r.type === 'terraform_state_absent' &&
+          'address' in r &&
+          r.address === 'local_file.legacy_report',
+      ),
+    ).toBe(true);
+  });
+
+  it('distinguishes `state rm` from a destroy by requiring the file to survive', async () => {
+    const requirements = (await tf004()).requirements;
+    // Unmanaged...
+    expect(
+      requirements.some(
+        (r) =>
+          r.type === 'terraform_state_absent' &&
+          'address' in r &&
+          r.address === 'local_file.scratch_notes',
+      ),
+    ).toBe(true);
+    // ...but still on disk. Without this pair, `terraform destroy -target`
+    // would satisfy the lab, and it teaches the opposite lesson.
+    expect(
+      requirements.some(
+        (r) => r.type === 'file_exists' && 'path' in r && r.path === 'terraform/out/scratch-notes.txt',
+      ),
+    ).toBe(true);
+  });
+
+  it('binds the exported plan to the refactor, so a stale or faked plan cannot pass', async () => {
+    const planChecks = (await tf004()).requirements.filter(
+      (r) => 'path' in r && r.path === 'terraform/plan.json',
+    );
+    const has = (type: string, text: string) =>
+      planChecks.some((r) => r.type === type && 'contains' in r && r.contains === text);
+
+    // It must be a plan, not a `terraform show -json` dump of state.
+    expect(has('file_content', '"resource_changes"')).toBe(true);
+    // Of the renamed configuration...
+    expect(has('file_content', 'local_file.quarterly_report')).toBe(true);
+    // ...and not of the configuration as it stood before the work.
+    expect(has('file_content_absent', 'local_file.legacy_report')).toBe(true);
+    expect(has('file_content_absent', 'local_file.scratch_notes')).toBe(true);
+    // A clean refactor plans nothing at all.
+    expect(has('file_content_absent', '"create"')).toBe(true);
+    expect(has('file_content_absent', '"delete"')).toBe(true);
+  });
+
+  it('reads no student-authored configuration file, only state and artifacts', async () => {
+    // `main.tf` is the student's own writing; grading it would be grading what
+    // was typed. Every check reads state, a plan Terraform produced, or a file
+    // a provider wrote.
+    const paths = (await tf004()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
   });
 });

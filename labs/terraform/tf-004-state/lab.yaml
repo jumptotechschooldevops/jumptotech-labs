@@ -1,0 +1,292 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-004 — Terraform state as a binding you can inspect and rearrange.
+#
+# Official objectives this lab practises:
+#   Terraform Associate (004)
+#   2d — "Explain how Terraform uses and manages state"   (domain 2)
+#   7b — "Use the CLI to inspect state"                   (domain 7)
+#
+# Official sources, read on 2026-08-25:
+#   · Inspecting state — `terraform state list` "shows the resource addresses
+#     for every resource Terraform knows about"; `terraform state show`
+#     "displays detailed state data about one resource".
+#   · Command: state mv — "changes bindings in Terraform state so that existing
+#     remote objects bind to new resource instances", and "the most common uses
+#     ... are when you have renamed a resource block in your configuration".
+#   · Command: state rm — "removes the binding to an existing remote object
+#     without first destroying it. The remote object continues to exist but is
+#     no longer managed by Terraform."
+#
+# ## What makes this lab hard to fake
+#
+# The state assertions alone would be satisfied by a student who renamed the
+# resource in configuration and let Terraform destroy and recreate it — the end
+# state looks the same. So the lab also requires a final saved plan, and
+# requires it to contain no create and no delete action.
+#
+# That is the discriminator, verified against the CLI this sandbox ships:
+#   · renaming in configuration *with* `state mv`  → plan reports no changes;
+#     "create" and "delete" appear zero times in the exported plan
+#   · renaming in configuration *without* `state mv` → plan reports 1 to add
+#     and 1 to destroy; both strings appear
+#   · removing a resource from state but leaving its block in configuration
+#     → plan reports it as a create
+#   · deleting a managed file by hand → plan reports it as a create
+#
+# One saved plan therefore proves the whole refactor was done the way the
+# documentation describes, and nothing about it can be produced by copying a
+# string or writing a note.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-004
+slug: tf-004-state
+title: Terraform State
+track: terraform
+topic: state
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 9
+
+environment:
+  provider: terraform
+  isolation: container
+
+# The approved curriculum lists TF-003 here. TF-003 is not on this branch yet,
+# and this lab's final step needs the saved-plan workflow, so TF-011 is the
+# honest prerequisite today. Revisit when TF-002/TF-003 land.
+prerequisites:
+  - TF-011
+
+story: >
+  Six months ago someone added a resource called `legacy_report` in a hurry.
+  It was never legacy and it was never only a report — it is the quarterly
+  summary the whole team reads, and every new engineer asks about the name.
+
+  There is a second problem in the same file. The scratch notes were put under
+  Terraform by accident. Nobody wants Terraform managing them; they are edited
+  by hand between releases, and every plan since has threatened to overwrite
+  them. They should come out of Terraform's care — but the file itself must
+  stay exactly where it is.
+
+  Neither change may destroy or recreate anything. These files are read by
+  people every day, and a rename is not a reason to take something away and
+  put it back.
+
+objectives:
+  - Inspect what Terraform is managing, and what it records about one resource
+  - Rename a resource without Terraform destroying and recreating it
+  - Stop managing a resource without destroying the object it created
+  - Show from a plan that configuration and state agree again
+
+task:
+  summary: >
+    Rename one resource and stop managing another, both without destroying
+    anything, then prove it from a plan.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf` and
+    a `main.tf` declaring three `local_file` resources — `legacy_report`,
+    `metrics` and `scratch_notes`. Nothing has been applied. Work in that
+    directory.
+
+    Start by initialising and applying, so there is real state to work with.
+    Then look at it: list every address Terraform knows about, and show the
+    detail it holds for one of them. You cannot rearrange state sensibly
+    without first reading it.
+
+    Now make two changes.
+
+    **Rename.** `local_file.legacy_report` should be called
+    `local_file.quarterly_report`. Change the configuration, and move the
+    existing object to the new address in state, so Terraform keeps tracking
+    the same file rather than destroying it and making a new one. The file it
+    writes, `out/report.txt`, does not change name or content.
+
+    **Stop managing.** `local_file.scratch_notes` should no longer be
+    Terraform's concern. Remove it from state *and* remove its block from the
+    configuration — one without the other leaves the two disagreeing, and
+    Terraform will try to fix that on the next apply. `out/scratch-notes.txt`
+    must still be on disk when you are done. Removing something from state is
+    not the same as destroying it, and this is the lab where that difference
+    matters.
+
+    Finally, prove the refactor landed cleanly: save a plan to `tfplan` and
+    export it to `plan.json`, as you did in TF-011. A correct refactor plans no
+    creates and no deletes — Terraform should report no changes at all. If your
+    plan wants to add or destroy anything, state and configuration still
+    disagree somewhere, and the plan will tell you where.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The platform configuration is in place
+
+# Read from Terraform's own state and from a plan it generated. Nothing here is
+# satisfied by a filename, a copied string, or a note the student wrote.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: quarterly_report
+    label: State tracks the report at its new address
+
+  - type: terraform_state_absent
+    dir: terraform
+    address: local_file.legacy_report
+    label: The old address is gone from state
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: metrics
+    label: The metrics resource is still managed and untouched
+
+  - type: terraform_state_absent
+    dir: terraform
+    address: local_file.scratch_notes
+    label: Terraform no longer manages the scratch notes
+
+  # The point of `state rm`: the binding goes, the object stays.
+  - type: file_exists
+    path: terraform/out/scratch-notes.txt
+    label: The scratch notes file is still on disk — removing state destroyed nothing
+
+  - type: file_exists
+    path: terraform/out/report.txt
+    label: The report the renamed resource writes is still on disk
+
+  - type: file_content
+    path: terraform/out/report.txt
+    contains: 'owner: platform-team'
+    label: The report kept its contents through the rename
+
+  - type: file_exists
+    path: terraform/plan.json
+    label: A final plan was exported for review
+
+  # A plan, not a state dump. `terraform show -json` with no plan file emits
+  # the *state* — same addresses, no actions — and would otherwise satisfy the
+  # checks below without anything having been planned. Only a plan export
+  # carries `resource_changes`.
+  - type: file_content
+    path: terraform/plan.json
+    contains: '"resource_changes"'
+    label: What was exported is an execution plan, not a dump of state
+
+  # The plan has to be a plan *of the refactored configuration*, not one taken
+  # earlier and left lying around: a plan exported before the rename names the
+  # old address and the removed resource, and names no `quarterly_report` at
+  # all. These three pin the plan to the work.
+  - type: file_content
+    path: terraform/plan.json
+    contains: local_file.quarterly_report
+    label: The plan is of the renamed configuration
+
+  - type: file_content_absent
+    path: terraform/plan.json
+    contains: local_file.legacy_report
+    label: The plan knows nothing of the old address
+
+  - type: file_content_absent
+    path: terraform/plan.json
+    contains: local_file.scratch_notes
+    label: The plan knows nothing of the resource that left Terraform's care
+
+  # A rename done without moving state plans a delete and a create. A resource
+  # dropped from state but left in configuration plans a create. Either way the
+  # refactor was not clean, and these two checks say so.
+  - type: file_content_absent
+    path: terraform/plan.json
+    contains: '"create"'
+    label: The final plan creates nothing — nothing was left to be rebuilt
+
+  - type: file_content_absent
+    path: terraform/plan.json
+    contains: '"delete"'
+    label: The final plan destroys nothing — the rename moved the object rather than replacing it
+
+hints:
+  - level: 1
+    text: >
+      Apply first: there is no state to inspect or rearrange until something
+      has been created. Then find the two `terraform state` subcommands that
+      list what is managed and show the detail of one resource.
+
+      Both of the changes you need are `terraform state` subcommands too. One
+      of them changes an address; the other stops Terraform tracking something
+      without touching it.
+  - level: 2
+    text: >
+      Renaming is two steps that belong together: change the label in the
+      configuration, and tell state that the existing object now lives at the
+      new address. Do only the first and Terraform will plan a destroy and a
+      create, which is exactly what the task forbids.
+
+      Removing from state is also two steps: take the binding out of state, and
+      take the block out of the configuration. Leave the block behind and the
+      next plan will offer to create the file all over again.
+  - level: 3
+    text: >
+      `terraform init`, `terraform apply`, then `terraform state list` and
+      `terraform state show local_file.legacy_report` to see what is there.
+
+      Rename with `terraform state mv local_file.legacy_report
+      local_file.quarterly_report`, and edit `main.tf` so the block is labelled
+      `quarterly_report`.
+
+      Then `terraform state rm local_file.scratch_notes`, and delete that
+      resource block from `main.tf`. Leave `out/scratch-notes.txt` alone.
+
+      Finish with `terraform plan -out=tfplan` — it should report no changes —
+      and `terraform show -json tfplan > plan.json`.
+
+references:
+  - title: Terraform — Inspecting state
+    url: https://developer.hashicorp.com/terraform/cli/state/inspect
+  - title: 'Terraform — Command: state list'
+    url: https://developer.hashicorp.com/terraform/cli/commands/state/list
+  - title: 'Terraform — Command: state show'
+    url: https://developer.hashicorp.com/terraform/cli/commands/state/show
+  - title: 'Terraform — Command: state mv'
+    url: https://developer.hashicorp.com/terraform/cli/commands/state/mv
+  - title: 'Terraform — Command: state rm'
+    url: https://developer.hashicorp.com/terraform/cli/commands/state/rm
+  - title: Terraform — Purpose of Terraform state
+    url: https://developer.hashicorp.com/terraform/language/state/purpose
+  - title: 'Terraform — Command: plan'
+    url: https://developer.hashicorp.com/terraform/cli/commands/plan
+
+skills:
+  - terraform.state.inspect
+  - terraform.state.move
+  - terraform.state.remove
+  - terraform.workflow.plan
+
+# Objectives 2d and 7b of the Terraform Associate (004) exam content list. The
+# schema on this branch carries domains but not objective ids; the objectives
+# are recorded in the header comment above.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '2'
+      - '7'
