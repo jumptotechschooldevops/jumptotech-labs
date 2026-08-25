@@ -51,5 +51,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['test/**/*.test.{ts,tsx}'],
+    // PLATFORM-006: the host-execution guard. The UI suite has no business
+    // starting a process, and this is what proves it rather than assuming it.
+    setupFiles: ['../../test-support/vitest.setup.ts'],
   },
 });

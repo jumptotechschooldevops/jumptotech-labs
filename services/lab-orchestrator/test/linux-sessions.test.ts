@@ -28,7 +28,7 @@ import {
   SessionReaper,
   type TerminalTerminator,
 } from '../src/index.js';
-import { FakeKubernetes } from './fakes.js';
+import { FakeKubernetes, fakeExec } from './fakes.js';
 import { FakeContainerRuntime } from './container-fakes.js';
 import { LABS_DIR } from './helpers.js';
 
@@ -52,6 +52,7 @@ async function harness(options: HarnessOptions = {}) {
     provider: new KindLabProvider({
       k8s,
       clusterName: 'jumptotech-labs',
+      exec: fakeExec(),
       destroyTimeoutMs: 500,
       sleep: async () => undefined,
       waitForRequirements: async () => ({ ok: true, checks: [] }),

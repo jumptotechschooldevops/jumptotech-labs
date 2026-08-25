@@ -120,7 +120,23 @@ async function findLabFiles(dir: string): Promise<string[]> {
  * registry, no dedup. What comes back is "what is on disk", which is the thing
  * the registry's output has to be checked against.
  */
-export async function scanLabsDirectory(labsDir: string = LABS_DIR): Promise<DiscoveredCatalog> {
+/**
+ * Cached scan of the *shipped* labs directory.
+ *
+ * The real catalog does not change during a test run, and the scan walks and
+ * YAML-parses every `lab.yaml` on disk. Dozens of call sites re-running that
+ * was pure repeated work. Temporary directories are never cached — each one is
+ * built for a single test and must be read as it actually is.
+ */
+let cachedRealScan: Promise<DiscoveredCatalog> | undefined;
+
+export function scanLabsDirectory(labsDir: string = LABS_DIR): Promise<DiscoveredCatalog> {
+  if (labsDir !== LABS_DIR) return scanLabsDirectoryUncached(labsDir);
+  cachedRealScan ??= scanLabsDirectoryUncached(labsDir);
+  return cachedRealScan;
+}
+
+async function scanLabsDirectoryUncached(labsDir: string): Promise<DiscoveredCatalog> {
   const files = await findLabFiles(labsDir);
 
   const labs: DiscoveredLab[] = [];
@@ -249,6 +265,34 @@ hints:
 ${overrides.extra ?? ''}`;
 }
 
+/**
+ * Copy the parts of a labs directory that the *registry* actually reads.
+ *
+ * `LabRegistry.load()` looks for exactly two filenames: `lab.yaml`, found by
+ * walking the tree, and `track.yaml`, read beside each track's labs. Setup
+ * manifests and seed scripts are opened later by the setup engine, from the
+ * real labs directory, and never by discovery.
+ *
+ * So a discovery fixture needs those two files and nothing else. Deep-copying
+ * the whole tree instead — which is what this used to do — moved every setup
+ * manifest and seed script four times per run for no benefit, and made these
+ * the slowest tests in the suite by a wide margin: they were the only ones
+ * still timing out on a loaded machine. Copying the skeleton is the same test
+ * against the same loader, without the dead I/O.
+ */
+async function copyCatalogSkeleton(from: string, to: string): Promise<void> {
+  await mkdir(to, { recursive: true });
+  for (const entry of await readdir(from, { withFileTypes: true })) {
+    const source = path.join(from, entry.name);
+    const target = path.join(to, entry.name);
+    if (entry.isDirectory()) {
+      await copyCatalogSkeleton(source, target);
+    } else if (entry.name === 'lab.yaml' || entry.name === 'track.yaml') {
+      await cp(source, target);
+    }
+  }
+}
+
 const tempRoots: string[] = [];
 
 /** Temporary directories created by this module, for a test's cleanup hook. */
@@ -270,7 +314,7 @@ export async function labsDirPlus(files: Record<string, string>): Promise<string
   const root = await mkdtemp(path.join(tmpdir(), 'jtt-catalog-'));
   tempRoots.push(root);
   const labsRoot = path.join(root, 'labs');
-  await cp(LABS_DIR, labsRoot, { recursive: true });
+  await copyCatalogSkeleton(LABS_DIR, labsRoot);
   for (const [relative, contents] of Object.entries(files)) {
     const target = path.join(labsRoot, relative);
     await mkdir(path.dirname(target), { recursive: true });

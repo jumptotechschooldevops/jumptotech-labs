@@ -16,7 +16,7 @@ import {
   SessionManager,
   SessionReaper,
 } from '../src/index.js';
-import { FakeKubernetes } from './fakes.js';
+import { FakeKubernetes, fakeExec } from './fakes.js';
 import { LABS_DIR } from './helpers.js';
 
 const SECRET = 'a-namespace-derivation-secret';
@@ -31,6 +31,7 @@ async function harness(lifetimes: { maxSessionSeconds?: number; idleTimeoutSecon
   const provider = new KindLabProvider({
     k8s,
     clusterName: 'jumptotech-labs',
+    exec: fakeExec(),
     now: () => clock.now,
     sleep: async () => undefined,
   });

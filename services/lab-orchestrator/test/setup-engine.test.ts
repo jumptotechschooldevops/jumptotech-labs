@@ -22,7 +22,7 @@ import {
   loadSetupManifests,
   type LoadedLabDefinition,
 } from '../src/index.js';
-import { FakeKubernetes } from './fakes.js';
+import { FakeKubernetes, fakeExec } from './fakes.js';
 import { LABS_DIR, sessionContext } from './helpers.js';
 
 const NS_A = 'lab-00000000000a';
@@ -92,6 +92,7 @@ function provider(k8s: FakeKubernetes): KindLabProvider {
   return new KindLabProvider({
     k8s,
     clusterName: 'jumptotech-labs',
+    exec: fakeExec(),
     resetDrainTimeoutMs: 1_000,
     destroyTimeoutMs: 1_000,
     sleep: async () => undefined,

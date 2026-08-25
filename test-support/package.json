@@ -1,0 +1,15 @@
+{
+  "name": "@jumptotech/test-support",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared test infrastructure: the host-execution guard and run-scoped resource naming (PLATFORM-006).",
+  "exports": {
+    "./host-execution": "./host-execution.ts",
+    "./run-id": "./test-run-id.ts",
+    "./setup": "./vitest.setup.ts"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  }
+}

@@ -18,7 +18,7 @@ import {
   type LabSessionContext,
   type LoadedLabDefinition,
 } from '../src/index.js';
-import { FakeKubernetes, podSnapshot } from './fakes.js';
+import { FakeKubernetes, podSnapshot, fakeExec } from './fakes.js';
 import { loadK8s001, sessionContext } from './helpers.js';
 
 let lab: LoadedLabDefinition;
@@ -34,6 +34,7 @@ function makeProvider(k8s: FakeKubernetes, kubectlOk = true) {
   const provider = new KindLabProvider({
     k8s,
     clusterName: 'jumptotech-labs',
+    exec: fakeExec(),
     resetDrainTimeoutMs: 2_000,
     destroyTimeoutMs: 2_000,
     sleep: async () => undefined,
@@ -464,7 +465,11 @@ describe('listManagedNamespaces()', () => {
 
 describe('execute() command allow-list', () => {
   it('refuses a binary that is not allow-listed', async () => {
-    const p = new KindLabProvider({ k8s: new FakeKubernetes(), clusterName: 'jumptotech-labs' });
+    const p = new KindLabProvider({
+      k8s: new FakeKubernetes(),
+      clusterName: 'jumptotech-labs',
+      exec: fakeExec(),
+    });
 
     await expect(p.execute(CONTEXT, { command: 'sh', args: ['-c', 'id'] })).rejects.toThrow(
       /not allow-listed/,
@@ -475,7 +480,11 @@ describe('execute() command allow-list', () => {
   });
 
   it('requires args to be an array of strings', async () => {
-    const p = new KindLabProvider({ k8s: new FakeKubernetes(), clusterName: 'jumptotech-labs' });
+    const p = new KindLabProvider({
+      k8s: new FakeKubernetes(),
+      clusterName: 'jumptotech-labs',
+      exec: fakeExec(),
+    });
 
     await expect(
       p.execute(CONTEXT, { command: 'kubectl', args: [42 as unknown as string] }),

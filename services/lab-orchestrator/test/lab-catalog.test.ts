@@ -128,8 +128,27 @@ async function labsDir(files: Record<string, string>): Promise<string> {
   return root;
 }
 
-/** The real catalog, loaded fresh. */
-async function realRegistry(): Promise<LabRegistry> {
+/**
+ * The real catalog.
+ *
+ * Loaded once and shared: the shipped labs do not change during a run, and the
+ * 22 call sites below were re-reading and re-parsing all 33 `lab.yaml` files
+ * every time — ~726 redundant parses per run, which is real work that made the
+ * suite needlessly slow and, on a loaded machine, timeout-sensitive.
+ *
+ * Sharing is safe because `LabRegistry` is immutable once loaded and every
+ * caller here only reads. The one test that genuinely needs two independent
+ * loads — the determinism check — calls `freshRegistry()` instead, which is the
+ * whole point of that test.
+ */
+let cachedRegistry: Promise<LabRegistry> | undefined;
+function realRegistry(): Promise<LabRegistry> {
+  cachedRegistry ??= freshRegistry();
+  return cachedRegistry;
+}
+
+/** A separate load of the same directory, for tests that compare two loads. */
+async function freshRegistry(): Promise<LabRegistry> {
   const registry = new LabRegistry(LABS_DIR);
   await registry.load();
   return registry;
@@ -169,7 +188,7 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
   });
 
   it('loads deterministically: two loads of one directory agree exactly', async () => {
-    const [a, b] = [await realRegistry(), await realRegistry()];
+    const [a, b] = [await freshRegistry(), await freshRegistry()];
 
     expect(a.all().map((l) => l.id)).toEqual(b.all().map((l) => l.id));
     expect(a.tracks()).toEqual(b.tracks());

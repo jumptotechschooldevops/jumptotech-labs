@@ -49,6 +49,7 @@ import {
   TerraformLabProvider,
   type LabSession,
 } from '@jumptotech/lab-orchestrator';
+import { ownedByThisRun, scopedName } from '@jumptotech/test-support/run-id';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 
@@ -414,7 +415,10 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     if (!enabled) return;
     const { providers } = await harness();
     const linux = providers.peek('linux')!;
-    const foreign = 'jtt-lab-ffffffffdead';
+    // Scoped to this run: a fixed name would collide with a second integration
+    // run on the same daemon, and the `finally` below would then remove the
+    // *other* run's container mid-test.
+    const foreign = scopedName('lab', 'foreign');
 
     // A container with a name that would pass the shape gate, created outside
     // the platform and therefore carrying none of its labels.
@@ -432,6 +436,12 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
       const managed = await linux.listManagedSandboxes();
       expect(managed.map((s) => s.sandboxRef)).not.toContain(foreign);
     } finally {
+      // The same gate docker-integration applies: a name without this run's id
+      // was created by someone else — another worktree, mid-test — and removing
+      // it would be the exact cross-run corruption PLATFORM-006 exists to stop.
+      if (!ownedByThisRun(foreign)) {
+        throw new Error(`refusing to remove '${foreign}': not created by this test run`);
+      }
       await exec('docker', ['rm', '--force', foreign]).catch(() => undefined);
     }
   }, 180_000);
