@@ -38,6 +38,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  CONTAINER_SANDBOX_PATTERN,
   DEFAULT_SESSION_POLICY,
   DockerCliFactory,
   DockerLabProvider,
@@ -773,7 +774,12 @@ suite('integration: real Docker daemon', () => {
 
     expect(names).toEqual(expect.arrayContaining([SANDBOX_A, SANDBOX_B]));
     for (const entry of managed) {
-      expect(entry.sandboxRef).toMatch(/^lab-[a-z0-9-]+$/);
+      // The production pattern, not a hand-written one. This asserted
+      // `/^lab-…/` — the *Kubernetes namespace* shape — against a container
+      // sandbox ref, which is `jtt-lab-…`, so it could only ever fail. Binding
+      // the test to `CONTAINER_SANDBOX_PATTERN` is what stops the two shapes
+      // drifting apart again.
+      expect(entry.sandboxRef).toMatch(CONTAINER_SANDBOX_PATTERN);
       expect(entry.expiresAtMs).toBeGreaterThan(0);
     }
     expect(managed.find((m) => m.sandboxRef === SANDBOX_A)?.sessionId).toBe(SESSION_A);
@@ -786,7 +792,7 @@ suite('integration: real Docker daemon', () => {
   }, 120_000);
 
   it('refuses to delete a container it does not own', async () => {
-    // A `lab-`-shaped container carrying none of the ownership labels.
+    // A `jtt-lab-`-shaped container carrying none of the ownership labels.
     await docker('run', '--detach', '--name', owned(DECOY), 'nginx:1.27-alpine');
 
     const result = await provider.destroySandbox(DECOY);
