@@ -237,6 +237,80 @@ export const VERIFIER_COMMANDS = [
 
 export type VerifierCommand = (typeof VERIFIER_COMMANDS)[number];
 
+/**
+ * Binaries the *verifier* may run that a lab may never name.
+ *
+ * `VERIFIER_COMMANDS` above is lab-facing: a lab picks one and supplies argv.
+ * This list is the opposite arrangement — trusted verifier code owns both the
+ * executable and the whole argv, and a lab contributes only strictly validated
+ * operands that the handler places itself.
+ *
+ * `ip` is here rather than in the list above for exactly that reason. It is not
+ * read-only as a binary: `ip neigh add`, `ip link set`, `ip route del` all
+ * mutate. Exposing it to `command_output` would hand every lab author a way to
+ * change the sandbox's networking from a YAML file. `neighbour_state` runs the
+ * single form `ip -json neigh show`, which is a read, and nothing else can ask
+ * for `ip` at all.
+ */
+export const VERIFIER_INTERNAL_COMMANDS = ['ip'] as const;
+
+export type VerifierInternalCommand = (typeof VERIFIER_INTERNAL_COMMANDS)[number];
+
+/**
+ * The states the Linux neighbour table can hold, as `ip -json neigh show`
+ * reports them.
+ *
+ * These are the kernel's NUD ("neighbour unreachability detection") states.
+ * They matter to a lab because they are not interchangeable: a resolved entry
+ * is `REACHABLE` only while the kernel has recent confirmation, and ages to
+ * `STALE` on its own without anything being wrong. A lab that demanded
+ * `REACHABLE` would therefore fail a correct student who paused; one that
+ * accepts the set `[REACHABLE, STALE]` grades what it means to grade. At the
+ * other end, `INCOMPLETE` and `FAILED` are the states of a neighbour that never
+ * answered — which is a legitimate thing for a lab to require a student to
+ * produce.
+ */
+export const NEIGHBOUR_STATES = [
+  'PERMANENT',
+  'NOARP',
+  'REACHABLE',
+  'STALE',
+  'NONE',
+  'INCOMPLETE',
+  'DELAY',
+  'PROBE',
+  'FAILED',
+] as const;
+
+export type NeighbourState = (typeof NEIGHBOUR_STATES)[number];
+
+/**
+ * An IP address a lab may ask about.
+ *
+ * Deliberately a literal address and never a hostname or a range: the operand
+ * reaches an argv, and the narrower the shape the less there is to reason
+ * about. The character sets here cannot express a shell metacharacter, a path
+ * separator, or an option.
+ */
+const ipAddress = z
+  .string()
+  .min(2)
+  .max(45)
+  .refine(
+    (value) =>
+      /^(\d{1,3}\.){3}\d{1,3}$/.test(value)
+        ? value.split('.').every((octet) => Number(octet) <= 255)
+        : /^[0-9a-fA-F:]+$/.test(value) && value.includes(':'),
+    { message: 'must be an IPv4 or IPv6 literal address' },
+  );
+
+/** A network interface name, as the kernel allows one. */
+const interfaceName = z
+  .string()
+  .min(1)
+  .max(15)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'must be a network interface name such as eth0');
+
 /** One argv element. Never concatenated into a string, never shell-expanded. */
 const commandArgument = z
   .string()
@@ -1264,6 +1338,42 @@ const sandboxRequirementSchemas = {
     })
     .strict(),
 
+  /**
+   * One entry in the kernel's neighbour table.
+   *
+   * The check a networking lab needs and no file read can answer: did this host
+   * actually resolve that neighbour, and what did the kernel conclude?
+   *
+   * Graded from `ip -json neigh show` inside the session's own sandbox — the
+   * kernel's own answer, per network namespace. It cannot be satisfied by
+   * writing a file, echoing the expected output, or editing shell history,
+   * because none of those put an entry in a neighbour table. Nor can a student
+   * forge one: `ip neigh add` needs CAP_NET_ADMIN, which no sandbox grants.
+   *
+   * `state` is a *set*, because more than one state is often correct — see
+   * `NEIGHBOUR_STATES`. `absent: true` asserts the opposite: that no entry
+   * exists at all, which is what an off-subnet destination with no route
+   * produces, and is a distinct lesson from a neighbour that failed to answer.
+   */
+  neighbour_state: z
+    .object({
+      type: z.literal('neighbour_state'),
+      address: ipAddress,
+      /** Restrict the match to one interface. Omit to match on any. */
+      device: interfaceName.optional(),
+      /** Any one of these states satisfies the check. */
+      state: z.array(z.enum(NEIGHBOUR_STATES)).min(1).max(NEIGHBOUR_STATES.length).optional(),
+      /** Whether the entry must carry a resolved hardware address. */
+      lladdr: z.enum(['present', 'absent']).optional(),
+      /** Assert that no entry for this address exists. */
+      absent: z.boolean().optional(),
+      ...common,
+    })
+    .strict()
+    .refine((r) => !(r.absent && (r.state || r.lladdr)), {
+      message: "absent: true cannot be combined with 'state' or 'lladdr'",
+    }),
+
   // --- Allow-listed inspection commands -----------------------------------
   command_exit_code: z
     .object({
@@ -1772,6 +1882,7 @@ export const REQUIREMENT_FAMILIES = {
   script_runs: 'linux',
   command_exit_code: 'linux',
   command_output: 'linux',
+  neighbour_state: 'linux',
 
   // --- Docker: one session's own daemon --------------------------------
   docker_container_exists: 'docker',

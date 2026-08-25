@@ -72,6 +72,8 @@ export {
   type ContainerInfo,
   type ContainerRuntimePort,
   type ContainerSpec,
+  type NetworkInfo,
+  type NetworkSpec,
 } from './providers/container/runtime.js';
 export {
   LinuxLabProvider,
@@ -143,3 +145,5 @@ export {
 } from './session/reaper.js';
 
 export * from './session-token.js';
+
+export { LAB_NETWORK_MODES, type LabNetworkMode } from './providers/catalog.js';

@@ -93,6 +93,8 @@ describe('schema — a lab declares its substrate', () => {
     expect(parseLabDefinition(dockerYaml()).environment).toEqual({
       provider: 'docker',
       isolation: 'container',
+      // A Docker lab asks for no lab network, and therefore gets none.
+      network: 'none',
       capabilities: [],
     });
   });

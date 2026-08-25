@@ -38,6 +38,20 @@ export const CONTAINER_SANDBOX_PREFIX = 'jtt-lab-';
 /** Exactly what a container sandbox name may look like, on both sides of the wire. */
 export const CONTAINER_SANDBOX_PATTERN = /^jtt-lab-[0-9a-f]{6,40}$/;
 
+/**
+ * The name of a session's private lab network.
+ *
+ * Derived from the session's own sandbox reference — which is itself a keyed
+ * HMAC of the session id — so a network name is trusted platform output and
+ * never a string that arrived from a browser, a lab definition or a student.
+ *
+ * The `jtt-net-` prefix is what makes deletion safe: Docker's own `bridge`,
+ * `host` and `none` networks, and anything an operator created by hand, cannot
+ * match this pattern, so the reaper and the destroy path physically cannot name
+ * them however wrong their input is.
+ */
+export const CONTAINER_NETWORK_PATTERN = /^jtt-net-[0-9a-f]{6,40}$/;
+
 /** Hex characters of entropy in a session id. 16 → 64 bits. */
 export const DEFAULT_SESSION_ID_ENTROPY_CHARS = 16;
 
@@ -269,6 +283,37 @@ export function assertValidContainerSandboxRef(input: unknown): string {
 
 export function isContainerSandboxRef(input: unknown): input is string {
   return typeof input === 'string' && CONTAINER_SANDBOX_PATTERN.test(input);
+}
+
+/**
+ * The private network name for a sandbox reference.
+ *
+ * One session, one network: the suffix is the sandbox's, so the two names rise
+ * and fall together and neither can be pointed at another session's topology.
+ */
+export function networkRefForSandbox(sandboxRef: string): string {
+  const ref = assertValidContainerSandboxRef(sandboxRef);
+  return `jtt-net-${ref.slice('jtt-lab-'.length)}`;
+}
+
+/** The sandbox reference a lab network belongs to. */
+export function sandboxRefForNetwork(networkRef: string): string {
+  const ref = assertValidContainerNetworkRef(networkRef);
+  return `jtt-lab-${ref.slice('jtt-net-'.length)}`;
+}
+
+export function assertValidContainerNetworkRef(input: unknown): string {
+  if (typeof input !== 'string') {
+    throw new InvalidSandboxRefError(String(input), 'must be a string');
+  }
+  if (!CONTAINER_NETWORK_PATTERN.test(input)) {
+    throw new InvalidSandboxRefError(input, `must match ${CONTAINER_NETWORK_PATTERN.source}`);
+  }
+  return input;
+}
+
+export function isContainerNetworkRef(input: unknown): input is string {
+  return typeof input === 'string' && CONTAINER_NETWORK_PATTERN.test(input);
 }
 
 /** Constant-time session id comparison, for anywhere ids are matched. */

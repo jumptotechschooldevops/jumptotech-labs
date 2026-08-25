@@ -345,6 +345,13 @@ setup:
     );
 
     expect(def.id).toBe('LINUX-901');
-    expect(def.environment).toEqual({ provider: 'linux', isolation: 'container', capabilities: [] });
+    // `network: 'none'` is the point of the assertion, not noise: a lab that
+    // declares no network keeps the boundary it has always had.
+    expect(def.environment).toEqual({
+      provider: 'linux',
+      isolation: 'container',
+      network: 'none',
+      capabilities: [],
+    });
   });
 });

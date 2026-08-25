@@ -30,9 +30,11 @@ import {
 } from './requirements.js';
 import {
   ISOLATION_MODES,
+  LAB_NETWORK_MODES,
   LAB_PROVIDERS,
   PROVIDER_ISOLATION,
   type IsolationMode,
+  type LabNetworkMode,
   type LabProviderId,
 } from './providers/catalog.js';
 import { dockerSetupSchema, isEmptyDockerSetup } from './docker/setup.js';
@@ -419,6 +421,15 @@ const labDefinitionSchema = z
          */
         isolation: z.enum(ISOLATION_MODES).optional(),
         /**
+         * The network this lab's sandbox needs.
+         *
+         * Absent means `none`, which is the existing behaviour for every lab
+         * that shipped before this field existed: `--network none`, no
+         * interface but loopback. A lab must opt in to `link` explicitly, and
+         * only a provider that creates a container can honour it.
+         */
+        network: z.enum(LAB_NETWORK_MODES).default('none'),
+        /**
          * Optional session capabilities beyond the base student Role.
          * `rbac_authoring` activates the create-only RBAC overlay for RBAC labs.
          */
@@ -493,6 +504,7 @@ export type LabDefinition = Omit<z.infer<typeof labDefinitionSchema>, 'environme
   environment: {
     provider: LabProviderId;
     isolation: IsolationMode;
+    network: LabNetworkMode;
     capabilities: (typeof LAB_CAPABILITIES)[number][];
   };
 };
@@ -615,6 +627,15 @@ function checkProviderCapabilities(def: LabDefinition, issues: string[]): void {
       `setup.files are seeded into a sandbox filesystem, which the '${provider}' provider does not have`,
     );
   }
+  // A lab network is a container on a private bridge. A provider that creates
+  // no container cannot be given one, and saying so here turns a silently
+  // ignored field into a precise authoring error.
+  if (def.environment.network === 'link' && PROVIDER_ISOLATION[provider] !== 'container') {
+    issues.push(
+      `environment.network 'link' needs a sandbox container, which the '${provider}' provider does not create`,
+    );
+  }
+
   if (def.setup.seed_scripts.length > 0 && PROVIDER_ISOLATION[provider] !== 'container') {
     issues.push(
       `setup.seed_scripts run inside a sandbox container, which the '${provider}' provider does not create`,
@@ -708,6 +729,7 @@ export function parseLabDefinition(yamlText: string, sourcePath = '<inline>'): L
     environment: {
       provider: providerId,
       isolation: declaredIsolation ?? providerIsolation,
+      network: result.data.environment.network,
       capabilities: result.data.environment.capabilities,
     },
   };

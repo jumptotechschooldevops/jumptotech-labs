@@ -175,6 +175,7 @@ import {
   terraformOutputEquals,
   terraformResourceExists,
 } from './handlers/terraform.js';
+import { neighbourState } from './handlers/neighbours.js';
 import {
   commandExitCode,
   commandOutput,
@@ -365,6 +366,7 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   user_in_group: userInGroup,
   command_exit_code: commandExitCode,
   command_output: commandOutput,
+  neighbour_state: neighbourState,
 };
 
 /**

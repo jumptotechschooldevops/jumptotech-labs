@@ -39,6 +39,24 @@ export const ISOLATION_MODES = ['namespace', 'container', 'none'] as const;
 export type IsolationMode = (typeof ISOLATION_MODES)[number];
 
 /**
+ * The network a lab may ask its sandbox for.
+ *
+ * Deliberately two values, not a Docker network description. `none` is the
+ * default and the historical behaviour: the sandbox is created with
+ * `--network none` and has no interface but loopback. `link` gives that session
+ * — and only that session — a private bridge with no route off itself, so a
+ * networking lab has a link, an address and a neighbour to resolve.
+ *
+ * What is *not* here is the point. There is no `host`, no `bridge`, no shared
+ * network and no way to name one: a lab cannot ask for host networking because
+ * the vocabulary cannot express it, and a value outside this list fails schema
+ * validation before it reaches a provider.
+ */
+export const LAB_NETWORK_MODES = ['none', 'link'] as const;
+
+export type LabNetworkMode = (typeof LAB_NETWORK_MODES)[number];
+
+/**
  * The isolation a provider actually implements.
  *
  * A lab may omit `environment.isolation`; the loader fills in the provider's
