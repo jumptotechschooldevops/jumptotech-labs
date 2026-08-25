@@ -1,0 +1,349 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-026 — The local backend, and what "where state lives" actually means.
+#
+# Official objectives this lab practises:
+#   Terraform Associate (004)
+#   6a — "Describe default local backend"                    (domain 6)
+#   6c — "Handle backend and cloud integration authentication
+#         methods" / local state behaviour                   (domain 6)
+#
+# Official sources, read on 2026-08-25:
+#   · Backend configuration — "Terraform uses persisted state data to keep
+#     track of the resources it manages"; a `backend` block "must be in the
+#     top-level terraform block"; "when you change a backend's configuration,
+#     you must run terraform init again ... Terraform will give you the option
+#     to migrate your state to the new backend."
+#   · Local backend — "stores state on the local filesystem"; the `path`
+#     argument is "the path to the tfstate file. This defaults to
+#     terraform.tfstate relative to the root module."
+#   · Purpose of Terraform state — state is "a mapping between the resources
+#     in your configuration and the objects in the real world", and it is
+#     "the only way Terraform can know which real-world object corresponds to
+#     which resource in your configuration".
+#   · State — "State is a necessary requirement for Terraform to function."
+#
+# ## What this lab is not
+#
+# It is not a remote-backend lab. Remote state, locking, and the object-store
+# backends belong to the labs written for them. What is taught here is the one
+# thing every Terraform user meets on their first day and rarely looks at
+# again: state is a *file*, the backend decides *where that file is*, and the
+# two are not the same thing as the configuration.
+#
+# ## What makes this lab hard to fake
+#
+# The seeded state holds a `random_pet` — a value Terraform generated once and
+# can never work out again. It exists nowhere but in state. So:
+#
+#   · copying `terraform.tfstate` to the new path by hand produces state at
+#     the right place, but no initialised backend and no post-migration apply;
+#   · initialising the backend and answering "no" to the migration prompt
+#     produces a correct backend and a correct-looking state — with a *new*
+#     deployment identifier, because the old one was lost. Verified against
+#     the CLI this sandbox ships: answering "no" regenerates it.
+#
+# Only a real migration keeps the identifier that was already there, and only
+# a real apply against the relocated state puts the new resource into it.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-026
+slug: tf-026-local-backend
+title: The Local Backend
+track: terraform
+topic: backends
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 24
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-004
+
+story: >
+  The platform team keeps one Terraform workspace under version control, and
+  every so often somebody commits `terraform.tfstate` along with their changes.
+  It has caused two bad afternoons already. The agreed fix is small and
+  specific: state moves to a `state/` directory of its own, which is easy to
+  exclude and easy to back up, and everyone can stop pretending they will
+  remember not to add it.
+
+  There is a catch, and it is the reason this is being done carefully rather
+  than with `mv`. This workspace has been applied before. Somewhere in that
+  state file is the deployment identifier the platform has carried since the
+  first apply. Nobody has typed it anywhere, because nobody chose it:
+  Terraform generated it once and wrote it down. There is no copy of it in the configuration, and no way to derive it
+  again. If the move loses the state, the identifier goes with it, and every
+  dashboard and log stream that refers to it starts pointing at nothing.
+
+  So: move the state, and bring the state with it.
+
+objectives:
+  - Explain what Terraform state is, and why Terraform cannot work without it
+  - Recognise the default local backend and where it puts the state file
+  - Configure the local backend to keep state somewhere else
+  - Migrate existing state to a new location without losing what it holds
+  - Tell configuration, backend, and state file apart
+
+task:
+  summary: >
+    Move this workspace's state into `state/platform.tfstate` using the local
+    backend, keeping the state it already holds, then apply a change and see
+    it land in the new file.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf`, a
+    `main.tf` declaring `random_pet.deployment_id` and `local_file.inventory`,
+    and — unusually for these labs — a `terraform.tfstate` that is already
+    there. This workspace has been applied before. Work in that directory.
+
+    Start by reading what you were given. Open `terraform.tfstate` and find the
+    deployment identifier inside it. Nothing in `main.tf` says what that name
+    is; the configuration asks for *a* pet name, and state records *which one*
+    Terraform generated. That gap is what state is for, and it is why losing a
+    state file is not the same as losing a text file.
+
+    Note also that nothing in `versions.tf` says where that state file should
+    be. There is no `backend` block at all — Terraform is using the default
+    local backend, which writes `terraform.tfstate` next to your configuration.
+    A default is still a backend.
+
+    **First, change where state lives.** Add a `backend "local"` block to the
+    `terraform` block in `versions.tf`, with its `path` set to
+    `state/platform.tfstate`. A backend block goes in the top-level `terraform`
+    block, alongside `required_providers` — not inside a resource, and not at
+    the top of the file on its own.
+
+    **Then re-initialise, and bring the state with you.** Changing a backend
+    takes effect at `terraform init`, not at apply. Because there is already
+    state at the old location, Terraform will notice and ask whether you want
+    to copy it to the new backend. Answer that question the way the story
+    demands. Answering it wrong is not a syntax error and Terraform will not
+    warn you again — you will simply have an empty state, and the next apply
+    will generate a brand new deployment identifier as if none had ever
+    existed.
+
+    **Then look at what the migration left behind.** `terraform.tfstate` is
+    still in the directory, and it is now empty; the contents it used to have
+    are in `terraform.tfstate.backup`. Leave both where they are. Seeing that
+    Terraform empties the old file rather than deleting it — and keeps a backup
+    of it — is part of what this lab is showing you, and the checks look at
+    them.
+
+    **Finally, prove the relocated state is the live one.** Add a resource:
+
+      - `local_file.state_report`, writing `out/state-report.txt`, whose
+        content is exactly one line —
+
+            deployment: <the deployment identifier>
+
+        — with the identifier taken from `random_pet.deployment_id`'s `id`
+        attribute, not typed out by hand. A trailing newline is fine; nothing
+        else in the file is.
+
+    Apply. If the migration went the way it should, Terraform adds one resource
+    and changes nothing else — the pet is already in state, so it is not
+    generated again — and the identifier written into your report is the same
+    one that was in the state file you were given. If your report shows a
+    different name, the state did not survive the move, and that is the whole
+    lesson of this lab arriving the hard way.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+    # This workspace has already been applied. The state and the file it
+    # manages are seeded together, so the first plan is clean and the only
+    # thing standing between the student and a correct apply is the move.
+    - source: setup/terraform.tfstate
+      path: terraform/terraform.tfstate
+      mode: '644'
+    - source: setup/inventory.txt
+      path: terraform/out/inventory.txt
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The platform configuration is in place
+    - type: file_exists
+      path: terraform/terraform.tfstate
+      label: The workspace's existing state is in place
+    - type: file_exists
+      path: terraform/out/inventory.txt
+      label: The file that state already manages is in place
+
+# Every check reads something Terraform itself wrote: its own record of the
+# initialised backend, the state document at the relocated path, and the file
+# the applied configuration produced. None of them is satisfied by a note, a
+# transcript, or a file the student created to be found.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  # `.terraform/terraform.tfstate` is not the workspace's state — it is the
+  # record `init` writes of *which backend was initialised here*. The default
+  # local backend writes no such file, so its presence and contents are proof
+  # that a backend block was configured and initialised, and not merely typed.
+  - type: file_content
+    path: terraform/.terraform/terraform.tfstate
+    contains: '"type": "local"'
+    label: Terraform has initialised a local backend for this workspace
+
+  - type: file_content
+    path: terraform/.terraform/terraform.tfstate
+    contains: state/platform.tfstate
+    label: The initialised backend keeps state at the required path
+
+  # The relocated state is real state, holding what the old state held.
+  - type: terraform_resource_exists
+    dir: terraform/state
+    state_file: platform.tfstate
+    resource_type: random_pet
+    name: deployment_id
+    label: The deployment identifier is in the relocated state
+
+  # Not merely "a random_pet is in state" — *the* one. A move that lost the
+  # state produces a perfectly valid `random_pet.deployment_id` holding a
+  # newly generated name, and that is precisely the failure this lab exists to
+  # catch. The pet's `id` is the only place this string can occur as a value;
+  # the identifier is generated by nothing else in the workspace.
+  - type: file_content
+    path: terraform/state/platform.tfstate
+    contains: '"id": "romantic-eagle"'
+    label: The relocated state still records the identifier the workspace already had
+
+  - type: terraform_resource_exists
+    dir: terraform/state
+    state_file: platform.tfstate
+    resource_type: local_file
+    name: inventory
+    label: The inventory resource came across with it
+
+  # Applied *after* the move, so it can only be here if Terraform is genuinely
+  # reading and writing the relocated file. A hand-copied state has the two
+  # resources above and not this one.
+  - type: terraform_resource_exists
+    dir: terraform/state
+    state_file: platform.tfstate
+    resource_type: local_file
+    name: state_report
+    label: The new resource was applied into the relocated state
+
+  # A migration empties the old file; copying to the new path leaves the old
+  # one intact, still naming everything it managed. This is what separates the
+  # two. The check reads the *deployment identifier*, which appears in the
+  # seeded state exactly once and is generated by nothing else.
+  - type: file_content_absent
+    path: terraform/terraform.tfstate
+    contains: romantic-eagle
+    label: The old default-path state no longer holds the platform's state
+
+  - type: file_exists
+    path: terraform/out/state-report.txt
+    label: The state report was written
+
+  # The pair that closes the lab. The identifier in the report must be the one
+  # that was already in state — a lost migration regenerates it — *and* it must
+  # have come from the resource attribute rather than been typed, so a student
+  # who reads the old name out of the backup and pastes it in fails here.
+  - type: file_content
+    path: terraform/out/state-report.txt
+    equals: 'deployment: romantic-eagle'
+    label: The report carries the deployment identifier the workspace already had
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: state_report
+    attribute: content
+    references: random_pet.deployment_id
+    label: The report takes the identifier from state, not from a typed-in name
+
+hints:
+  - level: 1
+    text: >
+      Two things decide where state lives: the backend, and its configuration.
+      Look up the `backend` block — where it goes, and what the local backend's
+      one interesting argument is called.
+
+      Changing it is not enough on its own. Backends are wired up by `init`,
+      so a backend you have written but not initialised is not in use yet.
+  - level: 2
+    text: >
+      When you re-initialise with a new backend and there is already state at
+      the old one, Terraform stops and asks you a yes/no question about copying
+      it. Read that question rather than reflexively agreeing — but in this lab
+      the answer the story wants is the one that keeps what you have.
+
+      For the report: `random_pet.deployment_id` has an `id` attribute holding
+      the generated name. Interpolate that attribute. If you type the name in
+      as text it will look right and still be wrong, because the report would
+      no longer be reading from state at all.
+  - level: 3
+    text: >
+      In `versions.tf`, inside the `terraform` block:
+
+          backend "local" {
+            path = "state/platform.tfstate"
+          }
+
+      Then `terraform init`, and answer `yes` when it asks whether to copy the
+      existing state to the new backend. Terraform creates `state/` for you.
+
+      Look at what happened: `state/platform.tfstate` now holds the state,
+      `terraform.tfstate` is zero bytes, and `terraform.tfstate.backup` has the
+      old contents. Leave those two alone.
+
+      Then add to `main.tf`:
+
+          resource "local_file" "state_report" {
+            filename = "out/state-report.txt"
+            content  = "deployment: ${random_pet.deployment_id.id}\n"
+          }
+
+      Nothing else goes in that file — the line is checked as a whole, so an
+      extra heading or a second line will fail it.
+
+      and `terraform apply`. It should report one resource to add and nothing
+      to change.
+
+references:
+  - title: Terraform — Backend configuration
+    url: https://developer.hashicorp.com/terraform/language/backend
+  - title: Terraform — Local backend
+    url: https://developer.hashicorp.com/terraform/language/backend/local
+  - title: Terraform — State
+    url: https://developer.hashicorp.com/terraform/language/state
+  - title: Terraform — Purpose of Terraform state
+    url: https://developer.hashicorp.com/terraform/language/state/purpose
+  - title: 'Terraform — Command: init'
+    url: https://developer.hashicorp.com/terraform/cli/commands/init
+
+skills:
+  - terraform.state.purpose
+  - terraform.backend.local
+  - terraform.backend.migrate
+  - terraform.workflow.init
+
+# Objectives 6a and 6c of the Terraform Associate (004) exam content list. The
+# schema on this branch carries domains but not objective ids; the objectives
+# are recorded in the header comment above.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '6'
