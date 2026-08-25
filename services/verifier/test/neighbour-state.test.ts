@@ -19,7 +19,11 @@
  * rows below are copied from that run rather than invented.
  */
 import { describe, expect, it } from 'vitest';
-import { parseLabDefinition, type LoadedLabDefinition } from '@jumptotech/lab-orchestrator';
+import {
+  LabDefinitionError,
+  parseLabDefinition,
+  type LoadedLabDefinition,
+} from '@jumptotech/lab-orchestrator';
 import { verifyLab } from '../src/index.js';
 import { FakeSandbox } from './sandbox-fake.js';
 
@@ -358,5 +362,88 @@ describe('a previous pass cannot survive the state going away', () => {
 
     expect(after.passed).toBe(false);
     expect(after.summary).toBe('LAB NOT COMPLETE');
+  });
+});
+
+// -------------------------------- 12. a link a lab author cannot name upfront
+
+describe('a neighbour whose address the lab cannot know', () => {
+  const ANY_RESOLVED = `  - type: neighbour_state
+    device: eth0
+    state: [REACHABLE, STALE, DELAY, PROBE]
+    lladdr: present
+    label: A neighbour on this link was resolved
+`;
+  const ANY_UNRESOLVED = `  - type: neighbour_state
+    device: eth0
+    state: [INCOMPLETE, FAILED]
+    lladdr: absent
+    label: A neighbour on this link never answered
+`;
+
+  it('passes when some neighbour on the link is resolved', async () => {
+    const result = await verifyLab({
+      lab: labWith(ANY_RESOLVED),
+      sandbox: sandbox(RESOLVED_AND_FAILED),
+      namespace: NS,
+    });
+
+    expect(failures(result.checks)).toEqual([]);
+  });
+
+  it('is not satisfied by an unresolved entry alone', async () => {
+    const onlyFailed = JSON.stringify([{ dst: '10.90.0.77', dev: 'eth0', state: ['FAILED'] }]);
+    const result = await verifyLab({
+      lab: labWith(ANY_RESOLVED),
+      sandbox: sandbox(onlyFailed),
+      namespace: NS,
+    });
+
+    expect(failures(result.checks)).toHaveLength(1);
+  });
+
+  it('is not satisfied by a resolved entry when an unresolved one is required', async () => {
+    const onlyResolved = JSON.stringify([
+      { dst: '10.90.0.1', dev: 'eth0', lladdr: 'b6:1c:12:75:5f:cf', state: ['REACHABLE'] },
+    ]);
+    const result = await verifyLab({
+      lab: labWith(ANY_UNRESOLVED),
+      sandbox: sandbox(onlyResolved),
+      namespace: NS,
+    });
+
+    expect(failures(result.checks)).toHaveLength(1);
+  });
+
+  it('ignores entries on another interface', async () => {
+    const elsewhere = JSON.stringify([
+      { dst: '10.90.0.1', dev: 'eth9', lladdr: 'b6:1c:12:75:5f:cf', state: ['REACHABLE'] },
+    ]);
+    const result = await verifyLab({
+      lab: labWith(ANY_RESOLVED),
+      sandbox: sandbox(elsewhere),
+      namespace: NS,
+    });
+
+    expect(failures(result.checks)).toHaveLength(1);
+  });
+
+  it('refuses a check that names neither an address nor a device', () => {
+    expect(() =>
+      labWith(`  - type: neighbour_state
+    state: [REACHABLE]
+    label: matches anything
+`),
+    ).toThrow(LabDefinitionError);
+  });
+
+  it('refuses an absence check with nothing to be absent', () => {
+    expect(() =>
+      labWith(`  - type: neighbour_state
+    device: eth0
+    absent: true
+    label: nothing here
+`),
+    ).toThrow(LabDefinitionError);
   });
 });

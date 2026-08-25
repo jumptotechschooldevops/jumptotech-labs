@@ -22,9 +22,11 @@ import type { SandboxVerifierHandler } from '../contract.js';
 import { fail, pass } from '../contract.js';
 import type { NeighbourEntry } from '../sandbox-reader.js';
 
-/** `10.90.0.1 on eth0` / `10.90.0.1`, for messages. */
-function describeTarget(address: string, device?: string): string {
-  return device ? `${address} on ${device}` : address;
+/** `10.90.0.1 on eth0` / `a neighbour on eth0`, for messages. */
+function describeTarget(address: string | undefined, device: string | undefined): string {
+  if (address && device) return `${address} on ${device}`;
+  if (address) return address;
+  return `a neighbour on ${device}`;
 }
 
 /** How the kernel currently describes one entry. */
@@ -45,7 +47,7 @@ export const neighbourState: SandboxVerifierHandler<'neighbour_state'> = {
     const entries = await reader.neighbours();
     const matches = entries.filter(
       (entry) =>
-        entry.dst === requirement.address &&
+        (requirement.address === undefined || entry.dst === requirement.address) &&
         (requirement.device === undefined || entry.dev === requirement.device),
     );
 
@@ -75,6 +77,8 @@ export const neighbourState: SandboxVerifierHandler<'neighbour_state'> = {
 
     if (satisfied) return pass();
 
+    // Report only what was asked about. The rest of a student's neighbour
+    // table is not the lab's business and is never echoed back.
     const observed = matches.map(describeEntry).join('; ');
     if (requirement.state && requirement.lladdr) {
       return fail(

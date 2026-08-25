@@ -1358,7 +1358,15 @@ const sandboxRequirementSchemas = {
   neighbour_state: z
     .object({
       type: z.literal('neighbour_state'),
-      address: ipAddress,
+      /**
+       * The neighbour to look for. Optional, because the address often cannot
+       * be known when the lab is written: a session's bridge is allocated by
+       * the daemon, so its gateway is not a constant a lab author could name.
+       * Omitting it asks about *any* neighbour on the named interface, which is
+       * how a lab grades "this host resolved a neighbour on its link" without
+       * pretending to know which one.
+       */
+      address: ipAddress.optional(),
       /** Restrict the match to one interface. Omit to match on any. */
       device: interfaceName.optional(),
       /** Any one of these states satisfies the check. */
@@ -1372,6 +1380,12 @@ const sandboxRequirementSchemas = {
     .strict()
     .refine((r) => !(r.absent && (r.state || r.lladdr)), {
       message: "absent: true cannot be combined with 'state' or 'lladdr'",
+    })
+    .refine((r) => r.address !== undefined || r.device !== undefined, {
+      message: "needs an 'address', a 'device', or both — an unqualified check would match anything",
+    })
+    .refine((r) => !r.absent || r.address !== undefined, {
+      message: "absent: true needs the 'address' it is asserting the absence of",
     }),
 
   // --- Allow-listed inspection commands -----------------------------------
