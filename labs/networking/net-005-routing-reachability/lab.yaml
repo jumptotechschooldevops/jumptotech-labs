@@ -1,0 +1,203 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Network scope. Runs on this session's own private segment
+# (`environment.network: link`): an internal bridge with no route off it,
+# shared with nothing. Nothing is published and no external address is reached.
+#
+# ## Why the repair is in the application, not the routing table
+#
+# The sandbox does not grant CAP_NET_ADMIN, so a student cannot add, change or
+# delete a route — not even through sudo, because the capability is absent from
+# the bounding set entirely. That is deliberate and it shapes this lab: routing
+# is what the student *diagnoses*, and the fault is planted where it can
+# honestly be repaired, in the application's configuration. Telling a routing
+# diagnosis apart from a routing change is itself one of the objectives.
+#
+# ## Why the fixture cannot pass its own lab
+#
+# The seeded endpoint is on a network no route covers, so every poll fails at
+# the routing decision — before address resolution is ever attempted. The
+# baseline, every restart of it, and every reset back to it therefore leave the
+# neighbour table with nothing resolved on this segment. The state this lab
+# grades can only be produced by pointing the poller somewhere it can actually
+# reach, which is the student's work.
+#
+# Content is written from RFC 1812 (route selection), RFC 826 (ARP, STD 37),
+# RFC 1122, and the iproute2 man pages. Scenario, configuration, service and
+# task wording are original JumpToTech content.
+#
+# Classification: PRODUCTION SKILL (this is the shape of a real reachability
+# incident) and FOUNDATIONAL KNOWLEDGE (route selection, connected prefixes).
+# No certification objective is claimed.
+# ---------------------------------------------------------------------------
+id: NET-005
+slug: net-005-routing-reachability
+title: Routing and Reachability — Why One Destination Works and Another Does Not
+track: networking
+topic: routing
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 5
+
+environment:
+  provider: linux
+  network: link
+
+prerequisites:
+  - NET-004
+
+story: >
+  The ledger's settlement poller has not reconciled a batch since the
+  migration. It has been restarted twice, and the escalation says the network
+  is down.
+
+  The network is not down. The API on this host is healthy and answering. One
+  destination the poller is configured to talk to cannot be reached from here,
+  and the poller has been writing the reason into its own log every few seconds
+  the whole time.
+
+objectives:
+  - Read a host's own address, prefix and routing table and say what it can deliver to
+  - Decide whether a given destination falls inside a connected route or outside every route
+  - Tell a destination that is unroutable apart from a service that is down
+  - Establish what is actually alive on a segment rather than assuming it
+  - Separate diagnosing routing from changing routing, and repair at the layer the fault was introduced
+
+task:
+  summary: Work out why the settlement poller cannot reach its endpoint, and repair it at the layer the fault was introduced.
+  description: >
+    Your working directory is `/home/student/routing`. Read `brief.txt` first —
+    it names the services and the files, and it states what the question
+    actually is.
+
+    Nothing here tells you the answer. Your own addressing does: read what
+    address and prefix this host has, what its routing table can deliver to,
+    and which destinations therefore fall outside every route it holds. The
+    poller's own log records the outcome of each attempt, which is worth
+    reading before and after you change anything.
+
+    The endpoint the poller should be using is on this host's own segment, and
+    it is not this host itself. Find it from your own prefix, and confirm it
+    responds before you trust it — an address you have not probed is an
+    assumption. Then correct
+    `/etc/ledger/settlement.conf` so the poller points somewhere this host can
+    actually reach, and leave it running. The poller re-reads its configuration
+    each cycle, so no restart is required.
+
+    You cannot change this machine's routing table: the sandbox does not grant
+    the privilege, and that is the point. Routing is what you are diagnosing.
+    The fault was introduced in the application's configuration, and that is
+    where it is repaired.
+
+setup:
+  files:
+    - source: setup/brief.txt
+      path: routing/brief.txt
+      mode: "0644"
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: directory_exists
+      path: /home/student/routing
+      label: The working directory exists
+    - type: port_listening
+      port: 9120
+      label: The ledger API is healthy
+    # The fault is present, and the baseline is genuinely broken.
+    - type: file_content
+      path: /etc/ledger/settlement.conf
+      contains: "10.80.4.10"
+      label: The misconfigured endpoint is in place
+    - type: file_content
+      path: /proc/net/dev
+      contains: "eth0"
+      label: This session's private segment is attached
+
+requirements:
+  # --- the destination this host cannot reach is gone ----------------------
+  - type: file_content_absent
+    path: /etc/ledger/settlement.conf
+    contains: "10.80.4.10"
+    label: The unreachable destination is no longer configured
+
+  # --- the poller reached something, and had to resolve it to do so --------
+  #
+  # `status` separates a destination the routing table can deliver to from one
+  # it cannot. `neighbour` separates a real host elsewhere on the segment from
+  # this host's own address, because traffic to yourself is delivered locally
+  # and resolves nothing. Both together are only true of a correct answer, and
+  # the line is written by the poller reading the student's own configuration.
+  - type: file_content
+    path: /var/log/jumptotech/settlement.log
+    contains: "status=routable neighbour=resolved"
+    label: The poller reached a destination that required resolving a neighbour
+
+  # --- and the kernel agrees, independently of any log ---------------------
+  #
+  # Un-forgeable: an entry exists because traffic was sent and an answer came
+  # back. Writing one by hand needs CAP_NET_ADMIN, which this sandbox does not
+  # grant even through sudo.
+  - type: neighbour_state
+    device: eth0
+    state: [REACHABLE, STALE, DELAY, PROBE]
+    lladdr: present
+    label: A neighbour on this segment was really resolved
+
+  # --- nothing was broken along the way ------------------------------------
+  - type: port_listening
+    port: 9120
+    label: The ledger API is still healthy
+
+hints:
+  - level: 1
+    text: >
+      "The network is down" is a conclusion, not an observation. Start from what
+      this host can prove about itself: the address it holds, the prefix that
+      address sits in, and what its routing table says it can deliver to. A
+      destination either falls inside something the host has a route for, or it
+      does not, and that decision is made before a single frame is built.
+  - level: 2
+    text: >
+      `man ip-address` and `man ip-route` cover reading the two facts you need;
+      RFC 1812 describes how a router picks between routes that both match, and
+      the same rule decides whether *any* route matches at all. The poller
+      writes what it observed each cycle — compare what it says about the
+      configured destination with what your routing table says about the same
+      address. `man ip-neighbour` covers how you confirm something on your own
+      segment is actually there rather than assumed.
+  - level: 3
+    text: >
+      `ip -brief addr show` gives you the address and prefix; `ip route show`
+      gives you exactly one connected route and no default, which is why
+      anything outside that prefix has nowhere to go. Work out the first usable
+      address of your own prefix — the arithmetic is NET-002's — and probe it
+      before you trust it; `nc -w2 -v <address> <port>` is enough to make the
+      kernel resolve it, and `ip neigh show` will tell you whether it answered.
+      Then edit the `settlement_endpoint` line in
+      `/etc/ledger/settlement.conf` and watch the log pick it up.
+
+references:
+  - title: RFC 1812 — Requirements for IP Version 4 Routers, section 5.2.4 (route selection)
+    url: https://www.rfc-editor.org/info/rfc1812
+  - title: RFC 826 — An Ethernet Address Resolution Protocol, STD 37
+    url: https://www.rfc-editor.org/info/rfc826
+  - title: RFC 1122 — Requirements for Internet Hosts
+    url: https://www.rfc-editor.org/rfc/rfc1122.html
+  - title: ip-route(8) — iproute2 manual page
+    url: https://man7.org/linux/man-pages/man8/ip-route.8.html
+  - title: ip-address(8) — iproute2 manual page
+    url: https://man7.org/linux/man-pages/man8/ip-address.8.html
+  - title: ip-neighbour(8) — iproute2 manual page
+    url: https://man7.org/linux/man-pages/man8/ip-neighbour.8.html
+
+skills:
+  - net.l3.routing
+  - net.l3.connected-route
+  - net.l3.route-selection
+  - net.troubleshoot.reachability
+  - net.troubleshoot.config-vs-routing
+  - net.l2.arp
+
+certification: []

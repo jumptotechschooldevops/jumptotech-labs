@@ -135,9 +135,10 @@ describe('labs that never asked for a network are untouched', () => {
       .filter((lab) => lab.environment.network !== 'none')
       .map((lab) => `${lab.id}:${lab.environment.network}`);
 
-    // NET-004 is the only lab in the catalog that may appear here. Every other
-    // track's boundary is unchanged by this capability.
-    for (const entry of declared) expect(entry).toMatch(/^NET-004:link$/);
+    // Only the Networking track may appear here, and only ever asking for
+    // `link`. Every other track's boundary is unchanged by this capability,
+    // and no lab anywhere can obtain a mode outside the vocabulary.
+    for (const entry of declared) expect(entry).toMatch(/^NET-\d{3}:link$/);
   });
 
   it('creates a Linux lab on --network none and touches no network at all', async () => {

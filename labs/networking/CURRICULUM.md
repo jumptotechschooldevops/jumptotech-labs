@@ -295,6 +295,20 @@ must find rather than a task they must perform.
 - **Supported today?** No (C1). Verification of `routes.txt` works via
   `file_content` today; grading `ip route` directly would need capability **N7**.
 - **New capability** N1, N2.
+- **Implemented 2026-08-25, deliberately re-scoped.** The design above assumed
+  the student could repair a route. They cannot, and this is not a gap to close
+  casually: `CAP_NET_ADMIN` is absent from the sandbox's *bounding set*, so
+  `ip route add` fails even under `sudo` (`sudo` itself works — the student is
+  genuinely root). Rather than grant the capability, NET-005 ships as
+  **Routing and Reachability Troubleshooting**: a settlement poller is
+  configured with an endpoint on a network no route covers, and the student
+  diagnoses via routing state and repairs at the layer the fault was introduced
+  — the application's configuration. Routing is diagnosed, never modified, and
+  telling those apart is one of the objectives. Graded on
+  `neighbour_state` + `file_content_absent` + `file_content` + `port_listening`;
+  no `route_exists` primitive was needed or added. The fixture provably cannot
+  self-pass: its own endpoint has no route, so it never reaches address
+  resolution and never leaves a resolved neighbour behind.
 
 ---
 
