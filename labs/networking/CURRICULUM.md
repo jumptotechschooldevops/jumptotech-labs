@@ -255,6 +255,19 @@ must find rather than a task they must perform.
 - **New capability** N1, N2, N3, **N4 (`NET_RAW`/`NET_ADMIN` grantable for the
   net provider only)**. Docker-substrate fallback works today with a pre-pulled
   tooling image and weaker verification.
+- **Implemented 2026-08-24, and the capability estimate above was wrong twice
+  over.** `NET_RAW` (N4) turned out to be unnecessary: `ip neigh` reads the
+  kernel's neighbour table with no capability at all, and grading that table is
+  *stronger* than grading a packet capture because a student cannot write to it
+  — `ip neigh add` needs `CAP_NET_ADMIN`, which no sandbox grants. A peer
+  container (N3) was unnecessary too: a session's own bridge gateway is a real
+  neighbour, and a same-prefix address with nothing behind it produces a real
+  `FAILED` entry, so one container yields all three outcomes. What was needed
+  was an opt-in `environment.network: link` giving each session a private
+  `--internal` bridge, plus the `neighbour_state` primitive. The lab grades
+  three kernel-observed outcomes — resolved, unanswered, and no entry at all
+  for a destination with no route — and never a literal address, because the
+  segment is allocated at start time.
 
 ---
 

@@ -1,0 +1,16 @@
+JumpToTech Bank — link-layer review
+Fill in the value after each "= ". Do not change the labels.
+Answer each line once: a line listing several values is wrong even if the
+right one is among them.
+
+When a host needs a neighbour's hardware address and does not have it yet,
+who is that request addressed to?
+Allowed values: broadcast  unicast  multicast
+
+  arp_request_destination = 
+
+When a host sends to an address that is NOT on its own segment, whose
+hardware address goes in the frame that leaves the interface?
+Allowed values: the destination itself  the gateway
+
+  off_subnet_frame_goes_to = 
