@@ -1118,3 +1118,96 @@ recording that evidence.
 **Runtime dependency:** Python 3.11 standard library only. **No PyYAML**, and
 none requested — the YAML half is reading and repairing YAML by hand, which is
 the skill, and is why the seeded file is graded as text.
+
+### CS-011 — Process Lifecycle: Fork, Exec, Zombies and PID 1
+
+```text
+LAB ID:              CS-011
+TITLE:               Process Lifecycle: Fork, Exec, Zombies and PID 1
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Describe how a process is created and what fork returns to each of the two
+  processes that come back from it; explain what a zombie is, why SIGKILL does
+  not remove one, and what does; read a process's state and parent from /proc;
+  decode a wait status and say why it is not the exit code; and explain what
+  PID 1 inherits and why an entrypoint that never waits runs out of processes.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  Why a container ignores `docker stop`, why zombies accumulate behind a
+  shell-script entrypoint, why `tini` and `--init` exist, and why
+  "the process is <defunct>" is not fixed by killing it. It is also where
+  128+signal comes from.
+
+OFFICIAL / PRIMARY SOURCES:
+  fork(2)                                  https://man7.org/linux/man-pages/man2/fork.2.html
+  execve(2)                                https://man7.org/linux/man-pages/man2/execve.2.html
+  wait(2) — the status macros              https://man7.org/linux/man-pages/man2/wait.2.html
+  proc(5) — /proc/[pid]/stat and states    https://man7.org/linux/man-pages/man5/proc.5.html
+  signal(7)                                https://man7.org/linux/man-pages/man7/signal.7.html
+  Python — os process management           https://docs.python.org/3/library/os.html
+
+LAST VERIFIED:       2026-08-25   (all six fetched, HTTP 200)
+```
+
+**No wall-clock grading — a deliberate departure from the plan.** The
+curriculum plan proposed catching "never reaps" with a short `timeout_seconds`,
+so a program that does not wait fails by hanging. That grades the machine as
+much as the student, and this repository has already seen container reads go
+slow under contention. It was replaced with an outcome grade:
+
+| reported | what it proves | how it is obtained |
+|---|---|---|
+| `CHILD_STATE=Z` | the child was dead and uncollected when they looked | field 3 of `/proc/<child>/stat` |
+| `RAW=<n>` | `waitpid` was actually called | the raw status it returned |
+| `CHILD_GONE=yes` | collecting it removed the entry | `/proc/<child>` is gone |
+
+Confirmed on the real platform: a program that forks and walks away **exits 0
+promptly** and fails on the three lines it cannot print. No timer is involved
+in the verdict; the 30-second ceiling is a runaway guard, and a test asserts
+that no requirement distinguishes a fast run from a slow one.
+
+**The raw wait status is the discriminator.** The exit code is handed to the
+program at run time and the raw status is that code shifted left by eight.
+Measured in the real image rather than assumed:
+
+| exit code | raw wait status | `code << 8` |
+|---|---|---|
+| 7 | 1792 | 1792 |
+| 3 | 768 | 768 |
+| 0 | 0 | 0 |
+
+Three runs with three codes means a fixed answer fails two of them, and four
+`file_content_absent` checks bar `RAW=1792`, `RAW=768`, `STATUS=7` and
+`CHILD_STATE=Z` from the source. A correct program contains none of them — it
+prints `RAW={status}`, `STATUS={code}` and `CHILD_STATE={seen}`. A shell script
+that types out the whole table behaves perfectly on all three runs and reaches
+8 of 12; verified against real Docker.
+
+It is also the lesson: a wait status is not an exit code, which is why
+`os.waitstatus_to_exitcode` exists and why a killed process shows up as
+128 plus its signal number.
+
+**Invariants, verified live, and one thing deliberately not graded.** All three
+write-up values were confirmed inside the real session container:
+
+| recorded | observed |
+|---|---|
+| `ZOMBIE_STATE=Z` | a dead, uncollected child reads `Z` |
+| `ORPHAN_PARENT=1` | an orphan reparents to PID 1 of the container's PID namespace |
+| `STATE_AFTER_SIGKILL=Z` | `SIGKILL` on a zombie changes nothing — the team's stuck point |
+
+**Not graded: the identity of PID 1.** It is `/usr/bin/runsvdir -P /etc/service`
+in a real session container and `sleep` in a throwaway one — a provider detail,
+not a property of the lesson. Grading it would couple the lab to something that
+may change. A test asserts no expectation mentions it.
+
+**New platform capability required:** none. `script_runs`, `file_content_absent`
+and `command_output` are all already in use by the CS track; `fork`, `waitpid`
+and `/proc` all work for the unprivileged student with no added privilege — no
+`SYS_ADMIN`, no privileged container, no Docker socket, no host filesystem. The
+`unprivileged_shell` capability is the existing one.
+
+**Runtime dependency:** Python 3.11 standard library only, plus `ps` from the
+base image.

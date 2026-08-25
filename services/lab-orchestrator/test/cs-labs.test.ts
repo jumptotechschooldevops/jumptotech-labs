@@ -52,6 +52,7 @@ const CS_IDS = [
   'CS-008',
   'CS-009',
   'CS-010',
+  'CS-011',
 ];
 
 async function csLabs(): Promise<LoadedLabDefinition[]> {
@@ -208,6 +209,16 @@ describe('CS-001 content policy', () => {
         'COUNTRY_BECAME=',
         'VERSION_BECAME=',
         'TAB_DEPOT=',
+      ],
+      'CS-011': [
+        'RAW=1792',
+        'RAW=768',
+        'STATUS=7',
+        'CHILD_STATE=Z',
+        'ZOMBIE_STATE=',
+        'RAW_WAIT_STATUS=',
+        'ORPHAN_PARENT=',
+        'STATE_AFTER_SIGKILL=',
       ],
       'CS-008': ['TOTAL=16', 'ERRORS=4', 'SLOWEST=R-1007', 'LONGEST_MSG=R-1012', 'ERROR_PATHS='],
       'CS-007': ['ORDER=leeds,bristol', 'ORDER=york,cardiff', 'TOTAL=26', 'COUNT=9', 'leeds,9'],
