@@ -1,5 +1,5 @@
 /**
- * CS-001 — the Computer Science Fundamentals track's first lab.
+ * The Computer Science Fundamentals track.
  *
  * The CS track is FOUNDATIONAL SKILL content: it teaches what sits underneath
  * the other tracks and claims no certification objective. These tests pin the
@@ -39,6 +39,14 @@ async function cs001(): Promise<LoadedLabDefinition> {
   return (await realRegistry()).get('CS-001');
 }
 
+/** Every CS lab shipped so far, so track-wide rules are checked once. */
+const CS_IDS = ['CS-001', 'CS-002'];
+
+async function csLabs(): Promise<LoadedLabDefinition[]> {
+  const registry = await realRegistry();
+  return CS_IDS.map((id) => registry.get(id));
+}
+
 // -------------------------------------------------------- the definition loads
 
 describe('the CS track loads', () => {
@@ -46,7 +54,16 @@ describe('the CS track loads', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.labsForTrack('cs').map((l) => l.id)).toEqual(['CS-001']);
+    expect(registry.labsForTrack('cs').map((l) => l.id)).toEqual(CS_IDS);
+  });
+
+  it('sequences the track, each lab requiring the one before it', async () => {
+    const labs = await csLabs();
+
+    for (const [index, lab] of labs.entries()) {
+      expect(lab.prerequisites, lab.id).toEqual(index === 0 ? [] : [CS_IDS[index - 1]]);
+      expect(lab.order, lab.id).toBe(index + 1);
+    }
   });
 
   it('presents itself as the foundation track, ahead of the others', async () => {
@@ -66,19 +83,19 @@ describe('the CS track loads', () => {
   });
 
   it('runs on the existing Linux provider and gets container isolation from it', async () => {
-    const lab = await cs001();
-
+    for (const lab of await csLabs()) {
     expect(lab.environment.provider).toBe('linux');
     // Never declared in the YAML: derived from the provider, so a lab cannot
     // claim an isolation model its provider does not deliver.
     expect(lab.environment.isolation).toBe('container');
     expect(lab.environment.capabilities).toEqual([]);
+    }
   });
 
   it('asks only for checks the Linux sandbox can already answer', async () => {
-    const lab = await cs001();
+    const all = (await csLabs()).flatMap((lab) => [...lab.requirements, ...lab.setup.verify]);
 
-    for (const requirement of [...lab.requirements, ...lab.setup.verify]) {
+    for (const requirement of all) {
       const family = requirementFamily(requirement.type);
       expect(
         PROVIDER_REQUIREMENT_FAMILIES.linux.includes(family),
@@ -88,13 +105,21 @@ describe('the CS track loads', () => {
   });
 
   it('needs no requirement type that did not already exist', async () => {
-    const lab = await cs001();
+    // Adding the CS track cost the platform no new verifier vocabulary. Every
+    // type below shipped before CS-001 did, and this test is what says so.
+    const shipped = new Set([
+      'file_exists',
+      'file_content',
+      'file_content_absent',
+      'script_executable',
+      'script_runs',
+    ]);
 
-    // The whole lab is graded by reading files back. Adding the CS track cost
-    // the platform no new verifier vocabulary, and this test is what says so.
-    expect(new Set(lab.requirements.map((r) => r.type))).toEqual(
-      new Set(['file_exists', 'file_content']),
-    );
+    for (const lab of await csLabs()) {
+      for (const requirement of lab.requirements) {
+        expect(shipped, `${lab.id}: ${requirement.type}`).toContain(requirement.type);
+      }
+    }
   });
 });
 
@@ -102,51 +127,54 @@ describe('the CS track loads', () => {
 
 describe('CS-001 content policy', () => {
   it('claims no certification objective', async () => {
-    const lab = await cs001();
-
     // FOUNDATIONAL SKILL, not exam preparation. A CS lab that starts claiming
     // coverage of a published objective has to justify it against that exam's
     // current official objective list first — see labs/cs/SOURCES.md.
-    expect(lab.certification).toEqual([]);
+    for (const lab of await csLabs()) expect(lab.certification, lab.id).toEqual([]);
   });
 
   it('cites primary documentation and nothing commercial', async () => {
-    const lab = await cs001();
-    const primary = ['man7.org', 'docs.kernel.org', 'www.gnu.org', 'kubernetes.io'];
+    const primary = ['man7.org', 'docs.kernel.org', 'www.gnu.org', 'kubernetes.io', 'docs.python.org'];
 
-    expect(lab.references.length).toBeGreaterThan(0);
-    for (const reference of lab.references) {
-      expect(reference.url).toMatch(/^https:\/\//);
-      const host = new URL(reference.url).hostname;
-      expect(primary, `${reference.url} is not a primary source`).toContain(host);
+    for (const lab of await csLabs()) {
+      expect(lab.references.length, lab.id).toBeGreaterThan(0);
+      for (const reference of lab.references) {
+        expect(reference.url).toMatch(/^https:\/\//);
+        const host = new URL(reference.url).hostname;
+        expect(primary, `${lab.id}: ${reference.url} is not a primary source`).toContain(host);
+      }
     }
   });
 
   it('ships a progressive hint ladder that never starts with the answer', async () => {
-    const lab = await cs001();
-
-    expect(lab.hints.length).toBeGreaterThanOrEqual(3);
-    expect(lab.hints.map((h) => h.level)).toEqual([1, 2, 3]);
     // No hint may contain a graded value. A student who opens every hint still
-    // has to read the capture and do the arithmetic.
-    const graded = ['15885', '16656', 'SCAN01_CPUS', 'VERDICT=', '/var'];
-    for (const hint of lab.hints) {
-      for (const answer of graded) {
-        expect(hint.text, `hint ${hint.level} leaks ${answer}`).not.toContain(answer);
+    // has to read the evidence and do the arithmetic themselves.
+    const graded: Record<string, string[]> = {
+      'CS-001': ['15885', '16656', 'SCAN01_CPUS', 'VERDICT=', '/var'],
+      'CS-002': ['536870912', '536.87', '512.00', '1073.74', '4d69', '537M', 'VERDICT='],
+    };
+
+    for (const lab of await csLabs()) {
+      expect(lab.hints.length, lab.id).toBeGreaterThanOrEqual(3);
+      expect(lab.hints.map((h) => h.level), lab.id).toEqual([1, 2, 3]);
+      for (const hint of lab.hints) {
+        for (const answer of graded[lab.id] ?? []) {
+          expect(hint.text, `${lab.id} hint ${hint.level} leaks ${answer}`).not.toContain(answer);
+        }
       }
     }
   });
 
   it('gives every student-visible check its own wording, and none of them the answer', async () => {
-    const lab = await cs001();
-
-    const labels = lab.requirements.map((r) => r.label ?? '');
-    expect(labels.every((label) => label.length > 0)).toBe(true);
-    expect(new Set(labels).size).toBe(labels.length);
-    // A label is shown before the student has solved anything, so it may name
-    // what is being checked but never what the value is.
-    for (const label of labels) {
-      expect(label).not.toMatch(/15885|16656|jumptotech-lab|=8\b/);
+    for (const lab of await csLabs()) {
+      const labels = lab.requirements.map((r) => r.label ?? '');
+      expect(labels.every((label) => label.length > 0), lab.id).toBe(true);
+      expect(new Set(labels).size, lab.id).toBe(labels.length);
+      // A label is shown before the student has solved anything, so it may name
+      // what is being checked but never what the value is.
+      for (const label of labels) {
+        expect(label, lab.id).not.toMatch(/15885|16656|jumptotech-lab|536870912|4d69|537M|=8\b/);
+      }
     }
   });
 });
@@ -155,7 +183,7 @@ describe('CS-001 content policy', () => {
 
 describe('CS-001 baseline script', () => {
   it('loads from the lab’s own directory, as a real script within the size limit', async () => {
-    const lab = await cs001();
+    for (const lab of await csLabs()) {
     const scripts = await loadSeedScripts(lab);
 
     expect(scripts).toHaveLength(1);
@@ -164,25 +192,27 @@ describe('CS-001 baseline script', () => {
     expect(script.source).toBe('setup/seed.sh');
     expect(script.content.startsWith('#!')).toBe(true);
     expect(Buffer.byteLength(script.content, 'utf8')).toBeLessThanOrEqual(MAX_SEED_SCRIPT_BYTES);
+    }
   });
 
-  it('plants the capture without pre-creating the student’s working directory', async () => {
-    const script = (await loadSeedScripts(await cs001())).at(0)!;
-
-    expect(script.content).toContain('/srv/kestrel/scan-01');
+  it('plants the evidence without pre-creating the student’s working directory', async () => {
     // Making the directory they are going to work in is the student's first
     // act on the machine; seeding it would remove that.
-    expect(script.content).not.toMatch(/install -d[^\n]*\/home\/student\/ops/);
+    for (const lab of await csLabs()) {
+      const script = (await loadSeedScripts(lab)).at(0)!;
+      expect(script.content, lab.id).toContain('/srv/kestrel/');
+      expect(script.content, lab.id).not.toMatch(/install -d[^\n]*\/home\/student\//);
+    }
   });
 
   it('states the lab’s starting condition through setup verification', async () => {
-    const lab = await cs001();
-
-    // Setup checks run before the student is let in, so a capture that failed
-    // to land is reported as a broken environment rather than as their fault.
-    expect(lab.setup.verify.length).toBeGreaterThanOrEqual(4);
-    for (const check of lab.setup.verify) {
-      expect(String((check as { path?: string }).path ?? '')).toMatch(/^\/srv\/kestrel\/scan-01\//);
+    // Setup checks run before the student is let in, so evidence that failed to
+    // land is reported as a broken environment rather than as their fault.
+    for (const lab of await csLabs()) {
+      expect(lab.setup.verify.length, lab.id).toBeGreaterThanOrEqual(4);
+      for (const check of lab.setup.verify) {
+        expect(String((check as { path?: string }).path ?? ''), lab.id).toMatch(/^\/srv\/kestrel\//);
+      }
     }
   });
 });

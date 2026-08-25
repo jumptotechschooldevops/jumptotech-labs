@@ -1,0 +1,293 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-002 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# Content is written from the GNU coreutils manual, the Linux man-pages project
+# and the Python documentation. The scenario, the company, the alert, the
+# evidence files and every word of the task are original JumpToTech content.
+#
+# Sources verified 2026-08-24. Every graded value was computed by running the
+# real tools inside this lab's own sandbox image rather than by hand:
+#   printf '%d\n' 0x20000000        -> 536870912
+#   numfmt --to=si  536870912       -> 537M
+#   numfmt --to=iec 536870912       -> 512M
+#   od -An -tx1 tag.bin             -> 4d 69
+#   numfmt --from=si 640M           -> 640000000  ( > 536870912, hence `over` )
+#
+# --- On grading a program rather than a transcript -------------------------
+#
+# `script_runs` grades behaviour: the student's own program is executed and its
+# output is compared. Two students with completely different code both pass.
+#
+# It is run three times with three different byte counts, and the program's
+# source is additionally required NOT to contain the expected output strings.
+# Both halves are needed. `output_contains` is a substring test over the whole
+# of stdout, so a program that simply printed every answer set it could think
+# of would satisfy all three invocations; requiring the source to be free of
+# the answers is what makes that a losing strategy. The lab says so plainly —
+# it is the difference between a program and a lookup table, which is worth
+# teaching in the same breath as the arithmetic.
+# ---------------------------------------------------------------------------
+id: CS-002
+slug: cs-002-bits-bytes-units
+title: Bits, Bytes, Hex, and the Units That Page You
+track: cs
+topic: computer-basics
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 2
+
+environment:
+  provider: linux
+
+prerequisites:
+  - CS-001
+
+story: >
+  06:12. An alert fires for Kestrel Logistics' tracking API:
+
+  `scan-api  memory 640M of 512Mi limit`
+
+  Two engineers are arguing in the incident channel. One says the pod is
+  comfortably inside its limit, because 640 is bigger than 512 and therefore
+  the limit must be the bigger number. The other says it is over. Neither has
+  converted anything.
+
+  They are arguing because the alert mixes two unit systems in one line, and
+  nobody in the channel can say what either number is in bytes. Until somebody
+  does, the argument cannot be settled and the pod keeps being restarted.
+
+  You have the evidence the on-call engineer copied off the host before the
+  argument started: the alert, the limit as the runtime actually recorded it,
+  and two bytes taken from the unit suffix everyone is talking past.
+
+objectives:
+  - Read a hexadecimal number as what it is — another spelling of a value you can already count
+  - See that a character is a byte, and that a byte has a two-digit hex spelling
+  - Convert one byte count into both SI and IEC units and watch the same quantity get two different sizes
+  - Write a small program that performs the conversion for any byte count, rather than for one
+  - Settle a real unit argument with arithmetic instead of intuition
+
+task:
+  summary: Convert the evidence in /srv/kestrel/scan-api, write a byte-count converter, and settle whether the pod was over its limit.
+  description: >
+    The evidence is in `/srv/kestrel/scan-api`, read-only. Start with its
+    `README.txt`. You will need two directories that do not exist yet:
+    `/home/student/py` for your program and `/home/student/ops` for your notes.
+
+
+    **Part 1 — read the evidence.** `limit.hex` holds the memory limit the way
+    the container runtime recorded it: in hexadecimal. Convert it to an ordinary
+    decimal byte count. `tag.bin` is exactly two bytes long — the `M` and the
+    `i` from the limit's unit suffix. Dump its bytes and read off their
+    hexadecimal spelling.
+
+
+    **Part 2 — the two unit systems.** A kilobyte is 1000 bytes; a kibibyte is
+    1024. That one difference is why the same memory has two sizes, and it
+    compounds: by the mebibyte the gap is about 5%, by the gibibyte about 7%.
+    Express the limit you converted in Part 1 in both systems using `numfmt`,
+    and record each exactly as `numfmt` prints it.
+
+
+    **Part 3 — the converter.** Write `/home/student/py/units.py`: a program
+    that takes a byte count as its first argument and prints exactly three
+    lines —
+
+
+    ```
+
+    BYTES=<the number you were given>
+
+    SI=<value> MB
+
+    IEC=<value> MiB
+
+    ```
+
+
+    — where `SI` divides by 1 000 000, `IEC` divides by 1024 x 1024, and both
+    are shown to two decimal places. It must run as a program in its own right:
+    give it a `#!/usr/bin/env python3` first line and make it executable, the
+    way every command on this machine already is.
+
+
+    Your program is run with several different byte counts, and it must be
+    right for all of them, so it has to *compute* the answers. A program that
+    contains the expected output text instead of working it out is rejected —
+    that is a lookup table, not a converter.
+
+
+    **Part 4 — settle it.** Reduce both numbers in the alert to bytes and decide
+    who was right. Write `/home/student/ops/units.txt` with one `KEY=value` per
+    line:
+
+
+    ```
+
+    LIMIT_BYTES=<decimal byte count from limit.hex>
+
+    TAG_HEX=<the two bytes of tag.bin, lower case, no spaces, e.g. 00ff>
+
+    SI=<numfmt's SI form of the limit>
+
+    IEC=<numfmt's IEC form of the limit>
+
+    VERDICT=<over|within>
+
+    ```
+
+
+    `VERDICT` is `over` if the reported 640M exceeds the limit, and `within` if
+    it does not. Line order does not matter and extra lines are ignored.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/scan-api/README.txt
+      label: The alert evidence has been placed on this machine
+    - type: file_content
+      path: /srv/kestrel/scan-api/limit.hex
+      contains: "0x20000000"
+      label: The evidence includes the recorded memory limit
+    - type: file_content
+      path: /srv/kestrel/scan-api/alert.txt
+      contains: "640M of 512Mi"
+      label: The evidence includes the alert text
+    - type: file_exists
+      path: /srv/kestrel/scan-api/tag.bin
+      label: The evidence includes the two-byte unit suffix
+
+requirements:
+  # --- Part 3: the converter, graded by running it ---------------------------
+  - type: script_executable
+    path: /home/student/py/units.py
+    label: The converter exists and can be run as a program
+  - type: script_runs
+    path: /home/student/py/units.py
+    args: ["536870912"]
+    expected_exit_code: 0
+    timeout_seconds: 10
+    output_contains:
+      - "BYTES=536870912"
+      - "SI=536.87 MB"
+      - "IEC=512.00 MiB"
+    label: The converter is correct for the limit from the alert
+  - type: script_runs
+    path: /home/student/py/units.py
+    args: ["1000000"]
+    expected_exit_code: 0
+    timeout_seconds: 10
+    output_contains:
+      - "BYTES=1000000"
+      - "SI=1.00 MB"
+      - "IEC=0.95 MiB"
+    label: The converter is correct for a round decimal megabyte
+  - type: script_runs
+    path: /home/student/py/units.py
+    args: ["1073741824"]
+    expected_exit_code: 0
+    timeout_seconds: 10
+    output_contains:
+      - "BYTES=1073741824"
+      - "SI=1073.74 MB"
+      - "IEC=1024.00 MiB"
+    label: The converter is correct for a gibibyte
+  # A converter computes its answers. A file that merely contains them is a
+  # lookup table, and would otherwise satisfy every substring check above.
+  - type: file_content_absent
+    path: /home/student/py/units.py
+    contains: "536.87"
+    label: The converter works the answer out rather than containing it
+  - type: file_content_absent
+    path: /home/student/py/units.py
+    contains: "1024.00"
+    label: The converter is not a table of expected outputs
+
+  # --- Parts 1, 2 and 4: the findings ---------------------------------------
+  - type: file_exists
+    path: /home/student/ops/units.txt
+    label: The findings file exists
+  - type: file_content
+    path: /home/student/ops/units.txt
+    contains: "LIMIT_BYTES=536870912"
+    label: The findings record the limit as a decimal byte count
+  - type: file_content
+    path: /home/student/ops/units.txt
+    contains: "TAG_HEX=4d69"
+    label: The findings record the hexadecimal spelling of the two bytes
+  - type: file_content
+    path: /home/student/ops/units.txt
+    contains: "SI=537M"
+    label: The findings record the limit in SI units
+  - type: file_content
+    path: /home/student/ops/units.txt
+    contains: "IEC=512M"
+    label: The findings record the same limit in IEC units
+  - type: file_content
+    path: /home/student/ops/units.txt
+    contains: "VERDICT=over"
+    label: The findings settle whether the pod was over its limit
+
+hints:
+  - level: 1
+    text: >
+      Nothing here needs the network, and every conversion has a tool already
+      installed. Read `/srv/kestrel/scan-api/README.txt`, then look at all three
+      evidence files before converting anything — one of them is only two bytes
+      long, and `cat` is the wrong tool for that one.
+  - level: 2
+    text: >
+      `printf` understands hexadecimal input: giving it a `%d` conversion and a
+      `0x`-prefixed argument prints the same number in decimal. `od` dumps a
+      file byte by byte, and its `-A` and `-t` options control how the offsets
+      and the bytes themselves are shown — `man od` has the table. `numfmt`
+      converts a plain number into human units and has separate options for the
+      two unit systems; `man numfmt` names them both. For the program, `sys.argv`
+      holds the arguments Python was started with.
+  - level: 3
+    text: >
+      A kibibyte is 1024 bytes and a kilobyte is 1000, so the same byte count
+      divided by 1000000 and by 1024*1024 gives two different numbers — that
+      difference is the whole argument in the incident channel. Python's format
+      specification mini-language will round a float to a fixed number of
+      decimal places for you inside an f-string. To make a file runnable in its
+      own right you need two things: an interpreter line as the very first line,
+      and the execute bit, which `chmod +x` sets. Test it the way the platform
+      will, by running it directly rather than by passing it to `python3`.
+
+references:
+  - title: GNU coreutils — Block size, and the difference between MB and MiB
+    url: https://www.gnu.org/software/coreutils/manual/html_node/Block-size.html
+  - title: GNU coreutils — numfmt
+    url: https://www.gnu.org/software/coreutils/manual/html_node/numfmt-invocation.html
+  - title: GNU coreutils — printf
+    url: https://www.gnu.org/software/coreutils/manual/html_node/printf-invocation.html
+  - title: od(1) — dump files in octal and other formats
+    url: https://man7.org/linux/man-pages/man1/od.1.html
+  - title: Python — sys.argv
+    url: https://docs.python.org/3/library/sys.html
+  - title: Python — format specification mini-language
+    url: https://docs.python.org/3/library/string.html
+  - title: Python — built-in types, integers and formatting
+    url: https://docs.python.org/3/library/stdtypes.html
+  - title: Resource Management for Pods and Containers — Kubernetes
+    url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+
+skills:
+  - cs.data.binary
+  - cs.data.hexadecimal
+  - cs.units.si-vs-iec
+  - cs.programming.argv
+  - cs.programming.executable-script
+
+# certification: deliberately absent.
+#
+# CS-002 is FOUNDATIONAL SKILL content. The unit confusion it corrects is the
+# one behind `memory: 512Mi`, but it covers no published objective of any
+# certification and claims none.

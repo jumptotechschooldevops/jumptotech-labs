@@ -486,3 +486,64 @@ outage, the capture's README, every number in the fixture, the report format,
 the task wording, the hint ladder and all eleven checks are original JumpToTech
 content. The capture imitates the *format* documented in `proc(5)`; it
 reproduces no real machine's output and no third-party lab.
+
+### CS-002 — Bits, Bytes, Hex, and the Units That Page You
+
+```text
+LAB ID:              CS-002
+TITLE:               Bits, Bytes, Hex, and the Units That Page You
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Read a hexadecimal number as another spelling of a value already countable;
+  see that a character is a byte and that a byte has a two-digit hex spelling;
+  convert one byte count into both SI and IEC units and watch the same quantity
+  acquire two different sizes; and write a program that performs the conversion
+  for any byte count rather than for one.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  `memory: 512Mi` is not 512 MB, and the gap is ~5% at the mebibyte and ~7% at
+  the gibibyte. Alerts, dashboards and limits routinely mix the two systems in
+  one line, and an engineer who cannot reduce both to bytes cannot say whether
+  a workload is over its limit. Hex is how a UID, an inode, a checksum, a
+  colour and every byte dump are read.
+
+OFFICIAL / PRIMARY SOURCES:
+  GNU coreutils — Block size   https://www.gnu.org/software/coreutils/manual/html_node/Block-size.html
+  GNU coreutils — numfmt       https://www.gnu.org/software/coreutils/manual/html_node/numfmt-invocation.html
+  GNU coreutils — printf       https://www.gnu.org/software/coreutils/manual/html_node/printf-invocation.html
+  od(1)                        https://man7.org/linux/man-pages/man1/od.1.html
+  Python — sys.argv            https://docs.python.org/3/library/sys.html
+  Python — format spec         https://docs.python.org/3/library/string.html
+  Python — built-in types      https://docs.python.org/3/library/stdtypes.html
+  K8s resource management      https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+
+LAST VERIFIED:       2026-08-24   (all eight fetched, HTTP 200)
+```
+
+**Values computed by running the real tools in this lab's own sandbox image,
+never by hand:**
+
+| Value | How it was obtained | Result |
+|---|---|---|
+| `LIMIT_BYTES` | `printf '%d\n' 0x20000000` | `536870912` |
+| `SI` | `numfmt --to=si 536870912` | `537M` |
+| `IEC` | `numfmt --to=iec 536870912` | `512M` |
+| `TAG_HEX` | `od -An -tx1 tag.bin` on the two bytes `Mi` | `4d 69` → `4d69` |
+| `VERDICT` | `numfmt --from=si 640M` = `640000000` vs `536870912` | `over` |
+| program output | Python 3.11.2, `:.2f` on `n/10**6` and `n/1024**2` | `536.87 MB` / `512.00 MiB` |
+
+The three graded byte counts were chosen so no conversion lands on a rounding
+boundary, so `:.2f` has exactly one correct answer under any rounding mode.
+
+**Runtime dependency:** Python 3.11 (standard library only — `sys` and string
+formatting). Provided by the sandbox image; see the platform commit that added
+it. No pip, no third-party package, no network.
+
+**Grading note (policy §12, original content):** the lookup-table bypass — a
+program that prints every answer set and ignores its argument — satisfies every
+`output_contains` check, because that check is a substring test over the whole
+of stdout. CS-002 therefore also requires the program's *source* to be free of
+the expected output strings, and says so in the task. Both halves are needed;
+neither is redundant.
