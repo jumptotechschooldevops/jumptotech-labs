@@ -675,3 +675,67 @@ lesson: the ceiling counts stdin, stdout and stderr too.
 
 **Runtime dependency:** Python 3.11 standard library only (`os`, `sys`,
 `errno`, `resource`, `socket`). No pip, no third-party package, no network.
+
+### CS-005 — The Process Contract: Streams, Exit Codes and Environment
+
+```text
+LAB ID:              CS-005
+TITLE:               The Process Contract: Streams, Exit Codes and Environment
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Name what a process is handed and hands back — arguments, environment, three
+  streams, an exit status; separate stdout from stderr with redirection and see
+  they are different channels; explain why automation reads the status rather
+  than the words; give a program an exit-code interface that distinguishes a
+  real failure from a misconfiguration; and show that a shell variable is not
+  part of a child's environment until it is exported.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  It is the contract every CI/CD system is built on. A step that prints its
+  failure to stdout gets piped onward as data; a step that always exits 0 turns
+  a broken deploy green; a launcher that assigns instead of exporting silently
+  strips a program's configuration. All three appear together here because they
+  appear together in real pipelines.
+
+OFFICIAL / PRIMARY SOURCES:
+  Bash — Redirections      https://www.gnu.org/software/bash/manual/html_node/Redirections.html
+  Bash — Exit Status       https://www.gnu.org/software/bash/manual/html_node/Exit-Status.html
+  Bash — Environment       https://www.gnu.org/software/bash/manual/html_node/Environment.html
+  Bash — Bourne builtins   https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html
+  environ(7)               https://man7.org/linux/man-pages/man7/environ.7.html
+  stdin(3)                 https://man7.org/linux/man-pages/man3/stdin.3.html
+  execve(2)                https://man7.org/linux/man-pages/man2/execve.2.html
+  exit(3)                  https://man7.org/linux/man-pages/man3/exit.3.html
+  Python — sys             https://docs.python.org/3/library/sys.html
+  Python — os.environ      https://docs.python.org/3/library/os.html
+
+LAST VERIFIED:       2026-08-25   (all ten fetched, HTTP 200)
+```
+
+**Two platform facts this lab was designed around, both verified in source:**
+
+| Fact | Consequence for grading |
+|---|---|
+| `script_runs` compares `output_contains` against **stdout and stderr concatenated** (`services/verifier/src/handlers/linux.ts`) | It can prove the exit-code contract but cannot tell the streams apart. Separation is therefore graded from the student's own `>` / `2>` captures: the diagnostic must be **present** in `err.txt` and **absent** from `out.txt`. |
+| `script_runs` cannot set environment variables | Turned into the lesson. The check is run **bare** and must report a misconfiguration rather than inventing a default; the success and failure paths run through the student's own launcher, which has to place the value in the child's environment. Inheritance is demonstrated, not asserted. |
+
+**`process_environ` does not exist in the requirement vocabulary and was not
+created.** No new shared-platform primitive was introduced.
+
+**A bug found in this lab during adversarial testing, and how it was fixed.**
+The first draft asserted `limit=5` in the passing run's output. Substring
+matching accepts `limit=5` inside `limit=50`, so a launcher exporting the wrong
+limit passed. The assertion was replaced with a **boundary run** — six failed
+probes must exit 3 — which pins the limit behaviourally and cannot be satisfied
+by a wrong one. The regression is covered by a named test.
+
+**Disclosure note.** The lab payload does contain `DEPLOY_CHECK=ok|failed|
+misconfigured`, because that is the **interface the task specifies** — the
+student is told what to implement. What must be discovered is the three
+contract violations and the limit in `pipeline.yml`, and none of those appears
+in any student-visible text. This is a different case from CS-004, where an
+objective named a value the student was supposed to find.
+
+**Runtime dependency:** Python 3.11 standard library only (`os`, `sys`).

@@ -1664,6 +1664,53 @@ brief.
 
 ---
 
+## 11b. Authoring constraints carried forward
+
+Recorded here because they bind labs that are planned but not yet written, and
+a plan is where a constraint survives longest.
+
+### CS-015 stays BLOCKED
+
+Its inode-exhaustion half needs a filesystem whose inode table can be
+exhausted, which needs `mknod`/`SYS_ADMIN`. **`SYS_ADMIN` is outside the
+accepted student sandbox privilege boundary and must not be granted to make
+this lab testable** — `linux-provider.ts` refuses it by construction, and that
+refusal is worth more than one lab's second half.
+
+**The documented fallback stands:** ship CS-015 with the open-descriptor half
+only — a deleted-but-still-open file, where `df` and `du` disagree and
+`/proc/<pid>/fd` explains why. That half needs no extra privilege, is the more
+common production failure of the two, and carries the lab on its own. Inode
+exhaustion is then taught from a seeded `df -i` capture rather than induced.
+
+**Recommendation:** take the fallback. Revisit only if the platform ever gains
+a privileged-fixture mechanism for reasons of its own; do not introduce one for
+this.
+
+### Timing-sensitive labs must not grade on wall-clock thresholds
+
+**CS-018, CS-020, CS-031, CS-032 and CS-034** were each sketched with a timing
+assertion. On a contended machine those fail for reasons that have nothing to
+do with the student: this repository's own suite has been observed timing out
+under load averages above 30 while every assertion in it was sound.
+
+**None of these labs may grade "must complete within X milliseconds."** Grade
+instead:
+
+| Instead of | Assert |
+|---|---|
+| absolute duration | **ordering** — which finished first, which came after what |
+| a speed multiple | **shape** — does the curve bend the way an O(n²) curve bends, over a wide tolerance band |
+| elapsed wall clock | **causality** — the retry happened *because* the first attempt failed |
+| a throughput number | **relative behaviour** — more concurrency produced more completed work than less did |
+| a latency ceiling | **observable state** — the queue drained, the file appeared, the counter advanced |
+
+CS-020's classification of O(1)/O(n)/O(n log n)/O(n²) is legitimate because it
+compares ratios as *n* doubles rather than absolute times, and because its
+tolerance band is wide enough that a slow host still classifies correctly.
+CS-021 is the model to copy: it asserts a *comparison count* bounded by
+⌈log₂ n⌉ + 1, which is a correctness property and cannot flake at all.
+
 ## 12. Official-source policy compliance
 
 This plan was written against the JumpToTech official-source policy. In summary:

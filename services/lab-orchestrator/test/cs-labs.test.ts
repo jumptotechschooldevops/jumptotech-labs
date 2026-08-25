@@ -41,7 +41,7 @@ async function cs001(): Promise<LoadedLabDefinition> {
 }
 
 /** Every CS lab shipped so far, so track-wide rules are checked once. */
-const CS_IDS = ['CS-001', 'CS-002', 'CS-003', 'CS-004'];
+const CS_IDS = ['CS-001', 'CS-002', 'CS-003', 'CS-004', 'CS-005'];
 
 async function csLabs(): Promise<LoadedLabDefinition[]> {
   const registry = await realRegistry();
@@ -180,6 +180,7 @@ describe('CS-001 content policy', () => {
     const graded: Record<string, string[]> = {
       'CS-001': ['15885', '16656', 'SCAN01_CPUS', 'VERDICT=', '/var'],
       'CS-002': ['536870912', '536.87', '512.00', '1073.74', '4d69', '537M', 'VERDICT='],
+      'CS-005': ['DEPLOY_CHECK=misconfigured', 'limit=5', 'exit 2', 'exit 3', 'export KESTREL'],
       'CS-004': ['OPENED=61', 'OPENED=125', 'ERRNO=24', 'EMFILE', 'LEAK_KIND=', 'COLLECTOR_SOFT_LIMIT', 'REAL_FIX=', '256'],
       'CS-003': [
         'c3bc',

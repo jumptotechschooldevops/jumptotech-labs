@@ -1,0 +1,287 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-005 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# Content is written from the GNU Bash manual, the Linux man-pages project and
+# the Python documentation. The company, the pipeline, the broken check and
+# every word of the task are original JumpToTech content.
+#
+# --- Why stream separation is graded from redirection artifacts ------------
+#
+# `script_runs` compares `output_contains` against stdout and stderr
+# concatenated, so it cannot on its own tell the two apart — and telling them
+# apart is half of what this lab teaches. So the exit-code contract is graded
+# by running the student's programs, and the *separation* is graded from the
+# two capture files the student produces with `>` and `2>`: the diagnostic must
+# be present in the stderr capture and absent from the stdout one. That pairing
+# proves what a combined stream never could, and needs no new primitive.
+#
+# --- Why the environment is graded the way it is ---------------------------
+#
+# `script_runs` cannot set environment variables, which turns out to be exactly
+# right for this lab. The check is run directly, with no environment, and must
+# report a configuration error rather than inventing a default — which is the
+# third bug in the seeded version. The success and failure paths are run
+# through the student's own launcher, which has to export the value; a launcher
+# that merely assigns it, as the seeded one does, leaves the child seeing
+# nothing. Inheritance at process creation is thereby demonstrated rather than
+# asserted.
+#
+# --- Exit codes ------------------------------------------------------------
+#
+# The lab defines the interface explicitly (0 / 2 / 3) and grades it, rather
+# than demanding an arbitrary non-zero number: a check that distinguishes "the
+# deploy is bad" from "I was not configured" is what lets a pipeline retry one
+# and page for the other.
+# ---------------------------------------------------------------------------
+id: CS-005
+slug: cs-005-process-contract
+title: "The Process Contract: Streams, Exit Codes and Environment"
+track: cs
+topic: computer-basics
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 5
+
+environment:
+  provider: linux
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-004
+
+story: >
+  Last night's Kestrel deploy left twelve failed health probes behind. The
+  pipeline's verify stage ran, the job went green, and the build shipped. This
+  morning production is broken and the job history still shows a tick next to
+  4417.
+
+  The pipeline is not lying to anyone on purpose. It asks each step one
+  question — what status did you exit with? — and `deploy-check` answered
+  "success", because it answers "success" no matter what it found.
+
+  That is one of three things wrong with it. The runner captured the step's two
+  output streams separately and both are in the job log, which is worth reading
+  before you assume you know what happened.
+
+objectives:
+  - Name what a process is handed and what it hands back — arguments, environment, three streams and an exit status
+  - Use redirection to separate stdout from stderr and see that they are genuinely different channels
+  - Explain why automation reads the exit status and not the words a program printed
+  - Send results to stdout and diagnostics to stderr, and know why the distinction matters when output is piped onward
+  - Show that a shell variable is not part of a child's environment until it is exported
+  - Give a program an exit-code interface that distinguishes a real failure from a misconfiguration
+
+task:
+  summary: Work out why the pipeline went green on a failed deploy, then write a corrected check and launcher that honour the process contract.
+  description: >
+    The repository copy of the step is in `/srv/kestrel/pipeline`, read-only.
+    Read `README.txt`, then `job-4417.log` — the runner recorded the step's
+    stdout, its stderr and its exit status separately, and the three together
+    say more than any of them alone. `pipeline.yml` holds the limit the deploy
+    was supposed to be measured against.
+
+
+    Run the repository version yourself, sending its two streams to different
+    files, and check what status it returned. Three separate things are wrong.
+    One of them explains why the limit in `pipeline.yml` never seemed to apply.
+
+
+    You will need `/home/student/py`, `/home/student/bin` and
+    `/home/student/ops`, none of which exists yet. Do not edit the repository
+    copy — it is read-only, and an engineer ships a fix rather than editing the
+    deployed artifact.
+
+
+    **The corrected check** — `/home/student/py/deploy-check.py`, taking the
+    number of failed probes as its first argument and reading its limit from
+    the environment variable `KESTREL_MAX_FAILURES`. Its interface:
+
+
+    | situation | goes to | exit status |
+
+    | --- | --- | --- |
+
+    | probes within the limit | `DEPLOY_CHECK=ok failures=<n> limit=<t>` on **stdout** | `0` |
+
+    | probes over the limit | `DEPLOY_CHECK=failed failures=<n> limit=<t>` on **stderr** | `3` |
+
+    | the variable is missing or not a number | `DEPLOY_CHECK=misconfigured` on **stderr** | `2` |
+
+
+    Nothing may go to stdout on either failure path: the pipeline pipes this
+    step's stdout into the next stage, which is how a failure ended up being
+    read as data. Inventing a default limit when the variable is absent is not
+    allowed — that is the bug that hid the real limit.
+
+
+    **The launcher** — `/home/student/bin/run-check.sh`, which supplies the
+    environment the check needs and then runs it, passing its own first
+    argument through. Use the limit from `pipeline.yml`. Assigning a shell
+    variable is not enough; a child process receives its environment when it is
+    created, and only what was placed there.
+
+
+    Both files need a `#!` first line and the execute bit.
+
+
+    **The evidence** — run your corrected check with **no** `KESTREL_MAX_FAILURES`
+    in the environment, capturing its streams into `/home/student/ops/out.txt`
+    and `/home/student/ops/err.txt` separately. Those two files are what show
+    the diagnostic went where a diagnostic belongs.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/pipeline/deploy-check.py
+      label: The repository copy of the check is present
+    - type: file_exists
+      path: /srv/kestrel/pipeline/run-check.sh
+      label: The pipeline's launcher is present
+    - type: file_content
+      path: /srv/kestrel/pipeline/job-4417.log
+      contains: "exit status: 0"
+      label: Last night's job output is available to read
+    - type: file_content
+      path: /srv/kestrel/pipeline/pipeline.yml
+      contains: "max_failures"
+      label: The pipeline definition states the failure limit
+
+requirements:
+  # --- The check, run directly with no environment --------------------------
+  - type: script_executable
+    path: /home/student/py/deploy-check.py
+    label: The corrected check exists and can be run as a program
+  - type: script_runs
+    path: /home/student/py/deploy-check.py
+    args: ["1"]
+    expected_exit_code: 2
+    timeout_seconds: 15
+    output_contains:
+      - "DEPLOY_CHECK=misconfigured"
+    label: Without its configuration the check reports a misconfiguration rather than guessing
+
+  # --- The launcher, which must actually export the environment -------------
+  - type: script_executable
+    path: /home/student/bin/run-check.sh
+    label: The launcher exists and can be run as a program
+  - type: file_content
+    path: /home/student/bin/run-check.sh
+    contains: "deploy-check.py"
+    label: The launcher runs the corrected check
+  - type: script_runs
+    path: /home/student/bin/run-check.sh
+    args: ["1"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "DEPLOY_CHECK=ok"
+    label: A deploy within the limit passes
+  - type: script_runs
+    path: /home/student/bin/run-check.sh
+    args: ["99"]
+    expected_exit_code: 3
+    timeout_seconds: 15
+    output_contains:
+      - "DEPLOY_CHECK=failed"
+    label: A deploy well over the limit fails with a status the pipeline can act on
+  # The boundary run is what pins the limit to the one pipeline.yml specifies.
+  # Asserting `limit=5` in the output could not do it: substring matching would
+  # accept `limit=50` just as happily, so the limit is proved by behaviour —
+  # six failed probes must be over the line, and only the right limit puts them
+  # there.
+  - type: script_runs
+    path: /home/student/bin/run-check.sh
+    args: ["6"]
+    expected_exit_code: 3
+    timeout_seconds: 15
+    output_contains:
+      - "DEPLOY_CHECK=failed"
+    label: The launcher supplies the limit the pipeline actually specifies
+
+  # --- The captured streams, which is where separation is proved ------------
+  - type: file_exists
+    path: /home/student/ops/out.txt
+    label: The check's standard output was captured on its own
+  - type: file_exists
+    path: /home/student/ops/err.txt
+    label: The check's standard error was captured on its own
+  - type: file_content
+    path: /home/student/ops/err.txt
+    contains: "DEPLOY_CHECK=misconfigured"
+    label: The diagnostic went to standard error
+  - type: file_content_absent
+    path: /home/student/ops/out.txt
+    contains: "DEPLOY_CHECK"
+    label: Nothing went to standard output on the failing path
+
+hints:
+  - level: 1
+    text: >
+      Read the job log before you run anything: the runner wrote down what came
+      back on each stream and what status the step exited with, and one of
+      those three lines is the reason the job went green. Then run the
+      repository copy yourself the same way the runner did, keeping the two
+      streams apart, and compare what you get against the limit in
+      `pipeline.yml`.
+  - level: 2
+    text: >
+      A shell sends a command's normal output and its diagnostics to two
+      different places, and `>` and `2>` redirect them independently — the
+      numbers in front are the descriptors CS-004 introduced. `$?` holds the
+      status of the command that just finished. In Python, `print()` writes to
+      one stream and there is a `file=` argument for choosing the other;
+      `sys.exit()` sets the status the caller sees. `env` and `printenv` show
+      what a process was actually given, which is not always what the shell
+      that started it had.
+  - level: 3
+    text: >
+      Assigning `NAME=value` in a shell creates a shell variable; a child gets
+      an environment entry only if the name was exported, and `export NAME` or
+      `NAME=value command` are both ways to arrange that. Try running a tiny
+      program that prints one variable, with and without the export, and the
+      difference is immediate. For the check itself, a missing variable and a
+      variable that is not a number are the same kind of problem — the program
+      cannot do its job — and that is a different kind of answer from "the
+      deploy is bad", which is why the two get different statuses.
+
+references:
+  - title: GNU Bash manual — Redirections
+    url: https://www.gnu.org/software/bash/manual/html_node/Redirections.html
+  - title: GNU Bash manual — Exit status
+    url: https://www.gnu.org/software/bash/manual/html_node/Exit-Status.html
+  - title: GNU Bash manual — Environment
+    url: https://www.gnu.org/software/bash/manual/html_node/Environment.html
+  - title: GNU Bash manual — Bourne shell builtins, including export
+    url: https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html
+  - title: environ(7) — the process environment
+    url: https://man7.org/linux/man-pages/man7/environ.7.html
+  - title: stdin(3) — the three standard streams
+    url: https://man7.org/linux/man-pages/man3/stdin.3.html
+  - title: execve(2) — what a new process is handed
+    url: https://man7.org/linux/man-pages/man2/execve.2.html
+  - title: exit(3) — a process's status, and what the caller sees
+    url: https://man7.org/linux/man-pages/man3/exit.3.html
+  - title: Python — sys.stdout, sys.stderr, sys.argv and sys.exit
+    url: https://docs.python.org/3/library/sys.html
+  - title: Python — os.environ
+    url: https://docs.python.org/3/library/os.html
+
+skills:
+  - cs.os.standard-streams
+  - cs.os.exit-status
+  - cs.os.environment
+  - cs.programming.cli-contract
+  - cs.troubleshooting.pipeline-false-pass
+
+# certification: deliberately absent.
+#
+# CS-005 is FOUNDATIONAL SKILL content. The contract it teaches is the one every
+# CI/CD system depends on, but it is not a published objective of any
+# certification and this lab claims none.
