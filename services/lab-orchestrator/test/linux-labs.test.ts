@@ -41,8 +41,22 @@ const LINUX_CHAIN = [
   'LINUX-010',
 ];
 
-/** Every Linux lab, in catalog order. */
-const LINUX_IDS = [...LINUX_CHAIN, 'LINUX-014', 'LINUX-015', 'LINUX-016', 'LINUX-017', 'LINUX-018', 'LINUX-019'];
+/**
+ * Every Linux lab, in catalog order — which is `order`, then lab id on a tie.
+ * LINUX-011 deliberately shares `order: 11` with LINUX-014 and sorts ahead of
+ * it on id, so a foundations lab written later still lands beside the
+ * fundamentals chain it belongs with rather than at the end of the track.
+ */
+const LINUX_IDS = [
+  ...LINUX_CHAIN,
+  'LINUX-011',
+  'LINUX-014',
+  'LINUX-015',
+  'LINUX-016',
+  'LINUX-017',
+  'LINUX-018',
+  'LINUX-019',
+];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {

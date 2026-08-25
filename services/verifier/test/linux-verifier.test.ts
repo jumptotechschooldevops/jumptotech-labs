@@ -412,6 +412,7 @@ describe('every shipped Linux lab', () => {
     'linux-008-storage',
     'linux-009-shell-scripting',
     'linux-010-troubleshooting',
+    'linux-011-special-permissions',
     'linux-014-environment',
     'linux-015-sudo-policy',
     'linux-016-text-sweeps',

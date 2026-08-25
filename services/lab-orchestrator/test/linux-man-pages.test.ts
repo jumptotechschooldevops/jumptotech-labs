@@ -65,6 +65,8 @@ const SANDBOX_MAN_PAGES = [
   'crontab', 'cron',
   // packages — LINUX-019
   'dpkg', 'dpkg-deb', 'dpkg-query',
+  // modes and the creation mask — LINUX-011
+  'inode',
   // the shell itself, and the section-7 pages LINUX-013/014 quote
   'bash', 'environ', 'signal', 'group',
 ] as const;

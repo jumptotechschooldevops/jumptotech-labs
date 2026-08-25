@@ -1,0 +1,296 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# HOW THIS LAB IS GRADED, AND THE ONE THING THAT MAKES IT HONEST
+#
+# Three of the checks read a mode off a path the student was asked to fix.
+# Those are ordinary: `stat` reports four octal digits, the special bits live
+# in the first one, and an exact match refuses both "forgot the bit" and
+# "set the bit and widened everything else while I was there".
+#
+# The other three are the interesting ones, because they grade a umask — and a
+# umask cannot be read off a filesystem at all. Once a file exists, a mode that
+# came from a umask and a mode that came from `chmod` are the same bytes. There
+# is nothing in a directory listing that distinguishes them, and any check that
+# claimed otherwise would be reading a student's word for it.
+#
+# So this lab does not ask what the umask *is*. It observes what a fresh login
+# shell for the deploy account *produces*, right now:
+#
+#   the handoff writer     runs `su - student` every three seconds and creates
+#                          one file and one directory, setting no mode on
+#                          either — there is no chmod anywhere in it
+#   handoff.csv 0640       what 0666 & ~umask comes to, so this is the umask
+#   handoff.csv deployers  the group only a setgid directory hands out
+#   handoff.d 2750         0777 & ~umask, plus the setgid bit a new directory
+#                          inherits from its parent — both facts in one mode
+#
+# A student who sets `umask 0027` in the shell they are sitting in changes
+# nothing here, which is the production lesson stated as a check: the writer
+# gets its own login shell, and an interactive umask does not survive into it.
+# The umask has to be in the login profile, which is also the only place it
+# would do any good on a real host.
+#
+# WHAT THIS DOES NOT CLAIM
+#
+# The student is root in their own container, so nothing here is unforgeable
+# against someone determined to forge it — stopping the writer and hand-making
+# the two artefacts would reach the same state. That is why "the writer is
+# still running" is itself a check: it makes the forgery a race against a
+# three-second cycle rather than four commands. What the checks refuse
+# absolutely is the cheaper category — there is no evidence file in this lab,
+# nothing reads a value the student wrote down, and no check can be satisfied
+# by describing the system instead of changing it.
+#
+# ONE TRAP, DEFUSED RATHER THAN LEFT IN
+#
+# GNU `chmod` preserves a *directory's* setuid and setgid bits when it is given
+# a three- or four-digit octal mode; only a symbolic `g-s`/`u-s` or a five-digit
+# mode clears them. Verified in the shipped image: a directory at 2777 given
+# the correct `chmod 1777` becomes 3777, and repeating the command never
+# improves it. A student who put setgid on the scratch area by mistake would
+# otherwise be stuck at a failing check with a command that looks right, and
+# nothing in the lab would explain why. The mode checks stay exact — 3777 is
+# not 1777 and should fail — but hint 3 now names the escape, and hint 2 points
+# at the paragraph of chmod(1) that describes it. A trap nobody can see is not
+# difficulty.
+#
+# The sticky bit is graded from the mode alone. Its effect — that one account
+# can no longer remove another's file — is only observable by attempting a
+# removal, and the verifier does not mutate the sandbox. The mode is still a
+# fact about the machine rather than a claim about it; the student can and
+# should confirm the effect themselves, and the task says so.
+# ---------------------------------------------------------------------------
+id: LINUX-011
+slug: linux-011-special-permissions
+title: Special Permission Bits and umask
+track: linux
+topic: linux-fundamentals
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+# Ties with LINUX-014 and sorts ahead of it on lab id, which puts this where it
+# belongs pedagogically — straight after the fundamentals chain — without
+# renumbering six shipped labs to make room.
+order: 11
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-002
+
+story: >
+  Last week's access review on the JumpToTech Bank deploy host produced three
+  findings, and they all turned out to be the same kind of mistake: a
+  permission bit that nobody sets by accident, either missing where it was
+  needed or left behind where it was not.
+
+  The nightly handoff writer deposits a batch file for the next shift, and the
+  deployers who are supposed to pick it up have no group access to it — while
+  every other account on the box can read it, account numbers and all. The
+  shared scratch area lets anybody delete anybody's work, which is how someone
+  lost their reconciliation set on Tuesday. And a reporting helper on the
+  deploy path is still carrying the setuid bit it was given during the March
+  incident, which means it reads directories as root for whoever runs it.
+
+  The standard the box is meant to meet is written down in
+  `/srv/jumptotech/runbooks/shared-areas.md`. Nothing here needs a new tool.
+
+objectives:
+  - Read a four-digit mode and say which special bit each leading digit sets
+  - Use setgid on a directory so new entries inherit its group
+  - Use the sticky bit to keep a shared, world-writable area safe from deletion
+  - Remove a setuid bit without widening the ordinary permissions underneath it
+  - Set a umask that persists beyond the shell that typed it
+  - Predict the mode a new file or directory will be created with
+
+task:
+  summary: Fix three special-permission findings on the deploy host, and make the handoff writer produce files that meet the runbook's standard.
+  description: >
+    Read `/srv/jumptotech/runbooks/shared-areas.md` first — it is where the
+    required end state comes from, and it explains why each one matters.
+
+    There are three permission bits to correct.
+    `/srv/jumptotech/drop` must make everything created inside it belong to
+    the `deployers` group automatically, while staying group-writable at 0770
+    and no wider. `/srv/jumptotech/scratch` must stay writable by everybody but
+    allow only a file's owner to remove it. `/usr/local/bin/report-helper` must
+    keep ordinary owner-write, all-read, all-execute permissions and lose the
+    bit that makes it run as its owner. Try that one before and after, against
+    a directory your own account cannot read, and you will see exactly what it
+    was granting.
+
+    Then there is the writer. A service runs every three seconds as your own
+    account and leaves `handoff.csv` and `handoff.d` in the drop. It sets no
+    permissions on either — whatever mode they appear with is the mode your
+    account's environment produced. Right now that is world-readable, which the
+    runbook forbids. Make new files come out readable by their owner and their
+    group and by nobody else, and make it stick: the writer starts a fresh
+    login shell every cycle, so a change that only affects the shell you are
+    typing in will not reach it. Give the writer a few seconds to produce a new
+    pair, then look at what it left.
+
+    Leave the writer running. Everything is checked by reading modes, owners
+    and groups off the machine — there is nothing to write down anywhere.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/jumptotech/runbooks/shared-areas.md
+      label: The shared-areas runbook is present
+    - type: file_mode
+      path: /srv/jumptotech/drop
+      mode: "0770"
+      label: The drop is group-writable but does not yet pass on its group
+    - type: file_mode
+      path: /srv/jumptotech/scratch
+      mode: "0777"
+      label: The scratch area is world-writable with nothing protecting it
+    - type: file_mode
+      path: /usr/local/bin/report-helper
+      mode: "4755"
+      label: The reporting helper still carries the setuid bit
+    - type: process_running
+      pattern: /usr/local/bin/jtt-handoff
+      min_count: 1
+      label: The handoff writer is running
+    - type: file_mode
+      path: /srv/jumptotech/drop/handoff.csv
+      mode: "0644"
+      label: The writer's output is world-readable, as reported
+  verify_timeout_seconds: 180
+
+# Every check below reads a fact the kernel recorded: a mode, or the group a
+# file was created in. Nothing reads a value the student wrote down, and there
+# is no evidence file in this lab to write one into.
+requirements:
+  # --- the three bits, each matched exactly --------------------------------
+  #
+  # Exact rather than "has the bit set", so widening the ordinary permissions
+  # on the way past fails: 2777 is not 2770, and 0777 on the helper strips the
+  # setuid bit while granting everyone the write access it never had.
+  - type: file_mode
+    path: /srv/jumptotech/drop
+    mode: "2770"
+    label: The drop passes its group on to new entries, and is no wider than it was
+  - type: file_mode
+    path: /srv/jumptotech/scratch
+    mode: "1777"
+    label: The scratch area is still writable by all, but only owners may delete
+  - type: file_mode
+    path: /usr/local/bin/report-helper
+    mode: "0755"
+    label: The reporting helper no longer runs as its owner, and gained nothing else
+
+  # --- what the writer produced, which is the only umask evidence there is --
+  #
+  # The writer is a precondition for the three checks after it: with it stopped,
+  # handoff.csv and handoff.d are whatever was last left lying there rather than
+  # what this account's login environment currently produces.
+  - type: process_running
+    pattern: /usr/local/bin/jtt-handoff
+    min_count: 1
+    label: The handoff writer is still running, so what follows is its output
+  - type: file_mode
+    path: /srv/jumptotech/drop/handoff.csv
+    mode: "0640"
+    label: A file the writer created is readable by its owner and group, and by nobody else
+  - type: file_group
+    path: /srv/jumptotech/drop/handoff.csv
+    group: deployers
+    label: That file belongs to the deployers group without anyone setting it
+  - type: file_mode
+    path: /srv/jumptotech/drop/handoff.d
+    mode: "2750"
+    label: A directory the writer created is owner and group only, and passes the group on in turn
+
+hints:
+  - level: 1
+    text: >
+      Start by looking at the modes themselves. `stat` will show you four octal
+      digits rather than three, and the leading digit is the one this lab is
+      about — it is where setuid, setgid and the sticky bit live, one bit each.
+      Two of the three paths need a bit added; one needs a bit taken away.
+
+      The writer is a different kind of problem. It sets no permissions, so the
+      mode its files appear with is not something you can fix on the files —
+      new ones replace them every few seconds. Ask instead what decides the
+      mode of a file at the moment it is created.
+  - level: 2
+    text: >
+      `man 7 inode` lists the three bits by name and says what each one does,
+      including the one whose meaning on a directory is completely different
+      from its meaning on a file. `man chmod` covers setting them, both as a
+      fourth octal digit and by symbolic name — and it has a paragraph about
+      directories and octal modes that is worth reading before you assume a
+      number took a bit away.
+
+      For the writer: the mask that removes permissions from newly created
+      files is a shell builtin, documented under the builtin commands in
+      `man bash`. Work out which mask leaves 0640 on a file — remember what
+      permissions a file is created with *before* the mask is applied, which is
+      not the same as the number a directory starts from.
+
+      Then find out where to put it. The writer runs a login shell each cycle,
+      so the question is which of your account's startup files a login shell
+      reads, and whether the one you were about to use is skipped when the
+      shell is not interactive. `man bash` has a section on exactly that, and
+      the first few lines of the file you already have will show you the test
+      that skips it.
+  - level: 3
+    text: >
+      The two directories need a leading `2` and a leading `1` respectively,
+      keeping the three digits that follow exactly as they are. The helper
+      needs its leading digit gone, leaving three. All three live outside your
+      home directory and are owned by root, so they need `sudo`.
+
+      A file is created from 0666 before the mask, a directory from 0777.
+      0666 with 0027 removed is 0640, and the same mask leaves a new directory
+      at 0750 — which will appear as 2750 once the parent directory is passing
+      its group on, because a new subdirectory inherits that bit as well.
+
+      Put the umask line in your login profile — `~/.profile` — rather than in
+      `~/.bashrc`, which returns immediately when the shell is not interactive
+      and so never runs for the writer. Then wait three seconds and look at the
+      drop again.
+
+      One thing that will waste your afternoon otherwise: on a *directory*,
+      `chmod` leaves the setuid and setgid bits alone when you give it an
+      ordinary three- or four-digit octal mode. If you put a bit on the wrong
+      directory, `chmod 1777` will not take it off again — you will get 3777
+      and stay there however many times you run it. Use the symbolic form,
+      `g-s` or `u-s`, to clear one. Files do not behave this way; only
+      directories.
+
+references:
+  - title: inode(7) — file attributes, including the set-user-ID, set-group-ID and sticky bits
+    url: https://man7.org/linux/man-pages/man7/inode.7.html
+  - title: chmod(1) — change file mode bits
+    url: https://man7.org/linux/man-pages/man1/chmod.1.html
+  - title: umask(2) — set file mode creation mask
+    url: https://man7.org/linux/man-pages/man2/umask.2.html
+  - title: open(2) — how mode and the creation mask combine for a new file
+    url: https://man7.org/linux/man-pages/man2/open.2.html
+  - title: Bash Reference Manual — Bash Startup Files
+    url: https://www.gnu.org/software/bash/manual/html_node/Bash-Startup-Files.html
+
+skills:
+  - permissions.setuid
+  - permissions.setgid
+  - permissions.sticky
+  - permissions.umask
+  - permissions.octal
+  - permissions.directory-traverse
+
+certification:
+  - certification: LFCS
+    relevant: true
+    # "Manage access to files and directories" sits under Essential Commands in
+    # the current competency list, re-read 2026-08-25. Special bits and the
+    # creation mask are that objective's second half; the first half is
+    # LINUX-002.
+    domains:
+      - essential-commands
