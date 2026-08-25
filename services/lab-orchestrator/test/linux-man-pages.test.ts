@@ -31,6 +31,12 @@ import { LABS_DIR } from './helpers.js';
 
 const run = promisify(execFile);
 
+/** The image definition itself — two tests below read it. */
+const DOCKERFILE = path.resolve(
+  LABS_DIR,
+  '../infrastructure/docker/sandbox-linux.Dockerfile',
+);
+
 /** The sandbox image to interrogate. Matches what the provider would use. */
 const SANDBOX_IMAGE =
   process.env.LINUX_SANDBOX_IMAGE ?? 'jumptotech/lab-linux:latest';
@@ -51,8 +57,8 @@ const SANDBOX_MAN_PAGES = [
   'grep', 'find', 'xargs', 'sed', 'awk',
   // processes and services — LINUX-004, 005, 010, 013, 014
   'ps', 'kill', 'pgrep', 'top', 'sv', 'runsvdir',
-  // networking — LINUX-006
-  'ip', 'ss', 'hostname',
+  // networking — LINUX-006, LINUX-010
+  'ip', 'ss', 'hostname', 'curl',
   // accounts and delegation — LINUX-003, 015
   'useradd', 'usermod', 'groupadd', 'sudo', 'visudo', 'sudoers',
   // scheduled jobs — LINUX-018
@@ -62,17 +68,6 @@ const SANDBOX_MAN_PAGES = [
   // the shell itself, and the section-7 pages LINUX-013/014 quote
   'bash', 'environ', 'signal', 'group',
 ] as const;
-
-/**
- * Cited by a lab, and deliberately *not* in the manifest.
- *
- * `man curl` appears in LINUX-006's hint ladder and curl is not installed in
- * the sandbox at all — a separate, previously reported defect about the tool
- * rather than about its documentation. Listing it here keeps this suite honest:
- * the gap stays visible and named instead of being quietly absorbed into the
- * manifest, and this entry should be deleted the day curl is installed.
- */
-const KNOWN_MISSING = new Set(['curl']);
 
 /** `man foo`, `man 5 foo` — as the hints write them, backticks and all. */
 function citedManPages(text: string): string[] {
@@ -116,7 +111,7 @@ describe('the Linux hints only send students to pages the sandbox has', () => {
     for (const summary of registry.labsForTrack('linux')) {
       const lab = registry.get(summary.id);
       for (const page of citedManPages(labProse(lab))) {
-        if (manifest.has(page) || KNOWN_MISSING.has(page)) continue;
+        if (manifest.has(page)) continue;
         unknown.push(`${lab.id} cites 'man ${page}'`);
       }
     }
@@ -143,14 +138,22 @@ describe('the Linux hints only send students to pages the sandbox has', () => {
     expect(orphaned).toEqual([]);
   });
 
-  it('records the curl gap rather than hiding it', async () => {
-    // LINUX-006 tells students to read `man curl` and curl is not installed.
-    // This assertion exists so the day someone installs curl, this test fails
-    // and KNOWN_MISSING gets cleaned up instead of rotting.
+  it('ships the tool behind the citation, not just its manual page', async () => {
+    /*
+     * The curl defect was two defects wearing one coat. LINUX-006 sends the
+     * student to `man curl` and LINUX-010's runbook has them
+     * `curl -s http://127.0.0.1:9105` — and the image shipped neither the page
+     * nor the binary, so two labs could not be completed by following their own
+     * hints. The manifest above now covers the page. This covers the tool,
+     * because a manual page for a binary that is not installed is the same
+     * defect over again and the manifest alone would not notice.
+     */
     const registry = await realRegistry();
-    const six = registry.get('LINUX-006');
-    expect(citedManPages(labProse(six))).toContain('curl');
-    expect(KNOWN_MISSING.has('curl')).toBe(true);
+    expect(citedManPages(labProse(registry.get('LINUX-006')))).toContain('curl');
+
+    const dockerfile = await fs.readFile(DOCKERFILE, 'utf8');
+    // A line of the apt-get list, not a mention in the prose above it.
+    expect(dockerfile).toMatch(/^[ \t]+curl[ \t]*\\?$/m);
   });
 });
 
@@ -158,10 +161,7 @@ describe('the Linux hints only send students to pages the sandbox has', () => {
 
 describe('the sandbox image ships the manual pages the curriculum cites', () => {
   it('keeps the dpkg drop-in that re-includes them', async () => {
-    const dockerfile = await fs.readFile(
-      path.resolve(LABS_DIR, '../infrastructure/docker/sandbox-linux.Dockerfile'),
-      'utf8',
-    );
+    const dockerfile = await fs.readFile(DOCKERFILE, 'utf8');
 
     // Without the include, every page below disappears again and nothing else
     // in the build changes — which is exactly how this went unnoticed before.

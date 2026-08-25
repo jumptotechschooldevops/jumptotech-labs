@@ -2,9 +2,10 @@
 # ---------------------------------------------------------------------------
 # LINUX-006 baseline — an edge service listening on the host's own loopback.
 #
-# Everything in this lab happens inside the session's own container and its own
-# private network. Nothing is published to the host, nothing is reachable from
-# another sandbox, and no external address is contacted.
+# Everything in this lab happens inside the session's own container, which runs
+# with no network attachment at all: `lo` is the only interface that is up or
+# addressed, and there are no routes. Nothing is published to the host, nothing
+# is reachable from another sandbox, and no external address is contacted.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 

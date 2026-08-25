@@ -34,9 +34,17 @@ SH
 chmod 0755 /usr/local/bin/stale-batch-job /usr/local/bin/ledger-sync
 
 install -d -o student -g student -m 0755 /home/student/ops
-chmod 0666 /var/log/jumptotech
-touch /var/log/jumptotech/ledger-sync.log
-chmod 0666 /var/log/jumptotech/ledger-sync.log
+
+# The log ledger-sync appends to, provisioned the way config management would
+# leave it: the directory stays root-owned and traversable, and the file itself
+# belongs to the account that writes to it.
+#
+# This was previously `chmod 0666` on the *directory*, which drops the search
+# bit — so `student` could not traverse into /var/log/jumptotech at all, and the
+# service they were asked to start failed on every write, silently, once every
+# five seconds. This lab teaches finding and signalling a process; an unhinted
+# permission fault layered on top of that is noise, not difficulty.
+install -o student -g student -m 0644 /dev/null /var/log/jumptotech/ledger-sync.log
 
 # Start the runaway and detach it from this seed session.
 setsid nohup /usr/local/bin/stale-batch-job >/dev/null 2>&1 &

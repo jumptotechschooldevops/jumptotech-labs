@@ -64,6 +64,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Package set, justified line by line:
 #   procps psmisc                       ps, top, pgrep, kill, fuser (LINUX-004)
 #   iproute2 iputils-ping netcat socat  LINUX-006 networking
+#   curl                                LINUX-006 and LINUX-010 tell the
+#                                       student to fetch a local HTTP service
+#                                       and cite `man curl`; the image shipped
+#                                       neither the tool nor the page, so both
+#                                       labs were uncompletable by their own
+#                                       hints. It reaches nothing new: under
+#                                       `--network none` the container holds
+#                                       one address, 127.0.0.1, and no routes —
+#                                       exactly the reach netcat-openbsd and
+#                                       socat above already have.
 #   passwd sudo                         LINUX-002/003 accounts
 #   runit                               LINUX-005 supervision
 #   cron                                LINUX-018 scheduled jobs. The package
@@ -126,6 +136,7 @@ RUN set -eux; \
       iputils-ping \
       netcat-openbsd \
       socat \
+      curl \
       passwd \
       sudo \
       runit \
