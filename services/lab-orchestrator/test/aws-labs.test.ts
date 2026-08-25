@@ -42,13 +42,13 @@ describe('AWS lab definitions load', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005']);
+    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006']);
   });
 
   it('declares the Linux sandbox, and gets container isolation for free', async () => {
     const registry = await realRegistry();
 
-    for (const id of ['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005']) {
+    for (const id of ['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006']) {
       const lab = registry.get(id);
       // Simulated: an AWS-track lab, deliberately backed by a local container.
       expect(lab.environment.provider, id).toBe('linux');
@@ -64,7 +64,7 @@ describe('AWS lab definitions load', () => {
 
     expect(track).toBeDefined();
     expect(track?.title).toBe('AWS');
-    expect(track?.labCount).toBe(5);
+    expect(track?.labCount).toBe(6);
   });
 });
 
@@ -86,6 +86,13 @@ describe('AWS-001 needs nothing from AWS', () => {
         expect(['filesystem', 'iam']).toContain(family);
       }
     }
+  });
+
+  it('grades AWS-006 entirely through the filesystem family, with no IAM checks', async () => {
+    const registry = await realRegistry();
+    const families = new Set(registry.get('AWS-006').requirements.map((r) => requirementFamily(r.type)));
+
+    expect(families).toEqual(new Set(['filesystem']));
   });
 
   it('grades the policy labs entirely through the IAM family', async () => {
@@ -228,7 +235,7 @@ describe('AWS-001 official documentation validation', () => {
   it('claims only SOA-C03 for the policy-authoring labs', async () => {
     const registry = await realRegistry();
 
-    for (const id of ['AWS-002', 'AWS-003', 'AWS-004']) {
+    for (const id of ['AWS-002', 'AWS-003', 'AWS-004', 'AWS-006']) {
       const claims = registry.get(id).certification;
       expect(claims, id).toHaveLength(1);
       expect(claims[0]?.certification, id).toBe('SOA-C03');
