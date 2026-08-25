@@ -1,0 +1,388 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-010 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# --- Why a sha256 of the normalised JSON is safe here ----------------------
+#
+# CS-007 rejected a byte hash because `csv.writer` emits CRLF and the hash
+# would have graded line endings. This one was proved before it was written
+# down, in the real image: 18 plausible implementations of the stated contract
+# (json.dump vs dumps vs print, load vs loads vs bytes, separators and
+# ensure_ascii spelled out, a re-normalise round trip) across BOTH seeded
+# configs, under three PYTHONHASHSEED values, produced exactly one digest.
+#
+# It is deterministic because the contract is complete and the fixture avoids
+# everything that is not: no floats (version is the string "3.10"), no
+# non-ASCII (so ensure_ascii cannot matter), and sort_keys removes any
+# dependence on dict ordering. The task text states all four terms — sorted
+# keys, two-space indent, one trailing newline, list order untouched — because
+# a canonical form that is not fully specified is not canonical.
+#
+# depot-a.json and depot-b.json are the SAME config in different key orders.
+# Both normalise to the same digest, which is the point of the exercise
+# rather than a coincidence of the fixture.
+#
+# --- Why the answers are barred from the source ----------------------------
+#
+# A program that never parses anything could match on the filename and print
+# the three error strings. `key=region` and `key=enabled` are barred so the
+# key name has to be computed, and `leeds` is barred so the canonical output
+# cannot be embedded as a literal. A correct validator contains none of the
+# three: it prints `key={name}` and never names a depot.
+#
+# --- The YAML half ---------------------------------------------------------
+#
+# Graded on the corrected file's real bytes, not on the write-up. Each trap
+# was verified against a real YAML parser (ruby psych 3.1.0) rather than
+# asserted:
+#
+#   country: no      -> false        (not the country code)
+#   version: 3.10    -> 3.1          (and 3.10 == 3.1 is true)
+#   duplicate leeds: -> second wins  silently
+#   a tab            -> Psych::SyntaxError, the file does not parse at all
+#
+# The absent-checks name the BROKEN spelling, so quoting with '' or "" both
+# pass — verified: both parse to the identical document.
+# ---------------------------------------------------------------------------
+id: CS-010
+slug: cs-010-json-yaml
+title: "JSON and YAML: The Formats Infrastructure Speaks"
+track: cs
+topic: programming-foundations
+difficulty: beginner
+level: practice
+duration_minutes: 40
+order: 10
+
+environment:
+  provider: linux
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-009
+
+story: >
+  Two things went wrong at Kestrel in the same week, and neither was a syntax
+  error anybody could see.
+
+  A depot team member set a depot's country to `no` — Norway — and the depot
+  dropped out of the routing table. Someone else pinned `version: 3.10` and the
+  rollout shipped a different release entirely. Both files were valid YAML, and
+  both were read by the machine to mean something other than what they said.
+
+  Meanwhile the loader keeps being handed the same config twice — once as the
+  collector writes it, once as the console exports it — and has no way to tell
+  that they are the same config, because the keys come out in a different
+  order every time.
+
+objectives:
+  - Load JSON with the standard library and tell a parse failure apart from a config that parsed but is wrong
+  - Validate required keys and their types, and report which key is at fault
+  - Normalise a document to a canonical form so that equal configs produce identical bytes
+  - Explain why sorting keys is not sorting data, and why list order must survive normalisation
+  - Name the YAML traps that turn a valid file into the wrong config — untagged booleans, unquoted versions, duplicate keys and tabs
+
+task:
+  summary: Write a config loader that says exactly what is wrong, normalises what is right, and then repair four YAML traps by hand.
+  description: >
+    Everything is in `/srv/kestrel/config`, read-only. Read `README.txt` first.
+    You will need `/home/student/py`, `/home/student/out` and
+    `/home/student/ops`, none of which exists yet.
+
+
+    **Part 1 — the loader.** Write `/home/student/py/config.py`, taking an
+    input config path as its first argument and an output path as its second.
+
+
+    A valid config has exactly these keys, with these types:
+
+
+    | key | type |
+
+    | --- | --- |
+
+    | `depot` | string |
+
+    | `region` | string |
+
+    | `version` | string |
+
+    | `enabled` | boolean |
+
+    | `limits` | object |
+
+    | `scanners` | list |
+
+
+    | situation | goes to | exit |
+
+    | --- | --- | --- |
+
+    | valid | `CONFIG_OK` on **stdout**, and the normalised file is written | `0` |
+
+    | a required key is absent | `CONFIG_ERROR=missing-key key=<key>` on **stderr** | `2` |
+
+    | a key has the wrong type | `CONFIG_ERROR=wrong-type key=<key>` on **stderr** | `3` |
+
+    | the file is not JSON at all | `CONFIG_ERROR=invalid-json` on **stderr** | `4` |
+
+
+    The last row is the distinction that matters: a file that will not parse
+    and a file that parses into the wrong shape are different failures, and
+    the caller needs to tell them apart. Write nothing to the output path
+    unless the config is valid.
+
+
+    **Normalising.** The normalised file is the same document in a canonical
+    form, and canonical means byte-for-byte reproducible, so all four of these
+    are part of the contract:
+
+
+    - object keys sorted
+
+    - indented with two spaces
+
+    - UTF-8, ending with exactly one newline
+
+    - **list order left exactly as it was** — sorting keys is not sorting data
+
+
+    `depot-a.json` and `depot-b.json` came out of different tools. Normalise
+    both, to `/home/student/out/depot-a.json` and `/home/student/out/depot-b.json`,
+    and then compare them.
+
+
+    **Part 2 — the YAML.** Copy `/srv/kestrel/config/depots.yaml` to
+    `/home/student/ops/depots.yaml` and repair it there. The seeded file is
+    read-only, so a plain copy of it arrives read-only too — make yours
+    writable before you start editing. It contains four
+    distinct traps. One of them stops it parsing at all; the other three let it
+    parse into a config nobody intended. Fix all four without changing what the
+    file was meant to say — `leeds` is in Norway and is on version 3.10, and
+    both depots stay enabled.
+
+
+    Then write `/home/student/ops/yaml.txt`:
+
+
+    ```
+
+    DUPLICATE_KEY=<the key that appears twice>
+
+    COUNTRY_BECAME=<the value a parser gave leeds's country>
+
+    VERSION_BECAME=<the value a parser gave leeds's version>
+
+    TAB_DEPOT=<the depot whose line is indented with a tab>
+
+    ```
+
+
+    Give the program a `#!/usr/bin/env python3` first line and make it
+    executable.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/config/depot-a.json
+      label: The collector's config is present
+    - type: file_exists
+      path: /srv/kestrel/config/depot-b.json
+      label: The console's export of the same config is present
+    - type: file_exists
+      path: /srv/kestrel/config/depot-broken.json
+      label: The config that will not parse is present
+    # The traps have to be in the seeded file, or the YAML half grades nothing.
+    - type: file_content
+      path: /srv/kestrel/config/depots.yaml
+      contains: "country: no"
+      label: The untagged-boolean trap is in the seeded YAML
+    - type: file_content
+      path: /srv/kestrel/config/depots.yaml
+      contains: "\t"
+      label: The tab is in the seeded YAML
+
+requirements:
+  - type: script_executable
+    path: /home/student/py/config.py
+    label: The loader exists and can be run as a program
+
+  # --- what the loader does with five different configs -------------------
+  - type: script_runs
+    path: /home/student/py/config.py
+    args: ["/srv/kestrel/config/depot-a.json", "/home/student/out/depot-a.json"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "CONFIG_OK"
+    label: The collector's config is accepted
+  - type: script_runs
+    path: /home/student/py/config.py
+    args: ["/srv/kestrel/config/depot-b.json", "/home/student/out/depot-b.json"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "CONFIG_OK"
+    label: The console's export of the same config is accepted too
+  - type: script_runs
+    path: /home/student/py/config.py
+    args: ["/srv/kestrel/config/depot-missing.json", "/home/student/out/missing.json"]
+    expected_exit_code: 2
+    timeout_seconds: 15
+    output_contains:
+      - "CONFIG_ERROR=missing-key key=region"
+    label: A config with a key absent is reported, and the key is named
+  - type: script_runs
+    path: /home/student/py/config.py
+    args: ["/srv/kestrel/config/depot-wrongtype.json", "/home/student/out/wrongtype.json"]
+    expected_exit_code: 3
+    timeout_seconds: 15
+    output_contains:
+      - "CONFIG_ERROR=wrong-type key=enabled"
+    label: A config with a key of the wrong type is reported, and the key is named
+  - type: script_runs
+    path: /home/student/py/config.py
+    args: ["/srv/kestrel/config/depot-broken.json", "/home/student/out/broken.json"]
+    expected_exit_code: 4
+    timeout_seconds: 15
+    output_contains:
+      - "CONFIG_ERROR=invalid-json"
+    label: A file that is not JSON is told apart from a config that is merely wrong
+
+  # --- the canonical form -------------------------------------------------
+  # Two configs that do not look alike, normalised to the same bytes. The
+  # digest was computed in the real image and is reproducible across every
+  # plausible implementation of the stated contract.
+  - type: command_output
+    command: sha256sum
+    args: ["/home/student/out/depot-a.json"]
+    contains: "d8cd267fcd4ffad806d82ef8601ea3209b72be782ff0847cb4badf779e02269c"
+    label: The collector's config normalises to the canonical form
+  - type: command_output
+    command: sha256sum
+    args: ["/home/student/out/depot-b.json"]
+    contains: "d8cd267fcd4ffad806d82ef8601ea3209b72be782ff0847cb4badf779e02269c"
+    label: The console's export normalises to the very same bytes
+
+  # --- the answers stay out of the source ---------------------------------
+  - type: file_content_absent
+    path: /home/student/py/config.py
+    contains: "key=region"
+    label: The loader works out which key is absent rather than containing the answer
+  - type: file_content_absent
+    path: /home/student/py/config.py
+    contains: "key=enabled"
+    label: The loader works out which key is mistyped rather than containing the answer
+  # A validator has no reason to name a depot. Embedding the canonical output
+  # as a literal does.
+  - type: file_content_absent
+    path: /home/student/py/config.py
+    contains: "leeds"
+    label: The loader normalises the config rather than containing it
+
+  # --- the repaired YAML, graded on the file itself -----------------------
+  - type: command_output
+    command: grep
+    args: ["-c", "leeds:", "/home/student/ops/depots.yaml"]
+    contains: "1"
+    label: The duplicated depot key appears once, and still appears
+  - type: file_content_absent
+    path: /home/student/ops/depots.yaml
+    contains: "country: no"
+    label: The country is quoted, so it stays a country and does not become false
+  - type: file_content_absent
+    path: /home/student/ops/depots.yaml
+    contains: "version: 3.10"
+    label: The version is quoted, so it stays 3.10 and does not become 3.1
+  - type: file_content_absent
+    path: /home/student/ops/depots.yaml
+    contains: "version: \"1.0\""
+    label: The values the duplicate block was silently winning with are gone
+  - type: file_content_absent
+    path: /home/student/ops/depots.yaml
+    contains: "\t"
+    label: The indentation is spaces, which is the only indentation YAML allows
+
+  # --- what the traps actually did ----------------------------------------
+  # Matched with `grep -x`, whole line, rather than `file_content contains`.
+  # `contains` is a substring test, and the wrong answer here is a superstring
+  # of the right one: `VERSION_BECAME=3.10` — the version the file says, which
+  # is exactly the misreading the lab is about — contains `VERSION_BECAME=3.1`.
+  # The same trap sits under `DUPLICATE_KEY=leeds` and `leeds-old`. Whole-line
+  # matching is what makes the near-miss fail.
+  - type: command_output
+    command: grep
+    args: ["-x", "DUPLICATE_KEY=leeds", "/home/student/ops/yaml.txt"]
+    contains: "DUPLICATE_KEY=leeds"
+    label: The write-up names the key that was silently overwritten
+  - type: command_output
+    command: grep
+    args: ["-x", "COUNTRY_BECAME=false", "/home/student/ops/yaml.txt"]
+    contains: "COUNTRY_BECAME=false"
+    label: The write-up records what the country became
+  - type: command_output
+    command: grep
+    args: ["-x", "VERSION_BECAME=3.1", "/home/student/ops/yaml.txt"]
+    contains: "VERSION_BECAME=3.1"
+    label: The write-up records the version that was actually deployed
+  - type: command_output
+    command: grep
+    args: ["-x", "TAB_DEPOT=bristol", "/home/student/ops/yaml.txt"]
+    contains: "TAB_DEPOT=bristol"
+    label: The write-up names the depot whose line stopped the file parsing
+
+hints:
+  - level: 1
+    text: >
+      Start by loading each of the five JSON files in `python3 -c` and seeing
+      which ones raise and which ones load fine but are wrong. `json.load`
+      raises `json.JSONDecodeError` for the first kind and nothing at all for
+      the second — that difference is the whole of exit code 4 versus 2 and 3.
+      For the YAML, there is no parser in this sandbox on purpose: read it.
+  - level: 2
+    text: >
+      `json.dumps` takes `sort_keys` and `indent`. Try normalising `depot-a.json`
+      and `depot-b.json` and running `diff` on the two results — if the contract
+      is right they are identical, and that is the answer to how the loader is
+      meant to tell they are the same config. Watch what happens to `scanners`:
+      it is data, and its order is part of the value, not something to tidy.
+  - level: 3
+    text: >
+      Canonical means byte-for-byte, so the last newline counts too:
+      `json.dumps` does not add one and `print` does. In YAML, quoting is what
+      separates a value from a type — `no`, `yes`, `on`, `off` and an unquoted
+      `3.10` are all read as something other than the text you typed, and the
+      parsers infrastructure actually uses (PyYAML, go-yaml, Ruby's Psych)
+      resolve them that way. A tab is not indentation at all; the file with one
+      in it does not parse.
+
+references:
+  - title: RFC 8259 — the JSON data interchange format
+    url: https://www.rfc-editor.org/rfc/rfc8259
+  - title: Python — the json module
+    url: https://docs.python.org/3/library/json.html
+  - title: Python — json.JSONDecodeError
+    url: https://docs.python.org/3/library/json.html#json.JSONDecodeError
+  - title: YAML 1.2.2 specification
+    url: https://yaml.org/spec/1.2.2/
+  - title: YAML 1.1 type repository — the bool resolution that yes/no comes from
+    url: https://yaml.org/type/bool.html
+  - title: sha256sum(1)
+    url: https://www.gnu.org/software/coreutils/manual/html_node/sha2-utilities.html
+
+skills:
+  - cs.data.json
+  - cs.data.yaml
+  - cs.data.canonical-form
+  - cs.data.schema-validation
+  - cs.troubleshooting.config-traps
+
+# certification: deliberately absent.
+#
+# CS-010 is FOUNDATIONAL SKILL content. Configuration formats underpin most of
+# the certification tracks without being an objective of any of them.

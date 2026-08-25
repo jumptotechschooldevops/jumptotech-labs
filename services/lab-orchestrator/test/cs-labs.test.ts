@@ -41,7 +41,18 @@ async function cs001(): Promise<LoadedLabDefinition> {
 }
 
 /** Every CS lab shipped so far, so track-wide rules are checked once. */
-const CS_IDS = ['CS-001', 'CS-002', 'CS-003', 'CS-004', 'CS-005', 'CS-006', 'CS-007', 'CS-008', 'CS-009'];
+const CS_IDS = [
+  'CS-001',
+  'CS-002',
+  'CS-003',
+  'CS-004',
+  'CS-005',
+  'CS-006',
+  'CS-007',
+  'CS-008',
+  'CS-009',
+  'CS-010',
+];
 
 async function csLabs(): Promise<LoadedLabDefinition[]> {
   const registry = await realRegistry();
@@ -132,12 +143,20 @@ describe('the CS track loads', () => {
   it('needs no requirement type that did not already exist', async () => {
     // Adding the CS track cost the platform no new verifier vocabulary. Every
     // type below shipped before CS-001 did, and this test is what says so.
+    //
+    // The list is deliberately hand-maintained rather than derived from the
+    // schema: derived from the schema it would accept a type someone adds
+    // tomorrow, which is the thing it exists to catch. Adding an entry here
+    // means checking that the type predates the track — `command_output` was
+    // added by 558a5f7 (the Linux track) and is present in the tree at
+    // 5930406^, the commit before CS-001.
     const shipped = new Set([
       'file_exists',
       'file_content',
       'file_content_absent',
       'script_executable',
       'script_runs',
+      'command_output',
     ]);
 
     for (const lab of await csLabs()) {
@@ -181,6 +200,15 @@ describe('CS-001 content policy', () => {
       'CS-001': ['15885', '16656', 'SCAN01_CPUS', 'VERDICT=', '/var'],
       'CS-002': ['536870912', '536.87', '512.00', '1073.74', '4d69', '537M', 'VERDICT='],
       'CS-009': ['RECONCILED=6', 'TOTAL=8484', 'line=3', 'IsADirectoryError', 'UNCAUGHT_EXIT='],
+      'CS-010': [
+        'd8cd267fcd4ffad806d82ef8601ea3209b72be782ff0847cb4badf779e02269c',
+        'key=region',
+        'key=enabled',
+        'DUPLICATE_KEY=',
+        'COUNTRY_BECAME=',
+        'VERSION_BECAME=',
+        'TAB_DEPOT=',
+      ],
       'CS-008': ['TOTAL=16', 'ERRORS=4', 'SLOWEST=R-1007', 'LONGEST_MSG=R-1012', 'ERROR_PATHS='],
       'CS-007': ['ORDER=leeds,bristol', 'ORDER=york,cardiff', 'TOTAL=26', 'COUNT=9', 'leeds,9'],
       'CS-006': ['DECISION=scale-down', 'DECISION=scale-up', 'current=10 target=9', 'current=12 target=9', 'DECISION=invalid'],

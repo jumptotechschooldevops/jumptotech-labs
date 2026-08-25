@@ -1001,3 +1001,120 @@ and what a traceback looks like — which is the objective in full. It cannot be
 discovered without running the program and reading the traceback, so it is a
 longer way round rather than a shortcut. Closing it would mean grading source
 shape, which is the thing this lab is built to avoid.
+
+### CS-010 — JSON and YAML: The Formats Infrastructure Speaks
+
+```text
+LAB ID:              CS-010
+TITLE:               JSON and YAML: The Formats Infrastructure Speaks
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Load JSON with the standard library and tell a parse failure apart from a
+  config that parsed but is wrong; validate required keys and types and report
+  which key is at fault; normalise a document to a canonical form so that equal
+  configs produce identical bytes; explain why sorting keys is not sorting data;
+  and name the YAML traps that turn a valid file into the wrong config.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  Kubernetes manifests, CI configs, Terraform state, API payloads and structured
+  logs are all this. `version: 3.10` deploying 3.1 and an unquoted `no` becoming
+  false are both real outages. Canonical form is what makes two configs
+  comparable, and what makes a diff mean something.
+
+OFFICIAL / PRIMARY SOURCES:
+  RFC 8259 — the JSON data interchange format  https://www.rfc-editor.org/rfc/rfc8259
+  Python — the json module                     https://docs.python.org/3/library/json.html
+  Python — json.JSONDecodeError                https://docs.python.org/3/library/json.html#json.JSONDecodeError
+  YAML 1.2.2 specification                     https://yaml.org/spec/1.2.2/
+  YAML 1.1 type repository — bool resolution   https://yaml.org/type/bool.html
+  sha256sum(1), GNU coreutils                  https://www.gnu.org/software/coreutils/manual/html_node/sha2-utilities.html
+
+LAST VERIFIED:       2026-08-25   (all five distinct URLs fetched, HTTP 200;
+                                  the JSONDecodeError reference is an anchor on
+                                  the json module page)
+```
+
+**The canonical form, and why a hash is safe here.** CS-007 rejected a byte
+hash because `csv.writer` emits CRLF and the hash would have graded line
+endings. This one was *measured before it was written down*, in the real
+sandbox image:
+
+| dimension varied | variants |
+|---|---|
+| serialising | `json.dumps`+`"\n"`, `json.dump`+`write("\n")`, `print(...)` |
+| loading | `json.load`, `json.loads` of text, `json.loads` of bytes |
+| spelled-out defaults | `separators=(",", ": ")`, `ensure_ascii` True and False |
+| idempotence | normalise, re-parse, normalise again |
+| inputs | `depot-a.json` and `depot-b.json` — the same config, different key order |
+| interpreter | `PYTHONHASHSEED` unset, 0, 1, 12345 |
+
+**Every combination produced one digest:**
+`d8cd267fcd4ffad806d82ef8601ea3209b72be782ff0847cb4badf779e02269c`.
+
+It is reproducible because the contract is complete and the fixture avoids what
+is not: **no floats** (`version` is the string `"3.10"`), **no non-ASCII** (so
+`ensure_ascii` cannot matter), and `sort_keys` removing any dependence on dict
+ordering. The task text states all four terms — sorted keys, two-space indent,
+one trailing newline, list order untouched — because a canonical form that is
+not fully specified is not canonical. Measured the other way too: dropping the
+trailing newline, using indent 4, using no indent, leaving keys unsorted, and
+sorting the `scanners` list all change the digest, and all five are rejected.
+
+**Semantically equivalent input, identical canonical output.** `depot-a.json`
+(compact, keys in one order) and `depot-b.json` (pretty-printed, keys in
+another) are the same document. Both are graded against the *same* digest, so
+the lab passes only when the student's normalisation actually collapses the
+difference — which is the thing normalisation is for.
+
+**Grading the YAML half on real bytes.** Each trap was verified against a real
+YAML parser (Ruby Psych 3.1.0) rather than asserted:
+
+| trap | what a parser actually does |
+|---|---|
+| `country: no` | resolves to boolean `false`, not the country code |
+| `version: 3.10` | resolves to the float `3.1`, and `3.10 == 3.1` is true |
+| duplicate `leeds:` | the second block silently wins |
+| a tab | `Psych::SyntaxError` — the file does not parse at all |
+
+The absent-checks name the **broken** spelling, so `"no"` and `'no'` both pass —
+verified: both spellings parse to the identical document. The repaired file is
+graded on its own bytes (`grep -c leeds:` for the duplicate, three
+`file_content_absent` checks for the rest); the write-up is graded separately
+and is never the only evidence.
+
+**Whole-line matching, not substring.** The write-up checks use
+`command_output` with `grep -x` rather than `file_content contains`, because
+`contains` is a substring test and the wrong answer here is a *superstring* of
+the right one: `VERSION_BECAME=3.10` — the version the file says, which is
+exactly the misreading the lab is about — contains `VERSION_BECAME=3.1`. The
+same trap sits under `DUPLICATE_KEY=leeds` and `leeds-old`. This was caught by
+the lab's own test suite before the lab shipped, and confirmed against real
+`grep` in the sandbox.
+
+**Forged evidence and typed-out answers cannot pass.** A shell script matching
+on the filename that emits correct exit codes on all five configs *and* types
+out byte-perfect canonical JSON was built and run against real Docker: it
+reaches 17 of 20 and fails all three `file_content_absent` checks. `key=region`
+and `key=enabled` force the key name to be computed; `leeds` is barred because a
+validator has no reason to name a depot, but embedded canonical output cannot
+avoid it.
+
+**Known limitation, stated plainly.** The two normalised files are graded where
+they lie, so a student who solves the lab and then breaks the loader still has
+two files that hash correctly. Those two checks are not the defence — the five
+that run the loader are, and a stale artifact behind a broken loader reaches 15
+of 20. Verified on the real platform. Closing it would need a verifier primitive
+that can clear a path before grading, which does not exist and is not worth
+adding for this.
+
+**New platform capability required:** none. `command_output` is pre-existing
+vocabulary — added by 558a5f7 with the Linux track, present in the tree at
+5930406^, the commit before CS-001. CS-010 is the first CS lab to use it, so the
+hand-maintained allow-list in `cs-labs.test.ts` gained an entry and a note
+recording that evidence.
+
+**Runtime dependency:** Python 3.11 standard library only. **No PyYAML**, and
+none requested — the YAML half is reading and repairing YAML by hand, which is
+the skill, and is why the seeded file is graded as text.
