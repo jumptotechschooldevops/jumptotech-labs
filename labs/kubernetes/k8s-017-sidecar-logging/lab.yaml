@@ -1,0 +1,228 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# K8S-017 is the second half of the container-composition pair K8S-016 opened.
+# There the extra container ran once and finished; here it has to keep running
+# alongside the application for the Pod's whole life, which is a different
+# lifecycle and a different field.
+#
+# Nothing in the fixture is broken, and that is deliberate. K8S-016 taught
+# "Running is not Ready" by handing over a workload that never became Ready.
+# This one is Ready throughout: the failure is that its audit trail is written
+# to a file inside the container where nothing can collect it. A student who
+# looks for a crash finds a healthy Deployment, which is the correct lesson
+# about observability problems — they do not show up in `kubectl get pods`.
+#
+# The volume is NOT seeded. K8S-016 gave the shared volume away because the
+# init container was the subject; here the sharing itself is the subject, so
+# the student builds both halves and the verifier checks that both containers
+# mount the *same* volume. Two containers each mounting a volume of their own
+# would satisfy a naive check and would not ship a single log line, which is
+# why `workload_volume_mount` is anchored to a named container rather than to
+# the workload.
+#
+# ---------------------------------------------------------------------------
+# SOURCE METADATA (official-source curriculum policy)
+#
+# Carried as a comment, not as fields: `labDefinitionSchema` is `.strict()`.
+#
+# classification:       CERTIFICATION OBJECTIVE
+# certification:        CKA
+# objective_version:    v1.35 (CNCF curriculum, Kubernetes v1.35)
+# official_objective:   "Manage and evaluate container output streams" —
+#                        Troubleshooting (30%)
+# objective_mapping:    A log-shipping sidecar is the mechanism Kubernetes
+#                        documents for getting file-based application output
+#                        into the container's stdout stream, which is the only
+#                        place cluster log collection reads from. This bullet
+#                        was previously uncovered by the track.
+# secondary_objective:  Workloads & Scheduling — "primitives for robust,
+#                        self-healing application deployments". Claimed as
+#                        secondary only: K8S-016 already serves that bullet, and
+#                        counting it twice would overstate coverage.
+# production_skill:     Adding observability to a service you are not allowed to
+#                        modify — the sidecar exists precisely so the
+#                        application image stays untouched.
+# coverage_depth:       PRACTICED
+#
+# official_documentation:
+#   - https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/
+#     verified 2026-08-25: a sidecar is an init container with
+#     `restartPolicy: Always`; stable since v1.33 (feature gate on by default
+#     since v1.29); it runs for the Pod's whole lifetime rather than to
+#     completion, and logging is the first use case the page lists.
+#   - https://kubernetes.io/docs/concepts/cluster-administration/logging/
+#   - https://kubernetes.io/docs/concepts/storage/volumes/
+# last_verified:        2026-08-25
+# ---------------------------------------------------------------------------
+id: K8S-017
+slug: k8s-017-sidecar-logging
+title: Ship a Log File with a Sidecar
+track: kubernetes
+topic: workloads
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 17
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-016
+
+story: >
+  `audit-api` is healthy. Both replicas are Ready, it has never restarted, and
+  it is doing exactly what it was written to do — appending every request it
+  serves to an audit trail at `/var/log/audit/audit.log`.
+
+  Compliance asked for six months of that trail last week and nobody could
+  produce any of it. The file lives inside the container, so it dies with the
+  container and no log collector has ever seen a line of it. `kubectl logs`
+  shows nothing, because the application has never written to stdout.
+
+  You cannot change the application. The team that owns it has a release freeze
+  until the audit closes, which is the situation this pattern exists for.
+
+objectives:
+  - Explain why only a container's stdout reaches cluster log collection
+  - Run a second container for the whole life of a Pod, not just before it starts
+  - Share one volume between two containers so one can read what the other writes
+  - Distinguish a sidecar from an ordinary init container by its lifecycle
+
+task:
+  summary: Make audit-api's file-based audit trail readable with kubectl logs, without changing the application container.
+  description: >
+    Deployment `audit-api` runs two replicas. Look first: confirm for yourself
+    that the Pods are Ready, that `kubectl logs` returns nothing useful, and
+    that the audit trail really is being written inside the container.
+
+    Add a second container that reads that file and writes what it reads to its
+    own stdout, so the platform can collect it. It has to be running the whole
+    time the application is — not only before it starts — because the
+    application appends to the file continuously.
+
+    The two containers need to see the same directory. A container's filesystem
+    is private to it; making a path shared between them is something you declare
+    on the Pod.
+
+    Name the new container `log-shipper`, base it on `busybox:1.36`, and have
+    both it and the application see the audit directory at
+    `/var/log/audit`. Leave the `api` container's image and command exactly as
+    they are.
+
+    You are done when `kubectl logs deploy/audit-api -c log-shipper` shows the
+    audit lines the application is writing, and both replicas are still
+    available. Let the rollout finish before you check: while old and new Pods
+    coexist, that command may pick a Pod from the previous version and tell you
+    the container does not exist there, which is true and not the failure you
+    are looking for.
+
+setup:
+  manifests:
+    - setup/audit-api.yaml
+  verify:
+    - type: deployment_exists
+      name: audit-api
+    - type: deployment_available
+      name: audit-api
+      min_available: 2
+  verify_timeout_seconds: 240
+
+# Graded on the live Pod template. The shared volume is checked per container:
+# both `api` and `log-shipper` must mount the *same* volume at the audit path,
+# because two containers each mounting a private volume would ship nothing.
+requirements:
+  - type: deployment_exists
+    name: audit-api
+    label: Deployment audit-api still exists
+  - type: deployment_selector
+    name: audit-api
+    selector:
+      app: audit-api
+      tier: api
+    label: The original Deployment was extended, not replaced
+  - type: workload_container
+    kind: deployment
+    name: audit-api
+    collection: containers
+    container: api
+    image: busybox:1.36
+    label: The application container is unchanged
+  - type: workload_container
+    kind: deployment
+    name: audit-api
+    collection: initContainers
+    container: log-shipper
+    image: busybox:1.36
+    restartPolicy: Always
+    label: log-shipper runs for the whole life of the Pod, as a sidecar
+  - type: workload_volume_mount
+    kind: deployment
+    name: audit-api
+    collection: containers
+    container: api
+    volume: audit-logs
+    mountPath: /var/log/audit
+    source: emptyDir
+    label: The application writes into a shared volume
+  - type: workload_volume_mount
+    kind: deployment
+    name: audit-api
+    collection: initContainers
+    container: log-shipper
+    volume: audit-logs
+    mountPath: /var/log/audit
+    source: emptyDir
+    label: log-shipper reads the same shared volume
+  - type: deployment_rollout_complete
+    name: audit-api
+    label: The rollout finished
+  - type: deployment_available
+    name: audit-api
+    min_available: 2
+    label: Both replicas are still available
+
+hints:
+  - level: 1
+    text: >
+      Cluster log collection only ever reads a container's stdout. Nothing else
+      about a container is collected — so the job is to get the contents of a
+      file onto a stream, not to configure a logging backend.
+  - level: 2
+    text: >
+      A container that must outlive Pod start-up, rather than finish before it,
+      is declared in the same list as an init container but with one extra field
+      that changes its lifecycle. The sidecar documentation names that field.
+      Separately: two containers share a directory when the Pod declares a
+      volume and both containers mount it.
+  - level: 3
+    text: >
+      Declare an `emptyDir` volume named `audit-logs` on the Pod template, and
+      give both containers a `volumeMount` for it at `/var/log/audit`. The
+      shipper goes in `initContainers` with `restartPolicy: Always` — that is
+      what makes it a sidecar rather than something that must finish first — and
+      a command such as `tail -F /var/log/audit/audit.log` keeps it streaming.
+      `-F` rather than `-f` matters: the file may not exist yet when the sidecar
+      starts.
+
+references:
+  - title: Sidecar Containers
+    url: https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/
+  - title: Logging Architecture
+    url: https://kubernetes.io/docs/concepts/cluster-administration/logging/
+  - title: Volumes
+    url: https://kubernetes.io/docs/concepts/storage/volumes/
+
+skills:
+  - kubernetes.pods.sidecar-containers
+  - kubernetes.observability.logs
+  - kubernetes.storage.volumes
+  - kubernetes.workloads.update
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - troubleshooting

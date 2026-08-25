@@ -1140,6 +1140,43 @@ const kubernetesRequirementSchemas = {
    * `kind` is a closed enum, and there is no `namespace` field: reads are bound
    * to the session's own namespace by the reader.
    */
+  /**
+   * One container's mount of one volume, at one path.
+   *
+   * The question this answers is deliberately narrow and deliberately not
+   * "does this workload have a volume called x". A volume in `spec.volumes`
+   * that nothing mounts is inert, and two containers each mounting *a* volume
+   * is not the same as two containers sharing *one* volume — which is the only
+   * thing that makes a sidecar work. So the check is anchored to a named
+   * container in a named list, and the volume must appear in that container's
+   * own `volumeMounts`.
+   *
+   * `source` is optional and, when given, is resolved through the Pod's
+   * `spec.volumes` — so a lab can require that the shared volume is an
+   * `emptyDir` rather than, say, a Secret that happens to carry the right name.
+   *
+   * As with the other workload checks there is no `namespace` field: reads are
+   * bound to the session's namespace by the reader, and `kind` is a closed
+   * enum rather than a group/version/resource triple.
+   */
+  workload_volume_mount: z
+    .object({
+      type: z.literal('workload_volume_mount'),
+      kind: z.enum(['pod', 'deployment']),
+      name: resourceName,
+      container: resourceName,
+      collection: z.enum(['containers', 'initContainers']).default('containers'),
+      /** The `volumes[].name` the container must mount. */
+      volume: resourceName,
+      mountPath: z.string().min(1).max(253).regex(/^\//, 'mountPath must be absolute'),
+      readOnly: z.boolean().optional(),
+      subPath: z.string().min(1).max(253).optional(),
+      source: z
+        .enum(['emptyDir', 'configMap', 'secret', 'projected', 'persistentVolumeClaim'])
+        .optional(),
+      ...common,
+    })
+    .strict(),
   workload_container: z
     .object({
       type: z.literal('workload_container'),
@@ -1947,6 +1984,7 @@ export const REQUIREMENT_FAMILIES = {
   workload_annotation: 'kubernetes',
   deployment_strategy: 'kubernetes',
   workload_container: 'kubernetes',
+  workload_volume_mount: 'kubernetes',
 
   file_exists: 'filesystem',
   directory_exists: 'filesystem',

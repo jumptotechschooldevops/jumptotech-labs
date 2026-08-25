@@ -43,6 +43,7 @@ import {
   type TolerationSnapshot,
   type AffinityTermSnapshot,
   type VolumeMountSnapshot,
+  type VolumeSourceSnapshot,
 } from './port.js';
 
 function statusCodeOf(error: unknown): number | undefined {
@@ -1116,6 +1117,16 @@ function toContainerSnapshots(
       ready: status?.ready ?? false,
       restartCount: status?.restartCount ?? 0,
       state,
+      ...(container.volumeMounts?.length
+        ? {
+            volumeMounts: container.volumeMounts.map((m) => ({
+              name: m.name,
+              mountPath: m.mountPath,
+              ...(m.readOnly !== undefined ? { readOnly: m.readOnly } : {}),
+              ...(m.subPath !== undefined ? { subPath: m.subPath } : {}),
+            })),
+          }
+        : {}),
       ...(container.command ? { command: [...container.command] } : {}),
       ...(container.args ? { args: [...container.args] } : {}),
       // The container's own restartPolicy. `V1Container.restartPolicy` is only
@@ -1218,6 +1229,7 @@ export function toPodSnapshot(pod: k8s.V1Pod, namespace: string, name: string): 
           ),
         }
       : {}),
+    ...(spec?.volumes?.length ? { volumes: volumeSourcesOf(spec) } : {}),
     deleting: Boolean(pod.metadata?.deletionTimestamp),
     ready: containers.length > 0 && containers.every((c) => c.ready),
     configRefs: configReferencesOf(spec),
@@ -1272,6 +1284,7 @@ export function toDeploymentSnapshot(
     ...(templateSpec?.initContainers?.length
       ? { initContainers: toContainerSnapshots(templateSpec.initContainers) }
       : {}),
+    ...(templateSpec?.volumes?.length ? { volumes: volumeSourcesOf(templateSpec) } : {}),
     conditions: (status.conditions ?? []).map((c) => ({
       type: c.type,
       status: c.status,
@@ -1317,6 +1330,50 @@ function affinityTermsOf(
     topologyKey: term.topologyKey ?? 'kubernetes.io/hostname',
     matchLabels: { ...(term.labelSelector?.matchLabels ?? {}) },
   }));
+}
+
+/**
+ * `spec.volumes`, reduced to the source kind a lab can reason about.
+ *
+ * Only the sources the Kubernetes track actually teaches are named; anything
+ * else is `other` rather than being guessed at, so a requirement can never
+ * accidentally match a volume type nobody modelled.
+ */
+function volumeSourcesOf(spec: k8s.V1PodSpec | undefined): VolumeSourceSnapshot[] {
+  return (spec?.volumes ?? []).map((volume) => {
+    if (volume.persistentVolumeClaim) {
+      return {
+        name: volume.name,
+        source: 'persistentVolumeClaim' as const,
+        sourceName: volume.persistentVolumeClaim.claimName,
+      };
+    }
+    if (volume.configMap) {
+      return {
+        name: volume.name,
+        source: 'configMap' as const,
+        ...(volume.configMap.name ? { sourceName: volume.configMap.name } : {}),
+      };
+    }
+    if (volume.secret) {
+      return {
+        name: volume.name,
+        source: 'secret' as const,
+        ...(volume.secret.secretName ? { sourceName: volume.secret.secretName } : {}),
+      };
+    }
+    if (volume.projected) return { name: volume.name, source: 'projected' as const };
+    if (volume.hostPath) return { name: volume.name, source: 'hostPath' as const };
+    if (volume.downwardAPI) return { name: volume.name, source: 'downwardAPI' as const };
+    if (volume.emptyDir) {
+      return {
+        name: volume.name,
+        source: 'emptyDir' as const,
+        ...(volume.emptyDir.medium ? { medium: volume.emptyDir.medium } : {}),
+      };
+    }
+    return { name: volume.name, source: 'other' as const };
+  });
 }
 
 function volumeMountsOf(spec: k8s.V1PodSpec | undefined): VolumeMountSnapshot[] {

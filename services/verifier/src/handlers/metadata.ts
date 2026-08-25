@@ -16,7 +16,7 @@
  *     platform's own credentials, exactly as every other Kubernetes check does.
  *     No student RBAC changes, and nothing here needs cluster scope.
  */
-import type { ContainerSnapshot } from '@jumptotech/lab-orchestrator';
+import type { ContainerSnapshot, VolumeSourceSnapshot } from '@jumptotech/lab-orchestrator';
 import type { VerifierHandler } from '../contract.js';
 import { fail, missing, pass } from '../contract.js';
 import { imageMatches } from '../image.js';
@@ -182,3 +182,86 @@ function describeArgv(argv: string[] | undefined): string {
   const rendered = JSON.stringify(argv);
   return rendered.length > 120 ? `${rendered.slice(0, 120)}… (truncated)` : rendered;
 }
+
+/**
+ * One container's mount of one volume.
+ *
+ * Three things have to line up, and the handler keeps them separate so a
+ * failure says which one is wrong:
+ *
+ *   1. the named container exists in the named list;
+ *   2. *that container* mounts a volume of the given name — not the workload
+ *      somewhere, and not a different container;
+ *   3. it mounts it at the required path.
+ *
+ * A volume declared in `spec.volumes` and mounted by nobody fails, which is the
+ * point: an unmounted volume changes nothing about how the Pod runs.
+ */
+export const workloadVolumeMount: VerifierHandler<'workload_volume_mount'> = {
+  type: 'workload_volume_mount',
+  label: (r) => {
+    const where = r.collection === 'initContainers' ? 'init container' : 'container';
+    const kind = r.kind === 'pod' ? 'Pod' : 'Deployment';
+    return `${kind} ${r.name} mounts volume ${r.volume} at ${r.mountPath} in ${where} ${r.container}`;
+  },
+  async run(r, reader) {
+    const workload =
+      r.kind === 'pod' ? await reader.pod(r.name) : await reader.deployment(r.name);
+    if (!workload) return missing(r.kind === 'pod' ? 'Pod' : 'Deployment', r.name, reader.namespace);
+
+    const list: ContainerSnapshot[] =
+      r.collection === 'initContainers' ? (workload.initContainers ?? []) : workload.containers;
+    const where = r.collection === 'initContainers' ? 'init container' : 'container';
+
+    if (list.length === 0) return fail(`${r.name} declares no ${where}s`);
+
+    const { container } = selectContainer({ containers: list }, r.container);
+    if (!container) {
+      const names = list.map((c) => `'${c.name}'`).join(', ');
+      return fail(`No ${where} named '${r.container}' — found ${names}`);
+    }
+
+    const mounts = container.volumeMounts ?? [];
+    const mount = mounts.find((m) => m.name === r.volume);
+    if (!mount) {
+      /*
+       * Distinguish "the volume is not mounted here" from "the volume does not
+       * exist at all". A student who declared the volume but forgot the mount
+       * gets told that, rather than being sent hunting for a typo.
+       */
+      const declared = (workload.volumes ?? []).some((v) => v.name === r.volume);
+      const mounted = mounts.map((m) => `'${m.name}'`).join(', ') || 'nothing';
+      return fail(
+        declared
+          ? `Volume '${r.volume}' exists on the Pod but ${where} '${r.container}' does not mount it — it mounts ${mounted}`
+          : `${where} '${r.container}' does not mount a volume named '${r.volume}' — it mounts ${mounted}`,
+      );
+    }
+
+    const problems: string[] = [];
+    if (mount.mountPath !== r.mountPath) {
+      problems.push(`mounted at '${mount.mountPath}', expected '${r.mountPath}'`);
+    }
+    if (r.readOnly !== undefined && (mount.readOnly ?? false) !== r.readOnly) {
+      problems.push(`readOnly is ${mount.readOnly ?? false}, expected ${r.readOnly}`);
+    }
+    if (r.subPath !== undefined && mount.subPath !== r.subPath) {
+      problems.push(`subPath is ${mount.subPath === undefined ? 'unset' : `'${mount.subPath}'`}, expected '${r.subPath}'`);
+    }
+
+    if (r.source !== undefined) {
+      // Resolved through the Pod's own volume list, so "mounts a volume called
+      // logs" cannot be satisfied by a Secret that happens to share the name.
+      const volume: VolumeSourceSnapshot | undefined = (workload.volumes ?? []).find(
+        (v) => v.name === r.volume,
+      );
+      if (!volume) {
+        problems.push(`no volume named '${r.volume}' is declared on the Pod`);
+      } else if (volume.source !== r.source) {
+        problems.push(`volume '${r.volume}' is a ${volume.source}, expected ${r.source}`);
+      }
+    }
+
+    return problems.length === 0 ? pass() : fail(problems.join('; '));
+  },
+};

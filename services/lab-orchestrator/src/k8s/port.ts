@@ -72,6 +72,8 @@ export interface ContainerSnapshot {
   command?: string[];
   /** `args` — arguments passed to the entrypoint. */
   args?: string[];
+  /** This container's own `volumeMounts`, in declaration order. */
+  volumeMounts?: ContainerVolumeMountSnapshot[];
   /**
    * The container's OWN `restartPolicy`, not the Pod's.
    *
@@ -105,6 +107,46 @@ export interface AffinityTermSnapshot {
   matchLabels: Record<string, string>;
 }
 
+/**
+ * One `volumeMounts[]` entry, attributed to the container that declares it.
+ *
+ * Distinct from `VolumeMountSnapshot`, which is flattened across every
+ * container of a workload and therefore cannot say *which* container mounts
+ * what. That flattening is fine for `workload_mounts_pvc` — "does this workload
+ * mount this claim somewhere" — and useless for a sidecar, where the whole
+ * question is whether two specific containers share one volume.
+ */
+export interface ContainerVolumeMountSnapshot {
+  name: string;
+  mountPath: string;
+  readOnly?: boolean;
+  subPath?: string;
+}
+
+/**
+ * A volume declared on a Pod spec, and what backs it.
+ *
+ * `source` is the discriminator a lab actually cares about: an `emptyDir`
+ * shared between two containers is a different teaching point from a projected
+ * Secret, even though both are "a volume named x".
+ */
+export interface VolumeSourceSnapshot {
+  name: string;
+  source:
+    | 'emptyDir'
+    | 'configMap'
+    | 'secret'
+    | 'projected'
+    | 'persistentVolumeClaim'
+    | 'hostPath'
+    | 'downwardAPI'
+    | 'other';
+  /** Claim, ConfigMap or Secret name, when the source names one. */
+  sourceName?: string;
+  /** `emptyDir.medium`, e.g. `Memory`. */
+  medium?: string;
+}
+
 export interface VolumeMountSnapshot {
   name: string;
   mountPath: string;
@@ -119,6 +161,8 @@ export interface PodSnapshot {
   phase: string;
   labels: Record<string, string>;
   containers: ContainerSnapshot[];
+  /** `spec.volumes` with their sources, so a mount can be traced to what backs it. */
+  volumes?: VolumeSourceSnapshot[];
   /** `spec.initContainers`, in declaration order — which is run order. */
   initContainers?: ContainerSnapshot[];
   /** Set while the Pod is terminating. */
@@ -165,6 +209,8 @@ export interface DeploymentSnapshot {
   selector: Record<string, string>;
   podLabels: Record<string, string>;
   containers: ContainerSnapshot[];
+  /** `spec.volumes` with their sources, so a mount can be traced to what backs it. */
+  volumes?: VolumeSourceSnapshot[];
   /** Pod template `spec.initContainers`, in declaration order. */
   initContainers?: ContainerSnapshot[];
   conditions: Array<{ type: string; status: string; reason?: string; message?: string }>;
