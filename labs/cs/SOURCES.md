@@ -865,3 +865,56 @@ only because the program is independently graded by running it: a hand-written
 perfect CSV behind a program that does nothing scores 7/9 and never passes.
 
 **Runtime dependency:** Python 3.11 standard library only.
+
+### CS-008 — Strings and Text Processing
+
+```text
+LAB ID:              CS-008
+TITLE:               Strings and Text Processing
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Take a record apart on the structure it has rather than on whitespace;
+  recognise that the last field can contain the delimiter and the separator;
+  count what could not be parsed and treat a non-zero count as a finding; keep
+  a text field intact including punctuation and non-ASCII; and rank and
+  summarise records deterministically once parsed.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  Logs are strings, first-line diagnosis is string work, and a parser that
+  splits on the wrong thing does not crash — it answers a smaller question
+  confidently. Here it loses the slowest request of the night and three of the
+  four errors, which is exactly the 2% nobody investigates.
+
+OFFICIAL / PRIMARY SOURCES:
+  Python — str and its methods       https://docs.python.org/3/library/stdtypes.html
+  Python tutorial — strings          https://docs.python.org/3/tutorial/introduction.html
+  Python — string services           https://docs.python.org/3/library/string.html
+  Python — re                        https://docs.python.org/3/library/re.html
+  Python — built-in functions        https://docs.python.org/3/library/functions.html
+  Python — reading and writing files https://docs.python.org/3/tutorial/inputoutput.html
+
+LAST VERIFIED:       2026-08-25   (all six fetched, HTTP 200)
+```
+
+| log | expected |
+|---|---|
+| `requests.log` | `TOTAL=16 ERRORS=4 DROPPED=0` · `SLOWEST=R-1007,R-1003,R-1010` · `LONGEST_MSG=R-1012` · `ERROR_PATHS=/api/depots,/api/track` |
+| `requests-quiet.log` | `TOTAL=5 ERRORS=1 DROPPED=0` · `SLOWEST=Q-2002,Q-2005,Q-2004` · `LONGEST_MSG=Q-2002` · `ERROR_PATHS=/api/track` |
+
+**Every trap was verified against the fixture, and one assumption was wrong.**
+
+| trap | what it actually does |
+|---|---|
+| whitespace split | accepts **10 of 16** lines, losing the slowest request and three of four errors |
+| `fallback=disabled` in a message | a dict-from-all-pairs parser invents a `fallback` field — real, but it surfaces as a dropped or truncated line rather than as a distinct failure |
+| `dur_ms=99999` in a message | **does *not* affect a first-match search**, because the real field comes first. It bites a parser taking the *last* or *largest* match, which reads 99999 instead of 1180 and reorders the ranking |
+| truncated message | breaks `LONGEST_MSG` only — the totals and ranking stay correct, which is why that check exists |
+
+The `dur_ms` decoy was originally described as defeating any whole-line search.
+It does not, and the lab text, the hint and the test now say what it really
+catches. `DROPPED` is graded at zero so that answering a smaller question
+counts as a failure rather than as a rounding error.
+
+**Runtime dependency:** Python 3.11 standard library only.

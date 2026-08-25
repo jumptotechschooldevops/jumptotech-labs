@@ -1,0 +1,248 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-008 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# --- Why the fixture is shaped the way it is -------------------------------
+#
+# A whitespace splitter accepts only 10 of the 16 lines in requests.log, and
+# the six it loses are the slowest request and three of the four errors. That
+# is the lab: a naive parser does not crash, it quietly answers a smaller
+# question. `DROPPED` exists so the student has to notice.
+#
+# Four traps, each a real thing a message contains:
+#   fallback=disabled     building a dict from key=value pairs invents a field
+#   dur_ms=99999          a value inside a message that looks exactly like a
+#                         field. Verified: a first-match search is unaffected
+#                         because the real field comes first, but a parser
+#                         taking the last or the largest match reads 99999
+#                         instead of 1180 — and it is graded through
+#                         LONGEST_MSG, which is only right if the whole
+#                         message was captured
+#   didn't ... , giving up  an apostrophe and a comma
+#   depot Zürich          not ASCII, which is CS-003 arriving in a log file
+#
+# `LONGEST_MSG` is graded because it can only be right if the whole quoted
+# field was captured: a parser that truncates at the first space gets every
+# length wrong, and the longest message happens to be the line carrying the
+# duration decoy.
+#
+# Values computed from the shipped fixture, never by hand:
+#   requests.log        TOTAL=16 ERRORS=4 DROPPED=0
+#                       SLOWEST=R-1007,R-1003,R-1010  LONGEST_MSG=R-1012
+#                       ERROR_PATHS=/api/depots,/api/track
+#   requests-quiet.log  TOTAL=5 ERRORS=1 DROPPED=0
+#                       SLOWEST=Q-2002,Q-2005,Q-2004  LONGEST_MSG=Q-2002
+#                       ERROR_PATHS=/api/track
+# ---------------------------------------------------------------------------
+id: CS-008
+slug: cs-008-strings
+title: Strings and Text Processing
+track: cs
+topic: programming-foundations
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 8
+
+environment:
+  provider: linux
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-007
+
+story: >
+  Kestrel's request-log parser reports about two per cent fewer lines than the
+  file contains. Nobody has minded much, because two per cent of a log is
+  noise.
+
+  It is not noise. The parser splits each line on spaces, and the only field
+  that contains spaces is the message — so the lines it loses are exactly the
+  ones somebody bothered to write a message about. Last night that meant the
+  slowest request of the night and three of the four errors.
+
+  The parser does not fail on those lines. It answers a smaller question and
+  reports the answer with complete confidence.
+
+objectives:
+  - Take a record apart on the structure it actually has, rather than on whitespace
+  - Recognise that the last field can contain the delimiter, the separator and anything else
+  - Count what you could not parse, and treat a non-zero count as a finding rather than a rounding error
+  - Keep a text field intact end to end, including punctuation and characters outside ASCII
+  - Rank and summarise records once they are parsed, and get the same answer from the same file every time
+
+task:
+  summary: Write a log parser that loses nothing, and use it to report the totals, the slowest requests and the errors.
+  description: >
+    The logs are in `/srv/kestrel/requests`, read-only. Read `README.txt`, then
+    look at `requests.log` — in particular at the lines a parser splitting on
+    spaces would find confusing, because there are more of them than you would
+    guess. You will need `/home/student/py`, which does not exist yet.
+
+
+    Every line has the same shape:
+
+
+    ```
+
+    <timestamp> level=<level> req=<id> dur_ms=<n> path=<path> msg="<free text>"
+
+    ```
+
+
+    The message is the last field, it is wrapped in double quotes, and it can
+    contain anything a human or a library felt like writing — spaces, commas,
+    apostrophes, an `=` sign, even a number that looks like another field.
+    Everything before it is well behaved.
+
+
+    Write `/home/student/py/parselog.py`, taking a log file as its first
+    argument, and print exactly these lines:
+
+
+    ```
+
+    TOTAL=<usable lines>
+
+    ERRORS=<lines whose level is error>
+
+    DROPPED=<lines you could not parse>
+
+    SLOWEST=<req>,<req>,<req>        the three longest durations, slowest first
+
+    LONGEST_MSG=<req>                the request whose message has the most characters
+
+    ERROR_PATHS=<path>,<path>        the distinct paths of error lines, A to Z
+
+    ```
+
+
+    `DROPPED` is the number of lines the parser could not turn into a record.
+    For these files that number should be zero, and if yours is not, the
+    problem is the parser rather than the log.
+
+
+    Your program is run against more than one log, so it has to parse rather
+    than remember. A program containing the expected totals instead of counting
+    them is rejected.
+
+
+    Give it a `#!/usr/bin/env python3` first line and make it executable.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/requests/requests.log
+      label: The overnight request log is present
+    - type: file_exists
+      path: /srv/kestrel/requests/requests-quiet.log
+      label: The afternoon log is present
+    - type: file_content
+      path: /srv/kestrel/requests/requests.log
+      contains: "fallback=disabled"
+      label: The log carries the messages that defeat a naive parser
+    - type: file_exists
+      path: /srv/kestrel/requests/README.txt
+      label: The log format is described for the student
+
+requirements:
+  - type: script_executable
+    path: /home/student/py/parselog.py
+    label: The parser exists and can be run as a program
+
+  - type: script_runs
+    path: /home/student/py/parselog.py
+    args: ["/srv/kestrel/requests/requests.log"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "TOTAL=16"
+      - "ERRORS=4"
+      - "DROPPED=0"
+      - "SLOWEST=R-1007,R-1003,R-1010"
+      - "LONGEST_MSG=R-1012"
+      - "ERROR_PATHS=/api/depots,/api/track"
+    label: The overnight log is parsed without losing a line
+  - type: script_runs
+    path: /home/student/py/parselog.py
+    args: ["/srv/kestrel/requests/requests-quiet.log"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "TOTAL=5"
+      - "ERRORS=1"
+      - "DROPPED=0"
+      - "SLOWEST=Q-2002,Q-2005,Q-2004"
+      - "LONGEST_MSG=Q-2002"
+      - "ERROR_PATHS=/api/track"
+    label: A second log is parsed correctly rather than the first one repeated
+
+  # A parser counts; a program that contains the counts is a remembered answer,
+  # and would otherwise satisfy both runs above at once.
+  - type: file_content_absent
+    path: /home/student/py/parselog.py
+    contains: "SLOWEST=R-1007"
+    label: The parser derives its ranking rather than containing it
+  - type: file_content_absent
+    path: /home/student/py/parselog.py
+    contains: "TOTAL=16"
+    label: The parser counts the lines rather than containing the total
+
+hints:
+  - level: 1
+    text: >
+      Count the lines in the file, then count how many your parser accepts. If
+      those two numbers differ, look at the lines that fell out rather than at
+      the ones that worked — they have something in common, and it is in the
+      last field. Reading a few of those messages out loud is usually enough.
+  - level: 2
+    text: >
+      The fields before the message are separated by spaces and none of them
+      contains one, so the line can be taken apart from the left without
+      touching the message. `str.split(sep, maxsplit)` stops after however many
+      splits you ask for, and `str.partition()` cuts once at the first
+      occurrence and hands back both sides. The message is delimited by the
+      quotes around it, not by the spaces inside it, so finding where it starts
+      and where it ends is a different question from splitting.
+  - level: 3
+    text: >
+      One message contains something that looks exactly like another field.
+      Where in the line you look decides whether that matters: the real field
+      comes first, so taking the first match is safe, while taking the last or
+      the largest is not. Anchoring on position — the fields you have already
+      consumed — rather than on a pattern that could match anywhere removes the
+      question entirely. For the longest message, remember from CS-003
+      that length in characters is not length in bytes, and that the message
+      you are measuring must be the whole message.
+
+references:
+  - title: Python — text sequence type str, and its methods
+    url: https://docs.python.org/3/library/stdtypes.html
+  - title: Python tutorial — an informal introduction, strings
+    url: https://docs.python.org/3/tutorial/introduction.html
+  - title: Python — string services and formatted output
+    url: https://docs.python.org/3/library/string.html
+  - title: Python — regular expression operations
+    url: https://docs.python.org/3/library/re.html
+  - title: Python — built-in functions, including sorted() and max()
+    url: https://docs.python.org/3/library/functions.html
+  - title: Python — reading and writing files
+    url: https://docs.python.org/3/tutorial/inputoutput.html
+
+skills:
+  - cs.data.string-parsing
+  - cs.data.delimiters
+  - cs.troubleshooting.silent-data-loss
+  - cs.programming.text-methods
+  - cs.data.sorting
+
+# certification: deliberately absent.
+#
+# CS-008 is FOUNDATIONAL SKILL content. A parser that silently drops the
+# interesting lines is a recurring production failure, but it is not a
+# published objective of any certification and this lab claims none.

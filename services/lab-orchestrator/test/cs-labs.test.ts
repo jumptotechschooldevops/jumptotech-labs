@@ -41,7 +41,7 @@ async function cs001(): Promise<LoadedLabDefinition> {
 }
 
 /** Every CS lab shipped so far, so track-wide rules are checked once. */
-const CS_IDS = ['CS-001', 'CS-002', 'CS-003', 'CS-004', 'CS-005', 'CS-006', 'CS-007'];
+const CS_IDS = ['CS-001', 'CS-002', 'CS-003', 'CS-004', 'CS-005', 'CS-006', 'CS-007', 'CS-008'];
 
 async function csLabs(): Promise<LoadedLabDefinition[]> {
   const registry = await realRegistry();
@@ -180,6 +180,7 @@ describe('CS-001 content policy', () => {
     const graded: Record<string, string[]> = {
       'CS-001': ['15885', '16656', 'SCAN01_CPUS', 'VERDICT=', '/var'],
       'CS-002': ['536870912', '536.87', '512.00', '1073.74', '4d69', '537M', 'VERDICT='],
+      'CS-008': ['TOTAL=16', 'ERRORS=4', 'SLOWEST=R-1007', 'LONGEST_MSG=R-1012', 'ERROR_PATHS='],
       'CS-007': ['ORDER=leeds,bristol', 'ORDER=york,cardiff', 'TOTAL=26', 'COUNT=9', 'leeds,9'],
       'CS-006': ['DECISION=scale-down', 'DECISION=scale-up', 'current=10 target=9', 'current=12 target=9', 'DECISION=invalid'],
       'CS-005': ['DEPLOY_CHECK=misconfigured', 'limit=5', 'exit 2', 'exit 3', 'export KESTREL'],
