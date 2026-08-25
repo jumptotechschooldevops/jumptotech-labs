@@ -21,7 +21,14 @@ import {
 import { LABS_DIR } from './helpers.js';
 import { scanLabsDirectory } from './catalog-shape.js';
 
-const LINUX_IDS = [
+/**
+ * The original fundamentals chain, in order, each lab requiring the one before.
+ *
+ * Kept as its own list because the track is no longer a single chain: a lab
+ * added after LINUX-010 names only the prerequisites it genuinely needs, so the
+ * catalog is a graph and this is one path through it.
+ */
+const LINUX_CHAIN = [
   'LINUX-001',
   'LINUX-002',
   'LINUX-003',
@@ -33,6 +40,9 @@ const LINUX_IDS = [
   'LINUX-009',
   'LINUX-010',
 ];
+
+/** Every Linux lab, in catalog order. */
+const LINUX_IDS = [...LINUX_CHAIN, 'LINUX-014'];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {
@@ -46,7 +56,7 @@ async function realRegistry(): Promise<LabRegistry> {
 // ------------------------------------------------------- 1. definitions load
 
 describe('Linux lab definitions load (test requirement 1)', () => {
-  it('loads all ten, with no definition errors anywhere in the catalog', async () => {
+  it('loads every one, with no definition errors anywhere in the catalog', async () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
@@ -173,12 +183,32 @@ describe('the catalog carries both tracks (test requirement 2)', () => {
     expect(summaries.filter((l) => l.hasSetup)).toHaveLength(summaries.length - 1);
   });
 
-  it('describes a prerequisite path through the track', async () => {
+  it('describes a prerequisite path through the fundamentals chain', async () => {
     const registry = await realRegistry();
 
-    for (const [index, id] of LINUX_IDS.entries()) {
+    for (const [index, id] of LINUX_CHAIN.entries()) {
       const lab = registry.get(id);
-      expect(lab.prerequisites).toEqual(index === 0 ? [] : [LINUX_IDS[index - 1]]);
+      expect(lab.prerequisites).toEqual(index === 0 ? [] : [LINUX_CHAIN[index - 1]]);
+    }
+  });
+
+  it('lets a later lab name only the prerequisites it genuinely needs', async () => {
+    const registry = await realRegistry();
+
+    // LINUX-014 is about a supervised service's environment, so it needs the
+    // service lab and nothing after it. Requiring the whole chain would have
+    // forced a student through a scripting challenge to reach it.
+    expect(registry.get('LINUX-014').prerequisites).toEqual(['LINUX-005']);
+  });
+
+  it('names only prerequisites that exist in the track', async () => {
+    const registry = await realRegistry();
+    const known = new Set(registry.labsForTrack('linux').map((l) => l.id));
+
+    for (const summary of registry.labsForTrack('linux')) {
+      for (const prerequisite of registry.get(summary.id).prerequisites) {
+        expect(known.has(prerequisite), `${summary.id} requires ${prerequisite}`).toBe(true);
+      }
     }
   });
 });
