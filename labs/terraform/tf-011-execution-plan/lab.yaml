@@ -1,0 +1,267 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-011 — the execution plan as an artifact.
+#
+# Official objective this lab practises:
+#   Terraform Associate (004), domain 3 "Core Terraform workflow"
+#   3d — "Generate and review an execution plan for Terraform"
+#
+# Official sources, read on 2026-08-23 (see `references` below for the links):
+#   · Command: terraform plan     — the -out=FILE option and the two-step
+#                                   "save a plan, then apply that plan" workflow
+#   · Command: terraform show     — `terraform show -json <planfile>` is the
+#                                   documented way to inspect a saved plan
+#   · JSON output format          — `resource_changes` lists *all* resources in
+#                                   the configuration, and a resource with no
+#                                   changes carries the action "no-op"
+#
+# Two documented cautions shape this lab's design, and are taught in it rather
+# than worked around:
+#
+#   · a saved plan file stores sensitive data *in cleartext*, and
+#   · `terraform show -json` prints sensitive state values in plain text.
+#
+# So no value in this lab is sensitive, and the lab says why. A lab that saved
+# a plan containing a secret would be teaching the wrong habit.
+#
+# Verification reads what the runs left behind: the initialised directory, the
+# saved plan files, the JSON the student exported, the state, and the artifacts
+# on disk. Typing `terraform plan` is not a pass.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-23
+# ---------------------------------------------------------------------------
+id: TF-011
+slug: tf-011-execution-plan
+title: Reading and Saving an Execution Plan
+track: terraform
+topic: workflow
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 2
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-001
+
+story: >
+  Last month a change went out to the ledger platform that nobody had read.
+  The apply was clean, the reviewer had approved the pull request, and the
+  configuration diff looked harmless — but what Terraform actually intended to
+  do had never been looked at by a human before it happened.
+
+  The team's new rule is short. Every change is planned to a file. That file is
+  exported to JSON and attached to the review. The apply consumes that exact
+  saved plan and nothing else, so what was reviewed is what runs.
+
+  You are the first person to work under the new rule.
+
+objectives:
+  - Save an execution plan to a file with terraform plan -out
+  - Inspect a saved plan machine-readably with terraform show -json
+  - Apply a saved plan rather than re-planning at apply time
+  - Read a second plan and recognise which resources are unchanged
+
+task:
+  summary: >
+    Take a configuration through two review rounds, saving and exporting the
+    plan each time, and applying the saved plan.
+  description: >
+    Your lab environment has a `terraform` directory containing `versions.tf`
+    and a `main.tf` with one `local_file` resource already written. Nothing has
+    been applied. Work in that directory.
+
+    Round one. Initialise the directory. Produce a plan and save it to a file
+    named `tfplan`. Export that saved plan to JSON as `plan.json` — a saved plan
+    file is deliberately not a readable format, so exporting it is how a human
+    or a review tool gets at what it contains. Then apply the saved plan
+    itself, rather than letting Terraform build a fresh plan at apply time.
+
+    Round two. Add a second resource to the configuration: a `local_file` named
+    `rollback_plan` that writes to `build/rollback-plan.txt`. Its content must
+    name the manifest file the first resource writes — and it must get that
+    filename by referring to the first resource, not by you typing the path a
+    second time.
+
+    Also declare an output named `rollback_path` whose value is
+    `build/rollback-plan.txt`.
+
+    Now plan again, saving to `tfplan2` and exporting it to `plan2.json`, then
+    apply that saved plan. Before you apply, read `plan2.json`. One of the two
+    resources has nothing to do, and the plan says so explicitly — find how it
+    is recorded, because that is the habit this lab exists to build.
+
+    A note on secrets, from the official documentation: a saved plan file stores
+    sensitive values in cleartext, and `terraform show -json` prints sensitive
+    state values in plain text. Nothing in this lab is sensitive, which is why
+    saving and exporting plans here is safe. On a real system, that is a
+    decision you have to make deliberately.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The starting configuration is in place
+
+# Every check reads an artifact a real run produced.
+#
+# The two `plan.json` / `plan2.json` content checks are substring matches
+# against JSON the student exported with `terraform show -json`. They are
+# deliberately loose — `"no-op"` rather than an exact serialisation — because a
+# check that pins Terraform's JSON spacing would fail a correct student on a
+# CLI upgrade, and failing correct work is the worse error. The evidence they
+# carry is still sound: `"no-op"` can only appear in the second plan if the
+# first plan was actually applied, because a resource that does not yet exist
+# is a create, never a no-op.
+#
+# A future `terraform_plan_action` requirement type would replace both with a
+# parsed assertion over `resource_changes[].change.actions`. It does not exist
+# on this branch, and adding it would be a shared-vocabulary change.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  - type: file_exists
+    path: terraform/tfplan
+    label: The first plan was saved to a file
+
+  - type: file_exists
+    path: terraform/plan.json
+    label: The first plan was exported to JSON
+
+  - type: file_content
+    path: terraform/plan.json
+    contains: local_file.release_manifest
+    label: The first plan covers the release manifest resource
+
+  - type: file_content
+    path: terraform/plan.json
+    contains: '"create"'
+    label: The first plan records a resource being created
+
+  - type: file_exists
+    path: terraform/tfplan2
+    label: The second plan was saved to a file
+
+  - type: file_exists
+    path: terraform/plan2.json
+    label: The second plan was exported to JSON
+
+  - type: file_content
+    path: terraform/plan2.json
+    contains: local_file.rollback_plan
+    label: The second plan covers the new rollback resource
+
+  - type: file_content
+    path: terraform/plan2.json
+    contains: '"no-op"'
+    label: The second plan reports an unchanged resource as no-op
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    label: Terraform state contains the release manifest resource
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: rollback_plan
+    label: Terraform state contains the rollback plan resource
+
+  - type: file_exists
+    path: terraform/build/release-manifest.txt
+    label: The release manifest was written to disk
+
+  - type: file_exists
+    path: terraform/build/rollback-plan.txt
+    label: The rollback plan was written to disk
+
+  - type: file_content
+    path: terraform/build/rollback-plan.txt
+    contains: build/release-manifest.txt
+    label: The rollback plan names the manifest file it rolls back to
+
+  - type: terraform_output_equals
+    dir: terraform
+    name: rollback_path
+    value: build/rollback-plan.txt
+    label: Output rollback_path reports the rollback plan's path
+
+hints:
+  - level: 1
+    text: >
+      `terraform plan` has an option that writes the plan to a file instead of
+      only printing it, and `terraform apply` accepts such a file as its
+      argument. Look up the plan command's options first — the whole lab
+      follows from that one flag.
+  - level: 2
+    text: >
+      A saved plan file is not text you can read; the documentation describes it
+      as not being in any standard format. There is a separate command whose job
+      is to render a saved plan, and it takes a flag that makes the output
+      machine-readable. Redirect that output to the file the lab asks for.
+
+      For the second resource, remember that referring to another resource's
+      attribute is what creates a dependency between them. The first resource
+      has a `filename` argument, and a resource's arguments are readable as
+      attributes elsewhere in the configuration.
+  - level: 3
+    text: >
+      Round one is `terraform init`, then `terraform plan -out=tfplan`, then
+      `terraform show -json tfplan > plan.json`, then `terraform apply tfplan`.
+
+      For round two, add a `resource "local_file" "rollback_plan"` whose
+      `filename` is `build/rollback-plan.txt` and whose `content` interpolates
+      `local_file.release_manifest.filename`, plus an `output "rollback_path"`
+      block. Then repeat the round-one commands with `tfplan2` and `plan2.json`.
+
+      In `plan2.json`, look inside `resource_changes` for each resource's
+      `change.actions` array. The resource you already applied will show
+      `["no-op"]`.
+
+references:
+  - title: 'Terraform — Command: plan'
+    url: https://developer.hashicorp.com/terraform/cli/commands/plan
+  - title: 'Terraform — Command: show'
+    url: https://developer.hashicorp.com/terraform/cli/commands/show
+  - title: 'Terraform — Command: apply'
+    url: https://developer.hashicorp.com/terraform/cli/commands/apply
+  - title: Terraform — JSON output format
+    url: https://developer.hashicorp.com/terraform/internals/json-format
+  - title: Terraform — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+  - title: Terraform — The core workflow
+    url: https://developer.hashicorp.com/terraform/intro/core-workflow
+
+skills:
+  - terraform.workflow.plan
+  - terraform.workflow.saved-plan
+  - terraform.workflow.apply
+  - terraform.language.references
+  - terraform.language.outputs
+
+# Objective 3d of the Terraform Associate (004) exam content list. The schema on
+# this branch carries domains but not objective ids; the objective is recorded
+# in the header comment above until the lab schema gains an `objectives` field.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '3'
