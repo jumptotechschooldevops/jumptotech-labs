@@ -1403,7 +1403,13 @@ with the session. It has:
   from `SessionPolicy.sandbox`, so one student cannot exhaust the host and an
   abandoned shell cannot fork-bomb it;
 - **a real Debian userland** — GNU coreutils, `procps`, `iproute2`, man pages,
-  and `runit` as a genuine process supervisor.
+  and `runit` as a genuine process supervisor;
+- **a Python 3.11 runtime** — the Computer Science track grades a student's own
+  program by running it, which needs a real interpreter rather than a mocked
+  one. It is the standard library only: no pip, no virtualenv tooling, no
+  third-party distribution, no compilers. It adds no capability, no socket and
+  no privilege — the sandbox already ships `bash`, so this changes how
+  expressively a student can write a program, not what they can reach.
 
 ### On root, and what the boundary actually is
 

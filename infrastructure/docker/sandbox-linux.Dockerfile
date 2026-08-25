@@ -19,6 +19,7 @@
 #   · no Docker client and no socket — a Linux lab has no business reaching a
 #     container runtime, and a sandbox that could would be a host escape;
 #   · no compilers, no package indexes, no editor beyond nano;
+#   · no pip, no virtualenv tooling, no third-party Python packages;
 #   · no secrets, no kubeconfig, nothing belonging to the platform.
 #
 # --- On root, sudo, and what the boundary actually is -----------------------
@@ -71,6 +72,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   gawk diffutils sed grep findutils   the analysis labs' toolset
 #   tar gzip                            LINUX-008 archives
 #   tzdata ca-certificates              sane log timestamps, TLS roots
+#   python3                             the CS track's programming runtime —
+#                                       see "On the Python runtime" below
 # `coreutils` comes with the base image. Nothing else is added.
 RUN set -eux; \
     apt-get update; \
@@ -98,8 +101,54 @@ RUN set -eux; \
       tar \
       gzip \
       tzdata \
-      ca-certificates; \
+      ca-certificates \
+      python3; \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# --- On the Python runtime -------------------------------------------------
+#
+# The Computer Science Fundamentals track teaches programming fundamentals,
+# data structures, HTTP and relational databases, and its labs are graded by
+# running the student's own program and comparing its *behaviour*. That needs
+# a real interpreter in the sandbox; a mocked one would grade nothing.
+#
+# Why this image rather than a separate CS image and provider: a provider
+# models the *substrate* a lab runs on — a namespace, a container, a cloud
+# session. A CS lab wants exactly the substrate a Linux lab wants: one
+# unprivileged container, the same capability set, the same reader. The only
+# difference is which packages are present, and that is a property of the
+# image, not a new kind of sandbox. Adding a second provider identical to
+# `linux` in every respect except one package would duplicate the provider id,
+# the isolation mode, the requirement families, the registry wiring, the
+# availability probe and a whole image to patch and scan, to express nothing.
+#
+# Why this does not move the security boundary: this sandbox already ships
+# `bash`, `gawk` and `sed`. A student can already author and run arbitrary
+# programs here; that is what a shell is. Python changes how expressively they
+# can do it, not what they can reach. It adds no capability, no socket, no
+# network, no setuid binary and no privilege — the container still runs
+# `--network none`, `--cap-drop ALL` plus a narrow add-back, as an
+# unprivileged user, with no host mount.
+#
+# Deliberately NOT installed, because no approved CS lab needs them:
+#   · pip and the package indexes — CS-023 teaches dependency *resolution* by
+#     reading real manifests and lock files, which needs no installer, and the
+#     sandbox has no network to install from;
+#   · python3-venv — CS-023's optional venv step works with
+#     `python3 -m venv --without-pip`, which the stock package supports;
+#   · any third-party distribution. The whole track runs on the standard
+#     library: sqlite3, json, http.server, socket, threading, hashlib,
+#     struct, dis, py_compile and friends all ship with `python3`.
+#
+# Version: constrained by the base image to Debian bookworm's Python 3.11
+# series. Asserted at build time rather than pinned to an exact package
+# revision: an exact pin breaks on every Debian point release, while this
+# fails the build loudly if the base image ever moves to a different minor
+# series, which is the change that would actually invalidate lab content.
+RUN set -eux; \
+    python3 --version; \
+    python3 -c 'import sys; assert sys.version_info[:2] == (3, 11), f"CS runtime expects Python 3.11.x, image has {sys.version.split()[0]}"'; \
+    python3 -c 'import sqlite3, json, http.server, socket, threading, hashlib, struct, dis, py_compile, venv, unicodedata'
 
 # The unprivileged student, a second group they are a *member* of, and sudo.
 #
