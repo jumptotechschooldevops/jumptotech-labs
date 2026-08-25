@@ -54,6 +54,7 @@ const CS_IDS = [
   'CS-010',
   'CS-011',
   'CS-012',
+  'CS-013',
 ];
 
 async function csLabs(): Promise<LoadedLabDefinition[]> {
@@ -228,6 +229,18 @@ describe('CS-001 content policy', () => {
         'BLOCKED_SYSCALL=read',
         'PRINTER_IS=',
         'SYSCALLS_SAVED_BY_BUFFERING=',
+      ],
+      'CS-013': [
+        'IO_VOLUNTARY=37',
+        'IO_VOLUNTARY=12',
+        'CPU_VOLUNTARY=0',
+        'THREADS_DURING=9',
+        'CPU_QUOTA=0.5',
+        'OVERSUBSCRIBED=yes',
+        'WHY_THREADS_DONT_HELP_CPU=',
+        'WHY_MORE_WORKERS_DIDNT_HELP=',
+        'BLOCKING_SHOWS_UP_AS=',
+        'POOL_SIZE_SHOULD_FOLLOW=',
       ],
       'CS-008': ['TOTAL=16', 'ERRORS=4', 'SLOWEST=R-1007', 'LONGEST_MSG=R-1012', 'ERROR_PATHS='],
       'CS-007': ['ORDER=leeds,bristol', 'ORDER=york,cardiff', 'TOTAL=26', 'COUNT=9', 'leeds,9'],
