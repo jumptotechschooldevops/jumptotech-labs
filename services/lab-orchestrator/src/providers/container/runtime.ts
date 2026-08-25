@@ -31,14 +31,27 @@
  */
 import { execFile } from 'node:child_process';
 import { assertValidContainerSandboxRef } from '../../session/identifiers.js';
+import { MANAGED_LABEL } from '../../k8s/labels.js';
 
-export const MANAGED_CONTAINER_LABEL = 'jumptotech.io/managed';
-export const CONTAINER_SESSION_LABEL = 'jumptotech.io/session-id';
-export const CONTAINER_LAB_LABEL = 'jumptotech.io/lab-id';
-export const CONTAINER_EXPIRES_LABEL = 'jumptotech.io/expires-at';
-export const CONTAINER_PROVIDER_LABEL = 'jumptotech.io/provider';
+/*
+ * Ownership vocabulary.
+ *
+ * Aliases, not copies. These five names existed here as their own string
+ * literals, identical to the ones in `k8s/labels.ts` — one label with two
+ * definitions, which is exactly how the container and Docker providers ended up
+ * proving ownership two different ways. A rename on one side could silently
+ * stop matching the other. There is now one definition and these are views of
+ * it, so the two cannot drift.
+ */
+export {
+  MANAGED_LABEL as MANAGED_CONTAINER_LABEL,
+  SESSION_LABEL as CONTAINER_SESSION_LABEL,
+  LAB_LABEL as CONTAINER_LAB_LABEL,
+  EXPIRES_AT_LABEL as CONTAINER_EXPIRES_LABEL,
+  PROVIDER_LABEL as CONTAINER_PROVIDER_LABEL,
+} from '../../k8s/labels.js';
 
-export const MANAGED_CONTAINER_SELECTOR = `${MANAGED_CONTAINER_LABEL}=true`;
+export const MANAGED_CONTAINER_SELECTOR = `${MANAGED_LABEL}=true`;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** Cap on anything read out of a sandbox, so a huge file cannot exhaust the API. */

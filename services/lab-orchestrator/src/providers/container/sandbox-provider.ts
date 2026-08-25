@@ -895,10 +895,30 @@ export class ContainerLabProvider implements LabProvider {
     }
   }
 
-  /** The ownership gate: managed label, then session label when one is named. */
+  /**
+   * The ownership gate: managed, then *this provider's*, then this session's.
+   *
+   * The provider check is the one that is easy to leave out and expensive to
+   * omit. One daemon carries every provider's sandboxes, and a Docker sandbox
+   * is as managed and as validly labelled as a Linux one — so without it, this
+   * provider would delete another provider's sandbox on request. Discovery
+   * already filtered on the provider, which hid the hole: the reaper never
+   * offered such a sandbox, but `destroySandbox` is public and the reaper is
+   * not its only caller.
+   *
+   * A sandbox created before the label existed carries no provider and is
+   * treated as this one's, matching how discovery defaults it — otherwise an
+   * upgrade would strand every running sandbox as undeletable.
+   */
   #assertOwned(ref: string, info: ContainerInfo, expectedSessionId?: string): void {
     if (info.labels[MANAGED_CONTAINER_LABEL] !== 'true') {
       throw new Error(`container '${ref}' is not labelled ${MANAGED_CONTAINER_LABEL}=true`);
+    }
+    const owningProvider = info.labels[CONTAINER_PROVIDER_LABEL] ?? this.id;
+    if (owningProvider !== this.id) {
+      throw new Error(
+        `container '${ref}' belongs to the '${owningProvider}' provider, not '${this.id}'`,
+      );
     }
     if (expectedSessionId !== undefined) {
       const owner = info.labels[CONTAINER_SESSION_LABEL];

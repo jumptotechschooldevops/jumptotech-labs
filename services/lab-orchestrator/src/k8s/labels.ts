@@ -25,6 +25,16 @@ export const SESSION_LABEL = 'jumptotech.io/session-id';
 export const LAB_LABEL = 'jumptotech.io/lab-id';
 export const EXPIRES_AT_LABEL = 'jumptotech.io/expires-at';
 export const COMPONENT_LABEL = 'jumptotech.io/component';
+/**
+ * Which provider owns this resource.
+ *
+ * One daemon can host sandboxes from several providers at once, and each
+ * provider must reap only its own. The container providers have always stamped
+ * and filtered on this; the Docker provider proved the same thing a second way,
+ * through `COMPONENT_LABEL`. Two mechanisms answering one question is how they
+ * drift, so ownership is stated here once and both use it.
+ */
+export const PROVIDER_LABEL = 'jumptotech.io/provider';
 
 /** Label selector matching every namespace this platform owns. */
 export const MANAGED_SELECTOR = `${MANAGED_LABEL}=true`;
@@ -35,6 +45,8 @@ export interface OwnershipLabelInput {
   /** Epoch ms. Written to the namespace so expiry survives an API restart. */
   expiresAtMs?: number;
   component?: string;
+  /** The provider that owns this resource, so each reaps only its own. */
+  provider?: string;
 }
 
 /**
@@ -51,6 +63,7 @@ export function ownershipLabels(input: OwnershipLabelInput): Record<string, stri
     [LAB_LABEL]: input.labId,
     ...(input.expiresAtMs !== undefined ? { [EXPIRES_AT_LABEL]: String(input.expiresAtMs) } : {}),
     ...(input.component ? { [COMPONENT_LABEL]: input.component } : {}),
+    ...(input.provider ? { [PROVIDER_LABEL]: input.provider } : {}),
   };
 }
 
