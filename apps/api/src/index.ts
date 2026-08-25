@@ -20,6 +20,9 @@ import {
   type WorkspacePort,
 } from '@jumptotech/lab-orchestrator';
 import { waitForRequirements } from '@jumptotech/verifier';
+import { buildIdentityResolver } from './auth/resolvers.js';
+import { OidcTokenVerifier } from './auth/oidc.js';
+import { InMemoryUserRepository, PostgresUserRepository } from './auth/users.js';
 import { createApp } from './app.js';
 import { buildProviderRegistry } from './providers.js';
 import { loadConfig } from './config.js';
@@ -149,6 +152,30 @@ async function main(): Promise<void> {
       : '[sessions] no DATABASE_URL configured — sessions are IN MEMORY and are lost on restart',
   );
 
+  /*
+   * Identity, decided once at startup.
+   *
+   * `buildIdentityResolver` refuses to return a development resolver when
+   * NODE_ENV=production, so a stale AUTH_MODE in a production environment file
+   * stops the process instead of silently disabling authentication.
+   */
+  const users = learning.database
+    ? new PostgresUserRepository(learning.database, config.auth.mode === 'oidc' ? 'oidc' : 'development')
+    : new InMemoryUserRepository(config.auth.mode === 'oidc' ? 'oidc' : 'development');
+
+  const identityResolver = buildIdentityResolver({
+    config: { mode: config.auth.mode, nodeEnv: config.auth.nodeEnv },
+    users,
+    ...(config.auth.oidc
+      ? { verifier: new OidcTokenVerifier(config.auth.oidc) }
+      : {}),
+  });
+  console.log(
+    identityResolver.mode === 'oidc'
+      ? `[auth] OIDC (issuer ${config.auth.oidc?.issuer})`
+      : '[auth] DEVELOPMENT identity — every caller is whoever they claim to be. Never for production.',
+  );
+
   const sessions = new SessionManager({
     registry,
     providers,
@@ -193,6 +220,10 @@ async function main(): Promise<void> {
     engines,
     workspace,
     config,
+    identityResolver,
+    // One structured line per authorization decision. Carries the user id and
+    // the outcome, never a token or a claim beyond the identifier.
+    authAudit: (event) => console.log(`[authz] ${JSON.stringify(event)}`),
     progress: {
       progress: learning.progress,
       identity: learning.identity,

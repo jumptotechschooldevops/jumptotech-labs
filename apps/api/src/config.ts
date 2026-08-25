@@ -27,6 +27,21 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../..');
 
+/** Authentication configuration (PLATFORM-009). */
+export interface AuthConfig {
+  /**
+   * `oidc` in any real deployment. `development` accepts whoever the caller
+   * says they are and exists only for local runs and the test suite; the
+   * default is deliberately `oidc`, so a missing value fails closed rather than
+   * opening the platform.
+   */
+  mode: 'oidc' | 'development';
+  /** Present when `mode` is `oidc`. */
+  oidc: { issuer: string; clientId: string; audience: string; jwksUri?: string } | null;
+  /** Mirrors NODE_ENV, so the startup gate can see the deployment kind. */
+  nodeEnv: string | undefined;
+}
+
 export interface ApiConfig {
   port: number;
   labsDir: string;
@@ -74,6 +89,7 @@ export interface ApiConfig {
    * headers (`X-Forwarded-Proto`, `X-Forwarded-Host`).
    */
   publicOrigin: string | undefined;
+  auth: AuthConfig;
 }
 
 /**
@@ -309,7 +325,36 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     );
   }
 
+  const authMode = strFromEnv(env, 'AUTH_MODE', 'oidc');
+  if (authMode !== 'oidc' && authMode !== 'development') {
+    throw new Error(`AUTH_MODE must be 'oidc' or 'development', not '${authMode}'.`);
+  }
+  const issuer = strFromEnv(env, 'OIDC_ISSUER', '');
+  const audience = strFromEnv(env, 'OIDC_AUDIENCE', '');
+  const jwksUri = strFromEnv(env, 'OIDC_JWKS_URI', '');
+
   return {
+    /*
+     * `oidc` is the default on purpose.
+     *
+     * A missing AUTH_MODE must fail closed. If the default were `development`,
+     * an environment file that lost the line would not fail to start — it would
+     * start with no authentication at all, which is the worst possible outcome
+     * and the hardest to notice.
+     */
+    auth: {
+      mode: authMode,
+      oidc:
+        authMode === 'oidc'
+          ? {
+              issuer,
+              clientId: strFromEnv(env, 'OIDC_CLIENT_ID', ''),
+              audience,
+              ...(jwksUri ? { jwksUri } : {}),
+            }
+          : null,
+      nodeEnv: env.NODE_ENV,
+    },
     port: intFromEnv(env, 'API_PORT', 4000),
     labsDir: env.LABS_DIR ?? path.join(repoRoot, 'labs'),
     provider: env.LAB_PROVIDER ?? 'kind',

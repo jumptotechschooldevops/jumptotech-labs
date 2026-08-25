@@ -69,6 +69,7 @@ interface SessionRow {
   service_account_name: string;
   status: string;
   environment_id: string;
+  owner_user_id: string | null;
   created_at: Date | string;
   last_activity_at: Date | string;
   expires_at: Date | string;
@@ -80,7 +81,7 @@ interface SessionRow {
 }
 
 const COLUMNS = `session_id, lab_id, provider, sandbox_kind, sandbox_ref, namespace,
-  service_account_name, status, environment_id, created_at, last_activity_at,
+  service_account_name, status, environment_id, owner_user_id, created_at, last_activity_at,
   expires_at, ended_at, status_reason, idle_timeout_seconds, idle_warning_seconds, revision`;
 
 /** Timestamps come back as `Date`; the model is ISO-8601 strings throughout. */
@@ -99,6 +100,7 @@ function toSession(row: SessionRow): LabSession {
     serviceAccountName: row.service_account_name,
     status: row.status as SessionStatus,
     environmentId: row.environment_id,
+    ...(row.owner_user_id ? { ownerUserId: row.owner_user_id } : {}),
     createdAt: iso(row.created_at),
     lastActivityAt: iso(row.last_activity_at),
     expiresAt: iso(row.expires_at),
@@ -154,7 +156,7 @@ export class PostgresSessionStore implements SessionStore {
     try {
       await this.db.query(
         `INSERT INTO lab_sessions (${COLUMNS})
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,1)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1)`,
         [
           session.sessionId,
           session.labId,
@@ -165,6 +167,7 @@ export class PostgresSessionStore implements SessionStore {
           session.serviceAccountName,
           session.status,
           session.environmentId,
+          session.ownerUserId ?? null,
           session.createdAt,
           session.lastActivityAt,
           session.expiresAt,

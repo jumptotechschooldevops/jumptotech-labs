@@ -1,3 +1,4 @@
+import type { SessionGuard } from '../auth/middleware.js';
 /**
  * Session-scoped routes.
  *
@@ -42,6 +43,13 @@ import { toAttemptPayload } from './me.js';
 export interface SessionRoutesDeps {
   registry: LabRegistry;
   sessions: SessionManager;
+  /**
+   * Resolves a session and proves the caller owns it.
+   *
+   * Required rather than optional: a router built without it would serve every
+   * session to every caller, and that must not be expressible.
+   */
+  sessionGuard: SessionGuard;
   k8s: KubernetesPort;
   engines?: DockerEngineFactory;
   workspace?: WorkspacePort;
@@ -134,6 +142,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   const { registry, sessions, k8s, engines, workspace, progress } = deps;
   const log = deps.logger ?? (() => undefined);
   const router = Router();
+  /*
+   * Every session route goes through this.
+   *
+   * It resolves the session *and* proves the caller owns it, in one step, so a
+   * handler cannot obtain the record without having been authorised for it —
+   * the failure mode where a route looks up a session and forgets the check
+   * simply has no shape here.
+   */
+  const guard = deps.sessionGuard;
 
   /**
    * Everything the verifier needs, scoped to one session.
@@ -169,13 +186,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   // Polling this deliberately does NOT count as activity: an abandoned browser
   // tab must not be able to keep a sandbox alive forever.
   router.get('/:sessionId', asyncRoute(async (req, res) => {
-    let session: LabSession;
-    try {
-      session = await sessions.require(req.params.sessionId);
-    } catch (error) {
-      sessionErrorResponse(res, error);
-      return;
-    }
+    const allowed = await guard(req, res, 'session:read');
+    if (!allowed) return;
+    const { session } = allowed;
 
     let environment = null;
     if (session.status === 'ACTIVE' || session.status === 'RESETTING') {
@@ -189,8 +202,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   // Backs the "Continue Lab" button. It moves the idle deadline only; the
   // absolute deadline is untouched, so this can never extend a lab forever.
   router.post('/:sessionId/activity', asyncRoute(async (req, res) => {
+    const allowed = await guard(req, res, 'session:activity');
+    if (!allowed) return;
     try {
-      const session = await sessions.require(req.params.sessionId);
+      const { session } = allowed;
       const updated = (await sessions.touch(session.sessionId, 'continue')) ?? session;
       sendOk(res, { session: toSessionPayload(sessions, updated) });
     } catch (error) {
@@ -200,6 +215,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
 
   // POST /api/sessions/:sessionId/check ------------------------------------
   router.post('/:sessionId/check', asyncRoute(async (req, res) => {
+    const allowed = await guard(req, res, 'session:check');
+    if (!allowed) return;
     let session: LabSession;
     try {
       ({ session } = await sessions.requireActive(req.params.sessionId));
@@ -258,6 +275,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   // Records that a hint was revealed. Idempotent per (attempt, hint level): a
   // replayed request returns the original record rather than counting twice.
   router.post('/:sessionId/hints', asyncRoute(async (req, res) => {
+    const permitted = await guard(req, res, 'session:hint');
+    if (!permitted) return;
     let session: LabSession;
     try {
       session = await sessions.require(req.params.sessionId);
@@ -296,6 +315,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
 
   // POST /api/sessions/:sessionId/reset ------------------------------------
   router.post('/:sessionId/reset', asyncRoute(async (req, res) => {
+    if (!(await guard(req, res, 'session:reset'))) return;
     try {
       const { session, result } = await sessions.reset(String(req.params.sessionId));
       if (!result.ok) {
@@ -350,6 +370,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   // one therefore travel the same path and cannot record different things.
   // Nothing is deleted from history either way.
   router.delete('/:sessionId', asyncRoute(async (req, res) => {
+    if (!(await guard(req, res, 'session:end'))) return;
     try {
       const { session, destroy } = await sessions.end(String(req.params.sessionId));
       if (!destroy.namespaceGone) {

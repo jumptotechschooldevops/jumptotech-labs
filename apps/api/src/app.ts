@@ -1,3 +1,11 @@
+import {
+  authenticate,
+  createSessionGuard,
+  type AuthAuditLogger,
+} from './auth/middleware.js';
+import type { IdentityResolver } from './auth/identity.js';
+import { DevelopmentIdentityResolver } from './auth/resolvers.js';
+import { InMemoryUserRepository } from './auth/users.js';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import type {
@@ -46,6 +54,18 @@ export interface CreateAppDeps {
   workspace?: WorkspacePort;
   config: ApiConfig;
   progress?: ProgressDeps;
+  /**
+   * How a request's caller is identified (PLATFORM-009).
+   *
+   * Optional so existing tests keep composing an app without one; when absent a
+   * development resolver over an in-memory user store is used, which is exactly
+   * what the pre-authentication behaviour was. Production always supplies one,
+   * and `buildIdentityResolver` refuses to hand back a development resolver
+   * when NODE_ENV=production.
+   */
+  identityResolver?: IdentityResolver;
+  /** One line per authorization decision. Never carries a credential. */
+  authAudit?: AuthAuditLogger;
 }
 
 function inMemoryProgress(config: ApiConfig): ProgressDeps {
@@ -112,11 +132,25 @@ export function createApp(deps: CreateAppDeps): Express {
     });
   }));
 
-  const routes = { ...deps, ...learning };
-  app.use('/api/labs', browserCors, createLabRoutes(routes));
-  app.use('/api/tracks', browserCors, createTrackRoutes(routes));
-  app.use('/api/sessions', browserCors, createSessionRoutes(routes));
-  app.use('/api/me', browserCors, createMeRoutes(routes));
+  /*
+   * Identity, then authorization.
+   *
+   * `authenticate` runs before every browser-facing router, so `req.user` is
+   * established once rather than per handler. `/health` is deliberately in
+   * front of it — an operator's readiness probe must not need a token — and
+   * `/internal` behind its own shared secret, unchanged.
+   */
+  const audit = deps.authAudit ?? (() => undefined);
+  const identity =
+    deps.identityResolver ?? new DevelopmentIdentityResolver(new InMemoryUserRepository());
+  const authenticated = authenticate(identity, audit);
+  const sessionGuard = createSessionGuard(deps.sessions, audit);
+
+  const routes = { ...deps, ...learning, sessionGuard, identity: learning.identity };
+  app.use('/api/labs', browserCors, authenticated, createLabRoutes(routes));
+  app.use('/api/tracks', browserCors, authenticated, createTrackRoutes(routes));
+  app.use('/api/sessions', browserCors, authenticated, createSessionRoutes(routes));
+  app.use('/api/me', browserCors, authenticated, createMeRoutes(routes));
   app.use('/internal', createInternalRoutes(deps));
 
   app.use((_req, res) => {

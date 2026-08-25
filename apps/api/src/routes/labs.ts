@@ -283,9 +283,26 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       }),
     );
 
+    /*
+     * The session belongs to the authenticated caller, decided here.
+     *
+     * `req.user` was resolved from the Authorization header before this handler
+     * ran. Nothing reads a body or query field, so a browser has no way to
+     * start a lab on somebody else's behalf — there is no owner parameter to
+     * send.
+     */
+    const owner = req.user;
+    if (!owner) {
+      sendError(res, 401, {
+        code: 'AUTH_REQUIRED',
+        message: 'Starting a lab requires authentication.',
+      });
+      return;
+    }
+
     let started;
     try {
-      started = await sessions.start(def.id);
+      started = await sessions.start(def.id, owner.userId);
     } catch (error) {
       // The sandbox never came up. Close the attempt honestly rather than
       // leaving a row that says the student is still working on it.

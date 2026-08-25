@@ -99,6 +99,16 @@ export interface LabSession {
   endedAt?: string;
   /** Why the session ended / failed. Operator-facing. */
   statusReason?: string;
+  /**
+   * The authenticated user this session belongs to.
+   *
+   * Set server-side from the caller's verified identity at start, and never
+   * from a request field — there is no way for a browser to name an owner.
+   * Optional only because sessions created before authentication existed have
+   * none; the authorization layer treats an absent owner as "owned by nobody",
+   * which is reachable by no student.
+   */
+  ownerUserId?: string;
   /** Idle window in seconds, copied from config at creation time. */
   idleTimeoutSeconds: number;
   /** How long before idle expiry the UI should warn, in seconds. */

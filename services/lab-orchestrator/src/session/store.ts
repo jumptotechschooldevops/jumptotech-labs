@@ -137,6 +137,7 @@ export class InMemorySessionStore implements SessionStore {
      * construction rather than by every caller remembering not to.
      */
     const {
+      ownerUserId: _ignoredOwner,
       sessionId: _ignoredId,
       namespace: _ignoredNs,
       sandboxRef: _ignoredRef,

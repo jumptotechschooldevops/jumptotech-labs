@@ -15,11 +15,15 @@ describe('migration files', () => {
   it('ships the schema with the package', async () => {
     const migrations = await loadMigrations(MIGRATIONS_DIR);
 
-    // PLATFORM-008 added 002. The list is asserted so a migration cannot be
+    // PLATFORM-008 added 002; PLATFORM-009 added 003. The list is asserted so a migration cannot be
     // added without someone noticing here, but the *safety* checks below apply
     // to every file rather than to a numbered one — that is the invariant, and
     // it should not need editing when 003 arrives.
-    expect(migrations.map((m) => m.version)).toEqual(['001_progress', '002_sessions']);
+    expect(migrations.map((m) => m.version)).toEqual([
+      '001_progress',
+      '002_sessions',
+      '003_users_and_ownership',
+    ]);
     for (const migration of migrations) {
       expect(migration.checksum, migration.version).toMatch(/^[0-9a-f]{64}$/);
     }
@@ -35,6 +39,16 @@ describe('migration files', () => {
     // and one sandbox belongs to at most one session.
     expect(sessions).toContain('session_id            TEXT        PRIMARY KEY');
     expect(sessions).toMatch(/sandbox_ref\s+TEXT\s+NOT NULL UNIQUE/);
+
+    const users = migrations.find((m) => m.version === '003_users_and_ownership')!.sql;
+    expect(users).toContain('CREATE TABLE IF NOT EXISTS users');
+    // The permanent identity is the provider pair, not an email.
+    expect(users).toMatch(/UNIQUE \(issuer, subject\)/);
+    expect(users).toContain('owner_user_id');
+    // No credential is ever stored on a user record.
+    for (const forbidden of ['password', 'access_token', 'refresh_token', 'client_secret']) {
+      expect(users.toLowerCase(), forbidden).not.toContain(`${forbidden} `);
+    }
 
     // Forward-only, and never destructive on startup — for every migration.
     for (const migration of migrations) {

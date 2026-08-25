@@ -305,7 +305,14 @@ export class SessionManager {
   // ----------------------------------------------------------------- start
 
   /** Create a session: unique id, unique namespace, fully provisioned sandbox. */
-  async start(labId: string): Promise<StartSessionResult> {
+  /**
+   * Start a lab for a specific owner.
+   *
+   * `ownerUserId` comes from the caller's verified identity, never from the
+   * request body — the route passes what the auth layer resolved, and there is
+   * no field a browser could use to name someone else.
+   */
+  async start(labId: string, ownerUserId?: string): Promise<StartSessionResult> {
     // Throws LabNotFoundError / InvalidLabIdError before anything is reserved.
     const lab = this.#registry.get(labId);
 
@@ -339,7 +346,7 @@ export class SessionManager {
      * start can pass through, which is exactly what the simultaneous-starts
      * test catches.
      */
-    const session = await this.#insertSession(lab, provider);
+    const session = await this.#insertSession(lab, provider, ownerUserId);
 
     const context = this.#contextFor(lab, session);
     let result: CreateResult;
@@ -392,7 +399,11 @@ export class SessionManager {
    * influenced by request input, which is what makes "a browser cannot choose
    * its sandbox, or another session's" true at the point it matters.
    */
-  async #insertSession(lab: LoadedLabDefinition, provider: LabProvider): Promise<LabSession> {
+  async #insertSession(
+    lab: LoadedLabDefinition,
+    provider: LabProvider,
+    ownerUserId?: string,
+  ): Promise<LabSession> {
     const createdAtMs = this.#now();
     const createdAt = new Date(createdAtMs).toISOString();
     const expiresAt = new Date(
@@ -422,6 +433,7 @@ export class SessionManager {
         serviceAccountName: this.#policy.serviceAccountName,
         status: 'CREATING',
         environmentId: '',
+        ...(ownerUserId ? { ownerUserId } : {}),
         createdAt,
         lastActivityAt: createdAt,
         expiresAt,
