@@ -66,6 +66,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   iproute2 iputils-ping netcat socat  LINUX-006 networking
 #   passwd sudo                         LINUX-002/003 accounts
 #   runit                               LINUX-005 supervision
+#   cron                                LINUX-018 scheduled jobs. The package
+#                                       only; nothing starts it here. Every
+#                                       service a student sees is one a lab
+#                                       put there, so LINUX-018's seed defines
+#                                       and enables it under runit like any
+#                                       other supervised service.
 #   less tree file nano                 reading and identifying what is there
 #   man-db manpages                     the labs cite man pages; they must exist
 #   gawk diffutils sed grep findutils   the analysis labs' toolset
@@ -121,6 +127,7 @@ RUN set -eux; \
       passwd \
       sudo \
       runit \
+      cron \
       less \
       tree \
       file \
