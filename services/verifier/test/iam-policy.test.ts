@@ -13,6 +13,8 @@ import {
   matchesIamPattern,
   parseIamPolicy,
   statementHasCondition,
+  statementHasNotPrincipal,
+  statementHasPrincipal,
   wildcardStatements,
 } from '../src/iam-policy.js';
 import { verifyRequirement } from '../src/registry.js';
@@ -481,5 +483,175 @@ describe('the parser is safe against a hostile policy document', () => {
     expect(policy.statements).toHaveLength(500);
     expect(evaluateIamPolicy(policy, { action: 's3:Action499', resource: 'arn:aws:s3:::bucket499/x' })).toBe('allow');
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+// -------------------------------------------------------------- principals
+
+const trust = (statement: unknown) =>
+  parseIamPolicy(JSON.stringify({ Version: '2012-10-17', Statement: statement }));
+
+describe('Principal and NotPrincipal', () => {
+  it('parses a service principal', () => {
+    const policy = trust({ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' });
+
+    expect(policy.statements[0]!.principals).toEqual([{ type: 'Service', id: 'ec2.amazonaws.com' }]);
+    expect(statementHasPrincipal(policy.statements[0]!, { type: 'Service', id: 'ec2.amazonaws.com' })).toBe(true);
+  });
+
+  it('parses a service principal written as an array', () => {
+    const policy = trust({
+      Effect: 'Allow',
+      Principal: { Service: ['ecs.amazonaws.com', 'elasticloadbalancing.amazonaws.com'] },
+      Action: 'sts:AssumeRole',
+    });
+
+    expect(policy.statements[0]!.principals).toEqual([
+      { type: 'Service', id: 'ecs.amazonaws.com' },
+      { type: 'Service', id: 'elasticloadbalancing.amazonaws.com' },
+    ]);
+  });
+
+  it('treats a bare account id and its root ARN as the same principal', () => {
+    const short = trust({ Effect: 'Allow', Principal: { AWS: '123456789012' }, Action: 'sts:AssumeRole' });
+    const long = trust({ Effect: 'Allow', Principal: { AWS: 'arn:aws:iam::123456789012:root' }, Action: 'sts:AssumeRole' });
+
+    expect(short.statements[0]!.principals).toEqual(long.statements[0]!.principals);
+    expect(statementHasPrincipal(short.statements[0]!, { type: 'AWS', id: 'arn:aws:iam::123456789012:root' })).toBe(true);
+  });
+
+  it('parses a role ARN principal', () => {
+    const policy = trust({
+      Effect: 'Allow',
+      Principal: { AWS: 'arn:aws:iam::123456789012:role/deployer' },
+      Action: 'sts:AssumeRole',
+    });
+
+    expect(statementHasPrincipal(policy.statements[0]!, { type: 'AWS', id: 'arn:aws:iam::123456789012:role/deployer' })).toBe(true);
+  });
+
+  it('parses a federated principal', () => {
+    const policy = trust({
+      Effect: 'Allow',
+      Principal: { Federated: 'arn:aws:iam::123456789012:oidc-provider/tokens.actions.githubusercontent.com' },
+      Action: 'sts:AssumeRoleWithWebIdentity',
+    });
+
+    expect(policy.statements[0]!.principals[0]!.type).toBe('Federated');
+  });
+
+  it('parses several principal types at once', () => {
+    const policy = trust({
+      Effect: 'Allow',
+      Principal: {
+        AWS: ['999999999999', 'arn:aws:iam::123456789012:root'],
+        Service: 'ec2.amazonaws.com',
+        CanonicalUser: '79a59df900b949e55d96a1e698fbacedfd6e09d98eacf8f8d5218e7cd47ef2be',
+      },
+      Action: 'sts:AssumeRole',
+    });
+
+    expect(policy.statements[0]!.principals).toHaveLength(4);
+    expect(statementHasPrincipal(policy.statements[0]!, { type: 'AWS', id: 'arn:aws:iam::999999999999:root' })).toBe(true);
+    expect(statementHasPrincipal(policy.statements[0]!, { type: 'Service', id: 'ec2.amazonaws.com' })).toBe(true);
+  });
+
+  it('treats "Principal": "*" and { "AWS": "*" } as the same thing', () => {
+    const bare = trust({ Effect: 'Allow', Principal: '*', Action: 'sts:AssumeRole' });
+    const object = trust({ Effect: 'Allow', Principal: { AWS: '*' }, Action: 'sts:AssumeRole' });
+
+    expect(bare.statements[0]!.principals).toEqual(object.statements[0]!.principals);
+    expect(wildcardStatements(bare, 'Principal')).toHaveLength(1);
+    expect(wildcardStatements(object, 'Principal', 'Allow')).toHaveLength(1);
+  });
+
+  it('does not let a wildcard principal stand in for a named one', () => {
+    // "You cannot use a wildcard to match part of a principal name or ARN."
+    // Trusting everyone is not the same as trusting the EC2 service.
+    const wide = trust({ Effect: 'Allow', Principal: '*', Action: 'sts:AssumeRole' });
+
+    expect(statementHasPrincipal(wide.statements[0]!, { type: 'Service', id: 'ec2.amazonaws.com' })).toBe(false);
+    expect(findStatements(wide, { principals: [{ type: 'Service', id: 'ec2.amazonaws.com' }] })).toEqual([]);
+  });
+
+  it('does not partially match a principal name or ARN', () => {
+    const policy = trust({ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' });
+
+    for (const wrong of ['ec2*', 'ec2', '*.amazonaws.com', 'EC2.amazonaws.com', 'lambda.amazonaws.com']) {
+      expect(statementHasPrincipal(policy.statements[0]!, { type: 'Service', id: wrong }), wrong).toBe(false);
+    }
+  });
+
+  it('does not confuse principal types', () => {
+    const policy = trust({ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' });
+
+    expect(statementHasPrincipal(policy.statements[0]!, { type: 'AWS', id: 'ec2.amazonaws.com' })).toBe(false);
+  });
+
+  it('reports no principals for an identity-based statement', () => {
+    const identity = parseIamPolicy(
+      JSON.stringify({ Statement: { Effect: 'Allow', Action: 's3:GetObject', Resource: 'arn:aws:s3:::b/*' } }),
+    );
+
+    expect(identity.statements[0]!.principals).toEqual([]);
+    expect(findStatements(identity, { principals: [{ type: 'Service', id: 'ec2.amazonaws.com' }] })).toEqual([]);
+  });
+
+  it('parses NotPrincipal with a Deny', () => {
+    const policy = trust({
+      Effect: 'Deny',
+      NotPrincipal: { AWS: 'arn:aws:iam::123456789012:role/keeper' },
+      Action: 's3:*',
+      Resource: 'arn:aws:s3:::b/*',
+    });
+
+    expect(statementHasNotPrincipal(policy.statements[0]!, { type: 'AWS', id: 'arn:aws:iam::123456789012:role/keeper' })).toBe(true);
+    expect(findStatements(policy, { notPrincipals: [{ type: 'AWS', id: 'arn:aws:iam::123456789012:role/keeper' }] })).toHaveLength(1);
+  });
+
+  it('refuses NotPrincipal with an Allow, which AWS does not support', () => {
+    expect(() => trust({ Effect: 'Allow', NotPrincipal: { AWS: '123456789012' }, Action: 'sts:AssumeRole' }))
+      .toThrow(/NotPrincipal with Effect Allow/);
+  });
+
+  it('refuses Principal and NotPrincipal in the same statement', () => {
+    expect(() => trust({
+      Effect: 'Deny',
+      Principal: '*',
+      NotPrincipal: { AWS: '123456789012' },
+      Action: 'sts:AssumeRole',
+    })).toThrow(/both Principal and NotPrincipal/);
+  });
+
+  it('refuses an unknown principal type and an empty Principal', () => {
+    expect(() => trust({ Effect: 'Allow', Principal: { service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }))
+      .toThrow(/not one of AWS, Service, Federated, CanonicalUser/);
+    expect(() => trust({ Effect: 'Allow', Principal: {}, Action: 'sts:AssumeRole' })).toThrow(/is empty/);
+    expect(() => trust({ Effect: 'Allow', Principal: 'ec2.amazonaws.com', Action: 'sts:AssumeRole' }))
+      .toThrow(/bare string may only be/);
+  });
+
+  it('lets a trust policy omit Resource, but still requires it without a Principal', () => {
+    // A statement with a Principal belongs to a resource-based policy, where
+    // the resource is what the policy is attached to.
+    expect(() => trust({ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }))
+      .not.toThrow();
+    expect(() => parseIamPolicy(JSON.stringify({ Statement: { Effect: 'Allow', Action: 's3:*' } })))
+      .toThrow(/neither Resource nor NotResource/);
+  });
+
+  it('grades formatting-different but equivalent trust policies identically', () => {
+    const a = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [{ Sid: 'Trust', Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }],
+    });
+    const b = JSON.stringify({
+      Statement: { Action: ['sts:AssumeRole'], Principal: { Service: ['ec2.amazonaws.com'] }, Effect: 'Allow', Sid: 'Trust' },
+      Version: '2012-10-17',
+    }, null, 6);
+
+    const selector = { effect: 'Allow' as const, actions: ['sts:AssumeRole'], principals: [{ type: 'Service' as const, id: 'ec2.amazonaws.com' }] };
+    expect(findStatements(parseIamPolicy(a), selector)).toHaveLength(1);
+    expect(findStatements(parseIamPolicy(b), selector)).toHaveLength(1);
   });
 });

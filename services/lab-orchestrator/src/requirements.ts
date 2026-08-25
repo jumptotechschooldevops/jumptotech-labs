@@ -155,6 +155,24 @@ const iamResource = z
   .max(2048)
   .regex(/^[^\s"]+$/, 'must be an ARN or ARN pattern with no whitespace');
 
+/**
+ * One principal a statement's `Principal` (or `NotPrincipal`) must name.
+ *
+ * Exact, never a pattern: AWS documents that a wildcard cannot match part of a
+ * principal name or ARN. `type` uses the documented spelling.
+ */
+const iamPrincipalSelector = z
+  .object({
+    type: z.enum(['AWS', 'Service', 'Federated', 'CanonicalUser']),
+    /** e.g. `ec2.amazonaws.com`, `arn:aws:iam::123456789012:role/deployer`. */
+    id: z
+      .string()
+      .min(1)
+      .max(2048)
+      .regex(/^[^\s"]+$/, 'must be a principal id or ARN with no whitespace'),
+  })
+  .strict();
+
 /** One condition a statement must carry. */
 const iamConditionSelector = z
   .object({
@@ -1227,6 +1245,10 @@ const sandboxRequirementSchemas = {
       /** The statement must cover every resource listed. */
       resources: z.array(iamResource).min(1).max(50).optional(),
       condition: iamConditionSelector.optional(),
+      /** Every principal listed must appear in the statement's `Principal`. */
+      principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
+      /** Every principal listed must appear in the statement's `NotPrincipal`. */
+      not_principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
       ...common,
     })
     .strict(),
@@ -1263,13 +1285,14 @@ const sandboxRequirementSchemas = {
    *
    * The least-privilege check: `"Action": "*"` or `"Resource": "*"` is what a
    * policy review flags first, and a lab that asks for least privilege has to
-   * be able to say so.
+   * be able to say so. `Principal` is the trust-policy equivalent — a role that
+   * trusts `"*"` can be assumed by anyone.
    */
   iam_policy_no_wildcard: z
     .object({
       type: z.literal('iam_policy_no_wildcard'),
       path: sandboxPath,
-      field: z.enum(['Action', 'Resource']),
+      field: z.enum(['Action', 'Resource', 'Principal']),
       /** Restrict the check to statements of one effect. */
       effect: iamEffect.optional(),
       ...common,

@@ -93,6 +93,7 @@ export const iamPolicyStatement: SandboxVerifierHandler<'iam_policy_statement'> 
     if (r.effect) parts.push(`${r.effect}s`);
     if (r.actions) parts.push(r.actions.join(', '));
     if (r.resources) parts.push(`on ${r.resources.join(', ')}`);
+    if (r.principals) parts.push(`for ${r.principals.map((p) => p.id).join(', ')}`);
     return `${r.path} has a statement that ${parts.join(' ') || 'matches'}`;
   },
   async run(requirement, reader) {
@@ -106,6 +107,10 @@ export const iamPolicyStatement: SandboxVerifierHandler<'iam_policy_statement'> 
       ...(requirement.actions !== undefined ? { actions: requirement.actions } : {}),
       ...(requirement.resources !== undefined ? { resources: requirement.resources } : {}),
       ...(requirement.condition !== undefined ? { condition: requirement.condition } : {}),
+      ...(requirement.principals !== undefined ? { principals: requirement.principals } : {}),
+      ...(requirement.not_principals !== undefined
+        ? { notPrincipals: requirement.not_principals }
+        : {}),
     };
 
     if (findStatements(policy, selector).length > 0) return pass();
@@ -119,6 +124,14 @@ export const iamPolicyStatement: SandboxVerifierHandler<'iam_policy_statement'> 
       return fail(
         `no statement in '${requirement.path}' has Effect ${requirement.effect}; ${summarise(policy)}`,
       );
+    }
+    if (requirement.principals !== undefined) {
+      const withoutPrincipals = findStatements(policy, { ...selector, principals: undefined });
+      if (withoutPrincipals.length > 0) {
+        return fail(
+          `a matching statement exists in '${requirement.path}', but its Principal does not name the ${requirement.principals.length === 1 ? 'principal' : 'principals'} required`,
+        );
+      }
     }
     if (requirement.condition !== undefined) {
       const withoutCondition = findStatements(policy, { ...selector, condition: undefined });
