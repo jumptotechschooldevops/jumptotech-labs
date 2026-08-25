@@ -172,7 +172,11 @@ export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
  */
 export const PROVIDER_REQUIREMENT_FAMILIES: Record<LabProviderId, readonly string[]> = {
   kubernetes: ['kubernetes'],
-  linux: ['filesystem', 'linux'],
+  // `iam` is a *parse* of a document on disk, so any provider with a sandbox
+  // filesystem can answer it. The Linux sandbox is where simulated AWS labs
+  // run until the real AWS provider exists, so it is the provider that claims
+  // it — see docs/aws-production-security-spec.md.
+  linux: ['filesystem', 'linux', 'iam'],
   terraform: ['filesystem', 'terraform'],
   // Docker labs are graded against the session's own daemon and its workspace,
   // never against the sandbox filesystem — see the `docker` family.

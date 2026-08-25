@@ -51,6 +51,13 @@ import type {
 import { VerifyReader } from './reader.js';
 import { SandboxReader } from './sandbox-reader.js';
 import {
+  iamPolicyAllows,
+  iamPolicyDocument,
+  iamPolicyNoWildcard,
+  iamPolicyNotAllows,
+  iamPolicyStatement,
+} from './handlers/iam.js';
+import {
   podExists,
   podImage,
   podLabel,
@@ -351,6 +358,12 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_initialized: terraformInitialized,
   terraform_resource_exists: terraformResourceExists,
   terraform_output_equals: terraformOutputEquals,
+
+  iam_policy_document: iamPolicyDocument,
+  iam_policy_statement: iamPolicyStatement,
+  iam_policy_allows: iamPolicyAllows,
+  iam_policy_not_allows: iamPolicyNotAllows,
+  iam_policy_no_wildcard: iamPolicyNoWildcard,
 
   path_absent: pathAbsent,
   file_content_absent: fileContentAbsent,

@@ -138,6 +138,43 @@ const common = {
   label: z.string().min(1).max(160).optional(),
 };
 
+/** `Allow` or `Deny`, as an IAM policy writes them. */
+const iamEffect = z.enum(['Allow', 'Deny']);
+
+/** An IAM action, e.g. `s3:GetObject`, `s3:Get*`, `*`. */
+const iamAction = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9*?:_-]+$/, 'must be an IAM action such as s3:GetObject');
+
+/** An ARN or ARN pattern, e.g. `arn:aws:s3:::bucket/*`. */
+const iamResource = z
+  .string()
+  .min(1)
+  .max(2048)
+  .regex(/^[^\s"]+$/, 'must be an ARN or ARN pattern with no whitespace');
+
+/** One condition a statement must carry. */
+const iamConditionSelector = z
+  .object({
+    /** e.g. `StringEquals`, `Bool`, `IpAddress`. */
+    operator: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9:]+$/, 'must be an IAM condition operator such as StringEquals'),
+    /** e.g. `aws:SourceIp`. */
+    key: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[A-Za-z0-9:._/-]+$/, 'must be an IAM condition key such as aws:SourceIp'),
+    /** When omitted, only the operator and key must be present. */
+    value: z.string().min(1).max(1024).optional(),
+  })
+  .strict();
+
 /** Kubernetes object kinds a requirement may name generically. */
 const CHECKABLE_KINDS = [
   'pod',
@@ -1150,6 +1187,95 @@ const sandboxRequirementSchemas = {
     })
     .strict(),
 
+  // --- IAM policy documents ------------------------------------------------
+  //
+  // These grade an IAM policy the student wrote, by *parsing* it. No check here
+  // matches text: the document is read into a normalised model, so key order,
+  // whitespace, `Action` as a string versus an array, and statement order are
+  // all irrelevant to the verdict — as they are to AWS.
+  //
+  // The reader is the sandbox filesystem, exactly as for Terraform state: the
+  // policy is an artefact on disk, and reading it needs no cloud account.
+
+  /** The file at `path` parses as a well-formed IAM policy document. */
+  iam_policy_document: z
+    .object({
+      type: z.literal('iam_policy_document'),
+      path: sandboxPath,
+      /** Optional exact `Version`, e.g. `2012-10-17`. */
+      version: z.string().min(1).max(32).optional(),
+      /** Optional exact number of statements the document must contain. */
+      statement_count: z.number().int().min(1).max(50).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * At least one statement satisfies every part of the selector.
+   *
+   * A statement "covers" an action or resource when one of its patterns matches
+   * it, with IAM's `*` and `?` wildcards — so `s3:Get*` covers `s3:GetObject`.
+   */
+  iam_policy_statement: z
+    .object({
+      type: z.literal('iam_policy_statement'),
+      path: sandboxPath,
+      effect: iamEffect.optional(),
+      sid: z.string().min(1).max(128).optional(),
+      /** The statement must cover every action listed. */
+      actions: z.array(iamAction).min(1).max(50).optional(),
+      /** The statement must cover every resource listed. */
+      resources: z.array(iamResource).min(1).max(50).optional(),
+      condition: iamConditionSelector.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The policy as a whole permits this action on this resource.
+   *
+   * Evaluated the way AWS documents a single identity policy: an explicit Deny
+   * wins, otherwise a matching Allow grants.
+   */
+  iam_policy_allows: z
+    .object({
+      type: z.literal('iam_policy_allows'),
+      path: sandboxPath,
+      action: iamAction,
+      resource: iamResource,
+      ...common,
+    })
+    .strict(),
+
+  /** The policy does **not** permit this action on this resource. */
+  iam_policy_not_allows: z
+    .object({
+      type: z.literal('iam_policy_not_allows'),
+      path: sandboxPath,
+      action: iamAction,
+      resource: iamResource,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * No statement uses the bare `*` wildcard in the named field.
+   *
+   * The least-privilege check: `"Action": "*"` or `"Resource": "*"` is what a
+   * policy review flags first, and a lab that asks for least privilege has to
+   * be able to say so.
+   */
+  iam_policy_no_wildcard: z
+    .object({
+      type: z.literal('iam_policy_no_wildcard'),
+      path: sandboxPath,
+      field: z.enum(['Action', 'Resource']),
+      /** Restrict the check to statements of one effect. */
+      effect: iamEffect.optional(),
+      ...common,
+    })
+    .strict(),
+
   // =========================================================================
   // Linux sandbox family
   // =========================================================================
@@ -1638,6 +1764,7 @@ export type RequirementFamily =
   | 'filesystem'
   | 'terraform'
   | 'linux'
+  | 'iam'
   | 'docker';
 
 export const REQUIREMENT_FAMILIES = {
@@ -1752,6 +1879,15 @@ export const REQUIREMENT_FAMILIES = {
   terraform_resource_exists: 'terraform',
   terraform_output_equals: 'terraform',
 
+  // Read from a policy document on disk, parsed rather than matched. Grouped
+  // as their own family because the *meaning* of the artefact is IAM's, not the
+  // filesystem's — the same reason `terraform` is separate from `filesystem`.
+  iam_policy_document: 'iam',
+  iam_policy_statement: 'iam',
+  iam_policy_allows: 'iam',
+  iam_policy_not_allows: 'iam',
+  iam_policy_no_wildcard: 'iam',
+
   resource_absent: 'kubernetes',
 
   // These three read a path and nothing else, so they belong with the rest of
@@ -1812,7 +1948,7 @@ export type RequirementTypeOf<F extends RequirementFamily> = {
 }[RequirementType];
 
 /** Requirement types read inside the session's sandbox rather than Kubernetes. */
-export type SandboxRequirementType = RequirementTypeOf<'filesystem' | 'terraform' | 'linux'>;
+export type SandboxRequirementType = RequirementTypeOf<'filesystem' | 'terraform' | 'linux' | 'iam'>;
 
 export type KubernetesRequirementType = RequirementTypeOf<'kubernetes'>;
 

@@ -1,0 +1,241 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# AWS-001 is a SIMULATED lab. It runs in the ordinary Linux sandbox, creates no
+# AWS resources, holds no AWS credentials, and calls no AWS API. The student
+# analyses captured evidence and repairs a configuration file.
+#
+# Content is written from the AWS General Reference and the AWS CLI User Guide
+# only. This lab claims NO certification objective — see `skills` and the
+# deliberate absence of a `certification` block.
+# ---------------------------------------------------------------------------
+id: AWS-001
+slug: aws-001-credentials-and-arns
+title: Which Credentials Won?
+track: aws
+topic: aws-identity
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 1
+
+environment:
+  provider: linux
+
+prerequisites: []
+
+story: >
+  The JumpToTech Bank nightly reconciliation job has been writing to the wrong
+  place for three days. Every run used a different identity, nobody can say
+  which one, and the engineer who set the host up has left.
+
+  Operations pulled an evidence bundle off the reconciliation host before it was
+  rebuilt: three captures of the AWS CLI configuration as it stood when a
+  command ran, plus the change ticket that lists the resources involved. The
+  deployment pipeline's own credentials file came with it, because the batch job
+  reports that the profile it needs does not exist.
+
+  You have the bundle and the official AWS documentation. You do not have an AWS
+  account, and you do not need one — every question here is answerable from the
+  files in front of you and the documented rules.
+
+objectives:
+  - Apply the documented AWS CLI credential precedence order to decide which source supplies credentials
+  - Read an Amazon Resource Name and identify which of its components are present
+  - Recognise malformed ARNs from the documented ARN grammar
+  - Correct a profile section header in a credentials file
+
+task:
+  summary: >
+    Work out which credential source won in each of three captures, judge five
+    ARNs from a change ticket, and repair the pipeline's credentials file.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. There is no AWS
+    CLI here and nothing you do reaches AWS. Everything you need is in
+    `~/aws-incident`, which begins with a `README.md` describing the bundle.
+
+    **Part 1 — which source supplied the credentials.**
+
+    Each of `capture-1`, `capture-2` and `capture-3` records one moment on the
+    reconciliation host: the AWS_ environment variables that were set, the
+    `~/.aws/config` file, the `~/.aws/credentials` file, and the command that
+    ran. For each capture, decide which entry in the AWS CLI's documented
+    configuration and credential precedence order actually supplied the
+    credentials that command used.
+
+    Answer with exactly one of these values, which are the ten entries of that
+    documented order, in order:
+
+      `command_line_options`, `environment_variables`, `assume_role`,
+      `assume_role_with_web_identity`, `iam_identity_center`,
+      `credentials_file`, `custom_process`, `configuration_file`,
+      `container_credentials`, `ec2_instance_profile`
+
+    Two of these captures turn on distinctions that are easy to get backwards,
+    so read the order carefully rather than assuming the obvious answer.
+
+    **Part 2 — the ARNs on the change ticket.**
+
+    `change-ticket-4471.txt` lists five resource names, `ARN_1` to `ARN_5`.
+    Some are well-formed ARNs and some are not. Judge each one against the
+    documented ARN format. Be careful: an ARN that omits a component is not
+    automatically malformed — some services legitimately leave the Region, the
+    account ID, or both out.
+
+    Answer each with exactly `valid` or `invalid`.
+
+    **Part 3 — repair the pipeline's file.**
+
+    `~/aws-incident/deploy/credentials` is what the pipeline writes to
+    `~/.aws/credentials` on the host. The batch job runs with
+    `--profile reconciliation` and cannot find that profile. Fix the file so the
+    profile would be found, without changing either profile's keys and without
+    removing either profile. Leave no section header in that file that uses the
+    word `profile`.
+
+    **Recording your answers.**
+
+    Write your conclusions into `~/aws-incident/findings.env`, which already
+    contains the keys. Replace every `FILL_ME`. Use exactly `KEY=value` with no
+    spaces around the `=` sign and nothing after the value on the line — the
+    file is read as it stands, so a stray space is a wrong answer.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/aws-incident/findings.env
+      label: The findings sheet is in place
+    - type: file_exists
+      path: /home/student/aws-incident/change-ticket-4471.txt
+      label: The change ticket is in place
+    - type: file_exists
+      path: /home/student/aws-incident/deploy/credentials
+      label: The pipeline credentials file is in place
+    - type: file_content
+      path: /home/student/aws-incident/deploy/credentials
+      contains: "[profile reconciliation]"
+      label: The pipeline credentials file starts out broken
+
+requirements:
+  # --- Part 1: credential precedence ---------------------------------------
+  - type: file_content
+    path: /home/student/aws-incident/findings.env
+    contains: "CAPTURE_1_SOURCE=environment_variables"
+    label: Capture 1 — the winning credential source is identified correctly
+
+  - type: file_content
+    path: /home/student/aws-incident/findings.env
+    contains: "CAPTURE_2_SOURCE=credentials_file"
+    label: Capture 2 — the winning credential source is identified correctly
+
+  - type: file_content
+    path: /home/student/aws-incident/findings.env
+    contains: "CAPTURE_3_SOURCE=custom_process"
+    label: Capture 3 — the winning credential source is identified correctly
+
+  # --- Part 2: ARN judgements ----------------------------------------------
+  - type: file_content
+    path: /home/student/aws-incident/findings.env
+    contains: "ARN_1=valid"
+    label: ARN 1 is judged correctly
+
+  - type: file_content
+    path: /home/student/aws-incident/findings.env
+    contains: "ARN_2=invalid"
+    label: ARN 2 is judged correctly
+
+  - type: file_content
+    path: /home/student/aws-incident/findings.env
+    contains: "ARN_3=valid"
+    label: ARN 3 is judged correctly
+
+  - type: file_content
+    path: /home/student/aws-incident/findings.env
+    contains: "ARN_4=invalid"
+    label: ARN 4 is judged correctly
+
+  - type: file_content
+    path: /home/student/aws-incident/findings.env
+    contains: "ARN_5=invalid"
+    label: ARN 5 is judged correctly
+
+  - type: file_content_absent
+    path: /home/student/aws-incident/findings.env
+    contains: "FILL_ME"
+    label: Every finding has been filled in
+
+  # --- Part 3: the repair ---------------------------------------------------
+  - type: file_content
+    path: /home/student/aws-incident/deploy/credentials
+    contains: "[reconciliation]"
+    label: The reconciliation profile uses a credentials-file section header
+
+  - type: file_content_absent
+    path: /home/student/aws-incident/deploy/credentials
+    contains: "[profile "
+    label: No section header in the credentials file uses the word profile
+
+  - type: file_content
+    path: /home/student/aws-incident/deploy/credentials
+    contains: "AKIAI88QH8DHFEXAMPLE"
+    label: The reconciliation profile still carries its own access key id
+
+  - type: file_content
+    path: /home/student/aws-incident/deploy/credentials
+    contains: "AKIAI99QH8DHGEXAMPLE"
+    label: The default profile was left intact
+
+hints:
+  - level: 1
+    text: >
+      Part 1 is not asking which credentials look most plausible. It is asking
+      which entry in one documented ordered list applies. Find that list first,
+      read all ten entries, and only then look at the captures. For part 2,
+      count the colon-separated fields of each name and ask what each one is
+      supposed to hold.
+  - level: 2
+    text: >
+      The AWS CLI User Guide has a section titled "Configuration and credential
+      precedence" that gives the order as a numbered list. Note that the
+      credentials file and the config file are two separate entries in it, and
+      that a custom process is a third. For the ARNs, the AWS General Reference
+      page on ARNs gives the format, names the valid partitions, says how the
+      account ID is written, and states where a wildcard may not appear.
+  - level: 3
+    text: >
+      Capture 2 has static keys in both files and no environment variables, so
+      the answer turns on which of those two files the documented order puts
+      first. Capture 3 has a `credential_process` line and static keys in the
+      same file. For the ARNs, check the partition of each one against the
+      three that exist, look closely at how the account ID in ARN_4 is
+      punctuated, and remember that the resource-type portion is the one place a
+      wildcard is explicitly not allowed. For part 3, the AWS CLI User Guide
+      states the section-header format for the credentials file and the config
+      file separately, and they are not the same.
+
+references:
+  - title: AWS General Reference — Amazon Resource Names (ARNs)
+    url: https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html
+  - title: AWS CLI User Guide — Authentication and access credentials (configuration and credential precedence)
+    url: https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-authentication.html
+  - title: AWS CLI User Guide — Configuration and credential file settings
+    url: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
+  - title: AWS CLI User Guide — Configuring environment variables
+    url: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
+
+skills:
+  - aws.identity.arn-anatomy
+  - aws.cli.credential-precedence
+  - aws.cli.profile-configuration
+
+# No `certification` block, deliberately.
+#
+# The current AWS Certified CloudOps Engineer - Associate (SOA-C03) exam guide
+# has no task statement covering ARN anatomy or the CLI credential provider
+# chain. Its introduction says the exam validates the ability to "Perform
+# operations by using the AWS Management Console and the AWS CLI", but that is a
+# validated ability, not a numbered objective, and claiming coverage from it
+# would overstate what this lab prepares a student for. AWS-001 is a
+# FOUNDATIONAL skill: the prerequisite for the labs that do map to objectives.

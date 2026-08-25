@@ -53,6 +53,23 @@ export {
   type TerraformStateSnapshot,
 } from './sandbox-reader.js';
 export { normalizeMode } from './handlers/filesystem.js';
+export {
+  IamPolicyParseError,
+  evaluateIamPolicy,
+  findStatements,
+  matchesIamPattern,
+  parseIamPolicy,
+  statementCoversAction,
+  statementCoversResource,
+  statementHasCondition,
+  wildcardStatements,
+  type ConditionSelector,
+  type IamCondition,
+  type IamDecision,
+  type IamPolicy,
+  type IamStatement,
+  type StatementSelector,
+} from './iam-policy.js';
 export { DockerVerifyReader } from './docker-reader.js';
 export { imageMatches, normalizeImageReference } from './image.js';
 export { parseQuantity, quantitiesEqual } from './quantity.js';
