@@ -26,7 +26,7 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 
-const TERRAFORM_IDS = ['TF-001', 'TF-003', 'TF-004', 'TF-005', 'TF-011', 'TF-012'];
+const TERRAFORM_IDS = ['TF-001', 'TF-002', 'TF-003', 'TF-004', 'TF-005', 'TF-011', 'TF-012'];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {
@@ -613,6 +613,92 @@ describe('TF-005 — Multiple Resources and Dependencies', () => {
     const paths = (await tf005()).requirements
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-002
+
+describe('TF-002 — Variables and Input Values', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf002(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-002-variables', 'lab.yaml'));
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf002();
+    expect(definition.id).toBe('TF-002');
+    expect(definition.topic).toBe('variables');
+    expect(definition.order).toBe(5);
+    expect(definition.prerequisites).toEqual(['TF-001']);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.certification).toBe('TERRAFORM-ASSOCIATE-004');
+    expect(entry?.domains).toEqual(['4']);
+  });
+
+  it('seeds a hardcoded configuration with no variables to start from', async () => {
+    const files = await loadSetupFiles(await tf002());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    expect(main.content).toContain('"staging"');
+    expect(main.content).not.toContain('variable "');
+    expect(main.content).not.toContain('var.');
+  });
+
+  it('requires all three variables, with the shape the task states', async () => {
+    const declared = (await tf002()).requirements.filter(
+      (r) => r.type === 'terraform_variable_declared',
+    ) as Array<Record<string, unknown>>;
+    expect(declared.map((r) => r.name).sort()).toEqual(['debug', 'environment', 'replicas']);
+    // Every one typed...
+    for (const rule of declared) expect(rule.has_type).toBe(true);
+    // ...and `environment` deliberately without a default, which is what makes
+    // Terraform insist on being told which environment is being built.
+    expect(declared.find((r) => r.name === 'environment')?.has_default).toBe(false);
+    expect(declared.find((r) => r.name === 'replicas')?.has_default).toBe(true);
+    expect(declared.find((r) => r.name === 'debug')?.has_default).toBe(true);
+  });
+
+  it('requires the resource to actually use the variables, not just declare them', async () => {
+    // Editing the literals reaches the same artifact. These four are what make
+    // that fail, and they are satisfied only by a live reference — a string
+    // that happens to read "production" does not count.
+    const references = (await tf002()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    expect(references).toHaveLength(4);
+    for (const rule of references) expect(rule.name).toBe('service_config');
+    const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
+    expect(pairs).toEqual([
+      'content->var.debug',
+      'content->var.environment',
+      'content->var.replicas',
+      'filename->var.environment',
+    ]);
+  });
+
+  it('grades the applied result as well as the mechanism', async () => {
+    const kinds = new Set((await tf002()).requirements.map((r) => r.type));
+    expect(kinds.has('terraform_resource_exists')).toBe(true);
+    expect(kinds.has('file_content')).toBe(true);
+    expect(kinds.has('path_absent')).toBe(true);
+  });
+
+  it('proves an override happened, without looking for a tfvars file', async () => {
+    // Two required values differ from the defaults the lab asks for, so
+    // reaching them is only possible by supplying a value — whichever
+    // documented mechanism the student picks. Nothing pins a filename.
+    const contents = (await tf002()).requirements
+      .filter((r) => r.type === 'file_content' && 'contains' in r)
+      .map((r) => ('contains' in r ? String(r.contains) : ''));
+    expect(contents).toContain('"replicas":4');
+    expect(contents).toContain('"debug":false');
+
+    const paths = (await tf002()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tfvars'))).toBe(false);
     expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
   });
 });
