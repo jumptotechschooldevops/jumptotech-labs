@@ -1,0 +1,270 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-005 — multiple resources, and the order Terraform works them out for itself.
+#
+# Official objectives this lab practises:
+#   Terraform Associate (004), domain 4 "Terraform configuration"
+#   4b — "Refer to resource attributes and create cross-resource references"
+#   4f — "Define resource dependencies in configuration"
+#
+# Official sources, read on 2026-08-25:
+#   · Resource graph — Terraform builds a dependency graph from the references
+#     between resources and walks it to decide order
+#   · References to values — `<TYPE>.<NAME>.<ATTRIBUTE>` is what creates an edge
+#   · Meta-argument: depends_on — for "hidden" dependencies Terraform cannot
+#     infer, and explicitly a last resort when no reference exists
+#
+# ## How the dependency is proved, without reading the student's source
+#
+# The seeded `local_file.service_config` renders its content with
+# `jsonencode`, which sorts object keys — so its bytes are fixed, and so is
+# its SHA-256. That checksum is an attribute Terraform computes *after* the
+# resource is created: `local_file.service_config.content_sha256`.
+#
+# A resource whose applied content carries that checksum can only have been
+# built from the config resource's own attribute, which is exactly what an
+# implicit dependency is. So the grading reads the checksum out of the applied
+# artifacts and the recorded outputs, and never looks at a `.tf` file. No
+# check requires `depends_on`, and adding one would not help: the reference
+# already creates the edge, which is the point the lab is making.
+#
+# A student could in principle compute SHA-256 of the exact rendered bytes by
+# hand and paste it. That is the same answer reached another way, and it costs
+# more effort than the reference — the platform's usual bargain.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-005
+slug: tf-005-dependencies
+title: Multiple Resources and Dependencies
+track: terraform
+topic: dependencies
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 10
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-004
+
+story: >
+  The deploy tooling has started refusing to ship anything it cannot verify.
+  Its rule is simple: alongside the service configuration there must be an
+  integrity record holding that configuration's checksum, and a deploy manifest
+  naming both.
+
+  The first attempt at this was three files written independently, each with
+  the checksum pasted in by hand. It worked until someone changed the replica
+  count, and then the integrity record described a configuration that no longer
+  existed — and the deploy tooling happily shipped it.
+
+  The fix is not more discipline. It is to make the second and third files
+  derive their contents from the first, so Terraform rebuilds them whenever the
+  configuration changes, in that order, without anyone having to remember.
+
+objectives:
+  - Build several resources where one consumes a value another produced
+  - Create an implicit dependency through a resource reference
+  - Read a plan and recognise the order Terraform derived
+  - Explain when depends_on is needed and when a reference already suffices
+
+task:
+  summary: >
+    Add two resources that derive their contents from the seeded service
+    configuration, and publish the result.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf`
+    and a `main.tf`. Read `main.tf` first: it already declares
+    `local_file.service_config`, which renders the service configuration to
+    `build/service.json`. Leave that block alone.
+
+    That resource computes a checksum of its own content once it exists. Find
+    it — the provider documentation lists the attributes a `local_file`
+    exports, and one of them is the SHA-256 of the content. You will need it
+    three times, and each time you must take it from the resource rather than
+    copying the digits.
+
+    Add two resources. Their names are the contract, because the deploy tooling
+    looks for them:
+
+    - `local_file.integrity_record` — writes `build/integrity.txt`. Its
+      content must carry the service configuration's SHA-256 checksum.
+    - `local_file.deploy_manifest` — writes `build/deploy-manifest.txt`.
+      Its content must carry that same checksum **and** the path of the
+      integrity record, taken from that resource rather than typed out.
+
+    Then publish two outputs:
+
+    - `config_fingerprint` — the configuration's SHA-256 checksum.
+    - `deployment` — one object with the keys `config`, `integrity` and
+      `fingerprint`: the configuration's path, the integrity record's path,
+      and the checksum.
+
+    How you lay any of this out is yours. Wrap the checksum in prose, use a
+    heredoc, build the manifest with a template — anything that puts the right
+    values in the right files.
+
+    Before you apply, run `terraform plan` and look at the order. Then apply,
+    and confirm from the state and the outputs that the values really are the
+    ones the configuration resource produced.
+
+    One thing to resist: you will not need `depends_on` anywhere in this lab.
+    Referring to `local_file.service_config.content_sha256` *is* the
+    dependency — Terraform reads that reference, adds the edge to its graph and
+    orders the work itself. `depends_on` is for the case where a real
+    dependency exists but no reference expresses it, and reaching for it when a
+    reference already exists adds an edge Terraform already had. Run
+    `terraform graph` if you want to see the edges it derived.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The seeded service configuration is in place
+
+# Graded from applied state, the artifacts on disk and the recorded outputs.
+# No check opens a `.tf` file, so any configuration producing these results
+# passes — and none of them can be satisfied without the checksum the config
+# resource computed.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: service_config
+    label: The seeded service configuration was applied
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: integrity_record
+    label: The integrity record resource exists in state
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: deploy_manifest
+    label: The deploy manifest resource exists in state
+
+  - type: file_exists
+    path: terraform/build/service.json
+    label: The service configuration was written
+
+  - type: file_exists
+    path: terraform/build/integrity.txt
+    label: The integrity record was written
+
+  # The dependency proof: this checksum exists only once the configuration
+  # resource has been created, so content carrying it was derived from it.
+  - type: file_content
+    path: terraform/build/integrity.txt
+    contains: d0e6aa155b3c5c346148dc7165a8a0bd33b9ce295eaddd8a72aba4ffdd53118f
+    label: The integrity record carries the configuration's checksum
+
+  - type: file_exists
+    path: terraform/build/deploy-manifest.txt
+    label: The deploy manifest was written
+
+  - type: file_content
+    path: terraform/build/deploy-manifest.txt
+    contains: d0e6aa155b3c5c346148dc7165a8a0bd33b9ce295eaddd8a72aba4ffdd53118f
+    label: The deploy manifest carries the configuration's checksum
+
+  - type: file_content
+    path: terraform/build/deploy-manifest.txt
+    contains: build/integrity.txt
+    label: The deploy manifest names the integrity record it accompanies
+
+  - type: terraform_output_equals
+    dir: terraform
+    name: config_fingerprint
+    value: d0e6aa155b3c5c346148dc7165a8a0bd33b9ce295eaddd8a72aba4ffdd53118f
+    label: Output config_fingerprint publishes the configuration's checksum
+
+  - type: terraform_output_equals
+    dir: terraform
+    name: deployment
+    value: '{"config":"build/service.json","integrity":"build/integrity.txt","fingerprint":"d0e6aa155b3c5c346148dc7165a8a0bd33b9ce295eaddd8a72aba4ffdd53118f"}'
+    label: Output deployment gathers the paths and the checksum into one object
+
+hints:
+  - level: 1
+    text: >
+      Start by reading the seeded resource and finding what a `local_file`
+      exports once it exists — the provider documentation lists its attributes,
+      and one of them is a SHA-256 of the content.
+
+      Everything else follows from referring to that attribute instead of
+      writing a value down. You do not need `depends_on`.
+  - level: 2
+    text: >
+      A reference looks like `<TYPE>.<NAME>.<ATTRIBUTE>`, so the seeded
+      resource's checksum and path are both reachable that way. The resource you
+      add is reachable the same way from the one you add after it.
+
+      For the object output, write braces with `key = value` pairs using the
+      three keys the task named.
+  - level: 3
+    text: >
+      `local_file` exports `content_sha256`. So the integrity record's
+      content can be built from
+      `local_file.service_config.content_sha256`, and the deploy manifest's
+      content from that same reference plus
+      `local_file.integrity_record.filename`.
+
+      The outputs are `config_fingerprint` taking
+      `local_file.service_config.content_sha256`, and `deployment` taking an
+      object of `local_file.service_config.filename`,
+      `local_file.integrity_record.filename` and that checksum.
+
+      Then `terraform plan` — notice the configuration resource is planned
+      first — and `terraform apply`.
+
+references:
+  - title: Terraform — Resource graph
+    url: https://developer.hashicorp.com/terraform/internals/graph
+  - title: Terraform — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+  - title: 'Terraform — Meta-argument: depends_on'
+    url: https://developer.hashicorp.com/terraform/language/meta-arguments/depends_on
+  - title: Terraform — Resources
+    url: https://developer.hashicorp.com/terraform/language/resources
+  - title: 'Terraform — Command: graph'
+    url: https://developer.hashicorp.com/terraform/cli/commands/graph
+  - title: 'Terraform — Command: plan'
+    url: https://developer.hashicorp.com/terraform/cli/commands/plan
+  - title: Terraform — Output values
+    url: https://developer.hashicorp.com/terraform/language/values/outputs
+
+skills:
+  - terraform.language.references
+  - terraform.language.dependencies
+  - terraform.workflow.plan
+  - terraform.workflow.apply
+  - terraform.language.outputs
+
+# Objectives 4b and 4f of the Terraform Associate (004) exam content list.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '4'

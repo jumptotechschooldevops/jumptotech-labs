@@ -26,7 +26,7 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 
-const TERRAFORM_IDS = ['TF-001', 'TF-003', 'TF-004', 'TF-011', 'TF-012'];
+const TERRAFORM_IDS = ['TF-001', 'TF-003', 'TF-004', 'TF-005', 'TF-011', 'TF-012'];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {
@@ -477,5 +477,110 @@ describe('TF-003 — Outputs and Exposed Values', () => {
       const label = (requirement as Record<string, unknown>).label;
       if (typeof label === 'string') expect(label).not.toContain('not-a-real-token-placeholder');
     }
+  });
+});
+
+// ------------------------------------------------------------------- TF-005
+
+describe('TF-005 — Multiple Resources and Dependencies', () => {
+  let lab: LoadedLabDefinition;
+  /** SHA-256 of the seeded config's rendered bytes. Deterministic: jsonencode sorts keys. */
+  const DIGEST = 'd0e6aa155b3c5c346148dc7165a8a0bd33b9ce295eaddd8a72aba4ffdd53118f';
+
+  async function tf005(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-005-dependencies', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf005();
+    expect(definition.id).toBe('TF-005');
+    expect(definition.topic).toBe('dependencies');
+    expect(definition.order).toBe(10);
+    expect(definition.prerequisites).toEqual(['TF-004']);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.domains).toEqual(['4']);
+  });
+
+  it('seeds only the head of the chain, leaving both dependents to the student', async () => {
+    const files = await loadSetupFiles(await tf005());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    expect(main.content).toContain('"local_file" "service_config"');
+    // `jsonencode` is what makes the seeded bytes — and therefore the digest —
+    // deterministic. Replacing it with a heredoc would silently break every
+    // checksum assertion in this lab.
+    expect(main.content).toContain('jsonencode');
+    for (const dependent of ['integrity_record', 'deploy_manifest']) {
+      expect(main.content).not.toContain(dependent);
+    }
+  });
+
+  it('requires all three resources, so an unrelated resource cannot stand in', async () => {
+    const named = (await tf005()).requirements
+      .filter((r) => r.type === 'terraform_resource_exists')
+      .map((r) => ('name' in r ? r.name : ''));
+    expect(named.sort()).toEqual(['deploy_manifest', 'integrity_record', 'service_config']);
+  });
+
+  it('proves the implicit dependency from a value only the first resource produces', async () => {
+    const requirements = (await tf005()).requirements;
+    // The digest exists only once `local_file.service_config` has been created,
+    // so applied content carrying it was derived from that resource. This is
+    // the dependency proof, and it reads artifacts rather than source.
+    const carriers = requirements.filter(
+      (r) => r.type === 'file_content' && 'contains' in r && r.contains === DIGEST,
+    );
+    expect(carriers.length).toBe(2);
+    const paths = carriers.map((r) => ('path' in r ? r.path : ''));
+    expect(paths.sort()).toEqual([
+      'terraform/build/deploy-manifest.txt',
+      'terraform/build/integrity.txt',
+    ]);
+  });
+
+  it('requires the dependent resource to name the one it accompanies', async () => {
+    const requirements = (await tf005()).requirements;
+    expect(
+      requirements.some(
+        (r) =>
+          r.type === 'file_content' &&
+          'path' in r &&
+          r.path === 'terraform/build/deploy-manifest.txt' &&
+          'contains' in r &&
+          r.contains === 'build/integrity.txt',
+      ),
+    ).toBe(true);
+  });
+
+  it('publishes the relationship through outputs, one of them structured', async () => {
+    const outputs = (await tf005()).requirements.filter(
+      (r) => r.type === 'terraform_output_equals',
+    );
+    const byName = new Map(outputs.map((r) => [('name' in r ? r.name : ''), r]));
+    expect([...byName.keys()].sort()).toEqual(['config_fingerprint', 'deployment']);
+
+    expect((byName.get('config_fingerprint') as Record<string, unknown>).value).toBe(DIGEST);
+
+    // Structural comparison, so a student's key order cannot decide.
+    const parsed = JSON.parse(
+      String((byName.get('deployment') as Record<string, unknown>).value),
+    ) as Record<string, string>;
+    expect(Object.keys(parsed).sort()).toEqual(['config', 'fingerprint', 'integrity']);
+    expect(parsed.fingerprint).toBe(DIGEST);
+  });
+
+  it('never requires depends_on, and never reads the student’s configuration', async () => {
+    const definition = await tf005();
+    // A reference already creates the edge; requiring `depends_on` as well
+    // would teach the habit the lab exists to argue against.
+    const serialised = JSON.stringify(definition.requirements);
+    expect(serialised).not.toContain('depends_on');
+    // And nothing opens a `.tf` file, so equivalent configurations pass.
+    const paths = definition.requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
   });
 });
