@@ -1,4 +1,8 @@
 /**
+ * Named `*-integration` since PLATFORM-006: this suite requires a real
+ * PostgreSQL. It was always gated on RUN_DB_TESTS, but the old name hid that,
+ * and `test-classification.test.ts` now refuses an unclassified infra suite.
+ *
  * The contract suite against a real PostgreSQL, plus the migration runner.
  *
  * Skipped unless a throwaway database is pointed at it, exactly like the kind

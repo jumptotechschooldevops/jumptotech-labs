@@ -26,7 +26,7 @@ import {
   SessionReaper,
   TerraformLabProvider,
 } from '../src/index.js';
-import { FakeKubernetes } from './fakes.js';
+import { FakeKubernetes, fakeExec } from './fakes.js';
 import { FakeContainerRuntime } from './container-fakes.js';
 import { LABS_DIR } from './helpers.js';
 
@@ -43,6 +43,7 @@ async function harness(options: { now?: () => number } = {}) {
     provider: new KindLabProvider({
       k8s,
       clusterName: 'jumptotech-labs',
+      exec: fakeExec(),
       destroyTimeoutMs: 500,
       sleep: async () => undefined,
       waitForRequirements: async () => ({ ok: true, checks: [] }),
@@ -187,7 +188,11 @@ describe('one session cannot reach another (test requirement 8)', () => {
     await registry.load();
     const providers = new ProviderRegistry({ availabilityTtlMs: 0 });
     providers.register({
-      provider: new KindLabProvider({ k8s: new FakeKubernetes(), clusterName: 'jumptotech-labs' }),
+      provider: new KindLabProvider({
+        k8s: new FakeKubernetes(),
+        clusterName: 'jumptotech-labs',
+        exec: fakeExec(),
+      }),
     });
     const manager = new SessionManager({
       registry,

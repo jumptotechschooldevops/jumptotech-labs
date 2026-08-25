@@ -17,6 +17,10 @@
  *     -e POSTGRES_USER=test -e POSTGRES_DB=jumptotech_labs_test \
  *     -p 55432:5432 postgres:16-alpine
  *
+ * Named `*-integration` since PLATFORM-006: this suite talks to a real
+ * PostgreSQL. It was always gated on RUN_DB_TESTS, but the old name hid the
+ * dependency, and `test-classification.test.ts` now refuses that.
+ *
  *   RUN_DB_TESTS=1 \
  *   TEST_DATABASE_URL=postgresql://test:test@localhost:55432/jumptotech_labs_test \
  *   npm run test:db

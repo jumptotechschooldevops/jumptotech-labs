@@ -8,7 +8,12 @@ export * from './k8s/port.js';
 export * from './k8s/labels.js';
 export { buildStudentKubeconfig, type StudentKubeconfigInput } from './k8s/student-kubeconfig.js';
 export { KubernetesClient, toPodSnapshot, toDeploymentSnapshot } from './k8s/client.js';
-export { KindLabProvider, type RequirementWaiter } from './providers/kind-provider.js';
+export {
+  KindLabProvider,
+  execFileExecRunner,
+  type ProviderExecRunner,
+  type RequirementWaiter,
+} from './providers/kind-provider.js';
 export {
   createLabProvider,
   isSupportedProvider,

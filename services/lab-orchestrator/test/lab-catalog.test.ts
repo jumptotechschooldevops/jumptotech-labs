@@ -128,8 +128,27 @@ async function labsDir(files: Record<string, string>): Promise<string> {
   return root;
 }
 
-/** The real catalog, loaded fresh. */
-async function realRegistry(): Promise<LabRegistry> {
+/**
+ * The real catalog.
+ *
+ * Loaded once and shared: the shipped labs do not change during a run, and the
+ * 22 call sites below were re-reading and re-parsing all 33 `lab.yaml` files
+ * every time — ~726 redundant parses per run, which is real work that made the
+ * suite needlessly slow and, on a loaded machine, timeout-sensitive.
+ *
+ * Sharing is safe because `LabRegistry` is immutable once loaded and every
+ * caller here only reads. The one test that genuinely needs two independent
+ * loads — the determinism check — calls `freshRegistry()` instead, which is the
+ * whole point of that test.
+ */
+let cachedRegistry: Promise<LabRegistry> | undefined;
+function realRegistry(): Promise<LabRegistry> {
+  cachedRegistry ??= freshRegistry();
+  return cachedRegistry;
+}
+
+/** A separate load of the same directory, for tests that compare two loads. */
+async function freshRegistry(): Promise<LabRegistry> {
   const registry = new LabRegistry(LABS_DIR);
   await registry.load();
   return registry;
@@ -169,7 +188,7 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
   });
 
   it('loads deterministically: two loads of one directory agree exactly', async () => {
-    const [a, b] = [await realRegistry(), await realRegistry()];
+    const [a, b] = [await freshRegistry(), await freshRegistry()];
 
     expect(a.all().map((l) => l.id)).toEqual(b.all().map((l) => l.id));
     expect(a.tracks()).toEqual(b.tracks());
@@ -778,6 +797,32 @@ describe('schema — documentation (test requirement 10)', () => {
       mutate(DOC_URL, 'https://example.com/pods'),
       /official kubernetes documentation link/,
     );
+  });
+
+  it('treats a path-narrowed entry as a path, not as its bare host', () => {
+    /*
+     * `OFFICIAL_DOC_HOSTS.kubernetes` contains `github.com/kubernetes`, meaning
+     * the Kubernetes project on GitHub. Before PLATFORM-006 the matcher
+     * compared it against the *hostname*, so every github.com URL satisfied the
+     * official-documentation rule — a stranger's cheatsheet repo and the bare
+     * site root included.
+     */
+    const withUrl = (url: string) => mutate(DOC_URL, url);
+
+    // The entry's own project still qualifies, at the root and below it.
+    expect(() => parseLabDefinition(withUrl('https://github.com/kubernetes'))).not.toThrow();
+    expect(() =>
+      parseLabDefinition(withUrl('https://github.com/kubernetes/kubernetes')),
+    ).not.toThrow();
+
+    // Anything else on the same host does not.
+    for (const url of [
+      'https://github.com/some-random-user/k8s-cheatsheet',
+      'https://github.com/',
+      'https://github.com/kubernetes-sigs-lookalike/x',
+    ]) {
+      expectIssue(withUrl(url), /official kubernetes documentation link/);
+    }
   });
 
   it('rejects links to commercial training platforms', () => {

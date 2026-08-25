@@ -21,6 +21,7 @@ import type {
   DaemonSetSnapshot,
   DeploymentSnapshot,
   EndpointsSnapshot,
+  ExecResult,
   HorizontalPodAutoscalerSnapshot,
   IngressSnapshot,
   JobSnapshot,
@@ -553,4 +554,53 @@ export function podSnapshot(overrides: Partial<PodSnapshot> = {}): PodSnapshot {
     ...overrides,
     containers,
   };
+}
+
+/**
+ * A `kubectl` runner that never leaves the process — PLATFORM-006.
+ *
+ * `KindLabProvider.create()` runs `kubectl version` as a readiness step. A unit
+ * test that supplies `FakeKubernetes` but no exec runner would fall through to
+ * the developer's real cluster, which is how three suites ended up failing
+ * whenever another worktree was busy. Passing `exec: fakeExec()` makes the
+ * provider self-contained.
+ *
+ * The default answers `kubectl version` with a plausible client version, which
+ * is all the readiness step reads. `responses` overrides the reply for a given
+ * command, and `calls` records what was asked so a test can assert on it —
+ * including that the namespace was appended by the provider rather than the
+ * caller.
+ */
+export interface FakeExecOptions {
+  /** Per-command overrides, keyed by binary name. */
+  responses?: Record<string, Partial<ExecResult>>;
+}
+
+export interface FakeExec {
+  (command: string, args: string[], options: { timeoutMs: number; env: NodeJS.ProcessEnv }):
+    Promise<ExecResult>;
+  /** Every invocation, in order. */
+  readonly calls: Array<{ command: string; args: string[] }>;
+}
+
+export function fakeExec(options: FakeExecOptions = {}): FakeExec {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const runner = async (
+    command: string,
+    args: string[],
+  ): Promise<ExecResult> => {
+    calls.push({ command, args: [...args] });
+    const override = options.responses?.[command];
+    const base: ExecResult =
+      command === 'kubectl' && args.includes('version')
+        ? {
+            exitCode: 0,
+            stdout: JSON.stringify({ clientVersion: { gitVersion: 'v1.34.2' } }),
+            stderr: '',
+            timedOut: false,
+          }
+        : { exitCode: 0, stdout: '', stderr: '', timedOut: false };
+    return { ...base, ...override };
+  };
+  return Object.assign(runner, { calls }) as FakeExec;
 }

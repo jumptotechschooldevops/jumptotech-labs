@@ -230,6 +230,49 @@ export class SandboxReader {
   }
 
   /**
+   * The values of *named* environment variables of one running process.
+   *
+   * Deliberately not "read the environment". The caller must name every
+   * variable it wants, and only those come back — so there is no code path,
+   * and no lab definition, that can obtain a process's environment wholesale.
+   * A secret the lab never names is never read into the verifier at all.
+   *
+   * Read from `/proc/<pid>/environ`, which is NUL-separated and owned by the
+   * process. `asRoot` is required because a supervised service normally runs as
+   * its own account; the boundary that makes this safe is the *container* —
+   * fixed at this reader's construction, belonging to exactly one session — not
+   * the account inside it. A reader cannot be pointed at another student's
+   * sandbox because it is never given the chance to name one.
+   *
+   * Returns `null` when the process is gone or its environment cannot be read,
+   * which the caller must treat as "not proven", never as "passed".
+   */
+  async environForPid(
+    pid: number,
+    names: readonly string[],
+  ): Promise<Map<string, string> | null> {
+    // The pid comes from this reader's own process table, but it is re-checked
+    // here so the path can never be assembled from anything but a plain integer.
+    if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+
+    const result = await this.inspect('cat', [`/proc/${pid}/environ`], { asRoot: true });
+    if (result.exitCode !== 0) return null;
+
+    const wanted = new Set(names);
+    const found = new Map<string, string>();
+    for (const entry of result.stdout.split('\0')) {
+      if (entry === '') continue;
+      const split = entry.indexOf('=');
+      if (split <= 0) continue;
+      const name = entry.slice(0, split);
+      // Only what was asked for is retained. Everything else is dropped here,
+      // before it can reach a handler, a result, or a log line.
+      if (wanted.has(name)) found.set(name, entry.slice(split + 1));
+    }
+    return found;
+  }
+
+  /**
    * Parse `terraform.tfstate` in a working directory.
    *
    * Returns `null` when there is no state at all — which is the honest answer

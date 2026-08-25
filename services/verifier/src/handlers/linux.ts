@@ -115,6 +115,77 @@ export const processNotRunning: SandboxVerifierHandler<'process_not_running'> = 
   },
 };
 
+/**
+ * The environment a running process actually has.
+ *
+ * The rule this handler exists to enforce, and the reason it is careful about
+ * what it says: **it reports a verdict, never a value.** A student sees which
+ * variable is wrong and in what way — missing, present when it should not be,
+ * or set to the wrong thing — and never what it is set to, nor what it should
+ * have been. `AWS_SECRET_ACCESS_KEY expected X but found Y` is precisely the
+ * failure message this must not be able to produce, so no branch below
+ * interpolates a value from either the process or the lab definition.
+ *
+ * `sensitive: true` on a variable withholds even its name.
+ *
+ * Every matching process must satisfy every assertion. That is stricter than
+ * "one of them does", and deliberately: a student who starts a second process
+ * with the right environment must not be able to mask a misconfigured one.
+ */
+export const processEnviron: SandboxVerifierHandler<'process_environ'> = {
+  type: 'process_environ',
+  label: (r) => `The process matching '${r.pattern}' has the required environment`,
+  async run(requirement, reader) {
+    const matches = await matchingProcesses(reader, requirement.pattern);
+    if (matches.length < requirement.min_count) {
+      return fail(
+        requirement.min_count === 1
+          ? `No running process has '${requirement.pattern}' in its command line`
+          : `Found ${matches.length} process(es) matching '${requirement.pattern}'; ${requirement.min_count} are required`,
+      );
+    }
+
+    const names = requirement.variables.map((v) => v.name);
+
+    for (const match of matches) {
+      const environ = await reader.environForPid(match.pid, names);
+      if (!environ) {
+        // Unreadable is not a pass. The process may have exited between the
+        // table read and this one, or the sandbox may not expose /proc.
+        return fail(
+          `Could not read the environment of the process matching '${requirement.pattern}'`,
+        );
+      }
+
+      for (const variable of requirement.variables) {
+        const actual = environ.get(variable.name);
+        const shown = variable.sensitive ? 'A required environment variable' : `'${variable.name}'`;
+
+        if (variable.absent === true) {
+          if (actual !== undefined) {
+            return fail(`${shown} is set on the process, and must not be`);
+          }
+          continue;
+        }
+        if (actual === undefined) {
+          return fail(`${shown} is not set on the process`);
+        }
+        if (variable.present === true) continue;
+        if (variable.equals !== undefined && actual !== variable.equals) {
+          // Neither value appears. The student is told which variable to look
+          // at and that it is wrong, which is what a real runbook would say.
+          return fail(`${shown} is set to the wrong value`);
+        }
+        if (variable.not_equals !== undefined && actual === variable.not_equals) {
+          return fail(`${shown} is set to a value this lab forbids`);
+        }
+      }
+    }
+
+    return pass();
+  },
+};
+
 export const portListening: SandboxVerifierHandler<'port_listening'> = {
   type: 'port_listening',
   label: (r) => `Something is listening on ${r.protocol}/${r.port}`,

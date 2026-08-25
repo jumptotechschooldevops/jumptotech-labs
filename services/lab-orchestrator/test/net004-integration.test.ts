@@ -13,12 +13,26 @@
  * `verifyLab` — so a pass here is evidence about the platform rather than about
  * this file.
  *
- * Skipped unless RUN_INTEGRATION_TESTS=1 and the image exists, because it needs
- * a daemon and takes real time.
+ * Tier: E2E (PLATFORM-006). Gated on RUN_INTEGRATION_TESTS=1, so `npm test`
+ * stays hermetic.
+ *
+ * What it mutates on the shared daemon, and nothing else:
+ *   · two sandbox containers, named from this run's id
+ *   · the two `jtt-net-*` lab networks the provider derives from those names
+ *
+ * Every name is derived from `testRunId()`, so two worktrees running this at
+ * once cannot collide. The run id cannot appear *literally* in either name:
+ * both `jtt-lab-<hex>` and `sess-<hex>` are hex-only by platform rule, which is
+ * what stops an identifier arriving from anywhere but trusted derivation. So
+ * `ownedByThisRun` — a substring check on the name — cannot apply here, and
+ * teardown proves ownership the stronger way instead: it re-reads the
+ * container's own session label from the daemon and refuses to name anything
+ * whose label is not this run's, on top of the provider's managed-label gate.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import {
+  CONTAINER_SESSION_LABEL,
   DockerCliRuntime,
   LinuxLabProvider,
   loadLabDefinition,
@@ -27,13 +41,27 @@ import {
   type LoadedLabDefinition,
 } from '../src/index.js';
 import { verifyLab } from '@jumptotech/verifier';
+import { testRunId } from '@jumptotech/test-support/run-id';
+import { createHash } from 'node:crypto';
 import { LABS_DIR, sessionContext } from './helpers.js';
 
 const IMAGE = process.env.NET004_E2E_IMAGE ?? 'jumptotech/lab-linux:net004-e2e';
 const ENABLED = process.env.RUN_INTEGRATION_TESTS === '1';
 
-const SANDBOX_A = 'jtt-lab-00000000e2e1';
-const SANDBOX_B = 'jtt-lab-00000000e2e2';
+/**
+ * Run-scoped sandbox references.
+ *
+ * `testRunId()` is not hex, and a sandbox reference must match
+ * `jtt-lab-<hex>` — the platform's own pattern, which is what stops a name
+ * arriving from anywhere but trusted derivation. Hashing the run id gives a
+ * value that is both hex and unique per run, so the two constraints hold at
+ * once rather than one being relaxed for the other.
+ */
+const RUN_HEX = createHash('sha256').update(testRunId()).digest('hex').slice(0, 12);
+const SANDBOX_A = `jtt-lab-${RUN_HEX}a1`;
+const SANDBOX_B = `jtt-lab-${RUN_HEX}b2`;
+const SESSION_A = `sess-${RUN_HEX}a1`;
+const SESSION_B = `sess-${RUN_HEX}b2`;
 const NETWORK_A = networkRefForSandbox(SANDBOX_A);
 const NETWORK_B = networkRefForSandbox(SANDBOX_B);
 
@@ -54,6 +82,25 @@ function sandboxPort(context: LabSessionContext) {
     inspect: (command: string, args: readonly string[], options?: { asRoot?: boolean }) =>
       provider.inspectSandbox(context, command, args, options),
   };
+}
+
+/**
+ * Remove only what this run created.
+ *
+ * The session id is derived from this run's id, so a container carrying it as a
+ * label is one this run made. Anything else — a concurrent worktree's sandbox,
+ * an operator's container — is left untouched, and the provider applies its own
+ * managed-label and session-label gates underneath this one.
+ */
+async function teardown() {
+  for (const [ref, sessionId] of [
+    [SANDBOX_A, SESSION_A],
+    [SANDBOX_B, SESSION_B],
+  ] as const) {
+    const info = await runtime.inspect(ref).catch(() => null);
+    if (info && info.labels[CONTAINER_SESSION_LABEL] !== sessionId) continue;
+    await provider.destroySandbox(ref, sessionId).catch(() => undefined);
+  }
 }
 
 async function check(context: LabSessionContext) {
@@ -125,13 +172,11 @@ describe.skipIf(!ENABLED)('NET-004 end to end, against a real daemon', () => {
   }, 120_000);
 
   afterAll(async () => {
-    for (const ref of [SANDBOX_A, SANDBOX_B]) {
-      await provider.destroySandbox(ref).catch(() => undefined);
-    }
+    await teardown();
   }, 120_000);
 
   it('runs the whole student journey: start, fail, solve, pass, break, fail, reset, fail, solve, pass', async () => {
-    const context = contextFor('sess-00000000000e2e01', SANDBOX_A);
+    const context = contextFor(SESSION_A, SANDBOX_A);
 
     // --- start ------------------------------------------------------------
     const created = await provider.create(context);
@@ -194,7 +239,7 @@ describe.skipIf(!ENABLED)('NET-004 end to end, against a real daemon', () => {
   }, 600_000);
 
   it('produces the three neighbour outcomes a real kernel reports', async () => {
-    const context = contextFor('sess-00000000000e2e01', SANDBOX_A);
+    const context = contextFor(SESSION_A, SANDBOX_A);
     if (!(await runtime.inspect(SANDBOX_A))) {
       const created = await provider.create(context);
       expect(created.ok).toBe(true);
@@ -225,7 +270,7 @@ describe.skipIf(!ENABLED)('NET-004 end to end, against a real daemon', () => {
   }, 300_000);
 
   it('will not let a student forge neighbour state', async () => {
-    const context = contextFor('sess-00000000000e2e01', SANDBOX_A);
+    const context = contextFor(SESSION_A, SANDBOX_A);
     if (!(await runtime.inspect(SANDBOX_A))) {
       await provider.create(context);
     }
@@ -244,8 +289,8 @@ describe.skipIf(!ENABLED)('NET-004 end to end, against a real daemon', () => {
   }, 300_000);
 
   it('keeps two concurrent sessions on separate segments', async () => {
-    const a = contextFor('sess-00000000000e2e01', SANDBOX_A);
-    const b = contextFor('sess-00000000000e2e02', SANDBOX_B);
+    const a = contextFor(SESSION_A, SANDBOX_A);
+    const b = contextFor(SESSION_B, SANDBOX_B);
     if (!(await runtime.inspect(SANDBOX_A))) await provider.create(a);
     const createdB = await provider.create(b);
     expect(createdB.ok, JSON.stringify(createdB.steps)).toBe(true);
@@ -282,14 +327,12 @@ describe.skipIf(!ENABLED)('NET-004 end to end, against a real daemon', () => {
   }, 600_000);
 
   it('leaves no orphan network behind after teardown', async () => {
-    for (const ref of [SANDBOX_A, SANDBOX_B]) {
-      await provider.destroySandbox(ref).catch(() => undefined);
-    }
+    await teardown();
 
     expect(await runtime.networkInspect(NETWORK_A)).toBeNull();
     expect(await runtime.networkInspect(NETWORK_B)).toBeNull();
     // And destroying again is safe.
-    const again = await provider.destroySandbox(SANDBOX_A);
+    const again = await provider.destroySandbox(SANDBOX_A, SESSION_A);
     expect(again.ok).toBe(true);
   }, 300_000);
 });

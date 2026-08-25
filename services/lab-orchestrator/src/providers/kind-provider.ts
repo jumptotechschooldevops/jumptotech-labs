@@ -73,6 +73,44 @@ export type RequirementWaiter = (input: {
   timeoutMs: number;
 }) => Promise<{ ok: boolean; checks: Array<{ label: string; status: string; detail?: string }> }>;
 
+/**
+ * How `KindLabProvider` starts an allow-listed binary.
+ *
+ * The same seam `DockerCliOptions.run` provides, for the same reason: it is the
+ * one place this provider leaves the process, so it is the one place a test
+ * must be able to replace. Argv is passed as an array and never a string —
+ * there is no shell, so argument content cannot become syntax.
+ */
+export type ProviderExecRunner = (
+  command: string,
+  args: string[],
+  options: { timeoutMs: number; env: NodeJS.ProcessEnv },
+) => Promise<ExecResult>;
+
+/** The production runner: a real child process, argv array, never a shell. */
+export const execFileExecRunner: ProviderExecRunner = (command, args, options) =>
+  new Promise<ExecResult>((resolve) => {
+    execFile(
+      command,
+      args,
+      { timeout: options.timeoutMs, env: options.env, maxBuffer: 1024 * 1024, shell: false },
+      (error, stdout, stderr) => {
+        const timedOut = Boolean(error && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
+        let exitCode = 0;
+        if (error) {
+          const code = (error as { code?: unknown }).code;
+          exitCode = typeof code === 'number' ? code : 1;
+        }
+        resolve({
+          exitCode,
+          stdout: String(stdout),
+          stderr: String(stderr) || (error && exitCode !== 0 ? error.message : ''),
+          timedOut,
+        });
+      },
+    );
+  });
+
 export interface KindProviderOptions {
   k8s: KubernetesPort;
   clusterName: string;
@@ -84,6 +122,16 @@ export interface KindProviderOptions {
   destroyTimeoutMs?: number;
   /** Confirms a lab's declared initial state actually materialised. */
   waitForRequirements?: RequirementWaiter;
+  /**
+   * How an allow-listed binary is actually run.
+   *
+   * Injectable for the same reason `DockerCliOptions.run` is: the readiness
+   * step below shells out to `kubectl`, and a test that supplies a fake
+   * Kubernetes port but no exec runner would otherwise reach the developer's
+   * real cluster — passing or failing on infrastructure it never asked for.
+   * Production leaves this unset and gets `execFileExecRunner`.
+   */
+  exec?: ProviderExecRunner;
   /** Injectable for tests. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -103,6 +151,7 @@ export class KindLabProvider implements LabProvider {
   readonly #wait: RequirementWaiter | undefined;
   readonly #now: () => number;
   readonly #sleep: (ms: number) => Promise<void>;
+  readonly #exec: ProviderExecRunner;
 
   constructor(options: KindProviderOptions) {
     this.#k8s = options.k8s;
@@ -113,6 +162,7 @@ export class KindLabProvider implements LabProvider {
     this.#wait = options.waitForRequirements;
     this.#now = options.now ?? (() => Date.now());
     this.#sleep = options.sleep ?? sleep;
+    this.#exec = options.exec ?? execFileExecRunner;
   }
 
   environmentId(context: LabSessionContext): string {
@@ -670,27 +720,13 @@ export class KindLabProvider implements LabProvider {
     };
     if (this.#kubeconfigPath) env.KUBECONFIG = this.#kubeconfigPath;
 
-    return new Promise<ExecResult>((resolve) => {
-      execFile(
-        request.command,
-        [...request.args, '--namespace', context.namespace],
-        { timeout: timeoutMs, env, maxBuffer: 1024 * 1024, shell: false },
-        (error, stdout, stderr) => {
-          const timedOut = Boolean(error && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
-          let exitCode = 0;
-          if (error) {
-            const code = (error as { code?: unknown }).code;
-            exitCode = typeof code === 'number' ? code : 1;
-          }
-          resolve({
-            exitCode,
-            stdout: String(stdout),
-            stderr: String(stderr) || (error && exitCode !== 0 ? error.message : ''),
-            timedOut,
-          });
-        },
-      );
-    });
+    // The namespace is appended here, not by the caller: a runner — real or
+    // fake — is never given the chance to choose which namespace it acts on.
+    return this.#exec(
+      request.command,
+      [...request.args, '--namespace', context.namespace],
+      { timeoutMs, env },
+    );
   }
 
   // --------------------------------------------------------------- helpers

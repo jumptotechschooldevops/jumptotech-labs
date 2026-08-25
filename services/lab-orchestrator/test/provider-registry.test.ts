@@ -33,14 +33,20 @@ import {
   TerraformLabProvider,
   singleProviderRegistry,
 } from '../src/index.js';
-import { FakeKubernetes } from './fakes.js';
+import { FakeKubernetes, fakeExec } from './fakes.js';
 import { FakeContainerRuntime } from './container-fakes.js';
 import { FakeDockerEngines } from './docker-fakes.js';
 import { LABS_DIR } from './helpers.js';
 
 function registry(runtime = new FakeContainerRuntime()) {
   const reg = new ProviderRegistry({ availabilityTtlMs: 0 });
-  reg.register({ provider: new KindLabProvider({ k8s: new FakeKubernetes(), clusterName: 'jumptotech-labs' }) });
+  reg.register({
+    provider: new KindLabProvider({
+      k8s: new FakeKubernetes(),
+      clusterName: 'jumptotech-labs',
+      exec: fakeExec(),
+    }),
+  });
   reg.register({ provider: new LinuxLabProvider({ runtime }) });
   reg.register({ provider: new TerraformLabProvider({ runtime }) });
   // The Docker provider drives a per-session daemon through an engine factory,
@@ -133,7 +139,9 @@ describe('availability is reported, not thrown', () => {
     const k8s = new FakeKubernetes();
     k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
     const reg = new ProviderRegistry({ availabilityTtlMs: 0 });
-    reg.register({ provider: new KindLabProvider({ k8s, clusterName: 'jumptotech-labs' }) });
+    reg.register({
+      provider: new KindLabProvider({ k8s, clusterName: 'jumptotech-labs', exec: fakeExec() }),
+    });
 
     const status = await reg.status('kubernetes');
     expect(status.available).toBe(false);
@@ -157,7 +165,11 @@ describe('availability is reported, not thrown', () => {
 describe('single-provider registry', () => {
   it('answers for the provider it holds and refuses every other', async () => {
     const reg = singleProviderRegistry(
-      new KindLabProvider({ k8s: new FakeKubernetes(), clusterName: 'jumptotech-labs' }),
+      new KindLabProvider({
+        k8s: new FakeKubernetes(),
+        clusterName: 'jumptotech-labs',
+        exec: fakeExec(),
+      }),
     );
     await expect(reg.resolve('kubernetes')).resolves.toBeDefined();
     // The point of this: a lab that declares another provider must not silently
@@ -180,6 +192,7 @@ async function platform() {
 
   const kind = new KindLabProvider({
     k8s,
+    exec: fakeExec(),
     clusterName: 'jumptotech-labs',
     now: () => clock.now,
     sleep: async () => undefined,
