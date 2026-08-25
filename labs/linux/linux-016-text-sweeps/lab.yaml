@@ -119,9 +119,6 @@ task:
     shell's `*.tmp` does not match it and will leave it behind without saying
     so. Make sure your sweep finds everything it is supposed to.
 
-    A caution worth stating once: this sandbox has no manual pages installed.
-    `--help` works on all of these tools, and the reference links below are the
-    upstream manuals for each.
 
 setup:
   seed_scripts:
@@ -270,8 +267,8 @@ hints:
       filename expansion does not, which is worth confirming for yourself
       before you trust a one-line `rm`.
 
-      This sandbox has no manual pages installed, so `--help` and the linked
-      manuals are the documentation available to you.
+      `man sed`, `man awk` and `man find` are all on this host, and the linked
+      GNU manuals below say the same things at more length.
   - level: 3
     text: >
       The substitution is a `find` over the config tree restricted to names
@@ -354,14 +351,15 @@ skills:
 #                    exact in awk's doubles; the generated log hashes
 #                    identically across runs
 #
-# KNOWN IMAGE DEFECT, reported separately and NOT worked around here beyond
-# telling the student the truth: the sandbox has no manual pages at all.
-# `debian:bookworm-slim` ships /etc/dpkg/dpkg.cfg.d/docker containing
-# `path-exclude /usr/share/man/*`, so despite man-db and manpages being
-# installed, `man find`, `man sed`, `man awk` and every other page cited by
-# LINUX-001 through LINUX-015 return "No manual entry". `--help` works. This
-# lab's hints point at the upstream manuals and at --help rather than promising
-# a `man` that does not answer.
+# IMAGE DEFECT FOUND HERE, SINCE FIXED: when this lab was written the sandbox
+# had no manual pages at all — `debian:bookworm-slim` ships
+# /etc/dpkg/dpkg.cfg.d/docker containing `path-exclude /usr/share/man/*`, so
+# despite man-db and manpages being installed, every page cited by LINUX-001
+# through LINUX-016 returned "No manual entry". The image now carries a
+# `path-include` drop-in that sorts after that exclusion, plus a `--reinstall`
+# of the base-image packages that were already unpacked without their pages, and
+# `services/lab-orchestrator/test/linux-man-pages.test.ts` keeps it that way.
+# This lab's hints cite `man` again as a result.
 # ---------------------------------------------------------------------------
 certification:
   - certification: LFCS

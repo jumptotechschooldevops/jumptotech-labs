@@ -72,8 +72,45 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   tar gzip                            LINUX-008 archives
 #   tzdata ca-certificates              sane log timestamps, TLS roots
 # `coreutils` comes with the base image. Nothing else is added.
+#
+# --- why the dpkg drop-in below exists --------------------------------------
+#
+# `debian:bookworm-slim` ships /etc/dpkg/dpkg.cfg.d/docker containing
+# `path-exclude /usr/share/man/*`, so every package installs *without* its
+# manual pages. Installing `man-db` and `manpages` does not undo that: they are
+# subject to the same exclusion, which is why this image previously answered
+# "No manual entry" for every one of the ~27 pages the labs' hints tell students
+# to read — `man find`, `man chmod`, `man ps`, and even `environ(7)`, which
+# LINUX-014 cites directly.
+#
+# A `path-include` in a drop-in that sorts *after* `docker` re-includes them.
+# Config files in /etc/dpkg/dpkg.cfg.d are read in alphabetical order and the
+# later directive wins, so the name matters — `zz-` is not decoration.
+#
+# The exclusion is only consulted at unpack time, so re-including it is not
+# enough on its own: the packages that came with the base image were already
+# unpacked without their pages and have to be reinstalled. That is the
+# `--reinstall` list, and it holds exactly the packages that own a page the
+# curriculum cites (coreutils covers mkdir/mv/touch/chmod/stat/df/du/head/tail/
+# test/ln/env, passwd covers useradd/usermod/groupadd, and `bash` is there
+# because a student who reaches for documentation reaches for `man bash` first).
+# Everything installed below gets its pages from the drop-in alone.
 RUN set -eux; \
+    printf '%s\n' \
+      '# Manual pages are curriculum content in this image: LINUX-001 onward' \
+      '# send students to `man` from their hints. The slim base image excludes' \
+      '# them; this drop-in sorts after that exclusion and re-includes them.' \
+      'path-include /usr/share/man/*' \
+      > /etc/dpkg/dpkg.cfg.d/zz-jumptotech-manpages; \
     apt-get update; \
+    apt-get install -y --no-install-recommends --reinstall \
+      bash \
+      coreutils \
+      findutils \
+      grep \
+      hostname \
+      passwd \
+      sed; \
     apt-get install -y --no-install-recommends \
       procps \
       psmisc \
