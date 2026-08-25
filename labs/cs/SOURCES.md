@@ -739,3 +739,65 @@ in any student-visible text. This is a different case from CS-004, where an
 objective named a value the student was supposed to find.
 
 **Runtime dependency:** Python 3.11 standard library only (`os`, `sys`).
+
+### CS-006 — Variables, Types and Control Flow
+
+```text
+LAB ID:              CS-006
+TITLE:               Variables, Types and Control Flow
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Tell a value's type from where it came and know that arguments, files and
+  environment all hand a program text; see that comparing numbers as text gives
+  a different answer silently; convert, and handle text that is not a number;
+  express a rule with strict boundaries in if/elif/else; loop over readings; and
+  put the rule in a function so it can be tested by calling it.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  A replica count read as a string and compared against a number is a real
+  outage, and it fails silently: "12" > "9" is False, so a scaler that looks
+  correct never scales down. The same shape appears wherever config crosses a
+  boundary — YAML, environment, JSON, command arguments.
+
+OFFICIAL / PRIMARY SOURCES:
+  Python tutorial — introduction   https://docs.python.org/3/tutorial/introduction.html
+  Python tutorial — control flow   https://docs.python.org/3/tutorial/controlflow.html
+  Python — built-in types          https://docs.python.org/3/library/stdtypes.html
+  Python — built-in functions      https://docs.python.org/3/library/functions.html
+  Python — sys.argv                https://docs.python.org/3/library/sys.html
+  Python — built-in exceptions     https://docs.python.org/3/library/exceptions.html
+
+LAST VERIFIED:       2026-08-25   (all six fetched, HTTP 200)
+```
+
+**No seeded grading harness — and this is the lab where that was decided.**
+
+The curriculum plan sketched CS-006 with a harness that imports the student's
+`decide` and prints `PASS:` tokens. That design is unsound **at any file
+permission**: a harness that imports student code runs it in the same process,
+so the student's module can print the tokens itself at import time and exit
+before a single case runs. Root ownership and an unwritable file do not help,
+because the attack is on the process, not the file. Hiding the filename would
+be obscurity, not security.
+
+So the student's own program is run directly, and each argument set is chosen
+to separate a correct implementation from one specific mistake:
+
+| arguments | catches |
+|---|---|
+| `10 9 2` | comparing as text — `"10" > "9"` is False, the seeded helper's actual bug |
+| `8 8 2` | the target boundary, which is strict |
+| `3 1 3` | the minimum boundary, which is also strict |
+| `1 0 0` | truthiness — `if minimum and …` breaks only when the minimum is genuinely zero |
+| `abc 1 1` | text that is not a number |
+| `--file readings.txt` | the loop, over the five windows the helper got wrong |
+
+Each is a named regression test, so a later edit cannot quietly drop the case
+that catches a particular bug. Verified on the real platform: the text-compare
+bug fails exactly two checks, the truthiness bug fails exactly one — the zero
+case — and a blanket program printing every expected line fails only on the two
+`file_content_absent` source checks, which is why they are not redundant.
+
+**Runtime dependency:** Python 3.11 standard library only (`sys`).
