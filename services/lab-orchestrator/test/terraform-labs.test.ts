@@ -26,7 +26,16 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 
-const TERRAFORM_IDS = ['TF-001', 'TF-002', 'TF-003', 'TF-004', 'TF-005', 'TF-011', 'TF-012'];
+const TERRAFORM_IDS = [
+  'TF-001',
+  'TF-002',
+  'TF-003',
+  'TF-004',
+  'TF-005',
+  'TF-006',
+  'TF-011',
+  'TF-012',
+];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {
@@ -699,6 +708,90 @@ describe('TF-002 — Variables and Input Values', () => {
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tfvars'))).toBe(false);
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-006
+
+describe('TF-006 — Local Values and Data Sources', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf006(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-006-locals-data', 'lab.yaml'));
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf006();
+    expect(definition.id).toBe('TF-006');
+    expect(definition.topic).toBe('expressions');
+    expect(definition.order).toBe(12);
+    expect(definition.prerequisites).toEqual(['TF-005']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds the hand-written version plus the file another team owns', async () => {
+    const files = await loadSetupFiles(await tf006());
+    expect(files.map((f) => f.path).sort()).toEqual([
+      'terraform/main.tf',
+      'terraform/platform.json',
+      'terraform/versions.tf',
+    ]);
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    // The problem the student fixes: everything written out, nothing read.
+    expect(main.content).toContain('"jumptotech-ledger-prod"');
+    expect(main.content).not.toContain('locals');
+    expect(main.content).not.toContain('data "');
+  });
+
+  it('requires the slug to be composed once, as named locals', async () => {
+    const locals = (await tf006()).requirements.find(
+      (r) => r.type === 'terraform_locals_declared',
+    ) as Record<string, unknown> | undefined;
+    expect(locals?.names).toEqual(['service_prefix', 'environment', 'service_slug']);
+  });
+
+  it('requires a data block, which is what tells reading apart from owning', async () => {
+    // Objective 4a. A `resource` would create and own `platform.json`, which is
+    // the wrong relationship with a file another team maintains.
+    const data = (await tf006()).requirements.find(
+      (r) => r.type === 'terraform_data_source_declared',
+    ) as Record<string, unknown> | undefined;
+    expect(data).toMatchObject({ data_type: 'local_file', name: 'platform' });
+  });
+
+  it('requires the manifest to derive its values rather than restate them', async () => {
+    // The artifact is byte-identical whether the values were derived or typed
+    // in, so these three are the only thing separating reading from
+    // transcribing.
+    const references = (await tf006()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
+    expect(pairs).toEqual([
+      'content->data.local_file.platform',
+      'content->local.service_slug',
+      'filename->local.service_slug',
+    ]);
+  });
+
+  it('checks the settings file was left alone', async () => {
+    // A data source reads. If it became a resource, Terraform would own the
+    // file — this is the check that notices.
+    const guard = (await tf006()).requirements.find(
+      (r) => 'path' in r && r.path === 'terraform/platform.json',
+    );
+    expect(guard).toBeDefined();
+  });
+
+  it('grades the applied result as well, and names no source file', async () => {
+    const kinds = new Set((await tf006()).requirements.map((r) => r.type));
+    expect(kinds.has('terraform_resource_exists')).toBe(true);
+    expect(kinds.has('file_content')).toBe(true);
+    const paths = (await tf006()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
   });
 });
