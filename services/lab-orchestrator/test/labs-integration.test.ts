@@ -325,6 +325,130 @@ spec:
     await manager.end(session.sessionId);
   }, 600_000);
 
+  // ------------------------------------------------------ K8S-013 lifecycle
+
+  it('K8S-013: fails on the old image, passes after a real rolling update, and resets', async () => {
+    const session = await start('K8S-013');
+    const kubectl = await studentKubectl(session);
+
+    const imageNow = async (): Promise<string> =>
+      (
+        await kubectl(
+          'get',
+          'deployment',
+          'payments-api',
+          '-o',
+          'jsonpath={.spec.template.spec.containers[0].image}',
+        )
+      ).stdout;
+
+    // 1. Provisioning left the previous release in place, settled and serving.
+    expect(await imageNow()).toBe('nginx:1.27-alpine');
+    const rolledOut = await kubectl(
+      'rollout',
+      'status',
+      'deployment/payments-api',
+      '--timeout=180s',
+    );
+    expect(rolledOut.code, rolledOut.stderr).toBe(0);
+
+    // 2. Check Solution initially FAILS, and only on the image.
+    const before = await check(session);
+    expect(before.passed).toBe(false);
+    const beforeByLabel = Object.fromEntries(before.checks.map((c) => [c.label, c.status]));
+    expect(beforeByLabel['Deployment payments-api still exists']).toBe('pass');
+    expect(beforeByLabel['The original Deployment was updated, not replaced']).toBe('pass');
+    expect(beforeByLabel['Three replicas are still requested']).toBe('pass');
+    expect(beforeByLabel['Image is now nginx:1.28-alpine']).toBe('fail');
+    expect(beforeByLabel['Rollout finished — no replica from the old version remains']).toBe('pass');
+    expect(beforeByLabel['All three replicas are available']).toBe('pass');
+
+    // 3. The student performs the rolling update in place.
+    const setImage = await kubectl(
+      'set',
+      'image',
+      'deployment/payments-api',
+      'api=nginx:1.28-alpine',
+    );
+    expect(setImage.code, setImage.stderr).toBe(0);
+
+    // 4. Check Solution now PASSES, once the rollout actually finishes.
+    const after = await checkUntilPassed(session);
+    expect(after.passed, JSON.stringify(after.checks)).toBe(true);
+    expect(after.summary).toBe('LAB PASSED');
+
+    // The old ReplicaSet really was drained rather than left running.
+    const replicaSets = await kubectl(
+      'get',
+      'replicasets',
+      '-o',
+      'jsonpath={range .items[*]}{.spec.replicas}{"\\n"}{end}',
+    );
+    expect(replicaSets.stdout.trim().split('\n').filter((n) => n !== '0')).toEqual(['3']);
+
+    // 5. Breaking one requirement fails the lab again. Rolling the image back
+    //    is the honest way to break exactly one check and nothing else.
+    const revert = await kubectl('set', 'image', 'deployment/payments-api', 'api=nginx:1.27-alpine');
+    expect(revert.code, revert.stderr).toBe(0);
+
+    const brokenDeadline = Date.now() + 60_000;
+    let broken = await check(session);
+    while (broken.passed && Date.now() < brokenDeadline) {
+      await sleep(2_000);
+      broken = await check(session);
+    }
+    expect(broken.passed).toBe(false);
+    expect(
+      broken.checks.filter((c) => c.status !== 'pass').map((c) => c.label),
+    ).toContain('Image is now nginx:1.28-alpine');
+
+    // 6. Repairing it passes again.
+    const repair = await kubectl('set', 'image', 'deployment/payments-api', 'api=nginx:1.28-alpine');
+    expect(repair.code, repair.stderr).toBe(0);
+    expect((await checkUntilPassed(session)).passed).toBe(true);
+
+    // 7. Reset restores the previous release, so the lab can be replayed.
+    const { result: reset } = await manager.reset(session.sessionId);
+    expect(reset.ok, JSON.stringify(reset.steps)).toBe(true);
+    expect(reset.restored).toEqual(['setup/payments-api.yaml']);
+
+    expect(await imageNow()).toBe('nginx:1.27-alpine');
+    const afterReset = await check(session);
+    expect(afterReset.passed).toBe(false);
+
+    await manager.end(session.sessionId);
+  }, 600_000);
+
+  // -------------------------------------- K8S-013 cannot be solved by recreating
+
+  it('K8S-013 rejects a deleted-and-recreated Deployment, because the selector differs', async () => {
+    const session = await start('K8S-013');
+    const kubectl = await studentKubectl(session);
+
+    const deleted = await kubectl('delete', 'deployment', 'payments-api');
+    expect(deleted.code, deleted.stderr).toBe(0);
+
+    // Right name, right image, right replica count — but `kubectl create
+    // deployment` can only produce a single-label selector, and a Deployment's
+    // selector is immutable, so the object cannot be made equivalent.
+    const recreated = await kubectl(
+      'create',
+      'deployment',
+      'payments-api',
+      '--image=nginx:1.28-alpine',
+      '--replicas=3',
+    );
+    expect(recreated.code, recreated.stderr).toBe(0);
+
+    const result = await checkUntilPassed(session, 60_000);
+    expect(result.passed).toBe(false);
+    expect(result.checks.filter((c) => c.status !== 'pass').map((c) => c.label)).toEqual([
+      'The original Deployment was updated, not replaced',
+    ]);
+
+    await manager.end(session.sessionId);
+  }, 300_000);
+
   // ------------------------------------------------ setup lands in one place
 
   it('applies a lab fixture into the starting session namespace only', async () => {

@@ -1,0 +1,71 @@
+# K8S-013 initial state — the release that is already in production.
+#
+# Three properties here exist for the lab rather than for realism:
+#
+#   * a two-label selector, which apps/v1 makes immutable. A student who
+#     deletes the Deployment and runs `kubectl create deployment` cannot
+#     reproduce it, so `deployment_selector` is what makes "update in place"
+#     the only way to pass.
+#   * `minReadySeconds`, so the rolling update is visibly gradual and
+#     `kubectl rollout status` has something to report.
+#   * a readiness probe, so a replica joins the rollout only once it can
+#     actually serve — which is the mechanism that makes a rolling update
+#     safe, and the reason `deployment_rollout_complete` is not instant.
+#
+# No namespace is set: the platform applies this into the session's own
+# namespace.
+#
+# Resources ARE declared, and that is load-bearing rather than decoration.
+# A RollingUpdate surges to `replicas + maxSurge` Pods — here 3 + ceil(25% of 3)
+# = 4 — and every one of those Pods is charged against the session
+# ResourceQuota's `limits.cpu` / `limits.memory` for the duration of the
+# rollout. A container that declares nothing inherits the session LimitRange's
+# default, which on this platform is 1 CPU / 1Gi, so four surging Pods would
+# claim exactly the namespace's entire 4 CPU / 4Gi ceiling. The rollout then
+# fits only in a namespace that is otherwise empty: one debug Pod a student
+# created to look around is enough to make the surge Pod fail admission with
+# `exceeded quota`, and the rollout stalls with no obvious cause.
+#
+# Declaring small explicit limits takes the rollout's peak to 800m / 512Mi —
+# about a fifth of the budget — which leaves a student room to experiment. It
+# is also what a real payments Deployment would carry.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  labels:
+    app: payments-api
+    tier: api
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 3
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      app: payments-api
+      tier: api
+  template:
+    metadata:
+      labels:
+        app: payments-api
+        tier: api
+    spec:
+      containers:
+        - name: api
+          image: nginx:1.27-alpine
+          ports:
+            - name: http
+              containerPort: 80
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 2
