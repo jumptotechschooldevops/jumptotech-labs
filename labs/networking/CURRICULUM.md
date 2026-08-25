@@ -379,6 +379,13 @@ must find rather than a task they must perform.
   `file_content` on `diagnosis.txt` requiring `refused` and `bind`.
 - **Supported today?** No. This lab is the strongest single argument for N5+N6.
 - **New capability** N1, N2, N3, N5, N6 (`http_request` sandbox requirement).
+- **Deferred 2026-08-25, and a candidate for retirement.** N5 shipped with
+  NET-006, but this lab still needs **N3** (a peer container, a session-model
+  change) to prove the symptom from another host and **N6** (`http_request`),
+  neither of which is approved. NET-006 already teaches the loopback-versus-
+  wildcard lesson from real socket state, so what remains distinctive here is
+  only the cross-host half. Worth deciding whether that earns a lab of its own
+  once N3 exists, rather than building it by default.
 
 ---
 
@@ -403,6 +410,16 @@ must find rather than a task they must perform.
   `port_listening` for 9200/tcp and 9201/udp; `port_not_listening` for 9202.
 - **Supported today?** No — `tcpdump` + `NET_RAW` (C2, C3).
 - **New capability** N1, N4.
+- **Implemented 2026-08-25.** Both arrived: tcpdump now ships in the sandbox
+  image (with no setuid bit and no file capabilities, so its presence grants
+  nothing), and `NET_RAW` is grantable per-lab through `sandbox_capabilities`,
+  refused unless the lab also declares `network: link`. Prerequisite is NET-006
+  rather than NET-007, which is deferred above. Capture happens on loopback,
+  because traffic between two addresses on the same host never reaches the
+  network interface. Beyond the capture text, each service records what
+  actually reached it, so a typed transcript fails: a connection log only grows
+  when a connection really completed. The lab observes only — no injection, no
+  spoofing, no redirection, and no `NET_ADMIN`.
 
 ---
 

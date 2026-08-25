@@ -1,0 +1,66 @@
+JumpToTech Bank — "just retry on failure"
+=========================================
+
+A team was told to retry on failure. They now retry a service that is refusing
+connections, several thousand times a minute, and the incident channel has
+decided the network is flaky.
+
+Nothing is flaky. One of the three things they are talking to answers, one
+takes messages and keeps no state at all, and one refuses instantly — and the
+difference is visible on the wire if you look.
+
+Your job is to look, and then to be able to say what a connection actually is.
+
+
+WHAT IS ON THIS HOST
+--------------------
+
+  ledger-echo      TCP, port 9200 — accepts connections and echoes
+  ledger-metrics   UDP, port 9201 — takes datagrams
+  port 9202        nothing is listening here
+
+Leave all three as they are. This lab is about observing them, not repairing
+them.
+
+
+A NOTE ON WHERE THE TRAFFIC GOES
+--------------------------------
+
+You will be talking to services on this host, so address them on this host.
+Traffic to an address that belongs to the machine sending it never reaches the
+network interface — the kernel delivers it internally, over the loopback
+interface. Capture on the wrong interface and you will see a great deal of
+nothing.
+
+You have the privilege to capture on this sandbox. That is deliberate and it
+is narrow: this session has its own private segment with nothing else on it,
+so the only traffic you can see is your own.
+
+
+THE THREE EXCHANGES
+-------------------
+
+  handshake    Open a TCP connection to 9200, send something, let it close.
+               Capture it. You are looking for the three packets that open a
+               connection before any data moves, and the flags that name them.
+
+  refused      Try to connect to 9202. Capture it. Compare how long it takes
+               and what comes back with the handshake above.
+
+  udp          Send a datagram to 9201. Capture it. Count the packets that
+               precede your data.
+
+Then look at the socket table while and after the TCP connection is open —
+a connection outlives the close, and the state it sits in afterwards has a
+name and a reason.
+
+
+WHAT TO RECORD
+--------------
+
+  handshake.txt    the capture of the exchange with 9200
+  refused.txt      the capture of the attempt against 9202
+  udp.txt          the capture of the datagram to 9201
+  states.txt       the socket table showing the connection after it closed
+
+Then complete answers.txt, which is already here.

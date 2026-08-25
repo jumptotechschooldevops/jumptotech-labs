@@ -143,6 +143,32 @@ describe('labs that never asked for a network are untouched', () => {
     for (const entry of declared) expect(entry).toMatch(/^NET-\d{3}:link$/);
   });
 
+  it('grants a kernel capability to only the labs that declare one, and only with a segment', async () => {
+    const registry = new LabRegistry(LABS_DIR);
+    await registry.load();
+
+    const granted = registry
+      .all()
+      .map((summary) => registry.get(summary.id))
+      .filter((lab) => lab.environment.sandbox_capabilities.length > 0);
+
+    for (const lab of granted) {
+      // The two conditions the security review made inseparable, asserted
+      // against the real catalog rather than against a fixture: capture is
+      // safe only on a segment that holds nothing but the student.
+      expect(lab.environment.provider, lab.id).toBe('linux');
+      expect(lab.environment.network, lab.id).toBe('link');
+      expect(lab.environment.sandbox_capabilities, lab.id).toEqual(['NET_RAW']);
+    }
+
+    // Every other lab in the catalog has none at all.
+    const ungranted = registry
+      .all()
+      .map((summary) => registry.get(summary.id))
+      .filter((lab) => lab.environment.sandbox_capabilities.length === 0);
+    expect(ungranted.length).toBeGreaterThan(granted.length);
+  });
+
   it('creates a Linux lab on --network none and touches no network at all', async () => {
     const lab = await loadLabDefinition(LINUX_001);
     const runtime = new FakeContainerRuntime();

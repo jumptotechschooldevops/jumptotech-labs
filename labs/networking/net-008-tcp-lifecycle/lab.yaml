@@ -1,0 +1,242 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# The first lab to ask for a kernel capability. It gets exactly one, `NET_RAW`,
+# and only because the platform refuses to grant it anywhere capture would be
+# unsafe: the schema will not accept `sandbox_capabilities` unless the lab also
+# declares `network: link`, which is a per-session `--internal` bridge holding
+# exactly one container. The only traffic a student can see is their own.
+#
+# `NET_ADMIN` is not requested and is not grantable. This lab observes; it does
+# not mutate interfaces, routes, firewall rules or the neighbour table, and it
+# teaches nothing about spoofing, injection or redirection. Those belong to a
+# separate security decision that has not been taken.
+#
+# tcpdump ships in the sandbox image with no setuid bit and no file
+# capabilities, so its presence grants nothing on its own — a Linux lab that
+# does not declare the capability still cannot open a capture socket.
+#
+# Content is written from RFC 9293 (TCP, STD 7), RFC 768 (UDP) and the tcpdump
+# and iproute2 man pages. Scenario, services and task wording are original
+# JumpToTech content.
+#
+# Classification: FOUNDATIONAL KNOWLEDGE (the TCP state machine) and a
+# PRODUCTION SKILL (reading a capture to end a "the network is flaky"
+# argument). No certification objective is claimed.
+# ---------------------------------------------------------------------------
+id: NET-008
+slug: net-008-tcp-lifecycle
+title: TCP and UDP — Handshake, State and Connection Lifecycle
+track: networking
+topic: transport
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 8
+
+environment:
+  provider: linux
+  network: link
+  sandbox_capabilities:
+    - NET_RAW
+
+# NET-007 is designed but blocked: it needs a peer container and an HTTP
+# request primitive, neither of which is approved. NET-006 is the prerequisite
+# actually satisfied, and it is the one this lab builds on — a student who has
+# read a socket table can now watch how the sockets in it come and go.
+prerequisites:
+  - NET-006
+
+story: >
+  A team was told to retry on failure. They now retry a service that is
+  refusing connections, thousands of times a minute, and the incident channel
+  has decided the network is flaky.
+
+  Nothing is flaky. One of the three things they are talking to answers, one
+  takes messages and keeps no state at all, and one refuses instantly. The
+  difference is visible on the wire, and being able to show it is how the
+  argument ends.
+
+objectives:
+  - Capture the three packets that open a TCP connection and name them by flag
+  - Tell an immediate refusal apart from a timeout, and say what each means
+  - Show that a datagram needs no handshake and leaves no connection state
+  - Read the state a closed connection sits in, and say which end holds it
+  - Explain why retrying a refused connection does not help
+
+task:
+  summary: Capture a TCP handshake, a refused connection and a UDP datagram on this host, and record what each one shows.
+  description: >
+    Your working directory is `/home/student/tcp`. Read `brief.txt` first — it
+    names the three services and explains where the traffic actually goes,
+    which decides which interface is worth capturing on.
+
+    This sandbox can capture packets. That is a privilege the platform grants
+    to this lab specifically, and it is narrow: the session has a private
+    segment of its own with nothing else on it, so the only traffic you can see
+    is the traffic you generate.
+
+    Produce three exchanges and capture each one. Open a TCP connection to
+    `9200`, send something, and let it close. Try to connect to `9202`, where
+    nothing is listening. Send a datagram to `9201`. Save the captures as
+    `handshake.txt`, `refused.txt` and `udp.txt` — the text tcpdump prints is
+    what you want, not the binary file.
+
+    Then look at the socket table after the TCP connection has closed and save
+    it as `states.txt`. A connection does not disappear the moment it ends.
+
+    Leave all three services as they are. This lab observes; nothing here needs
+    repairing, and the answer sheet is about what you saw.
+
+setup:
+  files:
+    - source: setup/brief.txt
+      path: tcp/brief.txt
+      mode: "0644"
+    - source: setup/answers.txt
+      path: tcp/answers.txt
+      mode: "0644"
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: directory_exists
+      path: /home/student/tcp
+      label: The working directory exists
+    - type: port_listening
+      port: 9200
+      label: The TCP echo service is listening
+    - type: port_listening
+      port: 9201
+      protocol: udp
+      label: The UDP metrics socket is open
+    - type: port_not_listening
+      port: 9202
+      label: The third port is genuinely empty
+    - type: file_content
+      path: /proc/net/dev
+      contains: "eth0"
+      label: This session's private segment is attached
+
+requirements:
+  # --- traffic really happened -----------------------------------------------
+  #
+  # Each service records what reached it. A capture file can be typed; a
+  # connection log only grows when a connection actually completed, and a
+  # datagram log only when a datagram actually arrived.
+  - type: command_exit_code
+    command: test
+    args: ["-s", "/var/log/jumptotech/tcp-echo.log"]
+    expected_exit_code: 0
+    as_user: root
+    label: A TCP connection was really completed against the echo service
+  - type: command_exit_code
+    command: test
+    args: ["-s", "/var/log/jumptotech/udp-echo.log"]
+    expected_exit_code: 0
+    as_user: root
+    label: A datagram really reached the metrics socket
+
+  # --- what the capture shows ------------------------------------------------
+  - type: file_content
+    path: /home/student/tcp/handshake.txt
+    contains: "Flags [S]"
+    label: The opening packet of the connection was captured
+  - type: file_content
+    path: /home/student/tcp/handshake.txt
+    contains: "Flags [S.]"
+    label: The reply that completes the handshake was captured
+  - type: file_content
+    path: /home/student/tcp/refused.txt
+    contains: "Flags [R."
+    label: The refusal was captured, and it is a reset rather than a silence
+  - type: file_content
+    path: /home/student/tcp/udp.txt
+    contains: "UDP, length"
+    label: The datagram was captured
+  - type: file_content
+    path: /home/student/tcp/states.txt
+    contains: "TIME-WAIT"
+    label: The state the closed connection sits in was captured
+  - type: file_content
+    path: /home/student/tcp/states.txt
+    contains: "9200"
+    label: The captured socket table is the one holding that connection
+
+  # --- the services were left alone -----------------------------------------
+  - type: port_listening
+    port: 9200
+    label: The TCP echo service was left running
+  - type: port_listening
+    port: 9201
+    protocol: udp
+    label: The UDP metrics socket was left open
+  - type: port_not_listening
+    port: 9202
+    label: Nothing was started on the empty port
+
+  # --- what it means ---------------------------------------------------------
+  - type: file_content
+    path: /home/student/tcp/answers.txt
+    contains: "udp_holds_connection_state = no"
+    label: Whether UDP keeps connection state was identified
+  - type: file_content
+    path: /home/student/tcp/answers.txt
+    contains: "retry_on_refused_helps = no"
+    label: The effect of retrying a refused connection was identified
+  - type: file_content
+    path: /home/student/tcp/answers.txt
+    contains: "time_wait_belongs_to = the side that closed first"
+    label: The end that holds the closed connection was identified
+
+  # --- one answer per line ---------------------------------------------------
+  - type: file_content_absent
+    path: /home/student/tcp/answers.txt
+    contains: "udp_holds_connection_state = yes"
+    label: The UDP question was answered once, not hedged
+  - type: file_content_absent
+    path: /home/student/tcp/answers.txt
+    contains: "retry_on_refused_helps = yes"
+    label: The retry question was answered once, not hedged
+
+hints:
+  - level: 1
+    text: >
+      A connection is not the same thing as a message. Before any of your data
+      moves, the two ends exchange packets that carry no payload at all, and
+      the flags on those packets are the whole story. Capture first, then read
+      what you captured rather than what you expected.
+  - level: 2
+    text: >
+      `man tcpdump` covers selecting an interface and reading a saved capture
+      back as text. RFC 9293 describes the connection establishment and close
+      sequences and the states either end passes through; `man ss` covers
+      showing sockets that are not listening, which is where a connection goes
+      after it closes. Remember that traffic between two addresses on the same
+      host never reaches a network interface.
+  - level: 3
+    text: >
+      Capture on the loopback interface, because that is where traffic to this
+      host's own addresses is delivered. `tcpdump -i lo -nn` prints what you
+      need directly, and `-w` then `-r` lets you capture once and read it back
+      several times. `nc 127.0.0.1 9200` opens the connection, `nc -u` sends
+      the datagram, and `ss -tan` shows sockets in every state rather than only
+      the listening ones.
+
+references:
+  - title: RFC 9293 — Transmission Control Protocol (TCP), STD 7
+    url: https://www.rfc-editor.org/info/rfc9293
+  - title: RFC 768 — User Datagram Protocol, STD 6
+    url: https://www.rfc-editor.org/info/rfc768
+  - title: tcpdump(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/tcpdump.1.html
+  - title: ss(8) — another utility to investigate sockets
+    url: https://man7.org/linux/man-pages/man8/ss.8.html
+
+skills:
+  - net.l4.tcp-handshake
+  - net.l4.tcp-states
+  - net.l4.udp
+  - net.tools.tcpdump
+  - net.troubleshoot.refused-vs-timeout
+
+certification: []

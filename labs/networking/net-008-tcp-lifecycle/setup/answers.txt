@@ -1,0 +1,21 @@
+JumpToTech Bank — connection lifecycle
+Fill in the value after each "= ". Do not change the labels.
+Answer each line once: a line listing several values is wrong even if the
+right one is among them.
+
+Does UDP keep connection state between the two ends?
+Allowed values: yes  no
+
+  udp_holds_connection_state = 
+
+A connection attempt was refused instantly rather than timing out. Does
+retrying it, repeatedly and quickly, make it more likely to succeed?
+Allowed values: yes  no
+
+  retry_on_refused_helps = 
+
+After a TCP connection closes, one of the two ends holds the connection in
+TIME-WAIT for a while. Which end?
+Allowed values: the client  the server  the side that closed first
+
+  time_wait_belongs_to = 
