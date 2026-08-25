@@ -64,6 +64,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Package set, justified line by line:
 #   procps psmisc                       ps, top, pgrep, kill, fuser (LINUX-004)
 #   iproute2 iputils-ping netcat socat  LINUX-006 networking
+#   curl                                LINUX-006 fetches a URL and LINUX-010's
+#                                       runbook checks a service with it; both
+#                                       cite curl(1) and neither works without
+#                                       it. Only ever used against 127.0.0.1 —
+#                                       these containers run `--network none`.
 #   passwd sudo                         LINUX-002/003 accounts
 #   runit                               LINUX-005 supervision
 #   less tree file nano                 reading and identifying what is there
@@ -81,6 +86,7 @@ RUN set -eux; \
       iputils-ping \
       netcat-openbsd \
       socat \
+      curl \
       passwd \
       sudo \
       runit \
