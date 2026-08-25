@@ -42,13 +42,13 @@ describe('AWS lab definitions load', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006', 'AWS-007', 'AWS-008', 'AWS-012', 'AWS-018']);
+    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006', 'AWS-007', 'AWS-008', 'AWS-009', 'AWS-012', 'AWS-018']);
   });
 
   it('declares the Linux sandbox, and gets container isolation for free', async () => {
     const registry = await realRegistry();
 
-    for (const id of ['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006', 'AWS-007', 'AWS-008', 'AWS-012', 'AWS-018']) {
+    for (const id of ['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006', 'AWS-007', 'AWS-008', 'AWS-009', 'AWS-012', 'AWS-018']) {
       const lab = registry.get(id);
       // Simulated: an AWS-track lab, deliberately backed by a local container.
       expect(lab.environment.provider, id).toBe('linux');
@@ -64,7 +64,7 @@ describe('AWS lab definitions load', () => {
 
     expect(track).toBeDefined();
     expect(track?.title).toBe('AWS');
-    expect(track?.labCount).toBe(10);
+    expect(track?.labCount).toBe(11);
   });
 });
 
@@ -243,7 +243,7 @@ describe('AWS-001 official documentation validation', () => {
   it('claims only SOA-C03 for the policy-authoring labs', async () => {
     const registry = await realRegistry();
 
-    for (const id of ['AWS-002', 'AWS-003', 'AWS-004', 'AWS-006', 'AWS-007', 'AWS-008', 'AWS-012', 'AWS-018']) {
+    for (const id of ['AWS-002', 'AWS-003', 'AWS-004', 'AWS-006', 'AWS-007', 'AWS-008', 'AWS-009', 'AWS-012', 'AWS-018']) {
       const claims = registry.get(id).certification;
       expect(claims, id).toHaveLength(1);
       expect(claims[0]?.certification, id).toBe('SOA-C03');
