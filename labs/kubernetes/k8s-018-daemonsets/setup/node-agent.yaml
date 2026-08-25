@@ -1,0 +1,65 @@
+# K8S-018 initial state — the right agent, run by the wrong controller.
+#
+# `node-agent` is deployed as a Deployment with three replicas, which is the
+# mistake this lab exists to correct. A Deployment maintains a *count* of Pods
+# and does not care where they land; nothing about `replicas: 3` says "one per
+# node". On this single-node development cluster all three replicas sit on the
+# same node, which is a vivid demonstration of the gap: three agents watching
+# one node, and any node added later would get none of them.
+#
+# The container is deliberately ordinary. A real node agent would read host
+# paths and often run privileged; requiring that here would drag hostPath and
+# extra capabilities into a lab about the controller model, and the platform's
+# isolation boundary rightly forbids both. The concept — one Pod per eligible
+# node, maintained by the controller — is demonstrated without any of it.
+#
+# Resources are declared for the reason K8S-013 documents: three replicas plus
+# rollout surge are charged against the session ResourceQuota, and a container
+# declaring nothing inherits the LimitRange default of 1 CPU / 1Gi.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-agent
+  labels:
+    app: node-agent
+    tier: infrastructure
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: node-agent
+      tier: infrastructure
+  template:
+    metadata:
+      labels:
+        app: node-agent
+        tier: infrastructure
+    spec:
+      containers:
+        - name: agent
+          image: busybox:1.36
+          # Stands in for a collector: emits a heartbeat so the Pod stays
+          # running and its logs show it is alive.
+          command:
+            - sh
+            - -c
+            - >
+              while true; do
+                echo "$(date -Iseconds) node-agent: collecting on ${NODE_NAME:-this node}";
+                sleep 10;
+              done
+          env:
+            # The downward API is how a node-local agent learns which node it is
+            # on. It needs no extra permission — the kubelet supplies it.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
