@@ -801,3 +801,67 @@ case — and a blanket program printing every expected line fails only on the tw
 `file_content_absent` source checks, which is why they are not redundant.
 
 **Runtime dependency:** Python 3.11 standard library only (`sys`).
+
+### CS-007 — Lists and Dictionaries: From Lines to Structure
+
+```text
+LAB ID:              CS-007
+TITLE:               Lists and Dictionaries: From Lines to Structure
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Turn line-oriented text into records and discard the lines that are not
+  records; choose between a list and a dictionary by what the data is for;
+  count by key; rank by more than one criterion so equal values still come out
+  in a defined order; and produce the same answer every time from the same
+  input.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  Every config file, API response and `kubectl get -o json` is lists inside
+  dictionaries inside lists, and every log pipeline starts by turning lines
+  into records. A report whose ranking moves between runs is a report two
+  people can disagree about, and an unstable tie-break is the usual cause.
+
+OFFICIAL / PRIMARY SOURCES:
+  Python tutorial — data structures   https://docs.python.org/3/tutorial/datastructures.html
+  Python — collections (Counter)      https://docs.python.org/3/library/collections.html
+  Python — built-in functions         https://docs.python.org/3/library/functions.html
+  Python — built-in types             https://docs.python.org/3/library/stdtypes.html
+  Python — sorting HOWTO              https://docs.python.org/3/howto/sorting.html
+  Python — reading and writing files  https://docs.python.org/3/tutorial/inputoutput.html
+
+LAST VERIFIED:       2026-08-25   (all six fetched, HTTP 200)
+```
+
+**Values computed from the shipped fixture, never by hand:**
+
+| log | result |
+|---|---|
+| `scan-events.log` | leeds 9, bristol 7, manchester 7, cardiff 3 · `ORDER=leeds,bristol,manchester,cardiff` · `TOTAL=26` |
+| `scan-events-small.log` | york 3, cardiff 2 · `ORDER=york,cardiff` · `TOTAL=5` |
+
+Three lines in the main log are unusable — one blank, one truncated mid-record,
+one from a scanner shipping no depot field — so a total that includes them is
+wrong in a way no single depot's number reveals.
+
+**Two grading decisions worth keeping.**
+
+*The ranking is one line, not a file hash.* `output_contains` checks each
+expected string independently and cannot assert ordering. The plan proposed
+`sha256sum` on the CSV; that was rejected because `csv.writer` emits CRLF by
+default, so a student using the csv module correctly would fail a byte hash —
+that grades line endings, not understanding. A single `ORDER=` line is
+order-exact and indifferent to whitespace.
+
+*The tie is the whole test.* manchester and bristol both finish on 7 and
+manchester appears first in the log, so sorting by count alone leaves them in
+insertion order **while every `DEPOT=` line stays correct**. Only the ranking
+shows whether the tie-break was applied. Confirmed on the real platform: that
+bug fails exactly one check, and only on the batch containing the tie.
+
+**Forged evidence cannot pass.** The CSV is student-written, so it is gradeable
+only because the program is independently graded by running it: a hand-written
+perfect CSV behind a program that does nothing scores 7/9 and never passes.
+
+**Runtime dependency:** Python 3.11 standard library only.
