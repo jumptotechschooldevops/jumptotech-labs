@@ -1,0 +1,60 @@
+# The repository's quality gates, run on every push and pull request.
+#
+# There was no workflow running the test suite at all — only CodeQL — so a change
+# could reach main having been checked on one developer's laptop and nowhere
+# else. This runs what a developer runs.
+#
+# Only the hermetic gates run here. Integration and E2E suites need a real Docker
+# daemon and a kind cluster, and they are gated behind RUN_INTEGRATION_TESTS /
+# RUN_DOCKER_INTEGRATION_TESTS / RUN_DB_TESTS precisely so `npm test` stays
+# hermetic — see test-support/README.md. Wiring those into CI is PLATFORM-007b's
+# remaining work and needs per-job cluster isolation first.
+name: Quality gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push supersedes an in-flight run on the same ref.
+concurrency:
+  group: quality-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Each job is its own runtime owner, so nothing it creates could ever be
+      # confused with another job's resources. See docs/runtime-ownership.md.
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-${{ github.job }}
+      JTT_TEST_RUN_ID: ci${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The repo pins Node 22 (engines: >=20 <25).
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # No Docker daemon is needed: the host-execution guard makes any attempt to
+      # start one a hard failure rather than a silent dependency, so a suite that
+      # regains one fails here instead of on someone's laptop months later.
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build

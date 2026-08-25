@@ -111,21 +111,52 @@ RUNTIME_OWNER_ID=wt-docker RUN_INTEGRATION_TESTS=1 npm run test:integration
 | Cross-provider, cross-owner and unmanaged refusal on a real daemon | **INTEGRATION** |
 | Two full worktree E2E runs concurrently, end to end | **NOT YET TESTED** |
 
+## Running two stacks at once (PLATFORM-007b)
+
+Every Compose resource is derived from the project name, and no service declares
+a `container_name` — that single fixed field was what made two stacks impossible,
+because Docker rejects duplicate container names regardless of project.
+
+```bash
+COMPOSE_PROJECT_NAME=wt-docker \
+POSTGRES_PORT=55461 WEB_PORT=31000 API_PORT=41000 TERMINAL_PORT=41001 \
+DOCKER_SANDBOX_NETWORK=wt-docker-sandboxes \
+RUNTIME_OWNER_ID=wt-docker \
+docker compose up -d
+```
+
+Proven with two live stacks: distinct containers, networks, volumes and ports,
+and `docker compose down -v` in one leaving the other healthy and intact.
+
+## kind cluster coordination
+
+`cluster:up` derives its kubeconfig paths from the cluster name, so two clusters
+no longer overwrite each other's credentials, and it records a lease naming the
+runtime owner. `cluster:down` refuses to delete a cluster leased by a different
+owner, because doing so destroys every lab session and integration run on the
+machine. `--force` overrides it when the leases are known to be stale.
+
+The legacy `kubeconfig-host.yaml` / `kubeconfig-internal.yaml` filenames are
+still written for the default cluster, since scripts and integration suites fall
+back to them when `KUBECONFIG` is unset.
+
 ## Known limitations
 
 **One Docker daemon.** Ownership stops runs from *corrupting* each other. It
 does not stop them competing for CPU, memory and image pulls — a saturated
 daemon still makes suites slow and time out. That is scheduling, not ownership.
 
-**One kind cluster - not solved.** `LAB_CLUSTER_NAME` parameterises the cluster
-name, but `scripts/cluster-up.sh` writes to fixed kubeconfig paths, so two
-clusters clobber each other's credentials. Per-session namespaces remain
-isolated and no test deletes a namespace it does not own, but **cluster
-lifecycle is uncoordinated**: `npm run cluster:down` in one worktree destroys
-the cluster every other worktree is using. Creating a kind cluster per unit test
-is not the answer - it costs minutes and gigabytes. This is deferred as
-**PLATFORM-007b**, and it is a real gap, not a solved one.
+**kind is coordinated, not isolated.** Two named clusters can now coexist
+without clobbering each other's kubeconfigs, and `cluster:down` will not delete
+a cluster another owner has leased. But worktrees still *share* one cluster by
+default, and the lease is advisory: it refuses, it does not lock. Running a
+cluster per worktree costs minutes and gigabytes each, so sharing remains the
+sensible default — and while sharing, cluster-scoped operations (admission
+policies, StorageClass, CRDs) are still uncoordinated between runs.
 
-**Compose stacks still collide.** `docker-compose.yml` fixes the project name,
-four `container_name` values, the network and the volume, so two stacks cannot
-run at once. Also PLATFORM-007b.
+**DinD daemon ports were never the problem.** The sandbox daemon is reached at
+`tcp://<sandbox-name>:2376` over a Docker network, not a published host port, so
+two sandboxes on one host cannot collide on it — each has its own network
+namespace. What concurrent DinD runs really contend for is CPU, memory and image
+pulls. Isolating the sandbox network per run (`DOCKER_SANDBOX_NETWORK`) keeps
+their traffic apart; nothing keeps them from competing for the machine.

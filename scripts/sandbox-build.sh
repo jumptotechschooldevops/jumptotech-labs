@@ -19,6 +19,32 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LINUX_IMAGE="${LINUX_SANDBOX_IMAGE:-jumptotech/lab-linux:latest}"
 TERRAFORM_IMAGE="${TERRAFORM_SANDBOX_IMAGE:-jumptotech/lab-terraform:latest}"
 
+# Both tags, or neither.
+#
+# This script always builds both images, and the Terraform one is built FROM the
+# Linux one. Setting only `LINUX_SANDBOX_IMAGE` — the natural thing to do when
+# testing a Linux change — therefore built a private Linux tag and then quietly
+# overwrote the shared `jumptotech/lab-terraform:latest` that every other
+# worktree runs from. Refusing the half-configured case is the whole point:
+# a shared tag must never be rewritten by accident.
+if { [[ -n "${LINUX_SANDBOX_IMAGE:-}" ]] && [[ -z "${TERRAFORM_SANDBOX_IMAGE:-}" ]]; } ||
+   { [[ -z "${LINUX_SANDBOX_IMAGE:-}" ]] && [[ -n "${TERRAFORM_SANDBOX_IMAGE:-}" ]]; }; then
+  echo "Refusing to build: only one sandbox image variable is set." >&2
+  echo >&2
+  echo "  LINUX_SANDBOX_IMAGE     = ${LINUX_SANDBOX_IMAGE:-<unset>}" >&2
+  echo "  TERRAFORM_SANDBOX_IMAGE = ${TERRAFORM_SANDBOX_IMAGE:-<unset>}" >&2
+  echo >&2
+  echo "This script builds both images, so the unset one would be written to its" >&2
+  echo "shared ':latest' tag — the tag every other worktree runs from. Set both:" >&2
+  echo >&2
+  echo "  LINUX_SANDBOX_IMAGE=jumptotech/lab-linux:<suffix> \\" >&2
+  echo "  TERRAFORM_SANDBOX_IMAGE=jumptotech/lab-terraform:<suffix> \\" >&2
+  echo "  npm run sandbox:build" >&2
+  echo >&2
+  echo "Or set neither, to rebuild the canonical operator images." >&2
+  exit 1
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker not found on PATH. Install Docker Desktop (or another runtime) first." >&2
   exit 1

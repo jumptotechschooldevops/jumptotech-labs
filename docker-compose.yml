@@ -57,7 +57,11 @@
 # mounted at all.
 # ---------------------------------------------------------------------------
 
-name: jumptotech-labs
+# Project name. `COMPOSE_PROJECT_NAME` takes precedence over this value, which is
+# how a second worktree runs its own stack alongside this one: every container,
+# network and volume below is namespaced by the project, so two projects cannot
+# collide. See docs/runtime-ownership.md.
+name: ${COMPOSE_PROJECT_NAME:-jumptotech-labs}
 
 x-kubeconfig: &kubeconfig
   # Read-only. Contains client credentials for the local throwaway cluster.
@@ -69,7 +73,6 @@ x-kubeconfig: &kubeconfig
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: jumptotech-postgres
     init: true
     security_opt:
       - no-new-privileges:true
@@ -106,7 +109,6 @@ services:
     build:
       context: .
       dockerfile: infrastructure/docker/api.Dockerfile
-    container_name: jumptotech-api
     init: true
     read_only: true
     tmpfs:
@@ -236,7 +238,6 @@ services:
     build:
       context: .
       dockerfile: infrastructure/docker/terminal.Dockerfile
-    container_name: jumptotech-terminal
     init: true
     security_opt:
       - no-new-privileges:true
@@ -294,7 +295,6 @@ services:
     build:
       context: .
       dockerfile: infrastructure/docker/web.Dockerfile
-    container_name: jumptotech-web
     init: true
     security_opt:
       - no-new-privileges:true
@@ -311,12 +311,17 @@ services:
 
 volumes:
   # Student history. `docker compose down` keeps it; only `down -v` removes it.
+  #
+  # Named from the project so a second stack gets its own volume rather than
+  # sharing — and so `down -v` in one worktree cannot destroy another's database.
   postgres-data:
-    name: jumptotech-labs-postgres-data
+    name: ${COMPOSE_PROJECT_NAME:-jumptotech-labs}-postgres-data
 
 networks:
   default:
-    name: jumptotech-labs
+    # Per project, for the same reason as the volume: two stacks on one daemon
+    # must not share a bridge, and neither may remove the other's.
+    name: ${COMPOSE_PROJECT_NAME:-jumptotech-labs}
   # Created by `kind`. `npm run cluster:up` must run first.
   kind:
     external: true
