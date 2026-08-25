@@ -114,6 +114,86 @@ export const deploymentRolloutComplete: VerifierHandler<'deployment_rollout_comp
   },
 };
 
+/**
+ * Kubernetes IntOrString, parsed into something comparable.
+ *
+ * `1`, `"1"` and `"25%"` are all valid spellings on the wire. The first two
+ * mean the same thing — one Pod — and must compare equal however the manifest
+ * happened to write them. The third means a proportion of `replicas` and must
+ * never compare equal to an absolute count, because `1` and `"1%"` are
+ * different instructions.
+ */
+type SurgeValue = { kind: 'pods' | 'percent'; value: number };
+
+function parseIntOrPercent(raw: number | string | undefined): SurgeValue | null {
+  if (raw === undefined) return null;
+  if (typeof raw === 'number') return Number.isInteger(raw) && raw >= 0 ? { kind: 'pods', value: raw } : null;
+
+  const text = raw.trim();
+  if (/^\d+$/.test(text)) return { kind: 'pods', value: Number(text) };
+  if (/^\d+%$/.test(text)) return { kind: 'percent', value: Number(text.slice(0, -1)) };
+  return null;
+}
+
+const describeSurge = (raw: number | string | undefined): string =>
+  raw === undefined ? 'unset' : typeof raw === 'number' ? String(raw) : raw;
+
+export const deploymentStrategy: VerifierHandler<'deployment_strategy'> = {
+  type: 'deployment_strategy',
+  label: (r) => {
+    const bounds = [
+      r.maxSurge !== undefined ? `maxSurge ${describeSurge(r.maxSurge)}` : undefined,
+      r.maxUnavailable !== undefined ? `maxUnavailable ${describeSurge(r.maxUnavailable)}` : undefined,
+    ].filter(Boolean);
+    return bounds.length === 0
+      ? `Deployment ${r.name} uses the ${r.strategy} strategy`
+      : `Deployment ${r.name} uses ${r.strategy} with ${bounds.join(' and ')}`;
+  },
+  async run(r, reader) {
+    const deployment = await reader.deployment(r.name);
+    if (!deployment) return missing('Deployment', r.name, reader.namespace);
+
+    /*
+     * An unset strategy is RollingUpdate — that is the API's own default, and a
+     * live object always carries it explicitly. Treating a missing snapshot
+     * field the same way keeps a reader that does not populate strategy from
+     * silently reporting the wrong type.
+     */
+    const observedType = deployment.strategy?.type ?? 'RollingUpdate';
+    if (observedType !== r.strategy) {
+      return fail(`Strategy is '${observedType}', expected '${r.strategy}'`);
+    }
+
+    if (r.maxSurge === undefined && r.maxUnavailable === undefined) return pass();
+
+    // Recreate has no rollingUpdate block at all; the schema already refuses a
+    // requirement that asks for one, so this is a belt-and-braces guard.
+    if (observedType !== 'RollingUpdate') {
+      return fail(`Strategy is '${observedType}', which has no rolling update settings`);
+    }
+
+    const problems: string[] = [];
+    const compare = (field: 'maxSurge' | 'maxUnavailable', expected: number | string): void => {
+      const observedRaw = deployment.strategy?.[field];
+      const observed = parseIntOrPercent(observedRaw);
+      const wanted = parseIntOrPercent(expected);
+
+      if (!observed) {
+        problems.push(`${field} is ${describeSurge(observedRaw)}, expected ${describeSurge(expected)}`);
+        return;
+      }
+      if (!wanted || observed.kind !== wanted.kind || observed.value !== wanted.value) {
+        problems.push(`${field} is ${describeSurge(observedRaw)}, expected ${describeSurge(expected)}`);
+      }
+    };
+
+    if (r.maxSurge !== undefined) compare('maxSurge', r.maxSurge);
+    if (r.maxUnavailable !== undefined) compare('maxUnavailable', r.maxUnavailable);
+
+    return problems.length === 0 ? pass() : fail(problems.join('; '));
+  },
+};
+
 export const deploymentSelector: VerifierHandler<'deployment_selector'> = {
   type: 'deployment_selector',
   label: (r) => `Deployment ${r.name} selects ${describeLabels(r.selector)}`,

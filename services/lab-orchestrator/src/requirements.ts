@@ -113,6 +113,15 @@ const labelMap = z
   )
   .refine((value) => Object.keys(value).length > 0, { message: 'must declare at least one label' });
 
+/**
+ * A Kubernetes IntOrString used for surge/unavailable counts: a non-negative
+ * whole number of Pods, or a percentage of `replicas`.
+ */
+const intOrPercent = z.union([
+  z.number().int().min(0).max(1000),
+  z.string().regex(/^\d{1,3}%$/, 'must be a whole number or a percentage such as 25%'),
+]);
+
 /** A Kubernetes resource quantity, e.g. `100m`, `64Mi`, `0.5`. */
 const quantity = z
   .string()
@@ -1102,6 +1111,32 @@ const kubernetesRequirementSchemas = {
    * counters — `deployment.kubernetes.io/revision` is the motivating case, and
    * asserting an exact revision would fail a student who simply rolled twice.
    */
+  /**
+   * A Deployment's update strategy.
+   *
+   * `maxSurge` / `maxUnavailable` are Kubernetes IntOrString: an absolute Pod
+   * count or a percentage of `replicas`. Both spellings are accepted here and
+   * compared by meaning rather than by text, so `1` and `"1"` agree while `1`
+   * and `"1%"` do not — one is a Pod, the other is a proportion.
+   *
+   * There is no defaulting to reproduce: the API server stores the effective
+   * strategy on the object, defaulting an unset one to RollingUpdate at 25%/25%
+   * and omitting `rollingUpdate` entirely under Recreate. The handler reads
+   * what is actually stored.
+   */
+  deployment_strategy: z
+    .object({
+      type: z.literal('deployment_strategy'),
+      name: resourceName,
+      strategy: z.enum(['RollingUpdate', 'Recreate']),
+      maxSurge: intOrPercent.optional(),
+      maxUnavailable: intOrPercent.optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.strategy === 'RollingUpdate' || (v.maxSurge === undefined && v.maxUnavailable === undefined), {
+      message: 'maxSurge and maxUnavailable only apply to the RollingUpdate strategy',
+    }),
   workload_annotation: z
     .object({
       type: z.literal('workload_annotation'),
@@ -1875,6 +1910,7 @@ export const REQUIREMENT_FAMILIES = {
   service_tcp: 'kubernetes',
 
   workload_annotation: 'kubernetes',
+  deployment_strategy: 'kubernetes',
 
   file_exists: 'filesystem',
   directory_exists: 'filesystem',

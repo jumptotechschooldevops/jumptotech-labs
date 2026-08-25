@@ -158,6 +158,19 @@ export interface DeploymentSnapshot {
    * what the student declared.
    */
   configRefs?: ConfigReference[];
+  /**
+   * `spec.strategy`, as the API server stores it.
+   *
+   * Always populated on a live object: the API defaults an unset strategy to
+   * RollingUpdate with 25% surge and 25% unavailable, and drops `rollingUpdate`
+   * entirely for Recreate. `maxSurge` / `maxUnavailable` are IntOrString, so
+   * either an absolute count (`1`) or a percentage (`"25%"`).
+   */
+  strategy?: {
+    type: string;
+    maxSurge?: number | string;
+    maxUnavailable?: number | string;
+  };
   /** Pod template `spec.nodeSelector`. */
   nodeSelector?: Record<string, string>;
   /** Pod template `spec.tolerations`. */

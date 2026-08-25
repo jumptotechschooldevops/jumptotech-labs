@@ -68,6 +68,7 @@ import {
   deploymentResources,
   deploymentRolloutComplete,
   deploymentSelector,
+  deploymentStrategy,
   deploymentUsesConfigMap,
   deploymentUsesSecret,
 } from './handlers/deployments.js';
@@ -246,6 +247,7 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
   deployment_available: deploymentAvailable,
   deployment_rollout_complete: deploymentRolloutComplete,
   deployment_selector: deploymentSelector,
+  deployment_strategy: deploymentStrategy,
   deployment_resources: deploymentResources,
   deployment_probe: deploymentProbe,
   deployment_uses_configmap: deploymentUsesConfigMap,

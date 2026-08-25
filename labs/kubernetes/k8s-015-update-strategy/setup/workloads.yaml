@@ -1,0 +1,81 @@
+# K8S-015 initial state — two services with opposite release constraints.
+#
+# Both ship on the API's default strategy (RollingUpdate, 25% surge, 25%
+# unavailable), which is wrong for each of them in a different direction. That
+# is the lab: neither Deployment is broken, and neither will fail a rollout
+# today — they are simply configured for a release behaviour their owners
+# cannot accept.
+#
+# Resources are declared for the reason K8S-013 documents: surging Pods are
+# charged against the session ResourceQuota, and a container declaring nothing
+# inherits the LimitRange default of 1 CPU / 1Gi. Peak here is 6 Pods
+# (checkout-api 3 + 1 surge, ledger-writer 2) = 1.2 CPU of the namespace's 4.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-writer
+  labels:
+    app: ledger-writer
+    tier: data
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 2
+  minReadySeconds: 3
+  selector:
+    matchLabels:
+      app: ledger-writer
+      tier: data
+  template:
+    metadata:
+      labels:
+        app: ledger-writer
+        tier: data
+    spec:
+      containers:
+        - name: writer
+          image: nginx:1.27-alpine
+          ports:
+            - name: http
+              containerPort: 80
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  labels:
+    app: checkout-api
+    tier: api
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 3
+  minReadySeconds: 3
+  selector:
+    matchLabels:
+      app: checkout-api
+      tier: api
+  template:
+    metadata:
+      labels:
+        app: checkout-api
+        tier: api
+    spec:
+      containers:
+        - name: api
+          image: nginx:1.27-alpine
+          ports:
+            - name: http
+              containerPort: 80
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 2

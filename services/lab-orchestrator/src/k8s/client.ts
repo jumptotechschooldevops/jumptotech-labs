@@ -1232,6 +1232,19 @@ export function toDeploymentSnapshot(
     name: deployment.metadata?.name ?? name,
     namespace: deployment.metadata?.namespace ?? namespace,
     annotations: deployment.metadata?.annotations ?? {},
+    ...(deployment.spec?.strategy
+      ? {
+          strategy: {
+            type: deployment.spec.strategy.type ?? 'RollingUpdate',
+            ...(deployment.spec.strategy.rollingUpdate?.maxSurge !== undefined
+              ? { maxSurge: deployment.spec.strategy.rollingUpdate.maxSurge }
+              : {}),
+            ...(deployment.spec.strategy.rollingUpdate?.maxUnavailable !== undefined
+              ? { maxUnavailable: deployment.spec.strategy.rollingUpdate.maxUnavailable }
+              : {}),
+          },
+        }
+      : {}),
     // An unset spec.replicas means 1 in the Kubernetes API.
     desiredReplicas: deployment.spec?.replicas ?? 1,
     readyReplicas: status.readyReplicas ?? 0,
