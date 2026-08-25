@@ -176,7 +176,7 @@ export const PROVIDER_REQUIREMENT_FAMILIES: Record<LabProviderId, readonly strin
   // filesystem can answer it. The Linux sandbox is where simulated AWS labs
   // run until the real AWS provider exists, so it is the provider that claims
   // it — see docs/aws-production-security-spec.md.
-  linux: ['filesystem', 'linux', 'iam'],
+  linux: ['filesystem', 'linux', 'iam', 'cloudformation'],
   terraform: ['filesystem', 'terraform'],
   // Docker labs are graded against the session's own daemon and its workspace,
   // never against the sandbox filesystem — see the `docker` family.

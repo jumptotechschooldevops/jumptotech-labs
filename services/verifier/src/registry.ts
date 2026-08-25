@@ -51,6 +51,14 @@ import type {
 import { VerifyReader } from './reader.js';
 import { SandboxReader } from './sandbox-reader.js';
 import {
+  cfnOutputExists,
+  cfnReferencesResolve,
+  cfnResourceExists,
+  cfnResourceProperty,
+  cfnResourceReference,
+  cfnTemplateValid,
+} from './handlers/cloudformation.js';
+import {
   iamPolicyAllows,
   iamPolicyDocument,
   iamPolicyNoWildcard,
@@ -364,6 +372,13 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   iam_policy_allows: iamPolicyAllows,
   iam_policy_not_allows: iamPolicyNotAllows,
   iam_policy_no_wildcard: iamPolicyNoWildcard,
+
+  cfn_template_valid: cfnTemplateValid,
+  cfn_resource_exists: cfnResourceExists,
+  cfn_resource_property: cfnResourceProperty,
+  cfn_resource_reference: cfnResourceReference,
+  cfn_references_resolve: cfnReferencesResolve,
+  cfn_output_exists: cfnOutputExists,
 
   path_absent: pathAbsent,
   file_content_absent: fileContentAbsent,

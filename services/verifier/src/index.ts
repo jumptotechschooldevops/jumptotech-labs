@@ -75,6 +75,20 @@ export {
   type IamStatement,
   type StatementSelector,
 } from './iam-policy.js';
+export {
+  CFN_PSEUDO_PARAMETERS,
+  CloudFormationParseError,
+  collectReferences,
+  outputReference,
+  parseCloudFormationTemplate,
+  readPath,
+  referenceAt,
+  unresolvedReferences,
+  valueEquals,
+  type CfnReference,
+  type CfnResource,
+  type CfnTemplate,
+} from './cloudformation.js';
 export { DockerVerifyReader } from './docker-reader.js';
 export { imageMatches, normalizeImageReference } from './image.js';
 export { parseQuantity, quantitiesEqual } from './quantity.js';

@@ -42,13 +42,13 @@ describe('AWS lab definitions load', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006']);
+    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006', 'AWS-018']);
   });
 
   it('declares the Linux sandbox, and gets container isolation for free', async () => {
     const registry = await realRegistry();
 
-    for (const id of ['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006']) {
+    for (const id of ['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006', 'AWS-018']) {
       const lab = registry.get(id);
       // Simulated: an AWS-track lab, deliberately backed by a local container.
       expect(lab.environment.provider, id).toBe('linux');
@@ -64,7 +64,7 @@ describe('AWS lab definitions load', () => {
 
     expect(track).toBeDefined();
     expect(track?.title).toBe('AWS');
-    expect(track?.labCount).toBe(6);
+    expect(track?.labCount).toBe(7);
   });
 });
 
@@ -83,7 +83,7 @@ describe('AWS-001 needs nothing from AWS', () => {
 
       for (const family of families) {
         expect(supported, `${lab.id} declares a ${family} check`).toContain(family);
-        expect(['filesystem', 'iam']).toContain(family);
+        expect(['filesystem', 'iam', 'cloudformation']).toContain(family);
       }
     }
   });
@@ -127,8 +127,16 @@ describe('AWS-001 needs nothing from AWS', () => {
     }
   });
 
-  it('lets the Linux provider answer IAM checks, because they are a file parse', () => {
+  it('lets the Linux provider answer IAM and CloudFormation checks, because both are a file parse', () => {
     expect(PROVIDER_REQUIREMENT_FAMILIES.linux).toContain('iam');
+    expect(PROVIDER_REQUIREMENT_FAMILIES.linux).toContain('cloudformation');
+  });
+
+  it('grades AWS-018 entirely through the cloudformation family', async () => {
+    const registry = await realRegistry();
+    const families = new Set(registry.get('AWS-018').requirements.map((r) => requirementFamily(r.type)));
+
+    expect(families).toEqual(new Set(['cloudformation']));
   });
 
   it('refuses an IAM check that points outside the sandbox', () => {
@@ -235,7 +243,7 @@ describe('AWS-001 official documentation validation', () => {
   it('claims only SOA-C03 for the policy-authoring labs', async () => {
     const registry = await realRegistry();
 
-    for (const id of ['AWS-002', 'AWS-003', 'AWS-004', 'AWS-006']) {
+    for (const id of ['AWS-002', 'AWS-003', 'AWS-004', 'AWS-006', 'AWS-018']) {
       const claims = registry.get(id).certification;
       expect(claims, id).toHaveLength(1);
       expect(claims[0]?.certification, id).toBe('SOA-C03');

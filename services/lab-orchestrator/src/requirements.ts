@@ -173,6 +173,27 @@ const iamPrincipalSelector = z
   })
   .strict();
 
+/** A CloudFormation logical ID: alphanumeric, as the template reference defines. */
+const cfnLogicalId = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Za-z0-9]+$/, 'must be an alphanumeric CloudFormation logical ID');
+
+/** A resource type such as `AWS::S3::Bucket`. */
+const cfnResourceType = z
+  .string()
+  .min(3)
+  .max(128)
+  .regex(/^[A-Za-z0-9]+::[A-Za-z0-9]+::[A-Za-z0-9]+$/, 'must look like AWS::S3::Bucket');
+
+/** A dotted property path, where a numeric segment indexes a list. */
+const cfnPropertyPath = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/, 'must be a dotted property path such as Tags.0.Key');
+
 /** One condition a statement must carry. */
 const iamConditionSelector = z
   .object({
@@ -1299,6 +1320,103 @@ const sandboxRequirementSchemas = {
     })
     .strict(),
 
+  // --- CloudFormation templates ---------------------------------------------
+  //
+  // These grade a template the student wrote or repaired, by *parsing* it. The
+  // YAML short forms are normalised to their canonical `Fn::` shape at parse
+  // time, so a YAML template and the equivalent JSON template are the same
+  // object, and resource order, property order and formatting are all
+  // irrelevant to the verdict — as they are to CloudFormation.
+  //
+  // The reader is the sandbox filesystem, as for Terraform state and IAM
+  // policies: a template is an artefact on disk, and reading it needs no cloud
+  // account and deploys nothing.
+
+  /** The file at `path` parses as a well-formed CloudFormation template. */
+  cfn_template_valid: z
+    .object({
+      type: z.literal('cfn_template_valid'),
+      path: sandboxPath,
+      /** Optional exact `AWSTemplateFormatVersion`, e.g. `2010-09-09`. */
+      format_version: z.string().min(1).max(32).optional(),
+      /** Optional floor on how many resources the template must declare. */
+      min_resources: z.number().int().min(1).max(200).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** A resource with this logical ID exists, and has this type. */
+  cfn_resource_exists: z
+    .object({
+      type: z.literal('cfn_resource_exists'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      resource_type: cfnResourceType,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A resource carries a property, optionally with an exact value.
+   *
+   * A one-element list is compared as the scalar it wraps, because
+   * `Action: sts:AssumeRole` and `Action: [sts:AssumeRole]` mean the same.
+   */
+  cfn_resource_property: z
+    .object({
+      type: z.literal('cfn_resource_property'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      property: cfnPropertyPath,
+      /** When omitted, the property need only be present. */
+      equals: z.string().min(1).max(1024).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * One resource's property refers to another resource.
+   *
+   * `via` names the intrinsic the reference must be made with, so a lab can
+   * require `Fn::GetAtt` where an ARN is needed and `Ref` where an id is.
+   */
+  cfn_resource_reference: z
+    .object({
+      type: z.literal('cfn_resource_reference'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      property: cfnPropertyPath,
+      /** Logical ID the property must point at. */
+      references: cfnLogicalId,
+      via: z.enum(['Ref', 'GetAtt', 'Sub']),
+      /** Required attribute for a `GetAtt`, e.g. `Arn`. */
+      attribute: z.string().min(1).max(128).regex(/^[A-Za-z0-9.]+$/).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * Every `Ref`, `Fn::GetAtt` and `Fn::Sub` variable resolves.
+   *
+   * The check a failed deployment usually needed: a typo in a logical ID, or a
+   * `Sub` variable naming a parameter nobody declared.
+   */
+  cfn_references_resolve: z
+    .object({ type: z.literal('cfn_references_resolve'), path: sandboxPath, ...common })
+    .strict(),
+
+  /** An output exists, optionally pointing at a named resource. */
+  cfn_output_exists: z
+    .object({
+      type: z.literal('cfn_output_exists'),
+      path: sandboxPath,
+      name: cfnLogicalId,
+      /** Logical ID the output's `Value` must reference. */
+      references: cfnLogicalId.optional(),
+      ...common,
+    })
+    .strict(),
+
   // =========================================================================
   // Linux sandbox family
   // =========================================================================
@@ -1788,6 +1906,7 @@ export type RequirementFamily =
   | 'terraform'
   | 'linux'
   | 'iam'
+  | 'cloudformation'
   | 'docker';
 
 export const REQUIREMENT_FAMILIES = {
@@ -1911,6 +2030,16 @@ export const REQUIREMENT_FAMILIES = {
   iam_policy_not_allows: 'iam',
   iam_policy_no_wildcard: 'iam',
 
+  // Parsed from a template on disk. Its own family for the same reason
+  // `terraform` is separate from `filesystem`: the meaning of the artefact is
+  // CloudFormation's, not the filesystem's.
+  cfn_template_valid: 'cloudformation',
+  cfn_resource_exists: 'cloudformation',
+  cfn_resource_property: 'cloudformation',
+  cfn_resource_reference: 'cloudformation',
+  cfn_references_resolve: 'cloudformation',
+  cfn_output_exists: 'cloudformation',
+
   resource_absent: 'kubernetes',
 
   // These three read a path and nothing else, so they belong with the rest of
@@ -1971,7 +2100,9 @@ export type RequirementTypeOf<F extends RequirementFamily> = {
 }[RequirementType];
 
 /** Requirement types read inside the session's sandbox rather than Kubernetes. */
-export type SandboxRequirementType = RequirementTypeOf<'filesystem' | 'terraform' | 'linux' | 'iam'>;
+export type SandboxRequirementType = RequirementTypeOf<
+  'filesystem' | 'terraform' | 'linux' | 'iam' | 'cloudformation'
+>;
 
 export type KubernetesRequirementType = RequirementTypeOf<'kubernetes'>;
 

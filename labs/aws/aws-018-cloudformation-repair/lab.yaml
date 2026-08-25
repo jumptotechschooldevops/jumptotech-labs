@@ -1,0 +1,238 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# EXECUTION MODEL: simulated Phase-0. AWS-018 runs in the ordinary Linux
+# sandbox. It creates no AWS resources, holds no AWS credentials, calls no AWS
+# API, and deploys nothing. The template is parsed and inspected on disk.
+#
+# Graded with the `cloudformation` requirement family, added for this lab as
+# the smallest reusable capability: the YAML short forms are normalised to
+# their canonical Fn:: shape at parse time, so a YAML template and the
+# equivalent JSON template are the same object and formatting is never an
+# answer. Nothing in the shared verifier knows about this lab.
+#
+# Certification claim: SOA-C03 Task 3.1 — skill 3.1.2, "Create and manage AWS
+# resources by using CloudFormation and the AWS CDK", and skill 3.1.3,
+# "Identify and remediate deployment issues (for example, subnet sizing issues,
+# CloudFormation errors, permissions issues)". The lab is squarely 3.1.3 and
+# introduces 3.1.2; it covers no CDK and claims none. Objectives read from the
+# official exam guide on 2026-08-25.
+# ---------------------------------------------------------------------------
+id: AWS-018
+slug: aws-018-cloudformation-repair
+title: The Stack That Would Not Create
+track: aws
+topic: aws-automation
+difficulty: intermediate
+level: practice
+duration_minutes: 45
+order: 18
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-004
+
+story: >
+  The JumpToTech Bank payments export pipeline is being moved into
+  CloudFormation so it stops being something one engineer configured by hand.
+  The template was adapted from another team's stack, and every attempt to
+  create it rolls straight back.
+
+  Three of the four resources fail. The stack events name what CloudFormation
+  objected to in each case, which is more help than an outage usually gives
+  you — but the events say what broke, not what the template should have said.
+
+objectives:
+  - Read CloudFormation stack events and map each failure to the template that caused it
+  - Distinguish a reference that returns an identifier from one that returns an attribute
+  - Repair a template so every reference resolves to something it declares
+  - Declare outputs that take their values from resources rather than restating them
+
+task:
+  summary: >
+    Repair a CloudFormation template so the stack it describes would create,
+    and so every reference in it resolves.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. Nothing is
+    deployed and nothing reaches AWS — the template is graded by parsing it and
+    reading what it declares.
+
+    Everything is in `~/stack`. Read `README.md`, then `stack-events.txt` for
+    what CloudFormation reported, then `change-request.txt` for what the stack
+    is supposed to end up creating. Then repair
+    `~/stack/payments-export.yaml`.
+
+    The events are your starting point but not the whole list. Two of the
+    failures are references that point at nothing; one is a property the
+    resource cannot be created without. The change request adds requirements the
+    events could not have reported, because the stack never got far enough to
+    fail on them.
+
+    Keep the four logical IDs as they are — other teams import these outputs by
+    name.
+
+    **How this is graded.** The template is parsed, not searched. Resource
+    order, property order, indentation, quoting style, and whether you use the
+    YAML short forms (`!Ref`, `!GetAtt`, `!Sub`) or the long forms
+    (`Fn::GetAtt`, and so on) make no difference whatsoever — and a template
+    written as JSON would be graded identically. What is checked is which
+    resources are declared, what they declare, which resource each reference
+    actually points at, and which intrinsic it uses to get there.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/stack/payments-export.yaml
+      label: The template is in place
+    - type: file_exists
+      path: /home/student/stack/stack-events.txt
+      label: The stack events are in place
+    - type: cfn_template_valid
+      path: /home/student/stack/payments-export.yaml
+      label: The template parses, even though it does not create
+    - type: cfn_resource_exists
+      path: /home/student/stack/payments-export.yaml
+      logical_id: ExportBucket
+      resource_type: AWS::S3::Bucket
+      label: The bucket, which did create, is present
+
+requirements:
+  - type: cfn_template_valid
+    path: /home/student/stack/payments-export.yaml
+    format_version: '2010-09-09'
+    min_resources: 4
+    label: The template is valid and still declares all four resources
+
+  # --- the four resources keep their identity ------------------------------
+  - type: cfn_resource_exists
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportBucket
+    resource_type: AWS::S3::Bucket
+    label: ExportBucket is an S3 bucket
+
+  - type: cfn_resource_exists
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportQueue
+    resource_type: AWS::SQS::Queue
+    label: ExportQueue is an SQS queue
+
+  - type: cfn_resource_exists
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportRole
+    resource_type: AWS::IAM::Role
+    label: ExportRole is an IAM role
+
+  - type: cfn_resource_exists
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportRolePolicy
+    resource_type: AWS::IAM::Policy
+    label: ExportRolePolicy is an IAM policy
+
+  # --- the role can actually be created ------------------------------------
+  - type: cfn_resource_property
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportRole
+    property: AssumeRolePolicyDocument.Statement.0.Effect
+    equals: Allow
+    label: The role's trust document allows rather than denies
+
+  - type: cfn_resource_property
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportRole
+    property: AssumeRolePolicyDocument.Statement.0.Action
+    equals: sts:AssumeRole
+    label: The role's trust document allows the role to be assumed
+
+  - type: cfn_resource_property
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportRole
+    property: AssumeRolePolicyDocument.Statement.0.Principal.Service
+    equals: ec2.amazonaws.com
+    label: The role trusts the service the export instances run on
+
+  # --- the policy is wired to the role and the bucket ------------------------
+  - type: cfn_resource_reference
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportRolePolicy
+    property: Roles.0
+    references: ExportRole
+    via: Ref
+    label: The policy attaches to the role by referring to it
+
+  - type: cfn_resource_reference
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportRolePolicy
+    property: PolicyDocument.Statement.0.Resource
+    references: ExportBucket
+    via: GetAtt
+    attribute: Arn
+    label: The policy takes the bucket's ARN from the bucket resource
+
+  # --- nothing dangles ------------------------------------------------------
+  - type: cfn_references_resolve
+    path: /home/student/stack/payments-export.yaml
+    label: Every reference in the template resolves to something it declares
+
+  # --- and the stack exports what other teams import -------------------------
+  - type: cfn_output_exists
+    path: /home/student/stack/payments-export.yaml
+    name: ExportBucketName
+    references: ExportBucket
+    label: The stack exports the bucket name, taken from the bucket
+
+  - type: cfn_output_exists
+    path: /home/student/stack/payments-export.yaml
+    name: ExportRoleArn
+    references: ExportRole
+    label: The stack exports the role ARN, taken from the role
+
+hints:
+  - level: 1
+    text: >
+      Take the stack events one at a time and find the line in the template each
+      one is complaining about. Two of the three are the same kind of mistake
+      wearing different words — something in the template names a thing that the
+      template never declares. Then read the change request for the requirements
+      the events could not have reached.
+  - level: 2
+    text: >
+      The CloudFormation template reference documents the two intrinsics that
+      point at another resource: one returns the resource's identifier, the
+      other returns a named attribute of it. Read what each returns for the
+      resource types here before choosing. Note also that a value written as a
+      plain string is not a reference at all, however much it looks like a
+      logical ID — CloudFormation will treat it as literal text. The role's
+      trust document is the same shape you wrote in the roles-and-trust lab.
+  - level: 3
+    text: >
+      `ExportsBucket` is a typo for a resource that exists under another name,
+      and `${Env}` should be the parameter the template actually declares. A
+      list entry that must point at a resource needs `!Ref`, not the bare name.
+      An ARN is an attribute, so it comes from `!GetAtt <resource>.Arn`. The
+      missing output takes the role's ARN the same way, and the trust document
+      belongs under the role's `Properties`.
+
+references:
+  - title: AWS CloudFormation — Template sections
+    url: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/template-anatomy.html
+  - title: AWS CloudFormation — Fn::GetAtt
+    url: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getatt.html
+  - title: AWS CloudFormation — Ref
+    url: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-ref.html
+  - title: AWS CloudFormation — Outputs
+    url: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/outputs-section-structure.html
+
+skills:
+  - aws.cloudformation.template-authoring
+  - aws.cloudformation.intrinsic-functions
+  - aws.cloudformation.deployment-troubleshooting
+
+certification:
+  - certification: SOA-C03
+    relevant: true
+    domains:
+      - deployment-provisioning-and-automation
