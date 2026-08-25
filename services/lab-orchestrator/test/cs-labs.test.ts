@@ -88,7 +88,18 @@ describe('the CS track loads', () => {
     // Never declared in the YAML: derived from the provider, so a lab cannot
     // claim an isolation model its provider does not deliver.
     expect(lab.environment.isolation).toBe('container');
-    expect(lab.environment.capabilities).toEqual([]);
+    }
+  });
+
+  it('gives every CS lab a student account with no route to root', async () => {
+    // The verifier reads state back by running binaries inside the student's
+    // own container, so a student who can become root can replace them and
+    // forge a pass. CS teaches what a system is, never how to administer one,
+    // so no CS lab has a reason to hand out sudo — and a new one that forgets
+    // to say so should fail here rather than ship a forgeable grade.
+    for (const lab of await csLabs()) {
+      expect(lab.environment.capabilities, lab.id).toContain('unprivileged_shell');
+      expect(lab.environment.capabilities, lab.id).not.toContain('rbac_authoring');
     }
   });
 

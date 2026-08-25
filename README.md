@@ -1435,6 +1435,38 @@ ceilings, the same one-container-per-session derivation, and the same reaper.
 inside it** — and a container is not a virtual machine, which is stated plainly
 in [Security model](#security-model) as well.
 
+### Why root in the sandbox is also a *grading* concern
+
+Root inside the sandbox is safe for the host. It is not safe for the *grade*.
+The verifier reads state back by running binaries inside that same container —
+`/usr/bin/stat` and `/bin/cat` for every file check, an allow-listed inspection
+command for the rest — so a student who can become root can replace those
+binaries and make an untouched home directory report whatever the lab was
+looking for. This was demonstrated end to end against CS-001: with nothing
+solved, a replaced `cat` and `stat` turned `0/11` into `LAB PASSED`.
+
+A lab therefore declares `unprivileged_shell` under
+`environment.capabilities` when it does not teach system administration. The
+provider removes the sudo drop-in once, as the sandbox's root, after tooling is
+confirmed and before any seed script or student shell exists, and verifies the
+grant is genuinely gone before the sandbox is handed over. Reset re-applies it,
+because reset replaces the container. The student cannot undo it, because
+undoing it needs the privilege it just removed.
+
+The capability *narrows* rather than widens, which is deliberate: making sudo
+opt-in would mean editing every Linux lab to ask for a privilege it has always
+had. A lab that says nothing keeps exactly the environment it has today.
+
+This is not the only protection, and it must not be treated as one. Nothing
+authoritative lives in the sandbox in the first place: expected values live in
+`lab.yaml` on the API host, where a student has no reach at all. Removing root
+protects the *reading* of student state; keeping the answers outside protects
+the *grading* of it. For the tracks that genuinely need root — Linux, and any
+future administration track — the remaining hardening is to read the sandbox
+through the container runtime's archive API instead of through binaries the
+student could replace. `docker cp` answers from the daemon, not from the
+container's userland, and returns the truth where a replaced `cat` lies.
+
 ### The shell
 
 The terminal service attaches a PTY to the session's container. It learns

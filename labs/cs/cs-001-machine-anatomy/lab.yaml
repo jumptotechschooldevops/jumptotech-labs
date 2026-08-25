@@ -29,6 +29,15 @@ order: 1
 
 environment:
   provider: linux
+  # This lab teaches what a system *is*, never how to administer one, so the
+  # student account has no route to root. That is not cosmetic: the verifier
+  # reads state back by running `/usr/bin/stat` and `/bin/cat` inside this
+  # container, and a student who could become root could replace them and make
+  # an untouched home directory report a finished lab. Declared here rather
+  # than baked into the image so the Linux track — which genuinely needs
+  # `sudo` — keeps the environment it has always had.
+  capabilities:
+    - unprivileged_shell
 
 prerequisites: []
 

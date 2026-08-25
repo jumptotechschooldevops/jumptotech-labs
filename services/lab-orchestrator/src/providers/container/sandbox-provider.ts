@@ -40,6 +40,7 @@
  * credentials: the isolation here is good enough for a single-tenant teaching
  * laptop, not for hostile multi-tenancy.
  */
+import { labHasCapability } from '../../session/isolation.js';
 import {
   ProviderUnavailableError,
   sandboxRefOf,
@@ -100,6 +101,16 @@ const INTERNAL_EXEC_ALLOWLIST = new Set([
  * their own container would otherwise be able to read the answer key.
  */
 const SEED_DIR = '/opt/jumptotech/seed';
+
+/**
+ * The sudo grant the Linux sandbox image ships for the student account.
+ *
+ * Removed for labs declaring `unprivileged_shell`; see `#dropSudo`. Pinned as
+ * a constant so the image and the provider cannot drift apart silently — if
+ * the image renames this file, the privilege step fails loudly at session
+ * creation rather than quietly leaving the student as root.
+ */
+const SUDOERS_DROP_IN = '/etc/sudoers.d/010-student';
 
 /** Cap on what one inspection command may return to the verifier. */
 const MAX_INSPECT_OUTPUT_BYTES = 256 * 1024;
@@ -295,6 +306,25 @@ export class ContainerLabProvider implements LabProvider {
     const toolingStep = await this.#runStep(steps, 'sandbox-tooling', 'Sandbox tooling ready', async () =>
       this.#checkTooling(ref, context),
     );
+    if (toolingStep.ok && labHasCapability(context.lab, 'unprivileged_shell')) {
+      const privilegeStep = await this.#runStep(
+        steps,
+        'sandbox-privilege',
+        'Sandbox privilege reduced',
+        async () => this.#dropSudo(ref, context),
+      );
+      if (!privilegeStep.ok) {
+        await this.#runtime.remove(ref).catch(() => undefined);
+        return {
+          ok: false,
+          environment: this.#environment(context, 'error', { message: privilegeStep.detail }),
+          steps,
+          error: this.#toLabError(privilegeStep.error, 'PROVISION_FAILED', {
+            remediation: `Rebuild the sandbox image: npm run sandbox:build`,
+          }),
+        };
+      }
+    }
     if (!toolingStep.ok) {
       await this.#runtime.remove(ref).catch(() => undefined);
       return {
@@ -677,6 +707,62 @@ export class ContainerLabProvider implements LabProvider {
     }
 
     return found.length > 0 ? `${who}; ${found.join('; ')}` : `unprivileged user '${who}'`;
+  }
+
+  /**
+   * Remove the student's route to root, for labs that declare
+   * `unprivileged_shell`.
+   *
+   * Why this matters more than it looks: the verifier reads state back by
+   * running binaries *inside this container* — `/usr/bin/stat` and `/bin/cat`
+   * for every file check, and an allow-listed inspection command for the rest.
+   * A student who can become root can replace those binaries, and a replaced
+   * `cat` can make an empty home directory report whatever the lab was looking
+   * for. That is not a hypothetical: it was demonstrated end to end against
+   * CS-001 before this step existed.
+   *
+   * So a lab that does not *teach* administration should not ship the ability
+   * to administer. This runs once, as the sandbox's root, after tooling is
+   * confirmed and before any seed script or student shell exists, and the
+   * student cannot undo it afterwards because undoing it needs the privilege
+   * it just removed.
+   *
+   * It is deliberately not the only protection. Nothing authoritative lives in
+   * the sandbox in the first place: expected values live in `lab.yaml`, on the
+   * API host, where a student has no reach at all. This step protects the
+   * *reading* of student state; keeping the answers outside protects the
+   * grading of it. Neither substitutes for the other, and the deeper fix — 
+   * reading the sandbox through the container runtime's archive API instead of
+   * through binaries the student could replace — remains worth doing for the
+   * tracks that genuinely need root.
+   */
+  async #dropSudo(ref: string, context: LabSessionContext): Promise<string> {
+    const removal = await this.#runtime.exec(ref, {
+      argv: ['/bin/rm', '-f', '--', SUDOERS_DROP_IN],
+      user: 'root',
+      workdir: '/',
+      timeoutMs: 15_000,
+    });
+    if (removal.exitCode !== 0) {
+      throw new Error(
+        `could not remove the sandbox's sudo grant: ${removal.stderr.trim() || `exit ${removal.exitCode}`}`,
+      );
+    }
+
+    // Verified rather than assumed: a sandbox that still hands out root after
+    // this step must not be given to a student, because every file check in
+    // the lab would be forgeable from inside it.
+    const probe = await this.#runtime.exec(ref, {
+      argv: ['/usr/bin/sudo', '-n', '/usr/bin/id', '-u'],
+      user: context.policy.sandbox.user,
+      workdir: this.#home,
+      timeoutMs: 15_000,
+    });
+    if (probe.exitCode === 0 && probe.stdout.trim() === '0') {
+      throw new Error("the sandbox still grants the student root after removing its sudo drop-in");
+    }
+
+    return `student cannot escalate to root (${SUDOERS_DROP_IN} removed)`;
   }
 
   /**
