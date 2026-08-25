@@ -35,6 +35,7 @@ const TERRAFORM_IDS = [
   'TF-006',
   'TF-011',
   'TF-012',
+  'TF-016',
 ];
 
 let cached: LabRegistry | undefined;
@@ -790,6 +791,97 @@ describe('TF-006 — Local Values and Data Sources', () => {
     expect(kinds.has('terraform_resource_exists')).toBe(true);
     expect(kinds.has('file_content')).toBe(true);
     const paths = (await tf006()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-016
+
+describe('TF-016 — Explicit Dependencies with depends_on', () => {
+  let lab: LoadedLabDefinition;
+  /** SHA-256 of the manifest's rendered bytes. Deterministic: jsonencode sorts keys. */
+  const MANIFEST_DIGEST = '53253121f03e0c078d549519600e0fae7da8608dfebfe48c336743a33ecb1c76';
+
+  async function tf016(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-016-explicit-dependencies', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, after TF-005', async () => {
+    const definition = await tf016();
+    expect(definition.id).toBe('TF-016');
+    expect(definition.topic).toBe('dependencies');
+    expect(definition.order).toBe(11);
+    expect(definition.prerequisites).toEqual(['TF-005']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds two resources that share a value but depend on nothing of each others', async () => {
+    const files = await loadSetupFiles(await tf016());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    expect(main.content).toContain('"local_file" "migration_marker"');
+    expect(main.content).toContain('"local_file" "app_manifest"');
+    // Sharing `local.release` is the trap: it is not a dependency between them.
+    expect(main.content).toContain('local.release');
+    // Neither the ordering nor the third resource is given away.
+    expect(main.content).not.toContain('depends_on');
+    expect(main.content).not.toContain('release_record');
+  });
+
+  it('grades the explicit dependency, which nothing else in the track does', async () => {
+    // `terraform_resource_depends_on` is used by no other lab; TF-005 grades
+    // references. The two labs are complements, not duplicates.
+    const explicit = (await tf016()).requirements.find(
+      (r) => r.type === 'terraform_resource_depends_on',
+    ) as Record<string, unknown> | undefined;
+    expect(explicit).toMatchObject({
+      resource_type: 'local_file',
+      name: 'app_manifest',
+      references: ['local_file.migration_marker'],
+    });
+  });
+
+  it('grades the implicit dependency by reference, so depends_on cannot stand in for it', async () => {
+    // The distinction the lab teaches: a student who writes `depends_on` on
+    // the record instead of referring to the checksum fails this check.
+    const implicit = (await tf016()).requirements.find(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Record<string, unknown> | undefined;
+    expect(implicit).toMatchObject({
+      name: 'release_record',
+      attribute: 'content',
+      references: 'local_file.app_manifest',
+      referenced_attribute: 'content_sha256',
+    });
+  });
+
+  it('pins the manifest contents, so ordering cannot be forced through them', async () => {
+    // Inventing a reference to the marker would rewrite the manifest. This is
+    // what makes `depends_on` the only correct answer for that pair.
+    const pinned = (await tf016()).requirements.find(
+      (r) => 'path' in r && r.path === 'terraform/build/app/manifest.json' && 'equals' in r,
+    ) as Record<string, unknown> | undefined;
+    expect(pinned?.equals).toBe('{"release":"2026.08","service":"ledger-api"}');
+  });
+
+  it('proves the implicit dependency resolved, from a value only the manifest produces', async () => {
+    const carrier = (await tf016()).requirements.find(
+      (r) =>
+        r.type === 'file_content' &&
+        'path' in r &&
+        r.path === 'terraform/build/app/release-record.txt',
+    ) as Record<string, unknown> | undefined;
+    expect(carrier?.contains).toBe(MANIFEST_DIGEST);
+  });
+
+  it('grades applied state too, and names no source file', async () => {
+    const requirements = (await tf016()).requirements;
+    expect(requirements.filter((r) => r.type === 'terraform_resource_exists')).toHaveLength(3);
+    const paths = requirements
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);

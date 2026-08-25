@@ -1,0 +1,260 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-016 — the dependency Terraform cannot infer, and the one it can.
+#
+# Official objective this lab practises:
+#   Terraform Associate (004), domain 4 "Terraform configuration"
+#   4f — "Define resource dependencies in configuration"
+#
+# Official sources, read on 2026-08-25:
+#   · Meta-argument: depends_on — for "hidden" dependencies Terraform cannot
+#     infer from the configuration, and explicitly a last resort
+#   · Resource graph — Terraform derives order from the references between
+#     resources
+#   · References to values — a reference is what creates an edge
+#
+# ## Why this is not TF-005 again
+#
+# TF-005 proves that a reference *is* a dependency: the student makes one
+# resource consume a value another produced, and Terraform orders the work
+# itself. This lab is the complement, and the two are only meaningful together:
+# here there is a genuine ordering requirement and **no value to reference**,
+# which is the one situation `depends_on` exists for.
+#
+# The lab contains both kinds on purpose, because knowing when *not* to reach
+# for `depends_on` is the half people get wrong:
+#
+#   · `app_manifest` after `migration_marker` — nothing is shared, so it can
+#     only be stated explicitly;
+#   · `release_record` after `app_manifest` — a checksum is shared, so a
+#     reference states it, and `depends_on` would add an edge Terraform
+#     already had.
+#
+# The grader distinguishes them. Writing `depends_on` where a reference
+# belongs does not satisfy the reference check, and manufacturing a reference
+# where none should exist changes the manifest's contents and fails that check
+# instead.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-016
+slug: tf-016-explicit-dependencies
+title: Explicit Dependencies with depends_on
+track: terraform
+topic: dependencies
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 11
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-005
+
+story: >
+  The deploy has succeeded three times and failed once, and nobody can say why
+  the fourth was different.
+
+  What is supposed to happen is that the migration marker is written first, and
+  only then the application manifest that tells the fleet the release is
+  live. What actually happens is that Terraform creates both in whatever order
+  suits it, because nothing in the configuration says otherwise. Three times it
+  happened to pick the order the team assumed; the fourth time it did not, and
+  the fleet picked up a release whose migrations were not yet recorded.
+
+  The two resources share a release number, which is what made this hard to
+  spot. Sharing a value is not a dependency — both read the same local, and
+  neither reads anything of the other's.
+
+objectives:
+  - Recognise an ordering requirement Terraform cannot infer
+  - State it explicitly with depends_on
+  - Recognise the case where a reference already states it, and depends_on is redundant
+  - Read the dependency graph Terraform derives
+
+task:
+  summary: >
+    State the ordering Terraform cannot see, and add a resource whose ordering
+    it can.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf`
+    and a `main.tf` with two resources — a migration marker and an
+    application manifest. Read it first, and note that both read
+    `local.release` while neither reads anything of the other's.
+
+    **The ordering Terraform cannot infer.** The application manifest must not
+    be written until the migration marker exists. There is no value to borrow:
+    the manifest's contents have nothing to do with the marker, and inventing a
+    reference just to force the order would change what the manifest says.
+    This is what the `depends_on` meta-argument is for — a dependency that is
+    real but invisible to Terraform. Add it to `local_file.app_manifest`,
+    naming the marker.
+
+    **The ordering Terraform can infer.** Add a third resource,
+    `local_file.release_record`, writing `build/app/release-record.txt`.
+    Its content must carry the manifest's SHA-256 checksum, taken from the
+    manifest resource. Because it genuinely consumes something the manifest
+    produced, a reference states the dependency on its own — and
+    `depends_on` here would add an edge Terraform already had. Do not add
+    one.
+
+    Leave the manifest's contents exactly as they are. If `manifest.json`
+    ends up mentioning migrations, you have forced the ordering the wrong way.
+
+    Apply, then run `terraform graph` and look at the edges. One of them you
+    wrote by hand; the other Terraform worked out for itself. Both are real
+    dependencies, and the graph does not distinguish them — which is the point.
+    `depends_on` is how you tell Terraform about something it could not see,
+    not a way of being extra careful about something it already knows.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The unordered configuration is in place
+
+# Both kinds of dependency are graded, and each by the mechanism that is
+# correct for it. Using the wrong one fails: depends_on does not satisfy the
+# reference check, and a manufactured reference changes the manifest.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  # The explicit half: nothing is shared, so only depends_on can state it.
+  - type: terraform_resource_depends_on
+    dir: terraform
+    resource_type: local_file
+    name: app_manifest
+    references:
+      - local_file.migration_marker
+    label: The manifest declares an explicit dependency on the migration marker
+
+  # The implicit half: a value is shared, so a reference states it.
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: release_record
+    attribute: content
+    references: local_file.app_manifest
+    referenced_attribute: content_sha256
+    label: The release record derives the manifest's checksum from the manifest itself
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: migration_marker
+    label: The migration marker was applied
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: app_manifest
+    label: The application manifest was applied
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: release_record
+    label: The release record was applied
+
+  - type: file_exists
+    path: terraform/build/migrations/applied.txt
+    label: The migration marker was written
+
+  - type: file_content
+    path: terraform/build/migrations/applied.txt
+    contains: 'status: complete'
+    label: The marker records a completed migration
+
+  - type: file_exists
+    path: terraform/build/app/manifest.json
+    label: The application manifest was written
+
+  # Unchanged contents. Forcing the ordering by making the manifest reference
+  # the marker would rewrite this, and fail here instead.
+  - type: file_content
+    path: terraform/build/app/manifest.json
+    equals: '{"release":"2026.08","service":"ledger-api"}'
+    label: The manifest says exactly what it said before — the ordering was not forced through its contents
+
+  - type: file_exists
+    path: terraform/build/app/release-record.txt
+    label: The release record was written
+
+  # This checksum exists only once the manifest has been created, so content
+  # carrying it was derived from the manifest resource.
+  - type: file_content
+    path: terraform/build/app/release-record.txt
+    contains: 53253121f03e0c078d549519600e0fae7da8608dfebfe48c336743a33ecb1c76
+    label: The release record carries the manifest's checksum
+
+hints:
+  - level: 1
+    text: >
+      Terraform works out order from the references between resources. Look at
+      the two seeded resources and ask what either one reads of the other's —
+      the answer is what explains the intermittent failure.
+
+      There is a meta-argument for the case where a dependency is real but
+      nothing in the configuration expresses it. Look it up before writing
+      anything.
+  - level: 2
+    text: >
+      A meta-argument goes inside the resource block alongside its arguments,
+      and this one takes a list of addresses — resources, not attributes.
+
+      For the third resource, the opposite applies: it genuinely uses something
+      the manifest produced, so referring to that value is all the ordering it
+      needs. A `local_file` exports a SHA-256 of its content.
+  - level: 3
+    text: >
+      Add `depends_on = [local_file.migration_marker]` to
+      `local_file.app_manifest`, changing nothing else about it.
+
+      Then add `local_file.release_record` writing
+      `build/app/release-record.txt`, with content built from
+      `local_file.app_manifest.content_sha256` — and no `depends_on`,
+      because that reference is the dependency.
+
+      Then `terraform apply`, and `terraform graph` if you want to see both
+      edges side by side.
+
+references:
+  - title: 'Terraform — Meta-argument: depends_on'
+    url: https://developer.hashicorp.com/terraform/language/meta-arguments/depends_on
+  - title: Terraform — Resource graph
+    url: https://developer.hashicorp.com/terraform/internals/graph
+  - title: Terraform — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+  - title: Terraform — Resources
+    url: https://developer.hashicorp.com/terraform/language/resources
+  - title: 'Terraform — Command: graph'
+    url: https://developer.hashicorp.com/terraform/cli/commands/graph
+
+skills:
+  - terraform.language.dependencies
+  - terraform.language.references
+  - terraform.workflow.apply
+
+# Objective 4f of the Terraform Associate (004) exam content list.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '4'
