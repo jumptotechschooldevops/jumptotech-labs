@@ -340,6 +340,17 @@ must find rather than a task they must perform.
   the bind-address distinction needs **N5**, the established connection needs a
   peer (N2/N3).
 - **New capability** N5 (`address` on `port_listening`), N1–N3.
+- **Implemented 2026-08-25.** N5 shipped as an optional `address` on the
+  existing `port_listening` / `port_not_listening` rather than a new primitive;
+  omitting it keeps the previous meaning exactly, so no existing lab moved. N3
+  proved unnecessary again: the established connection is held by a seeded
+  local client, so the socket table contains a connection as well as listeners
+  without a peer container. The lab also gained the *repair* half — payments-api
+  starts bound to `127.0.0.1` and the student moves it off loopback — because an
+  inventory that only asks the student to write down what they saw grades text,
+  not state. Every requirement now reads the kernel's socket table; there is no
+  answer sheet. This subsumes what NET-007 was going to teach, and NET-007
+  remains blocked on N3 for its cross-host half.
 
 ---
 

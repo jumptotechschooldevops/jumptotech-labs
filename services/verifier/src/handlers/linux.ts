@@ -25,7 +25,7 @@
  */
 import type { RequirementOf } from '@jumptotech/lab-orchestrator';
 import { fail, missingPath, pass, type HandlerOutcome, type SandboxVerifierHandler } from '../contract.js';
-import type { SandboxReader } from '../sandbox-reader.js';
+import { normaliseBindAddress, type SandboxReader } from '../sandbox-reader.js';
 import { normalizeMode } from './filesystem.js';
 
 // --- filesystem, the parts the base family does not cover -------------------
@@ -186,31 +186,71 @@ export const processEnviron: SandboxVerifierHandler<'process_environ'> = {
   },
 };
 
+/** The bind addresses a requirement accepts, normalised. Empty means "any". */
+function wantedAddresses(address: string | string[] | undefined): string[] {
+  if (address === undefined) return [];
+  return (Array.isArray(address) ? address : [address]).map(normaliseBindAddress);
+}
+
+/** `tcp/8080 on 127.0.0.1` / `tcp/8080`, for messages. */
+function describeSocket(
+  protocol: string,
+  port: number,
+  wanted: readonly string[],
+): string {
+  if (wanted.length === 0) return `${protocol}/${port}`;
+  return `${protocol}/${port} on ${wanted.join(' or ')}`;
+}
+
 export const portListening: SandboxVerifierHandler<'port_listening'> = {
   type: 'port_listening',
-  label: (r) => `Something is listening on ${r.protocol}/${r.port}`,
+  label: (r) =>
+    `Something is listening on ${describeSocket(r.protocol, r.port, wantedAddresses(r.address))}`,
   async run(requirement, reader) {
     const sockets = await reader.sockets();
-    const found = sockets.some(
+    const wanted = wantedAddresses(requirement.address);
+    const onPort = sockets.filter(
       (s) => s.port === requirement.port && s.protocol === requirement.protocol,
     );
-    return found
-      ? pass()
-      : fail(`Nothing is listening on ${requirement.protocol} port ${requirement.port}`);
+
+    if (onPort.length === 0) {
+      return fail(`Nothing is listening on ${requirement.protocol} port ${requirement.port}`);
+    }
+    if (wanted.length === 0) return pass();
+
+    const bound = onPort.some((s) => wanted.includes(normaliseBindAddress(s.address)));
+    if (bound) return pass();
+
+    // Report only the property the lab asked about. What *else* is listening on
+    // this host, and which process owns it, is not this check's business.
+    return fail(
+      `${requirement.protocol.toUpperCase()} port ${requirement.port} is not listening on ${wanted.join(' or ')}`,
+    );
   },
 };
 
 export const portNotListening: SandboxVerifierHandler<'port_not_listening'> = {
   type: 'port_not_listening',
-  label: (r) => `Nothing is listening on ${r.protocol}/${r.port}`,
+  label: (r) =>
+    `Nothing is listening on ${describeSocket(r.protocol, r.port, wantedAddresses(r.address))}`,
   async run(requirement, reader) {
     const sockets = await reader.sockets();
-    const found = sockets.some(
+    const wanted = wantedAddresses(requirement.address);
+    const onPort = sockets.filter(
       (s) => s.port === requirement.port && s.protocol === requirement.protocol,
     );
-    return found
-      ? fail(`Something is still listening on ${requirement.protocol} port ${requirement.port}`)
-      : pass();
+
+    const offending =
+      wanted.length === 0
+        ? onPort
+        : onPort.filter((s) => wanted.includes(normaliseBindAddress(s.address)));
+
+    if (offending.length === 0) return pass();
+    return fail(
+      wanted.length === 0
+        ? `Something is still listening on ${requirement.protocol} port ${requirement.port}`
+        : `${requirement.protocol.toUpperCase()} port ${requirement.port} is still listening on ${wanted.join(' or ')}`,
+    );
   },
 };
 

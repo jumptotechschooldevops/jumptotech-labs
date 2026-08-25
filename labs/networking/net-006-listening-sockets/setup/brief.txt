@@ -1,0 +1,54 @@
+JumpToTech Bank — four services, one of them invisible
+======================================================
+
+Four things on this host hold sockets. Nobody on the platform team can say
+which is which, and one of them — payments-api — is being reported as "down"
+by everything on the segment while the engineer who deployed it insists it is
+running. Both are true, which is the whole problem.
+
+Take the inventory first. For every socket on this host you want four facts:
+
+  · the protocol
+  · the port
+  · the address it is bound to
+  · whether it is a listener or an established connection
+
+The last two are where the answer is. A port number on its own tells you
+almost nothing: two sockets can hold the same port and be entirely different
+things, and a listener is identified by more than the number it answers on.
+
+
+WHAT "BOUND TO" DECIDES
+-----------------------
+
+A listening socket is bound to an address, and that address decides who can
+ever reach it. One of the addresses you will find here can only be reached by
+the host itself, no matter how healthy the service behind it is, how open the
+network is, or how many times it is restarted.
+
+That is not a bug in the service. It is the service doing exactly what it was
+configured to do.
+
+
+THE REPAIR
+----------
+
+payments-api reads its own configuration at startup:
+
+  /etc/payments/api.conf
+
+Change it so the service is reachable from the segment this host is on, not
+only from the host itself, and restart it so the change takes effect. `sv` is
+the supervisor here; `sv restart <service>` and `sv status <service>` are the
+two forms you are likely to want. The services live in /etc/service.
+
+Leave the other three alone. A repair that takes down a healthy service is not
+a repair, and the inventory you took at the start is how you will know.
+
+
+A NOTE ON WHAT YOU WILL SEE
+---------------------------
+
+Two of the sockets on this host belong to the container runtime rather than to
+the bank, and one of the rows is a connection rather than a listener. Working
+out which rows are yours to care about is part of taking an inventory.

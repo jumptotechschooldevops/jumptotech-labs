@@ -397,6 +397,33 @@ export function parseNeighbours(text: string): NeighbourEntry[] {
   return entries;
 }
 
+/**
+ * One local address, in the one spelling everything downstream compares.
+ *
+ * Both sides of a bind-address check pass through here — the value a lab wrote
+ * and the value the kernel reported — so the two cannot drift apart. What it
+ * settles, from what `ss` actually prints on Linux:
+ *
+ *   `[::1]`  → `::1`     brackets are presentation, not identity
+ *   `[::]`   → `::`      likewise
+ *   `*`      → `::`      how `ss` prints the IPv6 any-address socket
+ *   `0.0.0.0`→ `0.0.0.0` the IPv4 wildcard, a *different* binding from `::`
+ *
+ * The last line is the deliberate one. With `net.ipv6.bindv6only=0` — the Linux
+ * default — a socket bound to `::` also serves IPv4, so the two wildcards are
+ * often interchangeable in effect. They are not the same binding, and this
+ * check grades what a socket is bound to rather than what it can be reached
+ * over. A lab that accepts either says so by naming both, which is what the
+ * list form of `address` is for.
+ */
+export function normaliseBindAddress(address: string): string {
+  const trimmed = address.trim();
+  if (trimmed === '*') return '::';
+  const unbracketed =
+    trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed;
+  return unbracketed.toLowerCase();
+}
+
 export function parseListeningSockets(text: string): ListeningSocket[] {
   const sockets: ListeningSocket[] = [];
   for (const line of text.split('\n')) {

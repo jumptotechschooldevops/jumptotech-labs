@@ -362,6 +362,27 @@ const ipAddress = z
     { message: 'must be an IPv4 or IPv6 literal address' },
   );
 
+/**
+ * A local address a socket may be bound to.
+ *
+ * Accepts the forms a lab author would reasonably write: an IPv4 literal, an
+ * IPv6 literal with or without brackets, and the two wildcards — `0.0.0.0` for
+ * IPv4 and `::` for IPv6. `*` is accepted too, because that is how `ss` prints
+ * the IPv6 any-address socket on Linux, and an author reading their own
+ * terminal should be able to write down what they saw.
+ *
+ * Normalisation happens at comparison time, in one place, so the value a lab
+ * writes and the value the kernel reports cannot drift apart.
+ */
+const bindAddress = z
+  .string()
+  .min(1)
+  .max(47)
+  .regex(
+    /^(\*|\[?[0-9a-fA-F:]+\]?|(\d{1,3}\.){3}\d{1,3})$/,
+    'must be an IPv4 or IPv6 address, or a wildcard (0.0.0.0, ::, *)',
+  );
+
 /** A network interface name, as the kernel allows one. */
 const interfaceName = z
   .string()
@@ -1384,6 +1405,21 @@ const sandboxRequirementSchemas = {
       type: z.literal('port_listening'),
       port: z.number().int().min(1).max(65535),
       protocol: z.enum(['tcp', 'udp']).default('tcp'),
+      /**
+       * The local address the socket must be bound to.
+       *
+       * Omitted, the check means what it has always meant: *something* is
+       * listening on this port, wherever it is bound. Naming an address makes
+       * the check the stricter question a networking lab needs — the
+       * difference between a service on `127.0.0.1` that only its own host can
+       * reach and one on `0.0.0.0` that the network can.
+       *
+       * A list accepts any one of several bindings, which is how a lab says
+       * "reachable off this host" without dictating an address family: an IPv4
+       * wildcard and an IPv6 wildcard are different bindings that both satisfy
+       * that sentence.
+       */
+      address: z.union([bindAddress, z.array(bindAddress).min(1).max(6)]).optional(),
       ...common,
     })
     .strict(),
@@ -1393,6 +1429,15 @@ const sandboxRequirementSchemas = {
       type: z.literal('port_not_listening'),
       port: z.number().int().min(1).max(65535),
       protocol: z.enum(['tcp', 'udp']).default('tcp'),
+      /**
+       * Restrict the absence to one binding.
+       *
+       * Omitted, the check means nothing at all is listening on the port.
+       * Naming an address asserts the narrower thing — that nothing is bound
+       * *there* — which is what a lab needs when a service is supposed to have
+       * moved off loopback rather than gone away.
+       */
+      address: z.union([bindAddress, z.array(bindAddress).min(1).max(6)]).optional(),
       ...common,
     })
     .strict(),

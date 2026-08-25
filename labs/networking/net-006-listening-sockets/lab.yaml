@@ -1,0 +1,181 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Network scope. Runs on this session's own private segment
+# (`environment.network: link`): an internal bridge with no route off it,
+# shared with nothing. Nothing is published and no external address is reached.
+#
+# ## What is graded, and why there is no written answer here
+#
+# Every requirement below reads the kernel's socket table. There is no findings
+# file, no answer sheet and no prose to grade, because everything this lab
+# teaches leaves real state behind: a service bound to the wrong address is a
+# row in that table, and repairing it changes the row. A student who writes
+# `LISTEN 0.0.0.0:9106` into a file has changed nothing the verifier looks at.
+#
+# ## Why the fixture cannot pass its own lab
+#
+# The baseline binds payments-api to 127.0.0.1, which is precisely the state
+# the lab requires to be gone. Restarting the service re-reads the same
+# configuration, and a reset restores it — so the passing state can only come
+# from a student changing the configuration and restarting the service.
+#
+# Content is written from RFC 1122 (section 3.2.1.3, the loopback address) and
+# the iproute2 and socket man pages. Scenario, services, configuration and task
+# wording are original JumpToTech content.
+#
+# Classification: PRODUCTION SKILL (this is the most common reachability bug
+# there is) and FOUNDATIONAL KNOWLEDGE (socket identity, bind addresses). No
+# certification objective is claimed.
+# ---------------------------------------------------------------------------
+id: NET-006
+slug: net-006-listening-sockets
+title: Sockets and Listening Ports — What Is Bound Where
+track: networking
+topic: sockets
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 6
+
+environment:
+  provider: linux
+  network: link
+
+prerequisites:
+  - NET-005
+
+story: >
+  Four services on this host hold sockets, and nobody can say which is which.
+  One of them, payments-api, is reported as down by everything on the segment
+  while the engineer who deployed it insists it is running.
+
+  Both are true. The service is healthy and it is answering — to exactly one
+  address, which is not one anybody else can use.
+
+objectives:
+  - Take an inventory of a host's sockets, by protocol, port, bind address and state
+  - Explain why a port number alone does not identify a socket
+  - Recognise a service bound to loopback as unreachable rather than down
+  - Repair a bind address in application configuration and restart the service
+  - Leave healthy services untouched while repairing a broken one
+
+task:
+  summary: Inventory this host's sockets, find the service nobody else can reach, and make it reachable without disturbing the others.
+  description: >
+    Your working directory is `/home/student/sockets`. Read `brief.txt` first —
+    it says what four facts an inventory needs and why two of them matter more
+    than the port number.
+
+    Four services on this host hold sockets: `ledger-api`, `payments-api`,
+    `metrics` and a client holding one established connection. Some of what you
+    will see belongs to the container runtime rather than to the bank, and
+    telling those apart is part of the exercise.
+
+    One service is bound to an address only this host can use. That is not a
+    failure — it is the service doing what its configuration says. Find it,
+    then change `/etc/payments/api.conf` so the service is reachable from the
+    segment this host is on rather than only from the host itself, and restart
+    it through the supervisor so the change takes effect.
+
+    Leave the other three alone. Nothing here asks you to write down what you
+    found: the repair is the answer, and the socket table is where it shows.
+
+setup:
+  files:
+    - source: setup/brief.txt
+      path: sockets/brief.txt
+      mode: "0644"
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: directory_exists
+      path: /home/student/sockets
+      label: The working directory exists
+    - type: port_listening
+      port: 9105
+      label: The ledger API is listening
+    # The fault is present, and specifically a loopback binding.
+    - type: port_listening
+      port: 9106
+      address: 127.0.0.1
+      label: The payments API starts bound to loopback
+    - type: port_listening
+      port: 9107
+      protocol: udp
+      label: The metrics socket is open
+    - type: file_content
+      path: /etc/payments/api.conf
+      contains: "127.0.0.1"
+      label: The misconfigured bind address is in place
+
+requirements:
+  # --- the repair, read from the kernel's socket table ---------------------
+  - type: port_listening
+    port: 9106
+    address: [0.0.0.0, "::"]
+    label: The payments API is reachable from outside this host
+  - type: port_not_listening
+    port: 9106
+    address: 127.0.0.1
+    label: The payments API is no longer bound only to loopback
+
+  # --- the fault is gone from where it was introduced ----------------------
+  - type: file_content_absent
+    path: /etc/payments/api.conf
+    contains: "127.0.0.1"
+    label: The loopback bind address is no longer configured
+
+  # --- and the healthy services are still healthy --------------------------
+  - type: port_listening
+    port: 9105
+    label: The ledger API was left alone
+  - type: port_listening
+    port: 9107
+    protocol: udp
+    label: The metrics socket was left alone
+
+hints:
+  - level: 1
+    text: >
+      Start with the inventory rather than with the service that is complained
+      about. Every listening socket has an address as well as a port, and the
+      address is what decides who can reach it. Read all of them, and one row
+      will look different from the others in a way that explains the symptom
+      exactly.
+  - level: 2
+    text: >
+      `man ss` covers listing sockets: there are options for listening sockets,
+      for established ones, for TCP and UDP, and for printing numeric ports
+      rather than service names. RFC 1122 section 3.2.1.3 explains what the
+      loopback range is for and why an address in it never leaves the host.
+      When you have found the odd row, look at what configures that service
+      rather than at the service itself.
+  - level: 3
+    text: >
+      `ss -ltnup` lists listening TCP and UDP sockets numerically; `ss -tan`
+      shows established connections alongside them. Compare the local address
+      column across the rows. The service that stands out reads
+      `/etc/payments/api.conf` at startup, so edit the address there and then
+      `sv restart payments-api`; `sv status payments-api` confirms it came back
+      up, and re-running your inventory confirms the row changed.
+
+references:
+  - title: RFC 1122 — Requirements for Internet Hosts, section 3.2.1.3 (addressing)
+    url: https://www.rfc-editor.org/rfc/rfc1122.html
+  - title: ss(8) — another utility to investigate sockets
+    url: https://man7.org/linux/man-pages/man8/ss.8.html
+  - title: bind(2) — Linux manual page
+    url: https://man7.org/linux/man-pages/man2/bind.2.html
+  - title: ip(7) — Linux IPv4 protocol implementation
+    url: https://man7.org/linux/man-pages/man7/ip.7.html
+
+skills:
+  - linux.net.sockets
+  - linux.net.listening
+  - net.l4.ports
+  - net.l4.socket-identity
+  - net.l4.bind-address
+  - net.troubleshoot.reachability
+
+certification: []
