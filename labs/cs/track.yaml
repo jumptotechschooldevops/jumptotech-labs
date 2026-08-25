@@ -1,0 +1,21 @@
+# Optional track metadata. The track itself exists because labs declare it;
+# this file only says how it should be presented in the catalog.
+#
+# `order: 6` puts Computer Science Fundamentals ahead of Kubernetes (10) and
+# Docker (20): it is the track a beginner should meet first, and every other
+# track assumes what it teaches.
+#
+# Six rather than five, deliberately. `lab-catalog.test.ts` builds a temporary
+# `fixture-track` at `order: 5` and asserts it sorts first, which is how the
+# catalog proves a new track's declared order is honoured without editing a
+# hard-coded list. Equal orders tie-break alphabetically (`byTrackOrder`), so a
+# CS track at 5 would take that first position away from the fixture and fail a
+# test that is not about CS at all. Anything in 6..9 keeps this track first in
+# the real catalog and leaves the fixture's slot alone.
+#
+# This track is FOUNDATIONAL SKILL content. It maps to no certification
+# objective, and its labs ship with no `certification:` block — see
+# labs/cs/SOURCES.md.
+title: Computer Science Fundamentals
+tagline: What a computer actually does — and why every production incident traces back to it.
+order: 6

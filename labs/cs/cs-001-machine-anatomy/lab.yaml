@@ -1,0 +1,267 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-001 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# Content is written from proc(5), the kernel's own filesystem documentation,
+# the GNU coreutils manual and the Linux man-pages project. The scenario, the
+# company, the capture and every word of the task are original JumpToTech
+# content.
+#
+# Sources verified 2026-08-23 (see `references:` below). The two claims this
+# lab's arithmetic rests on were additionally checked against a running kernel
+# rather than taken on trust:
+#   · /proc/meminfo's `kB` is 1024 bytes — confirmed by comparing MemTotal
+#     against glibc's sysconf(_SC_PHYS_PAGES) × PAGESIZE on a live system;
+#   · `expr` truncates integer division — confirmed, which is why every graded
+#     conversion below has exactly one spelling.
+# ---------------------------------------------------------------------------
+id: CS-001
+slug: cs-001-machine-anatomy
+title: What a Machine Actually Is
+track: cs
+topic: computer-basics
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 1
+
+environment:
+  provider: linux
+
+prerequisites: []
+
+story: >
+  03:12. Kestrel Logistics' parcel-scan host `kestrel-scan-01` stopped
+  answering twenty minutes ago. SSH times out, the console is unresponsive, and
+  the datacentre is four hours away by road.
+
+  What you do have is the capture its monitoring agent uploaded in its last
+  half-minute: a few files copied straight out of the kernel, and one storage
+  summary. It is sitting on the machine you are logged into now.
+
+  Before anyone can argue about whether scan-01 needs more processors, more
+  memory, or more disk, somebody has to read those numbers and say plainly what
+  they mean. That is this morning's job.
+
+  One thing to keep straight, because it is most of the lesson: the machine you
+  are logged into is not scan-01. It is a container, and a container is very
+  good at telling you about a machine that is not the one you are in.
+
+objectives:
+  - Read a machine's processor count, memory total and disk usage out of the plain-text files the kernel exposes
+  - Express one memory figure in both MiB and MB, and see why the same machine has two different sizes
+  - Turn a load average into a per-processor figure and judge whether a host was saturated
+  - Keep the machine you are investigating separate from the machine you are logged into
+  - Discover that /proc/meminfo inside a container describes the host, not the container
+
+task:
+  summary: Read scan-01's diagnostic capture, capture this machine's own memory information, and write a sizing report.
+  description: >
+    The capture from `kestrel-scan-01` is at `/srv/kestrel/scan-01`. It is
+    read-only, and it is all the evidence that exists — the host itself is gone.
+    Start by reading its `README.txt`.
+
+
+    You will work in `/home/student/ops`, which does not exist yet.
+
+
+    **Part 1 — capture this machine.** Copy this sandbox's own memory
+    information out of the kernel into `/home/student/ops/live/meminfo`, exactly
+    as the kernel presents it. This is what the agent did on scan-01, and it is
+    what you would do by hand before letting anyone reboot anything.
+
+
+    **Part 2 — read scan-01.** From the capture, work out: how many logical
+    processors it had; its total memory expressed twice, once in MiB and once in
+    MB, each truncated to a whole number; its 1-minute load average divided by
+    its processor count, as a whole number; and which mount point had run out of
+    space. None of these is written down in the capture. Every one of them is
+    arithmetic on a number that is.
+
+
+    Memory in these files is counted in units of 1024 bytes — the file writes
+    `kB`, but it means KiB. That single convention is why one machine has two
+    memory sizes: a mebibyte is 1024 x 1024 bytes and a megabyte is 1 000 000,
+    so the MB figure is always the larger of the two for the same RAM.
+
+
+    **Part 3 — read this machine.** Record this sandbox's hostname. Then compare
+    the `MemTotal` you captured in Part 1 against the memory ceiling this
+    sandbox is actually held to — the container runtime records it under
+    `/sys/fs/cgroup` — and decide which of the two machines `/proc/meminfo` is
+    describing.
+
+
+    **The report.** Write `/home/student/ops/machine.txt` with one `KEY=value`
+    per line:
+
+
+    ```
+
+    HOSTNAME=<this sandbox's hostname>
+
+    MEMINFO_SCOPE=<host|container>
+
+    SCAN01_CPUS=<whole number>
+
+    SCAN01_MEM_MIB=<whole number>
+
+    SCAN01_MEM_MB=<whole number>
+
+    SCAN01_LOAD_PER_CPU=<whole number>
+
+    SCAN01_FULL_MOUNT=<mount point>
+
+    VERDICT=<saturated|healthy>
+
+    ```
+
+
+    `VERDICT` is `saturated` if scan-01 had more work waiting than processors to
+    run it, and `healthy` if it did not.
+
+
+    Line order does not matter and extra lines are ignored. The report is graded
+    on the values, never on how you arrived at them — every one of these can be
+    reached with a pocket calculator or with a command, and both are correct.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/scan-01/README.txt
+      label: The diagnostic capture has been placed on this machine
+    - type: file_exists
+      path: /srv/kestrel/scan-01/proc-cpuinfo.txt
+      label: The capture includes the processor information
+    - type: file_content
+      path: /srv/kestrel/scan-01/proc-meminfo.txt
+      contains: "MemTotal:       16266528 kB"
+      label: The capture includes the memory total
+    - type: file_content
+      path: /srv/kestrel/scan-01/proc-loadavg.txt
+      contains: "24.00"
+      label: The capture includes the load average
+    - type: file_content
+      path: /srv/kestrel/scan-01/df-h.txt
+      contains: "100% /var"
+      label: The capture includes the storage summary
+
+requirements:
+  # --- Part 1: this machine's own memory information, captured by hand -------
+  # `MemAvailable:` has been emitted by every kernel since 3.14 and is absent
+  # from the seeded capture by design, so this check cannot be satisfied by
+  # copying scan-01's file into place.
+  - type: file_exists
+    path: /home/student/ops/live/meminfo
+    label: This machine's memory information has been captured
+  - type: file_content
+    path: /home/student/ops/live/meminfo
+    contains: "MemAvailable:"
+    label: The captured file came from this machine's own kernel
+
+  # --- The report -----------------------------------------------------------
+  - type: file_exists
+    path: /home/student/ops/machine.txt
+    label: The sizing report exists
+  - type: file_content
+    path: /home/student/ops/machine.txt
+    contains: "HOSTNAME=jumptotech-lab"
+    label: The report names the machine it was written on
+  - type: file_content
+    path: /home/student/ops/machine.txt
+    contains: "MEMINFO_SCOPE=host"
+    label: The report says which machine /proc/meminfo is describing
+  - type: file_content
+    path: /home/student/ops/machine.txt
+    contains: "SCAN01_CPUS=8"
+    label: The report records how many logical processors scan-01 had
+  - type: file_content
+    path: /home/student/ops/machine.txt
+    contains: "SCAN01_MEM_MIB=15885"
+    label: The report records scan-01's memory in MiB
+  - type: file_content
+    path: /home/student/ops/machine.txt
+    contains: "SCAN01_MEM_MB=16656"
+    label: The report records the same memory in MB
+  - type: file_content
+    path: /home/student/ops/machine.txt
+    contains: "SCAN01_LOAD_PER_CPU=3"
+    label: The report records scan-01's load per processor
+  - type: file_content
+    path: /home/student/ops/machine.txt
+    contains: "SCAN01_FULL_MOUNT=/var"
+    label: The report identifies the filesystem that had run out of space
+  - type: file_content
+    path: /home/student/ops/machine.txt
+    contains: "VERDICT=saturated"
+    label: The report reaches a verdict on whether scan-01 was saturated
+
+hints:
+  - level: 1
+    text: >
+      Nothing in this lab needs a program, and nothing needs the network.
+      Everything scan-01 knew about itself it wrote into plain text, and
+      everything this machine knows about itself is in the same kind of place.
+      Read `/srv/kestrel/scan-01/README.txt` first, then open the files it
+      lists, one at a time, and see what is actually in them before you compute
+      anything.
+  - level: 2
+    text: >
+      `man proc` documents every file in that capture. `/proc/cpuinfo` carries
+      one `processor` line per logical CPU, so counting lines is enough —
+      `grep -c` counts matching lines for you. `/proc/loadavg` puts the
+      1-minute figure first; `cut` or `awk` will lift a single field out of a
+      line. `df(1)` explains what the `Use%` column means. For this machine's
+      own memory, the file you want is `/proc/meminfo`, and `>` will redirect a
+      copy of it wherever you like — remember that `mkdir -p` creates a whole
+      path at once.
+  - level: 3
+    text: >
+      For the conversions, `expr` does whole-number arithmetic and truncates,
+      which is exactly what the report asks for: dividing the kB figure by 1024
+      gives MiB, and multiplying it by 1024 before dividing by 1000000 gives MB.
+      A load average counts the jobs in the run queue *and* the ones waiting on
+      disk, so the question it answers is "how much work was queued", which only
+      means something next to the number of processors available to run it. For
+      the last part, look at `MemTotal` in the file you captured and then at
+      `/sys/fs/cgroup/memory.max`: if those two numbers are orders of magnitude
+      apart, only one of them can be describing the container you are sitting
+      in — and it is worth knowing which, because every tool that reports "free
+      memory" inside a container reads the same file you just did.
+
+references:
+  - title: proc(5) — the /proc filesystem
+    url: https://man7.org/linux/man-pages/man5/proc.5.html
+  - title: proc_meminfo(5) — /proc/meminfo and its fields
+    url: https://man7.org/linux/man-pages/man5/proc_meminfo.5.html
+  - title: proc_loadavg(5) — /proc/loadavg and what the load figures count
+    url: https://man7.org/linux/man-pages/man5/proc_loadavg.5.html
+  - title: The /proc Filesystem — Linux kernel documentation
+    url: https://docs.kernel.org/filesystems/proc.html
+  - title: df(1) — report file system space usage
+    url: https://man7.org/linux/man-pages/man1/df.1.html
+  - title: expr(1) — evaluate expressions
+    url: https://man7.org/linux/man-pages/man1/expr.1.html
+  - title: GNU coreutils — Block size, and the difference between MB and MiB
+    url: https://www.gnu.org/software/coreutils/manual/html_node/Block-size.html
+  - title: Control Group v2 — Linux kernel documentation
+    url: https://docs.kernel.org/admin-guide/cgroup-v2.html
+  - title: Resource Management for Pods and Containers — Kubernetes
+    url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+
+skills:
+  - cs.machine.cpu
+  - cs.machine.memory
+  - cs.machine.storage
+  - cs.units.mib-vs-mb
+  - cs.containers.resource-visibility
+
+# certification: deliberately absent.
+#
+# CS-001 is FOUNDATIONAL SKILL content. It teaches what sits underneath several
+# LFCS and CKA domains, but it covers no published objective of either, and
+# claiming one would be exactly the overreach the curriculum policy forbids.
