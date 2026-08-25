@@ -101,6 +101,7 @@ import {
   assertDeletable,
   expiryFromLabels,
   ownershipLabels,
+  PROVIDER_LABEL,
 } from '../k8s/labels.js';
 import {
   assertValidContainerSandboxRef,
@@ -435,6 +436,7 @@ export class DockerLabProvider implements LabProvider {
         labId: context.labId,
         expiresAtMs: context.expiresAtMs,
         component: SANDBOX_COMPONENT,
+        provider: this.id,
       }),
       args: daemonArgs,
     };
@@ -860,9 +862,23 @@ export class DockerLabProvider implements LabProvider {
       labelSelector: MANAGED_SELECTOR,
     });
 
-    return containers
-      .filter((c) => isContainerSandboxRef(c.name) && isSandboxComponent(c.labels))
-      .map((c) => this.#toManaged(c));
+    return (
+      containers
+        .filter((c) => isContainerSandboxRef(c.name) && isSandboxComponent(c.labels))
+        /*
+         * And the provider must match.
+         *
+         * One daemon hosts every provider's sandboxes, so discovery has to be
+         * able to say *whose* a sandbox is, not merely that it is ours-shaped.
+         * The container providers have always filtered here; this brings the
+         * Docker provider onto the same label rather than leaving two answers
+         * to one question. Sandboxes created before the label existed carry no
+         * provider and are matched by their component, which is what kept them
+         * discoverable then and keeps this change backward compatible.
+         */
+        .filter((c) => (c.labels[PROVIDER_LABEL] ?? this.id) === this.id)
+        .map((c) => this.#toManaged(c))
+    );
   }
 
   #toManaged(container: DockerContainerSummary): ManagedSandbox {
