@@ -38,6 +38,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  CONTAINER_SANDBOX_PATTERN,
   DEFAULT_SESSION_POLICY,
   DockerCliFactory,
   DockerLabProvider,
@@ -773,7 +774,10 @@ suite('integration: real Docker daemon', () => {
 
     expect(names).toEqual(expect.arrayContaining([SANDBOX_A, SANDBOX_B]));
     for (const entry of managed) {
-      expect(entry.sandboxRef).toMatch(/^lab-[a-z0-9-]+$/);
+      // The container contract, not the Kubernetes one: a Docker sandbox is
+      // `jtt-lab-<hex>`. Asserted against the exported pattern rather than a
+      // regex written out here, so the test cannot drift from production.
+      expect(entry.sandboxRef).toMatch(CONTAINER_SANDBOX_PATTERN);
       expect(entry.expiresAtMs).toBeGreaterThan(0);
     }
     expect(managed.find((m) => m.sandboxRef === SANDBOX_A)?.sessionId).toBe(SESSION_A);

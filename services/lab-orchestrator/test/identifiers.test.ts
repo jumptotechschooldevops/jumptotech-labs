@@ -6,14 +6,19 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  CONTAINER_SANDBOX_PATTERN,
+  CONTAINER_SANDBOX_PREFIX,
   DNS_1123_LABEL,
   InvalidNamespaceError,
   InvalidSessionIdError,
   LAB_NAMESPACE_PATTERN,
   PROTECTED_NAMESPACES,
+  assertValidContainerSandboxRef,
   assertValidLabNamespace,
   assertValidSessionId,
   deriveNamespace,
+  deriveSandboxRef,
+  isContainerSandboxRef,
   isLabNamespace,
   isProtectedNamespace,
   isValidSessionId,
@@ -149,6 +154,49 @@ describe('namespace validation', () => {
       const namespace = deriveNamespace({ sessionId: newSessionId(), secret: SECRET });
       expect(assertValidLabNamespace(namespace)).toBe(namespace);
       expect(namespace).toMatch(LAB_NAMESPACE_PATTERN);
+    }
+  });
+
+  /*
+   * CT-1 regression.
+   *
+   * The two substrates have deliberately different name shapes — `lab-<hex>`
+   * for a Kubernetes namespace, `jtt-lab-<hex>` for a container sandbox — and
+   * a test that hand-wrote the Kubernetes pattern and applied it to a Docker
+   * sandbox asserted something that could never hold. These pin the contract
+   * so the mistake cannot be made again by writing a regex out longhand.
+   */
+  it('keeps the container and namespace name shapes mutually exclusive', () => {
+    const namespace = deriveNamespace({ sessionId: newSessionId(), secret: SECRET });
+    const sandbox = deriveSandboxRef({
+      sessionId: newSessionId(),
+      secret: SECRET,
+      prefix: CONTAINER_SANDBOX_PREFIX,
+    });
+
+    expect(namespace).toMatch(LAB_NAMESPACE_PATTERN);
+    expect(sandbox).toMatch(CONTAINER_SANDBOX_PATTERN);
+
+    // Neither pattern may ever accept the other substrate's name.
+    expect(sandbox).not.toMatch(LAB_NAMESPACE_PATTERN);
+    expect(namespace).not.toMatch(CONTAINER_SANDBOX_PATTERN);
+    expect(isContainerSandboxRef(namespace)).toBe(false);
+    expect(isLabNamespace(sandbox)).toBe(false);
+  });
+
+  it('accepts every generated container sandbox ref, and nothing else', () => {
+    for (let i = 0; i < 100; i += 1) {
+      const sandbox = deriveSandboxRef({
+        sessionId: newSessionId(),
+        secret: SECRET,
+        prefix: CONTAINER_SANDBOX_PREFIX,
+      });
+      expect(assertValidContainerSandboxRef(sandbox)).toBe(sandbox);
+      expect(sandbox).toMatch(CONTAINER_SANDBOX_PATTERN);
+    }
+
+    for (const bad of ['lab-2fac4903ce9b', 'jtt-lab-NOTHEX', 'jtt-lab-', 'jtt-lab-zz', 'nginx']) {
+      expect(isContainerSandboxRef(bad), bad).toBe(false);
     }
   });
 
