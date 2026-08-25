@@ -211,6 +211,7 @@ import {
   dockerVolumeExists,
 } from './handlers/docker-resources.js';
 import { dockerfileValid, workspaceFileExists } from './handlers/docker-workspace.js';
+import { dockerContainerFileContent } from './handlers/docker-file.js';
 import { DockerVerifyReader } from './docker-reader.js';
 
 /** Raised when a requirement names a type with no registered handler. */
@@ -382,6 +383,7 @@ const DOCKER_HANDLERS: { [K in DockerRequirementType]: DockerVerifierHandler<K> 
   docker_container_image: dockerContainerImage,
   docker_container_exit_code: dockerContainerExitCode,
   docker_container_oom_killed: dockerContainerOomKilled,
+  docker_container_file_content: dockerContainerFileContent,
   docker_container_env: dockerContainerEnv,
   docker_container_port: dockerContainerPort,
   docker_container_network: dockerContainerNetwork,

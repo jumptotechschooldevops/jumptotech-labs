@@ -23,6 +23,8 @@
  * asserting isolation is asserting against genuinely separate object stores
  * rather than a filtered view of one.
  */
+import { DEFAULT_FILE_READ_BYTES } from '../src/docker/cli-client.js';
+import { TarReadError } from '../src/docker/tar.js';
 import {
   DockerUnreachableError,
   type CreateNetworkSpec,
@@ -31,6 +33,7 @@ import {
   type DockerEngineFactory,
   type DockerEnginePort,
   type DockerExecResult,
+  type DockerFileRead,
   type DockerImageSnapshot,
   type DockerImageSummary,
   type DockerNetworkSnapshot,
@@ -86,8 +89,10 @@ interface FakeContainer {
   /** Whether the kernel OOM-killed the last run. Never set by `runContainer`. */
   oomKilled?: boolean;
   createdAt: string;
-  /** Files readable with `execInContainer(['cat', path])`. */
+  /** Files readable with `execInContainer(['cat', path])` and the archive read. */
   files: Map<string, string>;
+  /** Paths that exist but are not regular files. */
+  directories: Set<string>;
 }
 
 interface FakeImage {
@@ -184,7 +189,54 @@ export class FakeDockerDaemon implements DockerEnginePort {
       oomKilled,
       createdAt: new Date(0).toISOString(),
       files: new Map(),
+      directories: new Set(),
     });
+  }
+
+  /**
+   * Put a file inside a fake container, for `copyFileFromContainer` to read.
+   *
+   * `directory: true` models a path that is not a regular file, which the real
+   * archive read refuses rather than walks.
+   */
+  putFile(container: string, path: string, content: string | Buffer, options: { directory?: boolean } = {}): void {
+    const found = this.containers.get(container);
+    if (!found) throw new Error(`fake daemon has no container '${container}'`);
+    if (options.directory) {
+      found.directories.add(path);
+      return;
+    }
+    found.files.set(path, Buffer.isBuffer(content) ? content.toString('binary') : content);
+  }
+
+  /**
+   * The archive read, modelled on the real one.
+   *
+   * Absences are `null`; a directory or an unreadable path throws, exactly as
+   * `readSingleFile` does against a real daemon.
+   */
+  async copyFileFromContainer(
+    name: string,
+    path: string,
+    options: { maxBytes?: number; timeoutMs?: number } = {},
+  ): Promise<DockerFileRead | null> {
+    this.#guard();
+    const container = this.containers.get(name);
+    if (!container) return null;
+    if (container.directories.has(path)) {
+      throw new TarReadError('the path names a directory, not a file');
+    }
+    const body = container.files.get(path);
+    if (body === undefined) return null;
+
+    const full = Buffer.from(body, 'binary');
+    const maxBytes = options.maxBytes ?? DEFAULT_FILE_READ_BYTES;
+    const kept = full.subarray(0, maxBytes);
+    return {
+      content: Buffer.from(kept),
+      declaredSize: full.length,
+      truncated: kept.length < full.length,
+    };
   }
 
   /** The isolated daemon inside a sandbox this host created. */
@@ -247,6 +299,7 @@ export class FakeDockerDaemon implements DockerEnginePort {
       exitCode: 0,
       createdAt: new Date(0).toISOString(),
       files: new Map(),
+      directories: new Set(),
     };
     this.containers.set(spec.name, container);
 

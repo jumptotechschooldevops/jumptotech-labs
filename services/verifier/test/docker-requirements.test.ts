@@ -30,6 +30,7 @@ import {
   type Requirement,
 } from '@jumptotech/lab-orchestrator';
 import { FakeDockerDaemon, containerSpec } from '@jumptotech/lab-orchestrator/testing';
+import { scanLabsDirectory } from '@jumptotech/lab-orchestrator/testing/catalog';
 import {
   DockerVerifyReader,
   parseDockerMemory,
@@ -909,6 +910,9 @@ function solve(lab: LoadedLabDefinition): {
   const port = new InMemoryWorkspace();
   const specs = new Map<string, Parameters<FakeDockerDaemon['addContainer']>[0]>();
   const states = new Map<string, { state: string; exitCode: number; oomKilled?: boolean }>();
+  // Files are placed after the containers exist, since the fake needs one to
+  // put a file into.
+  const containerFiles: Array<{ container: string; path: string; content: string }> = [];
 
   const specFor = (name: string) => {
     const existing = specs.get(name);
@@ -940,6 +944,15 @@ function solve(lab: LoadedLabDefinition): {
           exitCode: requirement.expected,
         });
         break;
+      case 'docker_container_file_content': {
+        specFor(requirement.container);
+        // `absent` is satisfied by writing nothing at all.
+        if (requirement.absent) break;
+        const content =
+          requirement.equals ?? (requirement.contains ?? ['placeholder']).join('\n');
+        containerFiles.push({ container: requirement.container, path: requirement.path, content });
+        break;
+      }
       case 'docker_container_oom_killed':
         specFor(requirement.name);
         states.set(requirement.name, {
@@ -1036,6 +1049,9 @@ function solve(lab: LoadedLabDefinition): {
     const state = states.get(name) ?? { state: 'running', exitCode: 0, oomKilled: false };
     docker.addContainer(spec, state.state, state.exitCode, state.oomKilled ?? false);
   }
+  for (const file of containerFiles) {
+    docker.putFile(file.container, file.path, file.content);
+  }
 
   return { docker, workspace: { port, sessionId: SESSION_A } };
 }
@@ -1046,8 +1062,13 @@ const dockerLabs = (): LoadedLabDefinition[] =>
 
 describe('docker verifier — every shipped lab', () => {
 
-  it('ships ten Docker labs, all on the Docker substrate', () => {
-    expect(dockerLabs()).toHaveLength(10);
+  it('ships every Docker lab on disk, all on the Docker substrate', async () => {
+    // The count comes from the labs directory, not from a number remembered
+    // here: adding a lab is a data change, and a test that restated today's
+    // curriculum would break every worktree that added one.
+    const disk = await scanLabsDirectory();
+    expect(dockerLabs()).toHaveLength(disk.labCountForTrack('docker'));
+    expect(dockerLabs().map((l) => l.id).sort()).toEqual([...disk.idsForTrack('docker')].sort());
     for (const lab of dockerLabs()) {
       expect(lab.environment.provider).toBe('docker');
       expect(lab.environment.isolation).toBe('container');

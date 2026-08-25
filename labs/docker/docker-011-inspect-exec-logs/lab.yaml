@@ -1,0 +1,243 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Content is written from the official Docker documentation only; the pages
+# this lab is grounded in are listed under `references`.
+#
+# The incident is deliberately the awkward kind: the service is *up*. Nothing
+# has crashed, no exit code is waiting to be read, and `docker ps` looks fine.
+# The only way to find either fault is to interrogate the environment:
+#
+#   statements-api     up, and wrong   → the log warns, `inspect` shows why,
+#                                        and a file inside the container holds
+#                                        the application's own verdict
+#   statements-worker  not in `ps`     → visible only in `docker ps -a`, and
+#                                        its log says which setting is missing
+#
+# The second exists to make `docker ps` versus `docker ps -a` a lesson rather
+# than a footnote: a student who only ever runs `docker ps` never learns the
+# worker is there at all.
+#
+# Verification is state-based and reads no command history. The file check is
+# used once, for the one thing no `inspect` field can answer: whether the
+# application actually reacted to the fix. Everything else is configuration,
+# and is graded as configuration.
+# ---------------------------------------------------------------------------
+id: DOCKER-011
+slug: docker-011-inspect-exec-logs
+title: Investigate a Service That Is Up and Wrong
+track: docker
+topic: troubleshooting
+difficulty: intermediate
+level: challenge
+duration_minutes: 55
+order: 11
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-002
+  - DOCKER-007
+  - DOCKER-010
+
+story: >
+  Customer support has escalated: statements are downloading, but every one of
+  them is empty. The statements service was deployed a week ago and has not
+  been touched since, and the dashboard shows it green — the container is up,
+  it has not restarted, and nothing has crashed.
+
+  Whoever deployed it is on leave. There is no runbook. What you have is the
+  running environment and the Docker CLI, and everything you need to find both
+  problems is somewhere in the containers' configuration, their logs, or the
+  files they wrote.
+
+objectives:
+  - Use `docker ps` and `docker ps -a` and know why the difference matters
+  - Read a container's logs to find what the application is complaining about
+  - Read a container's configuration with `docker inspect`
+  - Look inside a running container with `docker exec` to confirm a diagnosis
+  - Tell "the container is running" apart from "the service is working"
+  - Correct the configuration and confirm the application actually reacted
+
+task:
+  summary: Find out why the statements service returns empty statements, fix both problems you find, and confirm the application agrees it is healthy.
+  description: >
+    Nothing below tells you what is wrong. Working that out is the exercise.
+
+    Start with the shape of the environment. `docker ps` shows what is running
+    right now; `docker ps -a` also shows what has stopped. It is worth running
+    both before you conclude anything about how many pieces this service has.
+
+    For anything that is running, three commands answer three different
+    questions. `docker logs <name>` shows what the application has said about
+    itself. `docker inspect <name>` shows the configuration it was created
+    with — its image, its command, its environment. And `docker exec <name>
+    <command>` runs a command inside it, which is how you look at files the
+    application wrote after it started, rather than the settings it was given.
+
+    The application here is talkative. It writes its own health verdict to a
+    file under `/var/run/statements/`, and it ships a small configuration file
+    under `/etc/statements/` describing what it supports. Reading both is the
+    fastest route to the answer, and the second one tells you what a correct
+    value looks like.
+
+    **The required final state.** When you are done:
+
+      - `statements-api` must be running, and the health verdict it writes for
+        itself must say it is ready rather than degraded.
+      - `statements-worker` must be running, configured so that it can reach
+        the API at `http://statements-api`.
+
+    Keep both names exactly as they are. How you get there is yours to decide:
+    a container's environment is fixed when it is created, so anything you
+    cannot change in place can be removed and recreated. The checks read the
+    state you leave behind, not the commands you used.
+
+    Before you remove a container, read its configuration — most of what it was
+    created with is correct and worth keeping.
+
+setup:
+  docker:
+    images:
+      - alpine:3.20
+    containers:
+      # Fault 1 — up, and wrong. The region it was deployed with has no ledger
+      # shard, so the API serves empty statements and says so twice: once in
+      # its log, and once in the health file it writes for itself.
+      - name: statements-api
+        image: alpine:3.20
+        command:
+          - sh
+          - -c
+          - 'mkdir -p /etc/statements /var/run/statements; printf "supported_regions=eu-west-1\nshard=ledger-eu\n" > /etc/statements/regions.conf; if [ "$STATEMENTS_REGION" = eu-west-1 ]; then printf "ready: region=%s\n" "$STATEMENTS_REGION" > /var/run/statements/status; echo "statements-api ready"; else printf "degraded: region=%s\n" "$STATEMENTS_REGION" > /var/run/statements/status; echo "WARN: no ledger shard for region $STATEMENTS_REGION" >&2; fi; exec sleep 3600'
+        env:
+          STATEMENTS_REGION: us-east-1
+        state: running
+      # Fault 2 — not running at all, and invisible to `docker ps`. It refused
+      # to start because a required setting was never provided.
+      - name: statements-worker
+        image: alpine:3.20
+        command:
+          - sh
+          - -c
+          - 'if [ -z "$STATEMENTS_API_URL" ]; then echo "FATAL: STATEMENTS_API_URL is not set" >&2; exit 78; fi; exec sleep 3600'
+        state: exited
+  verify:
+    - type: docker_container_running
+      name: statements-api
+      label: The statements-api container is running
+    - type: docker_container_exists
+      name: statements-worker
+      label: The statements-worker container exists
+  verify_timeout_seconds: 180
+
+# Five checks over structured state. The file check earns its place: the
+# environment variable proves the student changed the setting, and the health
+# file proves the application actually restarted and agreed. Neither on its own
+# would show that the fix took effect.
+requirements:
+  - type: docker_container_running
+    name: statements-api
+    label: Container statements-api is running
+  - type: docker_container_env
+    name: statements-api
+    key: STATEMENTS_REGION
+    value: eu-west-1
+    label: statements-api is configured for a region that has a ledger shard
+  - type: docker_container_file_content
+    container: statements-api
+    path: /var/run/statements/status
+    equals: 'ready: region=eu-west-1'
+    label: statements-api reports itself ready rather than degraded
+
+  - type: docker_container_running
+    name: statements-worker
+    label: Container statements-worker is running
+  - type: docker_container_env
+    name: statements-worker
+    key: STATEMENTS_API_URL
+    value: http://statements-api
+    label: statements-worker knows how to reach the API
+
+# `Reset Lab` restores this session's Docker environment to its baseline: every
+# container, volume, and network the student created is removed, and both
+# containers are seeded again exactly as they started.
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    # Images are kept: re-pulling on every reset would turn a two-second reset
+    # into a two-minute one.
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Two questions are worth answering before anything else: how many
+      containers does this service actually have, and is the one you can see
+      doing what it is supposed to?
+
+      `docker ps` answers neither on its own. A container that stopped a week
+      ago is still there, and a container that is running can still be wrong.
+  - level: 2
+    text: >
+      For the container that is up: its log has already told you what it is
+      unhappy about, and `docker inspect` will show you the setting behind it.
+      Before you change anything, look at what the application itself wrote —
+      it keeps a health verdict under `/var/run/statements/` and a note of what
+      it supports under `/etc/statements/`, and neither is visible from
+      outside the container.
+
+      For the container that is not up, its log is a single line and it names
+      the thing that is missing.
+  - level: 3
+    text: >
+      `docker exec <name> cat <path>` reads a file inside a running container,
+      which is how you see both files above. `docker inspect <name> --format
+      '{{json .Config.Env}}'` shows the environment a container was created
+      with, and `--format '{{json .Config.Cmd}}'` shows its command.
+
+      An environment variable cannot be changed on a container that already
+      exists, so both of these are repaired by recreating the container with
+      the same image and command and a corrected environment. The application
+      rewrites its health file every time it starts, so a correct fix updates
+      it on its own — you should not need to write that file yourself.
+
+references:
+  - title: Docker CLI reference — docker container ls
+    url: https://docs.docker.com/reference/cli/docker/container/ls/
+  - title: Docker CLI reference — docker container logs
+    url: https://docs.docker.com/reference/cli/docker/container/logs/
+  - title: Docker CLI reference — docker container inspect
+    url: https://docs.docker.com/reference/cli/docker/container/inspect/
+  - title: Docker CLI reference — docker container exec
+    url: https://docs.docker.com/reference/cli/docker/container/exec/
+  - title: Docker CLI reference — docker container run
+    url: https://docs.docker.com/reference/cli/docker/container/run/
+
+skills:
+  - docker.containers.inspect
+  - docker.containers.exec
+  - docker.troubleshooting.logs
+  - docker.troubleshooting.containers
+  - docker.config.environment
+
+# Checked against the official Docker Certified Associate Study Guide v1.5
+# (January 2025), published by Mirantis, which administers the exam.
+#
+# Domain 1 lists "Interpret the output of `docker inspect` commands", which
+# this lab practises directly. That is the only DCA objective it touches: the
+# guide has nothing about `docker logs`, `docker exec`, or diagnosing a
+# misconfigured running container.
+#
+# Everything else here is a PRODUCTION SKILL (DevOps / SRE, container
+# troubleshooting). See docs/docker/CERTIFICATION-AUDIT.md.
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - orchestration

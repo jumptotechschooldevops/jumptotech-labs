@@ -1322,6 +1322,35 @@ const dockerCpuValue = z
   .max(12)
   .regex(/^[0-9]+(\.[0-9]+)?$/, 'must be a CPU count such as 0.5');
 
+/** No control characters, matching the rule `envValue` and setup argv already use. */
+const noControlCharacters = /^[^\u0000-\u001f\u007f]*$/;
+
+/**
+ * An absolute path to one file inside a container.
+ *
+ * Narrow on purpose. The class excludes whitespace, quotes, `$`, backtick, `;`,
+ * `|`, `&`, `\` and every control character — none of which a shell ever sees,
+ * because there is no shell on this path, but keeping the class closed means a
+ * future refactor that introduced one could not be exploited through lab
+ * content that already shipped.
+ *
+ * The refinements are what make it a *file* reference rather than a traversal:
+ * no `..` segment, no empty segment, no trailing slash, and no segment starting
+ * with `-` so that combined with the `--` separator in the argv it can never be
+ * read as an option.
+ */
+const containerAbsolutePath = z
+  .string()
+  .min(2)
+  .max(255)
+  .regex(/^\/[A-Za-z0-9._/-]*$/, 'must be an absolute path inside the container')
+  .refine((p) => !p.split('/').includes('..'), { message: 'must not traverse upwards' })
+  .refine((p) => !p.includes('//'), { message: 'must not contain empty segments' })
+  .refine((p) => !p.endsWith('/'), { message: 'must name a file, not a directory' })
+  .refine((p) => !p.split('/').some((segment) => segment.startsWith('-')), {
+    message: 'no path segment may begin with -',
+  });
+
 /** Docker object kinds a requirement may name generically. */
 const DOCKER_KINDS = ['container', 'image', 'volume', 'network'] as const;
 
@@ -1475,6 +1504,57 @@ const dockerRequirementSchemas = {
     .refine(
       (v) => v.memory !== undefined || v.cpus !== undefined || v.pids_limit !== undefined,
       { message: 'must specify memory, cpus, pids_limit, or a combination' },
+    ),
+
+  /**
+   * The content of one file inside a container.
+   *
+   * Read through the daemon's archive endpoint (`docker cp`), never by
+   * executing anything in the student's container. That is what lets it grade a
+   * **stopped** container — the persistence and data-recovery labs need exactly
+   * that — and what stops a student's own image influencing the read by
+   * shipping a doctored `cat`.
+   *
+   * Deliberately one path, one file. There is no listing form, no glob, and no
+   * directory form: an archive holding anything other than a single regular
+   * file is refused rather than walked, so this cannot become a way to browse a
+   * container's filesystem.
+   *
+   * `equals` is the preferred assertion because it is exact. `contains` exists
+   * for the case where a lab legitimately needs several independent tokens in
+   * one file, and is a whole-content test either way — never a substitute for
+   * comparing the thing the lab actually cares about.
+   *
+   * **Expected values never leave the server.** They live here, in lab.yaml,
+   * and the handler is forbidden from echoing either them or the file's content
+   * back into a check's detail — see `dockerContainerFileContent`. A lab that
+   * grades an answer would otherwise hand the answer to anyone who submitted a
+   * wrong one.
+   */
+  docker_container_file_content: z
+    .object({
+      type: z.literal('docker_container_file_content'),
+      container: dockerObjectName,
+      path: containerAbsolutePath,
+      /** Exact match, after trimming one trailing newline from each side. */
+      equals: z.string().max(4096).regex(noControlCharacters, 'must not contain control characters').optional(),
+      /** Every entry must appear somewhere in the file. */
+      contains: z
+        .array(z.string().min(1).max(256).regex(noControlCharacters, 'must not contain control characters'))
+        .min(1)
+        .max(5)
+        .optional(),
+      /** The path must be readable, whatever it holds. */
+      exists: z.literal(true).optional(),
+      /** The path must not be there at all. */
+      absent: z.literal(true).optional(),
+      ...common,
+    })
+    .strict()
+    .refine(
+      (v) =>
+        [v.equals, v.contains, v.exists, v.absent].filter((x) => x !== undefined).length === 1,
+      { message: 'must assert exactly one of equals, contains, exists, or absent' },
     ),
 
   // --- Images -------------------------------------------------------------
@@ -1808,6 +1888,7 @@ export const REQUIREMENT_FAMILIES = {
   docker_container_image: 'docker',
   docker_container_exit_code: 'docker',
   docker_container_oom_killed: 'docker',
+  docker_container_file_content: 'docker',
   docker_container_env: 'docker',
   docker_container_port: 'docker',
   docker_container_network: 'docker',

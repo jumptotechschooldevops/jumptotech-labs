@@ -194,6 +194,21 @@ export interface DockerNetworkSummary {
   labels: Record<string, string>;
 }
 
+/**
+ * One file read out of a container through the archive endpoint.
+ *
+ * Deliberately not a directory listing and not a stream: the reader asks for
+ * one path and gets at most one regular file back. See `copyFileFromContainer`.
+ */
+export interface DockerFileRead {
+  /** The file's bytes, truncated to the caller's cap. */
+  content: Buffer;
+  /** Size the tar header declared, before any cap was applied. */
+  declaredSize: number;
+  /** True when the file was larger than the cap, so `content` is a prefix. */
+  truncated: boolean;
+}
+
 /** Result of running one command inside a container. */
 export interface DockerExecResult {
   exitCode: number;
@@ -320,6 +335,26 @@ export interface DockerEnginePort {
   removeContainer(name: string, options?: { force?: boolean; volumes?: boolean }): Promise<void>;
   /** Tail of a container's logs, used for setup diagnostics. Never shown to students. */
   containerLogs(name: string, tailLines?: number): Promise<string>;
+
+  /**
+   * Read one regular file out of a container, without executing anything in it.
+   *
+   * Uses the daemon's archive endpoint (`docker cp <name>:<path> -`), which
+   * matters for three reasons: nothing runs inside the student's container, it
+   * works on a **stopped** container, and it does not depend on the image
+   * containing `cat` or a shell at all.
+   *
+   * Deliberately narrow. It reads the one path it is given and returns at most
+   * one regular file: a directory, a symlink, or an archive carrying more than
+   * one entry is refused rather than walked, so this can never become a
+   * filesystem browser. Returns `null` when the container or the path is
+   * absent — an absence is an answer, not an error.
+   */
+  copyFileFromContainer(
+    name: string,
+    path: string,
+    options?: { maxBytes?: number; timeoutMs?: number },
+  ): Promise<DockerFileRead | null>;
 
   /**
    * Run one command inside a container with an explicit argv array.

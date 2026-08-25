@@ -9,7 +9,8 @@
     "./session-token": "./src/session-token.ts",
     "./testing": "./test/fakes.ts",
     "./testing/catalog": "./test/catalog-shape.ts",
-    "./testing/containers": "./test/container-fakes.ts"
+    "./testing/containers": "./test/container-fakes.ts",
+    "./testing/tar": "./src/docker/tar.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -53,7 +53,11 @@ export {
   type TerraformStateSnapshot,
 } from './sandbox-reader.js';
 export { normalizeMode } from './handlers/filesystem.js';
-export { DockerVerifyReader } from './docker-reader.js';
+export {
+  DockerVerifyReader,
+  MAX_CONTAINER_FILE_BYTES,
+  CONTAINER_FILE_TIMEOUT_MS,
+} from './docker-reader.js';
 export { imageMatches, normalizeImageReference } from './image.js';
 export { parseQuantity, quantitiesEqual } from './quantity.js';
 export {
