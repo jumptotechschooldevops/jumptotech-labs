@@ -1649,6 +1649,55 @@ const dockerRequirementSchemas = {
       { message: 'must assert at least one image configuration field' },
     ),
 
+  /**
+   * Two images share a run of leading filesystem layers.
+   *
+   * Docker's build cache is not observable from one image. It is a property of
+   * a *rebuild*: when an instruction and its inputs are unchanged, the daemon
+   * reuses the layer it produced last time, and the two images then carry the
+   * same digest for it. Comparing the ordered `RootFS.Layers` of a before and
+   * an after image is therefore the only way to prove cache reuse from state
+   * rather than from build output the student could have written themselves.
+   *
+   * **Prefix means prefix.** `[A,B,C,D]` and `[A,B,C,E]` share three; `[A,B,C]`
+   * and `[A,X,B,C]` share one, because the run stops at the first difference.
+   * Order matters, and the digests come from the daemon.
+   *
+   * `maximum_changed_suffix` is the constraint to reach for. It says "only the
+   * last N layers may differ", which is exactly the property a cache-friendly
+   * Dockerfile has and is **independent of how many layers the image has in
+   * total** — so a lab does not have to guess a number that changes whenever a
+   * student adds an instruction. `minimum_shared_prefix` is available for the
+   * cases where an absolute floor is genuinely what is meant.
+   *
+   * `must_differ` exists because two *identical* images share every layer and
+   * would otherwise satisfy any prefix constraint. A rebuild that changed
+   * nothing proves nothing.
+   */
+  docker_image_layers: z
+    .object({
+      type: z.literal('docker_image_layers'),
+      /** The image built after the change. */
+      image: imageReference,
+      /** The image built before it. */
+      shares_prefix_with: imageReference,
+      /** At least this many leading layers must be identical, in order. */
+      minimum_shared_prefix: z.number().int().min(1).max(200).optional(),
+      /** At most this many trailing layers may differ. */
+      maximum_changed_suffix: z.number().int().min(0).max(200).optional(),
+      /** The two images must not be the same image. */
+      must_differ: z.boolean().default(true),
+      ...common,
+    })
+    .strict()
+    .refine(
+      (v) => v.minimum_shared_prefix !== undefined || v.maximum_changed_suffix !== undefined,
+      { message: 'must constrain the shared prefix, the changed suffix, or both' },
+    )
+    .refine((v) => v.image !== v.shares_prefix_with, {
+      message: 'an image cannot be compared against itself',
+    }),
+
   // --- Volumes and networks ------------------------------------------------
   docker_volume_exists: z
     .object({ type: z.literal('docker_volume_exists'), name: dockerObjectName, ...common })
@@ -1952,6 +2001,7 @@ export const REQUIREMENT_FAMILIES = {
 
   docker_image_exists: 'docker',
   docker_image_config: 'docker',
+  docker_image_layers: 'docker',
   docker_volume_exists: 'docker',
   docker_network_exists: 'docker',
 

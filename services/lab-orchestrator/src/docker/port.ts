@@ -150,6 +150,15 @@ export interface DockerImageSnapshot {
   architecture?: string;
   os?: string;
   sizeBytes: number;
+  /**
+   * The image's filesystem layers, as content digests, **bottom to top**.
+   *
+   * `RootFS.Layers` from the daemon: immutable identifiers the daemon computes,
+   * not names the student chose. Two images built from the same instructions
+   * over the same inputs share a leading run of these, which is what makes
+   * build-cache reuse observable as state rather than as build output.
+   */
+  layers: string[];
   createdAt: string;
 }
 

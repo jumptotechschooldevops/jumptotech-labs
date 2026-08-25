@@ -207,6 +207,7 @@ import {
 import {
   dockerImageConfig,
   dockerImageExists,
+  dockerImageLayers,
   dockerNetworkExists,
   dockerResourceAbsent,
   dockerVolumeExists,
@@ -394,6 +395,7 @@ const DOCKER_HANDLERS: { [K in DockerRequirementType]: DockerVerifierHandler<K> 
 
   docker_image_exists: dockerImageExists,
   docker_image_config: dockerImageConfig,
+  docker_image_layers: dockerImageLayers,
   docker_volume_exists: dockerVolumeExists,
   docker_network_exists: dockerNetworkExists,
 

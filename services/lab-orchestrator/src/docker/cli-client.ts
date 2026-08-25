@@ -777,6 +777,7 @@ interface RawContainer {
 
 interface RawImage {
   Id?: string;
+  RootFS?: { Type?: string; Layers?: string[] | null };
   RepoTags?: string[] | null;
   RepoDigests?: string[] | null;
   Created?: string;
@@ -909,6 +910,10 @@ export function toImageSnapshot(raw: RawImage): DockerImageSnapshot {
     ...(raw.Architecture ? { architecture: raw.Architecture } : {}),
     ...(raw.Os ? { os: raw.Os } : {}),
     sizeBytes: raw.Size ?? 0,
+    // Bottom-to-top, exactly as the daemon reports them. An image with no
+    // RootFS reads as no layers rather than as an error, so a daemon that
+    // omits the field degrades to "cannot prove sharing" instead of throwing.
+    layers: raw.RootFS?.Layers ?? [],
     createdAt: raw.Created ?? '',
   };
 }

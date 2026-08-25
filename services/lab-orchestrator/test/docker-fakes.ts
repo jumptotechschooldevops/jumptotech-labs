@@ -98,6 +98,8 @@ interface FakeContainer {
 interface FakeImage {
   id: string;
   tags: string[];
+  /** Content digests, bottom to top, as `RootFS.Layers` reports them. */
+  layers: string[];
   env: Record<string, string>;
   labels: Record<string, string>;
   cmd: string[];
@@ -166,6 +168,7 @@ export class FakeDockerDaemon implements DockerEnginePort {
     const image: FakeImage = {
       id: `sha256:${nextId('')}`,
       tags: [tag],
+      layers: config.layers ? [...config.layers] : [],
       env: config.env ?? {},
       labels: config.labels ?? {},
       cmd: config.cmd ?? [],
@@ -414,6 +417,7 @@ export class FakeDockerDaemon implements DockerEnginePort {
       entrypoint: [...found.entrypoint],
       workingDir: found.workingDir,
       exposedPorts: [...found.exposedPorts],
+      layers: [...found.layers],
       sizeBytes: 1_000_000,
       createdAt: new Date(0).toISOString(),
     };

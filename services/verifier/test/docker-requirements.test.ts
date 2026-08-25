@@ -1010,6 +1010,14 @@ function solve(lab: LoadedLabDefinition): {
       case 'docker_image_exists':
         docker.addImage(requirement.image);
         break;
+      case 'docker_image_layers': {
+        // A cache-friendly rebuild: identical leading layers, one new tail.
+        const shared = Math.max(requirement.minimum_shared_prefix ?? 3, 3);
+        const prefix = Array.from({ length: shared }, (_, i) => `sha256:shared-${i}`);
+        docker.addImage(requirement.shares_prefix_with, { layers: [...prefix, 'sha256:before-tail'] });
+        docker.addImage(requirement.image, { layers: [...prefix, 'sha256:after-tail'] });
+        break;
+      }
       case 'docker_image_config':
         docker.addImage(requirement.image, {
           ...(requirement.entrypoint ? { entrypoint: [...requirement.entrypoint] } : {}),
