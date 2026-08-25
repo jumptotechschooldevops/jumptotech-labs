@@ -37,6 +37,7 @@ const TERRAFORM_IDS = [
   'TF-012',
   'TF-016',
   'TF-017',
+  'TF-018',
   'TF-025',
 ];
 
@@ -1070,5 +1071,95 @@ describe('TF-025 — Custom Conditions', () => {
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tf') || p.endsWith('.json') && p.includes('platform'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-018
+
+describe('TF-018 — Expressions and Functions', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf018(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-018-expressions', 'lab.yaml'));
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf018();
+    expect(definition.id).toBe('TF-018');
+    expect(definition.topic).toBe('expressions');
+    expect(definition.order).toBe(14);
+    expect(definition.prerequisites).toEqual(['TF-017']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds a correct catalogue and a stale hand-typed manifest', async () => {
+    const files = await loadSetupFiles(await tf018());
+    expect(files.map((f) => f.path).sort()).toEqual([
+      'terraform/main.tf',
+      'terraform/manifest.tftpl',
+      'terraform/versions.tf',
+    ]);
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    // The catalogue is the source of truth...
+    expect(main.content).toContain('reporting = { tier = "silver", replicas = 1 }');
+    // ...and the manifest has not kept up: short list, wrong total, no locals.
+    expect(main.content).toContain('services: ledger, auth');
+    expect(main.content).toContain('replicas: 5');
+    expect(main.content).not.toContain('locals');
+  });
+
+  it('requires the four derived values as named locals', async () => {
+    const locals = (await tf018()).requirements.find(
+      (r) => r.type === 'terraform_locals_declared',
+    ) as Record<string, unknown> | undefined;
+    expect(locals?.names).toEqual([
+      'service_summary',
+      'gold_services',
+      'replica_factor',
+      'scaled_replicas',
+    ]);
+  });
+
+  it('requires the manifest to be derived, which is what a retyped one is not', async () => {
+    const references = (await tf018()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
+    expect(pairs).toEqual(['content->var.environment', 'content->var.services']);
+  });
+
+  it('grades values that only an expression produces', async () => {
+    const contents = (await tf018()).requirements
+      .filter((r) => r.type === 'file_content' && 'contains' in r)
+      .map((r) => ('contains' in r ? String(r.contains) : ''));
+    // A formatted transformation of both key and value — not obtainable from
+    // `keys()` alone, which is already lexicographical.
+    expect(contents).toContain('services: auth(2), ledger(3), reporting(1)');
+    // A filter on the collection.
+    expect(contents).toContain('gold: auth, ledger');
+    // A sum scaled by a conditional: six replicas, doubled for production.
+    expect(contents).toContain('replicas: 12');
+    // A string function applied to a variable.
+    expect(contents).toContain('environment: PRODUCTION');
+  });
+
+  it('does not require any particular function, and grades nothing time-dependent', async () => {
+    // `templatefile` and a string template rendering the same bytes are both
+    // correct uses of expressions, and the platform cannot assert which
+    // function an argument called without a primitive this lab does not need.
+    const serialised = JSON.stringify((await tf018()).requirements);
+    for (const fn of ['templatefile', 'format(', 'sort(', 'timestamp', 'plantimestamp']) {
+      expect(serialised).not.toContain(fn);
+    }
+  });
+
+  it('grades applied state as well, and names no source file', async () => {
+    const requirements = (await tf018()).requirements;
+    expect(requirements.some((r) => r.type === 'terraform_resource_exists')).toBe(true);
+    const paths = requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf') || p.endsWith('.tftpl'))).toBe(false);
   });
 });
