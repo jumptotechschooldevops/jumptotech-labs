@@ -18,17 +18,15 @@
  * What it mutates on the shared daemon, and nothing else:
  *   · up to five sandbox containers, named from this run's id
  *   · their per-session `jtt-net-*` networks
- *   · one derived image, built from the shared sandbox image plus tcpdump
+ *   · one run-scoped image tag, built from the shared sandbox Dockerfile
  *
- * The image is built here rather than by editing the shared Dockerfile, which
- * belongs to the Linux track. Adding tcpdump there is a coordination item, not
- * something to take unilaterally, and nothing in the platform change requires
- * it — only a lab that actually captures does.
+ * The image is built from the shared Dockerfile under a run-scoped tag rather
+ * than from a derived one: tcpdump now ships in the sandbox image itself, so
+ * the earlier workaround — restoring `/etc/sv/default-syslog` so apt could run
+ * at all — is gone along with the defect that required it.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -41,12 +39,11 @@ import {
   type LabSessionContext,
   type LoadedLabDefinition,
 } from '../src/index.js';
-import { scopedTmpPrefix, testRunId } from '@jumptotech/test-support/run-id';
-import { sessionContext } from './helpers.js';
+import { testRunId } from '@jumptotech/test-support/run-id';
+import { REPO_ROOT, sessionContext } from './helpers.js';
 
 const run = promisify(execFile);
 
-const BASE_IMAGE = process.env.NET_RAW_BASE_IMAGE ?? 'jumptotech/lab-linux:net004-e2e';
 const CAPTURE_IMAGE = `jumptotech/lab-linux:net-raw-${testRunId()}`;
 const ENABLED = process.env.RUN_INTEGRATION_TESTS === '1';
 
@@ -72,8 +69,6 @@ const PLAIN = {
 
 const runtime = new DockerCliRuntime();
 const provider = new LinuxLabProvider({ runtime, image: CAPTURE_IMAGE });
-
-let buildDir: string | undefined;
 
 /**
  * A synthetic lab that asks for a segment and the capture capability.
@@ -198,39 +193,26 @@ describe.skipIf(!ENABLED)('CAP_NET_RAW, against a real daemon', () => {
   beforeAll(async () => {
     // A derived image: the shared sandbox plus tcpdump. Built here so the
     // shared Dockerfile — another track's file — stays untouched.
-    buildDir = await mkdtemp(path.join(tmpdir(), scopedTmpPrefix('netraw')));
-    // The shared sandbox image cannot currently be extended with apt at all:
-    // it removes /etc/sv/default-syslog, so the `runit` package's postinst
-    // trigger fails (`cpsv: fatal: no service found for default-syslog`) and
-    // takes dpkg down with it. The directory is restored for the install and
-    // removed again afterwards, so the derived image keeps the base's intent —
-    // no stray service — while apt is able to run. Reported as a coordination
-    // item: whoever adds tcpdump to the shared image will hit the same wall.
-    await writeFile(
-      path.join(buildDir, 'Dockerfile'),
+    // Built from the shared sandbox Dockerfile, under this run's own tag so
+    // concurrent worktrees cannot collide on `:latest`.
+    await run(
+      'docker',
       [
-        `FROM ${BASE_IMAGE}`,
-        'RUN set -eux; \\',
-        '    mkdir -p /etc/sv/default-syslog; \\',
-        "    printf '#!/bin/sh\\nexec /bin/true\\n' > /etc/sv/default-syslog/run; \\",
-        '    chmod 0755 /etc/sv/default-syslog/run; \\',
-        '    apt-get update; \\',
-        '    apt-get install -y --no-install-recommends tcpdump; \\',
-        '    rm -rf /etc/sv/default-syslog /etc/runit/runsvdir/default/default-syslog; \\',
-        '    rm -rf /var/lib/apt/lists/*',
-        '',
-      ].join('\n'),
+        'build',
+        '-q',
+        '-t',
+        CAPTURE_IMAGE,
+        '-f',
+        path.join(REPO_ROOT, 'infrastructure', 'docker', 'sandbox-linux.Dockerfile'),
+        REPO_ROOT,
+      ],
+      { timeout: 1_800_000, maxBuffer: 8 * 1024 * 1024 },
     );
-    await run('docker', ['build', '-q', '-t', CAPTURE_IMAGE, buildDir], {
-      timeout: 900_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
   }, 900_000);
 
   afterAll(async () => {
     await teardown();
     await run('docker', ['rmi', '-f', CAPTURE_IMAGE]).catch(() => undefined);
-    if (buildDir) await rm(buildDir, { recursive: true, force: true }).catch(() => undefined);
   }, 300_000);
 
   // ------------------------------------------------- 1. the capability itself
@@ -379,6 +361,53 @@ describe.skipIf(!ENABLED)('CAP_NET_RAW, against a real daemon', () => {
     // B's network still exists: naming it from A's teardown is impossible.
     expect(await runtime.networkInspect(networkRefForSandbox(b.sandboxRef))).not.toBeNull();
   }, 900_000);
+
+  // ------------------------------- 3b. the image confers nothing by itself
+
+  it('ships tcpdump with no setuid bit and no file capabilities', async () => {
+    const sandbox = SESSIONS[0]!.sandboxRef;
+
+    // Presence is not permission. If tcpdump ever gained a setuid bit or a
+    // file capability, every Linux lab would silently become a capture lab —
+    // including the ones on `--network none` and the ones sharing no segment
+    // at all. This is the check that would catch that.
+    const mode = await shell(sandbox, 'stat -c "%a %U" "$(command -v tcpdump)"');
+    expect(mode.stdout.trim()).toBe('755 root');
+
+    const setuid = await shell(sandbox, '[ -u "$(command -v tcpdump)" ] && echo yes || echo no');
+    expect(setuid.stdout.trim()).toBe('no');
+
+    const caps = await shell(sandbox, 'getcap "$(command -v tcpdump)" 2>/dev/null | wc -l');
+    expect(caps.stdout.trim()).toBe('0');
+  }, 300_000);
+
+  // --------------------------------------- 3c. the host bridge residual
+
+  it('cannot reach platform services through the host-side bridge address', async () => {
+    // A documented residual, kept explicit rather than assumed away: a student
+    // can emit packets to the host side of their own bridge, and the host
+    // stack processes them. Nothing the platform runs is bound there today —
+    // the API and terminal publish on loopback only and everything runs in
+    // containers — and this asserts that rather than trusting it.
+    //
+    // If a future platform service ever binds to a bridge or otherwise
+    // non-loopback address, this test is the one that must be revisited, and
+    // the CAP_NET_RAW approval revisited with it.
+    const sandbox = SESSIONS[0]!.sandboxRef;
+    const segment = await segmentOf(sandbox);
+
+    const ports = [3000, 4000, 4001, 5432, 16443];
+    for (const port of ports) {
+      const probe = await shell(
+        sandbox,
+        `nc -w 3 -v ${segment.gateway} ${port} </dev/null 2>&1 | tail -1`,
+      );
+      expect(
+        probe.stdout,
+        `the host bridge address answered on ${port} — a platform service may now be exposed to student segments`,
+      ).toMatch(/refused|unreachable|timed out|Operation now in progress/i);
+    }
+  }, 600_000);
 
   // ------------------------------------------------- 4. lifecycle and cleanup
 
