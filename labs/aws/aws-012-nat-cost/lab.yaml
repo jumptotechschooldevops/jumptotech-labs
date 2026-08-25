@@ -1,0 +1,263 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# EXECUTION MODEL: simulated Phase-0. AWS-012 runs in the ordinary Linux
+# sandbox. It creates no AWS resources, holds no AWS credentials, calls no AWS
+# API, and deploys nothing.
+#
+# Uses only requirement families that already exist: `cloudformation` for the
+# template change and `filesystem` for the written conclusions. No new
+# shared-platform capability was added for this lab.
+#
+# Certification claim: SOA-C03 Task 5.1 — skill 5.1.4, "Optimize the cost of
+# network architectures", and skill 5.1.2, "Configure private networking
+# connectivity (for example, VPC endpoints, AWS PrivateLink, VPC peering)".
+# Objectives read from the official exam guide on 2026-08-25.
+#
+# No dollar figures appear anywhere in this lab. The cost lever is the
+# documented fact that gateway endpoints carry no additional charge, and the
+# measurement is a share of bytes from the traffic report.
+# ---------------------------------------------------------------------------
+id: AWS-012
+slug: aws-012-nat-cost
+title: Paying to Reach S3
+track: aws
+topic: aws-networking
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 12
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-018
+
+story: >
+  Finance has asked the JumpToTech Bank platform team why the NAT gateway bill
+  grows every time the backup volume does. It is a fair question. The nightly
+  backup writes to S3, the session store talks to DynamoDB, and both live in
+  the same Region as the VPC — and yet every byte of both is being processed
+  by a NAT gateway on the way out.
+
+  The team has a month of egress broken down by destination, and a review that
+  says to stop paying to process traffic that never needed to leave the AWS
+  network in the first place.
+
+objectives:
+  - Read an egress breakdown and identify which flows do not need a NAT gateway
+  - Choose the VPC endpoint type that serves those flows, and know which services it supports
+  - Associate an endpoint with the route table that actually carries the traffic
+  - Say which traffic still requires a NAT gateway, and why
+
+task:
+  summary: >
+    Remove the dominant traffic from a NAT gateway by adding the right VPC
+    endpoints, without breaking the egress that still needs it.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. Nothing is
+    deployed. The template is graded by parsing it.
+
+    Everything is in `~/network`. Read `README.md`, then `traffic-report.txt`
+    to see where the bytes go, then `review-notes.txt` for what to change.
+
+    Two jobs. First, edit `~/network/vpc.yaml` so that the two AWS services
+    dominating the report are reached without the NAT gateway processing the
+    traffic. The review names the logical IDs to use. The endpoint type matters,
+    and so does what you associate it with — an endpoint that exists but is not
+    associated with the route table the private subnets use changes nothing at
+    all, because instances whose route table is not associated keep using the
+    public service endpoint.
+
+    Second, record your conclusions in `~/network/findings.env`. Replace every
+    `FILL_ME`, using exactly `KEY=value` with no spaces around the `=`. One of
+    the values is a percentage taken from the report; work it out rather than
+    estimating.
+
+    Leave the NAT gateway and the private default route alone. Some of the
+    traffic in the report still needs them, and a change that removes them is
+    an outage rather than a saving.
+
+    **How this is graded.** The template is parsed, not searched — resource
+    order, property order, formatting and YAML-versus-JSON make no difference.
+    What is checked is which endpoints exist, of what type, and what they are
+    actually wired to.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/network/vpc.yaml
+      label: The VPC template is in place
+    - type: file_exists
+      path: /home/student/network/traffic-report.txt
+      label: The traffic report is in place
+    - type: cfn_template_valid
+      path: /home/student/network/vpc.yaml
+      label: The template parses before any change
+    - type: cfn_resource_exists
+      path: /home/student/network/vpc.yaml
+      logical_id: NatGateway
+      resource_type: AWS::EC2::NatGateway
+      label: The NAT gateway is present at the start
+
+requirements:
+  - type: cfn_template_valid
+    path: /home/student/network/vpc.yaml
+    format_version: '2010-09-09'
+    label: The template is still a valid CloudFormation document
+
+  # --- the S3 endpoint ------------------------------------------------------
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: S3Endpoint
+    resource_type: AWS::EC2::VPCEndpoint
+    label: An endpoint named S3Endpoint is declared
+
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: S3Endpoint
+    property: VpcEndpointType
+    equals: Gateway
+    label: S3Endpoint is the endpoint type that attaches to route tables
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: S3Endpoint
+    property: VpcId
+    references: Vpc
+    via: Ref
+    label: S3Endpoint belongs to this VPC
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: S3Endpoint
+    property: RouteTableIds.0
+    references: PrivateRouteTable
+    via: Ref
+    label: S3Endpoint is associated with the private route table
+
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: S3Endpoint
+    property: ServiceName
+    label: S3Endpoint names the service it points at
+
+  # --- the DynamoDB endpoint ------------------------------------------------
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: DynamoDbEndpoint
+    resource_type: AWS::EC2::VPCEndpoint
+    label: An endpoint named DynamoDbEndpoint is declared
+
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: DynamoDbEndpoint
+    property: VpcEndpointType
+    equals: Gateway
+    label: DynamoDbEndpoint is the endpoint type that attaches to route tables
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: DynamoDbEndpoint
+    property: RouteTableIds.0
+    references: PrivateRouteTable
+    via: Ref
+    label: DynamoDbEndpoint is associated with the private route table
+
+  # --- what must survive ----------------------------------------------------
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: NatGateway
+    resource_type: AWS::EC2::NatGateway
+    label: The NAT gateway is still declared
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateDefaultRoute
+    property: NatGatewayId
+    references: NatGateway
+    via: Ref
+    label: The private subnets keep their default route to the NAT gateway
+
+  - type: cfn_references_resolve
+    path: /home/student/network/vpc.yaml
+    label: Every reference in the template still resolves
+
+  # --- the written conclusions ----------------------------------------------
+  - type: file_content
+    path: /home/student/network/findings.env
+    contains: "\nENDPOINT_TYPE=Gateway\n"
+    label: The endpoint type is named as AWS names it
+
+  - type: file_content
+    path: /home/student/network/findings.env
+    contains: "\nENDPOINT_CHARGE=none\n"
+    label: What AWS charges for that endpoint type is stated correctly
+
+  - type: file_content
+    path: /home/student/network/findings.env
+    contains: "\nBACKUP_TRAFFIC_VIA=gateway_endpoint\n"
+    label: The backup traffic now reaches S3 the cheap way
+
+  - type: file_content
+    path: /home/student/network/findings.env
+    contains: "\nPATCHING_TRAFFIC_VIA=nat_gateway\n"
+    label: OS patching is correctly still routed through the NAT gateway
+
+  - type: file_content
+    path: /home/student/network/findings.env
+    contains: "\nNAT_SHARE_REMOVED=88\n"
+    label: The share of NAT-processed bytes removed is calculated correctly
+
+  - type: file_content_absent
+    path: /home/student/network/findings.env
+    contains: "=FILL_ME"
+    label: Every finding has been filled in
+
+hints:
+  - level: 1
+    text: >
+      Add up the report by destination type before touching the template. Three
+      of the six rows are AWS services in the same Region; the other three are
+      the public internet. Only one of those groups has an alternative to the
+      NAT gateway, and the review tells you the two services it covers.
+  - level: 2
+    text: >
+      The Amazon VPC documentation describes two kinds of VPC endpoint. One is
+      placed in subnets and carries an hourly and per-GB charge; the other is
+      associated with route tables, supports exactly two services, and the
+      documentation states plainly what it costs. Read which two services it
+      supports — that is why the review names exactly two endpoints. Note also
+      what the documentation says about instances whose route table is not
+      associated with the endpoint.
+  - level: 3
+    text: >
+      The type is `Gateway`, set with the `VpcEndpointType` property, and it is
+      associated through `RouteTableIds` rather than `SubnetIds`. Each endpoint
+      also needs `VpcId` and a `ServiceName`; the service name format is in the
+      documentation. The percentage is the sum of the three AWS-service rows in
+      the report. Everything else in the template stays as it is.
+
+references:
+  - title: AWS PrivateLink — Gateway endpoints
+    url: https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html
+  - title: Amazon VPC — NAT gateways
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html
+  - title: AWS CloudFormation — AWS::EC2::VPCEndpoint
+    url: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpcendpoint.html
+  - title: Amazon VPC — Route tables
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html
+
+skills:
+  - aws.networking.vpc-endpoints
+  - aws.networking.nat-gateway
+  - aws.cost.network-optimization
+
+certification:
+  - certification: SOA-C03
+    relevant: true
+    domains:
+      - networking-and-content-delivery
