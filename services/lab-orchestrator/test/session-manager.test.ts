@@ -120,7 +120,7 @@ describe('starting a session (story tests 1–3)', () => {
     const { manager } = await harness();
 
     await expect(manager.start('K8S-999')).rejects.toThrow(/not found/);
-    expect(manager.activeCount).toBe(0);
+    expect(await manager.activeCount()).toBe(0);
   });
 });
 
@@ -138,7 +138,7 @@ describe('capacity guard (story test 27)', () => {
     });
     // The important half: no fourth namespace was created.
     expect(k8s.namespaces.size).toBe(namespacesBefore);
-    expect(manager.activeCount).toBe(3);
+    expect(await manager.activeCount()).toBe(3);
   });
 
   it('holds under simultaneous starts, not just sequential ones', async () => {
@@ -366,6 +366,6 @@ describe('failed provisioning', () => {
     const sessions = await failing.manager.list();
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.status).toBe('FAILED');
-    expect(failing.manager.activeCount).toBe(0);
+    expect(await failing.manager.activeCount()).toBe(0);
   });
 });

@@ -81,6 +81,11 @@ import {
   type ContainerRuntimePort,
   type NetworkInfo,
 } from './runtime.js';
+import {
+  DEFAULT_RUNTIME_OWNER,
+  RUNTIME_OWNER_LABEL,
+  ownedByRuntime,
+} from '../../k8s/labels.js';
 
 /** Binaries the provider itself may run inside a sandbox, for reads and setup. */
 const INTERNAL_EXEC_ALLOWLIST = new Set([
@@ -133,6 +138,14 @@ export interface ContainerProviderOptions {
    * whose labs teach `sudo` turns it off, and only for its own sandboxes.
    */
   noNewPrivileges?: boolean;
+  /**
+   * Which runtime owns the sandboxes this provider creates.
+   *
+   * Production leaves it unset and gets the single default owner. Concurrent
+   * runtimes — a second worktree, a parallel test process — set their own, and
+   * thereafter neither can discover or delete the other's sandboxes.
+   */
+  runtimeOwner?: string;
   /**
    * The account the container's **foreground process** runs as.
    *
@@ -189,6 +202,7 @@ export class ContainerLabProvider implements LabProvider {
   readonly #hostname: string;
   readonly #foregroundCommand: string[];
   readonly #noNewPrivileges: boolean;
+  readonly #runtimeOwner: string;
   readonly #inspectionCommands: ReadonlySet<string>;
   readonly #now: () => number;
 
@@ -204,6 +218,7 @@ export class ContainerLabProvider implements LabProvider {
     this.#hostname = options.hostname ?? 'lab';
     this.#foregroundCommand = options.foregroundCommand ?? ['sleep', 'infinity'];
     this.#noNewPrivileges = options.noNewPrivileges ?? true;
+    this.#runtimeOwner = options.runtimeOwner ?? DEFAULT_RUNTIME_OWNER;
     this.#inspectionCommands = new Set(options.inspectionCommands ?? []);
     this.#now = options.now ?? (() => Date.now());
   }
@@ -309,6 +324,7 @@ export class ContainerLabProvider implements LabProvider {
           [CONTAINER_LAB_LABEL]: context.labId,
           [CONTAINER_EXPIRES_LABEL]: String(context.expiresAtMs),
           [CONTAINER_PROVIDER_LABEL]: this.id,
+          [RUNTIME_OWNER_LABEL]: this.#runtimeOwner,
         },
         env: {
           JTT_LAB_ID: context.labId,
@@ -668,6 +684,9 @@ export class ContainerLabProvider implements LabProvider {
       .filter((c) => isContainerSandboxRef(c.name))
       // A shared daemon may host several providers' sandboxes; each reaps its own.
       .filter((c) => (c.labels[CONTAINER_PROVIDER_LABEL] ?? this.id) === this.id)
+      // …and only this runtime's. Two worktrees run the same provider, so this
+      // is the only thing that separates their sandboxes.
+      .filter((c) => ownedByRuntime(c.labels, this.#runtimeOwner))
       .map((c) => ({
         providerId: this.id,
         sandboxRef: c.name,
@@ -1125,6 +1144,13 @@ export class ContainerLabProvider implements LabProvider {
     if (owningProvider !== this.id) {
       throw new Error(
         `container '${ref}' belongs to the '${owningProvider}' provider, not '${this.id}'`,
+      );
+    }
+    if (!ownedByRuntime(info.labels, this.#runtimeOwner)) {
+      throw new Error(
+        `container '${ref}' belongs to runtime owner '${
+          info.labels[RUNTIME_OWNER_LABEL] ?? '<unset>'
+        }', not '${this.#runtimeOwner}'`,
       );
     }
     if (expectedSessionId !== undefined) {

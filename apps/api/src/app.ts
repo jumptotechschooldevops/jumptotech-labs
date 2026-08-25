@@ -100,7 +100,7 @@ export function createApp(deps: CreateAppDeps): Express {
         ...(provider.reason ? { reason: provider.reason } : {}),
       })),
       sessions: {
-        active: deps.sessions.activeCount,
+        active: await deps.sessions.activeCount(),
         maxActive: deps.sessions.lifetimes.maxActiveSessions,
       },
       progress: {

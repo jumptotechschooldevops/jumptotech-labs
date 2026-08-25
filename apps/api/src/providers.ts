@@ -73,6 +73,7 @@ export function buildProviderRegistry(options: BuildProviderRegistryOptions): Pr
       runtime,
       image: config.sandbox.linuxImage,
       home: config.policy.sandbox.home,
+      runtimeOwner: config.sandbox.runtimeOwner,
     }),
     ...(config.sandbox.linuxEnabled
       ? {}
@@ -87,6 +88,7 @@ export function buildProviderRegistry(options: BuildProviderRegistryOptions): Pr
       runtime,
       image: config.sandbox.terraformImage,
       home: config.policy.sandbox.home,
+      runtimeOwner: config.sandbox.runtimeOwner,
     }),
     ...(config.sandbox.terraformEnabled
       ? {}
@@ -110,6 +112,7 @@ export function buildProviderRegistry(options: BuildProviderRegistryOptions): Pr
       provider: new DockerLabProvider({
         engines: options.engines,
         sandboxDaemonAvailable: config.dockerEnabled,
+        runtimeOwner: config.sandbox.runtimeOwner,
         ...(options.workspace ? { workspace: options.workspace } : {}),
         ...(options.waitForRequirements
           ? { waitForRequirements: options.waitForRequirements }

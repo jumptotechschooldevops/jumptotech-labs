@@ -9,6 +9,7 @@ import {
   DockerCliFactory,
   InMemorySessionStore,
   InMemoryWorkspace,
+  PostgresSessionStore,
   KubernetesClient,
   LabRegistry,
   SessionManager,
@@ -125,13 +126,33 @@ async function main(): Promise<void> {
     console.log(`[progress] ${message}`),
   );
 
+  /*
+   * Session bookkeeping is durable when a database is configured.
+   *
+   * It used to be memory on the reasoning that sandboxes are disposable and the
+   * reaper reconciles. That holds for one process; it does not survive a
+   * restart or a second instance. A restart lost every session record while the
+   * sandboxes kept running, so the student's lab became unreachable and the
+   * sandbox became an orphan — and two instances could not see each other's
+   * sessions at all.
+   *
+   * Memory remains the fallback when no database is configured, so local
+   * development and the hermetic test suite are unchanged. The warning says so
+   * plainly rather than implying sessions are safe.
+   */
+  const sessionStore = learning.database
+    ? new PostgresSessionStore(learning.database)
+    : new InMemorySessionStore();
+  console.log(
+    learning.database
+      ? '[sessions] durable session store (postgres)'
+      : '[sessions] no DATABASE_URL configured — sessions are IN MEMORY and are lost on restart',
+  );
+
   const sessions = new SessionManager({
     registry,
     providers,
-    // Sandbox bookkeeping stays in memory: it is disposable state about
-    // disposable environments, and the reaper reconciles it against reality on
-    // every sweep. What must survive a restart lives in `learning`.
-    store: new InMemorySessionStore(),
+    store: sessionStore,
     policy: config.policy,
     lifetimes: config.lifetimes,
     namespaceSecret: config.namespaceSecret,

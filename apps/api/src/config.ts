@@ -16,6 +16,7 @@ import {
   type DockerSandboxPolicy,
   type SessionLifetimeConfig,
   type SessionPolicy,
+  DEFAULT_RUNTIME_OWNER,
 } from '@jumptotech/lab-orchestrator';
 import {
   DEFAULT_DEV_STUDENT_ID,
@@ -119,6 +120,14 @@ export interface ProgressConfig {
 export interface SandboxProviderConfig {
   /** Container CLI to drive. Never taken from a request. */
   containerBinary: string;
+  /**
+   * Which runtime owns the sandboxes this deployment creates.
+   *
+   * One production deployment is one runtime and never sets this. It exists for
+   * the case where several run against one Docker daemon — seven curriculum
+   * worktrees on a laptop — so that each reaps only what it created.
+   */
+  runtimeOwner: string;
   linuxEnabled: boolean;
   linuxImage: string;
   terraformEnabled: boolean;
@@ -327,6 +336,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     policy: loadSessionPolicy(env),
     sandbox: {
       containerBinary: strFromEnv(env, 'SANDBOX_CONTAINER_BINARY', 'docker'),
+      runtimeOwner: strFromEnv(env, 'RUNTIME_OWNER_ID', DEFAULT_RUNTIME_OWNER),
       linuxEnabled: boolFromEnv(env, 'LINUX_PROVIDER_ENABLED', true),
       linuxImage: strFromEnv(env, 'LINUX_SANDBOX_IMAGE', DEFAULT_LINUX_SANDBOX_IMAGE),
       terraformEnabled: boolFromEnv(env, 'TERRAFORM_PROVIDER_ENABLED', true),

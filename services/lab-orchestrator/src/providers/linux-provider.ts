@@ -102,6 +102,8 @@ export interface LinuxProviderOptions {
   image?: string;
   home?: string;
   now?: () => number;
+  /** Which runtime owns these sandboxes; see RUNTIME_OWNER_LABEL. */
+  runtimeOwner?: string;
 }
 
 export class LinuxLabProvider extends ContainerLabProvider {
@@ -135,6 +137,7 @@ export class LinuxLabProvider extends ContainerLabProvider {
       inspectionCommands: [...VERIFIER_COMMANDS, ...VERIFIER_INTERNAL_COMMANDS],
       ...(options.home ? { home: options.home } : {}),
       ...(options.now ? { now: options.now } : {}),
+      ...(options.runtimeOwner ? { runtimeOwner: options.runtimeOwner } : {}),
     });
   }
 }

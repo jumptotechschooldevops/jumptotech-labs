@@ -102,6 +102,9 @@ import {
   expiryFromLabels,
   ownershipLabels,
   PROVIDER_LABEL,
+  DEFAULT_RUNTIME_OWNER,
+  RUNTIME_OWNER_LABEL,
+  ownedByRuntime,
 } from '../k8s/labels.js';
 import {
   assertValidContainerSandboxRef,
@@ -175,6 +178,8 @@ export interface DockerProviderOptions {
   /** Injectable for tests. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Which runtime owns these sandboxes; see RUNTIME_OWNER_LABEL. */
+  runtimeOwner?: string;
 }
 
 export class DockerLabProvider implements LabProvider {
@@ -186,6 +191,7 @@ export class DockerLabProvider implements LabProvider {
   readonly sandboxKind: SandboxKind = 'container';
 
   readonly #engines: DockerEngineFactory;
+  readonly #runtimeOwner: string;
   readonly #sandboxDaemonAvailable: boolean;
   readonly #hostName: string;
   readonly #workspace: WorkspacePort;
@@ -196,6 +202,7 @@ export class DockerLabProvider implements LabProvider {
 
   constructor(options: DockerProviderOptions) {
     this.#engines = options.engines;
+    this.#runtimeOwner = options.runtimeOwner ?? DEFAULT_RUNTIME_OWNER;
     this.#sandboxDaemonAvailable = options.sandboxDaemonAvailable ?? false;
     this.#hostName = options.hostName ?? 'local';
     this.#workspace = options.workspace ?? noopWorkspace;
@@ -437,6 +444,7 @@ export class DockerLabProvider implements LabProvider {
         expiresAtMs: context.expiresAtMs,
         component: SANDBOX_COMPONENT,
         provider: this.id,
+        runtimeOwner: this.#runtimeOwner,
       }),
       args: daemonArgs,
     };
@@ -703,6 +711,15 @@ export class DockerLabProvider implements LabProvider {
     if (!check.managed) {
       return this.#refuseDestroy(steps, sandbox, check.reason ?? 'not managed by JumpToTech');
     }
+    if (!ownedByRuntime(snapshot.labels, this.#runtimeOwner)) {
+      return this.#refuseDestroy(
+        steps,
+        sandbox,
+        `container '${sandbox}' belongs to runtime owner '${
+          snapshot.labels[RUNTIME_OWNER_LABEL] ?? '<unset>'
+        }', not '${this.#runtimeOwner}'`,
+      );
+    }
     if (!isSandboxComponent(snapshot.labels)) {
       return this.#refuseDestroy(
         steps,
@@ -877,6 +894,8 @@ export class DockerLabProvider implements LabProvider {
          * discoverable then and keeps this change backward compatible.
          */
         .filter((c) => (c.labels[PROVIDER_LABEL] ?? this.id) === this.id)
+        // …and only this runtime's, so concurrent runtimes never see each other.
+        .filter((c) => ownedByRuntime(c.labels, this.#runtimeOwner))
         .map((c) => this.#toManaged(c))
     );
   }

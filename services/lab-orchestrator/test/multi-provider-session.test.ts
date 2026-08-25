@@ -213,7 +213,7 @@ describe('one session cannot reach another (test requirement 8)', () => {
     });
     await expect(manager.start('LINUX-001')).rejects.toBeInstanceOf(SessionError);
     // No slot consumed and no record left behind.
-    expect(manager.activeCount).toBe(0);
+    expect(await manager.activeCount()).toBe(0);
     expect(await manager.list()).toHaveLength(0);
   });
 });

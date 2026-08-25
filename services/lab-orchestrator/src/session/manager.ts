@@ -239,7 +239,6 @@ export class SessionManager {
    * multi-instance deployment will need the same guard inside a database
    * transaction — noted in the README.)
    */
-  #occupied = 0;
   readonly #released = new Set<string>();
 
   constructor(options: SessionManagerOptions) {
@@ -267,8 +266,15 @@ export class SessionManager {
     return this.#lifetimes;
   }
 
-  get activeCount(): number {
-    return this.#occupied;
+  /**
+   * How many sessions hold a sandbox, counted from durable state.
+   *
+   * Asynchronous now because the answer belongs to the store rather than to
+   * this process: with several instances running, no one of them can know the
+   * total from its own memory.
+   */
+  activeCount(): Promise<number> {
+    return this.#store.countOccupying();
   }
 
   get providers(): ProviderRegistry {
@@ -322,23 +328,18 @@ export class SessionManager {
       throw error;
     }
 
-    if (this.#occupied >= this.#lifetimes.maxActiveSessions) {
-      throw new SessionError(
-        'LAB_CAPACITY_REACHED',
-        `All ${this.#lifetimes.maxActiveSessions} practice environments are currently in use.`,
-        'Try again shortly — environments are released automatically when students finish or go idle.',
-        { activeSessions: this.#occupied, maxActiveSessions: this.#lifetimes.maxActiveSessions },
-      );
-    }
-    this.#occupied += 1;
-
-    let session: LabSession;
-    try {
-      session = await this.#insertSession(lab, provider);
-    } catch (error) {
-      this.#occupied -= 1;
-      throw error;
-    }
+    /*
+     * Capacity is counted from durable state, and the count and the insert are
+     * one step.
+     *
+     * Three API instances each keeping their own tally would admit three times
+     * the configured limit between them, and none would be wrong about its own
+     * count — so the tally cannot live in a process. Nor can the check be a
+     * separate read: an `await` between counting and inserting is a gap another
+     * start can pass through, which is exactly what the simultaneous-starts
+     * test catches.
+     */
+    const session = await this.#insertSession(lab, provider);
 
     const context = this.#contextFor(lab, session);
     let result: CreateResult;
@@ -369,7 +370,10 @@ export class SessionManager {
     });
 
     this.#log(
-      `session ${session.sessionId} ACTIVE (lab=${lab.id} provider=${session.provider} sandbox=${session.sandboxRef}, ${this.#occupied}/${this.#lifetimes.maxActiveSessions} in use)`,
+      `session ${session.sessionId} ACTIVE (lab=${lab.id} provider=${session.provider} ` +
+        `sandbox=${session.sandboxRef}, ${await this.#store.countOccupying()}/${
+          this.#lifetimes.maxActiveSessions
+        } in use)`,
     );
 
     return {
@@ -408,7 +412,7 @@ export class SessionManager {
           : deriveSandboxRef({ sessionId, secret: this.#namespaceSecret, prefix });
       if (await this.#store.findBySandboxRef(sandboxRef)) continue;
 
-      const session: LabSession = {
+      const candidate: LabSession = {
         sessionId,
         labId: lab.id,
         provider: provider.id,
@@ -424,8 +428,22 @@ export class SessionManager {
         idleTimeoutSeconds: this.#lifetimes.idleTimeoutSeconds,
         idleWarningSeconds: this.#lifetimes.warningSeconds,
       };
-      await this.#store.create(session);
-      return session;
+      const admitted = await this.#store.createWithinCapacity(
+        candidate,
+        this.#lifetimes.maxActiveSessions,
+      );
+      if (!admitted) {
+        throw new SessionError(
+          'LAB_CAPACITY_REACHED',
+          `All ${this.#lifetimes.maxActiveSessions} practice environments are currently in use.`,
+          'Try again shortly — environments are released automatically when students finish or go idle.',
+          {
+            activeSessions: await this.#store.countOccupying(),
+            maxActiveSessions: this.#lifetimes.maxActiveSessions,
+          },
+        );
+      }
+      return candidate;
     }
     throw new SessionError(
       'SESSION_PROVISION_FAILED',
@@ -683,11 +701,44 @@ export class SessionManager {
       };
     }
 
-    const marked =
-      (await this.#store.update(session.sessionId, {
-        status: inProgress,
-        statusReason: reason,
-      })) ?? session;
+    /*
+     * Claim the teardown with a conditional write.
+     *
+     * Two instances can reach here for one session — a student pressing End
+     * while a reaper expires the same row. An unconditional update lets both
+     * proceed, and the second would finish the session under the *other* one's
+     * label, so a student-ended session could be recorded EXPIRED.
+     *
+     * The `from` list deliberately excludes the opposite in-flight state:
+     * End cannot claim a session already EXPIRING, and expiry cannot claim one
+     * already ENDING. `inProgress` itself *is* included, because an interrupted
+     * teardown must be resumable — the reaper re-enters this path every pass
+     * until the sandbox is verifiably gone, and that is the idempotence the
+     * whole cleanup design rests on.
+     */
+    const marked = await this.#store.transition(
+      session.sessionId,
+      ['CREATING', 'ACTIVE', 'RESETTING', inProgress],
+      inProgress,
+      { statusReason: reason },
+    );
+
+    if (!marked) {
+      // Someone else owns this teardown, or it already finished. Report what is
+      // actually true rather than acting on a state we no longer hold.
+      const current = (await this.#store.get(session.sessionId)) ?? session;
+      this.#log(
+        `session ${session.sessionId}: ${inProgress} not claimed — already ${current.status}`,
+      );
+      return {
+        session: current,
+        destroy: {
+          ok: true,
+          namespaceGone: isTerminalStatus(current.status),
+          steps: [],
+        },
+      };
+    }
 
     // Close the student's shell first: once the namespace goes, their kubectl
     // would only produce confusing errors.
@@ -756,9 +807,11 @@ export class SessionManager {
    * that was already handed back.
    */
   #release(sessionId: string): void {
-    if (this.#released.has(sessionId)) return;
+    // The slot is released by the session's status leaving the occupying set,
+    // which the store already recorded — capacity is derived from those rows,
+    // so there is no separate tally to decrement. The marker is kept because
+    // teardown is re-entrant and callers still ask whether this ran.
     this.#released.add(sessionId);
-    this.#occupied = Math.max(0, this.#occupied - 1);
   }
 
   /** Forget a finished session record (used by the reaper's retention sweep). */
