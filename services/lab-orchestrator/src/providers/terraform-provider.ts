@@ -41,6 +41,8 @@ export interface TerraformProviderOptions {
   image?: string;
   home?: string;
   now?: () => number;
+  /** Which runtime owns these sandboxes; see RUNTIME_OWNER_LABEL. */
+  runtimeOwner?: string;
 }
 
 export class TerraformLabProvider extends ContainerLabProvider {
@@ -55,6 +57,7 @@ export class TerraformLabProvider extends ContainerLabProvider {
       requiredBinaries: ['terraform'],
       ...(options.home ? { home: options.home } : {}),
       ...(options.now ? { now: options.now } : {}),
+      ...(options.runtimeOwner ? { runtimeOwner: options.runtimeOwner } : {}),
     });
   }
 }

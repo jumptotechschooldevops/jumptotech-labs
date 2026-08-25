@@ -36,6 +36,35 @@ export const COMPONENT_LABEL = 'jumptotech.io/component';
  */
 export const PROVIDER_LABEL = 'jumptotech.io/provider';
 
+/**
+ * Which *runtime* created this resource — the level above a session.
+ *
+ * A session says which student, a provider says which substrate; neither says
+ * which running platform. Production has exactly one, so the distinction is
+ * invisible there. A developer laptop has seven: the worktrees share one Docker
+ * daemon, and their sandboxes are identical in every other respect — managed,
+ * same provider, each with its own session id.
+ *
+ * That matters because of one deliberate asymmetry in the reaper. Orphan
+ * reclamation calls `destroySandbox` with *no* session, because an orphan is by
+ * definition a sandbox the store has no record of. With only `managed` and
+ * `provider` left to authorise the delete, one worktree's reaper would reclaim
+ * another's expired sandbox. This label is the missing discriminator.
+ *
+ * A resource carrying no owner belongs to whoever finds it, which is what the
+ * behaviour was before the label existed and keeps an upgrade from stranding
+ * running sandboxes.
+ */
+export const RUNTIME_OWNER_LABEL = 'jumptotech.io/runtime-owner';
+
+/**
+ * The owner a deployment uses when nothing overrides it.
+ *
+ * Production is a single runtime and never sets one, so every resource it
+ * creates carries this and every resource it finds matches.
+ */
+export const DEFAULT_RUNTIME_OWNER = 'jumptotech';
+
 /** Label selector matching every namespace this platform owns. */
 export const MANAGED_SELECTOR = `${MANAGED_LABEL}=true`;
 
@@ -47,6 +76,8 @@ export interface OwnershipLabelInput {
   component?: string;
   /** The provider that owns this resource, so each reaps only its own. */
   provider?: string;
+  /** The runtime that created it, so concurrent runtimes never collide. */
+  runtimeOwner?: string;
 }
 
 /**
@@ -64,7 +95,24 @@ export function ownershipLabels(input: OwnershipLabelInput): Record<string, stri
     ...(input.expiresAtMs !== undefined ? { [EXPIRES_AT_LABEL]: String(input.expiresAtMs) } : {}),
     ...(input.component ? { [COMPONENT_LABEL]: input.component } : {}),
     ...(input.provider ? { [PROVIDER_LABEL]: input.provider } : {}),
+    ...(input.runtimeOwner ? { [RUNTIME_OWNER_LABEL]: input.runtimeOwner } : {}),
   };
+}
+
+/**
+ * Whether a resource may be acted on by the runtime asking.
+ *
+ * Fail-open on a *missing* owner is deliberate and narrow: it preserves the
+ * pre-label behaviour for sandboxes created by an older build. A *present* owner
+ * that does not match is always refused — a malformed or unexpected value is
+ * somebody else's, not an invitation to guess.
+ */
+export function ownedByRuntime(
+  labels: Record<string, string>,
+  runtimeOwner: string,
+): boolean {
+  const stamped = labels[RUNTIME_OWNER_LABEL];
+  return stamped === undefined || stamped === runtimeOwner;
 }
 
 /** Labels stamped onto platform-owned objects *inside* a session namespace. */
