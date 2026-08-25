@@ -907,7 +907,7 @@ LAST VERIFIED:       2026-08-25   (all six fetched, HTTP 200)
 
 | trap | what it actually does |
 |---|---|
-| whitespace split | accepts **10 of 16** lines, losing the slowest request and three of four errors |
+| whitespace split | accepts **10 of 16** lines, losing the slowest request and **all four** errors |
 | `fallback=disabled` in a message | a dict-from-all-pairs parser invents a `fallback` field — real, but it surfaces as a dropped or truncated line rather than as a distinct failure |
 | `dur_ms=99999` in a message | **does *not* affect a first-match search**, because the real field comes first. It bites a parser taking the *last* or *largest* match, which reads 99999 instead of 1180 and reorders the ranking |
 | truncated message | breaks `LONGEST_MSG` only — the totals and ranking stay correct, which is why that check exists |

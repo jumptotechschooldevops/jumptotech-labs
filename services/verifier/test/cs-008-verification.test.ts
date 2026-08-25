@@ -6,7 +6,7 @@
  * below are specific:
  *
  *   whitespace split      accepts 10 of 16 lines, losing the slowest request
- *                         and three of the four errors
+ *                         and all four of the errors
  *   dict from key=value   invents a `fallback` field from a message — real,
  *                         and verified, but it surfaces through the same
  *                         truncated-message and dropped-line failures rather
@@ -149,7 +149,7 @@ describe('CS-008 rejects the parsers that lose lines', () => {
     // because the ones it drops are the ones with a message worth reading.
     const naiveMain: Report = {
       total: 10,
-      errors: 1,
+      errors: 0,
       dropped: 6,
       slowest: ['R-1015', 'R-1014', 'R-1002'],
       longest: 'R-1001',

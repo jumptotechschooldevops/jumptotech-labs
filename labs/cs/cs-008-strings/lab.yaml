@@ -7,9 +7,14 @@
 # --- Why the fixture is shaped the way it is -------------------------------
 #
 # A whitespace splitter accepts only 10 of the 16 lines in requests.log, and
-# the six it loses are the slowest request and three of the four errors. That
-# is the lab: a naive parser does not crash, it quietly answers a smaller
-# question. `DROPPED` exists so the student has to notice.
+# the six it loses are the slowest request and every one of the four errors —
+# counted from the shipped file, not estimated. That is the lab: a naive parser
+# does not crash, it quietly answers a smaller question. `DROPPED` exists so
+# the student has to notice.
+#
+# The file is an extract from the window the messages cluster in, so the loss
+# here is much steeper than the two per cent that made nobody look. The story
+# says so rather than claiming two per cent of a file a student can count.
 #
 # Four traps, each a real thing a message contains:
 #   fallback=disabled     building a dict from key=value pairs invents a field
@@ -56,13 +61,15 @@ prerequisites:
 
 story: >
   Kestrel's request-log parser reports about two per cent fewer lines than the
-  file contains. Nobody has minded much, because two per cent of a log is
+  logs it reads. Nobody has minded much, because two per cent of a log is
   noise.
 
   It is not noise. The parser splits each line on spaces, and the only field
   that contains spaces is the message — so the lines it loses are exactly the
-  ones somebody bothered to write a message about. Last night that meant the
-  slowest request of the night and three of the four errors.
+  ones somebody bothered to write a message about, and they do not arrive
+  evenly. The extract you have been given is from last night's noisy window,
+  where the parser lost the slowest request of the night and every one of its
+  four errors.
 
   The parser does not fail on those lines. It answers a smaller question and
   reports the answer with complete confidence.

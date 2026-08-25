@@ -42,8 +42,10 @@ message written by whichever component logged it:
 
   <timestamp> level=<level> req=<id> dur_ms=<n> path=<path> msg="<text>"
 
-The current parser reports roughly two per cent fewer lines than the file
-contains, and the ones it loses are never the boring ones.
+requests.log is an extract covering last night's noisy window, not a whole
+night. The current parser reports roughly two per cent fewer lines than the
+logs it reads, and the ones it loses are never the boring ones — which is why
+they bunch up in an extract like this one.
 TXT
 
 cat > "$BUNDLE/requests.log" <<'TXT'
