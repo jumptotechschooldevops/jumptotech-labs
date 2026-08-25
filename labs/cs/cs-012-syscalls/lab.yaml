@@ -1,0 +1,321 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-012 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# --- The plan's design does not work, and this is what replaced it ---------
+#
+# The plan had the student read /proc/<pid>/syscall for a *seeded* blocked
+# process. Checked rather than assumed, under the real capability set:
+#
+#     $ cat /proc/1/syscall          # root-owned
+#     cat: /proc/1/syscall: Permission denied
+#
+# Reading that file needs PTRACE_MODE_ATTACH_FSCREDS. So the inspected process
+# is one the student forks: same user, and a descendant, which is the only
+# combination that also works on a host with Yama ptrace_scope=1.
+#
+# No strace — it is not in the image. No SYS_PTRACE — it is not in
+# GRANTABLE_CAPABILITIES and is not being added. No capability of any kind was
+# added for this lab.
+#
+# --- Nothing is graded on wall-clock time, and nothing on a syscall number --
+#
+# The blocked child is found by polling for a *state*, not by waiting a fixed
+# time. And syscall numbers are per-architecture — `read` is 63 on aarch64 and
+# 0 on x86_64 — so the graded answer is the NAME. The number is required to be
+# *printed* (`BLOCKED_NUMBER=`) but its value is never asserted, because it is
+# a property of the machine rather than of the student.
+#
+# The reference table is observed at seed time on the machine the lab runs on,
+# so it is correct by construction rather than shipped for architectures this
+# was never tested on.
+#
+# --- What makes the measurements exact -------------------------------------
+#
+# /proc/self/io reports `syscw`, the count of write syscalls. Measured in the
+# real image: 200 straight-through writes move it by exactly 200, and the same
+# 200 lines gathered into one write move it by exactly 1. Three runs with three
+# different line counts mean a typed-out answer fails two of them.
+#
+# The task says "exactly one write" rather than "through a buffer" for a
+# reason found by testing: Python sizes a file object's buffer from the
+# filesystem's st_blksize, which is 4096 here, so 200 label lines (5200 bytes)
+# flush TWICE with default buffering. Grading `BUFFERED_WRITES=1` against a
+# default-buffered solution would have failed correct work for a reason that
+# has nothing to do with the lesson. Gathering explicitly is deterministic on
+# any filesystem, and is the thing the printer should have been doing.
+# ---------------------------------------------------------------------------
+id: CS-012
+slug: cs-012-syscalls
+title: "User Space, Kernel Space and System Calls"
+track: cs
+topic: operating-systems
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 12
+
+environment:
+  provider: linux
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-011
+
+story: >
+  Kestrel's label printer sits at about 60% CPU and nobody can say why. It is
+  not computing anything: the profiler shows almost nothing in the program at
+  all, and the CPU it is burning is system time rather than user time.
+
+  That distinction is the whole answer. The work is not happening in the
+  printer. It is happening in the kernel, on the printer's behalf, once per
+  label line — because the printer writes each line straight through instead of
+  gathering them up first.
+
+  A function call costs a jump. A system call costs a boundary crossing. The
+  printer makes forty thousand of them where it could make forty.
+
+objectives:
+  - Say what a system call is, and what makes it more expensive than a function call
+  - Explain the difference between user time and system time, and what a high sy figure means
+  - Find which system call a blocked process is sitting in, from /proc, without a debugger
+  - Explain why syscall numbers are per-architecture and why the name is the portable answer
+  - Measure how many times a program crosses into the kernel, and change that number by buffering
+
+task:
+  summary: Find which system call a blocked process is stuck in, then measure what buffering does to the number of boundary crossings.
+  description: >
+    The printer is in `/srv/kestrel/printer`, read-only. Read `README.txt`,
+    `print-labels.py` and `syscall-table.txt`. You will need `/home/student/py`
+    and `/home/student/ops`, neither of which exists yet.
+
+
+    There is no `strace` here, and there will not be: watching another process's
+    system calls needs a privilege this sandbox does not grant. Everything below
+    is done through `/proc`, which is how you would do it on a production host
+    where you also cannot attach a debugger.
+
+
+    **The program.** Write `/home/student/py/probe.py`, taking a mode as its
+    first argument.
+
+
+    `probe.py blocked` — fork a child and leave it blocked in a read that will
+    never complete. While it is blocked, read its system call number out of
+    `/proc/<child>/syscall`, and turn that number into a name using
+    `syscall-table.txt`. Print, on **stdout**:
+
+
+    ```
+
+    BLOCKED_SYSCALL=<the name> BLOCKED_NUMBER=<the number on this machine>
+
+    ```
+
+
+    You can only read that file for a process you own — which is why the child
+    is yours. Find it by polling for its state rather than by sleeping for a
+    guessed length of time.
+
+
+    `probe.py writes <n>` — write `<n>` label lines twice. First straight
+    through, one write per line, the way the printer does it. Then gather the
+    whole batch and hand it to the kernel in **exactly one** write. Count the
+    write system calls each way costs by reading `syscw` from `/proc/self/io`
+    before and after. Print:
+
+
+    ```
+
+    LINES=<n> UNBUFFERED_WRITES=<count> BUFFERED_WRITES=<count>
+
+    ```
+
+
+    Both modes must exit `0`.
+
+
+    **The write-up.** Record in `/home/student/ops/syscalls.txt`:
+
+
+    ```
+
+    BLOCKED_SYSCALL=<the name, again>
+
+    PRINTER_IS=<buffered or unbuffered — read print-labels.py>
+
+    SYSCALLS_SAVED_BY_BUFFERING=<how many crossings 200 lines saves>
+
+    ```
+
+
+    Give the program a `#!/usr/bin/env python3` first line and make it
+    executable.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/printer/print-labels.py
+      label: The production printer is present
+    - type: file_exists
+      path: /srv/kestrel/printer/syscall-table.txt
+      label: The syscall table for this machine was generated
+    # The table is what the lab is decoded against, and it is generated rather
+    # than shipped, so its usefulness is part of the starting condition.
+    - type: file_content
+      path: /srv/kestrel/printer/syscall-table.txt
+      contains: "  read"
+      label: The table has an entry for the call a blocked reader sits in
+    - type: file_content
+      path: /srv/kestrel/printer/README.txt
+      contains: "system time"
+      label: The incident notes are present
+
+requirements:
+  - type: script_executable
+    path: /home/student/py/probe.py
+    label: The probe exists and can be run as a program
+
+  # The name is graded; the number is required to be printed but never
+  # asserted, because it is a property of the machine, not of the student.
+  - type: script_runs
+    path: /home/student/py/probe.py
+    args: ["blocked"]
+    expected_exit_code: 0
+    timeout_seconds: 30
+    output_contains:
+      - "BLOCKED_SYSCALL=read"
+      - "BLOCKED_NUMBER="
+    label: The call a blocked process is sitting in is found and named
+
+  # Three line counts. `syscw` moves by exactly the number of writes, so a
+  # typed-out answer passes one run and fails the other two.
+  - type: script_runs
+    path: /home/student/py/probe.py
+    args: ["writes", "200"]
+    expected_exit_code: 0
+    timeout_seconds: 30
+    output_contains:
+      - "LINES=200"
+      - "UNBUFFERED_WRITES=200"
+      - "BUFFERED_WRITES=1"
+    label: Two hundred lines cost two hundred crossings, or exactly one
+  - type: script_runs
+    path: /home/student/py/probe.py
+    args: ["writes", "50"]
+    expected_exit_code: 0
+    timeout_seconds: 30
+    output_contains:
+      - "LINES=50"
+      - "UNBUFFERED_WRITES=50"
+      - "BUFFERED_WRITES=1"
+    label: Fewer lines cost proportionally fewer crossings
+  - type: script_runs
+    path: /home/student/py/probe.py
+    args: ["writes", "137"]
+    expected_exit_code: 0
+    timeout_seconds: 30
+    output_contains:
+      - "LINES=137"
+      - "UNBUFFERED_WRITES=137"
+      - "BUFFERED_WRITES=1"
+    label: An awkward number of lines is counted rather than assumed
+
+  # A correct probe prints what it measured — `UNBUFFERED_WRITES={count}` and
+  # `BLOCKED_SYSCALL={name}` — so it contains none of these.
+  - type: file_content_absent
+    path: /home/student/py/probe.py
+    contains: "UNBUFFERED_WRITES=200"
+    label: The crossings are counted rather than contained in the source
+  - type: file_content_absent
+    path: /home/student/py/probe.py
+    contains: "UNBUFFERED_WRITES=137"
+    label: The awkward count is measured rather than contained in the source
+  - type: file_content_absent
+    path: /home/student/py/probe.py
+    contains: "BUFFERED_WRITES=1"
+    label: The buffered cost is measured rather than assumed to be one
+  - type: file_content_absent
+    path: /home/student/py/probe.py
+    contains: "LINES=137"
+    label: The line count is echoed from the argument rather than typed out
+  - type: file_content_absent
+    path: /home/student/py/probe.py
+    contains: "BLOCKED_SYSCALL=read"
+    label: The call is decoded from the table rather than named in the source
+
+  - type: command_output
+    command: grep
+    args: ["-x", "BLOCKED_SYSCALL=read", "/home/student/ops/syscalls.txt"]
+    contains: "BLOCKED_SYSCALL=read"
+    label: The write-up names the call the blocked process was in
+  - type: command_output
+    command: grep
+    args: ["-x", "PRINTER_IS=unbuffered", "/home/student/ops/syscalls.txt"]
+    contains: "PRINTER_IS=unbuffered"
+    label: The write-up says what the production printer actually does
+  - type: command_output
+    command: grep
+    args: ["-x", "SYSCALLS_SAVED_BY_BUFFERING=199", "/home/student/ops/syscalls.txt"]
+    contains: "SYSCALLS_SAVED_BY_BUFFERING=199"
+    label: The write-up puts a number on what buffering is worth
+
+hints:
+  - level: 1
+    text: >
+      `top` splits CPU into user and system for a reason: the second column is
+      time the kernel spent working on the process's behalf. Start by reading
+      `print-labels.py` and asking how many times it asks the kernel for
+      something. Then look at `/proc/self/io` — one of the counters there is
+      the number of write calls the process has made, and you can read it
+      before and after a piece of work to price that work.
+  - level: 2
+    text: >
+      `/proc/<pid>/syscall` holds the call a process is currently in, with the
+      number first. You can only read it for a process you own, so fork one and
+      look at the child. Between forking and the child reaching its blocking
+      call there is a moment where it is still running, so poll its state in
+      `/proc/<pid>/stat` until it is sleeping rather than guessing at a delay.
+  - level: 3
+    text: >
+      Gather the batch yourself rather than trusting a file object's default
+      buffer. Python sizes that buffer from the filesystem's block size — 4096
+      bytes here — so 200 label lines spill over it and cost two writes rather
+      than one. Joining the lines and issuing a single write is both the
+      deterministic answer and the point: the same bytes, the same output, one
+      trip across the boundary instead of two hundred. That is also why the
+      numbers in the table are useless on another machine — the boundary is an
+      architecture's calling convention, and each one numbers the calls
+      differently.
+
+references:
+  - title: syscall(2) — the calling convention, per architecture
+    url: https://man7.org/linux/man-pages/man2/syscall.2.html
+  - title: syscalls(2) — the system calls Linux provides
+    url: https://man7.org/linux/man-pages/man2/syscalls.2.html
+  - title: proc(5) — /proc/[pid]/syscall, /proc/[pid]/io and /proc/[pid]/stat
+    url: https://man7.org/linux/man-pages/man5/proc.5.html
+  - title: The Linux kernel — the proc filesystem
+    url: https://docs.kernel.org/filesystems/proc.html
+  - title: ptrace(2) — the access mode that guards /proc/[pid]/syscall
+    url: https://man7.org/linux/man-pages/man2/ptrace.2.html
+  - title: Python — io, and what is buffered by default
+    url: https://docs.python.org/3/library/io.html
+
+skills:
+  - cs.os.system-calls
+  - cs.os.user-kernel-boundary
+  - cs.os.proc-filesystem
+  - cs.performance.syscall-cost
+  - cs.troubleshooting.system-time
+
+# certification: deliberately absent.
+#
+# CS-012 is FOUNDATIONAL SKILL content. It is why a container is not a VM, why
+# seccomp exists and why `sy` time is a real signal, but it is not a published
+# objective of any certification and this lab claims none.

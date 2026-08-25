@@ -1211,3 +1211,115 @@ and `/proc` all work for the unprivileged student with no added privilege — no
 
 **Runtime dependency:** Python 3.11 standard library only, plus `ps` from the
 base image.
+
+### CS-012 — User Space, Kernel Space and System Calls
+
+```text
+LAB ID:              CS-012
+TITLE:               User Space, Kernel Space and System Calls
+CLASSIFICATION:      FOUNDATIONAL SKILL  (also PRODUCTION SKILL)
+CERTIFICATION:       none — claims no objective of any certification
+
+LEARNING OBJECTIVE:
+  Say what a system call is and what makes it costlier than a function call;
+  explain user time versus system time; find which call a blocked process is
+  sitting in, from /proc, without a debugger; explain why syscall numbers are
+  per-architecture and the name is the portable answer; and measure how often a
+  program crosses into the kernel, then change that number.
+
+WHY A DEVOPS/SRE ENGINEER NEEDS THIS:
+  It reframes "the app is slow" as "the app makes 40,000 write calls where it
+  could make 40". It is why `sy` time in top is a real signal, why a container
+  is not a VM, and why seccomp exists.
+
+OFFICIAL / PRIMARY SOURCES:
+  syscall(2) — the per-architecture convention  https://man7.org/linux/man-pages/man2/syscall.2.html
+  syscalls(2)                                   https://man7.org/linux/man-pages/man2/syscalls.2.html
+  proc(5) — /proc/[pid]/syscall, io, stat       https://man7.org/linux/man-pages/man5/proc.5.html
+  The Linux kernel — the proc filesystem        https://docs.kernel.org/filesystems/proc.html
+  ptrace(2) — the mode guarding /proc/[pid]/syscall  https://man7.org/linux/man-pages/man2/ptrace.2.html
+  Python — io and default buffering             https://docs.python.org/3/library/io.html
+
+LAST VERIFIED:       2026-08-25   (all six fetched, HTTP 200)
+```
+
+**Readiness and security gate, run before implementing.** Probed inside a
+container configured exactly as the provider configures one — `--cap-drop ALL`
+plus `LINUX_SANDBOX_CAPABILITIES`, `--pids-limit 128 --memory 512m --cpus 0.5
+--network none` — and re-confirmed inside a real session:
+
+| question | finding |
+|---|---|
+| Is `strace` in the image? | **No.** `ltrace` and `perf` are absent too. |
+| Can the student use it for the objective? | Not needed — `/proc` answers it. |
+| Do ptrace restrictions affect the lab? | **Yes, decisively.** See below. |
+| Any extra Linux capability required? | **None.** |
+| Gradeable with existing primitives? | Yes — `script_runs`, `command_output`, `file_content_absent`, `script_executable`. |
+| Could the evidence be forged? | Bounded the same way as CS-009…CS-011; see below. |
+| New shared-platform primitive or trust-boundary change? | **No.** |
+
+**The plan's design does not work.** It had the student read
+`/proc/<pid>/syscall` for a *seeded* blocked process. That file is guarded by
+`PTRACE_MODE_ATTACH_FSCREDS`, so an unprivileged student reading a root-owned
+process gets `Permission denied` — reproduced in a live session against PID 1.
+`/proc/<pid>/status` and `/proc/<pid>/io` are readable, but the syscall file is
+not. A seeded process would have to run as the student, and on a host with Yama
+`ptrace_scope=1` even that would require a *descendant*. So the inspected
+process is one the student forks: same user, same session, descendant — the only
+combination that works everywhere. This kernel has no Yama at all, which is why
+the constraint had to be reasoned about rather than observed.
+
+`SYS_PTRACE` is absent from `GRANTABLE_CAPABILITIES`, so no configuration path
+can request it. Nothing was added, relaxed, or widened for this lab.
+
+**Nothing is graded on a syscall number.** Numbers are per-architecture — `read`
+is **63** on aarch64 (measured) and 0 on x86_64. The graded answer is the
+**name**; `BLOCKED_NUMBER=` is required to be *printed* but its value is never
+asserted, and a test enforces that no expectation matches `BLOCKED_NUMBER=\d`.
+A second test runs the whole lab against a simulated x86_64 machine reporting
+number 0 and confirms it still passes.
+
+**The reference table is observed, not shipped.** Rather than embedding numbers
+for architectures this was never run on, `seed.sh` derives the table at seed
+time by putting a child into each blocking call and reading the number back —
+`read`, `pselect6`, `futex`, `clock_nanosleep`, `wait4`. It fails loudly if any
+cannot be observed, and a final `grep` refuses to finish without a `read` entry.
+The table is therefore correct by construction on whatever machine runs it, and
+it regenerates on reset (verified).
+
+**What makes the measurements exact.** `syscw` in `/proc/self/io` is the count
+of write syscalls. Measured: 200 straight-through writes move it by exactly
+200; the same 200 lines gathered into one write move it by exactly 1. Stability
+in the real image: 25/25 for the blocked probe, 10/10 at each of three line
+counts.
+
+**A fairness bug found by adversarial testing, and fixed.** The contract
+originally said "once through a buffer" and graded `BUFFERED_WRITES=1`. Writing
+an alternate correct solution with Python's *default* buffering produced **2**,
+not 1 — `open()` sizes its buffer from the filesystem's `st_blksize`, which is
+4096 here, and 200 label lines are 5200 bytes. Grading that would have failed
+correct work for a reason unrelated to the lesson. The contract now says
+"gather the whole batch and hand it to the kernel in **exactly one** write",
+which is deterministic on any filesystem and is what the printer should have
+been doing. The level-3 hint states the block-size trap outright.
+
+**Forged evidence and typed-out answers.** A shell script that types out all
+four runs behaves perfectly and reaches **8 of 13**: five `file_content_absent`
+checks bar `UNBUFFERED_WRITES=200`, `UNBUFFERED_WRITES=137`, `BUFFERED_WRITES=1`,
+`LINES=137` and `BLOCKED_SYSCALL=read` from the source, and a correct probe
+contains none of them because it prints interpolated values. A probe that reads
+`/proc/self/syscall` instead of the child's reports `None` and fails. Three
+different line counts mean a fixed answer fails two runs. A perfect write-up
+behind a do-nothing probe reaches 9 of 13.
+
+**Known limitation.** The reference table names `read`, so a student could copy
+that name into the write-up without ever forking. The program half is what
+defends the lab: `BLOCKED_NUMBER=` must be printed by their own probe, and the
+three measurement runs cannot be satisfied without measuring. Same bound as the
+prior labs, and documented rather than hidden.
+
+**New platform capability required:** none.
+
+**Runtime dependency:** Python 3.11 standard library only. No `strace`, no
+`SYS_PTRACE`, no privileged container, no Docker socket, no host PID namespace,
+no host filesystem access.

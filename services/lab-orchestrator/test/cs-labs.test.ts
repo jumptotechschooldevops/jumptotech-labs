@@ -53,6 +53,7 @@ const CS_IDS = [
   'CS-009',
   'CS-010',
   'CS-011',
+  'CS-012',
 ];
 
 async function csLabs(): Promise<LoadedLabDefinition[]> {
@@ -219,6 +220,14 @@ describe('CS-001 content policy', () => {
         'RAW_WAIT_STATUS=',
         'ORPHAN_PARENT=',
         'STATE_AFTER_SIGKILL=',
+      ],
+      'CS-012': [
+        'UNBUFFERED_WRITES=200',
+        'UNBUFFERED_WRITES=137',
+        'BUFFERED_WRITES=1',
+        'BLOCKED_SYSCALL=read',
+        'PRINTER_IS=',
+        'SYSCALLS_SAVED_BY_BUFFERING=',
       ],
       'CS-008': ['TOTAL=16', 'ERRORS=4', 'SLOWEST=R-1007', 'LONGEST_MSG=R-1012', 'ERROR_PATHS='],
       'CS-007': ['ORDER=leeds,bristol', 'ORDER=york,cardiff', 'TOTAL=26', 'COUNT=9', 'leeds,9'],
