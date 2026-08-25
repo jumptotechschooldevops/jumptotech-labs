@@ -174,6 +174,7 @@ import {
   terraformInitialized,
   terraformOutputEquals,
   terraformResourceExists,
+  terraformStateAbsent,
 } from './handlers/terraform.js';
 import {
   commandExitCode,
@@ -351,6 +352,7 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_initialized: terraformInitialized,
   terraform_resource_exists: terraformResourceExists,
   terraform_output_equals: terraformOutputEquals,
+  terraform_state_absent: terraformStateAbsent,
 
   path_absent: pathAbsent,
   file_content_absent: fileContentAbsent,

@@ -1120,6 +1120,20 @@ const sandboxRequirementSchemas = {
     .object({
       type: z.literal('terraform_resource_exists'),
       dir: sandboxPath,
+      /**
+       * Where state lives inside `dir`. Defaults to `terraform.tfstate`.
+       *
+       * Symmetrical with `terraform_state_absent`, and for the same reason: a
+       * lab may need to assert what a *previous* state held — the backup a
+       * destroy wrote, or a workspace's own state — not only what the current
+       * one holds.
+       */
+      state_file: z
+        .string()
+        .min(1)
+        .max(128)
+        .regex(/^[A-Za-z0-9._-]+$/, 'state_file must be a plain file name, not a path')
+        .optional(),
       /** Provider resource type, e.g. `local_file`. */
       resource_type: z
         .string()
@@ -1132,6 +1146,64 @@ const sandboxRequirementSchemas = {
         .min(1)
         .max(128)
         .regex(/^[a-zA-Z_][a-zA-Z0-9_-]*$/, 'must be a Terraform resource name'),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * Terraform state holds no managed object at an address — or none at all.
+   *
+   * This is the check a `terraform destroy` lab is graded on, and it is
+   * deliberately **not** "terraform.tfstate does not exist". A completed
+   * destroy leaves a perfectly valid state file behind, with `resources: []`
+   * and its serial incremented; deleting the file is a different act with a
+   * different meaning, and one a student could perform with `rm`. So a missing
+   * state file fails this check rather than passing it.
+   *
+   * `address` selects between the two shapes:
+   *
+   *   · **given** — that one managed address must hold no instance. Used by
+   *     targeted-destroy, `state rm` and refactoring labs.
+   *   · **omitted** — the state must hold no managed instances at all. Used by
+   *     a full-destroy lab.
+   *
+   * Only `mode: "managed"` is counted. Data sources are readings of things
+   * Terraform does not own, and `terraform destroy` clears them as a side
+   * effect of dropping what depends on them; a state holding only data sources
+   * manages no infrastructure and passes.
+   *
+   * Every instance in `instances[]` counts, whatever its status — a *deposed*
+   * object is a real object that a failed replacement left behind, and a lab
+   * that called such a state "destroyed" would be teaching the opposite of the
+   * lesson.
+   */
+  terraform_state_absent: z
+    .object({
+      type: z.literal('terraform_state_absent'),
+      dir: sandboxPath,
+      /** Where state lives inside `dir`. Defaults to `terraform.tfstate`. */
+      state_file: z
+        .string()
+        .min(1)
+        .max(128)
+        .regex(/^[A-Za-z0-9._-]+$/, 'state_file must be a plain file name, not a path')
+        .optional(),
+      /**
+       * A managed resource address, e.g. `local_file.report`. Omit to require
+       * that no managed resource remains anywhere in the state.
+       *
+       * Deliberately not free text: it is parsed into type and name and
+       * compared field by field, so nothing here ever becomes a pattern.
+       */
+      address: z
+        .string()
+        .min(3)
+        .max(257)
+        .regex(
+          /^[a-z][a-z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_-]*$/,
+          'address must be a managed resource address such as local_file.report',
+        )
+        .optional(),
       ...common,
     })
     .strict(),
@@ -1751,6 +1823,7 @@ export const REQUIREMENT_FAMILIES = {
   terraform_initialized: 'terraform',
   terraform_resource_exists: 'terraform',
   terraform_output_equals: 'terraform',
+  terraform_state_absent: 'terraform',
 
   resource_absent: 'kubernetes',
 
