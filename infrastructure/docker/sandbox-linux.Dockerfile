@@ -73,10 +73,37 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   runit                               LINUX-005 supervision
 #   less tree file nano                 reading and identifying what is there
 #   man-db manpages                     the labs cite man pages; they must exist
+#                                       — see the dpkg fragment below, without
+#                                       which they are installed but empty
 #   gawk diffutils sed grep findutils   the analysis labs' toolset
 #   tar gzip                            LINUX-008 archives
 #   tzdata ca-certificates              sane log timestamps, TLS roots
 # `coreutils` comes with the base image. Nothing else is added.
+#
+# The second install is a `--reinstall` of packages the base image already
+# provides. `apt-get install coreutils` on an up-to-date system is a no-op, so
+# without this their manual pages — chmod(1), df(1), du(1), mkdir(1), mv(1),
+# stat(1), tail(1), find(1), grep(1), useradd(8), usermod(8), hostname(1) —
+# would stay missing even with the exclusion lifted, because they were unpacked
+# before it was. Every package named here provides a page a shipped lab cites.
+# `mandb` then builds the index `man` searches.
+# Put the man pages back.
+#
+# `debian:bookworm-slim` ships /etc/dpkg/dpkg.cfg.d/docker containing
+# `path-exclude /usr/share/man/*`, so every package installed below would unpack
+# with its manual pages silently dropped — `man-db` and `manpages` included.
+# The Linux track cites a manual page in almost every lab and tells students to
+# read them, so an image where `man ls` says "No manual entry" teaches the
+# opposite of what the labs are for.
+#
+# A `path-include` in a fragment that sorts *after* `docker` re-includes them,
+# which is surgical in a way that deleting the vendor file is not: the doc,
+# locale and info exclusions stay in force, so only the manual pages come back
+# and the image does not regain everything else Debian normally strips.
+RUN set -eux; \
+    printf '%s\n' 'path-include /usr/share/man/*' \
+      > /etc/dpkg/dpkg.cfg.d/jumptotech-manpages
+
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -105,6 +132,17 @@ RUN set -eux; \
       gzip \
       tzdata \
       ca-certificates; \
+    apt-get install -y --no-install-recommends --reinstall \
+      coreutils \
+      findutils \
+      grep \
+      sed \
+      tar \
+      gzip \
+      diffutils \
+      hostname \
+      passwd; \
+    mandb --quiet --create; \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # The unprivileged student, a second group they are a *member* of, and sudo.
