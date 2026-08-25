@@ -42,13 +42,13 @@ describe('AWS lab definitions load', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002']);
+    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003']);
   });
 
   it('declares the Linux sandbox, and gets container isolation for free', async () => {
     const registry = await realRegistry();
 
-    for (const id of ['AWS-001', 'AWS-002']) {
+    for (const id of ['AWS-001', 'AWS-002', 'AWS-003']) {
       const lab = registry.get(id);
       // Simulated: an AWS-track lab, deliberately backed by a local container.
       expect(lab.environment.provider, id).toBe('linux');
@@ -64,7 +64,7 @@ describe('AWS lab definitions load', () => {
 
     expect(track).toBeDefined();
     expect(track?.title).toBe('AWS');
-    expect(track?.labCount).toBe(2);
+    expect(track?.labCount).toBe(3);
   });
 });
 
@@ -88,12 +88,36 @@ describe('AWS-001 needs nothing from AWS', () => {
     }
   });
 
-  it('grades AWS-002 entirely through the IAM family', async () => {
+  it('grades the policy labs entirely through the IAM family', async () => {
     const registry = await realRegistry();
-    const lab = registry.get('AWS-002');
 
-    const families = new Set(lab.requirements.map((r) => requirementFamily(r.type)));
-    expect(families).toEqual(new Set(['iam']));
+    for (const id of ['AWS-002', 'AWS-003']) {
+      const families = new Set(registry.get(id).requirements.map((r) => requirementFamily(r.type)));
+      expect(families, id).toEqual(new Set(['iam']));
+    }
+  });
+
+  it('adds no requirement type beyond the five already committed', async () => {
+    const registry = await realRegistry();
+    const used = new Set(
+      registry
+        .labsForTrack('aws')
+        .flatMap((l) => [...registry.get(l.id).requirements, ...registry.get(l.id).setup.verify])
+        .map((r) => r.type)
+        .filter((t) => t.startsWith('iam_')),
+    );
+
+    expect([...used].sort()).toEqual(
+      ['iam_policy_allows', 'iam_policy_document', 'iam_policy_no_wildcard', 'iam_policy_not_allows', 'iam_policy_statement']
+        .filter((t) => used.has(t as never))
+        .sort(),
+    );
+    for (const type of used) {
+      expect([
+        'iam_policy_allows', 'iam_policy_document', 'iam_policy_no_wildcard',
+        'iam_policy_not_allows', 'iam_policy_statement',
+      ]).toContain(type);
+    }
   });
 
   it('lets the Linux provider answer IAM checks, because they are a file parse', () => {
@@ -198,13 +222,15 @@ describe('AWS-001 official documentation validation', () => {
     expect(registry.get('AWS-001').certification).toEqual([]);
   });
 
-  it('claims only SOA-C03 for AWS-002, which authors an IAM policy', async () => {
+  it('claims only SOA-C03 for the policy-authoring labs', async () => {
     const registry = await realRegistry();
-    const claims = registry.get('AWS-002').certification;
 
-    expect(claims).toHaveLength(1);
-    expect(claims[0]?.certification).toBe('SOA-C03');
-    expect(claims[0]?.relevant).toBe(true);
+    for (const id of ['AWS-002', 'AWS-003']) {
+      const claims = registry.get(id).certification;
+      expect(claims, id).toHaveLength(1);
+      expect(claims[0]?.certification, id).toBe('SOA-C03');
+      expect(claims[0]?.relevant, id).toBe(true);
+    }
   });
 });
 
