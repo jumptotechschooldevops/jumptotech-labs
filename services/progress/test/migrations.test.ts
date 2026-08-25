@@ -12,20 +12,36 @@ import { MIGRATIONS_DIR, MigrationError, loadMigrations } from '../src/postgres/
 import { describeDatabase, loadDatabaseConfig } from '../src/postgres/config.js';
 
 describe('migration files', () => {
-  it('ships the initial schema with the package', async () => {
+  it('ships the schema with the package', async () => {
     const migrations = await loadMigrations(MIGRATIONS_DIR);
 
-    expect(migrations.map((m) => m.version)).toEqual(['001_progress']);
-    expect(migrations[0]?.checksum).toMatch(/^[0-9a-f]{64}$/);
-
-    const sql = migrations[0]!.sql;
-    for (const table of ['students', 'lab_attempts', 'lab_progress', 'hint_usage']) {
-      expect(sql).toContain(`CREATE TABLE ${table}`);
+    // PLATFORM-008 added 002. The list is asserted so a migration cannot be
+    // added without someone noticing here, but the *safety* checks below apply
+    // to every file rather than to a numbered one — that is the invariant, and
+    // it should not need editing when 003 arrives.
+    expect(migrations.map((m) => m.version)).toEqual(['001_progress', '002_sessions']);
+    for (const migration of migrations) {
+      expect(migration.checksum, migration.version).toMatch(/^[0-9a-f]{64}$/);
     }
-    // Forward-only, and never destructive on startup.
-    expect(sql).not.toMatch(/\bDROP\s+TABLE\b/i);
-    expect(sql).not.toMatch(/\bTRUNCATE\b/i);
-    expect(sql).not.toMatch(/\bDROP\s+DATABASE\b/i);
+
+    const progress = migrations.find((m) => m.version === '001_progress')!.sql;
+    for (const table of ['students', 'lab_attempts', 'lab_progress', 'hint_usage']) {
+      expect(progress).toContain(`CREATE TABLE ${table}`);
+    }
+
+    const sessions = migrations.find((m) => m.version === '002_sessions')!.sql;
+    expect(sessions).toContain('CREATE TABLE IF NOT EXISTS lab_sessions');
+    // The durable session identity is the unpredictable id, not a row number,
+    // and one sandbox belongs to at most one session.
+    expect(sessions).toContain('session_id            TEXT        PRIMARY KEY');
+    expect(sessions).toMatch(/sandbox_ref\s+TEXT\s+NOT NULL UNIQUE/);
+
+    // Forward-only, and never destructive on startup — for every migration.
+    for (const migration of migrations) {
+      expect(migration.sql, migration.version).not.toMatch(/\bDROP\s+TABLE\b/i);
+      expect(migration.sql, migration.version).not.toMatch(/\bTRUNCATE\b/i);
+      expect(migration.sql, migration.version).not.toMatch(/\bDROP\s+DATABASE\b/i);
+    }
   });
 
   it('applies in filename order', async () => {
