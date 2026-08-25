@@ -415,6 +415,7 @@ describe('every shipped Linux lab', () => {
     'linux-014-environment',
     'linux-015-sudo-policy',
     'linux-016-text-sweeps',
+    'linux-017-systemd-unit',
   ];
 
   it.each(DIRS)('fails %s on an untouched sandbox, and never names the fix', async (dir) => {
@@ -469,6 +470,20 @@ function worldSatisfying(requirements: readonly Requirement[]): FakeWorld {
     commands: {},
   };
   let nextId = 3000;
+
+  /** Unit files under construction, keyed by path. */
+  const units = new Map<
+    string,
+    { sections: Set<string>; directives: Array<{ section: string; directive: string; value: string }> }
+  >();
+  const unitFor = (path: string) => {
+    let unit = units.get(path);
+    if (!unit) {
+      unit = { sections: new Set<string>(), directives: [] };
+      units.set(path, unit);
+    }
+    return unit;
+  };
 
   for (const requirement of requirements) {
     switch (requirement.type) {
@@ -590,9 +605,49 @@ function worldSatisfying(requirements: readonly Requirement[]): FakeWorld {
         };
         break;
 
+      /*
+       * The systemd checks read one parsed file, so satisfying them means
+       * building a unit rather than setting a flag. Sections and directives are
+       * collected per path and the file is rendered at the end — which is also
+       * why this is the one requirement family whose world cannot be built
+       * independently per requirement.
+       */
+      case 'systemd_unit_section':
+        unitFor(requirement.path).sections.add(requirement.section);
+        break;
+
+      case 'systemd_unit_directive': {
+        const unit = unitFor(requirement.path);
+        unit.sections.add(requirement.section);
+        if (requirement.absent === true) break;
+        const value = requirement.equals ?? requirement.contains ?? '';
+        unit.directives.push({
+          section: requirement.section,
+          directive: requirement.directive,
+          value,
+        });
+        break;
+      }
+
       default:
         throw new Error(`worldSatisfying does not know how to satisfy '${requirement.type}'`);
     }
+  }
+
+  // Render each collected unit into a real file, in section order, so the
+  // parser under test sees something a person could plausibly have written.
+  for (const [path, unit] of units) {
+    const lines: string[] = [];
+    for (const section of ['Unit', 'Service', 'Install']) {
+      if (!unit.sections.has(section)) continue;
+      lines.push(`[${section}]`);
+      for (const d of unit.directives.filter((x) => x.section === section)) {
+        lines.push(`${d.directive}=${d.value}`);
+      }
+      lines.push('');
+    }
+    const existing = world.files[path];
+    world.files[path] = { ...existing, type: 'file', content: lines.join('\n') };
   }
 
   return world;

@@ -1,0 +1,371 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# HOW THIS LAB IS GRADED, AND WHAT IT DOES NOT CLAIM
+#
+# The unit file is parsed and evaluated as configuration, directive by
+# directive, using the `systemd_unit_section` and `systemd_unit_directive`
+# requirement types. Formatting, comments, whitespace and the order directives
+# are written in are all irrelevant to the result; what is graded is what the
+# directives *say*.
+#
+# **The unit is never started.** This sandbox runs runit as its init, has no
+# systemd installed, and is not granted CAP_SYS_ADMIN — which is not an
+# oversight but the isolation boundary the whole track depends on. So this lab
+# validates the unit statically and says so, in its own task text, rather than
+# implying a service came up. Nothing here fakes `systemctl`; the track has
+# refused to do that since LINUX-005 and this lab does not start.
+#
+# That limitation is the reason the *runit* service is left running throughout.
+# The student can see the thing they are migrating actually working, compare its
+# definition against what they are writing, and check their reasoning against a
+# service that really runs — which is as close to runtime feedback as this
+# sandbox can honestly get.
+#
+# WHY THE DRAFT IS BROKEN THREE WAYS
+#
+#   [Unit                 an unterminated section header. systemd refuses the
+#                         whole file for this, and so does the platform's
+#                         parser — which reports the line rather than
+#                         pretending every directive is merely missing.
+#   ExecStart=ledger-api  a relative path, which systemd rejects.
+#   Restart=always        contradicts the runbook: it would bring the service
+#                         back after a deliberate stop.
+#
+# Each is a mistake a real person makes, and none of them is visible from the
+# draft alone — the runbook is what makes them wrong.
+#
+# Content is written from the systemd project's own manual pages as published
+# by Debian, and from the Linux man-pages project.
+# ---------------------------------------------------------------------------
+id: LINUX-017
+slug: linux-017-systemd-unit
+title: Writing a systemd Service Unit
+track: linux
+topic: linux-administration
+difficulty: intermediate
+level: practice
+duration_minutes: 45
+order: 14
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-005
+
+story: >
+  The ledger API is moving off the runit hosts onto the systemd fleet in
+  November, and platform want the unit file ahead of the window so it can go
+  through review with everything else.
+
+  Someone started one during the planning meeting and stopped after four lines.
+  What they left behind is not a draft so much as a note to self, and two of the
+  four lines are actively wrong.
+
+  The service itself is still running here under runit, doing exactly what it
+  will have to keep doing afterwards.
+
+objectives:
+  - Express a service's operational contract as a systemd unit file
+  - Place directives in the right section — [Unit], [Service], [Install]
+  - Choose a restart policy that distinguishes a crash from a deliberate stop
+  - Order a service against a dependency, and say whether it also wants it
+  - Read a unit file's structure well enough to find why systemd would reject it
+
+task:
+  summary: Write the systemd unit for the ledger API, working from its migration runbook and the runit definition it runs under today.
+  description: >
+    You have a shell on the host and passwordless `sudo`.
+
+    Write `/etc/systemd/system/ledger-api.service` so that it expresses what
+    the migration runbook asks for. The runbook is at
+    `/srv/jumptotech/runbooks/ledger-api-migration.md` and it is the
+    specification — it describes the service's behaviour in words, and your job
+    is to translate that into directives. It does not name the directives, on
+    purpose.
+
+    Two other things on this host are worth reading before you start. The
+    service is running right now under runit, and its definition at
+    `/etc/sv/ledger-api/run` shows how the same contract is satisfied today —
+    which account it drops to, where it works from, how it gets its settings.
+    And there is an abandoned draft already at the unit path. Do not trust it:
+    someone started it in a meeting and two of its four lines are wrong. One of
+    them stops systemd reading the file at all.
+
+    A word on what this lab can and cannot check, because you should not be
+    misled about it. **Your unit is never started.** This sandbox runs `runit`
+    as its init and has no systemd in it — the track has said since LINUX-005
+    that it will not fake a `systemctl` that does nothing, and that holds here.
+    What is graded is the unit file itself, parsed and evaluated directive by
+    directive: sections, values, and where each setting belongs. Formatting,
+    comments and the order you write things in do not matter. Nothing about
+    runtime behaviour is being claimed or checked.
+
+    systemd is not installed here either, so its manual pages are not on this
+    host. The reference links below are the same pages, and they are what you
+    want: `systemd.unit(5)` for the sections and the dependency settings,
+    `systemd.service(5)` for everything about how the process is run, and
+    `systemd.syntax(7)` if the parser rejects your file and you want to know
+    exactly what it objects to.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/jumptotech/runbooks/ledger-api-migration.md
+      label: The migration runbook is present
+    - type: file_exists
+      path: /etc/sv/ledger-api/run
+      label: The current runit definition is present
+    - type: process_running
+      pattern: /usr/local/bin/ledger-api
+      label: The service being migrated is running under runit
+    - type: file_exists
+      path: /etc/jumptotech/ledger-api.env
+      label: The environment file the unit must read is present
+    - type: user_exists
+      name: ledger
+      label: The service account exists
+    - type: file_exists
+      path: /etc/systemd/system/ledger-api.service
+      label: The abandoned draft is present
+  verify_timeout_seconds: 120
+
+# Verification is state-based and reads the live host. Nothing inspects the
+# student's shell history or the commands they typed.
+#
+# Every check below reads the unit file *semantically*: the file is parsed, and
+# each directive is evaluated as a key in a section. Two units that differ only
+# in whitespace, comments or directive order grade identically, and a
+# commented-out directive counts as absent rather than as text that happens to
+# match. A file systemd would refuse to parse fails as unparseable, naming the
+# line, rather than as a list of missing directives.
+requirements:
+  - type: file_mode
+    path: /etc/systemd/system/ledger-api.service
+    mode: "644"
+    label: The unit file is readable by the service manager
+
+  # --- the three sections a service unit needs ----------------------------
+  - type: systemd_unit_section
+    path: /etc/systemd/system/ledger-api.service
+    section: Unit
+    label: The unit has a [Unit] section
+  - type: systemd_unit_section
+    path: /etc/systemd/system/ledger-api.service
+    section: Service
+    label: The unit has a [Service] section
+  - type: systemd_unit_section
+    path: /etc/systemd/system/ledger-api.service
+    section: Install
+    label: The unit has an [Install] section
+
+  # --- [Unit]: identity and ordering --------------------------------------
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Unit
+    directive: Description
+    contains: ledger-api
+    label: The description names the service
+  # The runbook asks for the network to be genuinely configured, not merely
+  # for the network stack to have been brought up — which is the distinction
+  # between the two targets, and the reason both a Wants and an After are
+  # needed rather than one of them.
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Unit
+    directive: Wants
+    contains: network-online.target
+    label: The unit asks for the network to be up before it runs
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Unit
+    directive: After
+    contains: network-online.target
+    label: The unit is ordered after the network is up
+
+  # --- [Service]: how the process is run ----------------------------------
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Service
+    directive: Type
+    equals: simple
+    label: The service is declared as one that runs in the foreground
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Service
+    directive: ExecStart
+    equals: /usr/local/bin/ledger-api
+    label: The service starts the application by its absolute path
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Service
+    directive: User
+    equals: ledger
+    label: The service runs as its own account rather than as root
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Service
+    directive: Group
+    equals: ledger
+    label: The service runs under its own group
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Service
+    directive: WorkingDirectory
+    equals: /srv/jumptotech
+    label: The service works from the directory the runbook names
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Service
+    directive: EnvironmentFile
+    contains: /etc/jumptotech/ledger-api.env
+    label: The service reads its settings from the environment file
+  # `always` would bring the service back after an operator stopped it, which
+  # is exactly what the runbook says must not happen. This is the directive
+  # the abandoned draft gets wrong.
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Service
+    directive: Restart
+    equals: on-failure
+    label: A crash restarts the service and a deliberate stop does not
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Service
+    directive: RestartSec
+    equals: "5"
+    label: Restart attempts are spaced so a crash loop cannot spin
+
+  # --- [Install]: what `systemctl enable` would do ------------------------
+  - type: systemd_unit_directive
+    path: /etc/systemd/system/ledger-api.service
+    section: Install
+    directive: WantedBy
+    contains: multi-user.target
+    label: Enabling the service would start it on a normal boot
+
+hints:
+  - level: 1
+    text: >
+      Read the runbook first and turn each bullet into a question about the
+      service rather than about systemd: who does it run as, where does it work
+      from, where do its settings come from, what should happen when it dies,
+      and what should happen when someone stops it on purpose. Those last two
+      are different questions and the runbook answers them differently.
+
+      Then look at the draft. One of its four lines stops the file being read at
+      all — not a wrong value, a shape problem. If you fix nothing else first,
+      fix that, because until it is fixed nothing else in the file counts.
+  - level: 2
+    text: >
+      A unit file has three sections and each answers a different question.
+      [Unit] is about identity and how this service relates to others — what it
+      wants to exist, and what it must come after. [Service] is about running
+      the process: which program, as whom, from where, with what settings, and
+      what to do when it exits. [Install] is about what `systemctl enable`
+      should do with it — which target should pull it in.
+
+      `systemd.unit(5)` documents the first and third, `systemd.service(5)` the
+      second; both are linked below. Two things to look for specifically. The
+      restart settings have several values and their names describe exactly when
+      they act, so read the list rather than guessing. And the dependency
+      settings come in pairs — one expresses *ordering* and another expresses
+      *wanting the thing to exist at all*. The runbook asks for both, and it is
+      worth understanding why one without the other would not be enough.
+  - level: 3
+    text: >
+      [Unit] carries the description, and the two dependency directives that
+      name `network-online.target` — one for ordering and one for pulling the
+      target in, because ordering alone does not cause it to be reached.
+      [Service] carries the type for a foreground process that does not fork,
+      the absolute path to the program, the account and group it drops to, the
+      directory it works from, the file its settings are read out of, the
+      restart policy that acts on failure only, and the delay between attempts.
+      [Install] carries the target that should want this service on a normal
+      multi-user boot.
+
+      When the checks still disagree with you, read the failure text carefully:
+      a complaint that the file is not a valid unit is about its shape and names
+      the line, while a complaint about a particular directive means that
+      directive was found and its value is not what the runbook asked for.
+      Nothing in the results tells you the expected value, so work from the
+      runbook rather than from the checklist.
+
+references:
+  - title: systemd.unit(5) — unit configuration, sections and dependencies
+    url: https://manpages.debian.org/bookworm/systemd/systemd.unit.5.en.html
+  - title: systemd.service(5) — service unit configuration
+    url: https://manpages.debian.org/bookworm/systemd/systemd.service.5.en.html
+  - title: systemd.syntax(7) — the syntax of systemd configuration files
+    url: https://manpages.debian.org/bookworm/systemd/systemd.syntax.7.en.html
+  - title: systemd.exec(5) — execution environment configuration
+    url: https://manpages.debian.org/bookworm/systemd/systemd.exec.5.en.html
+  - title: sv(8) — controlling runit services
+    url: https://manpages.debian.org/bookworm/runit/sv.8.en.html
+
+skills:
+  - linux.systemd.unit-structure
+  - linux.systemd.service-directives
+  - linux.systemd.restart-policy
+  - linux.systemd.dependencies
+  - linux.systemd.install-target
+  - linux.services.status
+
+# ---------------------------------------------------------------------------
+# SOURCE VERIFICATION
+#
+# Recorded as comments rather than schema fields: a `sources:` / `last_verified:`
+# block would be a change to the shared lab schema, which this track is not
+# permitted to make unilaterally.
+#
+# last_verified: 2026-08-25
+#
+# CLASSIFICATION
+#
+#   CERTIFICATION OBJECTIVE  partial — see below
+#   PRODUCTION SKILL         yes; writing and reviewing unit files is most of
+#                            the systemd work an engineer actually does
+#   FOUNDATIONAL KNOWLEDGE   service supervision as a concept: identity,
+#                            dependency ordering, restart policy, enablement
+#
+# On the certification claim, stated carefully. "Create, configure, and
+# troubleshoot services" is a published LFCS competency under Essential
+# Commands, read from the Linux Foundation's certification page on 2026-08-25,
+# and LFCS is examined on systemd-based hosts. This lab covers the *configure*
+# and part of the *troubleshoot* of that competency — the student diagnoses why
+# a unit file would be rejected and corrects a policy that contradicts its
+# specification.
+#
+# What it does not cover is the rest: the unit is never loaded, never started,
+# and never inspected with `systemctl`, because this sandbox has no systemd and
+# is not granted CAP_SYS_ADMIN. So `certification.relevant` is true and the
+# domain is recorded, and the task text tells the student plainly that runtime
+# behaviour is not being validated. A lab that let a student believe they had
+# been examined on running services would be worse than one that admits the
+# boundary.
+#
+# Technical objectives verified 2026-08-25 against the systemd project's manual
+# pages as published by Debian:
+#   systemd.syntax(7)   comment markers, line continuation, whitespace around
+#                       `=`, and the rule that an empty assignment resets
+#   systemd.unit(5)     After=/Wants=/Requires= take space-separated lists and
+#                       "may be specified more than once, in which case
+#                       dependencies for all listed names are created";
+#                       WantedBy=/RequiredBy= likewise in [Install]
+#
+# RUNTIME LIMITATION, stated here as well as in the task text: nothing in this
+# lab validates that the unit would start. The sandbox runs runit as PID 1,
+# `systemctl` and `systemd-analyze` are not installed, and CAP_SYS_ADMIN is not
+# in the platform's grantable set at all. Grading is static and semantic. The
+# runit service is deliberately left running so the student has a working
+# reference to compare against, which is the closest to runtime feedback this
+# architecture can honestly offer.
+# ---------------------------------------------------------------------------
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - essential-commands

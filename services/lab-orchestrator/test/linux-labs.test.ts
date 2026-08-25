@@ -42,7 +42,7 @@ const LINUX_CHAIN = [
 ];
 
 /** Every Linux lab, in catalog order. */
-const LINUX_IDS = [...LINUX_CHAIN, 'LINUX-014', 'LINUX-015', 'LINUX-016'];
+const LINUX_IDS = [...LINUX_CHAIN, 'LINUX-014', 'LINUX-015', 'LINUX-016', 'LINUX-017'];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {
@@ -204,6 +204,9 @@ describe('the catalog carries both tracks (test requirement 2)', () => {
     expect(registry.get('LINUX-015').prerequisites).toEqual(['LINUX-003']);
     // LINUX-016 builds on reading and filtering logs, and needs nothing else.
     expect(registry.get('LINUX-016').prerequisites).toEqual(['LINUX-007']);
+    // LINUX-017 expresses a supervised service as a systemd unit, so it needs
+    // the service lab and nothing else.
+    expect(registry.get('LINUX-017').prerequisites).toEqual(['LINUX-005']);
   });
 
   it('names only prerequisites that exist in the track', async () => {
