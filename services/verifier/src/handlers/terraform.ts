@@ -11,6 +11,25 @@
  * the student's working directory: that would mean executing a directory whose
  * contents the student controls, from the platform's own verification path, for
  * information the state file already contains.
+ *
+ * ## Values never leave this module (PLATFORM-SEC)
+ *
+ * A `CheckResult` carries one free-text field, `detail`, and it is serialised
+ * straight into the API response the browser reads. So `detail` is the whole
+ * disclosure surface of a check, and the rule these handlers keep is simple:
+ *
+ *   · an **expected** value is never repeated, because it is the answer;
+ *   · an **actual** value is never repeated, because the platform cannot know
+ *     it is safe to — `sensitive` marks only the outputs whose author thought
+ *     to mark them;
+ *   · **names, addresses, types and counts** are fine, and are what failures
+ *     are built from.
+ *
+ * Expected values live in `lab.yaml` on the server and reach nothing else: the
+ * catalog API projects requirements to `label ?? type` and never their fields,
+ * the sandbox seeding path never sees a requirement, and the progress store
+ * persists a check *count* rather than any check detail. Comparison happens
+ * here, in the verifier process, and only its verdict travels.
  */
 import { fail, missingPath, pass, type SandboxVerifierHandler } from '../contract.js';
 import {
@@ -222,16 +241,107 @@ export const terraformOutputEquals: SandboxVerifierHandler<'terraform_output_equ
       );
     }
 
-    // Outputs are compared as their string form: a lab that wants a number and
-    // a lab that wants the digits of one mean the same thing to a student, and
-    // the state file's JSON typing is not what the exercise is teaching.
-    const actual = renderOutput(output.value);
-    if (actual !== requirement.value) {
-      return fail(`Output '${requirement.name}' is ${actual === '' ? 'empty' : `'${actual}'`}`);
+    if (outputMatches(output.value, requirement.value)) return pass();
+
+    /*
+     * PLATFORM-SEC. Neither value goes into this message.
+     *
+     * Not the *expected* value, because it is the answer — telling a student
+     * what the output should have been turns a failed check into a solution.
+     * Not the *actual* value either, because the platform cannot know it is
+     * safe to repeat: `sensitive` marks the ones an author knew about, and the
+     * lesson of a sensitive-data lab is precisely that an unmarked output can
+     * still hold a credential.
+     *
+     * What is left is enough to act on and carries nothing secret: the name
+     * the student chose, and the shape of what they produced. A type is
+     * structural metadata, not a value — knowing an output is a list rather
+     * than a string tells you where to look and reveals nothing about it.
+     */
+    if (output.sensitive === true) {
+      return fail(
+        `Terraform output '${requirement.name}' does not match the required value. It is marked sensitive, so the platform does not read its value into this message.`,
+      );
     }
-    return pass();
+    return fail(
+      `Terraform output '${requirement.name}' does not match the required value (the output is ${describeShape(output.value)}).`,
+    );
   },
 };
+
+/**
+ * Does an output hold the value a lab asked for?
+ *
+ * Two comparisons, chosen by what the output actually is rather than by what
+ * the lab wrote:
+ *
+ *   · **Primitives** compare by their canonical string form, so a lab may write
+ *     `value: '8080'` for a number output. This is the long-standing behaviour
+ *     and labs depend on it.
+ *   · **Lists and objects** compare *structurally*. The lab's expected string is
+ *     parsed as JSON and deep-compared, so `{"b":2,"a":1}` matches an output of
+ *     `{"a":1,"b":2}` — Terraform does not promise key order, and a check that
+ *     depended on it would fail correct work. Only if the expected text is not
+ *     valid JSON does this fall back to comparing canonical renderings.
+ *
+ * Deliberately never a substring match: `terraform_output_equals` means equals.
+ */
+export function outputMatches(actual: unknown, expected: string): boolean {
+  if (Array.isArray(actual) || (typeof actual === 'object' && actual !== null)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(expected);
+    } catch {
+      return renderOutput(actual) === expected;
+    }
+    return deepEquals(actual, parsed);
+  }
+  return renderOutput(actual) === expected;
+}
+
+/** Structural equality. Object key order is irrelevant; array order is not. */
+function deepEquals(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((entry, index) => deepEquals(entry, b[index]));
+  }
+  if (typeof a === 'object' && typeof b === 'object' && a !== null && b !== null) {
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const keys = Object.keys(left);
+    if (keys.length !== Object.keys(right).length) return false;
+    return keys.every((key) => Object.hasOwn(right, key) && deepEquals(left[key], right[key]));
+  }
+  return false;
+}
+
+/**
+ * The *shape* of an output, for a failure message. Never its contents.
+ *
+ * Lengths are included for containers because "a list of 3" is a useful nudge
+ * and says nothing about what is in it. Nothing is reported for a primitive
+ * beyond its type — not even whether it is empty, since emptiness is a fact
+ * about the value.
+ */
+function describeShape(value: unknown): string {
+  if (value === null || value === undefined) return 'null';
+  if (Array.isArray(value)) return `a list of ${value.length} item${value.length === 1 ? '' : 's'}`;
+  switch (typeof value) {
+    case 'string':
+      return 'a string';
+    case 'number':
+      return 'a number';
+    case 'boolean':
+      return 'a boolean';
+    case 'object': {
+      const keys = Object.keys(value as Record<string, unknown>).length;
+      return `an object with ${keys} attribute${keys === 1 ? '' : 's'}`;
+    }
+    default:
+      return 'an unrecognised type';
+  }
+}
 
 function renderOutput(value: unknown): string {
   if (typeof value === 'string') return value;
