@@ -37,6 +37,7 @@ const TERRAFORM_IDS = [
   'TF-012',
   'TF-016',
   'TF-017',
+  'TF-025',
 ];
 
 let cached: LabRegistry | undefined;
@@ -974,5 +975,100 @@ describe('TF-017 — Complex Types', () => {
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tf') || p.endsWith('.tfvars'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-025
+
+describe('TF-025 — Custom Conditions', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf025(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-025-custom-conditions', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf025();
+    expect(definition.id).toBe('TF-025');
+    expect(definition.topic).toBe('conditions');
+    expect(definition.order).toBe(23);
+    expect(definition.prerequisites).toEqual(['TF-017']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds a configuration that works and states none of its assumptions', async () => {
+    const files = await loadSetupFiles(await tf025());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    for (const construct of ['validation', 'precondition', 'postcondition', 'check "']) {
+      expect(main.content).not.toContain(construct);
+    }
+    // The pieces the conditions will be about are all present.
+    expect(main.content).toContain('variable "environment"');
+    expect(main.content).toContain('data "local_file" "platform"');
+  });
+
+  it('requires all four constructs, each on the right thing', async () => {
+    const requirements = (await tf025()).requirements;
+    expect(requirements.some((r) => r.type === 'terraform_variable_validation')).toBe(true);
+    expect(requirements.some((r) => r.type === 'terraform_check_declared')).toBe(true);
+
+    const conditions = requirements.filter(
+      (r) => r.type === 'terraform_resource_condition',
+    ) as Array<Record<string, unknown>>;
+    expect(conditions).toHaveLength(2);
+    // A precondition on the managed resource...
+    expect(
+      conditions.some(
+        (c) => c.condition === 'precondition' && c.name === 'release_manifest' && c.mode !== 'data',
+      ),
+    ).toBe(true);
+    // ...and a postcondition on the data source, which is a different block.
+    expect(
+      conditions.some(
+        (c) => c.condition === 'postcondition' && c.name === 'platform' && c.mode === 'data',
+      ),
+    ).toBe(true);
+  });
+
+  it('names what a condition must be about, never which function to use', async () => {
+    // `contains`, a regex and `startswith` are all correct ways to write the
+    // validation rule. Pinning one would grade style rather than meaning, so
+    // the checks name the subject instead — and Terraform independently
+    // refuses a condition that refers to nothing at all.
+    const validation = (await tf025()).requirements.find(
+      (r) => r.type === 'terraform_variable_validation',
+    ) as Record<string, unknown> | undefined;
+    expect(validation?.condition_mentions).toEqual(['environment']);
+
+    const precondition = (await tf025()).requirements.find(
+      (r) => r.type === 'terraform_resource_condition' && 'condition' in r && r.condition === 'precondition',
+    ) as Record<string, unknown> | undefined;
+    expect(precondition?.condition_mentions).toEqual(['replicas']);
+
+    // Scoped to what the condition checks actually ask for. `contains` is also
+    // a *field name* on `file_content`, so serialising everything and grepping
+    // would have found it there and proved nothing.
+    const mentioned = (await tf025()).requirements.flatMap((r) =>
+      'condition_mentions' in r && Array.isArray(r.condition_mentions)
+        ? (r.condition_mentions as string[])
+        : [],
+    );
+    expect(mentioned.sort()).toEqual(['environment', 'replicas']);
+    for (const fn of ['contains', 'regex', 'startswith', 'can', 'length']) {
+      expect(mentioned).not.toContain(fn);
+    }
+  });
+
+  it('grades the applied result too, so conditions alone are not enough', async () => {
+    const kinds = new Set((await tf025()).requirements.map((r) => r.type));
+    expect(kinds.has('terraform_resource_exists')).toBe(true);
+    expect(kinds.has('file_content')).toBe(true);
+    const paths = (await tf025()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf') || p.endsWith('.json') && p.includes('platform'))).toBe(false);
   });
 });

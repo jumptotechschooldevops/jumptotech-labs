@@ -1,0 +1,262 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-025 — custom conditions: writing down what the configuration assumes.
+#
+# Official objective this lab practises:
+#   Terraform Associate (004), domain 4 "Terraform configuration"
+#   4g — "Validate configuration using custom conditions"
+#
+# Official sources, read on 2026-08-25:
+#   · Custom conditions — variable `validation` blocks, and `precondition` and
+#     `postcondition` inside a resource or data source `lifecycle` block
+#   · Checks — a top-level `check` block with `assert`, which reports without
+#     blocking an apply
+#
+# ## How the checks avoid pinning an implementation
+#
+# A validation rule can be written with `contains`, a regex, `startswith` or
+# anything else, and all of them are correct. So the grading does not name a
+# function: it requires that the rule's *condition* refers to the thing it is
+# meant to be about — the variable, the replica count — which is semantic
+# rather than stylistic. A rule whose condition is simply `true` mentions
+# nothing and does not satisfy it.
+#
+# The four constructs are read from the configuration because that is where
+# they live; a condition that holds leaves no trace in an applied result. What
+# the apply produced is graded alongside, so a configuration that declares
+# beautiful conditions and does not work still fails.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-025
+slug: tf-025-custom-conditions
+title: Custom Conditions
+track: terraform
+topic: conditions
+difficulty: advanced
+level: practice
+duration_minutes: 45
+order: 23
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-017
+
+story: >
+  A deploy went out last month with `environment = "prodution"`. Terraform was
+  perfectly happy: it is a string, and a string was what the variable asked
+  for. A directory called `build/prodution.json` appeared, the real production
+  manifest was never rebuilt, and it took two days to find.
+
+  The review afterwards turned up more of the same. The settings file is
+  trusted to contain a region because it always has. Nothing says a replica
+  count has to be a positive number. Nothing says the manifest should end up
+  with anything in it.
+
+  All of those are assumptions this configuration makes and does not state.
+  Terraform will happily build something wrong from them, because you never
+  told it what wrong looks like.
+
+objectives:
+  - Reject invalid input at plan time with a variable validation rule
+  - Assert what a resource needs before it is created, with a precondition
+  - Assert what a data source returned, with a postcondition
+  - Report on an assumption without blocking the apply, with a check block
+
+task:
+  summary: >
+    Write down the four assumptions this configuration makes, each with the
+    construct that fits it.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf`,
+    `platform.json` and a `main.tf` that works and explains nothing. Read it
+    and find the assumptions before you start writing.
+
+    Add four things.
+
+    **A validation rule** on `variable "environment"`, so `prodution` is
+    rejected at plan time rather than accepted as a perfectly good string. The
+    only valid environments are `staging` and `production`. Give it an error
+    message a colleague would understand — the message is the part that saves
+    the two days.
+
+    **A precondition** on `local_file.release_manifest`, asserting that the
+    replica count it is about to write is greater than zero. A precondition
+    belongs inside the resource's `lifecycle` block and is checked before the
+    resource is created.
+
+    **A postcondition** on the `data.local_file.platform` data source,
+    asserting that what it read actually contains a region. A data source can
+    carry a `lifecycle` block too, and inside a postcondition you refer to what
+    was read as `self`.
+
+    **A check block** named `manifest_is_populated`, with an assertion that the
+    manifest ended up with content in it. A `check` block sits at the top level
+    rather than inside a resource, and it is the one of the four that
+    *reports* rather than blocks — an assertion that fails is a warning, not an
+    error, which is what makes it right for something you want to know about
+    but not be stopped by.
+
+    Then make sure it all still applies cleanly and produces the production
+    manifest.
+
+    Worth doing before you finish, because it is the whole point: run
+    `terraform plan -var="environment=prodution"` and watch the rule reject it
+    with your message. Temporarily change `replicas` in `platform.json` to `0`
+    and watch the precondition stop the apply. Put both back afterwards.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+    - source: setup/platform.json
+      path: terraform/platform.json
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The unguarded configuration is in place
+    - type: file_exists
+      path: terraform/platform.json
+      label: The platform settings file is in place
+
+# The four constructs are read from the configuration, because a condition that
+# holds leaves no trace in an applied result. What the apply produced is graded
+# alongside, so a configuration full of conditions that does not work fails.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  # `condition_mentions` names the variable, not a function: `contains`, a
+  # regex and `startswith` are all correct ways to write this rule, and a rule
+  # whose condition is simply `true` refers to nothing and does not pass.
+  - type: terraform_variable_validation
+    dir: terraform
+    name: environment
+    min_rules: 1
+    condition_mentions:
+      - environment
+    label: The environment variable validates the value it is given
+
+  - type: terraform_resource_condition
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    condition: precondition
+    condition_mentions:
+      - replicas
+    label: The manifest asserts the replica count before it is created
+
+  - type: terraform_resource_condition
+    dir: terraform
+    resource_type: local_file
+    name: platform
+    mode: data
+    condition: postcondition
+    label: The data source asserts what it actually read
+
+  - type: terraform_check_declared
+    dir: terraform
+    name: manifest_is_populated
+    min_assertions: 1
+    label: A check block reports on the manifest without blocking the apply
+
+  - type: terraform_data_source_declared
+    dir: terraform
+    data_type: local_file
+    name: platform
+    label: The platform settings are still read rather than owned
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    label: The manifest resource was applied
+
+  - type: file_exists
+    path: terraform/build/production.json
+    label: The production manifest was written
+
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"environment":"production"'
+    label: It was built for production
+
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"region":"eu-central-1"'
+    label: Its region came from the settings that were read
+
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"replicas":6'
+    label: Its replica count came from the settings that were read
+
+hints:
+  - level: 1
+    text: >
+      Four different constructs, and the documentation on custom conditions
+      covers three of them together; the fourth has a page of its own.
+
+      Start by deciding which assumption belongs to which. One is about input
+      that has not been used yet, two are about a single object, and one is
+      about something you want reported rather than enforced.
+  - level: 2
+    text: >
+      A variable takes a `validation` block containing a `condition` and an
+      `error_message`. Preconditions and postconditions live inside a
+      `lifecycle` block on a resource — and a data source can carry one too.
+
+      Inside a postcondition, the object being checked is `self`. A `check`
+      block is top level, takes a name, and contains an `assert` with the same
+      two arguments a validation has.
+  - level: 3
+    text: >
+      On the variable: a `validation` whose condition tests `var.environment`
+      against the two allowed values — `contains(["staging", "production"],
+      var.environment)` is one way — plus a message naming them.
+
+      On the resource: `lifecycle { precondition { condition =
+      local.settings.replicas > 0 ... } }`. On the data source: `lifecycle {
+      postcondition { condition = can(jsondecode(self.content).region) ... } }`.
+
+      And at the top level, `check "manifest_is_populated" { assert { condition
+      = length(local_file.release_manifest.content) > 0 ... } }`.
+
+references:
+  - title: Terraform — Custom conditions
+    url: https://developer.hashicorp.com/terraform/language/expressions/custom-conditions
+  - title: Terraform — Checks
+    url: https://developer.hashicorp.com/terraform/language/checks
+  - title: Terraform — Input variables
+    url: https://developer.hashicorp.com/terraform/language/values/variables
+  - title: 'Terraform — Meta-argument: lifecycle'
+    url: https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle
+  - title: Terraform — Data sources
+    url: https://developer.hashicorp.com/terraform/language/data-sources
+
+skills:
+  - terraform.language.conditions
+  - terraform.language.validation
+  - terraform.language.data-sources
+  - terraform.workflow.plan
+
+# Objective 4g of the Terraform Associate (004) exam content list.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '4'
