@@ -1,0 +1,369 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# HOW THIS LAB IS GRADED
+#
+# Two of the three tasks are graded on the filesystem itself, which is the
+# strongest evidence this platform has: the config tree either says the new
+# hostname or it does not, and the stale spool files are either gone or they
+# are not. Nothing the student writes is taken as proof of either.
+#
+# The third — the merchant totals — is a computed answer, and a computed answer
+# has to live in a file the student creates. That is the weakest shape of
+# evidence in the platform, so it is worth being explicit about why it is
+# acceptable here and what stops it being a free pass:
+#
+#   · the data is 2000 transactions across eight merchants, so the answer
+#     cannot be reached except by aggregating the file;
+#   · eight totals are checked, not one, and they are checked as exact
+#     integers — a filter that forgets `status=settled` gets all eight wrong;
+#   · two of the checks are multi-line, so the *ordering* is graded too, which
+#     a student cannot satisfy by guessing at individual numbers.
+#
+# In other words the file is student-written, but its contents are only
+# reachable by doing the task. Where real system state exists — tasks one and
+# three — this lab reads that instead, and never a student's account of it.
+#
+# WHAT EACH TASK PROTECTS
+#
+# Every task has an obvious wide version that gets the visible result and
+# damages something adjacent, so the requirement list grades the survivors as
+# carefully as the casualties:
+#
+#   substitution  README.txt and the archived change record must keep the old
+#                 hostname — one is inside the tree but is not a .conf, the
+#                 other is outside the tree entirely
+#   aggregation   reversed payments must not be counted as revenue
+#   cleanup       this morning's spool files and the spool's own .log must
+#                 survive a sweep aimed at stale .tmp exports, and the stale
+#                 hidden export must not survive it — `rm *.tmp` misses that
+#                 one because the shell's glob skips a leading dot
+#
+# A note on why the hazard is a dotfile rather than a filename containing a
+# space, which was the first choice: `SEGMENT_PATTERN` in
+# session/sandbox-paths.ts requires every path segment to begin with an
+# alphanumeric, so a path with a space in it cannot be named by a requirement
+# at all. Relaxing that validator is a change to a shared security check used
+# by every track and was not made for one lab. The dotfile teaches the same
+# care and is gradeable as it stands.
+#
+# Content is written from the GNU sed, GNU awk and GNU findutils manuals only.
+# ---------------------------------------------------------------------------
+id: LINUX-016
+slug: linux-016-text-sweeps
+title: Text and File Sweeps
+track: linux
+topic: linux-administration
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 13
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-007
+
+story: >
+  The ledger migration finished over the weekend and the old front end is being
+  switched off on Friday. Every service on this host still points at it.
+
+  While you are in there, finance want the August merchant totals — they have
+  been asking for a week and the last person to run it summed the reversals in
+  as revenue — and the spool directory has been filling with export scratch
+  files since July.
+
+  Three sweeps, one host. The interesting part of each is what it must not
+  touch.
+
+objectives:
+  - Substitute text across a file tree while scoping the sweep to the right files
+  - Extract fields and aggregate them with awk, filtering on a condition
+  - Select files by name and age with find, and act on them safely
+  - Know where the shell's filename expansion and find's -name disagree
+
+task:
+  summary: Retarget a config tree to a new hostname, produce August merchant totals, and clear stale spool files — without damaging what sits next to each.
+  description: >
+    Everything in this lab is under your own account. No elevated privilege is
+    needed anywhere, and reaching for `sudo` on a bulk edit is how hosts get
+    damaged.
+
+    **One — retarget the configuration.** Under `/srv/jumptotech/conf` every
+    `.conf` file points at `ledger-old.jumptotech.internal`. They must all point
+    at `ledger-01.jumptotech.internal` instead.
+
+    Two files nearby must keep the old name. `conf/README.txt` is prose about
+    what the estate used to look like, and `/srv/jumptotech/archive/2026-06-change-record.log`
+    is the change record. Neither is configuration; both are read by auditors.
+    Scope the sweep so it only touches `.conf` files under the config tree.
+
+    **Two — the August merchant totals.** The payments log is
+    `/var/log/jumptotech/payments-2026-08.log`, one transaction per line, with
+    `merchant=` and `amount=` fields and a `status=` that is either `settled` or
+    `reversed`. Only settled transactions are revenue.
+
+    Write `/home/student/analysis/merchant-totals.txt` with one line per
+    merchant — the merchant name, a single space, then that merchant's total
+    settled amount as a whole number — sorted from the largest total to the
+    smallest. Eight merchants, so eight lines, and nothing else in the file.
+
+    **Three — clear the spool.** `/srv/jumptotech/spool` holds export scratch
+    files. Retention is seven days and it applies to `.tmp` exports only.
+    Remove every `.tmp` file older than seven days; leave everything else,
+    including this morning's exports and the spool's own `.log`.
+
+    One of the stale exports has a name beginning with a dot. That is not a
+    trick — export tooling writes hidden scratch files all the time — but the
+    shell's `*.tmp` does not match it and will leave it behind without saying
+    so. Make sure your sweep finds everything it is supposed to.
+
+    A caution worth stating once: this sandbox has no manual pages installed.
+    `--help` works on all of these tools, and the reference links below are the
+    upstream manuals for each.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: directory_exists
+      path: /srv/jumptotech/conf
+      label: The configuration tree is present
+    - type: file_content
+      path: /srv/jumptotech/conf/services/ledger.conf
+      contains: ledger-old.jumptotech.internal
+      label: The services still point at the old front end
+    - type: file_content
+      path: /srv/jumptotech/archive/2026-06-change-record.log
+      contains: ledger-old.jumptotech.internal
+      label: The change record is present
+    - type: file_exists
+      path: /var/log/jumptotech/payments-2026-08.log
+      label: The August payments log is present
+    - type: file_exists
+      path: /srv/jumptotech/spool/.export-2026-07-25.tmp
+      label: The stale spool exports are present, including the hidden one
+    - type: file_exists
+      path: /srv/jumptotech/spool/export-2026-08-25.tmp
+      label: This morning's spool exports are present
+    - type: directory_exists
+      path: /home/student/analysis
+      label: The analysis directory exists
+  verify_timeout_seconds: 120
+
+# Verification is state-based and reads the live host. Nothing inspects the
+# student's shell history or the commands they typed, and any route to the
+# right end state passes — sed, ed, a Python one-liner or an editor all read
+# the same afterwards.
+requirements:
+  # --- one: the substitution landed, and stopped where it should ----------
+  - type: file_content
+    path: /srv/jumptotech/conf/services/ledger.conf
+    contains: ledger-01.jumptotech.internal
+    label: The ledger service points at the new front end
+  - type: file_content
+    path: /srv/jumptotech/conf/edge/edge-tls.conf
+    contains: ledger-01.jumptotech.internal
+    label: The edge services point at the new front end
+  - type: file_content
+    path: /srv/jumptotech/conf/defaults.conf
+    contains: ledger-01.jumptotech.internal
+    label: The defaults at the top of the tree were retargeted too
+  - type: file_content_absent
+    path: /srv/jumptotech/conf/services/reconciliation.conf
+    contains: ledger-old.jumptotech.internal
+    label: No service is left pointing at the old front end
+  - type: file_content_absent
+    path: /srv/jumptotech/conf/edge/edge-waf.conf
+    contains: ledger-old.jumptotech.internal
+    label: No edge service is left pointing at the old front end
+  # The two survivors. A sweep scoped by directory instead of by filename
+  # rewrites the first; a sweep run one directory too high rewrites the second.
+  - type: file_content
+    path: /srv/jumptotech/conf/README.txt
+    contains: ledger-old.jumptotech.internal
+    label: The tree's README still records what the estate used to be
+  - type: file_content
+    path: /srv/jumptotech/archive/2026-06-change-record.log
+    contains: ledger-old.jumptotech.internal
+    label: The archived change record was left alone
+
+  # --- two: the aggregation ------------------------------------------------
+  #
+  # Exact integers, and two of these are multi-line so the ordering is graded
+  # as well as the arithmetic. Getting the `status=settled` filter wrong moves
+  # every one of the eight numbers.
+  - type: file_content
+    path: /home/student/analysis/merchant-totals.txt
+    contains: |-
+      ember-books 105960
+      forge-tools 104424
+      gale-energy 102645
+      harbor-freight 102033
+    label: The four largest merchants are correct, in order
+  - type: file_content
+    path: /home/student/analysis/merchant-totals.txt
+    contains: |-
+      bolt-foods 100638
+      delta-travel 98908
+      acme-retail 91561
+      cinder-media 84587
+    label: The four smallest merchants are correct, in order
+  - type: file_content_absent
+    path: /home/student/analysis/merchant-totals.txt
+    contains: reversed
+    label: The totals file holds totals rather than raw log lines
+
+  # --- three: the spool sweep ---------------------------------------------
+  - type: path_absent
+    path: /srv/jumptotech/spool/export-2026-07-04.tmp
+    label: The July exports were cleared
+  - type: path_absent
+    path: /srv/jumptotech/spool/reconcile-2026-07-18.tmp
+    label: The stale reconciliation scratch file was cleared
+  # The hidden one. `rm *.tmp` leaves it behind without a word, because the
+  # shell's glob does not match a leading dot; find's -name does.
+  - type: path_absent
+    path: /srv/jumptotech/spool/.export-2026-07-25.tmp
+    label: The stale export whose name begins with a dot was cleared too
+  # The survivors: retention is seven days *and* .tmp only.
+  - type: file_exists
+    path: /srv/jumptotech/spool/export-2026-08-25.tmp
+    label: This morning's exports survived the sweep
+  - type: file_exists
+    path: /srv/jumptotech/spool/export-2026-08-24.tmp
+    label: Yesterday's exports survived the sweep
+  - type: file_exists
+    path: /srv/jumptotech/spool/spool-history.log
+    label: The spool's own history, old but not a temporary export, survived
+
+hints:
+  - level: 1
+    text: >
+      Do each sweep in two steps: first make it *list* what it would act on,
+      look at that list, and only then let it act. Every one of these three
+      tasks has a version that produces the right visible result and quietly
+      damages something beside it, and the listing step is what shows you the
+      difference before it is permanent.
+
+      For the totals, start by getting one line to print just the two fields
+      you care about. Summing them is the easy part; picking them out of the
+      line is the part worth getting right first.
+  - level: 2
+    text: >
+      For the substitution, the GNU sed manual's chapter on the `s` command
+      covers replacing text and the option that edits files in place. What
+      decides whether you damage the README is not sed, though — it is how you
+      choose the files you hand it. The GNU findutils manual's section on
+      filename patterns and the one on file age are both relevant.
+
+      For the totals, the GNU awk manual's chapters on fields and on arrays
+      cover the whole task: an array subscripted by merchant name, accumulating
+      amounts, printed at the end. Note the fields here are `name=value`, so
+      awk's default whitespace splitting gets you the pair and you still have
+      to separate the two halves. Ordering afterwards is a job for `sort`.
+
+      For the spool, findutils documents both a predicate that deletes matches
+      itself and one that emits null-separated names for another command to
+      consume. Either finds a name beginning with a dot; the shell's own
+      filename expansion does not, which is worth confirming for yourself
+      before you trust a one-line `rm`.
+
+      This sandbox has no manual pages installed, so `--help` and the linked
+      manuals are the documentation available to you.
+  - level: 3
+    text: >
+      The substitution is a `find` over the config tree restricted to names
+      matching `*.conf`, running an in-place `sed` substitution on each. Restrict
+      by name, not by directory alone — `README.txt` lives in that tree and must
+      not change — and start the search at the config directory rather than at
+      `/srv/jumptotech`, or the archived change record is in scope too.
+
+      The totals are one awk program: match lines containing `status=settled`,
+      split the merchant and amount fields out of the line, accumulate into an
+      array keyed by merchant, and print `merchant total` for each key at the
+      end. Pipe that into a numeric reverse sort on the second column. Print the
+      total as an integer — every amount in the file is a whole number, so the
+      sum is too, and a formatted float will not match.
+
+      The spool sweep is a `find` in the spool directory restricted to `*.tmp`
+      and to files older than seven days, with `-delete`. Run it once with
+      `-print` instead of `-delete` first and count what comes back: it should
+      list four files, one of which begins with a dot. If you only see three,
+      the sweep is going through the shell's filename expansion somewhere.
+
+references:
+  - title: GNU sed manual — the s command and in-place editing
+    url: https://www.gnu.org/software/sed/manual/sed.html
+  - title: GNU Awk manual — fields
+    url: https://www.gnu.org/software/gawk/manual/gawk.html
+  - title: GNU Findutils manual — finding files
+    url: https://www.gnu.org/software/findutils/manual/html_mono/find.html
+  - title: find(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/find.1.html
+  - title: xargs(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/xargs.1.html
+
+skills:
+  - linux.text.sed-substitute
+  - linux.text.awk-fields
+  - linux.text.awk-aggregate
+  - linux.files.find-predicates
+  - linux.files.glob-vs-find
+
+# ---------------------------------------------------------------------------
+# SOURCE VERIFICATION
+#
+# Recorded as comments rather than schema fields: a `sources:` / `last_verified:`
+# block would be a change to the shared lab schema, which this track is not
+# permitted to make unilaterally.
+#
+# last_verified: 2026-08-25
+#
+# CLASSIFICATION
+#
+#   FOUNDATIONAL KNOWLEDGE  text streams, field extraction, aggregation by key,
+#                           selecting files by predicate, null-separated lists
+#   PRODUCTION SKILL        bulk configuration change across a tree, log
+#                           aggregation for a finance request, retention sweeps
+#   CERTIFICATION OBJECTIVE none
+#
+# The published LFCS competency list was read on 2026-08-25 from
+# https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+# and enumerated in full. No bullet in any of the five domains mentions text
+# processing, sed, awk, grep, find, xargs, regular expressions or searching
+# files. The nearest wording is "Search for, install, validate, and maintain
+# software packages or repositories", which is package management.
+#
+# These tools are instrumental to almost every LFCS task, but instrumentality
+# is not an objective, so this lab claims no exam coverage.
+# `certification.relevant` is recorded as false rather than omitted so the
+# check stays on the record.
+#
+# Technical objectives verified 2026-08-25, empirically inside the sandbox
+# image because the image ships no manual pages (see below):
+#   find -mtime +7   matched files aged 8 and 30 days and did NOT match one
+#                    aged exactly 7 days, so the fixtures are seeded at 30 days
+#                    and 1 day and no grading hinges on the boundary
+#   shell glob vs find   `*.tmp` in the shell listed 2 of 3 matching files,
+#                    silently omitting `.export-hidden.tmp`; `find -name '*.tmp'`
+#                    listed all three. Verified in the sandbox image.
+#   awk              Lehmer generator with multiplier 16807 and modulus
+#                    2147483647 keeps every product under 2^53 and is therefore
+#                    exact in awk's doubles; the generated log hashes
+#                    identically across runs
+#
+# KNOWN IMAGE DEFECT, reported separately and NOT worked around here beyond
+# telling the student the truth: the sandbox has no manual pages at all.
+# `debian:bookworm-slim` ships /etc/dpkg/dpkg.cfg.d/docker containing
+# `path-exclude /usr/share/man/*`, so despite man-db and manpages being
+# installed, `man find`, `man sed`, `man awk` and every other page cited by
+# LINUX-001 through LINUX-015 return "No manual entry". `--help` works. This
+# lab's hints point at the upstream manuals and at --help rather than promising
+# a `man` that does not answer.
+# ---------------------------------------------------------------------------
+certification:
+  - certification: LFCS
+    relevant: false
+    domains: []

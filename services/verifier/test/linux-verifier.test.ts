@@ -414,6 +414,7 @@ describe('every shipped Linux lab', () => {
     'linux-010-troubleshooting',
     'linux-014-environment',
     'linux-015-sudo-policy',
+    'linux-016-text-sweeps',
   ];
 
   it.each(DIRS)('fails %s on an untouched sandbox, and never names the fix', async (dir) => {

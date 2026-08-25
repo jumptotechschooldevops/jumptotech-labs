@@ -42,7 +42,7 @@ const LINUX_CHAIN = [
 ];
 
 /** Every Linux lab, in catalog order. */
-const LINUX_IDS = [...LINUX_CHAIN, 'LINUX-014', 'LINUX-015'];
+const LINUX_IDS = [...LINUX_CHAIN, 'LINUX-014', 'LINUX-015', 'LINUX-016'];
 
 let cached: LabRegistry | undefined;
 async function realRegistry(): Promise<LabRegistry> {
@@ -202,6 +202,8 @@ describe('the catalog carries both tracks (test requirement 2)', () => {
     // LINUX-015 delegates authority between accounts, so it needs the users
     // and groups lab and nothing else.
     expect(registry.get('LINUX-015').prerequisites).toEqual(['LINUX-003']);
+    // LINUX-016 builds on reading and filtering logs, and needs nothing else.
+    expect(registry.get('LINUX-016').prerequisites).toEqual(['LINUX-007']);
   });
 
   it('names only prerequisites that exist in the track', async () => {
