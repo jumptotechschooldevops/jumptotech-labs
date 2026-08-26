@@ -1,0 +1,235 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-012 — taking infrastructure apart.
+#
+# Official objective this lab practises:
+#   Terraform Associate (004), domain 3 "Core Terraform workflow"
+#   3f — "Destroy Terraform-managed infrastructure"
+#
+# Official sources, read on 2026-08-25:
+#   · Command: terraform destroy — "deprovisions all objects managed by a
+#     Terraform configuration", and is "just a convenience alias for
+#     `terraform apply -destroy`"
+#   · Command: terraform plan → Resource Targeting — "-target ... is provided
+#     for exceptional circumstances, such as recovering from mistakes or
+#     working around Terraform limitations", and "it is not recommended to use
+#     -target for routine operations". The lab teaches it with that caveat
+#     attached, because teaching it without one would be teaching a bad habit.
+#
+# ## How this lab is graded, and why it is not "the state file is gone"
+#
+# Verified against the CLI this sandbox ships: a completed `terraform destroy`
+# leaves `terraform.tfstate` in place, valid, with `resources: []` and its
+# serial incremented, and writes the previous state to
+# `terraform.tfstate.backup`. So deleting the state file is not what a destroy
+# looks like — and `rm terraform.tfstate` fails this lab rather than passing it.
+#
+# The sequencing check is the interesting one. After a targeted destroy followed
+# by a full destroy, the backup holds the state as it was *before the last
+# write* — that is, the stack minus the resource that was targeted. A student
+# who skips the targeted step and runs one full destroy leaves a backup
+# containing all three resources, and fails. This is a property of artifacts
+# Terraform wrote, not a record of what was typed.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-012
+slug: tf-012-destroy
+title: Destroying Infrastructure Safely
+track: terraform
+topic: workflow
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 3
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-011
+
+story: >
+  The Q3 reporting stack has served its purpose. Finance have their numbers,
+  the quarter is closed, and the platform team wants the whole thing gone
+  before it starts drifting and confusing the next person who reads the repo.
+
+  There is one wrinkle. The draft report was superseded days ago and should
+  have been removed then; your lead wants it taken out first and separately, so
+  the change log shows it went before the rest rather than disappearing in a
+  bulk teardown. Then the remainder goes.
+
+  Nobody is going to accept "I deleted the state file" as a teardown.
+
+objectives:
+  - Destroy Terraform-managed infrastructure and confirm the result from state
+  - Remove a single resource with a targeted destroy, and know when that is appropriate
+  - Recognise what Terraform leaves behind after a destroy, and what it does not
+
+task:
+  summary: >
+    Create the reporting stack, remove one resource with a targeted destroy,
+    then tear down the remainder.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf` and
+    a `main.tf` that declares three `local_file` resources — a draft report, a
+    summary report and an audit log. Nothing has been applied. Work in that
+    directory.
+
+    First, initialise and apply, so the stack genuinely exists. Confirm the
+    three files were written under `out/`.
+
+    Next, remove **only** `local_file.draft_report`, using a destroy targeted at
+    that one address. Confirm the other two are still in state and still on
+    disk. Note what the documentation says about targeting: it exists for
+    exceptional circumstances such as recovering from mistakes, and is
+    explicitly not recommended for routine work. This is one of those
+    exceptions — a single superseded object being retired ahead of the rest.
+
+    Finally, destroy what remains, so the configuration manages nothing at all.
+
+    When you are done, Terraform should report no resources under management,
+    and none of the three files should be left under `out/`.
+
+    One thing to understand rather than guess at: a completed destroy does not
+    delete `terraform.tfstate`. It rewrites it, leaving a valid state file that
+    manages nothing, and keeps the previous version alongside it. Deleting the
+    state file yourself is a different act with a different meaning, and this
+    lab can tell the two apart.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The reporting stack configuration is in place
+
+# Everything here is read from artifacts a real run produced. Nothing reads
+# what was typed, and nothing is satisfied by a file the student wrote by hand.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  - type: terraform_state_absent
+    dir: terraform
+    label: Terraform state manages no resources — the stack is fully destroyed
+
+  # A destroy rewrites state and keeps the previous version. No apply ever
+  # happened means no backup was ever written, so this also refuses a "destroy"
+  # performed on a stack that was never created.
+  - type: file_exists
+    path: terraform/terraform.tfstate.backup
+    label: A destroy wrote through Terraform state, keeping the previous version
+
+  # The sequencing proof: the backup holds the state as it was before the final
+  # teardown. The draft report can only be missing from it if it had already
+  # been destroyed on its own beforehand.
+  - type: terraform_state_absent
+    dir: terraform
+    state_file: terraform.tfstate.backup
+    address: local_file.draft_report
+    label: The draft report was destroyed on its own, before the final teardown
+
+  # `local_file` creates the directory it writes into, and a destroy removes
+  # the files but leaves the directory. So this is only true if the stack was
+  # genuinely created here — it cannot be reached by destroying nothing.
+  - type: directory_exists
+    path: terraform/out
+    label: The reporting stack was really created in this directory
+
+  # Positive evidence that the stack really existed: the state the final destroy
+  # replaced still records the two resources it removed, with their instances.
+  # Together with the check above this pins the whole sequence — three created,
+  # one destroyed on its own, two destroyed last.
+  - type: terraform_resource_exists
+    dir: terraform
+    state_file: terraform.tfstate.backup
+    resource_type: local_file
+    name: summary_report
+    label: The summary report was still managed when the final teardown began
+
+  - type: terraform_resource_exists
+    dir: terraform
+    state_file: terraform.tfstate.backup
+    resource_type: local_file
+    name: audit_log
+    label: The audit log was still managed when the final teardown began
+
+  - type: path_absent
+    path: terraform/out/draft-report.txt
+    label: The draft report file is gone from disk
+
+  - type: path_absent
+    path: terraform/out/summary-report.txt
+    label: The summary report file is gone from disk
+
+  - type: path_absent
+    path: terraform/out/audit-log.txt
+    label: The audit log file is gone from disk
+
+hints:
+  - level: 1
+    text: >
+      Build the stack before you take it apart — there is nothing to destroy
+      until an apply has happened. Then look up how `terraform destroy` can be
+      pointed at a single resource address rather than everything.
+  - level: 2
+    text: >
+      The option that narrows an operation to one address takes a resource
+      address, in the same `type.name` form Terraform uses in `terraform state
+      list`. Run it, then check `terraform state list` again to see what
+      survived. Afterwards, a plain destroy removes the rest.
+
+      If you are wondering whether to delete `terraform.tfstate` at the end:
+      look at what the file contains after a real destroy before deciding.
+  - level: 3
+    text: >
+      `terraform init`, then `terraform apply`. Then
+      `terraform destroy -target=local_file.draft_report`, which leaves the
+      summary report and the audit log in place. Then `terraform destroy` to
+      remove those two.
+
+      Leave `terraform.tfstate` and `terraform.tfstate.backup` where they are.
+      Terraform maintains both, and this lab reads them to confirm the teardown
+      happened in the order the task asked for.
+
+references:
+  - title: 'Terraform — Command: destroy'
+    url: https://developer.hashicorp.com/terraform/cli/commands/destroy
+  - title: 'Terraform — Command: apply'
+    url: https://developer.hashicorp.com/terraform/cli/commands/apply
+  - title: 'Terraform — Command: plan (resource targeting)'
+    url: https://developer.hashicorp.com/terraform/cli/commands/plan
+  - title: Terraform — Purpose of Terraform state
+    url: https://developer.hashicorp.com/terraform/language/state/purpose
+  - title: 'Terraform — Command: state list'
+    url: https://developer.hashicorp.com/terraform/cli/commands/state/list
+  - title: Terraform — The core workflow
+    url: https://developer.hashicorp.com/terraform/intro/core-workflow
+
+skills:
+  - terraform.workflow.destroy
+  - terraform.workflow.apply
+  - terraform.state.inspect
+
+# Objective 3f of the Terraform Associate (004) exam content list. The schema on
+# this branch carries domains but not objective ids; the objective is recorded
+# in the header comment above.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '3'

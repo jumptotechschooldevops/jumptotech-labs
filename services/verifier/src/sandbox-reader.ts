@@ -17,11 +17,23 @@
  * the sandbox home by the provider before any read; nothing here can widen
  * that. See `session/sandbox-paths.ts`.
  */
-import type { SandboxInspectResult, SandboxPathRead } from '@jumptotech/lab-orchestrator';
+import {
+  scanHclFiles,
+  type HclDocument,
+  type SandboxInspectResult,
+  type SandboxListOptions,
+  type SandboxPathRead,
+} from '@jumptotech/lab-orchestrator';
 
 /** The primitives a sandbox provider offers the verifier. */
 export interface SandboxPort {
   read(relativePath: string, options?: { maxBytes?: number }): Promise<SandboxPathRead | null>;
+  /**
+   * List files under a directory. Optional, and the reason configuration
+   * checks are a separate capability from path reads: a lab cannot name the
+   * `.tf` files a student chose to write, and Terraform reads all of them.
+   */
+  list?(relativeDir: string, options?: SandboxListOptions): Promise<string[]>;
   /**
    * Ask the sandbox one allow-listed, read-only inspection question.
    *
@@ -81,6 +93,15 @@ export interface ListeningSocket {
   address: string;
 }
 
+/** Raised when a check needs a capability this sandbox does not offer. */
+export class SandboxCapabilityMissingError extends Error {
+  readonly code = 'SANDBOX_CAPABILITY_MISSING';
+  constructor(capability: string) {
+    super(`This lab environment cannot ${capability}`);
+    this.name = 'SandboxCapabilityMissingError';
+  }
+}
+
 /** Raised when the sandbox itself could not be reached. Never a failed check. */
 export class SandboxUnreachableError extends Error {
   readonly code = 'ENVIRONMENT_UNREACHABLE';
@@ -111,17 +132,27 @@ export interface TerraformStateSnapshot {
   outputs: Record<string, { value: unknown; type?: unknown; sensitive?: boolean }>;
 }
 
+/** Bounds on a configuration scan. A lab cannot widen either. */
+const MAX_CONFIG_FILES = 50;
+const MAX_CONFIG_BYTES = 256 * 1024;
+
 export const TERRAFORM_STATE_FILE = 'terraform.tfstate';
 export const TERRAFORM_LOCK_FILE = '.terraform.lock.hcl';
 export const TERRAFORM_WORK_DIR = '.terraform';
 
 export class SandboxReader {
   readonly #cache = new Map<string, Promise<SandboxPathRead | null>>();
+  readonly #configs = new Map<string, Promise<HclDocument>>();
   #processes: Promise<ProcessEntry[]> | undefined;
   #sockets: Promise<ListeningSocket[]> | undefined;
   #neighbours: Promise<NeighbourEntry[]> | undefined;
 
   constructor(private readonly port: SandboxPort) {}
+
+  /** Whether this sandbox can list files, and so answer configuration checks. */
+  get canReadConfig(): boolean {
+    return typeof this.port.list === 'function';
+  }
 
   /** Whether this sandbox can answer `linux`-family checks at all. */
   get canInspect(): boolean {
@@ -304,6 +335,43 @@ export class SandboxReader {
       if (wanted.has(name)) found.set(name, entry.slice(split + 1));
     }
     return found;
+  }
+
+  /**
+   * Every `.tf` file in a working directory, scanned as one document.
+   *
+   * Terraform reads all of them, so a check that looked only at `main.tf`
+   * would fail a student who split their configuration the way the style guide
+   * suggests. Memoised per run for the same reason each path read is: a lab
+   * asking several questions about one configuration must answer them from one
+   * snapshot.
+   *
+   * Reading only. `scanHclFiles` is a structure scanner — it evaluates nothing,
+   * calls nothing and reaches nothing outside the text it was handed.
+   */
+  terraformConfig(dir: string): Promise<HclDocument> {
+    const cached = this.#configs.get(dir);
+    if (cached) return cached;
+    const scan = this.#scanConfig(dir);
+    this.#configs.set(dir, scan);
+    return scan;
+  }
+
+  /** The `.tf` files a configuration check actually looked at. */
+  async terraformConfigPaths(dir: string): Promise<string[]> {
+    if (!this.port.list) throw new SandboxCapabilityMissingError('read Terraform configuration files');
+    return this.port.list(dir, { suffix: '.tf', maxDepth: 4, maxEntries: MAX_CONFIG_FILES });
+  }
+
+  async #scanConfig(dir: string): Promise<HclDocument> {
+    const names = await this.terraformConfigPaths(dir);
+    const files: Array<{ path: string; text: string }> = [];
+    for (const name of names) {
+      const read = await this.path(this.join(dir, name), { maxBytes: MAX_CONFIG_BYTES });
+      if (!read || read.type !== 'file' || read.content === undefined) continue;
+      files.push({ path: name, text: read.content });
+    }
+    return scanHclFiles(files);
   }
 
   /**

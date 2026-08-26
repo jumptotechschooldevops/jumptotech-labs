@@ -1,0 +1,265 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-006 — local values and data sources: naming things once, and reading what
+# you do not own.
+#
+# Official objectives this lab practises:
+#   Terraform Associate (004), domain 4 "Terraform configuration"
+#   4a — "Use and differentiate resource and data blocks"
+#   4e — "Write dynamic configuration using expressions and functions"
+#
+# Official sources, read on 2026-08-25:
+#   · Local values — a named expression, computed once and referred to as
+#     `local.<NAME>`, for a value used in several places
+#   · Data sources — a `data` block *reads* something Terraform does not
+#     manage, in contrast to a `resource` block, which creates and owns it
+#   · Expressions and built-in functions — `jsondecode`, string interpolation
+#
+# ## The distinction the lab is built on
+#
+# A `resource` owns what it describes; a `data` block only reads. `platform.json`
+# belongs to another team, so reading it is the only correct relationship — and
+# reading it is what makes the manifest follow it when it changes, which
+# transcribing never does.
+#
+# Both halves are graded, and neither alone is enough. The applied artifact is
+# byte-identical whether the values were derived or typed in, so the lab also
+# checks that the manifest's content actually refers to the data source and to
+# the local value. A literal that happens to say `eu-west-1` does not count.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-006
+slug: tf-006-locals-data
+title: Local Values and Data Sources
+track: terraform
+topic: expressions
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 12
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-005
+
+story: >
+  Two problems in one small file.
+
+  The service slug — `jumptotech-ledger-prod` — is written out by hand
+  everywhere it is needed. It appears in the filename and again in the content,
+  and it is assembled in someone's head each time from a prefix, a service name
+  and an environment. When staging needs its own manifest, every copy has to be
+  found.
+
+  Worse, the region and tier were transcribed from `platform.json`, which the
+  platform team owns and this configuration does not. They were right when
+  somebody typed them. `platform.json` has since been the source of truth in
+  name only.
+
+  Neither is fixed by being more careful. The slug should be composed once, and
+  the settings should be *read* rather than copied.
+
+objectives:
+  - Compose a value once as a local and refer to it wherever it is needed
+  - Read a file this configuration does not own with a data source
+  - Tell a data block apart from a resource block, and know when each is right
+  - Use functions and expressions to turn what you read into what you need
+
+task:
+  summary: >
+    Replace the hand-written slug with a local value, and the transcribed
+    settings with a data source.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf`, a
+    `main.tf` that builds the service manifest, and `platform.json` — the file
+    the platform team owns. Read all three before changing anything.
+
+    **Read what you do not own.** Add a data source named `platform` that reads
+    `platform.json`. It is a `data` block, not a `resource`: this configuration
+    must not create, own or rewrite that file, only look at it. Its content
+    arrives as a string, so you will need a function to turn JSON text into
+    something you can index.
+
+    **Name the slug once.** Add a `locals` block defining three values:
+
+    - `service_prefix` — the string `jumptotech`;
+    - `environment` — the string `prod`;
+    - `service_slug` — the two above with `ledger` between them, joined by
+      hyphens, composed as an expression rather than written out.
+
+    **Then use them.** The manifest's filename becomes
+    `build/<service_slug>.json`, and its content keeps the same three keys —
+    `slug`, `region`, `tier` — but every one of them now comes from the local
+    value or from what you read, rather than from a literal.
+
+    When you are done the applied file should be byte-for-byte what it is now.
+    That is the point: nothing about the result changes, and everything about
+    how it is produced does. Change `environment` to `staging` afterwards if you
+    want to see what you bought — one edit, and the filename and the contents
+    both follow.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+    - source: setup/platform.json
+      path: terraform/platform.json
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The manifest configuration is in place
+    - type: file_exists
+      path: terraform/platform.json
+      label: The platform settings file is in place
+
+# The artifact is identical whether the values were derived or typed in, so the
+# result alone cannot grade this lab. The reference checks are what separate
+# reading from transcribing.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  - type: terraform_locals_declared
+    dir: terraform
+    names:
+      - service_prefix
+      - environment
+      - service_slug
+    label: The slug is composed from named local values
+
+  # `data`, not `resource` — this configuration reads the file, it does not own it.
+  - type: terraform_data_source_declared
+    dir: terraform
+    data_type: local_file
+    name: platform
+    label: A data source reads the platform settings file
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: service_manifest
+    attribute: filename
+    references: local.service_slug
+    label: The manifest filename is built from the composed slug
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: service_manifest
+    attribute: content
+    references: local.service_slug
+    label: The manifest content takes its slug from the same local value
+
+  # The settings must be *read*. A transcribed region satisfies the artifact
+  # check below and fails this one.
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: service_manifest
+    attribute: content
+    references: data.local_file.platform
+    label: The manifest content is derived from the platform settings it read
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: service_manifest
+    label: The manifest resource was applied
+
+  - type: file_exists
+    path: terraform/build/jumptotech-ledger-prod.json
+    label: The manifest was written under its composed name
+
+  - type: file_content
+    path: terraform/build/jumptotech-ledger-prod.json
+    contains: '"slug":"jumptotech-ledger-prod"'
+    label: The manifest carries the composed slug
+
+  - type: file_content
+    path: terraform/build/jumptotech-ledger-prod.json
+    contains: '"region":"eu-west-1"'
+    label: The manifest carries the region from the platform settings
+
+  - type: file_content
+    path: terraform/build/jumptotech-ledger-prod.json
+    contains: '"tier":"gold"'
+    label: The manifest carries the tier from the platform settings
+
+  # A data source reads; it must not have taken ownership of the file.
+  - type: file_content
+    path: terraform/platform.json
+    contains: platform-team
+    label: The platform settings file is unchanged and still owned by its team
+
+hints:
+  - level: 1
+    text: >
+      Two different blocks are involved. One creates and owns what it
+      describes; the other only reads something that already exists and belongs
+      to someone else. Look up the difference before you write either.
+
+      A `locals` block defines named values you can refer to elsewhere. Look up
+      how a configuration refers to one.
+  - level: 2
+    text: >
+      A data source is `data "<type>" "<name>"`, and it is referred to as
+      `data.<type>.<name>.<attribute>` — one more segment than a resource
+      reference. The `local_file` data source exposes what it read as a string.
+
+      A string is not something you can index, so you will need the function
+      that parses JSON text into an object. Locals may be built from other
+      locals, so the slug can be composed from the two values above it.
+  - level: 3
+    text: >
+      `data "local_file" "platform" { filename = "platform.json" }`, then a
+      `locals` block with `service_prefix = "jumptotech"`,
+      `environment = "prod"`, and
+      `service_slug = "${local.service_prefix}-ledger-${local.environment}"`.
+
+      Parse the settings once — for example another local,
+      `settings = jsondecode(data.local_file.platform.content)` — and then the
+      resource becomes `filename = "build/${local.service_slug}.json"` with a
+      `jsonencode` whose `slug` is `local.service_slug` and whose `region` and
+      `tier` come from the parsed settings.
+
+references:
+  - title: Terraform — Local values
+    url: https://developer.hashicorp.com/terraform/language/values/locals
+  - title: Terraform — Data sources
+    url: https://developer.hashicorp.com/terraform/language/data-sources
+  - title: Terraform — Resources
+    url: https://developer.hashicorp.com/terraform/language/resources
+  - title: Terraform — Expressions
+    url: https://developer.hashicorp.com/terraform/language/expressions
+  - title: 'Terraform — Function: jsondecode'
+    url: https://developer.hashicorp.com/terraform/language/functions/jsondecode
+  - title: Terraform — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+
+skills:
+  - terraform.language.locals
+  - terraform.language.data-sources
+  - terraform.language.expressions
+  - terraform.language.references
+
+# Objectives 4a and 4e of the Terraform Associate (004) exam content list.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '4'

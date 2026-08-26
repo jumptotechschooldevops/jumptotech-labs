@@ -55,9 +55,11 @@ export function pass(detail?: string): HandlerOutcome {
 /**
  * The platform could not look, so the student is not told they failed.
  *
- * The lab loader already refuses a lab whose provider cannot verify its
- * requirement families, so this is a backstop for the narrower case: the
- * family is right, but this one observation is unavailable.
+ * A capability a provider does not offer is a platform gap, and reporting it
+ * as a failed check would blame the student for it. The lab loader already
+ * refuses a lab whose provider cannot verify its requirement families, so this
+ * is a backstop for the narrower case: the family is right, but this one
+ * observation is unavailable.
  */
 export function skip(detail: string): HandlerOutcome {
   return { ok: false, skipped: true, detail };

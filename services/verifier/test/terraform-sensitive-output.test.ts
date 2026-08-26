@@ -11,6 +11,13 @@
  * No shipped or in-flight lab used a sensitive output, so nothing leaked in
  * practice. The primitive was unsafe by construction, which is what these
  * tests pin shut.
+ *
+ * The rule has since been tightened past `sensitive`, and these tests moved
+ * with it. `sensitive` marks only the outputs whose author thought to mark
+ * one, so the handler now withholds *every* actual value, marked or not, and
+ * the expected value with it — the expected value is the answer, and repeating
+ * it turns a failed check into a solution. What a failure may still carry is
+ * the output's name and its shape: a type is structural metadata, not a value.
  */
 import { describe, expect, it } from 'vitest';
 import type { Requirement } from '@jumptotech/lab-orchestrator';
@@ -47,8 +54,9 @@ describe('terraform_output_equals — sensitive outputs', () => {
     const result = await check(SECRET, true);
 
     expect(result.status).toBe('fail');
+    // The property, not the phrasing: the secret is absent from the whole
+    // serialised result, which is what the API spreads into its response.
     expect(JSON.stringify(result)).not.toContain(SECRET);
-    expect(result.detail).toContain('withheld');
     expect(result.detail).toContain('sensitive');
   });
 
@@ -64,12 +72,28 @@ describe('terraform_output_equals — sensitive outputs', () => {
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
 
-  it('still reports the actual value for an output that is not sensitive', async () => {
-    // Unchanged behaviour where there is no secret: a Terraform lab that checks
-    // a path or a count is more useful when it says what it found.
+  it('withholds the actual value of an output that is not marked sensitive', async () => {
+    // The tightened rule. `sensitive` marks only what an author remembered to
+    // mark, and the lesson of a sensitive-data lab is that an unmarked output
+    // can still hold a credential — so the platform does not repeat any actual
+    // value, and does not decide which ones are safe.
     const result = await check('build/wrong-path.txt', false);
 
     expect(result.status).toBe('fail');
-    expect(result.detail).toContain('build/wrong-path.txt');
+    expect(result.detail).not.toContain('build/wrong-path.txt');
+  });
+
+  it('names the output and its shape, which is what a student can act on', async () => {
+    const result = await check('build/wrong-path.txt', false);
+
+    expect(result.detail).toContain('db_password');
+    expect(result.detail).toContain('string');
+  });
+
+  it('never repeats the expected value, which is the answer', async () => {
+    for (const sensitive of [true, false]) {
+      const result = await check('build/wrong-path.txt', sensitive);
+      expect(JSON.stringify(result), `sensitive=${sensitive}`).not.toContain('expected-value');
+    }
   });
 });

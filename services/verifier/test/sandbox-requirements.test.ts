@@ -308,7 +308,7 @@ describe('TF-001 (test requirements 19–20)', () => {
     expect(result.checks[4]?.detail).toContain('declares no outputs');
   });
 
-  it('reports a wrong output value without revealing the expected one', async () => {
+  it('reports a wrong output value without revealing the expected OR the actual one', async () => {
     const lab = await loadLabDefinition(TF_001);
     const wrongOutput = JSON.parse(SOLVED_STATE) as {
       outputs: Record<string, { value: string }>;
@@ -322,7 +322,22 @@ describe('TF-001 (test requirements 19–20)', () => {
     const result = await verifyLab({ lab, sandbox, namespace: 'ns' });
 
     expect(result.checks[4]?.status).toBe('fail');
-    expect(result.checks[4]?.detail).toBe("Output 'manifest_path' is 'manifest.txt'");
+
+    /*
+     * PLATFORM-SEC. This assertion used to be
+     *
+     *     expect(detail).toBe("Output 'manifest_path' is 'manifest.txt'")
+     *
+     * which pinned the disclosure it was named after avoiding: the *expected*
+     * value was withheld, but the *actual* one was quoted straight into a
+     * payload the browser renders. The handler cannot know an output is safe to
+     * repeat — `sensitive` marks only the ones an author remembered to mark —
+     * so it now repeats neither, and this test holds it to that.
+     */
+    const detail = result.checks[4]?.detail ?? '';
+    expect(detail).not.toContain('manifest.txt');
+    expect(detail).toContain('manifest_path');
+    expect(detail).toContain('does not match the required value');
   });
 
   it('treats unparseable state as "nothing applied", not as a crash', async () => {

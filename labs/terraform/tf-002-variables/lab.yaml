@@ -1,0 +1,274 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-002 — input variables: one configuration, many environments.
+#
+# Official objective this lab practises:
+#   Terraform Associate (004), domain 4 "Terraform configuration"
+#   4c — "Use variables and outputs"  (the variables half; outputs are TF-003)
+#
+# Official sources, read on 2026-08-25:
+#   · Input variables — a variable block takes `type`, `description` and
+#     `default`; "if a variable does not have a default value … Terraform
+#     prompts the user to assign a value before it generates a plan"; values
+#     arrive from `.tfvars` files, the `-var` flag, or `TF_VAR_` environment
+#     variables, and are read with `var.<NAME>`.
+#   · The documented precedence, highest first: `-var` / `-var-file`, then
+#     `*.auto.tfvars`, then `terraform.tfvars`, then environment variables,
+#     then the variable's own `default`.
+#
+# ## What is graded, and why the values alone are not enough
+#
+# A student could reach the required artifact by editing the hardcoded strings
+# rather than declaring anything — identical file, identical state, no
+# variables. So the lab grades both halves:
+#
+#   · the *result* — the applied resource and the JSON it wrote;
+#   · the *mechanism* — that three variables are declared with the right shape,
+#     and that the resource's arguments actually refer to them. A literal that
+#     happens to say "production" does not satisfy a reference check.
+#
+# Precedence is graded semantically rather than by looking for a file: two of
+# the variables carry defaults, and the required final values are *not* those
+# defaults. The only way to reach them is to override, whichever documented
+# mechanism the student chooses.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-002
+slug: tf-002-variables
+title: Variables and Input Values
+track: terraform
+topic: variables
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 5
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-001
+
+story: >
+  There are two copies of this configuration. One lives here and builds
+  staging; the other lives in a second repository and builds production. They
+  were identical when someone split them, and they differ in four values by
+  design — but they have drifted twice this quarter in ways nobody intended,
+  because a change made in one was only sometimes made in the other.
+
+  The platform team has decided there will be one configuration. What differs
+  between environments becomes input, supplied at apply time, and the file
+  itself stops mentioning any particular environment at all.
+
+objectives:
+  - Replace hardcoded values with declared input variables
+  - Declare variables with types, and with or without defaults
+  - Drive resource arguments from variables rather than literals
+  - Supply values that override a variable's default
+
+task:
+  summary: >
+    Parameterise the configuration so one file can build any environment, then
+    apply it as production.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf` and
+    a `main.tf` that writes `build/staging.json`. Every value that differs
+    between environments is written into the file. Read it first.
+
+    Declare three input variables, and give each one a type:
+
+    - `environment` — a string, with **no default**. There is no sensible
+      default for which environment you are deploying; leaving it out is how
+      you make Terraform insist on being told.
+    - `replicas` — a number, defaulting to `2`.
+    - `debug` — a boolean, defaulting to `true`.
+
+    Then rewrite the resource so it uses them. The filename becomes
+    `build/<environment>.json`, and the JSON keeps exactly the shape it has now
+    — the same four keys, still produced with `jsonencode` — but `environment`,
+    `replicas` and `debug` come from the variables instead of being typed in.
+    The `service` value does not vary, so it stays as it is.
+
+    Nothing in the configuration should name a particular environment when you
+    are done. If the word `production` appears anywhere in `main.tf`, the file
+    is still an environment-specific copy.
+
+    Finally, apply it as production, with **four** replicas and debug turned
+    **off**. Two of those differ from the defaults you just declared, so you
+    will have to supply them — a `terraform.tfvars` file, a `-var` flag on the
+    command line, or a `TF_VAR_` environment variable will each do it, and the
+    documentation lists which wins when more than one applies.
+
+    When you are done, `build/production.json` should exist with the production
+    values, and `build/staging.json` should be gone — one configuration, and
+    the environment is now an input rather than a fact about the file.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The staging configuration is in place
+
+# Both halves are graded: the applied result, and the mechanism that produced
+# it. Editing the literals reaches the first and fails the second.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  # No default is the point: it is what makes Terraform insist on a value.
+  - type: terraform_variable_declared
+    dir: terraform
+    name: environment
+    has_type: true
+    has_default: false
+    label: A typed environment variable is declared, with no default
+
+  - type: terraform_variable_declared
+    dir: terraform
+    name: replicas
+    has_type: true
+    has_default: true
+    label: A typed replicas variable is declared, with a default
+
+  - type: terraform_variable_declared
+    dir: terraform
+    name: debug
+    has_type: true
+    has_default: true
+    label: A typed debug variable is declared, with a default
+
+  # Declaring a variable and then ignoring it is not parameterising anything.
+  # A literal that happens to read 'production' does not satisfy these.
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: service_config
+    attribute: filename
+    references: var.environment
+    label: The filename is built from the environment variable
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: service_config
+    attribute: content
+    references: var.environment
+    label: The configuration content takes its environment from the variable
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: service_config
+    attribute: content
+    references: var.replicas
+    label: The configuration content takes its replica count from the variable
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: service_config
+    attribute: content
+    references: var.debug
+    label: The configuration content takes its debug flag from the variable
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: service_config
+    label: The configuration resource was applied
+
+  - type: file_exists
+    path: terraform/build/production.json
+    label: The production configuration was written
+
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"environment":"production"'
+    label: It was built for production
+
+  # Both of these differ from the declared defaults, so reaching them proves a
+  # value was supplied rather than fallen back on.
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"replicas":4'
+    label: The replica count overrides its default
+
+  - type: file_content
+    path: terraform/build/production.json
+    contains: '"debug":false'
+    label: The debug flag overrides its default
+
+  - type: path_absent
+    path: terraform/build/staging.json
+    label: The environment-specific staging artifact is gone
+
+hints:
+  - level: 1
+    text: >
+      A variable is its own top-level block, and it can state a `type` and a
+      `default`. Leave the default off where the task says there should not be
+      one, and see what Terraform does when you plan without supplying it.
+
+      Once the variables exist, the resource has to actually use them — read
+      the language documentation on how a configuration refers to a variable.
+  - level: 2
+    text: >
+      Refer to a variable with `var.<name>`. Interpolation puts one inside a
+      string: `"build/${var.something}.json"`. Inside `jsonencode` the values
+      are expressions already, so they need no quoting at all.
+
+      For the two values that differ from their defaults, look up how values
+      are assigned — a `terraform.tfvars` file is picked up automatically, and
+      `-var` on the command line beats it.
+  - level: 3
+    text: >
+      Three `variable` blocks: `environment` with `type = string` and no
+      default, `replicas` with `type = number` and `default = 2`, `debug` with
+      `type = bool` and `default = true`.
+
+      The resource becomes `filename = "build/${var.environment}.json"` and a
+      `jsonencode` whose `environment`, `replicas` and `debug` entries are
+      `var.environment`, `var.replicas` and `var.debug`.
+
+      Then supply the values, for example a `terraform.tfvars` containing
+      `environment = "production"` and `replicas = 4`, and
+      `terraform apply -var="debug=false"`.
+
+references:
+  - title: Terraform — Input variables
+    url: https://developer.hashicorp.com/terraform/language/values/variables
+  - title: Terraform — References to values
+    url: https://developer.hashicorp.com/terraform/language/expressions/references
+  - title: Terraform — Type constraints
+    url: https://developer.hashicorp.com/terraform/language/expressions/types
+  - title: 'Terraform — Function: jsonencode'
+    url: https://developer.hashicorp.com/terraform/language/functions/jsonencode
+  - title: 'Terraform — Command: apply'
+    url: https://developer.hashicorp.com/terraform/cli/commands/apply
+
+skills:
+  - terraform.language.variables
+  - terraform.language.references
+  - terraform.workflow.apply
+
+# Objective 4c of the Terraform Associate (004) exam content list.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '4'

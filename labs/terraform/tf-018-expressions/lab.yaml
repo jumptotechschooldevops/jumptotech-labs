@@ -1,0 +1,274 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# TF-018 — expressions and functions: deriving values instead of typing them.
+#
+# Official objective this lab practises:
+#   Terraform Associate (004), domain 4 "Terraform configuration"
+#   4e — "Write dynamic configuration using expressions and functions"
+#
+# TF-006 and TF-017 touch 4e in passing; this is the lab that is about it.
+#
+# Official sources, read on 2026-08-25:
+#   · Expressions — conditional expressions, `for` expressions, string
+#     templates and interpolation
+#   · Built-in functions — `sort`, `keys`, `join`, `sum`, `upper`
+#   · Function: templatefile — rendering a file from a template and a set of
+#     values
+#
+# ## Grading, and what it deliberately does not require
+#
+# Every required value is *derived* and deterministic: a sorted list, a filtered
+# list, a conditional multiplier applied to a sum, an upper-cased string. The
+# lab checks the rendered artifact for those values, requires the named locals
+# that compose them, and requires the resource's content to refer to the
+# catalogue and the environment — which a hand-typed manifest does not.
+#
+# It does **not** require `templatefile`. A heredoc with interpolation that
+# renders the same bytes is an equally correct use of expressions, and the
+# platform has no way to assert which function an argument called without
+# adding a primitive that is not warranted here. The task recommends the
+# template; the grading accepts either.
+#
+# Nothing time-dependent is graded. An earlier draft of this lab called for a
+# timestamped header, which cannot be verified deterministically.
+#
+# Content is written from the official HashiCorp Terraform documentation.
+# Verified: 2026-08-25
+# ---------------------------------------------------------------------------
+id: TF-018
+slug: tf-018-expressions
+title: Expressions and Functions
+track: terraform
+topic: expressions
+difficulty: intermediate
+level: practice
+duration_minutes: 45
+order: 14
+
+environment:
+  provider: terraform
+  isolation: container
+
+prerequisites:
+  - TF-017
+
+story: >
+  The service catalogue in this configuration is maintained and correct. The
+  release manifest underneath it is typed out by hand, and it has been wrong
+  since `reporting` was added three weeks ago — the service list is short and
+  in the wrong order, and nobody recalculated the replica count.
+
+  It will be wrong again the next time the catalogue changes, and the time
+  after that, because nothing in the manifest is derived from anything. It is a
+  transcription, and transcriptions rot.
+
+  The catalogue is the source of truth. The manifest should be computed from
+  it, so that adding a service is one edit rather than two, and so that
+  forgetting the second edit stops being possible.
+
+objectives:
+  - Transform a collection with a for expression, using both key and value
+  - Filter a collection on a condition
+  - Choose a value with a conditional expression
+  - Compose derived values with built-in functions rather than repeating them
+
+task:
+  summary: >
+    Replace the hand-typed manifest with one computed from the service
+    catalogue.
+  description: >
+    Your lab environment has a `terraform` directory holding `versions.tf`,
+    `manifest.tftpl`, and a `main.tf` with the catalogue and the stale manifest.
+    Read the template first — it names the four values it expects, and those
+    names are the shape of the work.
+
+    Define four local values, and use these names:
+
+    - `service_summary` — one entry per service in the catalogue, each written
+      as `name(replicas)` — `auth(2)`, and so on. This is a `for` expression
+      over the map, using both the key and the value, and a function that
+      formats a string from them.
+    - `gold_services` — only the services whose tier is `gold`, also sorted.
+      This is a `for` expression with a condition on it.
+    - `replica_factor` — `2` when the environment is `production`, otherwise
+      `1`. A conditional expression, not an `if` block; Terraform has no `if`
+      block.
+    - `scaled_replicas` — every service's replica count added together, then
+      multiplied by the factor.
+
+    Then rewrite the resource so its content is rendered from those values
+    rather than typed. The manifest must end up as:
+
+    ```
+    environment: PRODUCTION
+    services: auth(2), ledger(3), reporting(1)
+    gold: auth, ledger
+    replicas: 12
+    ```
+
+    The environment line is the variable's value upper-cased — from the
+    variable, not typed in capitals. The two lists are comma-and-space
+    separated. `12` is the six replicas in the catalogue, doubled because this
+    is production.
+
+    `templatefile` is the natural way to render `manifest.tftpl` with a set of
+    values, and is what the template is there for. A string template producing
+    the same bytes is equally valid — what matters is that the values are
+    computed, not that a particular function produced them.
+
+    The test of whether you have done this properly: add a fourth service to
+    the catalogue and apply again. The manifest should follow, with no other
+    edit.
+
+setup:
+  files:
+    - source: setup/versions.tf
+      path: terraform/versions.tf
+      mode: '644'
+    - source: setup/main.tf
+      path: terraform/main.tf
+      mode: '644'
+    - source: setup/manifest.tftpl
+      path: terraform/manifest.tftpl
+      mode: '644'
+  verify:
+    - type: file_exists
+      path: terraform/versions.tf
+      label: Provider requirements are in place
+    - type: file_exists
+      path: terraform/main.tf
+      label: The catalogue and the stale manifest are in place
+    - type: file_exists
+      path: terraform/manifest.tftpl
+      label: The manifest template is in place
+
+# The values are all derived and deterministic, so the rendered artifact is
+# graded directly. The locals and the references are what separate a computed
+# manifest from a freshly-retyped one.
+requirements:
+  - type: terraform_initialized
+    dir: terraform
+    label: Terraform is initialised in the terraform directory
+
+  - type: terraform_locals_declared
+    dir: terraform
+    names:
+      - service_summary
+      - gold_services
+      - replica_factor
+      - scaled_replicas
+    label: The four derived values are named local values
+
+  # A hand-typed manifest refers to nothing. These two are what make retyping
+  # the answer fail.
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    attribute: content
+    references: var.services
+    label: The manifest content is derived from the service catalogue
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    attribute: content
+    references: var.environment
+    label: The manifest content is derived from the environment variable
+
+  - type: terraform_resource_exists
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    label: The manifest resource was applied
+
+  - type: file_exists
+    path: terraform/build/manifest.txt
+    label: The manifest was written
+
+  - type: file_content
+    path: terraform/build/manifest.txt
+    contains: 'environment: PRODUCTION'
+    label: The environment line is the variable, upper-cased
+
+  # Sorted, and complete — the stale manifest is neither.
+  - type: file_content
+    path: terraform/build/manifest.txt
+    contains: 'services: auth(2), ledger(3), reporting(1)'
+    label: Every service appears, with its replica count formatted alongside
+
+  - type: file_content
+    path: terraform/build/manifest.txt
+    contains: 'gold: auth, ledger'
+    label: Only the gold-tier services appear on the gold line
+
+  # Six replicas in the catalogue, doubled because this is production.
+  - type: file_content
+    path: terraform/build/manifest.txt
+    contains: 'replicas: 12'
+    label: The replica total is summed and scaled for the environment
+
+hints:
+  - level: 1
+    text: >
+      Start from the template: it names four values, and each one is a
+      different kind of expression. One is a whole collection transformed, one
+      is a collection filtered, one is a choice between two values, and one is
+      an aggregate.
+
+      The functions and expressions documentation has all four. Terraform has
+      no `if` statement — look for what it has instead.
+  - level: 2
+    text: >
+      A `for` expression over a map gives you both the key and the value —
+      `[for name, service in var.services : name]` — and it can carry an `if`
+      clause at the end to keep only some of them. There is also a function
+      that builds a string from a format and some values.
+
+      Worth knowing while you are here: `keys()` already returns a map's keys
+      in lexicographical order, so sorting them again would change nothing.
+
+      A conditional expression is `condition ? this : that`. Adding up a list
+      of numbers is one function call over a `for` expression that pulls out
+      the numbers.
+  - level: 3
+    text: >
+      `service_summary = [for name, s in var.services : format("%s(%d)", name, s.replicas)]`;
+      `gold_services = sort([for name, s in var.services : name if s.tier == "gold"])`;
+      `replica_factor = var.environment == "production" ? 2 : 1`;
+      `scaled_replicas = sum([for s in var.services : s.replicas]) * local.replica_factor`.
+
+      Then the resource's content becomes
+      `templatefile("${path.module}/manifest.tftpl", { ... })` with
+      `environment = upper(var.environment)`,
+      `services = join(", ", local.service_summary)`,
+      `gold = join(", ", local.gold_services)` and
+      `replicas = local.scaled_replicas`.
+
+references:
+  - title: Terraform — Expressions
+    url: https://developer.hashicorp.com/terraform/language/expressions
+  - title: Terraform — Conditional expressions
+    url: https://developer.hashicorp.com/terraform/language/expressions/conditionals
+  - title: Terraform — For expressions
+    url: https://developer.hashicorp.com/terraform/language/expressions/for
+  - title: Terraform — Built-in functions
+    url: https://developer.hashicorp.com/terraform/language/functions
+  - title: 'Terraform — Function: templatefile'
+    url: https://developer.hashicorp.com/terraform/language/functions/templatefile
+  - title: Terraform — Local values
+    url: https://developer.hashicorp.com/terraform/language/values/locals
+
+skills:
+  - terraform.language.expressions
+  - terraform.language.functions
+  - terraform.language.locals
+
+# Objective 4e of the Terraform Associate (004) exam content list.
+certification:
+  - certification: TERRAFORM-ASSOCIATE-004
+    relevant: true
+    domains:
+      - '4'

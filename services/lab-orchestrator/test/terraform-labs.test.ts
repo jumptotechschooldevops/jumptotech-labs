@@ -1,0 +1,1160 @@
+/**
+ * The Terraform lab catalog.
+ *
+ * Two jobs, both of which are about keeping the track honest rather than about
+ * any one lab's content:
+ *
+ *   1. Every Terraform lab loads, and asks only for checks the Terraform
+ *      provider can actually answer. A lab that names a `linux` or `docker`
+ *      check would load happily and then fail a correct student at check time,
+ *      so it is caught here instead.
+ *
+ *   2. Every Terraform lab is grounded in official documentation. The
+ *      curriculum policy is that HashiCorp's own docs are the source of truth;
+ *      a lab with no official reference is a lab nobody can audit, so the
+ *      absence of one is a test failure, not a style note.
+ */
+import { describe, expect, it } from 'vitest';
+import path from 'node:path';
+import {
+  LabRegistry,
+  PROVIDER_REQUIREMENT_FAMILIES,
+  loadLabDefinition,
+  loadSetupFiles,
+  requirementFamily,
+  type LoadedLabDefinition,
+} from '../src/index.js';
+import { LABS_DIR } from './helpers.js';
+import { scanLabsDirectory } from './catalog-shape.js';
+
+let cached: LabRegistry | undefined;
+async function realRegistry(): Promise<LabRegistry> {
+  if (!cached) {
+    cached = new LabRegistry(LABS_DIR);
+    await cached.load();
+  }
+  return cached;
+}
+
+function tf011Path(): string {
+  return path.join(LABS_DIR, 'terraform', 'tf-011-execution-plan', 'lab.yaml');
+}
+
+// --------------------------------------------------------- definitions load
+
+describe('the Terraform lab catalog', () => {
+  it('loads every Terraform lab with no definition errors', async () => {
+    const registry = await realRegistry();
+    expect(registry.loadErrors).toEqual([]);
+    // Compared as a set: the catalog orders by each lab's `order`, and the
+    // teaching sequence is asserted separately below. TF-004 sits at order 9
+    // because the approved curriculum puts it there, even though it shipped
+    // after TF-011 and TF-012.
+    //
+    // Derived from the labs directory rather than listed here: a hardcoded set
+    // silently goes stale the moment a lab is added, which is exactly how
+    // TF-026 came to be missing from it. What this asserts is the property
+    // that matters — the registry surfaces every Terraform lab on disk and
+    // invents none — and it stays true for the next lab too.
+    const disk = await scanLabsDirectory(LABS_DIR);
+    const onDisk = disk.idsForTrack('terraform');
+    expect(onDisk.length).toBeGreaterThan(0);
+    expect(registry.list({ track: 'terraform' }).map((lab) => lab.id).sort()).toEqual(
+      [...onDisk].sort(),
+    );
+  });
+
+  it('orders the track by its teaching sequence, with no two labs claiming one slot', async () => {
+    const labs = (await realRegistry()).list({ track: 'terraform' });
+    const orders = labs.map((lab) => lab.order);
+    expect(orders).toEqual([...orders].sort((a, b) => a - b));
+    expect(new Set(orders).size).toBe(orders.length);
+  });
+
+  it('resolves every declared prerequisite to a lab that exists', async () => {
+    for (const lab of (await realRegistry()).list({ track: 'terraform' })) {
+      for (const prerequisite of lab.prerequisites) {
+        expect(prerequisite.available, `${lab.id} requires ${prerequisite.id}`).toBe(true);
+      }
+    }
+  });
+
+  it('cites official HashiCorp documentation in every lab', async () => {
+    const registry = await realRegistry();
+    for (const summary of registry.list({ track: 'terraform' })) {
+      const lab = registry.get(summary.id);
+      const official = lab.references.filter((reference) =>
+        reference.url.startsWith('https://developer.hashicorp.com/'),
+      );
+      expect(official.length, `${summary.id} cites no official documentation`).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ------------------------------------------- the provider can verify the lab
+
+describe('Terraform labs stay inside what their provider can verify', () => {
+  it('asks only for filesystem and terraform checks', async () => {
+    const registry = await realRegistry();
+    const allowed = PROVIDER_REQUIREMENT_FAMILIES.terraform;
+
+    for (const summary of registry.list({ track: 'terraform' })) {
+      const lab = registry.get(summary.id);
+      expect(lab.environment.provider).toBe('terraform');
+      for (const requirement of [...lab.requirements, ...lab.setup.verify]) {
+        expect(
+          allowed,
+          `${summary.id} asks for '${requirement.type}', which the terraform provider cannot verify`,
+        ).toContain(requirementFamily(requirement.type));
+      }
+    }
+  });
+
+  it('runs in an isolated container with no Kubernetes setup', async () => {
+    const registry = await realRegistry();
+    for (const summary of registry.list({ track: 'terraform' })) {
+      const lab = registry.get(summary.id);
+      expect(lab.environment.isolation).toBe('container');
+      expect(lab.setup.manifests).toEqual([]);
+    }
+  });
+});
+
+// ------------------------------------------------------------------- TF-011
+
+describe('TF-011 — Reading and Saving an Execution Plan', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf011(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(tf011Path());
+    return lab;
+  }
+
+  it('follows TF-001 and covers the plan step of the core workflow', async () => {
+    const definition = await tf011();
+    expect(definition.id).toBe('TF-011');
+    expect(definition.track).toBe('terraform');
+    expect(definition.topic).toBe('workflow');
+    expect(definition.difficulty).toBe('beginner');
+    expect(definition.prerequisites).toEqual(['TF-001']);
+  });
+
+  it('maps to the current Terraform Associate exam version, not an older one', async () => {
+    const definition = await tf011();
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.certification).toBe('TERRAFORM-ASSOCIATE-004');
+    // Domain 3 is "Core Terraform workflow" in the 004 content list. The ids
+    // are HashiCorp's; nothing here invents an objective.
+    expect(entry?.domains).toEqual(['3']);
+  });
+
+  it('seeds a starting configuration the student did not have to write', async () => {
+    const definition = await tf011();
+    expect(definition.setup.files.map((file) => file.path)).toEqual([
+      'terraform/versions.tf',
+      'terraform/main.tf',
+    ]);
+
+    // Loading proves the sources resolve inside the lab directory and are
+    // readable — a lab whose setup cannot be staged is a lab that cannot start,
+    // and Reset Lab re-stages exactly these.
+    const files = await loadSetupFiles(definition);
+    expect(files.map((file) => file.path)).toEqual([
+      'terraform/versions.tf',
+      'terraform/main.tf',
+    ]);
+    for (const file of files) expect(file.content.length).toBeGreaterThan(0);
+
+    // The seeded configuration must declare the resource the lab plans, and
+    // must not already declare the one the student is asked to add.
+    const main = files.find((file) => file.path.endsWith('main.tf'))!;
+    expect(main.content).toContain('"local_file" "release_manifest"');
+    expect(main.content).not.toContain('rollback_plan');
+  });
+
+  it('grades the artifacts of two plan rounds, not the commands typed', async () => {
+    const types = (await tf011()).requirements.map((requirement) => requirement.type);
+
+    // State is the anchor: both resources must genuinely be in it.
+    expect(types.filter((type) => type === 'terraform_resource_exists')).toHaveLength(2);
+    expect(types).toContain('terraform_initialized');
+    expect(types).toContain('terraform_output_equals');
+
+    // Both rounds leave a saved plan and an exported JSON behind.
+    const paths = (await tf011()).requirements
+      .map((requirement) => ('path' in requirement ? requirement.path : ''))
+      .filter(Boolean);
+    for (const expected of ['terraform/tfplan', 'terraform/plan.json', 'terraform/tfplan2', 'terraform/plan2.json']) {
+      expect(paths, `TF-011 does not check ${expected}`).toContain(expected);
+    }
+  });
+
+  it('cannot be passed by planning twice without applying in between', async () => {
+    // The discriminating check. A student who never applies the first plan
+    // produces a second plan in which *both* resources are creates and nothing
+    // is a no-op, even though the final state and artifacts look identical.
+    // Removing this check would make the two-round workflow unenforceable.
+    const noOp = (await tf011()).requirements.find(
+      (requirement) =>
+        requirement.type === 'file_content' &&
+        'path' in requirement &&
+        requirement.path === 'terraform/plan2.json' &&
+        'contains' in requirement &&
+        requirement.contains === '"no-op"',
+    );
+    expect(noOp).toBeDefined();
+  });
+
+  it('offers three progressive hints and never puts the answer in the first', async () => {
+    const definition = await tf011();
+    expect(definition.hints.map((hint) => hint.level)).toEqual([1, 2, 3]);
+    expect(definition.hints[0]!.text).not.toContain('-out=tfplan');
+    expect(definition.hints[2]!.text).toContain('-out=tfplan');
+  });
+});
+
+// ------------------------------------------------------------------- TF-012
+
+describe('TF-012 — Destroying Infrastructure Safely', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf012(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-012-destroy', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('follows TF-011 and covers the destroy step of the core workflow', async () => {
+    const definition = await tf012();
+    expect(definition.id).toBe('TF-012');
+    expect(definition.topic).toBe('workflow');
+    expect(definition.prerequisites).toEqual(['TF-011']);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.certification).toBe('TERRAFORM-ASSOCIATE-004');
+    expect(entry?.domains).toEqual(['3']);
+  });
+
+  it('seeds a three-resource stack the student has to create before destroying', async () => {
+    const definition = await tf012();
+    const files = await loadSetupFiles(definition);
+    expect(files.map((f) => f.path)).toEqual(['terraform/versions.tf', 'terraform/main.tf']);
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    for (const name of ['draft_report', 'summary_report', 'audit_log']) {
+      expect(main.content).toContain(`"local_file" "${name}"`);
+    }
+  });
+
+  it('grades the destroy from state, not from the absence of a state file', async () => {
+    const requirements = (await tf012()).requirements;
+    // The full-destroy assertion: no address, so it means "nothing managed".
+    const whole = requirements.find(
+      (r) => r.type === 'terraform_state_absent' && !('address' in r && r.address),
+    );
+    expect(whole).toBeDefined();
+
+    // A file check for the state file's *absence* would be the wrong shape
+    // entirely — a completed destroy leaves one behind.
+    const forbids = requirements.some(
+      (r) => r.type === 'path_absent' && 'path' in r && String(r.path).endsWith('terraform.tfstate'),
+    );
+    expect(forbids).toBe(false);
+  });
+
+  it('proves the targeted destroy happened first, from the state the last destroy replaced', async () => {
+    const requirements = (await tf012()).requirements;
+    const sequencing = requirements.find(
+      (r) =>
+        r.type === 'terraform_state_absent' &&
+        'state_file' in r &&
+        r.state_file === 'terraform.tfstate.backup' &&
+        'address' in r &&
+        r.address === 'local_file.draft_report',
+    );
+    expect(sequencing).toBeDefined();
+
+    // ...and that the two survivors were still managed at that point, so a
+    // hand-written empty backup cannot stand in for the real one.
+    const survivors = requirements.filter(
+      (r) =>
+        r.type === 'terraform_resource_exists' &&
+        'state_file' in r &&
+        r.state_file === 'terraform.tfstate.backup',
+    );
+    expect(survivors).toHaveLength(2);
+  });
+
+  it('requires the artifacts to be gone from disk, and the directory to remain as evidence', async () => {
+    const requirements = (await tf012()).requirements;
+    const absent = requirements
+      .filter((r) => r.type === 'path_absent')
+      .map((r) => ('path' in r ? r.path : ''));
+    expect(absent).toEqual([
+      'terraform/out/draft-report.txt',
+      'terraform/out/summary-report.txt',
+      'terraform/out/audit-log.txt',
+    ]);
+    expect(
+      requirements.some((r) => r.type === 'directory_exists' && 'path' in r && r.path === 'terraform/out'),
+    ).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------------- TF-004
+
+describe('TF-004 — Terraform State', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf004(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-004-state', 'lab.yaml'));
+    return lab;
+  }
+
+  it('keeps the curriculum sequence: state topic, intermediate, order 9', async () => {
+    const definition = await tf004();
+    expect(definition.id).toBe('TF-004');
+    expect(definition.topic).toBe('state');
+    expect(definition.difficulty).toBe('intermediate');
+    // The approved plan places TF-004 at order 9, after the labs that fill
+    // orders 4–8. Implementing it early must not move it in the catalog.
+    expect(definition.order).toBe(9);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.certification).toBe('TERRAFORM-ASSOCIATE-004');
+    expect(entry?.domains).toEqual(['2', '7']);
+  });
+
+  it('seeds the three resources the refactor operates on', async () => {
+    const files = await loadSetupFiles(await tf004());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    for (const name of ['legacy_report', 'metrics', 'scratch_notes']) {
+      expect(main.content).toContain(`"local_file" "${name}"`);
+    }
+    // The target name must not be pre-written for them.
+    expect(main.content).not.toContain('quarterly_report');
+  });
+
+  it('grades the rename from state, both the new address and the old one', async () => {
+    const requirements = (await tf004()).requirements;
+    expect(
+      requirements.some(
+        (r) => r.type === 'terraform_resource_exists' && 'name' in r && r.name === 'quarterly_report',
+      ),
+    ).toBe(true);
+    expect(
+      requirements.some(
+        (r) =>
+          r.type === 'terraform_state_absent' &&
+          'address' in r &&
+          r.address === 'local_file.legacy_report',
+      ),
+    ).toBe(true);
+  });
+
+  it('distinguishes `state rm` from a destroy by requiring the file to survive', async () => {
+    const requirements = (await tf004()).requirements;
+    // Unmanaged...
+    expect(
+      requirements.some(
+        (r) =>
+          r.type === 'terraform_state_absent' &&
+          'address' in r &&
+          r.address === 'local_file.scratch_notes',
+      ),
+    ).toBe(true);
+    // ...but still on disk. Without this pair, `terraform destroy -target`
+    // would satisfy the lab, and it teaches the opposite lesson.
+    expect(
+      requirements.some(
+        (r) => r.type === 'file_exists' && 'path' in r && r.path === 'terraform/out/scratch-notes.txt',
+      ),
+    ).toBe(true);
+  });
+
+  it('binds the exported plan to the refactor, so a stale or faked plan cannot pass', async () => {
+    const planChecks = (await tf004()).requirements.filter(
+      (r) => 'path' in r && r.path === 'terraform/plan.json',
+    );
+    const has = (type: string, text: string) =>
+      planChecks.some((r) => r.type === type && 'contains' in r && r.contains === text);
+
+    // It must be a plan, not a `terraform show -json` dump of state.
+    expect(has('file_content', '"resource_changes"')).toBe(true);
+    // Of the renamed configuration...
+    expect(has('file_content', 'local_file.quarterly_report')).toBe(true);
+    // ...and not of the configuration as it stood before the work.
+    expect(has('file_content_absent', 'local_file.legacy_report')).toBe(true);
+    expect(has('file_content_absent', 'local_file.scratch_notes')).toBe(true);
+    // A clean refactor plans nothing at all.
+    expect(has('file_content_absent', '"create"')).toBe(true);
+    expect(has('file_content_absent', '"delete"')).toBe(true);
+  });
+
+  it('reads no student-authored configuration file, only state and artifacts', async () => {
+    // `main.tf` is the student's own writing; grading it would be grading what
+    // was typed. Every check reads state, a plan Terraform produced, or a file
+    // a provider wrote.
+    const paths = (await tf004()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-003
+
+describe('TF-003 — Outputs and Exposed Values', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf003(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-003-outputs', 'lab.yaml'));
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf003();
+    expect(definition.id).toBe('TF-003');
+    expect(definition.topic).toBe('outputs');
+    expect(definition.order).toBe(6);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.certification).toBe('TERRAFORM-ASSOCIATE-004');
+    expect(entry?.domains).toEqual(['4']);
+  });
+
+  it('seeds a configuration that builds something and exposes nothing', async () => {
+    const files = await loadSetupFiles(await tf003());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    // The raw material for the three reference kinds the lab teaches...
+    expect(main.content).toContain('variable "channel"');
+    expect(main.content).toContain('locals');
+    expect(main.content).toContain('"local_file"');
+    // ...and no outputs at all, which is the gap the student closes.
+    expect(main.content).not.toContain('output "');
+  });
+
+  it('grades every one of the five contracted outputs', async () => {
+    const outputs = (await tf003()).requirements
+      .filter((r) => r.type === 'terraform_output_equals')
+      .map((r) => ('name' in r ? r.name : ''));
+    expect(outputs.sort()).toEqual(
+      ['deploy_token', 'manifest_path', 'release_channel', 'release_summary', 'service_name'].sort(),
+    );
+  });
+
+  it('grades the object output structurally, so key order cannot decide', async () => {
+    const summary = (await tf003()).requirements.find(
+      (r) => r.type === 'terraform_output_equals' && 'name' in r && r.name === 'release_summary',
+    );
+    const value = (summary as Record<string, unknown> | undefined)?.value;
+    expect(typeof value).toBe('string');
+    // Valid JSON is what makes the comparison structural rather than textual.
+    const parsed = JSON.parse(String(value)) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual(['channel', 'manifest', 'service']);
+  });
+
+  it('verifies the sensitive marking from an artifact, not from the source', async () => {
+    const requirements = (await tf003()).requirements;
+    const listing = requirements.filter((r) => 'path' in r && r.path === 'terraform/outputs.txt');
+    // `terraform output` redacts a sensitive value; both halves are asserted.
+    expect(
+      listing.some((r) => r.type === 'file_content' && 'contains' in r && r.contains === '<sensitive>'),
+    ).toBe(true);
+    expect(
+      listing.some(
+        (r) =>
+          r.type === 'file_content_absent' &&
+          'contains' in r &&
+          String(r.contains).includes('not-a-real-token'),
+      ),
+    ).toBe(true);
+  });
+
+  it('reads no student configuration, so equivalent configurations pass', async () => {
+    // The contract is the output names and their values. Nothing pins a
+    // resource, local or variable name, and no check opens a `.tf` file — a
+    // student may restructure freely.
+    const paths = (await tf003()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+
+  it('keeps the expected token out of every published label', async () => {
+    // PLATFORM-SEC: a label is student-facing. The one output whose value is a
+    // stand-in credential must not have that value restated in its checklist.
+    for (const requirement of (await tf003()).requirements) {
+      const label = (requirement as Record<string, unknown>).label;
+      if (typeof label === 'string') expect(label).not.toContain('not-a-real-token-placeholder');
+    }
+  });
+});
+
+// ------------------------------------------------------------------- TF-005
+
+describe('TF-005 — Multiple Resources and Dependencies', () => {
+  let lab: LoadedLabDefinition;
+  /** SHA-256 of the seeded config's rendered bytes. Deterministic: jsonencode sorts keys. */
+  const DIGEST = 'd0e6aa155b3c5c346148dc7165a8a0bd33b9ce295eaddd8a72aba4ffdd53118f';
+
+  async function tf005(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-005-dependencies', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf005();
+    expect(definition.id).toBe('TF-005');
+    expect(definition.topic).toBe('dependencies');
+    expect(definition.order).toBe(10);
+    expect(definition.prerequisites).toEqual(['TF-004']);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.domains).toEqual(['4']);
+  });
+
+  it('seeds only the head of the chain, leaving both dependents to the student', async () => {
+    const files = await loadSetupFiles(await tf005());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    expect(main.content).toContain('"local_file" "service_config"');
+    // `jsonencode` is what makes the seeded bytes — and therefore the digest —
+    // deterministic. Replacing it with a heredoc would silently break every
+    // checksum assertion in this lab.
+    expect(main.content).toContain('jsonencode');
+    for (const dependent of ['integrity_record', 'deploy_manifest']) {
+      expect(main.content).not.toContain(dependent);
+    }
+  });
+
+  it('requires all three resources, so an unrelated resource cannot stand in', async () => {
+    const named = (await tf005()).requirements
+      .filter((r) => r.type === 'terraform_resource_exists')
+      .map((r) => ('name' in r ? r.name : ''));
+    expect(named.sort()).toEqual(['deploy_manifest', 'integrity_record', 'service_config']);
+  });
+
+  it('proves the implicit dependency from a value only the first resource produces', async () => {
+    const requirements = (await tf005()).requirements;
+    // The digest exists only once `local_file.service_config` has been created,
+    // so applied content carrying it was derived from that resource. This is
+    // the dependency proof, and it reads artifacts rather than source.
+    const carriers = requirements.filter(
+      (r) => r.type === 'file_content' && 'contains' in r && r.contains === DIGEST,
+    );
+    expect(carriers.length).toBe(2);
+    const paths = carriers.map((r) => ('path' in r ? r.path : ''));
+    expect(paths.sort()).toEqual([
+      'terraform/build/deploy-manifest.txt',
+      'terraform/build/integrity.txt',
+    ]);
+  });
+
+  it('requires the dependent resource to name the one it accompanies', async () => {
+    const requirements = (await tf005()).requirements;
+    expect(
+      requirements.some(
+        (r) =>
+          r.type === 'file_content' &&
+          'path' in r &&
+          r.path === 'terraform/build/deploy-manifest.txt' &&
+          'contains' in r &&
+          r.contains === 'build/integrity.txt',
+      ),
+    ).toBe(true);
+  });
+
+  it('publishes the relationship through outputs, one of them structured', async () => {
+    const outputs = (await tf005()).requirements.filter(
+      (r) => r.type === 'terraform_output_equals',
+    );
+    const byName = new Map(outputs.map((r) => [('name' in r ? r.name : ''), r]));
+    expect([...byName.keys()].sort()).toEqual(['config_fingerprint', 'deployment']);
+
+    expect((byName.get('config_fingerprint') as Record<string, unknown>).value).toBe(DIGEST);
+
+    // Structural comparison, so a student's key order cannot decide.
+    const parsed = JSON.parse(
+      String((byName.get('deployment') as Record<string, unknown>).value),
+    ) as Record<string, string>;
+    expect(Object.keys(parsed).sort()).toEqual(['config', 'fingerprint', 'integrity']);
+    expect(parsed.fingerprint).toBe(DIGEST);
+  });
+
+  it('never requires depends_on', async () => {
+    // A reference already creates the edge; requiring `depends_on` as well
+    // would teach the habit the lab exists to argue against.
+    const serialised = JSON.stringify((await tf005()).requirements);
+    expect(serialised).not.toContain('depends_on');
+  });
+
+  it('proves the dependency semantically, not just from applied values', async () => {
+    // Applied state cannot tell a pasted digest from a derived one. These two
+    // checks can, and they are what closed the lab's original limitation.
+    const references = (await tf005()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    expect(references).toHaveLength(2);
+
+    const integrity = references.find((r) => r.name === 'integrity_record');
+    expect(integrity).toMatchObject({
+      attribute: 'content',
+      references: 'local_file.service_config',
+      referenced_attribute: 'content_sha256',
+    });
+
+    const manifest = references.find((r) => r.name === 'deploy_manifest');
+    expect(manifest).toMatchObject({
+      attribute: 'content',
+      references: 'local_file.integrity_record',
+    });
+
+    // Still graded from applied state as well — the configuration checks were
+    // added alongside, not instead.
+    const kinds = new Set((await tf005()).requirements.map((r) => r.type));
+    expect(kinds.has('terraform_resource_exists')).toBe(true);
+    expect(kinds.has('terraform_output_equals')).toBe(true);
+    expect(kinds.has('file_content')).toBe(true);
+  });
+
+  it('names no source file, so how the configuration is laid out cannot matter', async () => {
+    // Configuration checks name a *directory*; the scanner reads every `.tf`
+    // file in it. Nothing pins a filename.
+    const paths = (await tf005()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-002
+
+describe('TF-002 — Variables and Input Values', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf002(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-002-variables', 'lab.yaml'));
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf002();
+    expect(definition.id).toBe('TF-002');
+    expect(definition.topic).toBe('variables');
+    expect(definition.order).toBe(5);
+    expect(definition.prerequisites).toEqual(['TF-001']);
+    const entry = definition.certification.find((c) => c.relevant);
+    expect(entry?.certification).toBe('TERRAFORM-ASSOCIATE-004');
+    expect(entry?.domains).toEqual(['4']);
+  });
+
+  it('seeds a hardcoded configuration with no variables to start from', async () => {
+    const files = await loadSetupFiles(await tf002());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    expect(main.content).toContain('"staging"');
+    expect(main.content).not.toContain('variable "');
+    expect(main.content).not.toContain('var.');
+  });
+
+  it('requires all three variables, with the shape the task states', async () => {
+    const declared = (await tf002()).requirements.filter(
+      (r) => r.type === 'terraform_variable_declared',
+    ) as Array<Record<string, unknown>>;
+    expect(declared.map((r) => r.name).sort()).toEqual(['debug', 'environment', 'replicas']);
+    // Every one typed...
+    for (const rule of declared) expect(rule.has_type).toBe(true);
+    // ...and `environment` deliberately without a default, which is what makes
+    // Terraform insist on being told which environment is being built.
+    expect(declared.find((r) => r.name === 'environment')?.has_default).toBe(false);
+    expect(declared.find((r) => r.name === 'replicas')?.has_default).toBe(true);
+    expect(declared.find((r) => r.name === 'debug')?.has_default).toBe(true);
+  });
+
+  it('requires the resource to actually use the variables, not just declare them', async () => {
+    // Editing the literals reaches the same artifact. These four are what make
+    // that fail, and they are satisfied only by a live reference — a string
+    // that happens to read "production" does not count.
+    const references = (await tf002()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    expect(references).toHaveLength(4);
+    for (const rule of references) expect(rule.name).toBe('service_config');
+    const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
+    expect(pairs).toEqual([
+      'content->var.debug',
+      'content->var.environment',
+      'content->var.replicas',
+      'filename->var.environment',
+    ]);
+  });
+
+  it('grades the applied result as well as the mechanism', async () => {
+    const kinds = new Set((await tf002()).requirements.map((r) => r.type));
+    expect(kinds.has('terraform_resource_exists')).toBe(true);
+    expect(kinds.has('file_content')).toBe(true);
+    expect(kinds.has('path_absent')).toBe(true);
+  });
+
+  it('proves an override happened, without looking for a tfvars file', async () => {
+    // Two required values differ from the defaults the lab asks for, so
+    // reaching them is only possible by supplying a value — whichever
+    // documented mechanism the student picks. Nothing pins a filename.
+    const contents = (await tf002()).requirements
+      .filter((r) => r.type === 'file_content' && 'contains' in r)
+      .map((r) => ('contains' in r ? String(r.contains) : ''));
+    expect(contents).toContain('"replicas":4');
+    expect(contents).toContain('"debug":false');
+
+    const paths = (await tf002()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tfvars'))).toBe(false);
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-006
+
+describe('TF-006 — Local Values and Data Sources', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf006(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-006-locals-data', 'lab.yaml'));
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf006();
+    expect(definition.id).toBe('TF-006');
+    expect(definition.topic).toBe('expressions');
+    expect(definition.order).toBe(12);
+    expect(definition.prerequisites).toEqual(['TF-005']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds the hand-written version plus the file another team owns', async () => {
+    const files = await loadSetupFiles(await tf006());
+    expect(files.map((f) => f.path).sort()).toEqual([
+      'terraform/main.tf',
+      'terraform/platform.json',
+      'terraform/versions.tf',
+    ]);
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    // The problem the student fixes: everything written out, nothing read.
+    expect(main.content).toContain('"jumptotech-ledger-prod"');
+    expect(main.content).not.toContain('locals');
+    expect(main.content).not.toContain('data "');
+  });
+
+  it('requires the slug to be composed once, as named locals', async () => {
+    const locals = (await tf006()).requirements.find(
+      (r) => r.type === 'terraform_locals_declared',
+    ) as Record<string, unknown> | undefined;
+    expect(locals?.names).toEqual(['service_prefix', 'environment', 'service_slug']);
+  });
+
+  it('requires a data block, which is what tells reading apart from owning', async () => {
+    // Objective 4a. A `resource` would create and own `platform.json`, which is
+    // the wrong relationship with a file another team maintains.
+    const data = (await tf006()).requirements.find(
+      (r) => r.type === 'terraform_data_source_declared',
+    ) as Record<string, unknown> | undefined;
+    expect(data).toMatchObject({ data_type: 'local_file', name: 'platform' });
+  });
+
+  it('requires the manifest to derive its values rather than restate them', async () => {
+    // The artifact is byte-identical whether the values were derived or typed
+    // in, so these three are the only thing separating reading from
+    // transcribing.
+    const references = (await tf006()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
+    expect(pairs).toEqual([
+      'content->data.local_file.platform',
+      'content->local.service_slug',
+      'filename->local.service_slug',
+    ]);
+  });
+
+  it('checks the settings file was left alone', async () => {
+    // A data source reads. If it became a resource, Terraform would own the
+    // file — this is the check that notices.
+    const guard = (await tf006()).requirements.find(
+      (r) => 'path' in r && r.path === 'terraform/platform.json',
+    );
+    expect(guard).toBeDefined();
+  });
+
+  it('grades the applied result as well, and names no source file', async () => {
+    const kinds = new Set((await tf006()).requirements.map((r) => r.type));
+    expect(kinds.has('terraform_resource_exists')).toBe(true);
+    expect(kinds.has('file_content')).toBe(true);
+    const paths = (await tf006()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-016
+
+describe('TF-016 — Explicit Dependencies with depends_on', () => {
+  let lab: LoadedLabDefinition;
+  /** SHA-256 of the manifest's rendered bytes. Deterministic: jsonencode sorts keys. */
+  const MANIFEST_DIGEST = '53253121f03e0c078d549519600e0fae7da8608dfebfe48c336743a33ecb1c76';
+
+  async function tf016(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-016-explicit-dependencies', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, after TF-005', async () => {
+    const definition = await tf016();
+    expect(definition.id).toBe('TF-016');
+    expect(definition.topic).toBe('dependencies');
+    expect(definition.order).toBe(11);
+    expect(definition.prerequisites).toEqual(['TF-005']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds two resources that share a value but depend on nothing of each others', async () => {
+    const files = await loadSetupFiles(await tf016());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    expect(main.content).toContain('"local_file" "migration_marker"');
+    expect(main.content).toContain('"local_file" "app_manifest"');
+    // Sharing `local.release` is the trap: it is not a dependency between them.
+    expect(main.content).toContain('local.release');
+    // Neither the ordering nor the third resource is given away.
+    expect(main.content).not.toContain('depends_on');
+    expect(main.content).not.toContain('release_record');
+  });
+
+  it('grades the explicit dependency, which nothing else in the track does', async () => {
+    // `terraform_resource_depends_on` is used by no other lab; TF-005 grades
+    // references. The two labs are complements, not duplicates.
+    const explicit = (await tf016()).requirements.find(
+      (r) => r.type === 'terraform_resource_depends_on',
+    ) as Record<string, unknown> | undefined;
+    expect(explicit).toMatchObject({
+      resource_type: 'local_file',
+      name: 'app_manifest',
+      references: ['local_file.migration_marker'],
+    });
+  });
+
+  it('grades the implicit dependency by reference, so depends_on cannot stand in for it', async () => {
+    // The distinction the lab teaches: a student who writes `depends_on` on
+    // the record instead of referring to the checksum fails this check.
+    const implicit = (await tf016()).requirements.find(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Record<string, unknown> | undefined;
+    expect(implicit).toMatchObject({
+      name: 'release_record',
+      attribute: 'content',
+      references: 'local_file.app_manifest',
+      referenced_attribute: 'content_sha256',
+    });
+  });
+
+  it('pins the manifest contents, so ordering cannot be forced through them', async () => {
+    // Inventing a reference to the marker would rewrite the manifest. This is
+    // what makes `depends_on` the only correct answer for that pair.
+    const pinned = (await tf016()).requirements.find(
+      (r) => 'path' in r && r.path === 'terraform/build/app/manifest.json' && 'equals' in r,
+    ) as Record<string, unknown> | undefined;
+    expect(pinned?.equals).toBe('{"release":"2026.08","service":"ledger-api"}');
+  });
+
+  it('proves the implicit dependency resolved, from a value only the manifest produces', async () => {
+    const carrier = (await tf016()).requirements.find(
+      (r) =>
+        r.type === 'file_content' &&
+        'path' in r &&
+        r.path === 'terraform/build/app/release-record.txt',
+    ) as Record<string, unknown> | undefined;
+    expect(carrier?.contains).toBe(MANIFEST_DIGEST);
+  });
+
+  it('grades applied state too, and names no source file', async () => {
+    const requirements = (await tf016()).requirements;
+    expect(requirements.filter((r) => r.type === 'terraform_resource_exists')).toHaveLength(3);
+    const paths = requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-017
+
+describe('TF-017 — Complex Types', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf017(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-017-complex-types', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf017();
+    expect(definition.id).toBe('TF-017');
+    expect(definition.topic).toBe('types');
+    expect(definition.order).toBe(13);
+    expect(definition.prerequisites).toEqual(['TF-006']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds loose variables with stale defaults, and the data that outgrew them', async () => {
+    const files = await loadSetupFiles(await tf017());
+    expect(files.map((f) => f.path).sort()).toEqual([
+      'terraform/main.tf',
+      'terraform/terraform.tfvars',
+      'terraform/versions.tf',
+    ]);
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    // The problem: separate variables, and no structure to put the new data in.
+    expect(main.content).toContain('variable "env_region"');
+    expect(main.content).not.toContain('environments');
+    // The defaults are deliberately stale, so the seeded lab does not already
+    // produce the values the task asks for.
+    expect(main.content).toContain('us-east-1');
+
+    const tfvars = files.find((f) => f.path.endsWith('.tfvars'))!;
+    // `production` omits debug — which is what forces `optional()`. Sliced from
+    // the block itself, not the first mention of the word, since the file's
+    // header comment explains the omission.
+    const block = tfvars.content.slice(tfvars.content.indexOf('production = {'));
+    expect(block).toContain('replicas');
+    expect(block).not.toContain('debug');
+  });
+
+  it('requires a collection type and a structural type together', async () => {
+    const declared = (await tf017()).requirements.filter(
+      (r) => r.type === 'terraform_variable_declared',
+    ) as Array<Record<string, unknown>>;
+    const environments = declared.filter((r) => r.name === 'environments');
+    const shapes = environments.map((r) => r.type_contains);
+    expect(shapes).toContain('map(object(');
+    // Matched against the type expression with whitespace collapsed, so a
+    // student's layout does not decide.
+    expect(shapes).toContain('optional(');
+    expect(declared.some((r) => r.name === 'target' && r.has_type === true)).toBe(true);
+  });
+
+  it('proves optional() through its effect, not only its spelling', async () => {
+    // The platform team never wrote a debug value for production, so the
+    // manifest can only carry one if the attribute was declared optional with
+    // a default.
+    const contents = (await tf017()).requirements
+      .filter((r) => r.type === 'file_content' && 'contains' in r)
+      .map((r) => ('contains' in r ? String(r.contains) : ''));
+    expect(contents).toContain('"debug":false');
+    expect(contents).toContain('"region":"eu-central-1"');
+    expect(contents).toContain('"replicas":6');
+  });
+
+  it('requires the manifest to be built from the structure, not from literals', async () => {
+    const references = (await tf017()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
+    expect(pairs).toEqual(['content->var.environments', 'filename->var.target']);
+  });
+
+  it('grades applied state as well, and names no source file', async () => {
+    const requirements = (await tf017()).requirements;
+    expect(requirements.some((r) => r.type === 'terraform_resource_exists')).toBe(true);
+    const paths = requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf') || p.endsWith('.tfvars'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-025
+
+describe('TF-025 — Custom Conditions', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf025(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(
+      path.join(LABS_DIR, 'terraform', 'tf-025-custom-conditions', 'lab.yaml'),
+    );
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf025();
+    expect(definition.id).toBe('TF-025');
+    expect(definition.topic).toBe('conditions');
+    expect(definition.order).toBe(23);
+    expect(definition.prerequisites).toEqual(['TF-017']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds a configuration that works and states none of its assumptions', async () => {
+    const files = await loadSetupFiles(await tf025());
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    for (const construct of ['validation', 'precondition', 'postcondition', 'check "']) {
+      expect(main.content).not.toContain(construct);
+    }
+    // The pieces the conditions will be about are all present.
+    expect(main.content).toContain('variable "environment"');
+    expect(main.content).toContain('data "local_file" "platform"');
+  });
+
+  it('requires all four constructs, each on the right thing', async () => {
+    const requirements = (await tf025()).requirements;
+    expect(requirements.some((r) => r.type === 'terraform_variable_validation')).toBe(true);
+    expect(requirements.some((r) => r.type === 'terraform_check_declared')).toBe(true);
+
+    const conditions = requirements.filter(
+      (r) => r.type === 'terraform_resource_condition',
+    ) as Array<Record<string, unknown>>;
+    expect(conditions).toHaveLength(2);
+    // A precondition on the managed resource...
+    expect(
+      conditions.some(
+        (c) => c.condition === 'precondition' && c.name === 'release_manifest' && c.mode !== 'data',
+      ),
+    ).toBe(true);
+    // ...and a postcondition on the data source, which is a different block.
+    expect(
+      conditions.some(
+        (c) => c.condition === 'postcondition' && c.name === 'platform' && c.mode === 'data',
+      ),
+    ).toBe(true);
+  });
+
+  it('names what a condition must be about, never which function to use', async () => {
+    // `contains`, a regex and `startswith` are all correct ways to write the
+    // validation rule. Pinning one would grade style rather than meaning, so
+    // the checks name the subject instead — and Terraform independently
+    // refuses a condition that refers to nothing at all.
+    const validation = (await tf025()).requirements.find(
+      (r) => r.type === 'terraform_variable_validation',
+    ) as Record<string, unknown> | undefined;
+    expect(validation?.condition_mentions).toEqual(['environment']);
+
+    const precondition = (await tf025()).requirements.find(
+      (r) => r.type === 'terraform_resource_condition' && 'condition' in r && r.condition === 'precondition',
+    ) as Record<string, unknown> | undefined;
+    expect(precondition?.condition_mentions).toEqual(['replicas']);
+
+    // Scoped to what the condition checks actually ask for. `contains` is also
+    // a *field name* on `file_content`, so serialising everything and grepping
+    // would have found it there and proved nothing.
+    const mentioned = (await tf025()).requirements.flatMap((r) =>
+      'condition_mentions' in r && Array.isArray(r.condition_mentions)
+        ? (r.condition_mentions as string[])
+        : [],
+    );
+    expect(mentioned.sort()).toEqual(['environment', 'replicas']);
+    for (const fn of ['contains', 'regex', 'startswith', 'can', 'length']) {
+      expect(mentioned).not.toContain(fn);
+    }
+  });
+
+  it('grades the applied result too, so conditions alone are not enough', async () => {
+    const kinds = new Set((await tf025()).requirements.map((r) => r.type));
+    expect(kinds.has('terraform_resource_exists')).toBe(true);
+    expect(kinds.has('file_content')).toBe(true);
+    const paths = (await tf025()).requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf') || p.endsWith('.json') && p.includes('platform'))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------- TF-018
+
+describe('TF-018 — Expressions and Functions', () => {
+  let lab: LoadedLabDefinition;
+
+  async function tf018(): Promise<LoadedLabDefinition> {
+    lab ??= await loadLabDefinition(path.join(LABS_DIR, 'terraform', 'tf-018-expressions', 'lab.yaml'));
+    return lab;
+  }
+
+  it('sits where the curriculum puts it, on the configuration domain', async () => {
+    const definition = await tf018();
+    expect(definition.id).toBe('TF-018');
+    expect(definition.topic).toBe('expressions');
+    expect(definition.order).toBe(14);
+    expect(definition.prerequisites).toEqual(['TF-017']);
+    expect(definition.certification.find((c) => c.relevant)?.domains).toEqual(['4']);
+  });
+
+  it('seeds a correct catalogue and a stale hand-typed manifest', async () => {
+    const files = await loadSetupFiles(await tf018());
+    expect(files.map((f) => f.path).sort()).toEqual([
+      'terraform/main.tf',
+      'terraform/manifest.tftpl',
+      'terraform/versions.tf',
+    ]);
+    const main = files.find((f) => f.path.endsWith('main.tf'))!;
+    // The catalogue is the source of truth...
+    expect(main.content).toContain('reporting = { tier = "silver", replicas = 1 }');
+    // ...and the manifest has not kept up: short list, wrong total, no locals.
+    expect(main.content).toContain('services: ledger, auth');
+    expect(main.content).toContain('replicas: 5');
+    expect(main.content).not.toContain('locals');
+  });
+
+  it('requires the four derived values as named locals', async () => {
+    const locals = (await tf018()).requirements.find(
+      (r) => r.type === 'terraform_locals_declared',
+    ) as Record<string, unknown> | undefined;
+    expect(locals?.names).toEqual([
+      'service_summary',
+      'gold_services',
+      'replica_factor',
+      'scaled_replicas',
+    ]);
+  });
+
+  it('requires the manifest to be derived, which is what a retyped one is not', async () => {
+    const references = (await tf018()).requirements.filter(
+      (r) => r.type === 'terraform_resource_references',
+    ) as Array<Record<string, unknown>>;
+    const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
+    expect(pairs).toEqual(['content->var.environment', 'content->var.services']);
+  });
+
+  it('grades values that only an expression produces', async () => {
+    const contents = (await tf018()).requirements
+      .filter((r) => r.type === 'file_content' && 'contains' in r)
+      .map((r) => ('contains' in r ? String(r.contains) : ''));
+    // A formatted transformation of both key and value — not obtainable from
+    // `keys()` alone, which is already lexicographical.
+    expect(contents).toContain('services: auth(2), ledger(3), reporting(1)');
+    // A filter on the collection.
+    expect(contents).toContain('gold: auth, ledger');
+    // A sum scaled by a conditional: six replicas, doubled for production.
+    expect(contents).toContain('replicas: 12');
+    // A string function applied to a variable.
+    expect(contents).toContain('environment: PRODUCTION');
+  });
+
+  it('does not require any particular function, and grades nothing time-dependent', async () => {
+    // `templatefile` and a string template rendering the same bytes are both
+    // correct uses of expressions, and the platform cannot assert which
+    // function an argument called without a primitive this lab does not need.
+    const serialised = JSON.stringify((await tf018()).requirements);
+    for (const fn of ['templatefile', 'format(', 'sort(', 'timestamp', 'plantimestamp']) {
+      expect(serialised).not.toContain(fn);
+    }
+  });
+
+  it('grades applied state as well, and names no source file', async () => {
+    const requirements = (await tf018()).requirements;
+    expect(requirements.some((r) => r.type === 'terraform_resource_exists')).toBe(true);
+    const paths = requirements
+      .filter((r) => 'path' in r)
+      .map((r) => ('path' in r ? String(r.path) : ''));
+    expect(paths.some((p) => p.endsWith('.tf') || p.endsWith('.tftpl'))).toBe(false);
+  });
+});

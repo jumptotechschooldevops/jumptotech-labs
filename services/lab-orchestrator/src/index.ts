@@ -6,6 +6,37 @@ export * from './lab-registry.js';
 export * from './track-definition.js';
 export * from './k8s/port.js';
 export * from './k8s/labels.js';
+/**
+ * Terraform configuration inspection.
+ *
+ * A block-structure scanner and a reference extractor — static reading only.
+ * Nothing here evaluates an expression, calls a function, resolves a variable
+ * or contacts anything; a lab asks what the configuration *says*, and Terraform
+ * itself remains the only thing that decides what it means.
+ */
+export {
+  scanHcl,
+  scanHclFiles,
+  blocksOfType,
+  findBlock,
+  findNestedBlock,
+  argumentValue,
+  argumentNames,
+  hasArgument,
+  referencedNames,
+  literalString,
+  type HclArgument,
+  type HclBlock,
+  type HclDocument,
+} from './terraform/hcl.js';
+export {
+  extractReferences,
+  referencesTarget,
+  isLiteralExpression,
+  type ReferenceKind,
+  type TerraformReference,
+} from './terraform/references.js';
+
 export { buildStudentKubeconfig, type StudentKubeconfigInput } from './k8s/student-kubeconfig.js';
 export { KubernetesClient, toPodSnapshot, toDeploymentSnapshot } from './k8s/client.js';
 export {

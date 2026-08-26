@@ -201,9 +201,20 @@ import {
   terraformInitialized,
   terraformOutputEquals,
   terraformResourceExists,
+  terraformStateAbsent,
 } from './handlers/terraform.js';
 import { neighbourState } from './handlers/neighbours.js';
 import { httpRequest } from './handlers/reachability-peer.js';
+import {
+  terraformCheckDeclared,
+  terraformDataSourceDeclared,
+  terraformLocalsDeclared,
+  terraformResourceCondition,
+  terraformResourceDependsOn,
+  terraformResourceReferences,
+  terraformVariableDeclared,
+  terraformVariableValidation,
+} from './handlers/terraform-config.js';
 import {
   commandExitCode,
   commandOutput,
@@ -393,6 +404,16 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_initialized: terraformInitialized,
   terraform_resource_exists: terraformResourceExists,
   terraform_output_equals: terraformOutputEquals,
+  terraform_state_absent: terraformStateAbsent,
+
+  terraform_resource_references: terraformResourceReferences,
+  terraform_variable_declared: terraformVariableDeclared,
+  terraform_locals_declared: terraformLocalsDeclared,
+  terraform_data_source_declared: terraformDataSourceDeclared,
+  terraform_resource_depends_on: terraformResourceDependsOn,
+  terraform_variable_validation: terraformVariableValidation,
+  terraform_resource_condition: terraformResourceCondition,
+  terraform_check_declared: terraformCheckDeclared,
 
   iam_policy_document: iamPolicyDocument,
   iam_policy_statement: iamPolicyStatement,
