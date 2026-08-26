@@ -1,0 +1,266 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Content is written from the official Docker documentation only; the pages
+# this lab is grounded in are listed under `references`.
+#
+# THE INCIDENT IS SEEDED, NOT DESCRIBED. `ledger-web` holds host port 8080.
+# `statements-web` exists, is stopped, and was created asking for the same host
+# port — so the student's first instinct, `docker start statements-web`, fails
+# in their face with the daemon's own "port is already allocated". That failure
+# is the lesson; the task never names it.
+#
+# ORDERING MATTERS AND IS LOAD-BEARING. The provider creates containers in the
+# order listed here, and creating a container in the `created` state starts it
+# briefly before stopping it. `statements-web` must therefore come FIRST: it
+# binds 8080, releases it on stop, and `ledger-web` then takes it. Swapping
+# these two entries makes provisioning fail, because the second one would try
+# to bind a port the first still holds.
+#
+# WHAT THIS LAB VERIFIES, AND WHAT IT DOES NOT.
+#
+#   verified      the port BINDING each container was created with, read from
+#                 `docker inspect` — container port, protocol, and host port
+#   NOT verified  that an HTTP request to those ports returns anything
+#
+# Those are different claims. A container can hold a correct binding while the
+# application inside it is broken, and this lab deliberately grades only the
+# binding. Reachability needs the verifier to make a request from inside a
+# container, which is a separate executor and security design that has not been
+# approved — see docs/docker/VERIFIER-CONTRACTS.md §3, marked DESIGNED / NOT
+# APPROVED. Nothing here parses `curl` output or looks at command history.
+# ---------------------------------------------------------------------------
+id: DOCKER-012
+slug: docker-012-publish-ports
+title: Publish a Second Service Without Breaking the First
+track: docker
+topic: networking
+difficulty: intermediate
+level: challenge
+duration_minutes: 45
+order: 12
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-001
+  - DOCKER-011
+
+story: >
+  JumpToTech Bank runs the ledger web front end on this Docker host, and it has
+  been serving customers on port 8080 for months. Nobody is allowed to
+  interrupt it.
+
+  Last night an engineer tried to deploy the statements front end onto the same
+  host. It never came up. They left the container behind, went home, and the
+  deployment ticket says only "port issue?".
+
+  Both applications are ordinary web servers. Both listen on port 80 inside
+  their own container. Only one of them is currently reachable from outside.
+
+objectives:
+  - Distinguish a container port from a host port
+  - Publish a container port to a chosen host port
+  - Explain why EXPOSE alone does not make a container reachable from the host
+  - Read port mappings from `docker ps` and port bindings from `docker inspect`
+  - Recognise a host-port collision and identify which container owns the port
+  - Run two containers that both listen on port 80 internally, on one host
+
+task:
+  summary: Work out why the statements front end will not start, then get it running alongside the ledger front end without disturbing it.
+  description: >
+    Nothing below tells you what went wrong. Finding that out is the exercise.
+
+    Start by looking at what is actually there. `docker ps` shows what is
+    running and, in its PORTS column, how each container is reachable from the
+    host. `docker ps -a` also shows what is not running. The container the
+    engineer left behind is in one of those two lists, and trying to start it
+    will tell you something useful.
+
+    When you need more detail than the PORTS column gives you, `docker port
+    <name>` prints a container's published mappings, and `docker inspect
+    <name>` shows the full configuration — including the port bindings a
+    container was *created* with, which is worth knowing for one that has never
+    successfully run.
+
+    Two ideas are worth being clear about before you change anything. A
+    container port and a host port are different numbers on different network
+    stacks: `--publish HOST_PORT:CONTAINER_PORT` connects one to the other.
+    And an image that declares `EXPOSE` has documented which port its
+    application listens on — it has not published anything. Only publishing
+    makes a container reachable from the host.
+
+    **The required final state.**
+
+      - `ledger-web` must still be running, still from `nginx:1.27-alpine`,
+        still with its container port `80` published on host port `8080`.
+        It is in production; leave it working.
+      - `statements-web` must be running, from `nginx:1.27-alpine`, with its
+        container port `80` published on host port `8081`.
+
+    Both containers listen on port 80 inside themselves, and that is fine —
+    each has its own network namespace. The number they cannot share is the one
+    on the host.
+
+    Keep both names exactly as they are. A container's port bindings are fixed
+    when it is created, so anything you cannot change in place can be removed
+    and recreated. The checks read the bindings you leave behind, not the
+    commands you used to get there.
+
+    One thing this lab does **not** check: whether an HTTP request to either
+    port actually returns a page. It grades the port bindings only. Getting a
+    binding right and getting an application to serve are two different
+    problems, and today you are being asked for the first.
+
+setup:
+  docker:
+    images:
+      - nginx:1.27-alpine
+    containers:
+      # FIRST, deliberately. This is the engineer's failed deployment: created
+      # asking for host port 8080, briefly started by the provider, then
+      # stopped — which releases 8080 in time for ledger-web to take it below.
+      # Starting it now collides, which is the incident.
+      - name: statements-web
+        image: nginx:1.27-alpine
+        state: created
+        ports:
+          - container: 80
+            host: 8080
+      # SECOND. The production service that owns host port 8080.
+      - name: ledger-web
+        image: nginx:1.27-alpine
+        state: running
+        ports:
+          - container: 80
+            host: 8080
+  verify:
+    - type: docker_container_running
+      name: ledger-web
+      label: The ledger-web front end is running
+    - type: docker_container_port
+      name: ledger-web
+      container_port: 80
+      host_port: 8080
+      label: ledger-web holds host port 8080
+    - type: docker_container_exists
+      name: statements-web
+      label: The failed statements-web deployment is present
+  verify_timeout_seconds: 180
+
+# Six checks over structured `docker inspect` state. `docker_container_port`
+# with a `host_port` requires a real published binding: a container that only
+# EXPOSEs port 80 reports the port with no host side and fails, which is the
+# distinction this lab exists to teach.
+#
+# No check here asserts anything about HTTP. See the header.
+requirements:
+  # --- the production service must survive the fix -------------------------
+  - type: docker_container_running
+    name: ledger-web
+    label: Container ledger-web is still running
+  - type: docker_container_image
+    name: ledger-web
+    image: nginx:1.27-alpine
+    label: ledger-web still runs the nginx:1.27-alpine image
+  - type: docker_container_port
+    name: ledger-web
+    container_port: 80
+    host_port: 8080
+    label: ledger-web still publishes container port 80 on host port 8080
+
+  # --- the second service, on a host port of its own -----------------------
+  - type: docker_container_running
+    name: statements-web
+    label: Container statements-web is running
+  - type: docker_container_image
+    name: statements-web
+    image: nginx:1.27-alpine
+    label: statements-web runs the nginx:1.27-alpine image
+  - type: docker_container_port
+    name: statements-web
+    container_port: 80
+    host_port: 8081
+    label: statements-web publishes container port 80 on host port 8081
+
+# `Reset Lab` restores this session's Docker environment to its baseline: the
+# student's containers are removed and both seeded containers are recreated in
+# their original states — ledger-web running on 8080, statements-web stopped and
+# still asking for it.
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    # Images are kept: re-pulling on every reset would turn a two-second reset
+    # into a two-minute one.
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      There are two containers here, and only one of them is in `docker ps`.
+      Find the other one, and try to start it — the daemon will tell you
+      exactly what it objects to, and its objection names a number.
+
+      Once you have that number, the next question is which container is
+      already using it.
+  - level: 2
+    text: >
+      A container that has never run successfully still remembers the
+      configuration it was created with. `docker inspect` will show you the
+      port bindings the engineer asked for, even though nothing was ever bound.
+      Compare those against what the running container currently holds.
+
+      Two containers can both listen on port 80 inside themselves without any
+      conflict at all. Think about which of the two numbers in a published port
+      mapping actually has to be unique on this host.
+  - level: 3
+    text: >
+      `docker port <name>` prints the published mappings of a container, and
+      `docker inspect <name> --format '{{json .HostConfig.PortBindings}}'`
+      shows what it was created with — which is the one that still works for a
+      container that never started.
+
+      Port bindings are fixed at creation, so the failed container cannot be
+      repaired by starting it differently: remove it and create it again with
+      the same image and the host port the task asks for. The container port
+      stays 80 in both containers; only the host side changes.
+
+references:
+  - title: Published ports
+    url: https://docs.docker.com/engine/network/#published-ports
+  - title: Docker CLI reference — docker container run
+    url: https://docs.docker.com/reference/cli/docker/container/run/
+  - title: Docker CLI reference — docker container port
+    url: https://docs.docker.com/reference/cli/docker/container/port/
+  - title: Docker CLI reference — docker container ls
+    url: https://docs.docker.com/reference/cli/docker/container/ls/
+  - title: Dockerfile reference — EXPOSE
+    url: https://docs.docker.com/reference/dockerfile/#expose
+
+skills:
+  - docker.networks.ports
+  - docker.containers.inspect
+  - docker.troubleshooting.containers
+  - docker.containers.run
+
+# Checked against the official Docker Certified Associate Study Guide v1.5
+# (January 2025), published by Mirantis, which administers the exam.
+#
+# Domain 4, Networking, lists both "Describe and demonstrate how to publish a
+# port so that an application is accessible externally" and "Identify which IP
+# and port a container is externally accessible on". This lab practises both
+# directly, which makes it one of the few genuine certification mappings in the
+# track. See docs/docker/CERTIFICATION-AUDIT.md.
+#
+# Diagnosing the collision itself is a PRODUCTION SKILL rather than an exam
+# objective; the guide has nothing about host-port conflicts.
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - networking

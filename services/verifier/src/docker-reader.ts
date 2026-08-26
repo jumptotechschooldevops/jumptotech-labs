@@ -21,6 +21,19 @@ import type {
 } from '@jumptotech/lab-orchestrator';
 import type { WorkspacePort } from '@jumptotech/lab-orchestrator';
 
+/** How much of a container file a check will read. Not settable from lab.yaml. */
+export const MAX_CONTAINER_FILE_BYTES = 64 * 1024;
+/**
+ * Hard ceiling on one archive read. Not settable from lab.yaml.
+ *
+ * The read crosses two Docker CLIs — one into the sandbox, one into the
+ * student's container — so it is slower than an inspect, and on a loaded host
+ * noticeably so. Five seconds tripped mid-stream under real load; fifteen is
+ * still a bound, and a read that genuinely needs longer than this is a broken
+ * environment rather than a slow one.
+ */
+export const CONTAINER_FILE_TIMEOUT_MS = 15_000;
+
 export class DockerVerifyReader {
   readonly #cache = new Map<string, Promise<unknown>>();
 
@@ -54,6 +67,30 @@ export class DockerVerifyReader {
 
   network(name: string): Promise<DockerNetworkSnapshot | null> {
     return this.#once(`network/${name}`, () => this.docker.inspectNetwork(name));
+  }
+
+  /**
+   * Read one regular file out of one of this session's containers.
+   *
+   * Goes through the daemon's archive endpoint, so nothing runs inside the
+   * student's container and a stopped container reads just as well as a running
+   * one. Memoised like every other read, so a lab asserting two things about
+   * one file reads it once.
+   *
+   * The reader takes a container name and a path and nothing else: there is no
+   * daemon parameter, so a handler cannot reach outside the session this reader
+   * was constructed for, and no listing operation, so it cannot browse.
+   */
+  containerFile(
+    container: string,
+    path: string,
+  ): Promise<{ content: Buffer; declaredSize: number; truncated: boolean } | null> {
+    return this.#once(`containerfile/${container}/${path}`, () =>
+      this.docker.copyFileFromContainer(container, path, {
+        maxBytes: MAX_CONTAINER_FILE_BYTES,
+        timeoutMs: CONTAINER_FILE_TIMEOUT_MS,
+      }),
+    );
   }
 
   /**

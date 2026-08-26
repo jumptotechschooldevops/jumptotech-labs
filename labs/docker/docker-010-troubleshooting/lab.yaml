@@ -1,11 +1,38 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Content is written from the official Docker documentation only; the pages
+# this lab is grounded in are listed under `references`.
+#
+# Three containers are seeded broken, each in a different way, and each fault
+# is discoverable purely from Docker state:
+#
+#   ledger-api     exits immediately   → exit code 127, and the daemon's own
+#                                        error names the missing binary
+#   ledger-worker  exits immediately   → exit code 78, and the container's log
+#                                        says which setting it refused to start
+#                                        with
+#   ledger-web     stays up            → but `docker ps` shows the wrong image
+#                                        and no published port
+#
+# The third is the one that teaches the most: "the container is running" is not
+# the same as "the service works", and only inspecting the image and the port
+# bindings tells you which you have.
+#
+# Verification is state-based: the verifier reads the live Docker state in this
+# session's own daemon and never inspects the student's command history. A
+# container repaired with `docker run`, with `docker create` + `docker start`,
+# or from a Compose file passes identically. No check is a substring match —
+# every one reads a structured field of `docker inspect`.
+# ---------------------------------------------------------------------------
 id: DOCKER-010
 slug: docker-010-troubleshooting
-title: Repair a Broken Container
+title: Diagnose and Repair Three Failing Containers
 track: docker
 topic: troubleshooting
 difficulty: intermediate
 level: challenge
-duration_minutes: 45
+duration_minutes: 60
 order: 10
 
 environment:
@@ -14,145 +41,220 @@ environment:
 
 prerequisites:
   - DOCKER-002
+  - DOCKER-003
   - DOCKER-007
 
 story: >
-  You are on call. The ledger API on the batch host is down: the container is
-  not serving, and the internal clients that depend on it are timing out.
+  You are on shift at JumpToTech Bank. Overnight, someone deployed three
+  containers for the ledger service and went home. None of the service is
+  working this morning, and the person who deployed it is not answering.
 
-  The last change was made by someone who has since gone off shift, and the
-  pull request said only "config tweak". Nobody has told you what is wrong —
-  finding that out is the job.
+  There is no deployment script, no runbook, and no ticket describing what
+  they did. What you have is a Docker daemon holding three containers, and
+  everything you need to work out what went wrong is somewhere in their state,
+  their configuration, or their logs.
 
-  Investigate the container, work out why it is not serving, and restore it.
-  There is more than one thing wrong.
+  Two of them are stopped. One of them looks perfectly healthy and is not.
 
 objectives:
-  - Investigate a failing container from its recorded state alone
-  - Read container status, logs, and configuration to locate a fault
-  - Distinguish a container that never started from one that started and exited
-  - Repair a container and confirm the service is genuinely configured correctly
+  - Read a container's exit code and logs to tell why it stopped
+  - Tell the difference between a container that will not start and one that starts and then refuses to run
+  - Recognise a container that is running but was created from the wrong image
+  - Read a container's published ports and image from its live configuration
+  - Restore each container to the state the service actually requires
 
 task:
-  summary: Investigate the ledger-api container and restore it to a healthy, correctly configured state.
+  summary: Work out why each of the three ledger containers is failing, then repair all three so they reach the required final state.
   description: >
-    A container named `ledger-api` already exists in your environment. It is
-    not working.
+    Nothing here tells you what is wrong. Finding that out is the exercise.
 
-    Your task is to find out why and fix it, so that it ends up:
+    Start by getting the full picture: `docker ps` shows what is running, and
+    `docker ps -a` shows what has stopped and how it ended. From there,
+    `docker logs <name>` shows what a container printed before it stopped, and
+    `docker inspect <name>` shows the configuration it was actually created
+    with — its image, its command, its environment, and its port bindings.
+    Reading those four things for each container is enough to find all three
+    faults.
 
-      - running, from the `nginx:1.27-alpine` image
-      - publishing container port 80 on host port 8080
-      - with the environment variable `LEDGER_MODE` set to `live`
+    A note on exit codes, because two of these containers have one worth
+    understanding. An exit code is chosen by whatever stopped the process. Some
+    come from the shell inside the container when it cannot find or run a
+    program at all; others are chosen by the application itself to say it
+    refused to continue. `docker inspect` reports the code, and the container's
+    logs usually explain which of the two you are looking at.
 
-    Everything else you need is discoverable from the environment itself.
+    **The required final state.** When you are done, all three containers must
+    be running, and:
 
-    Start by looking at what is there and what state it is in. `docker ps` on
-    its own will not show you this container — think about why, and which flag
-    changes that. `docker logs` shows what the container said before it
-    stopped, and `docker inspect` shows the configuration it was actually given
-    as opposed to the one somebody intended.
+      - `ledger-api` must run the `nginx:1.27-alpine` image, with its container
+        port `80` published on host port `8080`.
+      - `ledger-worker` must be running with `LEDGER_MODE` set to `live` and
+        `LEDGER_API_URL` set to `http://ledger-api`.
+      - `ledger-web` must run the `nginx:1.27-alpine` image, with its container
+        port `80` published on host port `8081`.
 
-    How you repair it is up to you. This lab checks the state of your
-    environment at the end, never the commands you typed to get there — so
-    recreating the container is a perfectly good answer if that is what the
-    fault calls for.
+    Keep the names exactly as they are. Anything else about how you get there
+    is yours to decide — a container that cannot be repaired in place can be
+    removed and recreated, and the checks read the state you leave behind, not
+    the commands you used to get there.
+
+    Before you remove anything, read its configuration. A stopped container
+    still holds every setting it was created with, and some of those settings
+    are correct and worth keeping.
 
 setup:
   docker:
     images:
       - nginx:1.27-alpine
+      - alpine:3.20
     containers:
+      # Fault 1 — the image does not contain the program the command names, so
+      # the container never really starts. Its port binding is already correct
+      # and the student is expected to notice and preserve it.
       - name: ledger-api
         image: nginx:1.27-alpine
-        # Two faults, both discoverable and neither named in the task:
-        #  - `daemon on;` makes nginx fork and the container exit immediately
-        #  - the published port and LEDGER_MODE are both wrong
-        command: ["nginx", "-g", "daemon on;"]
-        env:
-          LEDGER_MODE: maintenance
+        command: ["/usr/local/bin/ledger-api", "--serve"]
+        state: exited
         ports:
           - container: 80
-            host: 8081
+            host: 8080
+      # Fault 2 — the program starts, inspects its configuration, and refuses.
+      # Fixing the environment genuinely fixes the container: the same command
+      # runs normally once LEDGER_MODE is right.
+      - name: ledger-worker
+        image: alpine:3.20
+        command:
+          - sh
+          - -c
+          - 'if [ "$LEDGER_MODE" != "live" ]; then echo "FATAL: ledger-worker refuses to start with LEDGER_MODE=$LEDGER_MODE" >&2; exit 78; fi; exec sleep 3600'
+        env:
+          LEDGER_MODE: maintenance
+          LEDGER_API_URL: http://ledger-api
         state: exited
-  # Deliberately NOT a health check: this lab's starting condition is a
-  # container that cannot stay up, so requiring it to be running here would
-  # fail every provision.
+      # Fault 3 — running, and wrong. Built from the wrong image entirely, and
+      # publishing nothing, so `docker ps` shows a healthy-looking container
+      # that serves no traffic.
+      - name: ledger-web
+        image: alpine:3.20
+        command: ["sleep", "3600"]
+        state: running
   verify:
     - type: docker_container_exists
       name: ledger-api
       label: The ledger-api container exists
-  verify_timeout_seconds: 120
+    - type: docker_container_exists
+      name: ledger-worker
+      label: The ledger-worker container exists
+    - type: docker_container_running
+      name: ledger-web
+      label: The ledger-web container is running
+  verify_timeout_seconds: 180
 
-# Requirements state the goal, never the injected fault. Each label is written
-# so that reading the checklist before starting does not give away what is
-# broken — the student is told what "working" looks like, and has to discover
-# for themselves why it currently is not.
+# Every check reads a structured field of `docker inspect` against this
+# session's own daemon. There is no substring matching anywhere: the image is
+# compared after registry normalisation, the port is compared as a binding, and
+# the environment is compared key by key.
 requirements:
-  - type: docker_container_exists
+  # --- ledger-api: would not start ---------------------------------------
+  - type: docker_container_running
     name: ledger-api
-    label: Container ledger-api exists
+    label: Container ledger-api is running
   - type: docker_container_image
     name: ledger-api
     image: nginx:1.27-alpine
-    label: Container runs the correct application image
-  - type: docker_container_running
-    name: ledger-api
-    label: Container is running
+    label: Container ledger-api runs the nginx:1.27-alpine image
   - type: docker_container_port
     name: ledger-api
     container_port: 80
     host_port: 8080
-    label: Port 80 is published on host port 8080
+    label: ledger-api publishes container port 80 on host port 8080
+
+  # --- ledger-worker: started, then refused -------------------------------
+  - type: docker_container_running
+    name: ledger-worker
+    label: Container ledger-worker is running
   - type: docker_container_env
-    name: ledger-api
+    name: ledger-worker
     key: LEDGER_MODE
     value: live
-    label: The service is configured for live mode
+    label: ledger-worker runs with LEDGER_MODE set to live
+  - type: docker_container_env
+    name: ledger-worker
+    key: LEDGER_API_URL
+    value: http://ledger-api
+    label: ledger-worker still knows the API URL
 
+  # --- ledger-web: running, and wrong -------------------------------------
+  - type: docker_container_running
+    name: ledger-web
+    label: Container ledger-web is running
+  - type: docker_container_image
+    name: ledger-web
+    image: nginx:1.27-alpine
+    label: Container ledger-web runs the nginx:1.27-alpine image
+  - type: docker_container_port
+    name: ledger-web
+    container_port: 80
+    host_port: 8081
+    label: ledger-web publishes container port 80 on host port 8081
+
+# `Reset Lab` restores this session's Docker environment to its baseline: every
+# container, volume, and network the student created is removed, and the three
+# broken containers are seeded again exactly as they started.
 reset:
   docker:
     containers: true
     volumes: true
     networks: true
+    # Images are kept: re-pulling them on every reset would turn a two-second
+    # reset into a two-minute one.
     images: false
     workspace: true
 
 hints:
   - level: 1
     text: >
-      Work outside in. First establish that the container exists at all and
-      what state it reports, then narrow down to why it is in that state. Do
-      not change anything until you can say what is wrong — a container that
-      exited has left you evidence, and recreating it destroys that evidence.
+      Deal with them one at a time, and start by asking each container the same
+      four questions: is it running, how did it end, what did it print, and
+      what was it actually created with. Two of those answers come from
+      `docker ps -a`, one from `docker logs`, and one from `docker inspect`.
+
+      The container that is still running deserves the most suspicion. Nothing
+      about `docker ps` showing "Up" means the right software is inside it.
   - level: 2
     text: >
-      There are two separate problems, and fixing only one will not restore the
-      service. One of them stops the container from staying up at all; the
-      other means that even a running container would be wrong. For the first,
-      compare what the container was told to run against what the image would
-      have run on its own — `docker inspect` shows both `Path`/`Args` and the
-      image's own default. For the second, compare the published port and the
-      environment against what the task says they should be.
+      For the two stopped containers, the exit code narrows it down a long way.
+      One of them stopped with a code that a shell uses when it cannot run the
+      program it was given at all — so look at what command the container was
+      created with, and ask whether that path exists inside that image. The
+      other stopped with a code the program chose for itself, and it wrote a
+      line to its log saying why.
+
+      For the running container, compare what `docker ps` reports in its IMAGE
+      and PORTS columns against what the task says the service requires.
   - level: 3
     text: >
-      A container's process must stay in the foreground; nginx forks into the
-      background when it is told `daemon on`, its main process exits, and
-      Docker considers the container finished — `docker logs ledger-api` and
-      the exit code in `docker ps -a` both point at this. The image already
-      runs nginx correctly by default, so the override is the problem rather
-      than something to correct. Note that a container's published ports and
-      environment are fixed when it is created and cannot be changed on a
-      container that already exists, which tells you what the repair has to
-      involve.
+      `docker inspect <name> --format '{{json .Config.Cmd}}'` shows the command
+      a container was created with, `--format '{{json .Config.Env}}'` shows its
+      environment, and `--format '{{json .HostConfig.PortBindings}}'` shows its
+      published ports. `docker inspect <name> --format '{{.State.ExitCode}}'`
+      and `docker logs <name>` cover how it ended.
+
+      None of these three containers can be repaired by editing it in place —
+      an image, a command, and a port binding are all fixed when a container is
+      created. Read the settings you need to keep, remove the container, and
+      create it again with those settings plus the correction. The checks read
+      the final state, so recreating is a completely legitimate repair.
 
 references:
-  - title: Docker CLI reference — docker logs
-    url: https://docs.docker.com/reference/cli/docker/container/logs/
-  - title: Docker CLI reference — docker inspect
-    url: https://docs.docker.com/reference/cli/docker/inspect/
-  - title: Docker CLI reference — docker ps
+  - title: Docker CLI reference — docker container ls
     url: https://docs.docker.com/reference/cli/docker/container/ls/
+  - title: Docker CLI reference — docker container inspect
+    url: https://docs.docker.com/reference/cli/docker/container/inspect/
+  - title: Docker CLI reference — docker container logs
+    url: https://docs.docker.com/reference/cli/docker/container/logs/
+  - title: Docker CLI reference — docker container run
+    url: https://docs.docker.com/reference/cli/docker/container/run/
   - title: Publishing and exposing ports
     url: https://docs.docker.com/engine/network/#published-ports
 
@@ -160,12 +262,29 @@ skills:
   - docker.troubleshooting.containers
   - docker.troubleshooting.logs
   - docker.containers.inspect
+  - docker.images.inspect
   - docker.config.environment
   - docker.networks.ports
 
+# Checked against the official Docker Certified Associate Study Guide v1.5
+# (January 2025), published by Mirantis, which administers the exam.
+#
+# The port-publishing half of this lab maps to Domain 4, Networking:
+# "Describe and demonstrate how to publish a port so that an application is
+# accessible externally" and "Identify which IP and port a container is
+# externally accessible on".
+#
+# The `installation-and-configuration` claim an earlier version of this lab
+# carried is dropped. Domain 3 covers repo setup, storage-driver selection,
+# engine installation, logging drivers, swarm, users and teams, daemon
+# start-on-boot, certificate-based authentication, and UCP/DTR — not container
+# repair. See docs/docker/CERTIFICATION-AUDIT.md.
+#
+# Everything else here — reading exit codes, logs and container configuration
+# to find a fault — is a PRODUCTION SKILL (DevOps / SRE, container
+# troubleshooting) rather than an exam objective.
 certification:
   - certification: DCA
     relevant: true
     domains:
-      - installation-and-configuration
       - networking

@@ -1575,6 +1575,48 @@ const dockerCpuValue = z
   .max(12)
   .regex(/^[0-9]+(\.[0-9]+)?$/, 'must be a CPU count such as 0.5');
 
+/** No control characters, matching the rule `envValue` and setup argv already use. */
+const noControlCharacters = /^[^\u0000-\u001f\u007f]*$/;
+
+/**
+ * An absolute path to one file inside a container.
+ *
+ * Narrow on purpose. The class excludes whitespace, quotes, `$`, backtick, `;`,
+ * `|`, `&`, `\` and every control character — none of which a shell ever sees,
+ * because there is no shell on this path, but keeping the class closed means a
+ * future refactor that introduced one could not be exploited through lab
+ * content that already shipped.
+ *
+ * The refinements are what make it a *file* reference rather than a traversal:
+ * no `..` segment, no empty segment, no trailing slash, and no segment starting
+ * with `-` so that combined with the `--` separator in the argv it can never be
+ * read as an option.
+ */
+const containerAbsolutePath = z
+  .string()
+  .min(2)
+  .max(255)
+  .regex(/^\/[A-Za-z0-9._/-]*$/, 'must be an absolute path inside the container')
+  .refine((p) => !p.split('/').includes('..'), { message: 'must not traverse upwards' })
+  .refine((p) => !p.includes('//'), { message: 'must not contain empty segments' })
+  .refine((p) => !p.endsWith('/'), { message: 'must name a file, not a directory' })
+  .refine((p) => !p.split('/').some((segment) => segment.startsWith('-')), {
+    message: 'no path segment may begin with -',
+  });
+
+/**
+ * One element of an argv a requirement compares against.
+ *
+ * Compared, never executed: this describes what a container's start command
+ * *is*, and no handler ever runs it. Control characters are excluded so a
+ * value cannot smuggle a newline into a check's detail.
+ */
+const argvToken = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(noControlCharacters, 'must not contain control characters');
+
 /** Docker object kinds a requirement may name generically. */
 const DOCKER_KINDS = ['container', 'image', 'volume', 'network'] as const;
 
@@ -1623,6 +1665,63 @@ const dockerRequirementSchemas = {
       type: z.literal('docker_container_exit_code'),
       name: dockerObjectName,
       expected: z.number().int().min(0).max(255),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The command and entrypoint a container was created with.
+   *
+   * Read from `Config.Entrypoint` and `Config.Cmd` — what the daemon holds for
+   * this container, which is the image's values unless the run overrode them.
+   * That is exactly the pair DOCKER-014 teaches: a runtime argument replaces
+   * `Cmd` and leaves `Entrypoint` alone, so the two fields together show
+   * whether a student built a tool that takes arguments or one that ignores
+   * them.
+   *
+   * Compared as **exact argv arrays**, not membership, because the distinction
+   * that matters here is invisible to a looser test. `ENTRYPOINT ["/app/x"]`
+   * gives `["/app/x"]`; the shell form `ENTRYPOINT /app/x` gives
+   * `["/bin/sh","-c","/app/x"]` and silently discards every runtime argument.
+   * Both run, both exit 0, and only the array tells them apart.
+   */
+  docker_container_command: z
+    .object({
+      type: z.literal('docker_container_command'),
+      name: dockerObjectName,
+      command: z.array(argvToken).max(20).optional(),
+      entrypoint: z.array(argvToken).max(20).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.command !== undefined || v.entrypoint !== undefined, {
+      message: 'must assert a command, an entrypoint, or both',
+    }),
+
+  /**
+   * The kernel's OOM killer stopped the container's last run.
+   *
+   * Read from `State.OOMKilled`, which is the daemon's own report of a cgroup
+   * memory-limit kill. This is the **only** field that distinguishes one: a
+   * `docker kill`, a `docker stop` that escalates past its grace period, and an
+   * application that exits 137 by itself all produce exit code 137 with
+   * `OOMKilled` false. A lab that graded exit code 137 alone would accept all
+   * four, which is why this exists as its own check rather than as a detail on
+   * `docker_container_exit_code`.
+   *
+   * Per-run, not cumulative: a container that was OOM-killed and then started
+   * again reports false for the new run, so a student cannot OOM once and keep
+   * the flag.
+   *
+   * `expected: false` is the form a production lab wants — "this worker must
+   * run without being OOM-killed" — so the field is a boolean rather than the
+   * check being implicitly positive.
+   */
+  docker_container_oom_killed: z
+    .object({
+      type: z.literal('docker_container_oom_killed'),
+      name: dockerObjectName,
+      expected: z.boolean().default(true),
       ...common,
     })
     .strict(),
@@ -1702,6 +1801,57 @@ const dockerRequirementSchemas = {
       { message: 'must specify memory, cpus, pids_limit, or a combination' },
     ),
 
+  /**
+   * The content of one file inside a container.
+   *
+   * Read through the daemon's archive endpoint (`docker cp`), never by
+   * executing anything in the student's container. That is what lets it grade a
+   * **stopped** container — the persistence and data-recovery labs need exactly
+   * that — and what stops a student's own image influencing the read by
+   * shipping a doctored `cat`.
+   *
+   * Deliberately one path, one file. There is no listing form, no glob, and no
+   * directory form: an archive holding anything other than a single regular
+   * file is refused rather than walked, so this cannot become a way to browse a
+   * container's filesystem.
+   *
+   * `equals` is the preferred assertion because it is exact. `contains` exists
+   * for the case where a lab legitimately needs several independent tokens in
+   * one file, and is a whole-content test either way — never a substitute for
+   * comparing the thing the lab actually cares about.
+   *
+   * **Expected values never leave the server.** They live here, in lab.yaml,
+   * and the handler is forbidden from echoing either them or the file's content
+   * back into a check's detail — see `dockerContainerFileContent`. A lab that
+   * grades an answer would otherwise hand the answer to anyone who submitted a
+   * wrong one.
+   */
+  docker_container_file_content: z
+    .object({
+      type: z.literal('docker_container_file_content'),
+      container: dockerObjectName,
+      path: containerAbsolutePath,
+      /** Exact match, after trimming one trailing newline from each side. */
+      equals: z.string().max(4096).regex(noControlCharacters, 'must not contain control characters').optional(),
+      /** Every entry must appear somewhere in the file. */
+      contains: z
+        .array(z.string().min(1).max(256).regex(noControlCharacters, 'must not contain control characters'))
+        .min(1)
+        .max(5)
+        .optional(),
+      /** The path must be readable, whatever it holds. */
+      exists: z.literal(true).optional(),
+      /** The path must not be there at all. */
+      absent: z.literal(true).optional(),
+      ...common,
+    })
+    .strict()
+    .refine(
+      (v) =>
+        [v.equals, v.contains, v.exists, v.absent].filter((x) => x !== undefined).length === 1,
+      { message: 'must assert exactly one of equals, contains, exists, or absent' },
+    ),
+
   // --- Images -------------------------------------------------------------
   docker_image_exists: z
     .object({ type: z.literal('docker_image_exists'), image: imageReference, ...common })
@@ -1724,6 +1874,16 @@ const dockerRequirementSchemas = {
       working_dir: z.string().min(1).max(255).optional(),
       /** Every listed argv element must appear, in order, in CMD or ENTRYPOINT. */
       cmd_contains: z.array(z.string().min(1).max(255)).max(10).optional(),
+      /**
+       * `ENTRYPOINT` and `CMD` as exact argv arrays, separately.
+       *
+       * `cmd_contains` deliberately merges the two and tests membership, which
+       * is right for "does this image start the thing it should". It cannot
+       * show which half a value came from, or tell exec form from shell form —
+       * so a lab teaching the difference asserts these instead.
+       */
+      entrypoint: z.array(argvToken).max(20).optional(),
+      cmd: z.array(argvToken).max(20).optional(),
       env: z.record(z.string().min(1).max(128), z.string().max(1024)).optional(),
       exposed_port: z.number().int().min(1).max(65535).optional(),
       labels: z.record(z.string().min(1).max(128), z.string().max(256)).optional(),
@@ -1734,11 +1894,62 @@ const dockerRequirementSchemas = {
       (v) =>
         v.working_dir !== undefined ||
         v.cmd_contains !== undefined ||
+        v.entrypoint !== undefined ||
+        v.cmd !== undefined ||
         v.env !== undefined ||
         v.exposed_port !== undefined ||
         v.labels !== undefined,
       { message: 'must assert at least one image configuration field' },
     ),
+
+  /**
+   * Two images share a run of leading filesystem layers.
+   *
+   * Docker's build cache is not observable from one image. It is a property of
+   * a *rebuild*: when an instruction and its inputs are unchanged, the daemon
+   * reuses the layer it produced last time, and the two images then carry the
+   * same digest for it. Comparing the ordered `RootFS.Layers` of a before and
+   * an after image is therefore the only way to prove cache reuse from state
+   * rather than from build output the student could have written themselves.
+   *
+   * **Prefix means prefix.** `[A,B,C,D]` and `[A,B,C,E]` share three; `[A,B,C]`
+   * and `[A,X,B,C]` share one, because the run stops at the first difference.
+   * Order matters, and the digests come from the daemon.
+   *
+   * `maximum_changed_suffix` is the constraint to reach for. It says "only the
+   * last N layers may differ", which is exactly the property a cache-friendly
+   * Dockerfile has and is **independent of how many layers the image has in
+   * total** — so a lab does not have to guess a number that changes whenever a
+   * student adds an instruction. `minimum_shared_prefix` is available for the
+   * cases where an absolute floor is genuinely what is meant.
+   *
+   * `must_differ` exists because two *identical* images share every layer and
+   * would otherwise satisfy any prefix constraint. A rebuild that changed
+   * nothing proves nothing.
+   */
+  docker_image_layers: z
+    .object({
+      type: z.literal('docker_image_layers'),
+      /** The image built after the change. */
+      image: imageReference,
+      /** The image built before it. */
+      shares_prefix_with: imageReference,
+      /** At least this many leading layers must be identical, in order. */
+      minimum_shared_prefix: z.number().int().min(1).max(200).optional(),
+      /** At most this many trailing layers may differ. */
+      maximum_changed_suffix: z.number().int().min(0).max(200).optional(),
+      /** The two images must not be the same image. */
+      must_differ: z.boolean().default(true),
+      ...common,
+    })
+    .strict()
+    .refine(
+      (v) => v.minimum_shared_prefix !== undefined || v.maximum_changed_suffix !== undefined,
+      { message: 'must constrain the shared prefix, the changed suffix, or both' },
+    )
+    .refine((v) => v.image !== v.shares_prefix_with, {
+      message: 'an image cannot be compared against itself',
+    }),
 
   // --- Volumes and networks ------------------------------------------------
   docker_volume_exists: z
@@ -2094,6 +2305,9 @@ export const REQUIREMENT_FAMILIES = {
   docker_container_state: 'docker',
   docker_container_image: 'docker',
   docker_container_exit_code: 'docker',
+  docker_container_oom_killed: 'docker',
+  docker_container_command: 'docker',
+  docker_container_file_content: 'docker',
   docker_container_env: 'docker',
   docker_container_port: 'docker',
   docker_container_network: 'docker',
@@ -2102,6 +2316,7 @@ export const REQUIREMENT_FAMILIES = {
 
   docker_image_exists: 'docker',
   docker_image_config: 'docker',
+  docker_image_layers: 'docker',
   docker_volume_exists: 'docker',
   docker_network_exists: 'docker',
 

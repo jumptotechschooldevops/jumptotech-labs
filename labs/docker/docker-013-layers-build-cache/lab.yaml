@@ -1,0 +1,271 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Content is written from the official Docker documentation only; the pages
+# this lab is grounded in are listed under `references`.
+#
+# HOW THIS LAB PROVES CACHE REUSE, AND WHY IT IS NOT A LAYER COUNT.
+#
+# Build-cache behaviour is not a property of an image. It is a property of a
+# *rebuild*: it exists only in the relationship between what was built before a
+# change and what was built after it. So the lab asks for two images and
+# compares their ordered `RootFS.Layers` digests, which the daemon computes and
+# a student cannot author.
+#
+# Layer count was considered and rejected. Measured on a real daemon, with only
+# the application source changed between builds:
+#
+#     cache-friendly ordering   5 layers   1 trailing layer changed
+#     cache-hostile ordering    4 layers   2 trailing layers changed
+#
+# The hostile Dockerfile has *fewer* layers. A `max_layers` check would have
+# passed it, so counting layers is not a weak proxy here — it points the wrong
+# way. What separates them is how much of the image survived the rebuild.
+#
+# `maximum_changed_suffix: 1` is deliberately used instead of a minimum shared
+# prefix: it says "only the layer carrying your source may change", which holds
+# no matter how many instructions the student's Dockerfile has. A fixed
+# expected layer count would break the moment a student added a RUN.
+#
+# The same comparison distinguishes a source-only change from a dependency
+# change, which is the distinction the lab is really teaching. Measured:
+# editing `requirements.txt` instead of the source leaves 3 trailing layers
+# changed, and correctly fails — the dependency layer *should* be invalidated
+# when the dependencies change.
+# ---------------------------------------------------------------------------
+id: DOCKER-013
+slug: docker-013-layers-build-cache
+title: Make the Build Cache Work for You
+track: docker
+topic: images
+difficulty: intermediate
+level: practice
+duration_minutes: 55
+order: 13
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - DOCKER-004
+
+story: >
+  The greeter service is rebuilt on every commit, and CI takes four minutes to
+  do it — even for a one-line change to a source file that has nothing to do
+  with its dependencies. The team has started batching commits to avoid the
+  wait, which is the wrong fix to the wrong problem.
+
+  Nobody has changed the Dockerfile since it was written. It builds a correct
+  image; it just rebuilds all of it, every time.
+
+objectives:
+  - Explain what a Docker image layer is and which instructions create one
+  - Explain when Docker reuses a cached layer and when it invalidates one
+  - Order Dockerfile instructions so a source change does not rebuild dependencies
+  - Recognise that a dependency change *should* invalidate the dependency layer
+  - Read an image's layers to see what a rebuild actually reused
+
+task:
+  summary: Reorder the greeter Dockerfile so that changing application source no longer rebuilds its dependencies, and prove it with two builds.
+  description: >
+    Your workspace has the service: `requirements.txt` lists what it depends
+    on, `src/` holds the application, and `Dockerfile` builds it. Read the
+    Dockerfile first.
+
+    Each instruction that changes the filesystem adds a layer, and Docker
+    caches those layers. On a rebuild it walks the instructions in order and
+    reuses each cached layer until it reaches one whose inputs have changed —
+    and from that point on, **everything after it is rebuilt too**. The order
+    of your instructions therefore decides how much work a small change costs.
+
+    The Dockerfile you have been given puts the expensive step in the worst
+    possible place. Work out where, and rewrite it so that editing a file under
+    `src/` does not force the dependency step to run again. The official guide
+    to writing Dockerfiles has a section on layer ordering and cache; the
+    principle you want is about which inputs change often and which rarely.
+
+    **Prove it, in two builds.**
+
+      1. Build your rewritten Dockerfile as `jumptotech/greeter:1.0`.
+      2. Change *only* the application source — edit a file under `src/`, and
+         leave `requirements.txt` exactly as it is.
+      3. Build again as `jumptotech/greeter:1.1`.
+
+    If your ordering is right, the second build reuses everything up to and
+    including the dependency step, and only the layer carrying your source is
+    rebuilt. That is what the checks look at: they compare the two images'
+    actual layers as the daemon recorded them, not the text of your Dockerfile
+    and not what the build printed.
+
+    Two things worth knowing before you start. Changing `requirements.txt`
+    instead of the source will *not* pass — and it should not, because a
+    dependency change genuinely has to rebuild the dependency layer. And
+    building the same thing twice without changing anything will not pass
+    either, because a rebuild that changed nothing demonstrates nothing.
+
+setup:
+  docker:
+    images:
+      - alpine:3.20
+    files:
+      # The dependency manifest. Stable: it changes when dependencies change,
+      # which is rarely.
+      - path: requirements.txt
+        content: |
+          greeter-core==1.4.0
+          greeter-format==0.9.2
+      # The application. Volatile: it changes on almost every commit.
+      - path: src/greeter.sh
+        content: |
+          #!/bin/sh
+          echo "greeter: hello from JumpToTech Bank"
+      # Cache-hostile on purpose: the whole context is copied before the
+      # dependency step, so any source edit invalidates the install.
+      - path: Dockerfile
+        content: |
+          # greeter service — builds correctly, rebuilds far too much.
+          FROM alpine:3.20
+          WORKDIR /app
+
+          COPY . /app
+
+          # Stands in for a real dependency install. It is the slow step.
+          RUN sort /app/requirements.txt > /app/.installed
+
+          CMD ["/bin/sh", "/app/src/greeter.sh"]
+  verify:
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: The alpine:3.20 base image is available
+    - type: workspace_file_exists
+      path: Dockerfile
+      label: The greeter Dockerfile is in the workspace
+    - type: workspace_file_exists
+      path: requirements.txt
+      label: The dependency manifest is in the workspace
+  verify_timeout_seconds: 120
+
+# The decisive check is the layer comparison. The static Dockerfile check and
+# the image checks supplement it — they confirm the student built the thing the
+# lab asked for — but none of them, alone or together, would prove cache reuse.
+# Only comparing what two real builds produced does that.
+requirements:
+  - type: dockerfile_valid
+    path: Dockerfile
+    base_image: alpine:3.20
+    requires:
+      - FROM
+      - COPY
+      - RUN
+      - CMD
+    label: The Dockerfile still builds the service on alpine:3.20
+  - type: docker_image_exists
+    image: jumptotech/greeter:1.0
+    label: Image jumptotech/greeter:1.0 was built
+  - type: docker_image_exists
+    image: jumptotech/greeter:1.1
+    label: Image jumptotech/greeter:1.1 was built after the source change
+
+  # The whole lab. Only the layer carrying the application source may have been
+  # rebuilt; everything before it — including the dependency step — must have
+  # been reused. `must_differ` rejects a second build that changed nothing.
+  - type: docker_image_layers
+    image: jumptotech/greeter:1.1
+    shares_prefix_with: jumptotech/greeter:1.0
+    maximum_changed_suffix: 1
+    minimum_shared_prefix: 3
+    must_differ: true
+    label: The source-only rebuild reused the dependency layers
+
+  # And it still has to work.
+  - type: docker_container_exists
+    name: greeter
+    label: Container greeter exists
+  - type: docker_container_image
+    name: greeter
+    image: jumptotech/greeter:1.1
+    label: Container greeter runs the rebuilt image
+  - type: docker_container_exit_code
+    name: greeter
+    expected: 0
+    label: The rebuilt image still runs successfully
+
+# `Reset Lab` restores this session's Docker environment to its baseline: the
+# containers and both images the student built are removed, and the original
+# cache-hostile Dockerfile, manifest, and source are seeded again — so a
+# previous pass leaves nothing behind and the repair has to be redone.
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    # The student's own images are the artefacts being graded, so they go.
+    images: true
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Look at the order of the instructions, not at what any single one does.
+      Ask which of the inputs to this build changes often and which almost
+      never, then ask which instruction currently depends on both at once.
+
+      A cached layer is only reused if everything it depends on is unchanged —
+      and once one layer is invalidated, every layer after it is rebuilt too.
+  - level: 2
+    text: >
+      The problem is that one instruction copies the whole build context,
+      dependencies and source together, before the expensive step runs. Any
+      edit anywhere in the context therefore invalidates the expensive step.
+
+      Split it. Copy just the thing the expensive step actually needs, run the
+      expensive step, and only then copy the part that changes on every commit.
+      The official Dockerfile best-practices guide describes this ordering.
+  - level: 3
+    text: >
+      The shape you want is: copy the dependency manifest, run the dependency
+      step, then copy the application source — three separate instructions in
+      that order, with the source copy last.
+
+      To see what a rebuild actually reused,
+      `docker image inspect jumptotech/greeter:1.0 --format '{{json .RootFS.Layers}}'`
+      lists an image's layers bottom to top. Run it for both tags and compare:
+      with the right ordering the two lists are identical except for the last
+      entry. Remember to edit only a file under `src/` between the two builds.
+
+references:
+  - title: Docker build cache
+    url: https://docs.docker.com/build/cache/
+  - title: Building best practices
+    url: https://docs.docker.com/build/building/best-practices/
+  - title: Dockerfile reference — COPY
+    url: https://docs.docker.com/reference/dockerfile/#copy
+  - title: Docker CLI reference — docker image inspect
+    url: https://docs.docker.com/reference/cli/docker/image/inspect/
+  - title: Docker CLI reference — docker image history
+    url: https://docs.docker.com/reference/cli/docker/image/history/
+
+skills:
+  - docker.images.layers
+  - docker.images.cache
+  - docker.dockerfile.author
+  - docker.images.build
+  - docker.images.inspect
+
+# Checked against the official Docker Certified Associate Study Guide v1.5
+# (January 2025), published by Mirantis, which administers the exam.
+#
+# Domain 2 lists "Describe and demonstrate how to create an efficient image via
+# a Dockerfile" and "Describe and demonstrate how to display layers of a Docker
+# image"; Domain 6 lists "Describe how an application is composed of layers and
+# where these layers reside on the filesystem". This lab practises all three.
+#
+# The build cache itself is not named anywhere in the guide, so the cache
+# reasoning is a PRODUCTION SKILL. See docs/docker/CERTIFICATION-AUDIT.md.
+certification:
+  - certification: DCA
+    relevant: true
+    domains:
+      - image-creation-and-registry
+      - storage-and-volumes

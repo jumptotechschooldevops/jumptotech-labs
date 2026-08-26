@@ -774,11 +774,12 @@ suite('integration: real Docker daemon', () => {
 
     expect(names).toEqual(expect.arrayContaining([SANDBOX_A, SANDBOX_B]));
     for (const entry of managed) {
-      // The production pattern, not a hand-written one. This asserted
-      // `/^lab-…/` — the *Kubernetes namespace* shape — against a container
-      // sandbox ref, which is `jtt-lab-…`, so it could only ever fail. Binding
-      // the test to `CONTAINER_SANDBOX_PATTERN` is what stops the two shapes
-      // drifting apart again.
+      // The container contract, not the Kubernetes one: a Docker sandbox is
+      // `jtt-lab-<hex>`. This asserted `/^lab-…/` — the *Kubernetes namespace*
+      // shape — against a container sandbox ref, so it could only ever fail.
+      // Binding the test to the exported `CONTAINER_SANDBOX_PATTERN` rather
+      // than a regex written out here is what stops the two shapes drifting
+      // apart again.
       expect(entry.sandboxRef).toMatch(CONTAINER_SANDBOX_PATTERN);
       expect(entry.expiresAtMs).toBeGreaterThan(0);
     }

@@ -31,11 +31,13 @@
  */
 import { execFile } from 'node:child_process';
 import { isContainerSandboxRef } from '../session/identifiers.js';
+import { readSingleFile } from './tar.js';
 import {
   DockerCommandError,
   DockerUnreachableError,
   envListToMap,
   type DockerContainerSnapshot,
+  type DockerFileRead,
   type DockerContainerSummary,
   type CreateNetworkSpec,
   type DockerEngineFactory,
@@ -60,6 +62,16 @@ const DEFAULT_PULL_TIMEOUT_MS = 300_000;
 /** `docker inspect` output for a big image is comfortably under this. */
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
+/**
+ * How much of a container file the archive read will keep, by default.
+ *
+ * A grading check compares a config file, a marker, a short report — not a log
+ * or a database. 64 KiB is generous for all of those and small enough that a
+ * student cannot make verification expensive by leaving a huge file at the path
+ * a lab reads.
+ */
+export const DEFAULT_FILE_READ_BYTES = 64 * 1024;
+
 export interface DockerCliOptions {
   /** Path to the CLI. Absolute in production images; `docker` resolves via PATH. */
   binary?: string;
@@ -75,6 +87,8 @@ export interface DockerCliOptions {
   argvPrefix?: readonly string[];
   /** Injected in tests so no real process is spawned. */
   run?: CliRunner;
+  /** Injected in tests. Only the archive read uses it. */
+  runBinary?: CliBinaryRunner;
 }
 
 /** The one primitive everything else in this file is built from. */
@@ -83,6 +97,53 @@ export type CliRunner = (
   argv: string[],
   options: { timeoutMs: number; env: NodeJS.ProcessEnv },
 ) => Promise<DockerExecResult>;
+
+/**
+ * The archive read's runner: identical to `CliRunner` but hands back raw bytes.
+ *
+ * A tar stream is binary, and `String(stdout)` would replace every byte that is
+ * not valid UTF-8 — which is most of a tar header's padding. This exists only
+ * so `copyFileFromContainer` can see the bytes the daemon actually sent; every
+ * other call in this file still goes through the string runner.
+ */
+export type CliBinaryRunner = (
+  binary: string,
+  argv: string[],
+  options: { timeoutMs: number; env: NodeJS.ProcessEnv; maxBytes: number },
+) => Promise<{ exitCode: number; stdout: Buffer; stderr: string; timedOut: boolean }>;
+
+/** Spawn a process with an explicit argv array, capturing stdout as bytes. Never a shell. */
+export const execFileBinaryRunner: CliBinaryRunner = (binary, argv, options) =>
+  new Promise((resolve) => {
+    execFile(
+      binary,
+      argv,
+      {
+        timeout: options.timeoutMs,
+        env: options.env,
+        maxBuffer: options.maxBytes,
+        encoding: 'buffer',
+        shell: false,
+        windowsHide: true,
+      },
+      (error, stdout, stderr) => {
+        const killed = Boolean(error && (error as { killed?: boolean }).killed);
+        const timedOut =
+          killed || Boolean(error && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
+        let exitCode = 0;
+        if (error) {
+          const code = (error as { code?: unknown }).code;
+          exitCode = typeof code === 'number' ? code : 1;
+        }
+        resolve({
+          exitCode,
+          stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout)),
+          stderr: Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr ?? ''),
+          timedOut,
+        });
+      },
+    );
+  });
 
 /** Spawn a process with an explicit argv array. Never a shell. */
 export const execFileRunner: CliRunner = (binary, argv, options) =>
@@ -161,6 +222,7 @@ export class DockerCliClient implements DockerEnginePort {
   readonly #prefix: readonly string[];
   readonly #timeoutMs: number;
   readonly #run: CliRunner;
+  readonly #runBinary: CliBinaryRunner;
   readonly #env: NodeJS.ProcessEnv;
 
   constructor(options: DockerCliOptions = {}) {
@@ -168,6 +230,7 @@ export class DockerCliClient implements DockerEnginePort {
     this.#prefix = options.argvPrefix ?? [];
     this.#timeoutMs = options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#run = options.run ?? execFileRunner;
+    this.#runBinary = options.runBinary ?? execFileBinaryRunner;
     this.#env = {
       PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
       HOME: process.env.HOME ?? '/tmp',
@@ -391,6 +454,73 @@ export class DockerCliClient implements DockerEnginePort {
     return `${result.stdout}${result.stderr}`.trim();
   }
 
+  /**
+   * Read one regular file out of a container through the archive endpoint.
+   *
+   * `docker cp <name>:<path> -` writes a tar to stdout. Nothing runs inside the
+   * student's container, so this works on a stopped one and on an image with no
+   * shell — and the container cannot influence what the verifier reads by
+   * shipping its own `cat`.
+   *
+   * The one composed argument is `name + ':' + path`. Both halves are validated
+   * upstream against closed character classes that exclude `:` and whitespace,
+   * so the composition is unambiguous, and it sits after `--` so it can never
+   * be read as an option.
+   *
+   * Returns `null` for a missing container or a missing path. Anything else the
+   * daemon refuses is raised, so "the archive was unreadable" is never silently
+   * graded as "the file said the wrong thing".
+   */
+  async copyFileFromContainer(
+    name: string,
+    path: string,
+    options: { maxBytes?: number; timeoutMs?: number } = {},
+  ): Promise<DockerFileRead | null> {
+    const maxBytes = options.maxBytes ?? DEFAULT_FILE_READ_BYTES;
+    // Room for the tar header, the content, and its block padding.
+    const budget = maxBytes + 4 * 1024;
+    const argv = [...this.#prefix, 'cp', '--', `${name}:${path}`, '-'];
+
+    const result = await this.#runBinary(this.#binary, argv, {
+      timeoutMs: options.timeoutMs ?? this.#timeoutMs,
+      env: this.#env,
+      maxBytes: budget,
+    });
+
+    if (result.exitCode !== 0) {
+      const stderr = result.stderr.trim();
+      if (result.timedOut) {
+        return Promise.reject(
+          new DockerUnreachableError(`docker cp timed out after ${options.timeoutMs ?? this.#timeoutMs}ms`),
+        );
+      }
+      if (looksUnreachable(stderr)) {
+        return Promise.reject(new DockerUnreachableError(`Docker daemon is unreachable: ${stderr}`));
+      }
+      // "No such container" and "no such file or directory" are both absences.
+      if (looksAbsent(stderr) || /no such file or directory/i.test(stderr) || /could not find the file/i.test(stderr)) {
+        return null;
+      }
+      return Promise.reject(
+        new DockerCommandError(`docker cp failed (exit ${result.exitCode}): ${stderr || 'no stderr'}`, result.exitCode, stderr),
+      );
+    }
+
+    if (result.stdout.length === 0) {
+      // A successful `docker cp` always writes at least one 512-byte tar
+      // header. Nothing at all means the stream was cut — a killed child, a
+      // daemon that went away mid-read — which is an environment failure, not
+      // a student one, and must not be graded as "the file said the wrong
+      // thing".
+      return Promise.reject(
+        new DockerUnreachableError(`docker cp returned an empty archive for '${name}:${path}'`),
+      );
+    }
+
+    const entry = readSingleFile(result.stdout, maxBytes);
+    return { content: entry.content, declaredSize: entry.size, truncated: entry.truncated };
+  }
+
   async execInContainer(
     name: string,
     argv: string[],
@@ -610,6 +740,8 @@ interface RawContainer {
     Status?: string;
     Running?: boolean;
     ExitCode?: number;
+    /** Set by the daemon when the kernel OOM-killed this run. */
+    OOMKilled?: boolean;
     Error?: string;
     StartedAt?: string;
     FinishedAt?: string;
@@ -645,6 +777,7 @@ interface RawContainer {
 
 interface RawImage {
   Id?: string;
+  RootFS?: { Type?: string; Layers?: string[] | null };
   RepoTags?: string[] | null;
   RepoDigests?: string[] | null;
   Created?: string;
@@ -743,6 +876,9 @@ export function toContainerSnapshot(raw: RawContainer): DockerContainerSnapshot 
     state,
     running: raw.State?.Running ?? state === 'running',
     exitCode: raw.State?.ExitCode ?? 0,
+    // Absent on a daemon that does not report it; absent means "not an OOM",
+    // never "unknown", so the default is the safe one.
+    oomKilled: raw.State?.OOMKilled ?? false,
     ...(raw.State?.Error ? { errorMessage: raw.State.Error } : {}),
     restartPolicy: raw.HostConfig?.RestartPolicy?.Name || 'no',
     env: envListToMap(raw.Config?.Env),
@@ -774,6 +910,10 @@ export function toImageSnapshot(raw: RawImage): DockerImageSnapshot {
     ...(raw.Architecture ? { architecture: raw.Architecture } : {}),
     ...(raw.Os ? { os: raw.Os } : {}),
     sizeBytes: raw.Size ?? 0,
+    // Bottom-to-top, exactly as the daemon reports them. An image with no
+    // RootFS reads as no layers rather than as an error, so a daemon that
+    // omits the field degrades to "cannot prove sharing" instead of throwing.
+    layers: raw.RootFS?.Layers ?? [],
     createdAt: raw.Created ?? '',
   };
 }

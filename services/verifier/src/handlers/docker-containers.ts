@@ -82,6 +82,90 @@ export const dockerContainerExitCode: DockerVerifierHandler<'docker_container_ex
   },
 };
 
+/**
+ * Was this container's last run stopped by the kernel's OOM killer?
+ *
+ * The whole value of this check is that it is *not* the exit code. Exit 137 is
+ * "killed by SIGKILL", and the kernel is only one of the things that sends it —
+ * `docker kill`, a `docker stop` that runs out of grace period, and an
+ * application that calls `exit(137)` itself all land on the same code. Only the
+ * daemon knows which of those happened, and `State.OOMKilled` is where it says
+ * so.
+ *
+ * The flag describes the **last run**. A container that was OOM-killed and then
+ * started again reports false, so this cannot be satisfied by an OOM that
+ * happened at some point in the past.
+ */
+export const dockerContainerOomKilled: DockerVerifierHandler<'docker_container_oom_killed'> = {
+  type: 'docker_container_oom_killed',
+  label: (r) =>
+    r.expected
+      ? `Container ${r.name} was killed for exceeding its memory limit`
+      : `Container ${r.name} was not killed for exceeding its memory limit`,
+  async run(r, reader) {
+    const container = await reader.container(r.name);
+    if (!container) return missingDocker('container', r.name);
+    if (container.oomKilled === r.expected) return pass();
+
+    if (r.expected) {
+      // Say what was observed, and — because this is the exact confusion the
+      // check exists to resolve — say that the exit code did not settle it.
+      return container.running
+        ? fail(`Container '${r.name}' is still running, so it has not been stopped by anything`)
+        : fail(
+            `Container '${r.name}' stopped with exit code ${container.exitCode}, but the daemon does not report it as killed for exceeding its memory limit`,
+          );
+    }
+    return fail(`Container '${r.name}' was killed for exceeding its memory limit`);
+  },
+};
+
+/** Render an argv the way a Dockerfile would, for a readable detail. */
+const showArgv = (argv: readonly string[]): string =>
+  argv.length === 0 ? '(none)' : `[${argv.map((a) => JSON.stringify(a)).join(', ')}]`;
+
+const sameArgv = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
+
+/**
+ * What command was this container created with?
+ *
+ * Reads `Config.Entrypoint` and `Config.Cmd`, which hold the image's values
+ * unless the run overrode them — so the pair shows both halves of the thing
+ * DOCKER-014 is about: a runtime argument replaces `Cmd` and leaves
+ * `Entrypoint` untouched.
+ *
+ * Exact argv comparison, deliberately. `ENTRYPOINT ["/app/batch.sh"]` yields
+ * `["/app/batch.sh"]`, while the shell form `ENTRYPOINT /app/batch.sh` yields
+ * `["/bin/sh","-c","/app/batch.sh"]` and silently throws away every runtime
+ * argument. Both start, both can exit 0, and the array is the only thing that
+ * distinguishes them — so a membership test would pass the broken one.
+ */
+export const dockerContainerCommand: DockerVerifierHandler<'docker_container_command'> = {
+  type: 'docker_container_command',
+  label: (r) => {
+    if (r.command && r.entrypoint) return `Container ${r.name} runs the expected entrypoint and command`;
+    if (r.entrypoint) return `Container ${r.name} runs the expected entrypoint`;
+    return `Container ${r.name} runs the expected command`;
+  },
+  async run(r, reader) {
+    const container = await reader.container(r.name);
+    if (!container) return missingDocker('container', r.name);
+    const problems: string[] = [];
+
+    if (r.entrypoint !== undefined && !sameArgv(container.entrypoint, r.entrypoint)) {
+      problems.push(`its entrypoint is ${showArgv(container.entrypoint)}`);
+    }
+    if (r.command !== undefined && !sameArgv(container.command, r.command)) {
+      problems.push(`its command is ${showArgv(container.command)}`);
+    }
+
+    return problems.length === 0
+      ? pass()
+      : fail(`Container '${r.name}': ${problems.join(', and ')}`);
+  },
+};
+
 export const dockerContainerEnv: DockerVerifierHandler<'docker_container_env'> = {
   type: 'docker_container_env',
   label: (r) =>

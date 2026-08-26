@@ -1,3 +1,22 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Content is written from the official Docker documentation only. The two
+# pages this lab is grounded in are listed under `references`, and every
+# behaviour it asserts was checked against them:
+#
+#   - `--memory` takes a `b`/`k`/`m`/`g` suffix and its minimum allowed value
+#     is `6m`, so the `16m` this lab asks for is legal.
+#   - "By default, if an out-of-memory (OOM) error occurs, the kernel kills
+#     processes in a container" — the resource-constraints page.
+#   - `--pids-limit` is documented on the `docker run` reference as
+#     "Tune container pids limit (set -1 for unlimited)".
+#
+# Verification is state-based: the verifier reads the live Docker state in this
+# session's own daemon and never inspects the student's command history. A
+# container created with `docker run`, or with `docker create` followed by
+# `docker start`, passes identically.
+# ---------------------------------------------------------------------------
 id: DOCKER-009
 slug: docker-009-resource-limits
 title: Constrain a Container with Resource Limits
@@ -5,7 +24,7 @@ track: docker
 topic: resources
 difficulty: intermediate
 level: practice
-duration_minutes: 35
+duration_minutes: 45
 order: 9
 
 environment:
@@ -14,6 +33,7 @@ environment:
 
 prerequisites:
   - DOCKER-001
+  - DOCKER-002
 
 story: >
   The reporting job at JumpToTech Bank is the noisy neighbour of the batch
@@ -24,44 +44,92 @@ story: >
   shares the host's memory and CPU with everything else. The platform team's
   rule is that a container gets an explicit budget.
 
+  Setting a budget is the easy half. The half that matters at three in the
+  morning is recognising what it looks like when a container hits one.
+
 objectives:
   - Explain what a container with no resource limits can do to its host
-  - Apply memory and CPU limits when starting a container
+  - Apply memory, CPU, and process-count limits when starting a container
   - Read back the limits the daemon is actually enforcing
-  - Distinguish a limit from a reservation
+  - Recognise a container the kernel killed for exceeding its memory limit
 
 task:
-  summary: Run a reporting container limited to 256m of memory and half a CPU.
+  summary: Give the reporting container a memory, CPU, and process budget, then watch a second container get killed for exceeding one.
   description: >
     Docker applies resource limits through the kernel's cgroups. A limit is a
     ceiling the kernel enforces: exceed the memory limit and the process is
     killed, ask for more CPU than the quota allows and it is throttled.
 
-    Run a container named `reporting`, from `alpine:3.20`, leave it running,
-    and give it exactly this budget:
+    **Part one — set a budget.** Run a container named `reporting`, from
+    `alpine:3.20`, leave it running, and give it exactly this budget:
 
       - a memory limit of `256m`
       - a CPU limit of `0.5`
+      - a process limit of `64`
 
     Then read back what the daemon actually applied.
     `docker inspect reporting` reports `HostConfig.Memory` in **bytes**, so
-    `256m` appears as `268435456`, and `HostConfig.NanoCpus` in billionths of a
-    CPU, so `0.5` appears as `500000000`. `docker stats` shows live usage
-    against those limits.
+    `256m` appears as `268435456`, `HostConfig.NanoCpus` in billionths of a
+    CPU, so `0.5` appears as `500000000`, and `HostConfig.PidsLimit` as a plain
+    count. `docker stats` shows live usage against those limits.
 
     This lab accepts any spelling of the same limit: `256m`, `256M`, and the
     raw byte count all produce the same value in the daemon, and all pass.
+
+    **Part two — watch a limit being enforced.** Setting a limit you never hit
+    teaches you nothing about what happens when you do. Run a second container
+    named `memory-probe`, also from `alpine:3.20`, with a memory limit of
+    `16m`, and give it something to do that needs considerably more memory than
+    that — writing a file of a few dozen megabytes into the container's own
+    `/dev/shm` will do it, because those pages are charged to the container's
+    memory budget.
+
+    Let it run to completion. It will not finish successfully: the kernel's
+    out-of-memory killer will stop it. Leave the stopped container in place so
+    its final state can be read.
+
+    **Part three — record what you saw.** Open `answers.txt` in your workspace
+    and replace each `____` with what you observed. One answer is the exit code
+    the stopped container reports. The other is the field in
+    `docker inspect memory-probe` that tells you the kernel killed it for
+    memory, rather than the application exiting on its own with the same code —
+    a distinction that matters, because they are not the same incident and they
+    do not have the same fix.
 
 setup:
   docker:
     images:
       - alpine:3.20
+    files:
+      - path: answers.txt
+        content: |
+          # DOCKER-009 — resource limits
+          #
+          # Replace each ____ below with what you observed. Keep the field
+          # names; only the values need to change.
+          #
+          # 1. What exit code does `memory-probe` report after the kernel
+          #    stops it for exceeding its memory limit?
+          exit_code: ____
+          #
+          # 2. Which boolean field of `docker inspect memory-probe` shows that
+          #    this was a memory kill rather than an ordinary application exit
+          #    with the same code? Give the field name exactly as it appears.
+          inspect_field: ____
   verify:
     - type: docker_image_exists
       image: alpine:3.20
       label: The alpine:3.20 image is available
+    - type: workspace_file_exists
+      path: answers.txt
+      label: The answers.txt worksheet is in the workspace
   verify_timeout_seconds: 120
 
+# Every check below reads `docker inspect` against this session's own daemon.
+# The `memory-probe` checks are deliberately three separate facts — the limit
+# the daemon applied, that the container stopped, and the code it stopped with
+# — so a student who gets two of the three right is told which one is missing
+# rather than being failed as a whole.
 requirements:
   - type: docker_container_running
     name: reporting
@@ -70,53 +138,130 @@ requirements:
     name: reporting
     memory: 256m
     cpus: "0.5"
-    label: Container is limited to 256m of memory and 0.5 CPU
+    pids_limit: 64
+    label: Container reporting is limited to 256m of memory, 0.5 CPU, and 64 processes
+  - type: docker_container_exists
+    name: memory-probe
+    label: Container memory-probe exists
+  - type: docker_container_resource_limit
+    name: memory-probe
+    memory: 16m
+    label: Container memory-probe was given a 16m memory limit
+  - type: docker_container_state
+    name: memory-probe
+    expected: exited
+    label: Container memory-probe has stopped
+  - type: docker_container_exit_code
+    name: memory-probe
+    expected: 137
+    label: Container memory-probe was killed rather than exiting cleanly
+  # The check that makes the previous one mean something. Exit code 137 is
+  # "killed by SIGKILL", and the kernel is only one of the things that sends
+  # it — `docker kill`, a `docker stop` that runs out of grace period, and an
+  # application calling exit(137) all produce the same code. Only the daemon
+  # knows which happened, and this is where it says so.
+  - type: docker_container_oom_killed
+    name: memory-probe
+    expected: true
+    label: The kernel stopped memory-probe for exceeding its memory limit
+  - type: workspace_file_exists
+    path: answers.txt
+    contains:
+      - "137"
+      - OOMKilled
+    label: answers.txt records the exit code and the inspect field that identifies a memory kill
 
+# `Reset Lab` restores this session's Docker environment to its baseline: every
+# container, volume, and network the student created is removed, the workspace
+# is re-seeded with a fresh answers.txt, and the lab's initial state is applied
+# again. The session, its sandbox, and its terminal all survive.
 reset:
   docker:
     containers: true
     volumes: true
     networks: true
+    # Images are kept: re-pulling the lab's base image on every reset would
+    # turn a two-second reset into a two-minute one.
     images: false
     workspace: true
 
 hints:
   - level: 1
     text: >
-      Both limits are set when the container is created, as options to the same
-      command you have used all along. Neither can be added to a container
-      after the fact without updating it.
+      All three limits on `reporting` are set when the container is created, as
+      options to the same command you have used all along. None of them can be
+      added to a container after the fact without updating it.
+
+      For `memory-probe`, think about what a memory limit actually means: the
+      container is not prevented from asking for more, it is stopped when it
+      takes more. So you need to give it work that genuinely allocates.
   - level: 2
     text: >
       The resource constraints documentation covers memory and CPU separately.
       Read the memory section carefully: there is an option that sets a hard
       limit and another that sets a soft reservation, and this lab wants the
       hard one. For CPU, the modern option expresses a fraction of a core
-      directly rather than as a period and a quota.
+      directly rather than as a period and a quota. The process limit is on the
+      `docker run` reference rather than the resource constraints page.
+
+      That same documentation states what the kernel does when a container
+      exceeds its memory limit. Once `memory-probe` has stopped, `docker ps -a`
+      shows how it ended, and `docker inspect` has the detail behind it.
   - level: 3
     text: >
-      The memory value takes a unit suffix — `256m` means 256 MiB. The CPU
+      The memory value takes a unit suffix — `256m` means 256 MiB, and the
+      documented minimum for a container is `6m`, so `16m` is legal. The CPU
       value is a plain decimal, so half a core is `0.5`. As in the earlier
-      labs, `alpine:3.20` needs a long-running command or it will exit before
-      you can inspect it. Confirm with
-      `docker inspect reporting --format '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}'`,
-      which should print `268435456 500000000`.
+      labs, `alpine:3.20` needs a long-running command or `reporting` will exit
+      before you can inspect it.
+
+      Confirm the budget with
+      `docker inspect reporting --format '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.HostConfig.PidsLimit}}'`,
+      which should print `268435456 500000000 64`.
+
+      For the probe, `/dev/shm` inside the container is a tmpfs whose pages
+      count against the container's memory budget, so writing a file there that
+      is larger than the limit is enough. `docker inspect memory-probe` under
+      `.State` carries both the exit code and the boolean that tells you why.
 
 references:
   - title: Runtime options with Memory, CPUs, and GPUs
     url: https://docs.docker.com/engine/containers/resource_constraints/
   - title: Docker CLI reference — docker run
     url: https://docs.docker.com/reference/cli/docker/container/run/
+  - title: Docker CLI reference — docker container inspect
+    url: https://docs.docker.com/reference/cli/docker/container/inspect/
   - title: Docker CLI reference — docker stats
     url: https://docs.docker.com/reference/cli/docker/container/stats/
 
 skills:
   - docker.resources.limits
+  - docker.observability.stats
   - docker.containers.run
   - docker.containers.inspect
+  - docker.troubleshooting.resources
 
+# Checked against the official Docker Certified Associate Study Guide v1.5
+# (January 2025), published by Mirantis, which administers the exam.
+#
+# Container resource constraints — `--memory`, `--cpus`, `--pids-limit` — do
+# not appear in any of the six DCA domains. Domain 3, "Installation and
+# Configuration", which an earlier version of this lab claimed, covers repo
+# setup, storage-driver selection, engine installation, logging drivers, swarm
+# setup, user and team management, daemon start-on-boot, certificate-based
+# client-server authentication, a description of namespaces and cgroups, and
+# UCP/DTR deployment and backup. Setting a cgroup limit on a container is not
+# among them.
+#
+# This lab is therefore classified as:
+#
+#   PRODUCTION SKILL — DevOps / SRE
+#   Container reliability and resource management
+#
+# and not as an exam objective. It says so rather than claiming coverage it
+# does not have. See docs/docker/CERTIFICATION-AUDIT.md for the full
+# objective mapping and the DCA source-status finding.
 certification:
   - certification: DCA
-    relevant: true
-    domains:
-      - installation-and-configuration
+    relevant: false
+    domains: []

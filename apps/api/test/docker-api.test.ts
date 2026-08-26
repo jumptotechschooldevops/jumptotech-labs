@@ -191,6 +191,35 @@ describe('POST /api/sessions/:id/check — Docker labs', () => {
     expect(after.body.data.checks.every((c: { status: string }) => c.status === 'pass')).toBe(true);
   });
 
+  /*
+   * A lab that grades a file is often grading an answer. The check must fail
+   * without handing that answer to whoever submitted a wrong one — and the
+   * place that actually matters is the HTTP response, not the handler's
+   * message, so this asserts against the serialised body the browser receives.
+   */
+  it('never returns an expected file value, or file content, to the browser', async () => {
+    const harness = buildApp();
+    const { session } = await startDockerLab(harness, 'DOCKER-011');
+    const daemon = harness.engines.daemon(session.sandboxRef);
+
+    // The student got it wrong, and their file holds something private.
+    daemon.addContainer(
+      containerSpec({ name: 'statements-api', image: 'alpine:3.20' }),
+      'running',
+    );
+    daemon.putFile('statements-api', '/var/run/statements/status', 'degraded: region=us-east-1\n');
+
+    const response = await request(harness.app).post(`/api/sessions/${session.sessionId}/check`);
+    expect(response.status).toBe(200);
+    expect(response.body.data.passed).toBe(false);
+
+    const body = JSON.stringify(response.body);
+    // Neither the expectation the lab holds…
+    expect(body).not.toContain('ready: region=eu-west-1');
+    // …nor what the student's container actually said.
+    expect(body).not.toContain('degraded: region=us-east-1');
+  });
+
   it('grades against the requesting session\'s own daemon, not any other', async () => {
     const harness = buildApp();
     const alice = (await startDockerLab(harness)).session;

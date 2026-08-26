@@ -199,12 +199,14 @@ import {
   processEnviron,
 } from './handlers/linux.js';
 import {
+  dockerContainerCommand,
   dockerContainerEnv,
   dockerContainerExists,
   dockerContainerExitCode,
   dockerContainerImage,
   dockerContainerMount,
   dockerContainerNetwork,
+  dockerContainerOomKilled,
   dockerContainerPort,
   dockerContainerResourceLimit,
   dockerContainerRunning,
@@ -213,11 +215,13 @@ import {
 import {
   dockerImageConfig,
   dockerImageExists,
+  dockerImageLayers,
   dockerNetworkExists,
   dockerResourceAbsent,
   dockerVolumeExists,
 } from './handlers/docker-resources.js';
 import { dockerfileValid, workspaceFileExists } from './handlers/docker-workspace.js';
+import { dockerContainerFileContent } from './handlers/docker-file.js';
 import { DockerVerifyReader } from './docker-reader.js';
 
 /** Raised when a requirement names a type with no registered handler. */
@@ -395,6 +399,9 @@ const DOCKER_HANDLERS: { [K in DockerRequirementType]: DockerVerifierHandler<K> 
   docker_container_state: dockerContainerState,
   docker_container_image: dockerContainerImage,
   docker_container_exit_code: dockerContainerExitCode,
+  docker_container_oom_killed: dockerContainerOomKilled,
+  docker_container_command: dockerContainerCommand,
+  docker_container_file_content: dockerContainerFileContent,
   docker_container_env: dockerContainerEnv,
   docker_container_port: dockerContainerPort,
   docker_container_network: dockerContainerNetwork,
@@ -403,6 +410,7 @@ const DOCKER_HANDLERS: { [K in DockerRequirementType]: DockerVerifierHandler<K> 
 
   docker_image_exists: dockerImageExists,
   docker_image_config: dockerImageConfig,
+  docker_image_layers: dockerImageLayers,
   docker_volume_exists: dockerVolumeExists,
   docker_network_exists: dockerNetworkExists,
 

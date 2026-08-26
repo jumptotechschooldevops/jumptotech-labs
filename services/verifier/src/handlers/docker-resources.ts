@@ -12,6 +12,13 @@ import type { DockerVerifierHandler } from '../contract.js';
 import { fail, missingDocker, pass } from '../contract.js';
 import { imageMatches } from '../image.js';
 
+/** Render an argv the way a Dockerfile would, for a readable detail. */
+const showArgv = (argv: readonly string[]): string =>
+  argv.length === 0 ? '(none)' : `[${argv.map((a) => JSON.stringify(a)).join(', ')}]`;
+
+const sameArgv = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
+
 export const dockerImageExists: DockerVerifierHandler<'docker_image_exists'> = {
   type: 'docker_image_exists',
   label: (r) => `Image ${r.image} exists`,
@@ -48,6 +55,16 @@ export const dockerImageConfig: DockerVerifierHandler<'docker_image_config'> = {
       }
     }
 
+    // Exact, and separately: the point of asserting these rather than
+    // `cmd_contains` is to show which half a value came from, and to tell exec
+    // form from shell form.
+    if (r.entrypoint !== undefined && !sameArgv(image.entrypoint, r.entrypoint)) {
+      problems.push(`ENTRYPOINT is ${showArgv(image.entrypoint)}`);
+    }
+    if (r.cmd !== undefined && !sameArgv(image.cmd, r.cmd)) {
+      problems.push(`CMD is ${showArgv(image.cmd)}`);
+    }
+
     for (const [key, value] of Object.entries(r.env ?? {})) {
       const actual = image.env[key];
       if (actual === undefined) problems.push(`no ENV '${key}'`);
@@ -72,6 +89,75 @@ export const dockerImageConfig: DockerVerifierHandler<'docker_image_config'> = {
     }
 
     return problems.length === 0 ? pass() : fail(`Image '${r.image}': ${problems.join('; ')}`);
+  },
+};
+
+/**
+ * How many leading layers two images share, in order.
+ *
+ * Stops at the first difference, which is what makes it a *prefix*: an image
+ * that inserted a layer early shares only what came before the insertion, even
+ * if every later digest also appears in the other image.
+ */
+function sharedPrefixLength(a: readonly string[], b: readonly string[]): number {
+  const limit = Math.min(a.length, b.length);
+  let shared = 0;
+  while (shared < limit && a[shared] === b[shared]) shared += 1;
+  return shared;
+}
+
+/**
+ * Did a rebuild preserve the layers before the one that changed?
+ *
+ * This is the only check in the Docker family that reads two images, and it is
+ * the only way to observe the build cache: cache reuse is a property of a
+ * rebuild, not of an image. The digests come from the daemon's `RootFS.Layers`
+ * — immutable content identifiers the student cannot author.
+ *
+ * Failure detail describes the property and reports counts. It never prints a
+ * digest: a layer digest is not information a student can act on, and dumping
+ * image metadata into a check result is how internal detail leaks to a browser.
+ */
+export const dockerImageLayers: DockerVerifierHandler<'docker_image_layers'> = {
+  type: 'docker_image_layers',
+  label: (r) => `Image ${r.image} reuses the layers it should from ${r.shares_prefix_with}`,
+  async run(r, reader) {
+    const after = await reader.image(r.image);
+    if (!after) return missingDocker('image', r.image);
+    const before = await reader.image(r.shares_prefix_with);
+    if (!before) return missingDocker('image', r.shares_prefix_with);
+
+    // A daemon that reports no layers cannot answer the question. Saying so is
+    // honest; treating it as "nothing was shared" would fail a student for a
+    // reading the platform could not take.
+    if (after.layers.length === 0 || before.layers.length === 0) {
+      return fail(
+        `Could not read the filesystem layers of ${after.layers.length === 0 ? r.image : r.shares_prefix_with}, so cache reuse cannot be established`,
+      );
+    }
+
+    if (r.must_differ && after.id === before.id) {
+      return fail(
+        `'${r.image}' and '${r.shares_prefix_with}' are the same image — a rebuild that changed nothing does not show anything was cached`,
+      );
+    }
+
+    const shared = sharedPrefixLength(before.layers, after.layers);
+    const changed = after.layers.length - shared;
+
+    if (r.minimum_shared_prefix !== undefined && shared < r.minimum_shared_prefix) {
+      return fail(
+        `'${r.image}' shares only ${shared} leading layer${shared === 1 ? '' : 's'} with '${r.shares_prefix_with}', so the earlier build steps were not reused`,
+      );
+    }
+
+    if (r.maximum_changed_suffix !== undefined && changed > r.maximum_changed_suffix) {
+      return fail(
+        `rebuilding changed the last ${changed} layers of '${r.image}', not at most ${r.maximum_changed_suffix} — the steps before the change were rebuilt instead of reused`,
+      );
+    }
+
+    return pass(`${shared} of ${after.layers.length} layers reused`);
   },
 };
 
