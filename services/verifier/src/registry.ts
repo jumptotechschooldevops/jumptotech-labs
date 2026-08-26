@@ -31,7 +31,9 @@
  * already scoped to one session's sandbox.
  */
 import {
+  isDockerFamily,
   isDockerRequirementType,
+  isKubernetesFamily,
   isSupportedRequirementType,
   requirementFamily,
   REQUIREMENT_TYPES,
@@ -43,8 +45,10 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import type {
   CheckResult,
+  CheckStatus,
   DockerVerifierHandler,
   Handler,
+  HandlerOutcome,
   SandboxVerifierHandler,
   VerifierHandler,
 } from './contract.js';
@@ -449,6 +453,20 @@ export interface VerificationReaders {
   docker?: DockerVerifyReader | undefined;
 }
 
+/**
+ * One handler outcome, as a student-facing status.
+ *
+ * `skipped` is read before `ok` deliberately: a handler that could not perform
+ * its check reports `ok: false` as well, so a plain `ok ? 'pass' : 'fail'`
+ * would render a platform gap as the student's failure. Kept in one function
+ * rather than repeated at each dispatch branch so the three families can never
+ * drift apart on what an outcome means.
+ */
+function outcomeStatus(outcome: HandlerOutcome): CheckStatus {
+  if (outcome.skipped) return 'skipped';
+  return outcome.ok ? 'pass' : 'fail';
+}
+
 /** Stable, human-meaningful id for a check, used as the React key. */
 export function checkId(requirement: Requirement, index: number): string {
   const name = 'name' in requirement ? requirement.name : 'target';
@@ -480,7 +498,7 @@ export async function verifyRequirement(
   const family = requirementFamily(requirement.type);
   const id = checkId(requirement, index);
 
-  if (family === 'kubernetes') {
+  if (isKubernetesFamily(family)) {
     const handler = KUBERNETES_HANDLERS[
       requirement.type as KubernetesRequirementType
     ] as VerifierHandler<KubernetesRequirementType>;
@@ -497,12 +515,12 @@ export async function verifyRequirement(
     return {
       id,
       label,
-      status: outcome.ok ? 'pass' : 'fail',
+      status: outcomeStatus(outcome),
       ...(outcome.detail ? { detail: outcome.detail } : {}),
     };
   }
 
-  if (family === 'docker') {
+  if (isDockerFamily(family)) {
     const handler = DOCKER_HANDLERS[
       requirement.type as DockerRequirementType
     ] as DockerVerifierHandler<DockerRequirementType>;
@@ -519,7 +537,7 @@ export async function verifyRequirement(
     return {
       id,
       label,
-      status: outcome.ok ? 'pass' : 'fail',
+      status: outcomeStatus(outcome),
       ...(outcome.detail ? { detail: outcome.detail } : {}),
     };
   }
@@ -564,7 +582,7 @@ export async function verifyRequirement(
   return {
     id,
     label,
-    status: outcome.ok ? 'pass' : 'fail',
+    status: outcomeStatus(outcome),
     ...(outcome.detail ? { detail: outcome.detail } : {}),
   };
 }

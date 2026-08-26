@@ -1886,12 +1886,67 @@ export type RequirementType = keyof typeof requirementSchemas;
  * type without classifying it fails to compile, so a new check can never
  * silently fall through to the wrong reader.
  */
-export type RequirementFamily =
-  | 'kubernetes'
-  | 'filesystem'
-  | 'terraform'
-  | 'linux'
-  | 'docker';
+/**
+ * Every family, and the reader that answers it.
+ *
+ * One table rather than a hand-written union plus a hand-written
+ * `RequirementTypeOf<'filesystem' | 'terraform' | 'linux'>`. A family is not
+ * free-floating: it exists to name *which reader* observes it, so the family
+ * vocabulary and the routing are the same fact and are written once. A
+ * curriculum track that brings a new family — an AWS policy document, a
+ * cloud template — adds one line here, and `RequirementFamily`, the
+ * `SandboxRequirementType` alias, the provider capability table and the
+ * verifier's dispatch all follow.
+ *
+ * Exhaustive by construction: `RequirementFamily` is `keyof` this table, so a
+ * family that is not routed is not a family at all and cannot be named in
+ * `REQUIREMENT_FAMILIES` below. The failure this prevents is quiet — a new
+ * family added to a union alone would compile and then be swept into the
+ * verifier's sandbox `else` branch whether or not the sandbox is the right
+ * substrate.
+ */
+export const REQUIREMENT_FAMILY_READERS = {
+  kubernetes: 'kubernetes',
+  filesystem: 'sandbox',
+  terraform: 'sandbox',
+  linux: 'sandbox',
+  docker: 'docker',
+} as const;
+
+export type RequirementFamily = keyof typeof REQUIREMENT_FAMILY_READERS;
+
+/** The three substrates a check can be observed against. */
+export type ReaderGroup = (typeof REQUIREMENT_FAMILY_READERS)[RequirementFamily];
+
+type FamiliesFor<G extends ReaderGroup> = {
+  [F in RequirementFamily]: (typeof REQUIREMENT_FAMILY_READERS)[F] extends G ? F : never;
+}[RequirementFamily];
+
+export type KubernetesFamily = FamiliesFor<'kubernetes'>;
+export type SandboxFamily = FamiliesFor<'sandbox'>;
+export type DockerFamily = FamiliesFor<'docker'>;
+
+/** Every family, in declaration order. */
+export const REQUIREMENT_FAMILY_LIST = Object.keys(
+  REQUIREMENT_FAMILY_READERS,
+) as ReadonlyArray<RequirementFamily>;
+
+/** Which reader observes this family. */
+export function familyReader(family: RequirementFamily): ReaderGroup {
+  return REQUIREMENT_FAMILY_READERS[family];
+}
+
+export function isKubernetesFamily(family: RequirementFamily): family is KubernetesFamily {
+  return REQUIREMENT_FAMILY_READERS[family] === 'kubernetes';
+}
+
+export function isSandboxFamily(family: RequirementFamily): family is SandboxFamily {
+  return REQUIREMENT_FAMILY_READERS[family] === 'sandbox';
+}
+
+export function isDockerFamily(family: RequirementFamily): family is DockerFamily {
+  return REQUIREMENT_FAMILY_READERS[family] === 'docker';
+}
 
 export const REQUIREMENT_FAMILIES = {
   pod_exists: 'kubernetes',
@@ -2072,9 +2127,9 @@ export type RequirementTypeOf<F extends RequirementFamily> = {
 }[RequirementType];
 
 /** Requirement types read inside the session's sandbox rather than Kubernetes. */
-export type SandboxRequirementType = RequirementTypeOf<'filesystem' | 'terraform' | 'linux'>;
+export type SandboxRequirementType = RequirementTypeOf<SandboxFamily>;
 
-export type KubernetesRequirementType = RequirementTypeOf<'kubernetes'>;
+export type KubernetesRequirementType = RequirementTypeOf<KubernetesFamily>;
 
 /** Sandbox checks that additionally need an allow-listed inspection command. */
 export type LinuxRequirementType = RequirementTypeOf<'linux'>;
@@ -2086,7 +2141,7 @@ export function requirementTypesForFamily(family: RequirementFamily): Requiremen
 }
 
 /** Requirement types verified by reading a session's own Docker daemon. */
-export type DockerRequirementType = RequirementTypeOf<'docker'>;
+export type DockerRequirementType = RequirementTypeOf<DockerFamily>;
 
 export const KUBERNETES_REQUIREMENT_TYPES = requirementTypesForFamily(
   'kubernetes',
@@ -2105,25 +2160,31 @@ export function isLinuxRequirementType(value: unknown): value is LinuxRequiremen
 }
 
 export function isDockerRequirementType(value: unknown): value is DockerRequirementType {
-  return isSupportedRequirementType(value) && requirementFamily(value) === 'docker';
+  return isSupportedRequirementType(value) && isDockerFamily(requirementFamily(value));
 }
 
 export function isKubernetesRequirementType(value: unknown): value is KubernetesRequirementType {
-  return isSupportedRequirementType(value) && requirementFamily(value) === 'kubernetes';
+  return isSupportedRequirementType(value) && isKubernetesFamily(requirementFamily(value));
 }
 
-/** True when every requirement in a batch needs the Docker engine reader. */
+/** Requirement types read inside the session's own sandbox container. */
+export function isSandboxRequirementType(value: unknown): value is SandboxRequirementType {
+  return isSupportedRequirementType(value) && isSandboxFamily(requirementFamily(value));
+}
+
+/** True when any requirement in a batch needs the Docker engine reader. */
 export function requirementsNeedDocker(requirements: readonly { type: string }[]): boolean {
-  return requirements.some(
-    (r) => isSupportedRequirementType(r.type) && requirementFamily(r.type) === 'docker',
-  );
+  return requirements.some((r) => isDockerRequirementType(r.type));
 }
 
-/** True when every requirement in a batch needs the Kubernetes API reader. */
+/** True when any requirement in a batch needs the Kubernetes API reader. */
 export function requirementsNeedKubernetes(requirements: readonly { type: string }[]): boolean {
-  return requirements.some(
-    (r) => isSupportedRequirementType(r.type) && requirementFamily(r.type) === 'kubernetes',
-  );
+  return requirements.some((r) => isKubernetesRequirementType(r.type));
+}
+
+/** True when any requirement in a batch needs the sandbox filesystem reader. */
+export function requirementsNeedSandbox(requirements: readonly { type: string }[]): boolean {
+  return requirements.some((r) => isSandboxRequirementType(r.type));
 }
 
 const schemaValues = Object.values(requirementSchemas) as unknown as [

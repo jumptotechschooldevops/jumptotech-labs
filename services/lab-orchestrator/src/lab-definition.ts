@@ -27,6 +27,7 @@ import {
   REQUIREMENT_TYPES,
   requirementSchema,
   type Requirement,
+  type RequirementFamily,
 } from './requirements.js';
 import {
   ISOLATION_MODES,
@@ -170,7 +171,7 @@ export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
  * runs no services, so a Terraform lab asking `port_listening` is an authoring
  * error rather than a check that would quietly never pass.
  */
-export const PROVIDER_REQUIREMENT_FAMILIES: Record<LabProviderId, readonly string[]> = {
+export const PROVIDER_REQUIREMENT_FAMILIES: Record<LabProviderId, readonly RequirementFamily[]> = {
   kubernetes: ['kubernetes'],
   linux: ['filesystem', 'linux'],
   terraform: ['filesystem', 'terraform'],

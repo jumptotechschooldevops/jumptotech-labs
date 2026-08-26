@@ -20,6 +20,7 @@ import {
   requirementsNeedDocker,
   requirementsNeedKubernetes,
 } from '@jumptotech/lab-orchestrator';
+import { InMemoryWorkspace } from '@jumptotech/lab-orchestrator';
 import {
   FakeDockerEngines,
   FakeKubernetes,
@@ -113,6 +114,50 @@ describe('buildRequirementWaiter — substrate routing', () => {
 
     expect(sessionSpy).toHaveBeenCalledWith(sandbox);
     expect(result.ok).toBe(true);
+  });
+
+  it('grades a Docker workspace check against the named session, not the sandbox', async () => {
+    const sandbox = 'jtt-lab-000000000002';
+    const sessionId = 'session-waiter-workspace';
+    const k8s = new FakeKubernetes();
+    const engines = new FakeDockerEngines({ images: ['docker:27-dind'] });
+    const workspace = new InMemoryWorkspace();
+    await workspace.seed(sessionId, [{ path: 'Dockerfile', content: 'FROM alpine\n' }]);
+
+    const waitFor = buildRequirementWaiter({ k8s, engines, workspace });
+    const result = await waitFor({
+      namespace: sandbox,
+      sessionId,
+      requirements: [
+        { type: 'workspace_file_exists' as const, path: 'Dockerfile', label: 'Dockerfile exists' },
+      ],
+      timeoutMs: 2_000,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not hand a workspace to a Kubernetes batch', async () => {
+    const namespace = 'lab-f31fde487e8b';
+    const k8s = new FakeKubernetes({
+      deployments: {
+        [namespace]: [deploymentSnapshot({ name: 'ledger', namespace, availableReplicas: 1 })],
+      },
+    });
+    const workspace = new InMemoryWorkspace();
+    const read = vi.spyOn(workspace, 'read');
+    const engines = { session: vi.fn() } as unknown as FakeDockerEngines;
+
+    const waitFor = buildRequirementWaiter({ k8s, engines, workspace });
+    const result = await waitFor({
+      namespace,
+      sessionId: 'session-kubernetes-only',
+      requirements: K8S_SETUP_REQUIREMENTS,
+      timeoutMs: 2_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(read).not.toHaveBeenCalled();
   });
 });
 
@@ -235,6 +280,73 @@ hints:
 
     const started = await sessions.start('K8S-001', 'user-composition-owner');
     expect(started.session.ownerUserId).toBe('user-composition-owner');
+  });
+});
+
+describe('buildSandboxComposition — workspace routing', () => {
+  let labs: LabRegistry;
+
+  beforeAll(async () => {
+    labs = new LabRegistry(path.join(repoRoot, 'labs'));
+    await labs.load();
+    expect(labs.loadErrors).toEqual([]);
+  });
+
+  it('seeds a Docker lab workspace through the port the composition resolved', async () => {
+    const config = testConfig({ DOCKER_TRACK_ENABLED: 'true' });
+    const built = buildSandboxComposition({
+      config,
+      k8s: new FakeKubernetes(),
+      // No `workspace` injected: this is the production shape, where the
+      // resolved port is the only one that exists.
+      engines: new FakeDockerEngines({ images: [config.policy.docker.image] }),
+      containerRuntime: new FakeContainerRuntime(),
+      sleep: async () => undefined,
+    });
+    expect(built.workspace).toBeInstanceOf(InMemoryWorkspace);
+
+    const sessions = new SessionManager({
+      registry: labs,
+      providers: built.providers,
+      store: new InMemorySessionStore(),
+      policy: config.policy,
+      lifetimes: config.lifetimes,
+      namespaceSecret: config.namespaceSecret,
+    });
+
+    const started = await sessions.start('DOCKER-004', 'user-workspace-routing');
+
+    // DOCKER-004 declares `setup.docker.files: message.txt`. Reading it back
+    // through the composition's own port is what proves the Docker provider
+    // was handed that port rather than falling back to `noopWorkspace`.
+    expect(
+      await built.workspace.read(started.session.sessionId, 'message.txt'),
+    ).toContain('JumpToTech Bank');
+  }, 30_000);
+
+  it('does not pass an undefined workspace through to the provider registry', async () => {
+    const source = await readFile(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/composition.ts'),
+      'utf8',
+    );
+    // `options.workspace` is the test injection point and is undefined in
+    // production; the resolved `workspace` is what every consumer must get.
+    expect(source).not.toMatch(/workspace:\s*options\.workspace/);
+    expect(source).toMatch(/buildProviderRegistry\(\{[\s\S]*?\n\s*workspace,\n/);
+  });
+
+  it('seeds a Docker session workspace through the composed provider', async () => {
+    const config = testConfig({ DOCKER_TRACK_ENABLED: 'true' });
+    const workspace = new InMemoryWorkspace();
+    const built = buildSandboxComposition({
+      config,
+      k8s: new FakeKubernetes(),
+      engines: new FakeDockerEngines({ images: ['docker:27-dind'] }),
+      containerRuntime: new FakeContainerRuntime(),
+      workspace,
+    });
+    expect(built.workspace).toBe(workspace);
+    await expect(built.providers.resolve('docker')).resolves.toMatchObject({ id: 'docker' });
   });
 });
 

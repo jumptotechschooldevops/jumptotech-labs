@@ -57,6 +57,15 @@ export interface BuildProviderRegistryOptions {
   workspace?: WorkspacePort;
   /** Confirms a lab's declared initial state actually materialised. */
   waitForRequirements?: RequirementWaiter;
+  /**
+   * Injected in tests so provisioning does not spend real seconds waiting.
+   *
+   * Production leaves it unset and each provider uses its own real sleep. It
+   * exists so the composition regression suite can exercise *this* graph —
+   * the one production builds — rather than a hand-assembled stand-in that
+   * can drift away from it.
+   */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export function buildProviderRegistry(options: BuildProviderRegistryOptions): ProviderRegistry {
@@ -113,6 +122,7 @@ export function buildProviderRegistry(options: BuildProviderRegistryOptions): Pr
         engines: options.engines,
         sandboxDaemonAvailable: config.dockerEnabled,
         runtimeOwner: config.sandbox.runtimeOwner,
+        ...(options.sleep ? { sleep: options.sleep } : {}),
         ...(options.workspace ? { workspace: options.workspace } : {}),
         ...(options.waitForRequirements
           ? { waitForRequirements: options.waitForRequirements }

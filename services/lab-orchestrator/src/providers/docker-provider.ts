@@ -977,6 +977,9 @@ export class DockerLabProvider implements LabProvider {
       namespace: sandboxRefOf(context),
       requirements,
       timeoutMs: context.lab.setup.verify_timeout_seconds * 1000,
+      // Workspace checks address the student's files by session, not by
+      // sandbox — the two are different names for different things.
+      sessionId: context.sessionId,
     });
     if (!result.ok) {
       const failed = result.checks

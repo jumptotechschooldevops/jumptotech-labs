@@ -26,14 +26,41 @@ export interface CheckResult {
   detail?: string;
 }
 
-/** What a handler returns: a verdict, plus the observation behind it. */
+/**
+ * What a handler returns: a verdict, plus the observation behind it.
+ *
+ * `skipped` is the third state, and it exists because "pass or fail" is not an
+ * honest vocabulary for every outcome. A check the platform *could not
+ * perform* — a reader that cannot answer this particular question, a substrate
+ * feature the provider does not offer — is a platform gap, and reporting it as
+ * a failure blames the student for it. The registry already skips a whole
+ * family when its reader is absent; this lets one handler say the same thing
+ * about one check.
+ *
+ * `ok` stays `false` when skipped so that any caller which only looks at `ok`
+ * still refuses to award a pass. Callers that render results read `skipped`
+ * first — see `verifyRequirement`.
+ */
 export interface HandlerOutcome {
+  /** True when the check could not be performed at all. Never a student's fault. */
+  skipped?: boolean;
   ok: boolean;
   detail?: string;
 }
 
 export function pass(detail?: string): HandlerOutcome {
   return detail === undefined ? { ok: true } : { ok: true, detail };
+}
+
+/**
+ * The platform could not look, so the student is not told they failed.
+ *
+ * The lab loader already refuses a lab whose provider cannot verify its
+ * requirement families, so this is a backstop for the narrower case: the
+ * family is right, but this one observation is unavailable.
+ */
+export function skip(detail: string): HandlerOutcome {
+  return { ok: false, skipped: true, detail };
 }
 
 export function fail(detail: string): HandlerOutcome {

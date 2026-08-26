@@ -71,6 +71,18 @@ export type RequirementWaiter = (input: {
   namespace: string;
   requirements: readonly Requirement[];
   timeoutMs: number;
+  /**
+   * The session whose workspace a check may need to read.
+   *
+   * Optional because most substrates do not have one: a Kubernetes setup check
+   * reads the namespace named above and nothing else. A Docker lab is the
+   * exception — `workspace_file_exists` and `dockerfile_valid` grade files the
+   * student authors in the terminal container, which the workspace port
+   * addresses *by session id*, not by sandbox name. Without this the composed
+   * waiter has a workspace port and no way to say whose workspace it wants, so
+   * those checks can never pass no matter what the provider seeded.
+   */
+  sessionId?: string;
 }) => Promise<{ ok: boolean; checks: Array<{ label: string; status: string; detail?: string }> }>;
 
 /**
