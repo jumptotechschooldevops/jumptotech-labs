@@ -8,11 +8,15 @@
  *   GET /api/me/attempts/:attemptId   one attempt, with the hints it used
  * ```
  *
- * `me` rather than `/api/students/:id` on purpose. There is no authentication
- * yet, and a route that takes a student id in the path would invite exactly the
- * mistake the story warns about: trusting an arbitrary identifier from the
- * client. The subject of these endpoints is always whoever the resolver says
- * the caller is, and the payload states plainly that nobody proved it.
+ * `me` rather than `/api/students/:id` on purpose. A route that takes a student
+ * id in the path invites exactly the mistake this platform refuses to make:
+ * trusting an arbitrary identifier from the client. The subject of these
+ * endpoints is always the authenticated caller, resolved server-side.
+ *
+ * Since PLATFORM-010 that subject is the user the API verified — through a
+ * session cookie or a signed token — rather than a development identity. Where
+ * a deployment still runs without an identity provider, the payload says so:
+ * `authenticated: false` and a `notice` naming what the identity is worth.
  *
  * **Nothing here exposes the database.** No row ids, no column names, no table
  * names, no session ids. Totals come from the in-memory lab catalog and
@@ -199,11 +203,19 @@ export function createMeRoutes(deps: MeRoutesDeps): Router {
     sendOk(res, {
       student: toStudentPayload(identity, durable),
       /*
-       * Said once, in the API, rather than left for the UI to imply: this
-       * identity is a development convenience, not a login.
+       * The notice is now conditional, and that is the point — PLATFORM-010.
+       *
+       * It existed to stop the UI implying a login that did not exist. Where a
+       * caller really has authenticated, repeating it would be the opposite
+       * lie, so it is present only for a development identity: absent means
+       * somebody actually proved who they are.
        */
-      notice:
-        'Development identity. There is no authentication yet, so this history is not protected by a login.',
+      ...(identity.authenticated
+        ? {}
+        : {
+            notice:
+              'Development identity. Nobody proved who this is, so this history is not protected by a login.',
+          }),
     });
   }));
 

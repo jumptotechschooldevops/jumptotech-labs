@@ -164,9 +164,19 @@ function buildApp(options: { repository?: InMemoryProgressRepository | BrokenPro
 }
 
 /** Start a lab as a given student, returning the session and attempt payloads. */
-async function start(app: Express, labId: string, studentId?: string) {
+/**
+ * Who a request is, as a credential rather than as a claim — PLATFORM-010.
+ *
+ * These tests used `x-dev-student-id`, a header the *client* chose. That is
+ * precisely what no longer selects a student: learning history follows the
+ * authenticated user, so a student is now named the only way anything names one
+ * — by authenticating as them.
+ */
+const asStudent = (name: string) => `Developer ${name}`;
+
+async function start(app: Express, labId: string, student?: string) {
   const call = request(app).post(`/api/labs/${labId}/start`);
-  if (studentId) call.set('x-dev-student-id', studentId);
+  if (student) call.set('Authorization', asStudent(student));
   const response = await call;
   expect(response.status, JSON.stringify(response.body)).toBe(200);
   return response.body.data as {
@@ -175,9 +185,9 @@ async function start(app: Express, labId: string, studentId?: string) {
   };
 }
 
-function as(app: Express, method: 'get' | 'post', url: string, studentId?: string) {
+function as(app: Express, method: 'get' | 'post', url: string, student?: string) {
   const call = request(app)[method](url);
-  return studentId ? call.set('x-dev-student-id', studentId) : call;
+  return student ? call.set('Authorization', asStudent(student)) : call;
 }
 
 // --- starting a lab records an attempt (test requirement 2) ------------------
@@ -542,20 +552,22 @@ describe('students have independent progress', () => {
   it('keeps two development students entirely separate', async () => {
     const { app, runtime } = buildApp();
 
-    const alice = await start(app, 'LINUX-001', 'dev-student-001');
+    const alice = await start(app, 'LINUX-001', 'alice');
     completeLinuxLab(runtime, alice.session.sandboxRef);
-    await request(app).post(`/api/sessions/${alice.session.sessionId}/check`);
+    // The check runs as Alice: since PLATFORM-010 nobody else may check her
+    // session, which is the same rule the authorization suite proves.
+    await as(app, 'post', `/api/sessions/${alice.session.sessionId}/check`, 'alice');
 
-    const bob = await start(app, 'LINUX-001', 'dev-student-002');
+    const bob = await start(app, 'LINUX-001', 'bob');
 
-    const aliceProgress = await as(app, 'get', '/api/me/progress', 'dev-student-001');
-    const bobProgress = await as(app, 'get', '/api/me/progress', 'dev-student-002');
+    const aliceProgress = await as(app, 'get', '/api/me/progress', 'alice');
+    const bobProgress = await as(app, 'get', '/api/me/progress', 'bob');
 
     expect(aliceProgress.body.data.overall.completed).toBe(1);
     expect(bobProgress.body.data.overall.completed).toBe(0);
     expect(bobProgress.body.data.overall.inProgress).toBe(1);
 
-    const bobAttempts = await as(app, 'get', '/api/me/attempts', 'dev-student-002');
+    const bobAttempts = await as(app, 'get', '/api/me/attempts', 'bob');
     expect(bobAttempts.body.data.attempts).toHaveLength(1);
     expect(bobAttempts.body.data.attempts[0].attemptId).toBe(bob.attempt.attemptId);
 
@@ -564,33 +576,52 @@ describe('students have independent progress', () => {
       app,
       'get',
       `/api/me/attempts/${String(alice.attempt.attemptId)}`,
-      'dev-student-002',
+      'bob',
     );
     expect(stolen.status).toBe(404);
   });
 
-  it('never takes a student id from a query parameter or a body', async () => {
+  it('never takes a student id from a query parameter, a body, or a header', async () => {
     const { app } = buildApp();
 
-    // Every way a client might try to name somebody else.
+    /*
+     * Every way a client might try to name somebody else — including the
+     * development header, which used to work and deliberately no longer does.
+     * The attempt is attributed to whoever authenticated, and nothing else.
+     */
     const response = await request(app)
-      .post('/api/labs/K8S-001/start?studentId=dev-student-999')
-      .send({ studentId: 'dev-student-999', student: 'dev-student-999' });
+      .post('/api/labs/K8S-001/start?studentId=someone-else')
+      .set('Authorization', asStudent('alice'))
+      .set('x-dev-student-id', 'someone-else')
+      .send({ studentId: 'someone-else', student: 'someone-else' });
     expect(response.status).toBe(200);
 
-    const victim = await as(app, 'get', '/api/me/attempts', 'dev-student-999');
+    // The named victim has nothing, because naming somebody achieves nothing.
+    const victim = await as(app, 'get', '/api/me/attempts', 'someone-else');
     expect(victim.body.data.attempts).toEqual([]);
 
-    const actual = await request(app).get('/api/me/attempts');
+    // Alice has it, and the header did not move it.
+    const actual = await request(app)
+      .get('/api/me/attempts')
+      .set('Authorization', asStudent('alice'))
+      .set('x-dev-student-id', 'someone-else');
     expect(actual.body.data.attempts).toHaveLength(1);
-    expect(actual.body.data.student.studentId).toBe('dev-student-001');
+    expect(actual.body.data.student.authenticated).toBe(true);
+    expect(actual.body.data.student.identitySource).toBe('authenticated');
   });
 
-  it('rejects a malformed development identity rather than guessing', async () => {
+  it('gives each authenticated identity its own history', async () => {
     const { app } = buildApp();
-    const response = await as(app, 'get', '/api/me/progress', 'Robert; DROP TABLE students');
-    expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe('INVALID_STUDENT_ID');
+
+    await start(app, 'K8S-001', 'alice');
+
+    const alice = await as(app, 'get', '/api/me/attempts', 'alice');
+    const bob = await as(app, 'get', '/api/me/attempts', 'bob');
+
+    expect(alice.body.data.attempts).toHaveLength(1);
+    expect(bob.body.data.attempts).toEqual([]);
+    // Two identities, two student ids, neither chosen by the client.
+    expect(alice.body.data.student.studentId).not.toBe(bob.body.data.student.studentId);
   });
 });
 
@@ -674,20 +705,26 @@ describe('progress works for every track', () => {
 // --- the API surface ---------------------------------------------------------
 
 describe('the progress API', () => {
-  it('describes the identity honestly', async () => {
+  it('describes an authenticated identity honestly', async () => {
     const { app } = buildApp();
-    const response = await request(app).get('/api/me');
+    const response = await request(app).get('/api/me').set('Authorization', asStudent('alice'));
 
     expect(response.status).toBe(200);
     expect(response.body.data.student).toMatchObject({
-      studentId: 'dev-student-001',
-      authenticated: false,
-      identitySource: 'development-default',
+      authenticated: true,
+      identitySource: 'authenticated',
       // This harness is memory-backed and the API says so rather than
       // implying the history is safe.
       durable: false,
     });
-    expect(response.body.data.notice).toMatch(/no authentication/i);
+    // The student id is derived server-side and is nothing the caller chose.
+    expect(response.body.data.student.studentId).not.toBe('alice');
+    /*
+     * No development notice for somebody who really signed in. It said "there
+     * is no authentication yet", and repeating that to an authenticated caller
+     * would be exactly the kind of dishonesty it existed to prevent.
+     */
+    expect(response.body.data.notice).toBeUndefined();
   });
 
   it('serves an empty, honest dashboard for a student with no history', async () => {

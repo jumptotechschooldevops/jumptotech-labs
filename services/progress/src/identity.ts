@@ -1,32 +1,34 @@
 /**
- * Development student identity.
+ * Who a piece of learning history belongs to.
  *
- * ⚠️  THIS IS NOT AUTHENTICATION. ⚠️
+ * PLATFORM-005 persisted history and needed an owner before there was a login,
+ * so it introduced a *development identity*: a fixed student id configured
+ * server-side, optionally overridable by a request header for local
+ * multi-student testing.
  *
- * PLATFORM-005 persists learning history, and history needs an owner. There is
- * no login yet, so the platform uses a *development identity*: a fixed student
- * id configured server-side (`dev-student-001` by default), optionally
- * overridable by a request header when the deployment explicitly switches that
- * on for local multi-student testing.
+ * **PLATFORM-010 replaced that as the primary path.** History now follows the
+ * authenticated user: `apps/api/src/identity.ts` derives the student id from
+ * `req.user` through `studentIdForUser` below, and the development resolver is
+ * consulted only when there is no authenticated caller at all. In particular
+ * the `x-dev-student-id` header can no longer select an authenticated student's
+ * history — a browser-supplied identifier chooses nobody.
  *
- * What this means, stated plainly rather than dressed up:
+ * ⚠️  `DevStudentIdentity` is still NOT authentication. ⚠️
  *
- *   - Nobody proves who they are. Anyone who can reach the API is the
- *     development student, and — where the override is enabled — anyone can
- *     name any other student and read that student's progress.
- *   - So this must not be enabled on any deployment holding real learner data.
- *     `allowHeaderOverride` defaults to false and the composition root only
- *     turns it on outside production; see `apps/api/src/config.ts`.
- *   - Nothing else in the platform is gated on identity. Sandbox access is
- *     still authorised by possession of the session id exactly as PLATFORM-002
- *     described, and a student id grants no access to anyone's sandbox.
+ * Where it is reached — a deployment running with no identity provider — it
+ * accepts whoever the caller says they are, so:
  *
- * What is already true, and stays true when real authentication arrives: every
- * persistence call takes a `studentId` that was produced *here*, by a resolver,
- * from a validated source — never a raw string lifted out of a query parameter
- * or a JSON body inside a route handler. Replacing this class with one that
- * reads a verified session cookie or a JWT subject is the whole migration; no
- * repository, service, or route signature changes.
+ *   - it must not be enabled on any deployment holding real learner data;
+ *   - `allowHeaderOverride` defaults to false, and the composition root only
+ *     turns it on outside production (see `apps/api/src/config.ts`);
+ *   - the API refuses to start with `AUTH_MODE=development` when
+ *     `NODE_ENV=production`.
+ *
+ * What was true before and remains true: every persistence call takes a
+ * `studentId` produced *here*, by a resolver, from a validated source — never a
+ * raw string lifted out of a query parameter or a JSON body inside a route
+ * handler. That is what made the PLATFORM-010 migration a one-file change, with
+ * no repository, service, or route signature altered.
  */
 import { ProgressError } from './types.js';
 
@@ -52,16 +54,27 @@ export function assertValidStudentId(value: unknown): string {
   return raw;
 }
 
-/** How a request's student identity was established. */
-export type IdentitySource = 'development-default' | 'development-header';
+/**
+ * How a request's student identity was established.
+ *
+ * `authenticated` arrived with PLATFORM-010: the student is the user the API
+ * verified, so learning history finally has a real owner. The two
+ * `development-*` values remain for deployments running without an identity
+ * provider, and are the only ones for which `authenticated` is false.
+ */
+export type IdentitySource = 'development-default' | 'development-header' | 'authenticated';
 
 export interface StudentIdentity {
   studentId: string;
   /**
-   * Always false in PLATFORM-005, and served to the client on purpose: the UI
-   * says "development identity" rather than implying a signed-in user.
+   * Whether anybody proved this identity.
+   *
+   * Served to the client on purpose. Before PLATFORM-010 it was always false
+   * and the UI said "development identity" rather than implying a signed-in
+   * user; it is now true whenever the request carried a verified credential,
+   * and the UI can stop hedging.
    */
-  authenticated: false;
+  authenticated: boolean;
   source: IdentitySource;
 }
 
@@ -97,6 +110,38 @@ export interface DevStudentIdentityOptions {
    * independent progress" before login exists.
    */
   allowHeaderOverride?: boolean;
+}
+
+/**
+ * A student id derived from an authenticated user — PLATFORM-010.
+ *
+ * The seam this file's header always described:
+ *
+ * > *"Replacing this class with one that reads a verified session cookie or a
+ * > JWT subject is the whole migration; no repository, service, or route
+ * > signature changes."*
+ *
+ * That is what this is, and the promise held: no repository, service or route
+ * signature changed.
+ *
+ * ## Why the internal `userId`, and not the OIDC subject
+ *
+ * A subject is only unique *within an issuer*, so two providers could collide;
+ * subjects are also frequently email-shaped, which would put a personal
+ * identifier in every history row and every log line. `userId` is the platform's
+ * own surrogate key, already stable across email and display-name changes, and
+ * already the thing session ownership is expressed in — so history and
+ * ownership now agree on who a person is.
+ */
+export function studentIdForUser(userId: string): string {
+  const normalised = userId.trim().toLowerCase();
+  // `usr-00000001` already matches STUDENT_ID_PATTERN. A provider-shaped id
+  // with characters the pattern excludes is folded rather than rejected: the
+  // caller is authenticated, so refusing them their own history would be a bug,
+  // not a defence.
+  const safe = normalised.replace(/[^a-z0-9._-]/g, '-');
+  const padded = safe.length >= 3 ? safe : `usr-${safe}`;
+  return assertValidStudentId(padded.slice(0, 64));
 }
 
 export class DevStudentIdentity implements StudentIdentityResolver {

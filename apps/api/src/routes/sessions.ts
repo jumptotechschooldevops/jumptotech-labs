@@ -10,17 +10,20 @@ import type { SessionGuard } from '../auth/middleware.js';
  *   DELETE /api/sessions/:sessionId            End Lab
  * ```
  *
- * **Authorization, honestly labelled.** PLATFORM-002 has no user
- * authentication. Possessing the session id is what authorises these calls, and
- * that is an MVP mechanism, NOT production authentication — it is why session
- * ids are 64 bits of `crypto.randomBytes` rather than a counter. Real identity
- * arrives in a later story; until then this is documented as a limitation in
- * the README rather than dressed up as security.
+ * **Authorization.** Every route here goes through `sessionGuard`, which
+ * resolves the session *and* proves the caller owns it in one step — so a
+ * handler cannot hold a record it was not authorised for. Ownership is the
+ * stored `ownerUserId` matched against the authenticated caller; possessing the
+ * session id is worth nothing on its own, which is the point (PLATFORM-009).
  *
- * What is *already* true, and stays true when auth arrives: the namespace is
- * never an input. It is looked up from the session record on every request, so
- * learning or guessing a namespace name grants nothing at all — there is no
- * route that accepts one.
+ * A caller asking about somebody else's session gets exactly what they get for
+ * one that does not exist — 404. Distinguishing them would confirm the id is
+ * real and turn guessing into enumeration.
+ *
+ * What was already true before identity existed, and is still true: the
+ * namespace is never an input. It is looked up from the session record on every
+ * request, so learning or guessing a namespace name grants nothing at all —
+ * there is no route that accepts one.
  */
 import { Router, type Response } from 'express';
 import {
