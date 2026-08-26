@@ -1,0 +1,56 @@
+# K8S-014 initial state — the release K8S-013 left in production.
+#
+# Identical in shape to the K8S-013 fixture, and deliberately so: this lab
+# continues the same incident, and the two-label immutable selector is again
+# what makes "update the object you were given" the only route that passes.
+#
+# `revisionHistoryLimit` is left at the Kubernetes default of 10 rather than
+# tightened, because the whole lab depends on a previous revision still being
+# there to roll back to.
+#
+# Resources are declared for the reason K8S-013 documents: a RollingUpdate
+# surges to replicas + maxSurge Pods, each charged against the session
+# ResourceQuota's limits.*, and a container that declares nothing inherits the
+# LimitRange default of 1 CPU / 1Gi. This lab surges twice — once rolling
+# forward into the bad release, once rolling back — so the headroom matters
+# even more here than it did there.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  labels:
+    app: payments-api
+    tier: api
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 3
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      app: payments-api
+      tier: api
+  template:
+    metadata:
+      labels:
+        app: payments-api
+        tier: api
+    spec:
+      containers:
+        - name: api
+          image: nginx:1.28-alpine
+          ports:
+            - name: http
+              containerPort: 80
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 2

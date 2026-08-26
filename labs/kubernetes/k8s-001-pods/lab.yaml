@@ -122,8 +122,29 @@ skills:
   - kubernetes.pods.create
   - kubernetes.pods.inspect
 
+# ---------------------------------------------------------------------------
+# CLASSIFICATION (official-source curriculum policy)
+#
+# classification:      FOUNDATIONAL SKILL
+# official_objective:  none. No CKA v1.35 competency bullet covers "create a
+#                      Pod". The Pod is the object the other objectives are
+#                      *expressed in*, so this lab exists to build the model the
+#                      rest of the track assumes — not to serve a bullet.
+# objective_version:   checked against CKA v1.35 (CNCF curriculum)
+# official_source:     https://training.linuxfoundation.org/certification/certified-kubernetes-administrator-cka/
+#                      https://github.com/cncf/curriculum
+# technical_docs:      https://kubernetes.io/docs/concepts/workloads/pods/
+#                      https://kubernetes.io/docs/reference/kubectl/
+# last_verified:       2026-08-23
+#
+# `relevant: false` is accuracy, not a demotion. It stops the catalog and
+# `GET /api/labs` advertising a CKA badge this lab does not earn; the lab, its
+# content, and its place as lab one are unchanged.
+#
+# Recorded as a comment because `labDefinitionSchema` is `.strict()`. A shared
+# source-metadata contract is being designed across all tracks; this moves into
+# real fields then.
+# ---------------------------------------------------------------------------
 certification:
   - certification: CKA
-    relevant: true
-    domains:
-      - workloads-and-scheduling
+    relevant: false

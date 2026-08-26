@@ -68,6 +68,24 @@ export interface ContainerSnapshot {
   reason?: string;
   /** `spec.containers[].resources`, verbatim quantity strings. */
   resources?: ResourceRequirementsSnapshot;
+  /** `command` — the container's entrypoint override. */
+  command?: string[];
+  /** `args` — arguments passed to the entrypoint. */
+  args?: string[];
+  /** This container's own `volumeMounts`, in declaration order. */
+  volumeMounts?: ContainerVolumeMountSnapshot[];
+  /**
+   * The container's OWN `restartPolicy`, not the Pod's.
+   *
+   * Only init containers may set this, and only to `Always`, which is what
+   * makes one a native sidecar: it starts in init order but keeps running
+   * alongside the app instead of having to complete. A Pod-level
+   * `restartPolicy` is a different field with a different meaning and is
+   * deliberately not folded in here — every Deployment's template carries
+   * `Always` at Pod level, so conflating them would make every init container
+   * look like a sidecar.
+   */
+  restartPolicy?: string;
   /** Probes declared on this container. Optional so older fixtures stay valid. */
   probes?: ProbeSnapshot[];
 }
@@ -89,6 +107,46 @@ export interface AffinityTermSnapshot {
   matchLabels: Record<string, string>;
 }
 
+/**
+ * One `volumeMounts[]` entry, attributed to the container that declares it.
+ *
+ * Distinct from `VolumeMountSnapshot`, which is flattened across every
+ * container of a workload and therefore cannot say *which* container mounts
+ * what. That flattening is fine for `workload_mounts_pvc` — "does this workload
+ * mount this claim somewhere" — and useless for a sidecar, where the whole
+ * question is whether two specific containers share one volume.
+ */
+export interface ContainerVolumeMountSnapshot {
+  name: string;
+  mountPath: string;
+  readOnly?: boolean;
+  subPath?: string;
+}
+
+/**
+ * A volume declared on a Pod spec, and what backs it.
+ *
+ * `source` is the discriminator a lab actually cares about: an `emptyDir`
+ * shared between two containers is a different teaching point from a projected
+ * Secret, even though both are "a volume named x".
+ */
+export interface VolumeSourceSnapshot {
+  name: string;
+  source:
+    | 'emptyDir'
+    | 'configMap'
+    | 'secret'
+    | 'projected'
+    | 'persistentVolumeClaim'
+    | 'hostPath'
+    | 'downwardAPI'
+    | 'other';
+  /** Claim, ConfigMap or Secret name, when the source names one. */
+  sourceName?: string;
+  /** `emptyDir.medium`, e.g. `Memory`. */
+  medium?: string;
+}
+
 export interface VolumeMountSnapshot {
   name: string;
   mountPath: string;
@@ -103,6 +161,10 @@ export interface PodSnapshot {
   phase: string;
   labels: Record<string, string>;
   containers: ContainerSnapshot[];
+  /** `spec.volumes` with their sources, so a mount can be traced to what backs it. */
+  volumes?: VolumeSourceSnapshot[];
+  /** `spec.initContainers`, in declaration order — which is run order. */
+  initContainers?: ContainerSnapshot[];
   /** Set while the Pod is terminating. */
   deleting: boolean;
   /** True when every container reports Ready. */
@@ -136,9 +198,21 @@ export interface DeploymentSnapshot {
   /** `status.replicas` — total pods owned, including old ones mid-rollout. */
   currentReplicas: number;
   labels: Record<string, string>;
+  /**
+   * `metadata.annotations`, as the API reports them.
+   *
+   * Optional so every existing snapshot builder and test fake stays valid;
+   * a reader that does not populate it is indistinguishable from an object
+   * that carries none, which is the honest reading either way.
+   */
+  annotations?: Record<string, string>;
   selector: Record<string, string>;
   podLabels: Record<string, string>;
   containers: ContainerSnapshot[];
+  /** `spec.volumes` with their sources, so a mount can be traced to what backs it. */
+  volumes?: VolumeSourceSnapshot[];
+  /** Pod template `spec.initContainers`, in declaration order. */
+  initContainers?: ContainerSnapshot[];
   conditions: Array<{ type: string; status: string; reason?: string; message?: string }>;
   generation: number;
   observedGeneration: number;
@@ -150,6 +224,19 @@ export interface DeploymentSnapshot {
    * what the student declared.
    */
   configRefs?: ConfigReference[];
+  /**
+   * `spec.strategy`, as the API server stores it.
+   *
+   * Always populated on a live object: the API defaults an unset strategy to
+   * RollingUpdate with 25% surge and 25% unavailable, and drops `rollingUpdate`
+   * entirely for Recreate. `maxSurge` / `maxUnavailable` are IntOrString, so
+   * either an absolute count (`1`) or a percentage (`"25%"`).
+   */
+  strategy?: {
+    type: string;
+    maxSurge?: number | string;
+    maxUnavailable?: number | string;
+  };
   /** Pod template `spec.nodeSelector`. */
   nodeSelector?: Record<string, string>;
   /** Pod template `spec.tolerations`. */
@@ -361,6 +448,14 @@ export interface StatefulSetSnapshot {
   readyReplicas: number;
   serviceName?: string;
   labels: Record<string, string>;
+  /**
+   * `metadata.annotations`, as the API reports them.
+   *
+   * Optional so every existing snapshot builder and test fake stays valid;
+   * a reader that does not populate it is indistinguishable from an object
+   * that carries none, which is the honest reading either way.
+   */
+  annotations?: Record<string, string>;
   selector: Record<string, string>;
   containers: ContainerSnapshot[];
   volumeClaimTemplates: StatefulSetVolumeClaimTemplateSnapshot[];
@@ -374,6 +469,14 @@ export interface DaemonSetSnapshot {
   desiredScheduled: number;
   numberReady: number;
   selector: Record<string, string>;
+  /**
+   * `metadata.annotations`, as the API reports them.
+   *
+   * Optional so every existing snapshot builder and test fake stays valid;
+   * a reader that does not populate it is indistinguishable from an object
+   * that carries none, which is the honest reading either way.
+   */
+  annotations?: Record<string, string>;
   containers: ContainerSnapshot[];
   deleting: boolean;
 }

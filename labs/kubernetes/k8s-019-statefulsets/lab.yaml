@@ -1,0 +1,256 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# K8S-019 teaches the StatefulSet by handing the student a database run as a
+# Deployment — the shape that looks fine in review and fails in production.
+# Three things are wrong and they fail in three different ways: Pod names are
+# random so no client can address a replica; both replicas share one
+# ReadWriteOnce claim so the second cannot attach it; and the Service has a
+# virtual IP so "give me replica 0" is unanswerable.
+#
+# The fixture is left at 1/2 available on purpose. That is not a contrived
+# break — it is precisely what a shared RWO claim produces — and it is the
+# symptom that sends a student looking for a different controller rather than
+# for a typo.
+#
+# ---------------------------------------------------------------------------
+# ONE COHERENT WORKLOAD, NOT SIX INDEPENDENT CHECKS
+#
+# The risk with a lab this size is that unrelated objects satisfy separate
+# requirements: a headless Service here, a StatefulSet there, no relationship
+# between them. The requirements are chosen so all three links are graded, and
+# each is a real Kubernetes reference rather than a naming convention:
+#
+#   StatefulSet -> Service   `statefulset_service_name` pins `.spec.serviceName`
+#                            to `ledger-db`, and `service_headless` is asserted
+#                            of the Service by that name. A decoy headless
+#                            Service under another name satisfies neither.
+#   Service -> Pods          `service_selector` pins the selector, and
+#                            `service_endpoints` requires two *ready* backend
+#                            addresses — which only exist if the Service really
+#                            selects the StatefulSet's Pods and they are up.
+#   StatefulSet -> storage   `statefulset_volume_claim_template` pins the
+#                            template's name, access mode and size, so
+#                            per-replica storage is graded rather than assumed.
+#
+# `service_endpoints` is the check that makes the whole thing cohere: it cannot
+# be satisfied by any arrangement of decoys, because the endpoints controller
+# only populates it from Pods that the named Service actually selects.
+#
+# ---------------------------------------------------------------------------
+# SOURCE METADATA (official-source curriculum policy)
+#
+# Carried as a comment, not as fields: `labDefinitionSchema` is `.strict()`.
+#
+# classification:       CERTIFICATION OBJECTIVE
+# certification:        CKA
+# objective_version:    v1.35 (CNCF curriculum, Kubernetes v1.35)
+# official_objective:   "Understand primitives for robust, self-healing
+#                        application deployments" — Workloads & Scheduling (15%)
+# secondary_objective:  Storage — "Manage persistent volumes and persistent
+#                        volume claims", through volumeClaimTemplates. Claimed
+#                        as secondary; K8S-011 covers the PVC bullet directly.
+# production_skill:     Recognising that stable identity, per-replica storage
+#                        and per-replica addressing are one design decision,
+#                        not three independent settings.
+# foundational:         Why a load-balanced virtual IP and an addressable
+#                        individual replica are mutually exclusive.
+#
+# official_documentation:
+#   - https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/
+#     verified 2026-08-25: StatefulSets give stable, unique network identifiers
+#     and stable persistent storage; they require a Headless Service to be
+#     responsible for the network identity of the Pods; `volumeClaimTemplates`
+#     provide stable storage using PersistentVolumes.
+#   - https://kubernetes.io/docs/concepts/services-networking/service/#headless-services
+#     verified 2026-08-25: a headless Service is created by setting
+#     `.spec.clusterIP` to `None`; no cluster IP is allocated and DNS returns
+#     the Pod IPs directly.
+#   - https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+# last_verified:        2026-08-25
+# ---------------------------------------------------------------------------
+id: K8S-019
+slug: k8s-019-statefulsets
+title: Give a Database Stable Identity and Storage
+track: kubernetes
+topic: workloads
+difficulty: intermediate
+level: challenge
+duration_minutes: 45
+order: 19
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-011
+  - K8S-018
+
+story: >
+  `ledger-db` has been stuck at one replica out of two for a week.
+
+  It was written as a Deployment, because that is what everything else at the
+  bank is. Both replicas mount the same PersistentVolumeClaim, and the second
+  one has never started — the volume is already attached to the first, and a
+  ReadWriteOnce claim will not attach twice.
+
+  The team's proposed fix is to give the second replica its own claim by hand.
+  That would start the Pod, and it would still leave them unable to answer the
+  question the ledger client actually asks: "connect me to replica 0". A
+  Deployment's Pods are named at random and sit behind one virtual IP, so there
+  is no such thing as replica 0.
+
+  This workload needs a controller that treats replicas as individuals.
+
+objectives:
+  - Explain what a StatefulSet guarantees that a Deployment does not
+  - Create the headless Service that gives StatefulSet Pods their DNS names
+  - Use volumeClaimTemplates to give every replica its own storage
+  - Read a StatefulSet's identity guarantees from its Pod names and claims
+
+task:
+  summary: Replace the ledger-db Deployment with a StatefulSet that has stable identity, its own governing Service, and per-replica storage.
+  description: >
+    Start by confirming the diagnosis rather than trusting it. Look at how many
+    replicas are available and why the missing one is not starting, at what the
+    running Pods are called, and at what the current Service resolves to.
+
+    Then rebuild `ledger-db` as the controller meant for workloads whose
+    replicas are not interchangeable. It must:
+
+    keep the name `ledger-db` and the image `nginx:1.28-alpine`;
+
+    run two replicas, both Ready;
+
+    be governed by a Service named `ledger-db` that has no cluster IP of its
+    own, so DNS resolves each replica individually instead of load balancing
+    across them — note that the existing Service is the wrong kind and cannot
+    simply be edited into the right one, because a Service's clusterIP is fixed
+    once assigned;
+
+    give each replica its own 1Gi ReadWriteOnce volume through a claim template
+    named `data`, rather than sharing one claim;
+
+    and keep selecting Pods labelled `app=ledger-db`, so the Service and the
+    workload still refer to each other.
+
+    The old Deployment and the shared claim should not survive — leaving them
+    in place keeps the very conflict you were asked to remove.
+
+    When it is working, look at the Pod names and at
+    `kubectl get pvc`. Both should look different from anything a Deployment
+    would have produced, and the difference is the point of the lab.
+
+setup:
+  manifests:
+    - setup/ledger-db.yaml
+  verify:
+    - type: deployment_exists
+      name: ledger-db
+    - type: service_exists
+      name: ledger-db
+    - type: pvc_exists
+      name: ledger-shared-data
+  verify_timeout_seconds: 240
+
+# Graded on live Kubernetes state, and on the relationships between objects
+# rather than on names alone. `service_endpoints` is the check that ties the
+# Service to the StatefulSet's Pods: the endpoints controller only populates it
+# from Pods the Service actually selects, so no decoy satisfies it.
+requirements:
+  - type: statefulset_exists
+    name: ledger-db
+    label: A StatefulSet named ledger-db exists
+  - type: statefulset_image
+    name: ledger-db
+    image: nginx:1.28-alpine
+    label: The StatefulSet runs the ledger image
+  - type: statefulset_replicas
+    name: ledger-db
+    replicas: 2
+    label: Two replicas are requested
+  - type: statefulset_service_name
+    name: ledger-db
+    serviceName: ledger-db
+    label: The StatefulSet names ledger-db as its governing Service
+  - type: service_exists
+    name: ledger-db
+    label: The governing Service exists
+  - type: service_headless
+    name: ledger-db
+    label: The governing Service is headless, so replicas get their own DNS names
+  - type: service_selector
+    name: ledger-db
+    selector:
+      app: ledger-db
+    label: The Service selects the ledger-db Pods
+  - type: statefulset_volume_claim_template
+    name: ledger-db
+    claimName: data
+    accessModes:
+      - ReadWriteOnce
+    storage: 1Gi
+    label: Each replica gets its own 1Gi volume from a claim template
+  - type: statefulset_ready
+    name: ledger-db
+    min_ready: 2
+    label: Both replicas are Ready
+  - type: service_endpoints
+    name: ledger-db
+    min_ready: 2
+    label: The Service resolves to both ready replicas
+  - type: resource_absent
+    kind: deployment
+    name: ledger-db
+    label: The old ledger-db Deployment is gone
+  - type: resource_absent
+    kind: persistentvolumeclaim
+    name: ledger-shared-data
+    label: The shared claim that caused the conflict is gone
+
+hints:
+  - level: 1
+    text: >
+      Two of the three problems come from the same source: a Deployment treats
+      its Pods as interchangeable copies. Ask what would have to be true for
+      "replica 0" to be a meaningful address, and which controller makes it so.
+  - level: 2
+    text: >
+      The controller you want needs a Service to own the network identity of
+      its Pods, and that Service has to be of a particular kind — one with no
+      virtual IP, so DNS returns Pod addresses rather than balancing across
+      them. Consult the StatefulSet documentation for how the two objects
+      reference each other, and the Services documentation for how that kind of
+      Service is declared. Storage is declared on the workload itself, not as a
+      separate object you create up front.
+  - level: 3
+    text: >
+      Delete the Deployment and the shared claim, and replace the Service with
+      one that sets `clusterIP: None` — you cannot edit the existing one,
+      because a clusterIP is immutable once assigned. Then create a StatefulSet
+      whose `serviceName` is `ledger-db`, with `replicas: 2` and a
+      `volumeClaimTemplates` entry named `data` requesting 1Gi ReadWriteOnce.
+      Kubernetes will create `data-ledger-db-0` and `data-ledger-db-1` for you;
+      you never create those claims yourself.
+
+references:
+  - title: StatefulSets
+    url: https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/
+  - title: Headless Services
+    url: https://kubernetes.io/docs/concepts/services-networking/service/#headless-services
+  - title: Persistent Volumes
+    url: https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+
+skills:
+  - kubernetes.statefulsets.create
+  - kubernetes.services.headless
+  - kubernetes.storage.volume-claim-templates
+  - kubernetes.workloads.controllers
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling
+      - storage

@@ -472,6 +472,8 @@ export function deploymentSnapshot(overrides: Partial<DeploymentSnapshot> = {}):
   return {
     name: 'frontend',
     namespace: 'lab-000000000001',
+    annotations: {},
+    strategy: { type: 'RollingUpdate', maxSurge: '25%', maxUnavailable: '25%' },
     desiredReplicas: desired,
     readyReplicas: desired,
     availableReplicas: desired,

@@ -1,0 +1,81 @@
+# K8S-016 initial state — a workload that cannot start, and says why.
+#
+# The container serves /usr/share/nginx/html, which an emptyDir mounts over.
+# The volume is empty, so nginx has a document root with no index page: the
+# readiness probe requests /index.html, gets 404, and the Pod never becomes
+# Ready. The Deployment therefore reports 0/2 available forever.
+#
+# The failure is deliberately *not* a crash. A CrashLoopBackOff would point a
+# student straight at the container; this looks healthy in `kubectl get pods`
+# (1/1 Running is not the same as Ready) and only `describe` and the probe
+# events explain it. Working out that the missing thing is *content*, not
+# configuration, is the diagnosis this lab is teaching.
+#
+# The emptyDir is already here on purpose. Sharing a volume between an init
+# container and the app container is the mechanism being taught, so the lab
+# gives the student the shared volume and asks for the init container — not the
+# other way round.
+#
+# Resources are declared for the reason K8S-013 documents: an init container
+# is charged against the ResourceQuota while it runs, and effective Pod
+# requests are the max of the init and app containers rather than their sum.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reporting-api
+  labels:
+    app: reporting-api
+    tier: api
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 2
+  # An explicit rolling-update bound, and it is load-bearing rather than style.
+  #
+  # The seeded Pods are Running but never Ready — that is the whole premise of
+  # the lab. With the API default of `maxUnavailable: 25%`, two replicas round
+  # DOWN to zero unavailable, so Kubernetes may refuse to retire the un-Ready
+  # old Pods while `maxSurge` caps the new ReplicaSet at one. A student who
+  # tries the obvious wrong answer first (doing the work in an app container),
+  # then corrects it, lands in exactly that state and watches a correct fix
+  # stall at 1/2 with ProgressDeadlineExceeded — blocked by something that has
+  # nothing to do with init containers.
+  #
+  # Reproduced on a live cluster: shortcut-then-correct deadlocks at 0/2 under
+  # the default strategy. Allowing one unavailable replica lets a never-Ready
+  # Pod be replaced, so iterating toward the right answer always converges.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: reporting-api
+      tier: api
+  template:
+    metadata:
+      labels:
+        app: reporting-api
+        tier: api
+    spec:
+      volumes:
+        - name: site
+          emptyDir: {}
+      containers:
+        - name: api
+          image: nginx:1.28-alpine
+          ports:
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: site
+              mountPath: /usr/share/nginx/html
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          readinessProbe:
+            httpGet:
+              path: /index.html
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 3

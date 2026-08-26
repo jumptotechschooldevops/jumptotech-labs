@@ -68,12 +68,14 @@ import {
   deploymentResources,
   deploymentRolloutComplete,
   deploymentSelector,
+  deploymentStrategy,
   deploymentUsesConfigMap,
   deploymentUsesSecret,
 } from './handlers/deployments.js';
 import {
   serviceEndpoints,
   serviceExists,
+  serviceHeadless,
   servicePort,
   serviceSelector,
   serviceType,
@@ -162,6 +164,7 @@ import {
   hpaTarget,
 } from './handlers/hpa.js';
 import { serviceHttp, serviceTcp } from './handlers/reachability.js';
+import { workloadAnnotation, workloadContainer, workloadVolumeMount } from './handlers/metadata.js';
 import {
   directoryExists,
   fileContent,
@@ -245,6 +248,7 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
   deployment_available: deploymentAvailable,
   deployment_rollout_complete: deploymentRolloutComplete,
   deployment_selector: deploymentSelector,
+  deployment_strategy: deploymentStrategy,
   deployment_resources: deploymentResources,
   deployment_probe: deploymentProbe,
   deployment_uses_configmap: deploymentUsesConfigMap,
@@ -254,6 +258,7 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
   service_type: serviceType,
   service_port: servicePort,
   service_selector: serviceSelector,
+  service_headless: serviceHeadless,
   service_endpoints: serviceEndpoints,
 
   configmap_exists: configMapExists,
@@ -330,6 +335,10 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
 
   service_http: serviceHttp,
   service_tcp: serviceTcp,
+
+  workload_annotation: workloadAnnotation,
+  workload_container: workloadContainer,
+  workload_volume_mount: workloadVolumeMount,
 
   resource_absent: resourceAbsent,
 };

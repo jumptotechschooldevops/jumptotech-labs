@@ -43,6 +43,7 @@ import {
   type TolerationSnapshot,
   type AffinityTermSnapshot,
   type VolumeMountSnapshot,
+  type VolumeSourceSnapshot,
 } from './port.js';
 
 function statusCodeOf(error: unknown): number | undefined {
@@ -1116,6 +1117,22 @@ function toContainerSnapshots(
       ready: status?.ready ?? false,
       restartCount: status?.restartCount ?? 0,
       state,
+      ...(container.volumeMounts?.length
+        ? {
+            volumeMounts: container.volumeMounts.map((m) => ({
+              name: m.name,
+              mountPath: m.mountPath,
+              ...(m.readOnly !== undefined ? { readOnly: m.readOnly } : {}),
+              ...(m.subPath !== undefined ? { subPath: m.subPath } : {}),
+            })),
+          }
+        : {}),
+      ...(container.command ? { command: [...container.command] } : {}),
+      ...(container.args ? { args: [...container.args] } : {}),
+      // The container's own restartPolicy. `V1Container.restartPolicy` is only
+      // meaningful on an init container, where `Always` makes it a native
+      // sidecar. Read from the container, never from the Pod spec.
+      ...(container.restartPolicy ? { restartPolicy: container.restartPolicy } : {}),
       ...(reason ? { reason } : {}),
       ...(resources?.requests || resources?.limits
         ? {
@@ -1204,6 +1221,15 @@ export function toPodSnapshot(pod: k8s.V1Pod, namespace: string, name: string): 
     phase: pod.status?.phase ?? 'Unknown',
     labels: pod.metadata?.labels ?? {},
     containers,
+    ...(spec?.initContainers?.length
+      ? {
+          initContainers: toContainerSnapshots(
+            spec.initContainers,
+            pod.status?.initContainerStatuses ?? [],
+          ),
+        }
+      : {}),
+    ...(spec?.volumes?.length ? { volumes: volumeSourcesOf(spec) } : {}),
     deleting: Boolean(pod.metadata?.deletionTimestamp),
     ready: containers.length > 0 && containers.every((c) => c.ready),
     configRefs: configReferencesOf(spec),
@@ -1231,6 +1257,20 @@ export function toDeploymentSnapshot(
   return {
     name: deployment.metadata?.name ?? name,
     namespace: deployment.metadata?.namespace ?? namespace,
+    annotations: deployment.metadata?.annotations ?? {},
+    ...(deployment.spec?.strategy
+      ? {
+          strategy: {
+            type: deployment.spec.strategy.type ?? 'RollingUpdate',
+            ...(deployment.spec.strategy.rollingUpdate?.maxSurge !== undefined
+              ? { maxSurge: deployment.spec.strategy.rollingUpdate.maxSurge }
+              : {}),
+            ...(deployment.spec.strategy.rollingUpdate?.maxUnavailable !== undefined
+              ? { maxUnavailable: deployment.spec.strategy.rollingUpdate.maxUnavailable }
+              : {}),
+          },
+        }
+      : {}),
     // An unset spec.replicas means 1 in the Kubernetes API.
     desiredReplicas: deployment.spec?.replicas ?? 1,
     readyReplicas: status.readyReplicas ?? 0,
@@ -1241,6 +1281,10 @@ export function toDeploymentSnapshot(
     selector: deployment.spec?.selector?.matchLabels ?? {},
     podLabels: deployment.spec?.template?.metadata?.labels ?? {},
     containers: toContainerSnapshots(templateSpec?.containers ?? []),
+    ...(templateSpec?.initContainers?.length
+      ? { initContainers: toContainerSnapshots(templateSpec.initContainers) }
+      : {}),
+    ...(templateSpec?.volumes?.length ? { volumes: volumeSourcesOf(templateSpec) } : {}),
     conditions: (status.conditions ?? []).map((c) => ({
       type: c.type,
       status: c.status,
@@ -1286,6 +1330,50 @@ function affinityTermsOf(
     topologyKey: term.topologyKey ?? 'kubernetes.io/hostname',
     matchLabels: { ...(term.labelSelector?.matchLabels ?? {}) },
   }));
+}
+
+/**
+ * `spec.volumes`, reduced to the source kind a lab can reason about.
+ *
+ * Only the sources the Kubernetes track actually teaches are named; anything
+ * else is `other` rather than being guessed at, so a requirement can never
+ * accidentally match a volume type nobody modelled.
+ */
+function volumeSourcesOf(spec: k8s.V1PodSpec | undefined): VolumeSourceSnapshot[] {
+  return (spec?.volumes ?? []).map((volume) => {
+    if (volume.persistentVolumeClaim) {
+      return {
+        name: volume.name,
+        source: 'persistentVolumeClaim' as const,
+        sourceName: volume.persistentVolumeClaim.claimName,
+      };
+    }
+    if (volume.configMap) {
+      return {
+        name: volume.name,
+        source: 'configMap' as const,
+        ...(volume.configMap.name ? { sourceName: volume.configMap.name } : {}),
+      };
+    }
+    if (volume.secret) {
+      return {
+        name: volume.name,
+        source: 'secret' as const,
+        ...(volume.secret.secretName ? { sourceName: volume.secret.secretName } : {}),
+      };
+    }
+    if (volume.projected) return { name: volume.name, source: 'projected' as const };
+    if (volume.hostPath) return { name: volume.name, source: 'hostPath' as const };
+    if (volume.downwardAPI) return { name: volume.name, source: 'downwardAPI' as const };
+    if (volume.emptyDir) {
+      return {
+        name: volume.name,
+        source: 'emptyDir' as const,
+        ...(volume.emptyDir.medium ? { medium: volume.emptyDir.medium } : {}),
+      };
+    }
+    return { name: volume.name, source: 'other' as const };
+  });
 }
 
 function volumeMountsOf(spec: k8s.V1PodSpec | undefined): VolumeMountSnapshot[] {
@@ -1469,6 +1557,7 @@ function toStatefulSetSnapshot(
   return {
     name: sts.metadata?.name ?? name,
     namespace: sts.metadata?.namespace ?? namespace,
+    annotations: sts.metadata?.annotations ?? {},
     desiredReplicas: sts.spec?.replicas ?? 1,
     readyReplicas: sts.status?.readyReplicas ?? 0,
     ...(sts.spec?.serviceName ? { serviceName: sts.spec.serviceName } : {}),
@@ -1494,6 +1583,7 @@ function toDaemonSetSnapshot(ds: k8s.V1DaemonSet, namespace: string, name: strin
   return {
     name: ds.metadata?.name ?? name,
     namespace: ds.metadata?.namespace ?? namespace,
+    annotations: ds.metadata?.annotations ?? {},
     desiredScheduled: ds.status?.desiredNumberScheduled ?? 0,
     numberReady: ds.status?.numberReady ?? 0,
     selector: ds.spec?.selector?.matchLabels ?? {},

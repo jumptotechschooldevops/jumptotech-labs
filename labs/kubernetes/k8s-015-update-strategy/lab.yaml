@@ -1,0 +1,227 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# K8S-015 is the third lab in the release arc: K8S-013 rolled forward, K8S-014
+# rolled back, and this one is about the setting that governs how either of
+# those behaves while it is happening.
+#
+# The two workloads are deliberately opposed. `ledger-writer` cannot tolerate
+# two versions running at once; `checkout-api` cannot tolerate losing capacity.
+# The default strategy is wrong for both, in opposite directions, so a student
+# who changes one and copies the answer to the other fails — the point is to
+# read a constraint and translate it, not to memorise a stanza of YAML.
+#
+# The task states the constraints and never the manifest. Exactly one strategy
+# satisfies each, which is what makes it gradeable without giving it away:
+#   ledger-writer  — never two versions at once      -> Recreate
+#   checkout-api   — never fewer than 3 serving,     -> RollingUpdate
+#                    never more than one extra Pod      maxUnavailable 0, maxSurge 1
+#
+# Rolling both to a new image is part of the task rather than decoration: it is
+# what makes the difference observable, and it is the only way `deployment_image`
+# can witness that the strategy was actually exercised.
+#
+# ---------------------------------------------------------------------------
+# SOURCE METADATA (official-source curriculum policy)
+#
+# Carried as a comment, not as fields: `labDefinitionSchema` is `.strict()`.
+#
+# classification:       CERTIFICATION OBJECTIVE
+# certification:        CKA
+# objective_version:    v1.35 (CNCF curriculum, Kubernetes v1.35)
+# official_objective:   "Understand application deployments and perform rolling
+#                        updates/rollbacks" — Workloads & Scheduling (15%)
+# objective_mapping:    Covers how a rolling update behaves — the strategy and
+#                       its surge/unavailable bounds. K8S-013 covers performing
+#                       one, K8S-014 covers reversing one. No part is claimed
+#                       twice.
+# production_skill:     Choosing a release strategy from an availability
+#                       constraint, which is the judgement the exam objective
+#                       assumes but does not itself test.
+# coverage_depth:       PRACTICED
+#
+# official_documentation:
+#   - https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+#     verified 2026-08-25: `.spec.strategy` selects Recreate or RollingUpdate;
+#     `maxUnavailable` and `maxSurge` default to 25% and may be an absolute
+#     number or a percentage; Recreate kills all existing Pods before new ones
+#     are created. Confirmed against a live cluster: the API stores the
+#     defaulted strategy on the object, and drops `rollingUpdate` under
+#     Recreate.
+#   - https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/deployment-v1/
+# last_verified:        2026-08-25
+# ---------------------------------------------------------------------------
+id: K8S-015
+slug: k8s-015-update-strategy
+title: Control the Update Strategy
+track: kubernetes
+topic: workloads
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 15
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-013
+
+story: >
+  Two services, two release policies, and the same default configuration on
+  both — which is how last quarter's incident happened.
+
+  `ledger-writer` appends to a single ledger file. Two versions running at the
+  same time interleave their writes and corrupt it, so a release has to take
+  the old version fully down before the new one starts. A short outage during
+  a deploy is acceptable; overlap is not.
+
+  `checkout-api` is the opposite. It is what customers hit at the till, it is
+  sized so that all three replicas are needed at peak, and a release must never
+  reduce the number of Pods actually serving. Extra capacity during a rollout
+  is fine, as long as it is only a little.
+
+objectives:
+  - Choose between the Recreate and RollingUpdate strategies from a stated constraint
+  - Bound a rolling update with maxSurge and maxUnavailable
+  - Explain what each strategy does to availability while a release is running
+
+task:
+  summary: Give ledger-writer and checkout-api the update strategies their constraints require, then release both.
+  description: >
+    Both Deployments are running `nginx:1.27-alpine` on whatever update
+    strategy Kubernetes gave them when they were created. Start by looking at
+    what that actually is — `kubectl describe` or `kubectl get deployment -o
+    yaml` will show you the strategy the API server stored, including the
+    values you never typed.
+
+    Reconfigure each one to match its constraint:
+
+    `ledger-writer` must never have old and new Pods running at the same time.
+
+    `checkout-api` must never drop below three Pods available during a release,
+    and must never add more than one Pod beyond its normal size.
+
+    Work out which strategy each description implies, and for `checkout-api`
+    what the two rolling-update bounds have to be. The numbers follow from the
+    constraint; there is exactly one pair that satisfies it.
+
+    Then release both services to `nginx:1.28-alpine` and watch the rollouts.
+    They should look completely different from each other — that difference is
+    the whole point of the setting you just changed. `kubectl get pods -w`
+    during each rollout is the clearest way to see it.
+
+setup:
+  manifests:
+    - setup/workloads.yaml
+  verify:
+    - type: deployment_exists
+      name: ledger-writer
+    - type: deployment_exists
+      name: checkout-api
+    - type: deployment_available
+      name: ledger-writer
+      min_available: 2
+    - type: deployment_available
+      name: checkout-api
+      min_available: 3
+  verify_timeout_seconds: 240
+
+# Graded on the stored Deployment objects. `kubectl patch`, `kubectl edit` and
+# re-applying an edited manifest all leave the same `.spec.strategy` behind and
+# are all correct; the verifier compares meaning, so `maxSurge: 1` and
+# `maxSurge: "1"` agree while `1` and `"1%"` do not.
+requirements:
+  - type: deployment_exists
+    name: ledger-writer
+    label: Deployment ledger-writer still exists
+  - type: deployment_selector
+    name: ledger-writer
+    selector:
+      app: ledger-writer
+      tier: data
+    label: ledger-writer was reconfigured, not replaced
+  - type: deployment_strategy
+    name: ledger-writer
+    strategy: Recreate
+    label: ledger-writer never runs two versions at once
+  - type: deployment_image
+    name: ledger-writer
+    image: nginx:1.28-alpine
+    label: ledger-writer was released to nginx:1.28-alpine
+  - type: deployment_available
+    name: ledger-writer
+    min_available: 2
+    label: Both ledger-writer replicas are available again
+  - type: deployment_exists
+    name: checkout-api
+    label: Deployment checkout-api still exists
+  - type: deployment_selector
+    name: checkout-api
+    selector:
+      app: checkout-api
+      tier: api
+    label: checkout-api was reconfigured, not replaced
+  - type: deployment_strategy
+    name: checkout-api
+    strategy: RollingUpdate
+    maxUnavailable: 0
+    maxSurge: 1
+    label: checkout-api keeps every replica serving and adds at most one
+  - type: deployment_image
+    name: checkout-api
+    image: nginx:1.28-alpine
+    label: checkout-api was released to nginx:1.28-alpine
+  - type: deployment_rollout_complete
+    name: checkout-api
+    label: The checkout-api rollout finished
+  - type: deployment_available
+    name: checkout-api
+    min_available: 3
+    label: All three checkout-api replicas are available
+
+hints:
+  - level: 1
+    text: >
+      A Deployment's `.spec.strategy` has a type, and one of the two types
+      exists precisely for workloads that cannot run two versions side by side.
+      The other takes two bounds that control how far the rollout may drift
+      from the declared replica count in each direction.
+  - level: 2
+    text: >
+      Read `maxUnavailable` and `maxSurge` as answers to two separate
+      questions: how many Pods may be missing at once, and how many extra may
+      exist at once. Both accept an absolute number as well as a percentage —
+      and for a constraint stated in whole Pods, an absolute number is the
+      honest way to write it. Consult the Deployment documentation for the
+      exact field names and where they sit.
+  - level: 3
+    text: >
+      `ledger-writer` needs `strategy.type: Recreate`, which has no further
+      settings — Kubernetes removes every old Pod before creating any new one,
+      so there is a gap with nothing serving. `checkout-api` needs
+      `strategy.type: RollingUpdate` with `rollingUpdate.maxUnavailable: 0` and
+      `rollingUpdate.maxSurge: 1`. Note that `maxUnavailable: 0` is only
+      possible *because* `maxSurge` is above zero: a rollout with both at zero
+      could never start.
+
+references:
+  - title: Deployments
+    url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+  - title: Deployment API reference
+    url: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/deployment-v1/
+  - title: kubectl rollout
+    url: https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/
+
+skills:
+  - kubernetes.deployments.strategy
+  - kubernetes.deployments.rollout
+  - kubernetes.reliability.availability
+  - kubernetes.workloads.update
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling

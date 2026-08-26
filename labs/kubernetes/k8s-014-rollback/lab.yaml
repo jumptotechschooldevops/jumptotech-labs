@@ -1,0 +1,205 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# K8S-014 is the second half of the CKA bullet K8S-013 opened: rolling updates
+# *and rollbacks*. It is the track's second challenge-level lab, and the first
+# where the student has to create the failure themselves before recovering
+# from it.
+#
+# Why the student causes the break rather than the platform: rollout history
+# cannot be seeded. A ReplicaSet's ownerReference needs the Deployment's UID,
+# which does not exist until apply time, so `setup.manifests` can establish a
+# Deployment but never a *previous revision* of one. The honest design is
+# therefore roll-forward-then-back, and the lab says so plainly.
+#
+# That creates the grading problem this lab turns on. A rollback returns the
+# workload to where it started, so the end state of a *correct* solution is
+# nearly identical to the state of an *untouched* namespace — same image, same
+# replicas, same availability. Without evidence that a round trip happened, a
+# student who did nothing would pass.
+#
+# `deployment.kubernetes.io/revision` is that evidence. The Deployment
+# controller increments it on every rollout, and the upstream documentation is
+# explicit that "each rollback updates the revision of the Deployment" — so a
+# revision of at least 3 means the seeded revision 1 was rolled forward and
+# then rolled back. Verified against a live cluster before this lab was
+# written: 1 → 2 on the bad release, → 3 on `rollout undo`, with the image
+# restored.
+#
+# `min_int` rather than an exact value on purpose. A student who fumbles and
+# rolls twice lands on revision 4, which is still a correct solution; grading
+# an exact revision would punish them for a second attempt.
+#
+# ---------------------------------------------------------------------------
+# SOURCE METADATA (official-source curriculum policy)
+#
+# Carried as a comment, not as fields: `labDefinitionSchema` is `.strict()`.
+# A shared source-metadata contract is being designed across all tracks.
+#
+# classification:       CERTIFICATION OBJECTIVE
+# certification:        CKA
+# objective_version:    v1.35 (CNCF curriculum, Kubernetes v1.35)
+# official_objective:   "Understand application deployments and perform rolling
+#                        updates/rollbacks" — Workloads & Scheduling (15%)
+# objective_source:     https://training.linuxfoundation.org/certification/certified-kubernetes-administrator-cka/
+#                       https://github.com/cncf/curriculum
+# objective_mapping:    Covers the "rollbacks" half. K8S-013 covers the
+#                       "rolling updates" half; together they complete the
+#                       bullet. No part of it is claimed twice.
+# coverage_depth:       PRACTICED
+#
+# official_documentation:
+#   - https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+#     verified 2026-08-24: "Each new ReplicaSet updates the revision of the
+#     Deployment" and "Each rollback updates the revision of the Deployment".
+#     A rollout is triggered if and only if `.spec.template` changes.
+#   - https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/
+#     verified 2026-08-24: subcommands history, pause, restart, resume,
+#     status, undo.
+# last_verified:        2026-08-24
+#
+# Scenario, company, wording, starting state, hints and checks are original
+# JumpToTech content.
+# ---------------------------------------------------------------------------
+id: K8S-014
+slug: k8s-014-rollback
+title: Roll Back a Bad Release
+track: kubernetes
+topic: workloads
+difficulty: intermediate
+level: challenge
+duration_minutes: 40
+order: 14
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-013
+
+story: >
+  The release you shipped in the last change window is running happily. The
+  next one is not going to go so well.
+
+  Release engineering has tagged `nginx:1.29-rc1-jumptotech` and asked you to
+  put it out. The tag was never actually pushed to the registry — nobody has
+  noticed yet, and you are about to find out the hard way, at the point where
+  the rollout stops moving.
+
+  Getting out of a bad release quickly matters more than getting into a good
+  one slowly. That is the skill today.
+
+objectives:
+  - Recognise a stalled rollout and read the reason the cluster is giving you
+  - Return a Deployment to its previous revision with kubectl
+  - Explain why a rollback is itself a new revision rather than a rewind
+
+task:
+  summary: Roll payments-api forward to a broken release, then roll it back to the working one.
+  description: >
+    Deployment `payments-api` is running three replicas of `nginx:1.28-alpine`
+    and is healthy.
+
+    Roll it forward to `nginx:1.29-rc1-jumptotech`. That image does not exist,
+    so the rollout will not complete — watch what `kubectl rollout status`
+    reports, and use `kubectl get pods` and `kubectl describe` to see the
+    reason for yourself rather than assuming it.
+
+    Then put the service back on the release that worked, using the Deployment's
+    own rollout history. Do not edit the image back by hand if you can avoid it:
+    the point of the exercise is to recover the way you would at three in the
+    morning, from the history Kubernetes already keeps for you.
+
+    You are finished when three replicas are available on `nginx:1.28-alpine`
+    again, the rollout is complete, and the Deployment's revision shows that it
+    went forward and came back.
+
+setup:
+  manifests:
+    - setup/payments-api.yaml
+  verify:
+    - type: deployment_exists
+      name: payments-api
+    - type: deployment_image
+      name: payments-api
+      image: nginx:1.28-alpine
+    - type: deployment_available
+      name: payments-api
+      min_available: 3
+  verify_timeout_seconds: 240
+
+# State-based, like every check on this track. The verifier reads the live
+# Deployment; it has no view of which kubectl subcommands were typed, so
+# `rollout undo`, `rollout undo --to-revision`, and re-applying the previous
+# manifest are all correct answers that leave the same object behind.
+requirements:
+  - type: deployment_exists
+    name: payments-api
+    label: Deployment payments-api still exists
+  - type: deployment_selector
+    name: payments-api
+    selector:
+      app: payments-api
+      tier: api
+    label: The original Deployment was recovered, not replaced
+  - type: deployment_replicas
+    name: payments-api
+    replicas: 3
+    label: Three replicas are still requested
+  - type: workload_annotation
+    kind: deployment
+    name: payments-api
+    key: deployment.kubernetes.io/revision
+    min_int: 3
+    label: A new revision was rolled out and then rolled back
+  - type: deployment_image
+    name: payments-api
+    image: nginx:1.28-alpine
+    label: Image is back on nginx:1.28-alpine
+  - type: deployment_rollout_complete
+    name: payments-api
+    label: Rollout finished — no replica from the failed release remains
+  - type: deployment_available
+    name: payments-api
+    min_available: 3
+    label: All three replicas are available again
+
+hints:
+  - level: 1
+    text: >
+      A Deployment keeps a history of the templates it has run. Rolling back is
+      a first-class operation, not something you reconstruct by hand.
+  - level: 2
+    text: >
+      `kubectl rollout status` tells you a rollout is not progressing; it does
+      not tell you why. The Pods do — look at their status and their events.
+      Then consult the kubectl rollout reference for the subcommands that show
+      history and undo a rollout.
+  - level: 3
+    text: >
+      `kubectl rollout history deployment/payments-api` lists the revisions, and
+      `kubectl rollout undo deployment/payments-api` returns to the previous
+      one. Note what the revision number does: a rollback moves *forward* to a
+      new revision that happens to carry the old template, so after going out
+      and coming back you are on revision 3, not revision 1.
+
+references:
+  - title: Deployments
+    url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+  - title: kubectl rollout
+    url: https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/
+  - title: Debug Pods
+    url: https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/
+
+skills:
+  - kubernetes.deployments.rollout
+  - kubernetes.deployments.rollback
+  - kubernetes.troubleshooting.pods
+  - kubernetes.workloads.inspect
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling

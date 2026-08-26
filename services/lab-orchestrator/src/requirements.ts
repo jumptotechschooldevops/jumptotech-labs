@@ -113,6 +113,15 @@ const labelMap = z
   )
   .refine((value) => Object.keys(value).length > 0, { message: 'must declare at least one label' });
 
+/**
+ * A Kubernetes IntOrString used for surge/unavailable counts: a non-negative
+ * whole number of Pods, or a percentage of `replicas`.
+ */
+const intOrPercent = z.union([
+  z.number().int().min(0).max(1000),
+  z.string().regex(/^\d{1,3}%$/, 'must be a whole number or a percentage such as 25%'),
+]);
+
 /** A Kubernetes resource quantity, e.g. `100m`, `64Mi`, `0.5`. */
 const quantity = z
   .string()
@@ -527,6 +536,19 @@ const kubernetesRequirementSchemas = {
     })
     .strict(),
 
+  /**
+   * A Service with no cluster IP of its own.
+   *
+   * `spec.clusterIP: "None"` is what makes a Service headless: kube-proxy
+   * allocates no virtual IP and does no load balancing, and DNS returns the
+   * Pod addresses directly instead of one VIP. That is the property a
+   * StatefulSet's governing Service must have for per-Pod DNS names to exist,
+   * and it is invisible to `service_type` — a headless Service is still of
+   * type `ClusterIP`, so the two checks answer different questions.
+   */
+  service_headless: z
+    .object({ type: z.literal('service_headless'), name: resourceName, ...common })
+    .strict(),
   service_selector: z
     .object({ type: z.literal('service_selector'), name: resourceName, selector: labelMap, ...common })
     .strict(),
@@ -1087,6 +1109,139 @@ const kubernetesRequirementSchemas = {
    * Used by clean-up and troubleshooting labs ("the failed Job was removed"),
    * and by labs whose point is that a resource was replaced rather than added.
    */
+  /**
+   * An annotation on a workload's own metadata.
+   *
+   * Deliberately has no `namespace` field. The reader is constructed for one
+   * session's namespace and every read goes through it, so there is no way to
+   * express "look in another student's namespace" — the check cannot reach one
+   * even if a lab definition tried. `kind` is a closed enum over the three
+   * workloads the reader already fetches, so this is not a general API
+   * traversal primitive either.
+   *
+   * Exactly one of `value` (exact match) or `min_int` (numeric floor) is
+   * required. `min_int` exists because the useful annotations are often
+   * counters — `deployment.kubernetes.io/revision` is the motivating case, and
+   * asserting an exact revision would fail a student who simply rolled twice.
+   */
+  /**
+   * A Deployment's update strategy.
+   *
+   * `maxSurge` / `maxUnavailable` are Kubernetes IntOrString: an absolute Pod
+   * count or a percentage of `replicas`. Both spellings are accepted here and
+   * compared by meaning rather than by text, so `1` and `"1"` agree while `1`
+   * and `"1%"` do not — one is a Pod, the other is a proportion.
+   *
+   * There is no defaulting to reproduce: the API server stores the effective
+   * strategy on the object, defaulting an unset one to RollingUpdate at 25%/25%
+   * and omitting `rollingUpdate` entirely under Recreate. The handler reads
+   * what is actually stored.
+   */
+  /**
+   * One container inside a workload's Pod template.
+   *
+   * `collection` is what makes this precise rather than approximate: a Pod has
+   * two independent lists and a name may appear in either, so the requirement
+   * says which one it means. `containers` is the default because that is the
+   * common case.
+   *
+   * `restartPolicy` here is the *container's* field, which only an init
+   * container may set and only to `Always` — that is what makes it a native
+   * sidecar. It is not the Pod's `restartPolicy`, which every Deployment
+   * template carries as `Always` anyway.
+   *
+   * `kind` is a closed enum, and there is no `namespace` field: reads are bound
+   * to the session's own namespace by the reader.
+   */
+  /**
+   * One container's mount of one volume, at one path.
+   *
+   * The question this answers is deliberately narrow and deliberately not
+   * "does this workload have a volume called x". A volume in `spec.volumes`
+   * that nothing mounts is inert, and two containers each mounting *a* volume
+   * is not the same as two containers sharing *one* volume — which is the only
+   * thing that makes a sidecar work. So the check is anchored to a named
+   * container in a named list, and the volume must appear in that container's
+   * own `volumeMounts`.
+   *
+   * `source` is optional and, when given, is resolved through the Pod's
+   * `spec.volumes` — so a lab can require that the shared volume is an
+   * `emptyDir` rather than, say, a Secret that happens to carry the right name.
+   *
+   * As with the other workload checks there is no `namespace` field: reads are
+   * bound to the session's namespace by the reader, and `kind` is a closed
+   * enum rather than a group/version/resource triple.
+   */
+  workload_volume_mount: z
+    .object({
+      type: z.literal('workload_volume_mount'),
+      kind: z.enum(['pod', 'deployment']),
+      name: resourceName,
+      container: resourceName,
+      collection: z.enum(['containers', 'initContainers']).default('containers'),
+      /** The `volumes[].name` the container must mount. */
+      volume: resourceName,
+      mountPath: z.string().min(1).max(253).regex(/^\//, 'mountPath must be absolute'),
+      readOnly: z.boolean().optional(),
+      subPath: z.string().min(1).max(253).optional(),
+      source: z
+        .enum(['emptyDir', 'configMap', 'secret', 'projected', 'persistentVolumeClaim'])
+        .optional(),
+      ...common,
+    })
+    .strict(),
+  workload_container: z
+    .object({
+      type: z.literal('workload_container'),
+      kind: z.enum(['pod', 'deployment']),
+      name: resourceName,
+      container: resourceName,
+      collection: z.enum(['containers', 'initContainers']).default('containers'),
+      image: imageReference.optional(),
+      // Kubernetes accepts `Always` on an init container; `OnFailure` and
+      // `Never` are Pod-level values and are rejected on a container.
+      restartPolicy: z.literal('Always').optional(),
+      command: z.array(z.string().min(1).max(1024)).min(1).max(16).optional(),
+      args: z.array(z.string().max(1024)).min(1).max(16).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.restartPolicy === undefined || v.collection === 'initContainers', {
+      message: 'restartPolicy applies to init containers only — a native sidecar sets it, a normal container cannot',
+    }),
+  deployment_strategy: z
+    .object({
+      type: z.literal('deployment_strategy'),
+      name: resourceName,
+      strategy: z.enum(['RollingUpdate', 'Recreate']),
+      maxSurge: intOrPercent.optional(),
+      maxUnavailable: intOrPercent.optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.strategy === 'RollingUpdate' || (v.maxSurge === undefined && v.maxUnavailable === undefined), {
+      message: 'maxSurge and maxUnavailable only apply to the RollingUpdate strategy',
+    }),
+  workload_annotation: z
+    .object({
+      type: z.literal('workload_annotation'),
+      kind: z.enum(['deployment', 'statefulset', 'daemonset']),
+      name: resourceName,
+      // Annotation keys may carry a DNS-subdomain prefix, e.g.
+      // `deployment.kubernetes.io/revision`, so `/` is permitted here.
+      key: z
+        .string()
+        .min(1)
+        .max(253)
+        .regex(/^[-._a-zA-Z0-9]+(\/[-._a-zA-Z0-9]+)?$/, 'invalid annotation key'),
+      value: z.string().max(1024).optional(),
+      min_int: z.number().int().min(0).max(1_000_000).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => (v.value !== undefined) !== (v.min_int !== undefined), {
+      message: 'must specify exactly one of value or min_int',
+    }),
   resource_absent: z
     .object({
       type: z.literal('resource_absent'),
@@ -1762,6 +1917,7 @@ export const REQUIREMENT_FAMILIES = {
   service_type: 'kubernetes',
   service_port: 'kubernetes',
   service_selector: 'kubernetes',
+  service_headless: 'kubernetes',
   service_endpoints: 'kubernetes',
 
   configmap_exists: 'kubernetes',
@@ -1838,6 +1994,11 @@ export const REQUIREMENT_FAMILIES = {
 
   service_http: 'kubernetes',
   service_tcp: 'kubernetes',
+
+  workload_annotation: 'kubernetes',
+  deployment_strategy: 'kubernetes',
+  workload_container: 'kubernetes',
+  workload_volume_mount: 'kubernetes',
 
   file_exists: 'filesystem',
   directory_exists: 'filesystem',

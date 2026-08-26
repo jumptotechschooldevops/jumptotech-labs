@@ -1,0 +1,89 @@
+# K8S-019 initial state — a stateful workload run as a stateless one.
+#
+# `ledger-db` is a Deployment with two replicas sharing ONE PersistentVolumeClaim,
+# fronted by an ordinary ClusterIP Service. Every part of that is a real mistake
+# teams make, and each fails differently:
+#
+#   * Pod names are random and change on every reschedule, so nothing can
+#     address an individual replica.
+#   * Both replicas mount the same RWO claim, so the second cannot start on a
+#     different node — and if it does start alongside the first, two database
+#     processes write the same files.
+#   * The Service load-balances across a single virtual IP, so a client asking
+#     for "replica 0" gets whichever Pod kube-proxy picks.
+#
+# It is left deliberately at 1/2 available: the second replica cannot attach the
+# already-attached ReadWriteOnce claim. That is not a contrived break — it is
+# the failure this shape produces in production, and it is the symptom that
+# sends a student looking for the right controller.
+#
+# Resources are declared for the reason K8S-013 documents, and the claim is
+# small because the session ResourceQuota permits five PVCs in total.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ledger-shared-data
+  labels:
+    jumptotech.io/lab-fixture: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger-db
+  labels:
+    app: ledger-db
+    jumptotech.io/lab-fixture: "true"
+spec:
+  # An ordinary load-balanced Service: it has a virtual IP, which is exactly
+  # what a per-replica addressing scheme must not have.
+  type: ClusterIP
+  selector:
+    app: ledger-db
+  ports:
+    - name: db
+      port: 5432
+      targetPort: db
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-db
+  labels:
+    app: ledger-db
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ledger-db
+  template:
+    metadata:
+      labels:
+        app: ledger-db
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ledger-shared-data
+      containers:
+        - name: db
+          image: nginx:1.28-alpine
+          ports:
+            - name: db
+              containerPort: 80
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/ledger
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

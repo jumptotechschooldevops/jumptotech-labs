@@ -1,0 +1,207 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# K8S-016 introduces init containers, and does it by handing the student a
+# workload that is already broken rather than an empty namespace.
+#
+# The failure is chosen carefully. `reporting-api` is not crash-looping — its
+# container runs happily — but an emptyDir is mounted over nginx's document
+# root, so the readiness probe gets a 404 and the Pod never becomes Ready.
+# `kubectl get pods` shows `1/1 Running`, which is exactly the trap: Running is
+# not Ready, and the difference is visible only in `describe`, the probe events,
+# and the READY column. A student who reads "Running" and stops has learned the
+# wrong lesson, so the lab is built to punish that and reward looking further.
+#
+# The shared volume is seeded, the init container is not. That split is the
+# point: the mechanism being taught is one container preparing state that
+# another consumes, and giving away the volume while asking for the producer
+# keeps the exercise on initialisation rather than on volume syntax, which
+# K8S-028 covers later.
+#
+# Nothing in the task names `initContainers`, an image, or a command. The
+# student is told what must be true before the app can serve and has to work
+# out where that work belongs.
+#
+# ---------------------------------------------------------------------------
+# SOURCE METADATA (official-source curriculum policy)
+#
+# Carried as a comment, not as fields: `labDefinitionSchema` is `.strict()`.
+#
+# classification:       CERTIFICATION OBJECTIVE
+# certification:        CKA
+# objective_version:    v1.35 (CNCF curriculum, Kubernetes v1.35)
+# official_objective:   "Understand primitives for robust, self-healing
+#                        application deployments" — Workloads & Scheduling (15%)
+# objective_mapping:    Init containers are one of those primitives: separating
+#                        start-up work from the application so the application
+#                        never runs against an unprepared environment. The
+#                        probe half of the same bullet is K8S-008.
+# production_skill:     Diagnosing a Pod that is Running but not Ready, which is
+#                        the most commonly misread state in Kubernetes.
+# coverage_depth:       PRACTICED
+#
+# official_documentation:
+#   - https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
+#     verified 2026-08-25: init containers run to completion, in order, before
+#     app containers start; each must succeed before the next begins; a Pod
+#     stays in Init: while they run.
+#   - https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/
+#   - https://kubernetes.io/docs/concepts/storage/volumes/
+# last_verified:        2026-08-25
+# ---------------------------------------------------------------------------
+id: K8S-016
+slug: k8s-016-init-containers
+title: Prepare a Workload with an Init Container
+track: kubernetes
+topic: workloads
+difficulty: intermediate
+level: challenge
+duration_minutes: 40
+order: 16
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-008
+
+story: >
+  The reporting team shipped `reporting-api` on Friday. It has never served a
+  request.
+
+  Nobody can see why. The Deployment exists, the Pods are there, and the
+  container inside each one is running — the process has not crashed once. The
+  Service in front of it has no endpoints, and the on-call engineer has been
+  restarting Pods all weekend hoping one of them comes up different.
+
+  The application serves static reports out of its document root. It does not
+  generate them; something is supposed to put them there before it starts, and
+  on Friday that step was left out of the manifest entirely.
+
+objectives:
+  - Tell the difference between a Pod that is Running and a Pod that is Ready
+  - Diagnose a workload from its Pod status, events and probe failures
+  - Separate start-up work from the application using an init container
+  - Explain how a shared volume passes state from an init container to an app container
+
+task:
+  summary: Make reporting-api serve, by preparing its document root before the application starts.
+  description: >
+    Deployment `reporting-api` runs two replicas and reports none of them
+    available. Start there: find out what state the Pods are actually in, and
+    what the container's own status and the Deployment's events say about why
+    they are not Ready. The answer is not that the process is failing.
+
+    The application container serves files from `/usr/share/nginx/html`, and a
+    volume is already mounted there. That volume is empty. The application will
+    only become Ready once `index.html` exists inside it, and the application
+    itself will never create it.
+
+    Add the missing preparation step so that the file is written into the shared
+    volume *before* the application container starts, every time a Pod is
+    created — not by hand into a running Pod, which would be undone the moment
+    that Pod was replaced.
+
+    Call the container that does this work `prepare-content`, base it on
+    `busybox:1.36`, and have it write into the same volume the application
+    reads. Leave the application container as it is.
+
+    You are done when both replicas are available and the rollout is complete.
+    Watch a Pod come up while you are at it: its status while the preparation
+    step is running is worth seeing once.
+
+setup:
+  manifests:
+    - setup/reporting-api.yaml
+  verify:
+    - type: deployment_exists
+      name: reporting-api
+    - type: deployment_replicas
+      name: reporting-api
+      replicas: 2
+  verify_timeout_seconds: 240
+
+# Graded on the live Pod template. The verifier reads which container list each
+# container sits in, so putting the preparation work in the app container — or
+# adding a second app container that races the first — does not satisfy it.
+requirements:
+  - type: deployment_exists
+    name: reporting-api
+    label: Deployment reporting-api still exists
+  - type: deployment_selector
+    name: reporting-api
+    selector:
+      app: reporting-api
+      tier: api
+    label: The original Deployment was fixed, not replaced
+  - type: workload_container
+    kind: deployment
+    name: reporting-api
+    collection: initContainers
+    container: prepare-content
+    image: busybox:1.36
+    label: An init container prepare-content runs before the application
+  - type: workload_container
+    kind: deployment
+    name: reporting-api
+    collection: containers
+    container: api
+    image: nginx:1.28-alpine
+    label: The application container is unchanged
+  - type: deployment_replicas
+    name: reporting-api
+    replicas: 2
+    label: Two replicas are still requested
+  - type: deployment_rollout_complete
+    name: reporting-api
+    label: The rollout finished
+  - type: deployment_available
+    name: reporting-api
+    min_available: 2
+    label: Both replicas are available and serving
+
+hints:
+  - level: 1
+    text: >
+      `kubectl get pods` has a READY column and a STATUS column, and they are
+      answering different questions. A container can be running while the
+      kubelet still refuses to send it traffic. Find out which check is
+      refusing, and what it is asking for.
+  - level: 2
+    text: >
+      A Pod can run more than one kind of container. One kind runs to
+      completion, in order, before any application container starts — which is
+      exactly where work that must happen *first* belongs. Consult the init
+      container documentation for where it goes in the Pod spec and how it
+      shares a volume with the application.
+  - level: 3
+    text: >
+      Add an `initContainers` list to the Pod template alongside `containers`.
+      The entry needs the name and image the task specified, a `command` that
+      writes some HTML to `index.html`, and a `volumeMount` for the existing
+      `site` volume — mounted wherever you like inside the init container, since
+      it only has to write the file; the application reads it from its own mount
+      path. `kubectl describe pod` shows init containers separately from app
+      containers, and `kubectl logs <pod> -c prepare-content` reads the init
+      container's own output.
+
+references:
+  - title: Init Containers
+    url: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
+  - title: Debug Pods
+    url: https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/
+  - title: Volumes
+    url: https://kubernetes.io/docs/concepts/storage/volumes/
+
+skills:
+  - kubernetes.pods.init-containers
+  - kubernetes.troubleshooting.pods
+  - kubernetes.storage.volumes
+  - kubernetes.workloads.update
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling

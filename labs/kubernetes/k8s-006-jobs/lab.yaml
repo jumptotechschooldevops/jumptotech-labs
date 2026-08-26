@@ -88,8 +88,36 @@ skills:
   - kubernetes.jobs.troubleshoot
   - kubernetes.workloads.batch
 
+# ---------------------------------------------------------------------------
+# CLASSIFICATION (official-source curriculum policy)
+#
+# classification:      PRODUCTION SKILL
+# official_objective:  none. The CKA v1.35 Workloads & Scheduling domain has
+#                      exactly five bullets — application deployments and
+#                      rolling updates/rollbacks; ConfigMaps and Secrets;
+#                      workload autoscaling; primitives for robust, self-healing
+#                      application deployments; Pod admission and scheduling.
+#                      None of them names Jobs. Batch workloads are a CKAD
+#                      topic, not a CKA one.
+#
+#                      This lab previously claimed the "self-healing primitives"
+#                      bullet. That mapping was wrong and has been corrected: a
+#                      Job that runs once to completion is the opposite of a
+#                      self-healing long-running workload.
+#
+#                      The lab is kept because running one-off work correctly —
+#                      completions, backoff, and knowing when a Job has actually
+#                      finished — is a real skill this platform should teach.
+# objective_version:   checked against CKA v1.35 (CNCF curriculum)
+# official_source:     https://training.linuxfoundation.org/certification/certified-kubernetes-administrator-cka/
+#                      https://github.com/cncf/curriculum
+# technical_docs:      https://kubernetes.io/docs/concepts/workloads/controllers/job/
+# last_verified:       2026-08-23
+#
+# Recorded as a comment because `labDefinitionSchema` is `.strict()`. A shared
+# source-metadata contract is being designed across all tracks; this moves into
+# real fields then.
+# ---------------------------------------------------------------------------
 certification:
   - certification: CKA
-    relevant: true
-    domains:
-      - workloads-and-scheduling
+    relevant: false

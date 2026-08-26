@@ -1,0 +1,191 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# K8S-013 is the track's first lab about *changing* a running workload rather
+# than creating one. Everything it verifies already exists in the requirement
+# vocabulary; no new verifier capability was added for it.
+#
+# The check that carries the lesson is `deployment_selector`. A Deployment's
+# selector is immutable in apps/v1, and this one has two labels, so a student
+# who deletes the Deployment and recreates it with `kubectl create deployment`
+# cannot reproduce it. Updating in place is therefore not merely the taught
+# route — it is the only route that passes.
+#
+# As everywhere else in this track there is no `namespace:` field: the session
+# owns its namespace, and both the terminal and the verifier are scoped to it.
+#
+# ---------------------------------------------------------------------------
+# SOURCE METADATA (official-source curriculum policy)
+#
+# Carried as a comment, not as fields: `labDefinitionSchema` is `.strict()`,
+# so `sources:` / `official_objective:` / `last_verified:` would be rejected by
+# the loader until the shared schema is extended. See the curriculum plan for
+# the proposed extension.
+#
+# classification:       CERTIFICATION OBJECTIVE
+# certification:        CKA
+# objective_version:    v1.35 (CNCF curriculum, Kubernetes v1.35)
+# official_objective:   "Understand application deployments and perform rolling
+#                        updates/rollbacks" — Workloads & Scheduling (15%)
+# objective_source:     https://training.linuxfoundation.org/certification/certified-kubernetes-administrator-cka/
+#                       https://github.com/cncf/curriculum
+# objective_mapping:    Covers the "rolling updates" half of the objective.
+#                       The "rollbacks" half is deliberately left to K8S-014,
+#                       which needs `deployment_revision` to grade honestly.
+# coverage_depth:       PRACTICED
+#
+# official_documentation:
+#   - https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+#     verified: a rollout is triggered "if and only if the Deployment's Pod
+#     template (that is, .spec.template) is changed"; scaling does not trigger
+#     one. "Label selector updates": "the selector field is immutable after
+#     creation". "Complete Deployment": all replicas updated to the latest
+#     version, all available, and none of the old replicas running — which is
+#     exactly what the `deployment_rollout_complete` handler asserts.
+#     `minReadySeconds` defaults to 0; `maxSurge`/`maxUnavailable` default to 25%.
+#   - https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/
+#     verified: `status`, `history`, `undo`, `pause`, `resume`, `restart`.
+#   - https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/deployment-v1/
+#     verified: DeploymentSpec field semantics for selector and minReadySeconds.
+#   - https://kubernetes.io/docs/tutorials/kubernetes-basics/update/update-intro/
+# last_verified:        2026-08-23
+#
+# Scenario, company, wording, starting state, hints and checks are original
+# JumpToTech content. The documentation above determines what is *correct*; it
+# is linked rather than reproduced.
+# ---------------------------------------------------------------------------
+id: K8S-013
+slug: k8s-013-rolling-update
+title: Roll Out a New Version
+track: kubernetes
+topic: workloads
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 13
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - K8S-002
+
+story: >
+  The `payments-api` service has been on the same container image since it was
+  deployed. Release engineering has signed off on the next version, and the
+  change window opens now.
+
+  Payments cannot go dark while you do it. The Deployment already runs three
+  replicas behind a readiness probe, which is what makes a gradual replacement
+  possible — Kubernetes will only retire an old replica once a new one reports
+  that it can serve.
+
+objectives:
+  - Change the image of a running Deployment without recreating it
+  - Follow a rolling update to completion with kubectl
+  - Explain why a Deployment's selector cannot be edited after creation
+
+task:
+  summary: Update Deployment payments-api from nginx:1.27-alpine to nginx:1.28-alpine, in place.
+  description: >
+    Deployment `payments-api` is running three replicas of `nginx:1.27-alpine`.
+    Move it to `nginx:1.28-alpine`.
+
+    A Deployment does this by creating a second ReplicaSet and shifting
+    replicas across to it a few at a time, so the service keeps serving
+    throughout. The rollout is complete when every replica runs the new
+    template, no replica from the old one is left, and all three are available.
+
+    Do this by updating the existing Deployment. Do not delete and recreate it:
+    the selector was set when the Deployment was created and Kubernetes will not
+    let you change it afterwards, so a recreated Deployment will not be the same
+    object this lab is asking about.
+
+    Watch the replacement happen rather than assuming it did — the rollout takes
+    a few seconds per replica, because each new Pod has to pass its readiness
+    probe and then stay ready before the next one starts.
+
+setup:
+  manifests:
+    - setup/payments-api.yaml
+  verify:
+    - type: deployment_exists
+      name: payments-api
+    - type: deployment_image
+      name: payments-api
+      image: nginx:1.27-alpine
+    - type: deployment_available
+      name: payments-api
+      min_available: 3
+  verify_timeout_seconds: 240
+
+# Verification is state-based: the verifier reads the live Kubernetes API in
+# this session's namespace, and never inspects the student's command history.
+# `kubectl set image`, `kubectl edit`, and `kubectl apply` of an edited manifest
+# are all correct answers, because all three leave the same state behind.
+requirements:
+  - type: deployment_exists
+    name: payments-api
+    label: Deployment payments-api still exists
+  - type: deployment_selector
+    name: payments-api
+    selector:
+      app: payments-api
+      tier: api
+    label: The original Deployment was updated, not replaced
+  - type: deployment_replicas
+    name: payments-api
+    replicas: 3
+    label: Three replicas are still requested
+  - type: deployment_image
+    name: payments-api
+    image: nginx:1.28-alpine
+    label: Image is now nginx:1.28-alpine
+  - type: deployment_rollout_complete
+    name: payments-api
+    label: Rollout finished — no replica from the old version remains
+  - type: deployment_available
+    name: payments-api
+    min_available: 3
+    label: All three replicas are available
+
+hints:
+  - level: 1
+    text: >
+      A Deployment's container image lives in its Pod template. Changing that
+      template is what starts a rollout — you do not create anything new
+      yourself.
+  - level: 2
+    text: >
+      kubectl can change one field of a live object in more than one way.
+      Consult the kubectl reference for the subcommands that set a container
+      image and that report on a rollout in progress.
+  - level: 3
+    text: >
+      `kubectl set image deployment/payments-api api=nginx:1.28-alpine` updates
+      the template in place; `kubectl edit deployment payments-api` does the same
+      thing by hand. Either way, follow it with
+      `kubectl rollout status deployment/payments-api`, which returns once every
+      replica is on the new template and available. `kubectl get replicasets`
+      shows the old ReplicaSet scaled to zero and the new one at three.
+
+references:
+  - title: Deployments
+    url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+  - title: kubectl rollout
+    url: https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/
+  - title: Performing a Rolling Update
+    url: https://kubernetes.io/docs/tutorials/kubernetes-basics/update/update-intro/
+
+skills:
+  - kubernetes.deployments.update
+  - kubernetes.deployments.rollout
+  - kubernetes.workloads.update
+  - kubernetes.workloads.inspect
+
+certification:
+  - certification: CKA
+    relevant: true
+    domains:
+      - workloads-and-scheduling
