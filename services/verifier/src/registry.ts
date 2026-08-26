@@ -194,6 +194,8 @@ import {
   processRunning,
   scriptExecutable,
   scriptRuns,
+  systemdUnitDirective,
+  systemdUnitSection,
   userExists,
   userInGroup,
   processEnviron,
@@ -384,6 +386,8 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   user_in_group: userInGroup,
   command_exit_code: commandExitCode,
   command_output: commandOutput,
+  systemd_unit_section: systemdUnitSection,
+  systemd_unit_directive: systemdUnitDirective,
 };
 
 /**

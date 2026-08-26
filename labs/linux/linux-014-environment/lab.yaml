@@ -1,0 +1,396 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# WHY THIS LAB EXISTS, AND WHAT IT PROVES ABOUT VERIFICATION
+#
+# Every other lab in this track that asks "is the service up" asks it with
+# `process_running`, and `process_running` answers a narrower question than it
+# looks like it answers: a process exists. A process can exist and be doing
+# nothing useful — failing every write, resolving no helper, serving no
+# request — and a checklist built only from `process_running` would go green on
+# a host that is, from the outside, completely broken.
+#
+# This lab is built on that gap on purpose. The baseline hands the student a
+# service that is enabled, supervised, and present in the process table, and
+# which produces nothing. The requirement list below therefore checks five
+# separate things, in order of how easily each can be satisfied without doing
+# the work:
+#
+#   is it enabled         command_exit_code on /etc/service — the symlink only
+#   is it supervised      command_output on runit's own supervise/stat, as root
+#   does a process exist  process_running
+#   is the FIX in place   file_content on the run script — the cause, not the
+#                         effect
+#   is it working NOW     file_content on the status file the service
+#                         republishes every five seconds, plus a `find -mmin`
+#                         freshness check so a stale file cannot stand in for a
+#                         live one
+#
+# WHY THE RUN SCRIPT IS READ AS WELL AS THE OUTPUT
+#
+# The student is root inside their own container, by design — LINUX-003 and
+# LINUX-005 are unteachable otherwise. That means every file this lab reads is
+# a file the student could write by hand, and an earlier version of this
+# requirement list could be satisfied in three `sudo` commands without touching
+# the service at all: forge the status file, append one line to the log, write
+# the evidence file.
+#
+# No state-based check can be made forgery-proof against a root user in their
+# own sandbox, and pretending otherwise would be worse than saying so. What can
+# be made true is that **the honest path is the cheapest path**. Reading the run
+# script is what does it: the only way to satisfy those two checks is to write
+# the correct service definition, and once that is written a single `sv restart`
+# produces every other piece of evidence for free. Forging is now strictly more
+# work than solving.
+#
+# The freshness check closes the other half — evidence that was true once. A
+# file check is timeless, so a status file left saying STATUS=OK after the
+# service broke would satisfy a content check forever.
+#
+# Content is written from the GNU Bash manual, the Linux man-pages project and
+# Debian's runit documentation only.
+# ---------------------------------------------------------------------------
+id: LINUX-014
+slug: linux-014-environment
+title: Service Environment and PATH
+track: linux
+topic: linux-administration
+difficulty: intermediate
+level: practice
+duration_minutes: 30
+order: 11
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-005
+
+story: >
+  The nightly reporting rollups stopped arriving four days ago. The service
+  that produces them is enabled, the supervisor says it is running, and
+  `pgrep` finds it immediately — which is why three people have already looked
+  at this and concluded the problem must be somewhere else.
+
+  The engineer who packaged the release has one line in the handover: "runs
+  fine, I tested it on the box myself". They did. That is the clue, not the
+  excuse.
+
+objectives:
+  - Tell the difference between a process existing and a service working
+  - Explain why a supervised service does not inherit your login shell's environment
+  - Give a service the environment variables and PATH it needs, durably
+  - Read a service's own published health rather than trusting the process table
+
+task:
+  summary: The reporting service is running and producing nothing. Find out what its environment is missing and give it to it.
+  description: >
+    You have a shell on the host and passwordless `sudo`.
+
+    The service is `report-runner`. It is defined at `/etc/sv/report-runner`,
+    it is enabled, and the supervisor is keeping it alive — none of that is the
+    problem, and none of it needs changing.
+
+    The program itself is `/usr/local/lib/jumptotech/report-runner`. It
+    publishes its own health to `/var/lib/jumptotech/report-runner.status`,
+    rewriting that file from live state every few seconds, and it logs to
+    `/var/log/jumptotech/report-runner.log`. Read both. The status file will
+    tell you what it is unhappy about; it reports one problem at a time, so
+    expect fixing the first to reveal a second.
+
+    Now the part that catches people. Run the program yourself, directly, from
+    this shell:
+
+        /usr/local/lib/jumptotech/report-runner
+
+    It performs a single dry run and reports itself perfectly healthy. It is
+    the same program, on the same host, as the same machine — and under the
+    supervisor it is degraded. Nothing about the program differs between those
+    two runs. Something about the *environment it is given* does, and your
+    login shell has been configured with things the supervisor knows nothing
+    about.
+
+    Fix it so the supervised service reports itself healthy, and fix it in a
+    way that survives the supervisor restarting the service — a variable you
+    export in your own terminal reaches nothing but your own terminal.
+
+    Set the environment in the service's own run script,
+    `/etc/sv/report-runner/run`. That file already exports one variable, so
+    there is a worked example in front of you. runit would also let you source
+    a `conf` file from `run`; this lab asks for the run script specifically,
+    because that is the file it checks.
+
+    Then record one line of evidence: write the directory you had to make
+    resolvable for the service into `/home/student/ops/service-env.txt`. The
+    file may contain other text around it.
+
+    Note that the supervisor restarts a service after you change its
+    definition rather than instantly, and the service republishes its status
+    every five seconds, so give it a moment before concluding a change did not
+    work.
+
+    One honest note on what transfers. The reason a supervised process does not
+    have your shell's environment is portable: a process is handed its
+    environment by whatever executed it, and your shell's startup files were
+    read by your shell alone. That is true on every Linux system and it is the
+    skill being taught here. The *mechanism* on this host is runit, because a
+    container does not run systemd and this platform will not fake one — on a
+    systemd host the same fix lives in a unit file's `Environment=` or
+    `EnvironmentFile=` directive instead of a run script's `export`. The
+    reasoning is identical; only the file you edit changes.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /etc/sv/report-runner/run
+      label: The reporting service is defined
+    - type: command_exit_code
+      command: test
+      args:
+        - -d
+        - /etc/service/report-runner
+      expected_exit_code: 0
+      label: The reporting service is enabled
+    # The baseline this lab depends on: a process that exists...
+    - type: process_running
+      pattern: /usr/local/lib/jumptotech/report-runner
+      label: The reporting service is running
+    # ...supervised by runit rather than merely enabled...
+    - type: command_output
+      command: cat
+      args:
+        - /etc/service/report-runner/supervise/stat
+      as_user: root
+      contains: run
+      label: The supervisor is running the reporting service
+    # ...while the service itself reports that it is not working.
+    - type: file_content
+      path: /var/lib/jumptotech/report-runner.status
+      contains: STATUS=DEGRADED
+      label: The reporting service is not producing rollups
+    - type: file_exists
+      path: /usr/local/libexec/jumptotech/jtt-format
+      label: The formatter the service shells out to is installed
+    - type: directory_exists
+      path: /home/student/ops
+      label: The working directory exists
+  verify_timeout_seconds: 120
+
+# Verification is state-based and reads the live host. Nothing inspects the
+# student's shell history or the commands they typed.
+#
+# One route *is* constrained, deliberately: the environment must reach the
+# service through its run script. runit would also accept a `conf` file sourced
+# by `run`, and that solution is refused here — not because it is wrong, but
+# because reading the run script is what makes forging the output pointless.
+# The task text states the constraint rather than leaving a student to discover
+# it from a failing check.
+requirements:
+  # --- is the service supervised, not merely present? --------------------
+  #
+  # `test -d /etc/service/...` proves the service is *enabled* — the symlink
+  # the supervisor scans. It does NOT prove the supervisor is running it:
+  # `sv stop` leaves the symlink in place. runit publishes the answer in its
+  # own supervise directory, which is root-only, so this check reads it as
+  # root. `run` when supervised; `down` after `sv stop`.
+  - type: command_exit_code
+    command: test
+    args:
+      - -d
+      - /etc/service/report-runner
+    expected_exit_code: 0
+    label: The reporting service is still enabled
+  - type: command_output
+    command: cat
+    args:
+      - /etc/service/report-runner/supervise/stat
+    as_user: root
+    contains: run
+    label: The supervisor is running the reporting service, not just holding it enabled
+  - type: process_running
+    pattern: /usr/local/lib/jumptotech/report-runner
+    label: The reporting service is running
+
+  # --- is the fix in the service definition, or only in its output? -------
+  #
+  # These read the *cause* rather than the effect. Everything else below is
+  # something the service writes, and a student with sudo can write those
+  # files too — so a checklist made only of them can be satisfied without
+  # fixing anything. Reading the run script closes that: the cheapest way to
+  # satisfy these two is to write the correct run script, which is the task.
+  #
+  # Deliberately loose about form. `JTT_ENV=production`, `export JTT_ENV=...`
+  # and a quoted value all match; the exact value is proved by the live status
+  # file below, which only the running service can produce.
+  - type: file_content
+    path: /etc/sv/report-runner/run
+    contains: JTT_ENV
+    label: The service definition supplies the deployment variable
+  - type: file_content
+    path: /etc/sv/report-runner/run
+    contains: /usr/local/libexec/jumptotech
+    label: The service definition puts the formatter's directory on the service's PATH
+
+  # --- what the live service reports about itself -------------------------
+  - type: file_content
+    path: /var/lib/jumptotech/report-runner.status
+    contains: STATUS=OK
+    label: The reporting service reports itself healthy
+  - type: file_content
+    path: /var/lib/jumptotech/report-runner.status
+    contains: JTT_ENV=production
+    label: The service knows which deployment it belongs to
+  - type: file_content
+    path: /var/lib/jumptotech/report-runner.status
+    contains: FORMATTER=/usr/local/libexec/jumptotech/jtt-format
+    label: The service can resolve the formatter it shells out to
+
+  # A file check is timeless: a status file written once and never updated
+  # would satisfy the three above forever. `find -mmin -1` prints the path
+  # only when it was modified in the last minute, so this is the difference
+  # between "the service said it was healthy" and "the service is saying so
+  # now". The running service rewrites this file every five seconds.
+  - type: command_output
+    command: find
+    args:
+      - /var/lib/jumptotech/report-runner.status
+      - -mmin
+      - "-1"
+    contains: /var/lib/jumptotech/report-runner.status
+    label: That health report is current rather than a leftover from earlier
+
+  - type: file_content
+    path: /var/log/jumptotech/report-runner.log
+    contains: formatted=OK
+    label: A rollup was actually produced
+  - type: file_content
+    path: /home/student/ops/service-env.txt
+    contains: /usr/local/libexec/jumptotech
+    label: The directory the service needed on its PATH was recorded
+
+hints:
+  - level: 1
+    text: >
+      Stop looking at whether the process is there. It is there, and it has
+      been there the whole time. The service publishes what it thinks of its
+      own health — read that instead, and read it again after every change you
+      make. It names one problem at a time.
+
+      Then ask the question the handover note is really raising: what is
+      different between the program running under the supervisor and the same
+      program running in your terminal? Not the program. Not the host. Not the
+      account.
+  - level: 2
+    text: >
+      A process is handed its environment by whatever started it, and nothing
+      else. Your terminal's environment was assembled by your shell reading its
+      startup files; the supervisor never read those and never will. The GNU
+      Bash manual's chapters on shell startup files and on environment describe
+      which files a shell reads and when, and `env` prints what any given shell
+      currently has.
+
+      Compare `env` in your terminal with the `PATH=` line the service itself
+      publishes in its status file. The difference is not subtle once you look
+      at both.
+
+      For where a supervised service's environment is set, `man sv` and Debian's
+      runit documentation describe the service directory, and the existing run
+      script already contains one exported variable as a worked example.
+  - level: 3
+    text: >
+      The service needs two things it is not being given: `JTT_ENV`, whose
+      value the status file's own wording and the rest of this host will tell
+      you, and a `PATH` that can resolve `jtt-format` — which is installed
+      outside every directory on a default PATH. `command -v jtt-format` in
+      your own shell prints exactly where it lives, because your shell was set
+      up with it and the service was not.
+
+      Set both in `/etc/sv/report-runner/run`, before the line that executes
+      the program, using `export` the same way `JTT_SUPERVISED` is already
+      exported there. Exporting them in your own terminal instead will change
+      nothing at all — that environment belongs to your shell and dies with it.
+
+      After editing, wait a few seconds for the supervisor to restart the
+      service, then re-read the status file. When it reports `STATUS=OK` the
+      log will start carrying `formatted=OK` lines again.
+
+references:
+  - title: GNU Bash manual — Bash startup files
+    url: https://www.gnu.org/software/bash/manual/html_node/Bash-Startup-Files.html
+  - title: GNU Bash manual — Environment
+    url: https://www.gnu.org/software/bash/manual/html_node/Environment.html
+  - title: environ(7) — the user environment
+    url: https://man7.org/linux/man-pages/man7/environ.7.html
+  - title: env(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/env.1.html
+  - title: sv(8) — controlling runit services
+    url: https://manpages.debian.org/bookworm/runit/sv.8.en.html
+
+skills:
+  - linux.env.variables
+  - linux.env.path-resolution
+  - linux.env.startup-files
+  - linux.env.service-context
+  - linux.services.status
+  - linux.troubleshooting.diagnose
+
+# ---------------------------------------------------------------------------
+# SOURCE VERIFICATION
+#
+# Recorded here as comments rather than as schema fields: a `sources:` /
+# `last_verified:` block would be a change to the shared lab schema, which this
+# track is not permitted to make unilaterally. See the curriculum plan for the
+# proposed schema extension.
+#
+# last_verified: 2026-08-23
+#
+# Certification objectives — read from the official Linux Foundation LFCS
+# certification page on 2026-08-23:
+#   https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+#   Current domains and weights (distribution-agnostic exam, effective
+#   2023-05-11 per the Linux Foundation's own announcement):
+#     Operations Deployment 25% · Networking 25% · Storage 20% ·
+#     Essential Commands 20% · Users and Groups 10%
+#
+#   This lab maps to three published competencies:
+#     Essential Commands    "Create, configure, and troubleshoot services"
+#     Users and Groups      "Manage personal and system-wide environment
+#                            profiles"
+#     Operations Deployment "Diagnose, identify, manage, and troubleshoot
+#                            processes and services"
+#
+#   Caveat stated plainly: LFCS is examined on systemd-based hosts. The
+#   *environment* half of this lab — how a process receives its environment,
+#   which startup files a shell reads, how PATH resolution works — is portable
+#   and is the examined skill. The *supervisor* half is runit, because a
+#   container does not run systemd and this platform does not fake one. That
+#   half is a production skill, not an exam objective, and the task text says
+#   so rather than implying otherwise.
+#
+# Technical objectives — verified against upstream documentation on 2026-08-23:
+#   GNU Bash manual, "Bash Startup Files": "When Bash runs as an interactive
+#     shell that is not a login shell, it reads and executes commands from
+#     ~/.bashrc, if that file exists." A login shell instead reads /etc/profile
+#     then the first of ~/.bash_profile, ~/.bash_login, ~/.profile. The
+#     platform attaches a student with `docker exec … bash`, which is
+#     interactive and not a login shell — so the seed's .bashrc append is read
+#     by the student's shell and ~/.profile is not.
+#   environ(7): the environment "is made available to the process by the
+#     execve(2) call when a new program is started", and PATH is "the sequence
+#     of directory prefixes that sh(1) and many other programs employ when
+#     searching for an executable file that is specified as a simple
+#     filename". Both are exactly the mechanism this lab is about: `runsv`
+#     execs the run script with runsvdir's environment and nothing else.
+# ---------------------------------------------------------------------------
+certification:
+  - certification: LFCS
+    relevant: true
+    # Current official domain slugs, verified 2026-08-23. Note that
+    # `operation-of-running-systems`, used elsewhere in this track, is a
+    # retired domain that the current curriculum no longer contains.
+    domains:
+      - essential-commands
+      - users-and-groups
+      - operations-deployment

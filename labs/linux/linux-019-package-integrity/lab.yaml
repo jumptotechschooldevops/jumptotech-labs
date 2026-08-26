@@ -1,0 +1,314 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# HOW THIS LAB IS GRADED
+#
+# Entirely on system state, with no student-written evidence anywhere. There is
+# no findings file, no answer to record, nothing to type into a text file. What
+# is checked is what the host is:
+#
+#   the restored file's own bytes      sha256sum against the digest the package
+#                                      ships, so "restored" means restored and
+#                                      not "edited until it looked right"
+#   the shim is gone                   path_absent
+#   the package manager knows about    dpkg's own database — the .list file it
+#   the audit tool                     writes and the entry in its status file
+#   the tool actually landed           file_exists plus an executable bit
+#
+# Every one of those is a fact about the machine rather than a claim about it.
+# There is nothing to forge that is cheaper than doing the work: restoring the
+# file means having its bytes, and the only place those bytes exist is the
+# package sitting in the repository directory.
+#
+# WHY sha256sum RATHER THAN dpkg --verify
+#
+# `dpkg --verify` is the right tool for a *student* and the wrong one for this
+# verifier. It is not in the platform's allow-list of inspection binaries, and
+# widening that list for one lab would be the wrong trade. It is also noisy on
+# this image: the slim base excludes /usr/share/doc, so verifying any base
+# package reports a screenful of missing documentation files alongside the one
+# line that matters.
+#
+# So the student is pointed at `dpkg --verify jumptotech-tools`, which on an
+# internal package with no documentation reports exactly one line, and the
+# verifier independently confirms the outcome by digest. The two agree because
+# they are asking the same question of the same bytes.
+#
+# THE SECOND KIND OF DRIFT
+#
+# An integrity check only knows about files packages own. The shim in
+# /usr/local/bin is owned by nothing, so `dpkg --verify` is silent about it and
+# always will be. Finding it means asking `dpkg -S` and understanding that "no
+# path found matching" is an answer rather than an error — which is the part of
+# this objective people usually miss.
+#
+# Content is written from the dpkg project's own manual pages as installed on
+# this host, and from the Linux man-pages project.
+# ---------------------------------------------------------------------------
+id: LINUX-019
+slug: linux-019-package-integrity
+title: Package Integrity and Offline Installation
+track: linux
+topic: linux-administration
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 16
+
+environment:
+  provider: linux
+
+prerequisites:
+  - LINUX-002
+
+story: >
+  Config management flagged this host as drifted and pulled it out of the pool.
+  Nobody disputes the finding; the question is what actually changed, and the
+  person who changed it left in March.
+
+  There is no network here, which is the usual reason this ticket sits. It does
+  not need one — everything required is already on the disk, in the place the
+  internal repository leaves it.
+
+objectives:
+  - Ask the package manager which package owns a file, and read what an unowned path means
+  - Use a package's recorded checksums to find a file that has been edited in place
+  - Restore a packaged file from its artifact without network access
+  - Install a local package so the package manager knows about it, not just the filesystem
+
+task:
+  summary: A host has drifted from what its packages describe. Find both kinds of drift, correct them, and install the audit tool from the local artifact.
+  description: >
+    You have a shell on the host and passwordless `sudo`.
+
+    `/srv/jumptotech/runbooks/package-drift.md` is what platform wants true
+    before this host goes back into the pool. Read it first — it describes
+    three outcomes and deliberately does not tell you which commands produce
+    them.
+
+    Two things are worth knowing before you start hunting.
+
+    The package manager recorded a checksum for every file it installed, so it
+    can tell you whether a packaged file still matches what was shipped. That
+    finds one kind of drift.
+
+    It cannot find the other kind. A file that no package owns is invisible to
+    an integrity check — not because the check is weak, but because it has
+    nothing to compare against. Asking which package owns a path is a different
+    question, and on this host one of the answers is more interesting than the
+    others.
+
+    There is no network. The artifacts you need are in `/srv/jumptotech/pkg`,
+    and everything in this lab can be done with what is already installed.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/jumptotech/runbooks/package-drift.md
+      label: The drift runbook is present
+    - type: file_exists
+      path: /srv/jumptotech/pkg/jumptotech-tools_1.2.0_all.deb
+      label: The tools artifact is in the local repository
+    - type: file_exists
+      path: /srv/jumptotech/pkg/jumptotech-audit_0.9.1_all.deb
+      label: The audit artifact is in the local repository
+    - type: file_exists
+      path: /var/lib/dpkg/info/jumptotech-tools.list
+      label: The tools package is installed
+    # The two kinds of drift the student has to find.
+    - type: file_exists
+      path: /usr/local/bin/jtt-checkctl
+      label: An unpackaged file is shadowing a packaged tool
+    - type: command_exit_code
+      command: grep
+      args:
+        - -q
+        - settlement
+        - /usr/local/lib/jumptotech/jtt-checkctl
+      expected_exit_code: 0
+      label: A packaged file has been edited in place
+    - type: path_absent
+      path: /var/lib/dpkg/info/jumptotech-audit.list
+      label: The audit package has not been installed
+  verify_timeout_seconds: 180
+
+# Verification is state-based and reads the live host. Nothing inspects the
+# student's shell history, and there is no evidence file to write — every check
+# below reads a fact about the machine rather than a claim about it.
+requirements:
+  # --- drift one: the edited packaged file is what the package shipped -----
+  #
+  # By digest rather than by absence of the added text: "restored" has to mean
+  # the file's bytes are the package's bytes, not that a student deleted the
+  # lines they happened to notice. The only place those bytes exist on this
+  # host is the artifact in the repository directory.
+  - type: command_output
+    command: sha256sum
+    args:
+      - /usr/local/lib/jumptotech/jtt-checkctl
+    contains: 62cbea8ef4bfb108e7a0f62bdac3435b1c40c0ea73e2888df9b69fc760433ebf
+    label: The edited packaged file is byte-for-byte what its package installed
+  - type: command_output
+    command: sha256sum
+    args:
+      - /etc/jumptotech/checkctl.conf
+    contains: b58365da0df1dbee25acfd6d32d60ffad63d7b19f96d10b61a36bb855517e5b8
+    label: The package's configuration file was left as it shipped
+  - type: file_exists
+    path: /var/lib/dpkg/info/jumptotech-tools.list
+    label: The tools package is still installed rather than removed
+
+  # --- drift two: nothing unowned is shadowing a packaged tool -------------
+  - type: path_absent
+    path: /usr/local/bin/jtt-checkctl
+    label: Nothing in the earlier PATH directory shadows the packaged tool
+
+  # --- the audit tool, installed rather than copied ------------------------
+  #
+  # dpkg's own database, not the filesystem. A student who copies the binary
+  # into place leaves a host nobody can query, upgrade or remove — which the
+  # runbook names as half the reason this host drifted. These two checks are
+  # what tell the difference.
+  - type: file_exists
+    path: /var/lib/dpkg/info/jumptotech-audit.list
+    label: The package manager recorded the audit package as installed
+  - type: command_exit_code
+    command: grep
+    args:
+      - -q
+      - jumptotech-audit
+      - /var/lib/dpkg/status
+    expected_exit_code: 0
+    label: The audit package appears in the package database
+  - type: command_output
+    command: sha256sum
+    args:
+      - /usr/local/lib/jumptotech/jtt-audit
+    contains: 1ebbc40497567a8b06cea11aaab25ebc7edcff165b4b2c515bc68943d86ca6d9
+    label: The audit tool on disk is the one the package ships
+  - type: script_executable
+    path: /usr/local/lib/jumptotech/jtt-audit
+    label: The audit tool can be run
+
+hints:
+  - level: 1
+    text: >
+      Start from what the package manager already knows. It can tell you which
+      package a given file belongs to, and it can tell you whether the files a
+      package owns still match what was installed. Those are two different
+      questions and you need both.
+
+      When you run the second one against the tools package, read the output
+      carefully rather than skimming it — a single flagged file among the lines
+      is the point, and the flags themselves say which property changed.
+
+      Then ask the first question about the thing on your PATH that answers when
+      you type the tool's name. The answer you get back is the finding.
+  - level: 2
+    text: >
+      `man dpkg` covers both questions: the option that searches for the package
+      owning a file, and the option that compares installed files against the
+      checksums recorded for them. Note what the search prints when a path
+      belongs to no package at all — that is not an error, it is the answer.
+
+      For putting a file back without a network: the package is a file on disk,
+      and `man dpkg` and `man dpkg-deb` between them describe both installing
+      one and extracting its contents. Either route gets the bytes back; one of
+      them also keeps the package manager's view of the world consistent, which
+      the runbook has an opinion about.
+
+      For the third outcome, the runbook is explicit that "installed" means the
+      package manager knows about it. Copying files does not achieve that, and
+      the difference is checkable.
+  - level: 3
+    text: >
+      Three separate things, and they are independent — fixing one tells you
+      nothing about the others.
+
+      The edited file belongs to `jumptotech-tools`, and the way to put it back
+      exactly is to reinstall that package from the artifact in
+      `/srv/jumptotech/pkg` rather than to delete the lines you can see. Deleting
+      what looks added leaves you guessing whether you got every byte; letting
+      the package manager write the file means you are not guessing.
+
+      The shadowing file is in `/usr/local/bin` and belongs to no package, which
+      is why the integrity check never mentioned it. It should not be there at
+      all.
+
+      The audit package is the other artifact in the same directory, and it has
+      never been installed — installing it is one command against a local file,
+      with no repository involved.
+
+references:
+  - title: dpkg(1) — package manager for Debian
+    url: https://manpages.debian.org/bookworm/dpkg/dpkg.1.en.html
+  - title: dpkg-deb(1) — Debian package archive tool
+    url: https://manpages.debian.org/bookworm/dpkg/dpkg-deb.1.en.html
+  - title: dpkg-query(1) — a tool to query the dpkg database
+    url: https://manpages.debian.org/bookworm/dpkg/dpkg-query.1.en.html
+  - title: sha256sum(1) — Linux manual page
+    url: https://man7.org/linux/man-pages/man1/sha256sum.1.html
+  - title: Debian Policy Manual — the package database
+    url: https://www.debian.org/doc/debian-policy/
+
+skills:
+  - linux.packages.query-owner
+  - linux.packages.verify-integrity
+  - linux.packages.install-local
+  - linux.packages.restore-file
+  - linux.files.search
+
+# ---------------------------------------------------------------------------
+# SOURCE VERIFICATION
+#
+# Recorded as comments rather than schema fields: a `sources:` / `last_verified:`
+# block would be a change to the shared lab schema, which this track is not
+# permitted to make unilaterally.
+#
+# last_verified: 2026-08-25
+#
+# CLASSIFICATION
+#
+#   CERTIFICATION OBJECTIVE  yes — "Search for, install, validate, and maintain
+#                            software packages or repositories", published under
+#                            Operations Deployment (25%) in the current LFCS
+#                            competency list, re-read from the Linux
+#                            Foundation's certification page on 2026-08-25 and
+#                            quoted verbatim there. This lab covers *search*,
+#                            *validate* and *install*; repository maintenance is
+#                            out of reach on a host with no network and is not
+#                            claimed.
+#   PRODUCTION SKILL         yes; "config management says this host drifted,
+#                            prove it and fix it" is an ordinary ticket, and
+#                            restoring from a local artifact is what you do when
+#                            the mirror is unreachable
+#   FOUNDATIONAL KNOWLEDGE   ownership of files by packages, checksums as a
+#                            drift signal, PATH precedence
+#
+# Technical objectives verified 2026-08-25 inside the sandbox image, which is
+# the same image the lab runs on:
+#   dpkg --verify      reports `??5??????   <path>` for a file whose checksum no
+#                      longer matches the one recorded at install time. On base
+#                      packages it also reports many `missing
+#                      /usr/share/doc/...` lines, because the slim base image
+#                      excludes documentation — which is why this lab's drift is
+#                      seeded in an internal package with no doc files, where the
+#                      output is one line.
+#   dpkg -S            answers with the owning package, and for an unowned path
+#                      reports that no path was found matching it.
+#   offline install    `dpkg -i` against a local .deb succeeds with no network
+#                      and writes /var/lib/dpkg/info/<pkg>.list.
+#   deterministic      `dpkg-deb --root-owner-group --build` from fixed content
+#                      produced identical payload digests across runs, which is
+#                      what lets the expected digests be literals here.
+#   documentation      `man dpkg`, `man dpkg-deb` and `man dpkg-query` all
+#                      answer on this image. `deb(5)` does not — it ships in
+#                      dpkg-dev, which is not installed — so it is not cited.
+# ---------------------------------------------------------------------------
+certification:
+  - certification: LFCS
+    relevant: true
+    domains:
+      - operations-deployment

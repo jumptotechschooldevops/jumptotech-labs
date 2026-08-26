@@ -21,7 +21,14 @@ import {
 import { LABS_DIR } from './helpers.js';
 import { scanLabsDirectory } from './catalog-shape.js';
 
-const LINUX_IDS = [
+/**
+ * The original fundamentals chain, in order, each lab requiring the one before.
+ *
+ * Kept as its own list because the track is no longer a single chain: a lab
+ * added after LINUX-010 names only the prerequisites it genuinely needs, so the
+ * catalog is a graph and this is one path through it.
+ */
+const LINUX_CHAIN = [
   'LINUX-001',
   'LINUX-002',
   'LINUX-003',
@@ -32,6 +39,23 @@ const LINUX_IDS = [
   'LINUX-008',
   'LINUX-009',
   'LINUX-010',
+];
+
+/**
+ * Every Linux lab, in catalog order — which is `order`, then lab id on a tie.
+ * LINUX-011 deliberately shares `order: 11` with LINUX-014 and sorts ahead of
+ * it on id, so a foundations lab written later still lands beside the
+ * fundamentals chain it belongs with rather than at the end of the track.
+ */
+const LINUX_IDS = [
+  ...LINUX_CHAIN,
+  'LINUX-011',
+  'LINUX-014',
+  'LINUX-015',
+  'LINUX-016',
+  'LINUX-017',
+  'LINUX-018',
+  'LINUX-019',
 ];
 
 let cached: LabRegistry | undefined;
@@ -46,7 +70,7 @@ async function realRegistry(): Promise<LabRegistry> {
 // ------------------------------------------------------- 1. definitions load
 
 describe('Linux lab definitions load (test requirement 1)', () => {
-  it('loads all ten, with no definition errors anywhere in the catalog', async () => {
+  it('loads every one, with no definition errors anywhere in the catalog', async () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
@@ -173,12 +197,46 @@ describe('the catalog carries both tracks (test requirement 2)', () => {
     expect(summaries.filter((l) => l.hasSetup)).toHaveLength(summaries.length - 1);
   });
 
-  it('describes a prerequisite path through the track', async () => {
+  it('describes a prerequisite path through the fundamentals chain', async () => {
     const registry = await realRegistry();
 
-    for (const [index, id] of LINUX_IDS.entries()) {
+    for (const [index, id] of LINUX_CHAIN.entries()) {
       const lab = registry.get(id);
-      expect(lab.prerequisites).toEqual(index === 0 ? [] : [LINUX_IDS[index - 1]]);
+      expect(lab.prerequisites).toEqual(index === 0 ? [] : [LINUX_CHAIN[index - 1]]);
+    }
+  });
+
+  it('lets a later lab name only the prerequisites it genuinely needs', async () => {
+    const registry = await realRegistry();
+
+    // LINUX-014 is about a supervised service's environment, so it needs the
+    // service lab and nothing after it. Requiring the whole chain would have
+    // forced a student through a scripting challenge to reach it.
+    expect(registry.get('LINUX-014').prerequisites).toEqual(['LINUX-005']);
+    // LINUX-015 delegates authority between accounts, so it needs the users
+    // and groups lab and nothing else.
+    expect(registry.get('LINUX-015').prerequisites).toEqual(['LINUX-003']);
+    // LINUX-016 builds on reading and filtering logs, and needs nothing else.
+    expect(registry.get('LINUX-016').prerequisites).toEqual(['LINUX-007']);
+    // LINUX-017 expresses a supervised service as a systemd unit, so it needs
+    // the service lab and nothing else.
+    expect(registry.get('LINUX-017').prerequisites).toEqual(['LINUX-005']);
+    // LINUX-018 is about a job failing under a scheduler's environment rather
+    // than the student's, which is what LINUX-014 establishes.
+    expect(registry.get('LINUX-018').prerequisites).toEqual(['LINUX-014']);
+    // LINUX-019 is about file ownership and integrity, which LINUX-002
+    // establishes; it needs nothing after that.
+    expect(registry.get('LINUX-019').prerequisites).toEqual(['LINUX-002']);
+  });
+
+  it('names only prerequisites that exist in the track', async () => {
+    const registry = await realRegistry();
+    const known = new Set(registry.labsForTrack('linux').map((l) => l.id));
+
+    for (const summary of registry.labsForTrack('linux')) {
+      for (const prerequisite of registry.get(summary.id).prerequisites) {
+        expect(known.has(prerequisite), `${summary.id} requires ${prerequisite}`).toBe(true);
+      }
     }
   });
 });

@@ -1,9 +1,15 @@
 # ---------------------------------------------------------------------------
 # JumpToTech Labs — lab definition
 #
-# Network scope. This lab is entirely self-contained: the sandbox has its own
-# private bridge network and, by default, no route off the host at all. Nothing
-# here scans, probes, or contacts anything outside the student's own container.
+# Network scope. This lab is entirely self-contained: the sandbox runs with
+# `--network none`, so the container has no network attachment at all. `lo` is
+# the only interface that is up or carries an address, and there are no routes
+# whatsoever — verified in the built image, where `ip route` prints nothing.
+# (The kernel registers down, addressless tunnel placeholders such as `tunl0`
+# and `gre0` in every network namespace; they connect to nothing, and the task
+# text says so rather than letting a student wonder.) Nothing here scans,
+# probes, or contacts anything outside the student's own container, because
+# there is nothing outside it to contact.
 #
 # Content is written from the Linux man-pages project and iproute2/curl
 # documentation only.
@@ -57,10 +63,11 @@ task:
 
     Third, record this host's hostname into `hostname.txt`.
 
-    All three are local. This sandbox has a private network of its own and no
-    route to anywhere else, so everything you need is on `127.0.0.1` or on the
-    container's own interface — there is nothing external to reach, and nothing
-    external to break.
+    All three are local. This sandbox has no network attachment at all:
+    `127.0.0.1` on `lo` is the only address it holds, and it has no routes. The
+    handful of down `tunl0`/`gre0`-style devices in the interface list are
+    kernel placeholders that connect to nothing. There is nothing external to
+    reach, and nothing external to break.
 
 setup:
   seed_scripts:

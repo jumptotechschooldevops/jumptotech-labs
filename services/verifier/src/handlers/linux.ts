@@ -27,6 +27,12 @@ import type { RequirementOf } from '@jumptotech/lab-orchestrator';
 import { fail, missingPath, pass, type HandlerOutcome, type SandboxVerifierHandler } from '../contract.js';
 import type { SandboxReader } from '../sandbox-reader.js';
 import { normalizeMode } from './filesystem.js';
+import {
+  LIST_DIRECTIVES,
+  parseSystemdUnit,
+  SystemdUnitParseError,
+  type SystemdUnit,
+} from '../systemd-unit.js';
 
 // --- filesystem, the parts the base family does not cover -------------------
 
@@ -397,3 +403,125 @@ function runInspection(
 
 /** Re-exported so the registry can name the whole family in one import. */
 export type LinuxHandlerOutcome = HandlerOutcome;
+
+// --- systemd unit files -----------------------------------------------------
+
+/**
+ * Read a unit file and answer one question about one section or directive.
+ *
+ * Server-side and read-only. The expected value never leaves this process: it
+ * comes from the lab definition on the server, the unit file is read out of the
+ * sandbox, and the comparison happens here. Nothing is written into the
+ * sandbox, no checker script is generated, and the failure details below name
+ * what was *observed* rather than what was wanted — so a student who reads
+ * every check result still has to work out the answer.
+ */
+export const systemdUnitSection: SandboxVerifierHandler<'systemd_unit_section'> = {
+  type: 'systemd_unit_section',
+  label: (r) => `${r.path} declares a [${r.section}] section`,
+  async run(requirement, reader) {
+    const unit = await readUnit(reader, requirement.path);
+    if ('failure' in unit) return unit.failure;
+    return unit.value.hasSection(requirement.section)
+      ? pass()
+      : fail(`'${requirement.path}' has no [${requirement.section}] section`);
+  },
+};
+
+export const systemdUnitDirective: SandboxVerifierHandler<'systemd_unit_directive'> = {
+  type: 'systemd_unit_directive',
+  label: (r) => `${r.path} sets ${r.section}/${r.directive} as described`,
+  async run(requirement, reader) {
+    const unit = await readUnit(reader, requirement.path);
+    if ('failure' in unit) return unit.failure;
+    const { section, directive } = requirement;
+    const where = `[${section}] ${directive}`;
+
+    if (requirement.absent === true) {
+      return unit.value.isSet(section, directive)
+        ? fail(`'${requirement.path}' still sets ${where}`)
+        : pass();
+    }
+
+    if (!unit.value.hasSection(section)) {
+      return fail(`'${requirement.path}' has no [${section}] section`);
+    }
+    if (!unit.value.isSet(section, directive)) {
+      return fail(`'${requirement.path}' does not set ${where}`);
+    }
+
+    /*
+     * Which reader applies is decided by systemd's documented behaviour for
+     * this directive, not by which assertion the lab happened to write. A
+     * dependency setting accumulates across repetitions and is matched by
+     * membership; an ordinary setting is a scalar whose last assignment wins.
+     */
+    if (requirement.contains !== undefined) {
+      const members = LIST_DIRECTIVES.has(directive)
+        ? unit.value.tokens(section, directive)
+        : // A scalar directive has one effective value; membership over its
+          // whitespace-split form is still the honest reading of "contains".
+          unit.value.tokens(section, directive);
+      return members.includes(requirement.contains)
+        ? pass()
+        : fail(`${where} is set, but not to what this check expects`);
+    }
+
+    if (LIST_DIRECTIVES.has(directive)) {
+      // `equals` on a list directive compares the whole accumulated list, so a
+      // lab cannot accidentally assert "exactly one dependency" by writing the
+      // check it would have written for a scalar.
+      const joined = unit.value.tokens(section, directive).join(' ');
+      return joined === requirement.equals
+        ? pass()
+        : fail(`${where} is set, but not to what this check expects`);
+    }
+
+    const actual = unit.value.scalar(section, directive);
+    return collapseWhitespace(actual) === collapseWhitespace(requirement.equals)
+      ? pass()
+      : fail(`${where} is set, but not to what this check expects`);
+  },
+};
+
+/**
+ * Compare scalar values on their content, not on their spacing.
+ *
+ * systemd replaces a line-ending backslash with a space and concatenates, so a
+ * student who writes a long `ExecStart=` across three indented lines — which is
+ * the documented way to write one — ends up with runs of spaces the file does
+ * not visibly contain. Failing that answer over invisible whitespace would be
+ * grading formatting rather than configuration, and systemd itself splits a
+ * command line on whitespace regardless of how much of it there is.
+ *
+ * This collapses runs; it does not trim meaning. `ExecStart=/bin/a --x` and
+ * `ExecStart=/bin/b --x` still differ, and so do `on-failure` and `always`.
+ */
+function collapseWhitespace(value: string | null | undefined): string | null {
+  return value === null || value === undefined ? null : value.replace(/\s+/g, ' ').trim();
+}
+
+/** Read and parse a unit, turning every failure mode into a check outcome. */
+async function readUnit(
+  reader: SandboxReader,
+  path: string,
+): Promise<{ value: SystemdUnit } | { failure: HandlerOutcome }> {
+  const read = await reader.path(path);
+  if (!read) return { failure: missingPath('unit file', path) };
+  if (read.type !== 'file' || read.content === undefined) {
+    return { failure: fail(`'${path}' is not a readable regular file`) };
+  }
+  if (read.truncated) {
+    return {
+      failure: fail(`'${path}' is too large to read as a unit file`),
+    };
+  }
+  try {
+    return { value: parseSystemdUnit(read.content) };
+  } catch (error) {
+    // The parse error names the line and the shape of the problem, never the
+    // directive the lab was looking for.
+    const detail = error instanceof SystemdUnitParseError ? error.message : 'could not be parsed';
+    return { failure: fail(`'${path}' is not a valid unit file — ${detail}`) };
+  }
+}

@@ -66,11 +66,22 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   iproute2 iputils-ping netcat socat  LINUX-006 networking
 #   curl                                LINUX-006 fetches a URL and LINUX-010's
 #                                       runbook checks a service with it; both
-#                                       cite curl(1) and neither works without
-#                                       it. Only ever used against 127.0.0.1 —
-#                                       these containers run `--network none`.
+#                                       cite `man curl`, and the image shipped
+#                                       neither the tool nor the page, so both
+#                                       labs were uncompletable by their own
+#                                       hints. It reaches nothing new: under
+#                                       `--network none` the container holds
+#                                       one address, 127.0.0.1, and no routes —
+#                                       exactly the reach netcat-openbsd and
+#                                       socat above already have.
 #   passwd sudo                         LINUX-002/003 accounts
 #   runit                               LINUX-005 supervision
+#   cron                                LINUX-018 scheduled jobs. The package
+#                                       only; nothing starts it here. Every
+#                                       service a student sees is one a lab
+#                                       put there, so LINUX-018's seed defines
+#                                       and enables it under runit like any
+#                                       other supervised service.
 #   less tree file nano                 reading and identifying what is there
 #   man-db manpages                     the labs cite man pages; they must exist
 #                                       — see the dpkg fragment below, without
@@ -80,31 +91,44 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   tzdata ca-certificates              sane log timestamps, TLS roots
 # `coreutils` comes with the base image. Nothing else is added.
 #
-# The second install is a `--reinstall` of packages the base image already
-# provides. `apt-get install coreutils` on an up-to-date system is a no-op, so
-# without this their manual pages — chmod(1), df(1), du(1), mkdir(1), mv(1),
-# stat(1), tail(1), find(1), grep(1), useradd(8), usermod(8), hostname(1) —
-# would stay missing even with the exclusion lifted, because they were unpacked
-# before it was. Every package named here provides a page a shipped lab cites.
-# `mandb` then builds the index `man` searches.
-# Put the man pages back.
+# --- why the dpkg drop-in below exists --------------------------------------
 #
 # `debian:bookworm-slim` ships /etc/dpkg/dpkg.cfg.d/docker containing
-# `path-exclude /usr/share/man/*`, so every package installed below would unpack
-# with its manual pages silently dropped — `man-db` and `manpages` included.
-# The Linux track cites a manual page in almost every lab and tells students to
-# read them, so an image where `man ls` says "No manual entry" teaches the
-# opposite of what the labs are for.
+# `path-exclude /usr/share/man/*`, so every package installs *without* its
+# manual pages. Installing `man-db` and `manpages` does not undo that: they are
+# subject to the same exclusion, which is why this image previously answered
+# "No manual entry" for every one of the ~27 pages the labs' hints tell students
+# to read — `man find`, `man chmod`, `man ps`, and even `environ(7)`, which
+# LINUX-014 cites directly. The Linux track cites a manual page in almost every
+# lab, so an image where `man ls` says "No manual entry" teaches the opposite of
+# what the labs are for.
 #
-# A `path-include` in a fragment that sorts *after* `docker` re-includes them,
-# which is surgical in a way that deleting the vendor file is not: the doc,
-# locale and info exclusions stay in force, so only the manual pages come back
-# and the image does not regain everything else Debian normally strips.
+# A `path-include` in a drop-in that sorts *after* `docker` re-includes them.
+# Config files in /etc/dpkg/dpkg.cfg.d are read in alphabetical order and the
+# later directive wins, so the name matters — `zz-` is not decoration. This is
+# surgical in a way that deleting the vendor file is not: the doc, locale and
+# info exclusions stay in force, so only the manual pages come back and the
+# image does not regain everything else Debian normally strips.
+#
+# The exclusion is only consulted at unpack time, so re-including it is not
+# enough on its own: the packages that came with the base image were already
+# unpacked without their pages and have to be reinstalled. `apt-get install
+# coreutils` on an up-to-date system is a no-op, which is why `--reinstall` is
+# needed rather than a plain install. That list holds exactly the packages that
+# own a page the curriculum cites (coreutils covers mkdir/mv/touch/chmod/stat/
+# df/du/head/tail/test/ln/env, passwd covers useradd/usermod/groupadd, `dpkg`
+# covers dpkg/dpkg-deb/dpkg-query for LINUX-019, tar/gzip/diffutils cover
+# LINUX-008 and the analysis labs, and `bash` is there because a student who
+# reaches for documentation reaches for `man bash` first). Everything else
+# installed below gets its pages from the drop-in alone. `mandb` then builds
+# the index `man` searches, so it runs last, after every unpack.
 RUN set -eux; \
-    printf '%s\n' 'path-include /usr/share/man/*' \
-      > /etc/dpkg/dpkg.cfg.d/jumptotech-manpages
-
-RUN set -eux; \
+    printf '%s\n' \
+      '# Manual pages are curriculum content in this image: LINUX-001 onward' \
+      '# send students to `man` from their hints. The slim base image excludes' \
+      '# them; this drop-in sorts after that exclusion and re-includes them.' \
+      'path-include /usr/share/man/*' \
+      > /etc/dpkg/dpkg.cfg.d/zz-jumptotech-manpages; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       procps \
@@ -117,6 +141,7 @@ RUN set -eux; \
       passwd \
       sudo \
       runit \
+      cron \
       less \
       tree \
       file \
@@ -133,15 +158,17 @@ RUN set -eux; \
       tzdata \
       ca-certificates; \
     apt-get install -y --no-install-recommends --reinstall \
+      bash \
       coreutils \
+      diffutils \
+      dpkg \
       findutils \
       grep \
-      sed \
-      tar \
       gzip \
-      diffutils \
       hostname \
-      passwd; \
+      passwd \
+      sed \
+      tar; \
     mandb --quiet --create; \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 

@@ -1539,6 +1539,66 @@ const sandboxRequirementSchemas = {
       ...common,
     })
     .strict(),
+
+  /**
+   * One directive of a systemd unit file, read semantically.
+   *
+   * Substring matching grades the wrong thing here. `ExecStart=/usr/bin/app`
+   * and `ExecStart = /usr/bin/app` are one directive; a commented-out
+   * `#ExecStart=/bin/false` is not a directive at all; `After=` written twice
+   * means what `After=a b` means once. A `file_content` check gets all three
+   * wrong, and wrong in the direction that passes a broken unit.
+   *
+   * The verifier parses the file and answers one question about one directive.
+   * How that directive is read depends on what systemd documents for it: a
+   * dependency or environment setting accumulates across repetitions and is
+   * matched by membership, while an ordinary setting is a scalar whose last
+   * assignment wins. `LIST_DIRECTIVES` in the verifier holds that mapping.
+   *
+   * Exactly one of `equals`, `contains` or `absent` is required, so a lab
+   * cannot write a check whose meaning is ambiguous.
+   */
+  systemd_unit_directive: z
+    .object({
+      type: z.literal('systemd_unit_directive'),
+      path: sandboxPath,
+      section: z.enum(['Unit', 'Service', 'Install']),
+      directive: z
+        .string()
+        .min(1)
+        .max(64)
+        .regex(/^[A-Za-z][A-Za-z0-9-]*$/, 'must be a systemd directive name'),
+      /** Effective scalar value — the last assignment — must equal this. */
+      equals: z.string().min(1).max(512).optional(),
+      /** Accumulated, whitespace-split members must include this token. */
+      contains: z.string().min(1).max(512).optional(),
+      /** The directive must have no value in effect. */
+      absent: z.boolean().optional(),
+      ...common,
+    })
+    .strict()
+    .refine(
+      (v) =>
+        [v.equals !== undefined, v.contains !== undefined, v.absent === true].filter(Boolean)
+          .length === 1,
+      { message: 'must specify exactly one of equals, contains or absent' },
+    ),
+
+  /**
+   * A systemd unit file declares a section at all.
+   *
+   * Separate from the directive check so that "there is no [Install] section"
+   * reads as its own failure rather than as three unrelated missing
+   * directives — which is what a student actually needs to be told.
+   */
+  systemd_unit_section: z
+    .object({
+      type: z.literal('systemd_unit_section'),
+      path: sandboxPath,
+      section: z.enum(['Unit', 'Service', 'Install']),
+      ...common,
+    })
+    .strict(),
 } as const;
 
 // ---------------------------------------------------------------- Docker
@@ -2298,6 +2358,8 @@ export const REQUIREMENT_FAMILIES = {
   script_runs: 'linux',
   command_exit_code: 'linux',
   command_output: 'linux',
+  systemd_unit_section: 'linux',
+  systemd_unit_directive: 'linux',
 
   // --- Docker: one session's own daemon --------------------------------
   docker_container_exists: 'docker',
