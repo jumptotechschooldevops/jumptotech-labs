@@ -135,6 +135,30 @@ services:
       TERMINAL_CONTROL_URL: http://terminal:4001
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
       NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:-${TERMINAL_SESSION_SECRET}}
+      # --- authentication (PLATFORM-009 / PLATFORM-010) ---
+      #
+      # `development` is the compose default because a laptop has no identity
+      # provider. It accepts whoever the caller says they are, and the API
+      # refuses to start in this mode when NODE_ENV=production — so the stack
+      # cannot be shipped this way by forgetting to change it.
+      #
+      # For a real deployment set AUTH_MODE=oidc and the four OIDC_* values.
+      # OIDC_CLIENT_SECRET is what enables browser sign-in; it is a real secret
+      # and reaches only this service, never the web container. See
+      # docs/authentication.md.
+      AUTH_MODE: ${AUTH_MODE:-development}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid profile email}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      # The browser session cookie. `Secure` is derived — on unless the app URL
+      # is visibly plain-HTTP localhost — so forgetting it gets the safe value.
+      AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-43200}
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-jtt_session}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-}
+      AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
       # --- session lifetimes (PLATFORM-002) ---
       MAX_SESSION_MINUTES: ${MAX_SESSION_MINUTES:-60}
       IDLE_TIMEOUT_MINUTES: ${IDLE_TIMEOUT_MINUTES:-20}
