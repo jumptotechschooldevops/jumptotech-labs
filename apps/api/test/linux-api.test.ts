@@ -18,6 +18,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
+import { terminalCredentialBody } from './terminal-owner.js';
 import {
   DOCKER_PROVIDER_DISABLED_REASON,
   DockerLabProvider,
@@ -203,11 +204,12 @@ describe('POST /api/labs/:id/start — a Linux lab', () => {
 describe('the internal terminal binding for a Linux session', () => {
   it('names the container to attach to, and carries no credential', async () => {
     const { app } = buildApp();
-    const { session } = await start(app, 'LINUX-001');
+    const { session, terminal } = await start(app, 'LINUX-001');
 
     const response = await request(app)
       .post(`/internal/sessions/${String(session.sessionId)}/credentials`)
-      .set('x-internal-secret', SECRET);
+      .set('x-internal-secret', SECRET)
+      .send(terminalCredentialBody(terminal.token, SECRET));
 
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
@@ -235,11 +237,12 @@ describe('the internal terminal binding for a Linux session', () => {
 
   it('still issues a kubeconfig for a Kubernetes session', async () => {
     const { app } = buildApp();
-    const { session } = await start(app, 'K8S-001');
+    const { session, terminal } = await start(app, 'K8S-001');
 
     const response = await request(app)
       .post(`/internal/sessions/${String(session.sessionId)}/credentials`)
-      .set('x-internal-secret', SECRET);
+      .set('x-internal-secret', SECRET)
+      .send(terminalCredentialBody(terminal.token, SECRET));
 
     expect(response.status).toBe(200);
     expect(response.body.data.kind).toBe('kubernetes');

@@ -17,6 +17,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
+import { terminalCredentialBody } from './terminal-owner.js';
 import {
   DEFAULT_SESSION_POLICY,
   DockerLabProvider,
@@ -351,13 +352,16 @@ describe('DELETE /api/sessions/:id — Docker labs', () => {
 describe('POST /internal/sessions/:id/credentials — Docker sessions', () => {
   it('issues sandbox-scoped Docker credentials to the terminal service only', async () => {
     const harness = buildApp();
-    const { session } = await startDockerLab(harness);
+    const { session, terminal } = await startDockerLab(harness);
     const url = `/internal/sessions/${session.sessionId}/credentials`;
 
     const unauthenticated = await request(harness.app).post(url);
     expect(unauthenticated.status).toBe(401);
 
-    const res = await request(harness.app).post(url).set('x-internal-secret', SECRET);
+    const res = await request(harness.app)
+      .post(url)
+      .set('x-internal-secret', SECRET)
+      .send(terminalCredentialBody(terminal.token, SECRET));
 
     expect(res.status).toBe(200);
     expect(res.body.data).toMatchObject({
@@ -371,18 +375,19 @@ describe('POST /internal/sessions/:id/credentials — Docker sessions', () => {
 
   it('issues material that differs per session', async () => {
     const harness = buildApp();
-    const alice = (await startDockerLab(harness)).session;
-    const bob = (await startDockerLab(harness)).session;
+    const alice = await startDockerLab(harness);
+    const bob = await startDockerLab(harness);
 
-    const of = async (sessionId: string) =>
+    const of = async (sessionId: string, token: string) =>
       (
         await request(harness.app)
           .post(`/internal/sessions/${sessionId}/credentials`)
           .set('x-internal-secret', SECRET)
+          .send(terminalCredentialBody(token, SECRET))
       ).body.data;
 
-    const a = await of(alice.sessionId);
-    const b = await of(bob.sessionId);
+    const a = await of(alice.session.sessionId, alice.terminal.token);
+    const b = await of(bob.session.sessionId, bob.terminal.token);
 
     expect(a.ca).not.toBe(b.ca);
     expect(a.dockerHost).not.toBe(b.dockerHost);

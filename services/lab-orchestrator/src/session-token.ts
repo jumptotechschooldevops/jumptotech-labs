@@ -23,6 +23,21 @@ export interface TerminalSessionClaims {
    * a namespace, or a kubeconfig.
    */
   sid: string;
+  /**
+   * The user who owned the session when this token was minted — PLATFORM-010.
+   *
+   * The token is not a standalone capability. The terminal service presents
+   * this claim back to the API, which re-checks it against the *live* session
+   * record before releasing any credential, so a leaked token stops working the
+   * moment the session stops belonging to that user. Without it a valid HMAC
+   * was sufficient on its own, and the WebSocket path proved less than the HTTP
+   * path did — see `docs/authentication.md` §3.5.
+   *
+   * Required. A token with no `uid` is refused rather than treated as
+   * unowned: failing closed is the only safe reading of "this predates the
+   * ownership check".
+   */
+  uid: string;
   /** Lab this session may operate on. */
   labId: string;
   /** Namespace the terminal starts in. */
@@ -52,6 +67,8 @@ function sign(payload: string, secret: string): string {
 export interface IssueOptions {
   /** The lab session this token authorises. Required — see `sid` above. */
   sessionId: string;
+  /** The session's owner. Required — see `uid` above. */
+  ownerUserId: string;
   labId: string;
   namespace: string;
   secret: string;
@@ -70,8 +87,14 @@ export function issueSessionToken(options: IssueOptions): {
   if (!options.sessionId) {
     throw new Error('issueSessionToken requires the lab session id to bind the token to');
   }
+  if (!options.ownerUserId) {
+    // Minting an unowned token would recreate exactly the gap this claim
+    // closes, so it is refused at the source rather than checked downstream.
+    throw new Error('issueSessionToken requires the owning user id to bind the token to');
+  }
   const claims: TerminalSessionClaims = {
     sid: options.sessionId,
+    uid: options.ownerUserId,
     labId: options.labId,
     namespace: options.namespace,
     iat: nowSeconds,
@@ -117,6 +140,12 @@ export function verifySessionToken(
     typeof claims?.exp !== 'number'
   ) {
     throw new InvalidSessionTokenError('incomplete claims');
+  }
+
+  // Fails closed for a token minted before the owner binding existed: no `uid`
+  // means the API cannot re-prove ownership, and "cannot prove" is refused.
+  if (typeof claims.uid !== 'string' || claims.uid.length === 0) {
+    throw new InvalidSessionTokenError('token carries no session owner');
   }
 
   if (Math.floor(now() / 1000) >= claims.exp) {

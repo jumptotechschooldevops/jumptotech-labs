@@ -4,10 +4,12 @@ import { InvalidSessionTokenError, issueSessionToken, verifySessionToken } from 
 const SECRET = 'test-secret-that-is-long-enough';
 const SESSION_ID = 'sess-000000000000000a';
 const NAMESPACE = 'lab-0000000000aa';
+const OWNER = 'usr-00000001';
 
 function issue(overrides: Partial<Parameters<typeof issueSessionToken>[0]> = {}) {
   return issueSessionToken({
     sessionId: SESSION_ID,
+    ownerUserId: OWNER,
     labId: 'K8S-001',
     namespace: NAMESPACE,
     secret: SECRET,
@@ -36,6 +38,7 @@ describe('terminal session tokens', () => {
     expect(() =>
       issueSessionToken({
         sessionId: '',
+        ownerUserId: OWNER,
         labId: 'K8S-001',
         namespace: NAMESPACE,
         secret: SECRET,

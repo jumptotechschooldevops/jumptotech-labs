@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
+import { terminalCredentialBody } from './terminal-owner.js';
 import {
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
@@ -398,11 +399,13 @@ describe('internal credential endpoint', () => {
 
   it('issues a namespace-scoped kubeconfig to an authenticated service', async () => {
     const harness = buildApp(new FakeKubernetes(), registry);
-    const { session } = await startSession(harness);
+    const { session, terminal } = await startSession(harness);
 
     const res = await request(harness.app)
       .post(`/internal/sessions/${session.sessionId}/credentials`)
-      .set('x-internal-secret', SECRET);
+      .set('x-internal-secret', SECRET)
+      // PLATFORM-010: the service must name the owner the token was minted for.
+      .send(terminalCredentialBody(terminal.token, SECRET));
 
     expect(res.status).toBe(200);
     expect(res.body.data.namespace).toBe(session.namespace);

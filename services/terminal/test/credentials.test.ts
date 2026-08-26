@@ -46,6 +46,7 @@ describe('fetchStudentCredentials', () => {
       apiInternalUrl: 'http://api:4000',
       secret: 'service-secret',
       sessionId: 'sess-000000000000000a',
+      ownerUserId: 'usr-00000001',
       fetchImpl: (async (url: string, init: RequestInit) => {
         calls.push({
           url: String(url),
@@ -77,6 +78,7 @@ describe('fetchStudentCredentials', () => {
       apiInternalUrl: 'http://api:4000',
       secret: 's',
       sessionId: '../../internal/admin',
+      ownerUserId: 'usr-00000001',
       fetchImpl: (async (url: string) => {
         requested = String(url);
         return jsonResponse({
@@ -96,6 +98,7 @@ describe('fetchStudentCredentials', () => {
         apiInternalUrl: 'http://api:4000',
         secret: 's',
         sessionId: 'sess-000000000000000a',
+        ownerUserId: 'usr-00000001',
         fetchImpl: (async () =>
           jsonResponse(
             { ok: false, error: { code: 'SESSION_NOT_ACTIVE', message: 'This lab session is ENDED.' } },
@@ -111,6 +114,7 @@ describe('fetchStudentCredentials', () => {
         apiInternalUrl: 'http://api:4000',
         secret: 's',
         sessionId: 'sess-000000000000000a',
+        ownerUserId: 'usr-00000001',
         fetchImpl: (async () => {
           throw new Error('ECONNREFUSED');
         }) as unknown as typeof fetch,
@@ -124,6 +128,7 @@ describe('fetchStudentCredentials', () => {
         apiInternalUrl: 'http://api:4000',
         secret: 's',
         sessionId: 'sess-000000000000000a',
+        ownerUserId: 'usr-00000001',
         fetchImpl: (async () =>
           jsonResponse({
             ok: true,

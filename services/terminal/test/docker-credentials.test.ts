@@ -70,6 +70,7 @@ describe('fetchTerminalContext — Docker payloads', () => {
       apiInternalUrl: 'http://api:4000',
       secret: 'service-secret',
       sessionId: 'sess-000000000000000a',
+      ownerUserId: 'usr-00000001',
       fetchImpl: fetchReturning(DOCKER_CREDENTIALS),
     });
 
@@ -92,6 +93,7 @@ describe('fetchTerminalContext — Docker payloads', () => {
         apiInternalUrl: 'http://api:4000',
         secret: 'service-secret',
         sessionId: 'sess-000000000000000a',
+        ownerUserId: 'usr-00000001',
         fetchImpl: fetchReturning(DOCKER_CREDENTIALS),
       }),
     ).rejects.toThrow(/not backed by a Kubernetes namespace/);
@@ -102,6 +104,7 @@ describe('fetchTerminalContext — Docker payloads', () => {
       apiInternalUrl: 'http://api:4000',
       secret: 's',
       sessionId: 'sess-000000000000000a',
+      ownerUserId: 'usr-00000001',
       fetchImpl: fetchReturning({
         kubeconfig: 'apiVersion: v1\nkind: Config\n',
         namespace: 'lab-0000000000aa',
@@ -120,6 +123,7 @@ describe('fetchTerminalContext — Docker payloads', () => {
           apiInternalUrl: 'http://api:4000',
           secret: 's',
           sessionId: 'sess-000000000000000a',
+          ownerUserId: 'usr-00000001',
           fetchImpl: fetchReturning({ ...DOCKER_CREDENTIALS, [field]: '' }),
         }),
         `missing ${field}`,
@@ -133,6 +137,7 @@ describe('fetchTerminalContext — Docker payloads', () => {
         apiInternalUrl: 'http://api:4000',
         secret: 's',
         sessionId: 'sess-000000000000000a',
+        ownerUserId: 'usr-00000001',
         fetchImpl: fetchReturning({ kind: 'firecracker', sandboxRef: 'lab-0000000000aa' }),
       }),
     ).rejects.toThrow(/unknown kind/);
@@ -144,6 +149,7 @@ describe('fetchTerminalContext — Docker payloads', () => {
         apiInternalUrl: 'http://api:4000',
         secret: 's',
         sessionId: 'sess-000000000000000a',
+        ownerUserId: 'usr-00000001',
         fetchImpl: (async () => {
           throw new Error('ECONNREFUSED');
         }) as unknown as typeof fetch,

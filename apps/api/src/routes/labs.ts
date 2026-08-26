@@ -328,10 +328,18 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
         )) ?? attempt;
     }
 
-    // The token is bound to this session id. The browser never sees the
-    // namespace as a credential, and never sees a kubeconfig at all.
+    /*
+     * The token is bound to this session id *and* to its owner.
+     *
+     * The browser never sees the namespace as a credential, and never sees a
+     * kubeconfig at all. Since PLATFORM-010 it also cannot use the token to
+     * reach a session that stops being theirs: the terminal service presents
+     * `uid` back to the API, which re-checks it against the live session record
+     * before releasing anything — see `apps/api/src/routes/internal.ts`.
+     */
     const { token } = issueSessionToken({
       sessionId: started.session.sessionId,
+      ownerUserId: owner.userId,
       labId: def.id,
       namespace: started.session.namespace,
       secret: config.terminalSessionSecret,

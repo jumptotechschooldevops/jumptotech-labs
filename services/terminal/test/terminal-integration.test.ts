@@ -195,6 +195,7 @@ suite('integration: student terminal against real kind', () => {
   function tokenFor(session: LabSession): string {
     return issueSessionToken({
       sessionId: session.sessionId,
+      ownerUserId: 'usr-00000001',
       labId: session.labId,
       namespace: session.namespace,
       secret: SECRET,
@@ -348,6 +349,7 @@ suite('integration: student terminal against real kind', () => {
   it('refuses a forged or unsigned token outright', async () => {
     const forged = issueSessionToken({
       sessionId: sessionB.sessionId,
+      ownerUserId: 'usr-00000001',
       labId: sessionB.labId,
       namespace: sessionB.namespace,
       secret: 'a-completely-different-secret',

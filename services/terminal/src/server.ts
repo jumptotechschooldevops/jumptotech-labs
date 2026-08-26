@@ -24,6 +24,7 @@
  *     or a kubeconfig path. A second `auth` frame is rejected outright.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import * as pty from 'node-pty';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
@@ -77,6 +78,20 @@ interface Session {
 }
 
 export function createTerminalServer(config: TerminalConfig): Server {
+  /**
+   * Constant-time comparison of the shared internal secret.
+   *
+   * `!==` on a secret leaks its prefix length through timing. The API side
+   * already used `timingSafeEqual`; this brings the terminal side into line so
+   * the two ends of one trust boundary are checked the same way.
+   */
+  const internalSecretMatches = (presented: unknown): boolean => {
+    if (typeof presented !== 'string' || presented.length === 0) return false;
+    const a = Buffer.from(presented);
+    const b = Buffer.from(config.internalServiceSecret);
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
+
   const sessions = new Map<WebSocket, Session>();
   /** sessionId → socket, so the API can close one specific student's shell. */
   const bySessionId = new Map<string, WebSocket>();
@@ -148,7 +163,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
     res: import('node:http').ServerResponse,
     act: (sessionId: string) => Promise<Record<string, boolean>>,
   ): void {
-    if (req.headers['x-internal-secret'] !== config.internalServiceSecret) {
+    if (!internalSecretMatches(req.headers['x-internal-secret'])) {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Internal use only.' } }));
       return;
@@ -211,7 +226,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
     res: ServerResponse,
     onBody: (body: Record<string, unknown>) => void,
   ): void {
-    if (req.headers['x-internal-secret'] !== config.internalServiceSecret) {
+    if (!internalSecretMatches(req.headers['x-internal-secret'])) {
       reply(res, 401, {
         ok: false,
         error: { code: 'UNAUTHORIZED', message: 'Internal use only.' },
@@ -372,6 +387,10 @@ export function createTerminalServer(config: TerminalConfig): Server {
         apiInternalUrl: config.apiInternalUrl,
         secret: config.internalServiceSecret,
         sessionId: session.claims.sid,
+        // Re-proved on every fetch, not cached from the original attach: a
+        // reattach after a container reset must be as authorised as the first
+        // connection was.
+        ownerUserId: session.claims.uid,
       });
       if (context.kind !== 'container-exec' || !config.containerExecEnabled) return false;
       plan = containerSpawnPlan(context, planOptionsFor(session.claims.labId));
@@ -612,6 +631,9 @@ export function createTerminalServer(config: TerminalConfig): Server {
         apiInternalUrl: config.apiInternalUrl,
         secret: config.internalServiceSecret,
         sessionId: claims.sid,
+        // From the token this service just verified. The socket never supplied
+        // it and cannot influence it.
+        ownerUserId: claims.uid,
       });
 
       const planOptions = planOptionsFor(claims.labId);

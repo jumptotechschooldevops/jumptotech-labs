@@ -18,6 +18,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
+import { terminalCredentialBody } from './terminal-owner.js';
 import {
   AwsLabProvider,
   DockerLabProvider,
@@ -398,11 +399,12 @@ describe('one session API serves every provider (test requirement 21)', () => {
 describe('the terminal binding is resolved server-side (test requirements 29–30, 32)', () => {
   it('hands the terminal service a container reference for a Linux session', async () => {
     const { app, config } = buildApp();
-    const { session } = await start(app, 'LINUX-001');
+    const { session, terminal } = await start(app, 'LINUX-001');
 
     const response = await request(app)
       .post(`/internal/sessions/${String(session.sessionId)}/credentials`)
-      .set('x-internal-secret', config.internalServiceSecret);
+      .set('x-internal-secret', config.internalServiceSecret)
+      .send(terminalCredentialBody(terminal.token, config.terminalSessionSecret));
 
     expect(response.status).toBe(200);
     expect(response.body.data.kind).toBe('container-exec');
@@ -414,11 +416,12 @@ describe('the terminal binding is resolved server-side (test requirements 29–3
 
   it('still hands the terminal service a kubeconfig for a Kubernetes session', async () => {
     const { app, config } = buildApp();
-    const { session } = await start(app, 'K8S-001');
+    const { session, terminal } = await start(app, 'K8S-001');
 
     const response = await request(app)
       .post(`/internal/sessions/${String(session.sessionId)}/credentials`)
-      .set('x-internal-secret', config.internalServiceSecret);
+      .set('x-internal-secret', config.internalServiceSecret)
+      .send(terminalCredentialBody(terminal.token, config.terminalSessionSecret));
 
     expect(response.status).toBe(200);
     expect(response.body.data.kind).toBe('kubernetes');

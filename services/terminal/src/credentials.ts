@@ -95,6 +95,16 @@ export interface FetchOptions {
   apiInternalUrl: string;
   secret: string;
   sessionId: string;
+  /**
+   * The `uid` claim from the verified terminal token — PLATFORM-010.
+   *
+   * Sent so the API can re-prove ownership against the live session record
+   * before releasing anything. This service does not decide the answer and
+   * cannot: it forwards a claim it verified the signature of, and the API
+   * compares it with the row. Required, so a build that forgot it fails loudly
+   * rather than silently reverting to token-only access.
+   */
+  ownerUserId: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -105,6 +115,11 @@ export interface FetchOptions {
  * The session id comes from the signed token and from nowhere else, so this is
  * the point at which "which sandbox does this socket get?" is answered — by the
  * API, from the session record, and never by the browser.
+ *
+ * Since PLATFORM-010 the token's owner claim travels with it, and the API
+ * refuses the exchange unless that owner still owns that session. A valid
+ * signature is no longer sufficient on its own — see
+ * `apps/api/src/routes/internal.ts`.
  */
 export async function fetchTerminalContext(
   options: FetchOptions,
@@ -181,6 +196,9 @@ async function fetchInternal(options: FetchOptions): Promise<Record<string, unkn
       {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-internal-secret': options.secret },
+        // The only field ever sent, and it is a claim this service verified the
+        // signature of rather than anything a socket supplied.
+        body: JSON.stringify({ ownerUserId: options.ownerUserId }),
         signal: controller.signal,
       },
     );
