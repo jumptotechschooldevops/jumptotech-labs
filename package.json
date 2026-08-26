@@ -26,7 +26,7 @@
     "test:integration:docker": "RUN_DOCKER_INTEGRATION_TESTS=1 vitest run test/docker-integration.test.ts --root services/lab-orchestrator --testTimeout=900000 --hookTimeout=900000",
     "db:migrate": "npm run migrate --workspace @jumptotech/progress",
     "db:status": "npm run migrate --workspace @jumptotech/progress -- --status",
-    "test:db": "vitest run --root services/progress && vitest run test/progress-persistence-integration.test.ts --root apps/api",
+    "test:db": "vitest run --root services/progress && vitest run test/session-store-integration.test.ts --root services/lab-orchestrator && vitest run --no-file-parallelism test/progress-persistence-integration.test.ts test/auth-persistence-integration.test.ts --root apps/api",
     "dev:api": "npm run dev --workspace @jumptotech/api",
     "dev:terminal": "npm run dev --workspace @jumptotech/terminal",
     "dev:web": "npm run dev --workspace @jumptotech/web",
