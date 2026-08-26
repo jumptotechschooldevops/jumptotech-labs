@@ -1,0 +1,214 @@
+id: CICD-010
+slug: cicd-010-pipeline-troubleshooting
+title: Troubleshooting a Broken Pipeline
+track: cicd
+topic: troubleshooting
+difficulty: advanced
+level: challenge
+duration_minutes: 60
+order: 10
+
+environment:
+  provider: cicd
+  isolation: container
+
+prerequisites:
+  - CICD-009
+  - CICD-007
+
+# The student is not told which faults were injected, and neither is the
+# catalog: `requirements` describes the *desired end state* and every label is
+# written as a goal rather than as a symptom. The catalog projection excludes
+# requirements and setup entirely, so nothing here can be read before starting.
+story: >
+  Incident INC-2291 is open and the 1.4.1 release is blocked behind it.
+
+  A contractor tidied up the CI configuration on Thursday afternoon and left
+  for the day. Since then the GitHub Actions tab shows no runs at all — not
+  failures, nothing — the Jenkins job dies before it reaches a stage, and
+  whoever tried building locally reported that the tests were already failing.
+
+  Read `INCIDENT.md` in your workspace. It has the handover notes and the
+  agreed shape of both pipelines. The last line of the handover matters: do not
+  rewrite these from scratch, because the team wants to know what was actually
+  broken.
+
+objectives:
+  - Diagnose a pipeline that produces no runs at all, rather than failing runs
+  - Read a YAML parser error and locate the structural mistake it points at
+  - Trace a build failure to a command that names a file that does not exist
+  - Find an unbalanced block in a declarative pipeline
+  - Distinguish a failing test from a wrong test
+
+task:
+  summary: Diagnose and repair both pipelines until the project builds, tests, and publishes correctly.
+  description: >
+    Several separate faults were introduced. They are ordinary ones — the kind
+    that arrive together in a hurried change — and you are not told what they
+    are.
+
+    A method that works, roughly in this order:
+
+    **Start with what runs nothing.** A pipeline that produces no runs at all
+    has failed earlier than a pipeline that runs and fails. Ask what makes a CI
+    system notice a pipeline file in the first place, and check that before you
+    read a single line of its contents.
+
+    **Then make it parse.** A configuration file that a parser rejects cannot
+    be acted on, so every check that reads it will report the same parse error
+    until it is fixed. Fix the structure first and the real state of the file
+    becomes visible.
+
+    **Then read the errors literally.** "Cannot find module" names a file. A
+    step that collects a directory which does not exist collects nothing. A
+    variable used in a name has to be defined somewhere before it has a value.
+
+    **Then decide which side of a failing test is wrong.** A red test means the
+    code and the test disagree. It does not tell you which one is right. When
+    one test disagrees with the documented behaviour, with the rest of the
+    suite, and with the application's own self-check, the test is the odd one
+    out — and "fixing" the code to satisfy it would break the other four.
+
+    **The Jenkins pipeline has its own problems.** It fails before any stage
+    starts, which points at the pipeline definition rather than at anything it
+    does. And compare what it declares against the shape in `INCIDENT.md` —
+    something the agreed pipeline has is missing entirely.
+
+    Work until the workspace holds a project that genuinely builds, genuinely
+    tests, and genuinely produces its artifacts, with both pipeline definitions
+    matching the shape recorded in the incident. Press Check Solution as often
+    as you like; the failures are the diagnostic tool.
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: file_exists
+      path: INCIDENT.md
+      min_bytes: 400
+      label: Incident notes are present
+    - type: file_exists
+      path: Jenkinsfile
+      min_bytes: 100
+      label: Jenkins pipeline definition is present
+    - type: file_exists
+      path: .github/workflow/ci.yml
+      min_bytes: 100
+      label: Workflow file is present in the state the contractor left it
+
+requirements:
+  - type: github_workflow_exists
+    path: .github/workflows/ci.yml
+    label: A workflow exists where GitHub Actions reads workflows from
+  - type: yaml_valid
+    path: .github/workflows/ci.yml
+    label: The workflow file parses
+  - type: github_workflow_trigger
+    path: .github/workflows/ci.yml
+    trigger: push
+    label: The workflow is triggered on push
+  - type: github_workflow_job_exists
+    path: .github/workflows/ci.yml
+    job: build
+    runs_on: ubuntu-latest
+    min_steps: 5
+    label: The build job has all five agreed steps
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    uses: actions/checkout
+    label: The job checks the repository out
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    uses: actions/setup-node
+    label: The job provisions the Node.js toolchain
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    run_contains:
+      - node build.mjs
+    label: The job runs the project's build command
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    uses: actions/upload-artifact
+    with_keys:
+      - name
+      - path
+    label: The job uploads the build output
+  - type: environment_reference_exists
+    path: .github/workflows/ci.yml
+    name: APP_VERSION
+    label: APP_VERSION is defined in the workflow
+  - type: jenkinsfile_exists
+    path: Jenkinsfile
+    require_agent: true
+    label: The Jenkins pipeline definition is well formed
+  - type: jenkins_stage_exists
+    path: Jenkinsfile
+    stage: Test
+    steps_contain:
+      - node --test
+    after:
+      - Build
+    label: The Jenkins pipeline tests after it builds
+  - type: jenkins_stage_exists
+    path: Jenkinsfile
+    stage: Package
+    after:
+      - Test
+    label: The Jenkins pipeline packages last
+  - type: tests_pass
+    label: The test suite passes
+  - type: project_builds
+    produces: dist/build-info.json
+    label: The build succeeds and writes its manifest
+  - type: artifact_exists
+    path: dist/statements.bundle.js
+    min_bytes: 500
+    label: The build produced the deployable artifact
+
+hints:
+  - level: 1
+    text: >
+      Take the symptoms in the order of how early they fail. "No runs at all"
+      is earlier than "a run that fails", and "the definition is rejected" is
+      earlier than "a stage fails". Fixing the earliest one usually reveals the
+      next.
+  - level: 2
+    text: >
+      A CI system only notices a pipeline file in the place it looks for one,
+      and the check that reports this names that place. When a parser reports a
+      column or a count of unclosed blocks, it is pointing at real structure —
+      read the message rather than skimming the file. For the failing test,
+      compare it against the other tests of the same function and against the
+      application's self-check.
+  - level: 3
+    text: >
+      There are faults in four places: where the workflow file lives, how it is
+      indented, what its steps say, and how the Jenkinsfile's blocks are
+      closed. One step named in the incident notes is missing from the workflow
+      entirely, one command names a file that is not in the workspace, one
+      artifact path names a directory the build never creates, and one variable
+      is used without ever being defined. The Jenkins pipeline is missing a
+      whole stage as well as a brace. Run `node build.mjs` and `node --test` in
+      the terminal — their errors are more specific than any check result.
+
+references:
+  - title: Workflow syntax for GitHub Actions
+    url: https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+  - title: Monitoring and troubleshooting workflows
+    url: https://docs.github.com/en/actions/how-tos/monitor-workflows
+  - title: Pipeline syntax — declarative pipeline
+    url: https://www.jenkins.io/doc/book/pipeline/syntax/
+  - title: Storing and sharing data from a workflow
+    url: https://docs.github.com/en/actions/tutorials/store-and-share-data
+
+skills:
+  - cicd.troubleshooting.diagnose
+  - cicd.troubleshooting.yaml
+  - cicd.githubactions.workflow.repair
+  - cicd.jenkins.declarative.repair
+  - cicd.pipeline.test
+
+certification: []

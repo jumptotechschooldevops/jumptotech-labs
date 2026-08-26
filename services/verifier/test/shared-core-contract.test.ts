@@ -23,6 +23,7 @@ import {
   REQUIREMENT_TYPES,
   familyReader,
   isAnsibleFamily,
+  isCicdFamily,
   isDockerFamily,
   isKubernetesFamily,
   isSandboxFamily,
@@ -227,14 +228,15 @@ describe('family routing is exhaustive and disjoint', () => {
         isSandboxFamily(family),
         isDockerFamily(family),
         isAnsibleFamily(family),
+        isCicdFamily(family),
       ].filter(Boolean);
       return groups.length !== 1;
     });
     expect(misrouted).toEqual([]);
   });
 
-  it('routes every declared family to one of the four known readers', () => {
-    const known = new Set(['kubernetes', 'sandbox', 'docker', 'ansible']);
+  it('routes every declared family to one of the five known readers', () => {
+    const known = new Set(['kubernetes', 'sandbox', 'docker', 'ansible', 'cicd']);
     const stray = REQUIREMENT_FAMILY_LIST.filter((family) => !known.has(familyReader(family)));
     expect(stray).toEqual([]);
   });
@@ -250,6 +252,7 @@ describe('family routing is exhaustive and disjoint', () => {
       expect(isSandboxFamily(family)).toBe(REQUIREMENT_FAMILY_READERS[family] === 'sandbox');
       expect(isDockerFamily(family)).toBe(REQUIREMENT_FAMILY_READERS[family] === 'docker');
       expect(isAnsibleFamily(family)).toBe(REQUIREMENT_FAMILY_READERS[family] === 'ansible');
+      expect(isCicdFamily(family)).toBe(REQUIREMENT_FAMILY_READERS[family] === 'cicd');
     }
   });
 });

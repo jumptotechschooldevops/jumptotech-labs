@@ -1,0 +1,159 @@
+id: CICD-007
+slug: cicd-007-jenkins-stages
+title: Multi-Stage Jenkins Pipelines
+track: cicd
+topic: jenkins
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 7
+
+environment:
+  provider: cicd
+  isolation: container
+
+prerequisites:
+  - CICD-006
+
+story: >
+  The one-stage pipeline builds and reports green. Last week a change broke a
+  currency formatting rule and the build was perfectly happy: nothing in the
+  pipeline ever ran the tests. The failure was found by a customer.
+
+  There is a second problem the team has noticed. When the build does fail,
+  the Jenkins view shows one red box labelled "Build" and nobody can tell from
+  it whether the checkout failed, the compile failed, or the packaging failed.
+
+  Both problems have the same fix.
+
+objectives:
+  - Break a pipeline into stages that each answer one question
+  - Order stages so each depends on the last succeeding
+  - Explain what Jenkins does with the remaining stages when one fails
+  - Read a pipeline view and locate a failure from the stage that went red
+
+task:
+  summary: Expand the Jenkinsfile into Checkout, Build, Test and Package stages, in that order.
+  description: >
+    A stage is a named phase of the pipeline, and Jenkins treats it as the unit
+    of reporting: the pipeline view draws one column per stage with its own
+    duration and its own status. That is why stages exist at all. Everything a
+    four-stage pipeline does could be crammed into one stage's steps block, and
+    the pipeline would work — but it would tell you nothing when it failed, and
+    it would keep going after the point where it should have stopped.
+
+    **What happens when a stage fails.** In a declarative pipeline, a failing
+    step fails its stage, and a failed stage fails the run: the stages after it
+    are *not* executed, and Jenkins marks them skipped. So the ordering is not
+    presentational. Putting Test after Build means a broken build never reaches
+    the tests; putting Package after Test means a failing test never produces
+    an artifact that somebody might deploy. A pipeline whose stages are in the
+    wrong order can package code that was never tested.
+
+    (Steps that must run whatever happened — publishing a report, sending a
+    notification, cleaning up — belong in a `post` block rather than in a
+    later stage, precisely because later stages do not run after a failure.)
+
+    Restructure the `Jenkinsfile` into four stages, in this order:
+
+    * **Checkout** — get the source. On a real controller this is `checkout scm`,
+      which pulls the commit that triggered the run.
+    * **Build** — run the project's build command.
+    * **Test** — run the project's test command.
+    * **Package** — report on the artifact the build produced. Listing what is
+      in the output directory is enough; the point is that packaging is a
+      distinct phase that only runs once the tests have passed.
+
+    Then run the build and the tests yourself in the terminal, so the pipeline
+    you have written describes commands you have actually seen succeed.
+
+    **What this verifies.** The declarative structure of your Jenkinsfile: that
+    the four stages exist, that each has a non-empty `steps` block, that the
+    build and test stages run the right commands, and that the stages are
+    declared in the order given above — Jenkins runs them in file order, so
+    order is a structural property, not a matter of taste. The test suite is
+    additionally executed for real in your workspace. No Jenkins controller is
+    involved.
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: jenkinsfile_exists
+      path: Jenkinsfile
+      label: Starter pipeline is present
+    - type: jenkins_stage_exists
+      path: Jenkinsfile
+      stage: Build
+      label: Starter pipeline already has a Build stage
+
+requirements:
+  - type: jenkinsfile_exists
+    path: Jenkinsfile
+    require_agent: true
+    label: The pipeline is still a valid declarative pipeline
+  - type: jenkins_stage_exists
+    path: Jenkinsfile
+    stage: Checkout
+    label: A Checkout stage gets the source
+  - type: jenkins_stage_exists
+    path: Jenkinsfile
+    stage: Build
+    steps_contain:
+      - node build.mjs
+    after:
+      - Checkout
+    label: Build runs the build command, after Checkout
+  - type: jenkins_stage_exists
+    path: Jenkinsfile
+    stage: Test
+    steps_contain:
+      - node --test
+    after:
+      - Build
+    label: Test runs the test suite, after Build
+  - type: jenkins_stage_exists
+    path: Jenkinsfile
+    stage: Package
+    after:
+      - Test
+    label: Package runs last, after Test
+  - type: tests_pass
+    label: The test suite actually passes
+  - type: project_builds
+    produces: dist/build-info.json
+    label: The build command actually succeeds
+
+hints:
+  - level: 1
+    text: >
+      One stage becomes four. Ask what question each phase answers on its own —
+      "did we get the code?", "does it compile?", "does it behave?", "what do
+      we ship?" — and the boundaries fall out.
+  - level: 2
+    text: >
+      Every stage needs its own steps block; a stage with an empty one is legal
+      and does nothing. The Jenkins step for fetching the source configured on
+      the job is a single word followed by `scm`. The order the stages appear
+      in the file is the order they run in.
+  - level: 3
+    text: >
+      The four stage names are checked exactly as written: `Checkout`, `Build`,
+      `Test`, `Package`. The build and test commands are the ones in the
+      README. For the Package stage, a shell step that lists the build output
+      directory is enough to show the artifact exists at that point.
+
+references:
+  - title: Pipeline syntax — stages and stage
+    url: https://www.jenkins.io/doc/book/pipeline/syntax/
+  - title: Pipeline — running multiple steps
+    url: https://www.jenkins.io/doc/pipeline/tour/running-multiple-steps/
+  - title: Using a Jenkinsfile — post actions
+    url: https://www.jenkins.io/doc/book/pipeline/jenkinsfile/#post
+
+skills:
+  - cicd.jenkins.stages.design
+  - cicd.jenkins.stages.order
+  - cicd.pipeline.failure.behaviour
+  - cicd.pipeline.package
+
+certification: []

@@ -16,6 +16,7 @@
  * **Mode is compared as permission bits, not as a string.** `750`, `0750` and
  * `00750` are the same permission and all pass; `755` does not.
  */
+import { parse as parseYaml } from 'yaml';
 import type { RequirementOf, SandboxPathRead } from '@jumptotech/lab-orchestrator';
 import {
   fail,
@@ -56,6 +57,81 @@ export const fileExists: SandboxVerifierHandler<'file_exists'> = {
     if (read.type !== 'file') {
       return fail(`'${requirement.path}' is ${describeType(read)}, not a regular file`);
     }
+    if (requirement.min_bytes !== undefined) {
+      // `touch ci.yml` satisfies "exists" and teaches nothing. A lab that asked
+      // the student to *write* a file says how much writing counts.
+      const size = read.sizeBytes ?? Buffer.byteLength(read.content ?? '', 'utf8');
+      if (size < requirement.min_bytes) {
+        return fail(
+          `'${requirement.path}' exists but holds ${size} bytes; this lab expects at least ${requirement.min_bytes}`,
+        );
+      }
+    }
+    return pass();
+  },
+};
+
+/**
+ * Several fragments must appear in one file, and/or several must not.
+ *
+ * Reports the *first* missing fragment rather than all of them: a student
+ * fixing a pipeline script wants the next thing to do, and a list of four
+ * absences for one forgotten line reads as four problems.
+ */
+export const fileContains: SandboxVerifierHandler<'file_contains'> = {
+  type: 'file_contains',
+  label: (r) => `File ${r.path} has the expected contents`,
+  async run(requirement, reader) {
+    const read = await reader.path(requirement.path);
+    if (!read) return missingPath('file', requirement.path);
+    if (read.type !== 'file') {
+      return fail(`'${requirement.path}' is ${describeType(read)}, not a regular file`);
+    }
+    if (read.content === undefined) return fail(`'${requirement.path}' could not be read`);
+    if (read.truncated) {
+      return fail(`'${requirement.path}' is larger than this check can read`);
+    }
+
+    const content = read.content;
+    const missing = requirement.contains.find((fragment) => !content.includes(fragment));
+    if (missing !== undefined) {
+      return fail(`'${requirement.path}' does not mention '${missing}'`);
+    }
+    const present = requirement.absent.find((fragment) => content.includes(fragment));
+    if (present !== undefined) {
+      return fail(`'${requirement.path}' still mentions '${present}'`);
+    }
+    return pass();
+  },
+};
+
+/**
+ * The file parses as YAML.
+ *
+ * The first check a lab that asks for a YAML document should run: every later
+ * question about its structure is meaningless if the parser rejected it, and
+ * "not valid YAML: bad indentation at line 7" is the actionable answer.
+ */
+export const yamlValid: SandboxVerifierHandler<'yaml_valid'> = {
+  type: 'yaml_valid',
+  label: (r) => `${r.path} is valid YAML`,
+  async run(requirement, reader) {
+    const read = await reader.path(requirement.path);
+    if (!read) return missingPath('file', requirement.path);
+    if (read.type !== 'file') {
+      return fail(`'${requirement.path}' is ${describeType(read)}, not a regular file`);
+    }
+    if (read.content === undefined) return fail(`'${requirement.path}' could not be read`);
+    if (read.truncated) return fail(`'${requirement.path}' is too large to parse as YAML`);
+
+    let parsed: unknown;
+    try {
+      parsed = parseYaml(read.content);
+    } catch (error) {
+      const message = error instanceof Error ? error.message.split('\n')[0] : String(error);
+      return fail(`'${requirement.path}' is not valid YAML: ${message}`);
+    }
+    if (parsed === null || parsed === undefined) return fail(`'${requirement.path}' is empty`);
     return pass();
   },
 };

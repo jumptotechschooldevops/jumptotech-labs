@@ -1,0 +1,151 @@
+id: CICD-006
+slug: cicd-006-jenkins-first-pipeline
+title: Your First Jenkins Pipeline
+track: cicd
+topic: jenkins
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 6
+
+environment:
+  provider: cicd
+  isolation: container
+
+prerequisites:
+  - CICD-001
+
+story: >
+  Not everything at JumpToTech Bank lives in GitHub. The statements service
+  does, but the batch systems it feeds are built by a Jenkins controller that
+  the operations team has run for years, and the release process for those has
+  to work the same way.
+
+  Jenkins reads its pipeline from a file in the repository, exactly the way
+  Actions does — a different syntax describing the same idea. Write the first
+  one.
+
+objectives:
+  - Describe what a Jenkinsfile is and why the pipeline lives in the repository
+  - Write a declarative pipeline with the required blocks
+  - Explain what the agent directive decides
+  - Put real work inside a stage's steps block
+
+task:
+  summary: Create a Jenkinsfile with a declarative pipeline whose Build stage builds the project.
+  description: >
+    Jenkins pipelines come in two flavours. **Scripted** pipelines are Groovy
+    programs. **Declarative** pipelines — which is what this lab and the two
+    after it use, and what new work should use — are a structured syntax with a
+    fixed shape that Jenkins validates for you.
+
+    A declarative pipeline is built from four nested blocks.
+
+    `pipeline` wraps everything. A declarative Jenkinsfile has exactly one, and
+    it must be the outermost block in the file.
+
+    `agent` says where the pipeline runs. `agent any` lets Jenkins choose any
+    available executor; a real setup often pins a label, or a container. It is
+    required at the top level — a declarative pipeline without one is rejected.
+
+    `stages` holds the stages. It is a container and nothing else: no steps go
+    directly inside it.
+
+    `stage('Name')` is one named phase, and it is what Jenkins draws as a
+    column in the pipeline view. Every stage contains a `steps` block, and the
+    steps are the commands that actually run. `sh 'command'` runs a shell
+    command on a Unix agent.
+
+    So the shape is:
+
+        pipeline {
+            agent ...
+
+            stages {
+                stage('...') {
+                    steps {
+                        ...
+                    }
+                }
+            }
+        }
+
+    That is the skeleton, not the answer — the names and the commands are
+    yours to choose, within what the checks below ask for.
+
+    Create a `Jenkinsfile` in the workspace root with one stage called `Build`
+    whose steps run the project's build command. The README lists it, and it
+    is worth running in the terminal first so you know it works before you put
+    it in a pipeline.
+
+    **What this verifies.** The Jenkinsfile is read and its declarative
+    structure is checked: the `pipeline` block, the `agent`, the `stages`
+    block, the named stage, and what its `steps` block contains. Braces are
+    matched, so a missing one is reported. It is a syntax and structure check —
+    no Jenkins controller runs your pipeline, and this lab does not pretend one
+    did. Separately, the build command itself is run in your workspace, so
+    "the build works" is a real result and not an assumption.
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: file_exists
+      path: build.mjs
+      min_bytes: 200
+      label: Build script is present
+    - type: file_exists
+      path: README.md
+      min_bytes: 100
+      label: Project README is present
+
+requirements:
+  - type: file_exists
+    path: Jenkinsfile
+    min_bytes: 60
+    label: A Jenkinsfile exists
+  - type: jenkinsfile_exists
+    path: Jenkinsfile
+    require_agent: true
+    label: It is a declarative pipeline with an agent and stages
+  - type: jenkins_stage_exists
+    path: Jenkinsfile
+    stage: Build
+    steps_contain:
+      - node build.mjs
+    label: A Build stage runs the build command
+  - type: project_builds
+    produces: dist/build-info.json
+    label: The build command actually succeeds
+
+hints:
+  - level: 1
+    text: >
+      The pipeline is a file in the repository, not something configured in a
+      web interface. It has a conventional name and no extension, and it goes
+      in the root of the project.
+  - level: 2
+    text: >
+      Four blocks nest inside one another, outermost to innermost, and one
+      directive alongside them decides where the pipeline runs. Commands never
+      go directly inside the stage container — a stage holds a block of its own
+      for them.
+  - level: 3
+    text: >
+      The stage must be named exactly `Build`, and the step that runs a shell
+      command on a Unix agent is `sh`. The command itself is the build command
+      from the README. If the check reports unclosed blocks, count your closing
+      braces — there is one for each of the four levels.
+
+references:
+  - title: Pipeline — Getting started with the Jenkinsfile
+    url: https://www.jenkins.io/doc/book/pipeline/getting-started/
+  - title: Pipeline syntax — declarative pipeline
+    url: https://www.jenkins.io/doc/book/pipeline/syntax/
+  - title: Using a Jenkinsfile
+    url: https://www.jenkins.io/doc/book/pipeline/jenkinsfile/
+
+skills:
+  - cicd.jenkins.jenkinsfile.author
+  - cicd.jenkins.declarative.syntax
+  - cicd.jenkins.agent
+  - cicd.jenkins.stages

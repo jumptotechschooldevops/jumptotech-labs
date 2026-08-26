@@ -40,27 +40,16 @@ import {
  * of "exists", which is exactly the drift the family model exists to prevent.
  */
 
-export const yamlValid: AnsibleVerifierHandler<'yaml_valid'> = {
-  type: 'yaml_valid',
-  label: (r) => `${r.path} is valid YAML`,
-  async run(requirement, reader) {
-    const parsed = await reader.yaml(requirement.path);
-    if (parsed === null) return fail(`'${requirement.path}' does not exist in the lab project`);
-    if (!parsed.ok) return fail(`'${requirement.path}' is not valid YAML: ${parsed.error}`);
-    if (parsed.value === null || parsed.value === undefined) {
-      return fail(`'${requirement.path}' is empty`);
-    }
-    return pass();
-  },
-};
-
-/**
- * `ansible-playbook --syntax-check`.
+/*
+ * `yaml_valid` is deliberately NOT handled here.
  *
- * Deliberately Ansible's own answer rather than a YAML parse of our own: a file
- * can be perfectly valid YAML and still not be a playbook, and the tool the
- * student is being taught to run is the authority on the difference.
+ * "Does this file parse as YAML" is the same question for an Ansible playbook
+ * and a GitHub Actions workflow, so it belongs to the `filesystem` family that
+ * every sandbox provider can answer — see handlers/filesystem.ts. It lived
+ * here while Ansible was the only track that asked it, which is exactly how a
+ * generic check ends up owned by whichever track happened to need it first.
  */
+
 export const ansiblePlaybookValid: AnsibleVerifierHandler<'ansible_playbook_valid'> = {
   type: 'ansible_playbook_valid',
   label: (r) => `${r.playbook} passes ansible-playbook --syntax-check`,
@@ -320,7 +309,6 @@ function condense(text: string): string {
 }
 
 export const ansibleProjectHandlers = {
-  yamlValid,
   ansiblePlaybookValid,
   ansibleTaskExists,
   ansibleRoleExists,

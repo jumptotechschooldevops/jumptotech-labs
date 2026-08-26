@@ -1,0 +1,14 @@
+{
+  "name": "jumptotech-statements",
+  "version": "1.4.0",
+  "private": true,
+  "description": "JumpToTech Bank statement formatting service. Dependency-free on purpose.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test",
+    "start": "node src/cli.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,33 @@
+# JumpToTech Bank — statements service CI
+#
+# Builds, tests, and publishes the build output as an artifact. It stops there:
+# nothing yet turns that artifact into something runnable on a server.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build
+        run: node build.mjs
+
+      - name: Test
+        run: node --test
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: statements-dist
+          path: dist/

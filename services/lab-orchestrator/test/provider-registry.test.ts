@@ -158,6 +158,7 @@ describe('availability is reported, not thrown', () => {
       'terraform',
       'aws',
       'ansible',
+      'cicd',
     ]);
     expect(statuses.every((s) => !s.registered && !s.available)).toBe(true);
   });

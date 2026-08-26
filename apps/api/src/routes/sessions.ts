@@ -190,6 +190,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       // An Ansible lab is graded across its whole topology, so its reader is a
       // port over the session's containers rather than the single-sandbox one.
       ...(session.provider === 'ansible' && ansible ? { ansible } : {}),
+      // A CI/CD lab reads the same sandbox as any container-backed track; the
+      // CI/CD reader is what adds pipeline parsing and task running on top.
+      ...(session.provider === 'cicd' && sandboxPort ? { cicd: sandboxPort } : {}),
       ...(workspace ? { workspace: { port: workspace, sessionId: session.sessionId } } : {}),
     };
   }

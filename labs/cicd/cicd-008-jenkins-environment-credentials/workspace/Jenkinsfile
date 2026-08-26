@@ -1,0 +1,45 @@
+// JumpToTech Bank — statements service
+//
+// REVIEW BLOCKED. Do not merge.
+//
+// A contractor added the Publish stage in a hurry and wrote the registry
+// details straight into the file. The value below is a placeholder, not a real
+// credential — but the *shape* is the problem: anything written here is in
+// version control forever, visible to everyone with read access, and printed
+// in the build log the moment a step echoes it.
+//
+// Rewrite the environment block so the pipeline references its configuration
+// and its credential instead of containing them.
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY_PASSWORD = 'placeholder-do-not-ship-this'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'node build.mjs'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh 'node --test'
+            }
+        }
+
+        stage('Publish') {
+            steps {
+                sh 'echo "publishing to the registry"'
+            }
+        }
+    }
+}

@@ -1,0 +1,25 @@
+// JumpToTech Bank — statements service
+//
+// This pipeline has not run successfully since the last change to it.
+pipeline {
+    agent any
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'node build.mjs'
+        }
+
+        stage('Package') {
+            steps {
+                sh 'ls -l dist'
+            }
+        }
+    }
+}

@@ -1,0 +1,28 @@
+# JumpToTech Bank — statements service CI
+#
+# This is where CICD-003 left the workflow: it checks out, provisions Node.js,
+# builds, and tests. Everything it produces is thrown away when the runner is
+# destroyed at the end of the job.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build
+        run: node build.mjs
+
+      - name: Test
+        run: node --test

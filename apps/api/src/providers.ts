@@ -40,6 +40,7 @@ import {
   type WorkspacePort,
   ProviderRegistry,
   AnsibleLabProvider,
+  CicdLabProvider,
   TerraformLabProvider,
   type ContainerRuntimePort,
   type LabProvider,
@@ -120,6 +121,21 @@ export function buildProviderRegistry(options: BuildProviderRegistryOptions): Pr
       : {
           enabled: false,
           disabledReason: 'The Ansible provider is switched off (ANSIBLE_PROVIDER_ENABLED=false).',
+        }),
+  });
+
+  registry.register({
+    provider: new CicdLabProvider({
+      runtime,
+      image: config.sandbox.cicdImage,
+      home: config.policy.sandbox.home,
+      runtimeOwner: config.sandbox.runtimeOwner,
+    }),
+    ...(config.sandbox.cicdEnabled
+      ? {}
+      : {
+          enabled: false,
+          disabledReason: 'The CI/CD provider is switched off (CICD_PROVIDER_ENABLED=false).',
         }),
   });
 

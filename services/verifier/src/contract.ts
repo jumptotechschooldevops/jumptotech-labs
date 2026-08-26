@@ -7,6 +7,7 @@
  */
 import type {
   AnsibleRequirementType,
+  CicdRequirementType,
   DockerRequirementType,
   KubernetesRequirementType,
   RequirementOf,
@@ -14,6 +15,7 @@ import type {
   SandboxRequirementType,
 } from '@jumptotech/lab-orchestrator';
 import type { AnsibleVerifyReader } from './ansible-reader.js';
+import type { CicdVerifyReader } from './cicd-reader.js';
 import type { VerifyReader } from './reader.js';
 import type { SandboxReader } from './sandbox-reader.js';
 import type { DockerVerifyReader } from './docker-reader.js';
@@ -75,6 +77,20 @@ export interface AnsibleVerifierHandler<T extends AnsibleRequirementType> {
   readonly type: T;
   label(requirement: RequirementOf<T>): string;
   run(requirement: RequirementOf<T>, reader: AnsibleVerifyReader): Promise<HandlerOutcome>;
+}
+
+/**
+ * One CI/CD requirement type's implementation.
+ *
+ * Separate from the other handler shapes for the same reason they are separate
+ * from each other: the reader it is handed can read a project and run its
+ * build, and nothing else, so a Kubernetes or sandbox handler cannot be
+ * registered in the CI/CD table or the reverse.
+ */
+export interface CicdVerifierHandler<T extends CicdRequirementType> {
+  readonly type: T;
+  label(requirement: RequirementOf<T>): string;
+  run(requirement: RequirementOf<T>, reader: CicdVerifyReader): Promise<HandlerOutcome>;
 }
 
 export function skip(detail: string): HandlerOutcome {

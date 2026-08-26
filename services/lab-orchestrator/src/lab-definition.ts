@@ -145,6 +145,25 @@ export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
    * of truth.
    */
   ansible: ['docs.ansible.com'],
+  /*
+   * CI/CD has no single upstream, because the track deliberately teaches two
+   * systems rather than one: a pipeline is a portable idea and a student who
+   * has only seen Actions has learned a vendor, not the subject. Each host is
+   * the primary documentation for something a lab actually asks for:
+   *   docs.github.com   workflow syntax, events, jobs, steps, artifacts
+   *   www.jenkins.io    declarative Pipeline syntax, stages, credentials
+   *   github.com        the Actions the labs use, documented in their repos
+   *   docs.docker.com   CICD-005 — the Dockerfile a build step consumes
+   *   git-scm.com       the repository model the whole track assumes
+   */
+  cicd: [
+    'docs.github.com',
+    'www.jenkins.io',
+    'jenkins.io',
+    'github.com',
+    'docs.docker.com',
+    'git-scm.com',
+  ],
   cs: [
     'docs.python.org',
     'peps.python.org',
@@ -204,6 +223,10 @@ export const PROVIDER_REQUIREMENT_FAMILIES: Record<LabProviderId, readonly Requi
   // get `linux`: an inspection command answered by the control node would say
   // nothing about the managed nodes, which is where the lab's state lives.
   ansible: ['filesystem', 'ansible'],
+  // A CI/CD lab reads its project through the sandbox filesystem and its
+  // pipeline definitions through the CI/CD reader. It does not get `linux`:
+  // the track grades artefacts and build results, not a process table.
+  cicd: ['filesystem', 'cicd'],
 };
 
 /**

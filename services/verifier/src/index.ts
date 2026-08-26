@@ -39,6 +39,7 @@ import {
 import { SandboxReader, type SandboxPort } from './sandbox-reader.js';
 import type { AnsibleSandboxPort } from '@jumptotech/lab-orchestrator';
 import { AnsibleVerifyReader } from './ansible-reader.js';
+import { CicdVerifyReader } from './cicd-reader.js';
 import { DockerVerifyReader } from './docker-reader.js';
 import type { CheckResult } from './contract.js';
 
@@ -154,6 +155,8 @@ export interface VerifyOptions {
   docker?: DockerEnginePort;
   /** Required for Ansible labs: a port bound to *this session's* topology. */
   ansible?: AnsibleSandboxPort;
+  /** CI/CD labs read the same sandbox as `sandbox`, through a CI/CD reader. */
+  cicd?: SandboxPort;
   lab: LabDefinition;
   /**
    * The session's private sandbox: namespace for Kubernetes labs, container
@@ -182,6 +185,7 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
       ? { docker: new DockerVerifyReader(options.docker, namespace, options.workspace) }
       : {}),
     ...(options.ansible ? { ansible: new AnsibleVerifyReader(options.ansible, namespace) } : {}),
+    ...(options.cicd ? { cicd: new CicdVerifyReader(options.cicd) } : {}),
   };
 
   let checks: CheckResult[];

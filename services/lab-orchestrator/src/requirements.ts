@@ -50,6 +50,7 @@
  */
 import { z } from 'zod';
 import { isAllowedManagedPath, isSafeWorkspacePath } from './ansible/paths.js';
+import { WORKSPACE_TASK_IDS, type WorkspaceTaskId } from './cicd/tasks.js';
 import { isSafeSandboxPath, MAX_SANDBOX_PATH_LENGTH } from './session/sandbox-paths.js';
 
 /**
@@ -1479,8 +1480,50 @@ const sandboxRequirementSchemas = {
    * runs `stat` without `-L` so it can tell the difference.
    */
   file_exists: z
-    .object({ type: z.literal('file_exists'), path: sandboxPath, ...common })
+    .object({
+      type: z.literal('file_exists'),
+      path: sandboxPath,
+      /**
+       * A size floor, for a file the student was asked to *write* rather than
+       * merely create. `touch ci.yml` satisfies "exists" and teaches nothing;
+       * a lab that wants a real workflow file says so here.
+       */
+      min_bytes: z.number().int().min(1).max(1_048_576).optional(),
+      ...common,
+    })
     .strict(),
+
+  /**
+   * The file parses as YAML.
+   *
+   * The most common first failure in every track that has students author a
+   * YAML document — an Ansible playbook, a GitHub Actions workflow — which is
+   * why it lives with the other path reads rather than in either track's own
+   * family. Any provider with a sandbox filesystem can answer it.
+   */
+  yaml_valid: z.object({ type: z.literal('yaml_valid'), path: sandboxPath, ...common }).strict(),
+
+  /**
+   * Several fragments must appear in one file, and/or several must not.
+   *
+   * `file_content` takes one `contains` and answers "does this string occur".
+   * A pipeline script or a Dockerfile is graded on *several* things at once —
+   * a base image, a workdir, a copy, a start command — and expressing that as
+   * four separate checks would report four failures for one missing line.
+   * Substrings, never regular expressions.
+   */
+  file_contains: z
+    .object({
+      type: z.literal('file_contains'),
+      path: sandboxPath,
+      contains: z.array(z.string().min(1).max(120)).max(10).default([]),
+      absent: z.array(z.string().min(1).max(120)).max(10).default([]),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.contains.length > 0 || v.absent.length > 0, {
+      message: 'must specify contains, absent, or both',
+    }),
 
   directory_exists: z
     .object({ type: z.literal('directory_exists'), path: sandboxPath, ...common })
@@ -3047,8 +3090,6 @@ const contentFragment = z.string().min(1).max(512);
 
 const ansibleRequirementSchemas = {
   // --- the student's project ----------------------------------------------
-  /** The file parses as YAML. The most common first failure in every lab. */
-  yaml_valid: z.object({ type: z.literal('yaml_valid'), path: workspacePath, ...common }).strict(),
 
   /**
    * `ansible-inventory --list` succeeds and returns a parseable inventory.
@@ -3280,11 +3321,265 @@ const ansibleRequirementSchemas = {
     }),
 } as const;
 
+// ---------------------------------------------------------------------------
+// CI/CD
+// ---------------------------------------------------------------------------
+//
+// Every check here reads an artefact the student wrote — a workflow file, a
+// Jenkinsfile, a pipeline script — or runs the project's own build and tests.
+// Nothing contacts GitHub or Jenkins: a lab about *pipelines as code* is
+// graded on the code, and the two things a pipeline ultimately has to do
+// (build, test) are done for real in the session's own sandbox.
+
+/**
+ * A workflow path, additionally required to live where GitHub looks.
+ *
+ * Documented in the GitHub Actions workflow-syntax reference: workflow files
+ * are read from `.github/workflows` in the repository root.
+ */
+const workflowPath = workspacePath.refine(
+  (p) => /^\.github\/workflows\/[^/]+\.(ya?ml)$/i.test(p),
+  { message: 'must be a .yml or .yaml file directly inside .github/workflows/' },
+);
+
+/** A GitHub Actions event name, e.g. `push`, `pull_request`, `workflow_dispatch`. */
+const eventName = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9_]*$/, 'must be a lowercase event name such as push or pull_request');
+
+/** A git branch name, as it would appear in a `branches:` filter. */
+const branchName = z
+  .string()
+  .min(1)
+  .max(120)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._\-/*]*$/, 'must be a branch name or pattern');
+
+/** An environment variable name, as a workflow or Jenkinsfile would set it. */
+const envVarName = z
+  .string()
+  .min(1)
+  .max(96)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name such as REGISTRY_URL');
+
+/**
+ * One id from the platform's closed task table.
+ *
+ * A lab names a task *id*; the argv it maps to is written in platform code and
+ * never composed from a lab definition. That is what keeps "run the student's
+ * build" from becoming "run whatever a lab file says".
+ */
+const workspaceTaskId = z.enum(
+  WORKSPACE_TASK_IDS as unknown as [WorkspaceTaskId, ...WorkspaceTaskId[]],
+);
+
+/** A YAML mapping key used as an identifier: a job id, an action input name. */
+const identifier = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z_][A-Za-z0-9_-]*$/, 'must be an identifier such as build or fetch-depth');
+
+const cicdRequirementSchemas = {
+  github_workflow_exists: z
+    .object({
+      type: z.literal('github_workflow_exists'),
+      path: workflowPath,
+      /** Require `name:` to be set. Off by default — `name` is optional syntax. */
+      require_name: z.boolean().default(false),
+      ...common,
+    })
+    .strict(),
+
+  github_workflow_trigger: z
+    .object({
+      type: z.literal('github_workflow_trigger'),
+      path: workflowPath,
+      /** An event name from the `on:` key, e.g. `push`. */
+      trigger: eventName,
+      /** Require the trigger to be filtered to these branches. */
+      branches: z.array(branchName).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  github_workflow_job_exists: z
+    .object({
+      type: z.literal('github_workflow_job_exists'),
+      path: workflowPath,
+      /** The job's key under `jobs:`. */
+      job: identifier,
+      /** Require a `runs-on` value, e.g. `ubuntu-latest`. */
+      runs_on: z.string().min(1).max(64).optional(),
+      /** Require the job to declare at least this many steps. */
+      min_steps: z.number().int().min(1).max(50).optional(),
+      /** Require `needs:` to include these job ids, so ordering is explicit. */
+      needs: z.array(identifier).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A step inside a job does a particular thing.
+   *
+   * Either it *uses* an action (matched on the action name, ignoring the
+   * version, so `actions/checkout@v4` and `@v5` both satisfy a lab that only
+   * cares that code is checked out), or it *runs* a command containing all of
+   * the given fragments. Fragments are plain substrings, never patterns: a lab
+   * cannot supply a regular expression for the verifier to compile.
+   */
+  github_workflow_step_exists: z
+    .object({
+      type: z.literal('github_workflow_step_exists'),
+      path: workflowPath,
+      job: identifier,
+      uses: z.string().min(1).max(160).optional(),
+      run_contains: z.array(z.string().min(1).max(120)).max(6).optional(),
+      /** Require the step's `with:` block to set these input names. */
+      with_keys: z.array(identifier).max(10).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.uses !== undefined || v.run_contains !== undefined, {
+      message: 'must specify uses, run_contains, or both',
+    }),
+
+  // --- Jenkins -------------------------------------------------------------
+  /**
+   * A Jenkinsfile exists and parses as a declarative pipeline.
+   *
+   * "Parses" means the platform's structural reader finds a `pipeline` block
+   * with an `agent` and a `stages` block. It is a syntax and structure check,
+   * not a Groovy interpreter — see README → Jenkins for exactly what that does
+   * and does not prove.
+   */
+  jenkinsfile_exists: z
+    .object({
+      type: z.literal('jenkinsfile_exists'),
+      path: workspacePath.default('Jenkinsfile'),
+      /** Require an explicit `agent` directive at pipeline level. */
+      require_agent: z.boolean().default(true),
+      ...common,
+    })
+    .strict(),
+
+  jenkins_stage_exists: z
+    .object({
+      type: z.literal('jenkins_stage_exists'),
+      path: workspacePath.default('Jenkinsfile'),
+      /** The stage name, matched exactly as written in `stage('…')`. */
+      stage: z.string().min(1).max(64),
+      /** Require the stage's `steps` block to mention all of these substrings. */
+      steps_contain: z.array(z.string().min(1).max(120)).max(6).optional(),
+      /** Require the stage to appear after these stages, in file order. */
+      after: z.array(z.string().min(1).max(64)).max(10).optional(),
+      ...common,
+    })
+    .strict(),
+
+  // --- Environment and credentials ----------------------------------------
+  /**
+   * A named value is supplied by *reference* rather than written in the file.
+   *
+   * `via` pins the mechanism where the lab teaches one specific pattern:
+   *
+   *   `workflow_env`        `env:` in a GitHub Actions workflow
+   *   `workflow_secret`     `${{ secrets.NAME }}`
+   *   `jenkins_environment` an `environment { }` entry in a Jenkinsfile
+   *   `jenkins_credentials` `credentials('id')` in a Jenkinsfile
+   */
+  environment_reference_exists: z
+    .object({
+      type: z.literal('environment_reference_exists'),
+      path: workspacePath,
+      /** The variable name, e.g. `REGISTRY_URL` or `DEPLOY_TOKEN`. */
+      name: envVarName,
+      via: z
+        .enum(['workflow_env', 'workflow_secret', 'jenkins_environment', 'jenkins_credentials'])
+        .optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * No credential-shaped value is written in plain text.
+   *
+   * Structural, not a word list: a value fails when a key that names a
+   * credential (`*_TOKEN`, `*_PASSWORD`, `*_SECRET`, `*_API_KEY`, …) is
+   * assigned a *literal* instead of a reference to a secret store. The lab
+   * definition therefore never has to contain a secret value in order to
+   * forbid one — which is the whole point.
+   */
+  secret_not_hardcoded: z
+    .object({
+      type: z.literal('secret_not_hardcoded'),
+      path: workspacePath,
+      ...common,
+    })
+    .strict(),
+
+  // --- Build, test, artifacts ---------------------------------------------
+  /**
+   * A build artifact is present in the workspace.
+   *
+   * Distinct from `file_exists` only in intent and wording, but the distinction
+   * matters to a student: this check is about what the pipeline *produced*, and
+   * its failure text says so.
+   */
+  artifact_exists: z
+    .object({
+      type: z.literal('artifact_exists'),
+      path: workspacePath,
+      kind: z.enum(['file', 'directory']).default('file'),
+      min_bytes: z.number().int().min(1).max(10_000_000).default(1),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * An allow-listed task exits with an expected status.
+   *
+   * `command` is an *id* from `workspace/tasks.ts`, not a command line. There
+   * is no field anywhere in this schema that carries one.
+   */
+  /**
+   * One named task from the closed table exits with the expected status.
+   *
+   * Deliberately NOT `command_exit_code`, which already exists in the `linux`
+   * family and means something different: that one runs an allow-listed
+   * binary the lab names, this one runs a *task id* whose argv the platform
+   * owns. Two checks with one name would be two contracts with one spelling.
+   */
+  workspace_task_exit_code: z
+    .object({
+      type: z.literal('workspace_task_exit_code'),
+      command: workspaceTaskId,
+      expected_exit_code: z.number().int().min(0).max(255).default(0),
+      ...common,
+    })
+    .strict(),
+
+  /** The project's build task succeeds, and optionally leaves an output path. */
+  project_builds: z
+    .object({
+      type: z.literal('project_builds'),
+      /** A path the build must have produced, checked after it exits. */
+      produces: workspacePath.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** The project's test task succeeds. */
+  tests_pass: z.object({ type: z.literal('tests_pass'), ...common }).strict(),
+} as const;
+
 const requirementSchemas = {
   ...kubernetesRequirementSchemas,
   ...sandboxRequirementSchemas,
   ...dockerRequirementSchemas,
   ...ansibleRequirementSchemas,
+  ...cicdRequirementSchemas,
 } as const;
 
 /** Every requirement type the platform supports, in documentation order. */
@@ -3352,6 +3647,12 @@ export const REQUIREMENT_FAMILY_READERS = {
   // family is also what stops an Ansible check being written into a Linux lab,
   // where there are no managed nodes for it to be true about.
   ansible: 'ansible',
+  // A CI/CD check reads a pipeline definition out of the student's project, or
+  // runs the project's own build and tests. Both happen inside the session's
+  // sandbox, but neither is a plain path read: the reader parses workflow and
+  // Jenkinsfile syntax and memoises one build across several checks, so it is
+  // its own family rather than a `filesystem` one.
+  cicd: 'cicd',
 } as const;
 
 export type RequirementFamily = keyof typeof REQUIREMENT_FAMILY_READERS;
@@ -3367,6 +3668,7 @@ export type KubernetesFamily = FamiliesFor<'kubernetes'>;
 export type SandboxFamily = FamiliesFor<'sandbox'>;
 export type DockerFamily = FamiliesFor<'docker'>;
 export type AnsibleFamily = FamiliesFor<'ansible'>;
+export type CicdFamily = FamiliesFor<'cicd'>;
 
 /** Every family, in declaration order. */
 export const REQUIREMENT_FAMILY_LIST = Object.keys(
@@ -3392,6 +3694,10 @@ export function isDockerFamily(family: RequirementFamily): family is DockerFamil
 
 export function isAnsibleFamily(family: RequirementFamily): family is AnsibleFamily {
   return REQUIREMENT_FAMILY_READERS[family] === 'ansible';
+}
+
+export function isCicdFamily(family: RequirementFamily): family is CicdFamily {
+  return REQUIREMENT_FAMILY_READERS[family] === 'cicd';
 }
 
 export const REQUIREMENT_FAMILIES = {
@@ -3553,6 +3859,8 @@ export const REQUIREMENT_FAMILIES = {
   // sandbox to answer an *inspection command*.
   path_absent: 'filesystem',
   file_content_absent: 'filesystem',
+  file_contains: 'filesystem',
+  yaml_valid: 'filesystem',
   script_executable: 'filesystem',
 
   process_running: 'linux',
@@ -3605,7 +3913,6 @@ export const REQUIREMENT_FAMILIES = {
   // student's project on the control node, or real state on a managed node
   // reached over the session segment. None of them is answerable from a
   // single-container sandbox, which is why they are their own family.
-  yaml_valid: 'ansible',
   ansible_inventory_valid: 'ansible',
   ansible_group_exists: 'ansible',
   ansible_host_exists: 'ansible',
@@ -3619,6 +3926,20 @@ export const REQUIREMENT_FAMILIES = {
   managed_service_state: 'ansible',
   ansible_connectivity: 'ansible',
   ansible_idempotent: 'ansible',
+
+  // --- CI/CD: the pipeline the student wrote, and the project it builds ----
+  github_workflow_exists: 'cicd',
+  github_workflow_trigger: 'cicd',
+  github_workflow_job_exists: 'cicd',
+  github_workflow_step_exists: 'cicd',
+  jenkinsfile_exists: 'cicd',
+  jenkins_stage_exists: 'cicd',
+  environment_reference_exists: 'cicd',
+  secret_not_hardcoded: 'cicd',
+  artifact_exists: 'cicd',
+  workspace_task_exit_code: 'cicd',
+  project_builds: 'cicd',
+  tests_pass: 'cicd',
   // `as const satisfies` rather than a plain annotation: the literal family of
   // each type has to survive for `RequirementTypeOf` to be able to filter on
   // it, while `satisfies` still enforces that every requirement type is
@@ -3653,6 +3974,9 @@ export type DockerRequirementType = RequirementTypeOf<DockerFamily>;
 
 /** Requirement types answered across an Ansible session's control and managed nodes. */
 export type AnsibleRequirementType = RequirementTypeOf<AnsibleFamily>;
+
+/** Requirement types answered by reading a CI/CD project and running its build. */
+export type CicdRequirementType = RequirementTypeOf<CicdFamily>;
 
 export const KUBERNETES_REQUIREMENT_TYPES = requirementTypesForFamily(
   'kubernetes',

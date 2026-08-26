@@ -1,0 +1,153 @@
+id: CICD-003
+slug: cicd-003-github-actions-build-test
+title: Build and Test in a Workflow
+track: cicd
+topic: github-actions
+difficulty: beginner
+level: practice
+duration_minutes: 40
+order: 3
+
+environment:
+  provider: cicd
+  isolation: container
+
+prerequisites:
+  - CICD-002
+
+story: >
+  The workflow you left behind checks the code out and then stops. It reports
+  a green tick on every push, which is worse than having no workflow at all —
+  the team has started to believe a passing check means something.
+
+  Make it mean something. The workflow has to do what a person would do on a
+  clean machine: get the code, get the right toolchain, build it, and run the
+  tests.
+
+objectives:
+  - Order the steps of a continuous integration job correctly
+  - Check out the repository with the official checkout action
+  - Provision a language runtime as a pipeline step
+  - Run build and test commands from a workflow step
+
+task:
+  summary: Extend the build job so it checks out, provisions Node.js, builds, and tests.
+  description: >
+    A continuous integration job runs on a machine that has nothing on it. That
+    is the entire value of it: your laptop has state you have forgotten about,
+    and the runner does not. So every job starts by assembling what it needs.
+
+    **Check out the code.** The runner has no copy of your repository, so the
+    first step is almost always `actions/checkout`, GitHub's official action
+    for cloning the commit that triggered the run. Without it, every later step
+    runs against an empty directory.
+
+    **Provision the toolchain.** `actions/setup-node` installs a chosen Node.js
+    version and puts it on the path. For a project with dependencies this is
+    also where installing them belongs — `npm ci` in a `run` step, using the
+    lockfile so the runner installs exactly what was tested. `jumptotech-statements`
+    has no dependencies on purpose, so for this project provisioning the
+    runtime *is* the dependency step, and there is nothing to install.
+
+    **Build.** `node build.mjs` turns `src/` into the artifacts in `dist/`.
+
+    **Test.** `node --test` runs the suite with the Node.js built-in runner.
+
+    Order matters and each step depends on the last: building before checking
+    out builds nothing; testing before building tests source that was never
+    compiled into an artifact.
+
+    Edit `.github/workflows/ci.yml` so the `build` job carries all four steps,
+    in that order.
+
+    Two things are verified, and it is worth being clear about which is which.
+    The **workflow structure** is read from your file: that the checkout and
+    setup-node actions are used, and that steps run the build and test
+    commands. The **behaviour** is verified by actually running `node build.mjs`
+    and `node --test` in your workspace — the same commands your workflow
+    declares. GitHub-hosted execution is not available in this sandbox, so the
+    lab runs the local equivalent rather than reporting a run that never
+    happened.
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: github_workflow_exists
+      path: .github/workflows/ci.yml
+      label: Starter workflow is present
+    - type: file_exists
+      path: build.mjs
+      min_bytes: 200
+      label: Build script is present
+
+requirements:
+  - type: github_workflow_exists
+    path: .github/workflows/ci.yml
+    label: Workflow is valid
+  - type: github_workflow_job_exists
+    path: .github/workflows/ci.yml
+    job: build
+    runs_on: ubuntu-latest
+    min_steps: 4
+    label: The build job has at least four steps
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    uses: actions/checkout
+    label: A step checks the repository out
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    uses: actions/setup-node
+    label: A step provisions the Node.js toolchain
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    run_contains:
+      - node build.mjs
+    label: A step runs the build
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    run_contains:
+      - node --test
+    label: A step runs the tests
+  - type: project_builds
+    produces: dist/build-info.json
+    label: The build command actually succeeds
+  - type: tests_pass
+    label: The test suite actually passes
+
+hints:
+  - level: 1
+    text: >
+      A runner starts empty. Write down what a person would need to do on a
+      brand-new machine to get from nothing to a tested build, and each of
+      those becomes one step.
+  - level: 2
+    text: >
+      Two of the four steps use published actions and two run shell commands.
+      The README in your workspace lists the exact commands the project uses
+      for building and testing — try them in the terminal first, then put them
+      in the workflow.
+  - level: 3
+    text: >
+      Steps that use an action take a `uses:` key; steps that run a command
+      take a `run:` key. `actions/setup-node` takes a `node-version` input
+      under `with:`. The two checks that run the build and the tests execute
+      them in your workspace, so if they fail, run the same commands in the
+      terminal and read the error.
+
+references:
+  - title: Workflow syntax for GitHub Actions — jobs.<job_id>.steps
+    url: https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+  - title: Building and testing Node.js
+    url: https://docs.github.com/en/actions/tutorials/build-and-test-code/nodejs
+  - title: actions/checkout
+    url: https://github.com/actions/checkout
+
+skills:
+  - cicd.githubactions.steps
+  - cicd.githubactions.actions.use
+  - cicd.pipeline.build
+  - cicd.pipeline.test

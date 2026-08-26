@@ -303,6 +303,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       'terraform',
       'aws',
       'ansible',
+      'cicd',
     ]);
     expect(response.body.data.labsLoaded).toBe(disk.labCount);
   });

@@ -97,6 +97,7 @@ describe('schema — a lab declares its substrate', () => {
       'terraform',
       'aws',
       'ansible',
+      'cicd',
     ]);
     expect(parseLabDefinition(dockerYaml()).environment).toEqual({
       provider: 'docker',

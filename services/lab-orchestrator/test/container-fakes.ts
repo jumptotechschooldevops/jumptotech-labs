@@ -116,6 +116,7 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
         'jumptotech/lab-linux:latest',
         'jumptotech/lab-terraform:latest',
         'jumptotech/lab-ansible:latest',
+        'jumptotech/lab-cicd:latest',
       ],
     );
     this.unreachable = options.unreachable;
@@ -323,6 +324,10 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
         }
         if (binary === 'ssh' && container.spec.image.includes('ansible')) {
           return ok('OpenSSH_9.9p2\n');
+        }
+        // The CI/CD toolchain check, modelled per image like the others.
+        if (binary === 'node' && container.spec.image.includes('cicd')) {
+          return ok('v22.23.2\n');
         }
         return fail(`env: '${String(binary)}': No such file or directory`);
       }

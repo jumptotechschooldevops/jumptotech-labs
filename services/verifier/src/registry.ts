@@ -32,6 +32,7 @@
  */
 import {
   isAnsibleFamily,
+  isCicdFamily,
   isDockerFamily,
   isDockerRequirementType,
   isKubernetesFamily,
@@ -39,6 +40,7 @@ import {
   requirementFamily,
   REQUIREMENT_TYPES,
   type AnsibleRequirementType,
+  type CicdRequirementType,
   type DockerRequirementType,
   type KubernetesRequirementType,
   type Requirement,
@@ -48,6 +50,7 @@ import {
 import type {
   AnsibleVerifierHandler,
   CheckResult,
+  CicdVerifierHandler,
   CheckStatus,
   DockerVerifierHandler,
   Handler,
@@ -56,6 +59,7 @@ import type {
   VerifierHandler,
 } from './contract.js';
 import type { AnsibleVerifyReader } from './ansible-reader.js';
+import type { CicdVerifyReader } from './cicd-reader.js';
 import { VerifyReader } from './reader.js';
 import { SandboxReader } from './sandbox-reader.js';
 import {
@@ -71,12 +75,21 @@ import {
 } from './handlers/ansible-managed.js';
 import { ansibleIdempotent } from './handlers/ansible-idempotency.js';
 import {
+  githubWorkflowExists,
+  githubWorkflowJobExists,
+  githubWorkflowStepExists,
+  githubWorkflowTrigger,
+} from './handlers/github-actions.js';
+import { jenkinsStageExists, jenkinsfileExists } from './handlers/jenkins.js';
+import { environmentReferenceExists, secretNotHardcoded } from './handlers/pipeline-config.js';
+import { commandExitCode as workspaceTaskExitCode, projectBuilds, testsPass } from './handlers/build.js';
+import { artifactExists } from './handlers/files.js';
+import {
   ansibleHandlerExists,
   ansiblePlaybookValid,
   ansibleRoleExists,
   ansibleTaskExists,
   ansibleTemplateExists,
-  yamlValid,
 } from './handlers/ansible-project.js';
 import {
   cfnCidrDisjoint,
@@ -215,11 +228,13 @@ import { serviceHttp, serviceTcp } from './handlers/reachability.js';
 import { workloadAnnotation, workloadContainer, workloadVolumeMount } from './handlers/metadata.js';
 import {
   directoryExists,
+  fileContains,
   fileContent,
   fileExists,
   fileGroup,
   fileMode,
   fileOwner,
+  yamlValid,
 } from './handlers/filesystem.js';
 import {
   terraformInitialized,
@@ -459,6 +474,8 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
 
   path_absent: pathAbsent,
   file_content_absent: fileContentAbsent,
+  file_contains: fileContains,
+  yaml_valid: yamlValid,
   script_executable: scriptExecutable,
   script_runs: scriptRuns,
   process_running: processRunning,
@@ -520,6 +537,7 @@ export function registeredRequirementTypes(): RequirementType[] {
     ...Object.keys(SANDBOX_HANDLERS),
     ...Object.keys(DOCKER_HANDLERS),
     ...Object.keys(ANSIBLE_HANDLERS),
+    ...Object.keys(CICD_HANDLERS),
   ] as RequirementType[];
 }
 
@@ -529,7 +547,8 @@ export function hasHandler(type: string): boolean {
     Object.hasOwn(KUBERNETES_HANDLERS, type) ||
     Object.hasOwn(SANDBOX_HANDLERS, type) ||
     Object.hasOwn(DOCKER_HANDLERS, type) ||
-    Object.hasOwn(ANSIBLE_HANDLERS, type)
+    Object.hasOwn(ANSIBLE_HANDLERS, type) ||
+    Object.hasOwn(CICD_HANDLERS, type)
   );
 }
 
@@ -553,6 +572,7 @@ export interface VerificationReaders {
   sandbox?: SandboxReader | undefined;
   docker?: DockerVerifyReader | undefined;
   ansible?: AnsibleVerifyReader | undefined;
+  cicd?: CicdVerifyReader | undefined;
 }
 
 /**
@@ -591,7 +611,6 @@ function toReaders(input: AnyVerifyReader | VerificationReaders): VerificationRe
  * fails to compile rather than throwing at Check Solution time.
  */
 const ANSIBLE_HANDLERS: { [K in AnsibleRequirementType]: AnsibleVerifierHandler<K> } = {
-  yaml_valid: yamlValid,
   ansible_inventory_valid: ansibleInventoryValid,
   ansible_group_exists: ansibleGroupExists,
   ansible_host_exists: ansibleHostExists,
@@ -605,6 +624,28 @@ const ANSIBLE_HANDLERS: { [K in AnsibleRequirementType]: AnsibleVerifierHandler<
   managed_service_state: managedServiceState,
   ansible_connectivity: ansibleConnectivity,
   ansible_idempotent: ansibleIdempotent,
+};
+
+/**
+ * Every CI/CD requirement type, mapped to its handler.
+ *
+ * The mapped type is the completeness guarantee, as it is for the other
+ * families: adding a CI/CD requirement without writing a handler fails to
+ * compile rather than throwing at Check Solution time.
+ */
+const CICD_HANDLERS: { [K in CicdRequirementType]: CicdVerifierHandler<K> } = {
+  github_workflow_exists: githubWorkflowExists,
+  github_workflow_trigger: githubWorkflowTrigger,
+  github_workflow_job_exists: githubWorkflowJobExists,
+  github_workflow_step_exists: githubWorkflowStepExists,
+  jenkinsfile_exists: jenkinsfileExists,
+  jenkins_stage_exists: jenkinsStageExists,
+  environment_reference_exists: environmentReferenceExists,
+  secret_not_hardcoded: secretNotHardcoded,
+  artifact_exists: artifactExists,
+  workspace_task_exit_code: workspaceTaskExitCode,
+  project_builds: projectBuilds,
+  tests_pass: testsPass,
 };
 
 /**
@@ -660,6 +701,28 @@ export async function verifyRequirement(
       };
     }
     const outcome = await handler.run(requirement as never, available.docker);
+    return {
+      id,
+      label,
+      status: outcomeStatus(outcome),
+      ...(outcome.detail ? { detail: outcome.detail } : {}),
+    };
+  }
+
+  if (isCicdFamily(family)) {
+    const handler = CICD_HANDLERS[
+      requirement.type as CicdRequirementType
+    ] as CicdVerifierHandler<CicdRequirementType>;
+    const label = requirement.label ?? handler.label(requirement as never);
+    if (!available.cicd) {
+      return {
+        id,
+        label,
+        status: 'skipped',
+        detail: 'This lab environment has no CI/CD project to check against',
+      };
+    }
+    const outcome = await handler.run(requirement as never, available.cicd);
     return {
       id,
       label,

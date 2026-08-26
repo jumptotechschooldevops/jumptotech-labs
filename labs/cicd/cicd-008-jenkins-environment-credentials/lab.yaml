@@ -1,0 +1,164 @@
+id: CICD-008
+slug: cicd-008-jenkins-environment-credentials
+title: Environment Variables and Credentials
+track: cicd
+topic: jenkins
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 8
+
+environment:
+  provider: cicd
+  isolation: container
+
+prerequisites:
+  - CICD-007
+
+story: >
+  A contractor added a Publish stage to the statements pipeline last week and
+  wrote the registry password directly into the Jenkinsfile. It is a
+  placeholder rather than a real value, and the reviewer still blocked the
+  merge — because the pattern is what matters. A credential written into a
+  repository is in the history permanently, is readable by everyone with
+  access to the repository, and appears in the build log the first time a step
+  echoes it. Rotating it afterwards means rotating it everywhere.
+
+  Your job is to fix the pattern, not to find a cleverer place to put the
+  password.
+
+objectives:
+  - Declare non-secret configuration as pipeline environment variables
+  - Bind a credential by id instead of writing its value
+  - Explain why a credential in a repository stays compromised after deletion
+  - Recognise a hardcoded credential in a pipeline during review
+
+task:
+  summary: Replace the hardcoded password with a credentials binding and add the registry URL as an environment variable.
+  description: >
+    Two different things are being confused in the current Jenkinsfile, and
+    separating them is the whole lesson.
+
+    **Configuration** is a value that varies between environments but is not
+    sensitive: a registry hostname, an application version, a target namespace.
+    It belongs in the pipeline's `environment` block, where it is written once
+    and read by every stage:
+
+        environment {
+            SOME_SETTING = 'a value'
+        }
+
+    **A credential** is a value that grants access. It never appears in the
+    file at all. Jenkins stores credentials outside the repository, each under
+    an **id**, and the pipeline refers to that id. The declarative form is the
+    `credentials()` helper in an `environment` block:
+
+        environment {
+            SOMETHING = credentials('the-credential-id')
+        }
+
+    What that gives you is an environment variable containing the secret at
+    run time. The file contains the *id*, which is not sensitive; the value
+    lives in the credential store, can be rotated in one place, and is masked
+    if a build log ever prints it. (For steps that need finer scoping there is
+    also `withCredentials`, which binds a credential for one block rather than
+    the whole pipeline.)
+
+    Why deleting a committed secret is not a fix: git keeps every version of
+    every file. A password removed in a later commit is still in the history,
+    still in every clone, and still in every fork. The only real remedy is to
+    rotate the credential — which is why the reviewer treats a hardcoded value
+    as an incident and not a typo.
+
+    Edit the `Jenkinsfile` so that:
+
+    * `REGISTRY_URL` is declared in the pipeline's `environment` block as
+      ordinary configuration — it is a hostname, not a secret;
+    * `REGISTRY_PASSWORD` comes from the Jenkins credential store by id, using
+      the declarative credentials helper, instead of a literal;
+    * the `Publish` stage refers to `REGISTRY_URL` rather than repeating a
+      hostname inline.
+
+    Do not invent a password to put in the file. **There is no value that
+    belongs there** — if a check is failing, the answer is a reference, never a
+    better-hidden literal.
+
+    One of the checks below scans your pipeline for credential-shaped values
+    written in plain text. It works structurally: a key that names a credential
+    assigned a literal fails, and the same key assigned a reference passes. It
+    does not compare against a list of known secrets, because a lab that shipped
+    secrets to compare against would be making the mistake it is teaching you
+    to avoid.
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: jenkinsfile_exists
+      path: Jenkinsfile
+      label: Pipeline under review is present
+    - type: jenkins_stage_exists
+      path: Jenkinsfile
+      stage: Publish
+      label: The Publish stage that failed review is present
+
+requirements:
+  - type: jenkinsfile_exists
+    path: Jenkinsfile
+    require_agent: true
+    label: The pipeline is still a valid declarative pipeline
+  - type: environment_reference_exists
+    path: Jenkinsfile
+    name: REGISTRY_URL
+    via: jenkins_environment
+    label: REGISTRY_URL is declared as pipeline configuration
+  - type: environment_reference_exists
+    path: Jenkinsfile
+    name: REGISTRY_PASSWORD
+    via: jenkins_credentials
+    label: REGISTRY_PASSWORD is bound from the credential store by id
+  - type: secret_not_hardcoded
+    path: Jenkinsfile
+    label: No credential is written in plain text
+  - type: jenkins_stage_exists
+    path: Jenkinsfile
+    stage: Publish
+    steps_contain:
+      - REGISTRY_URL
+    label: The Publish stage uses the REGISTRY_URL variable
+  - type: tests_pass
+    label: The test suite still passes
+
+hints:
+  - level: 1
+    text: >
+      One of the two values is sensitive and one is not, and they are handled
+      completely differently. Decide which is which before you change
+      anything — a hostname and a password do not belong in the same mechanism.
+  - level: 2
+    text: >
+      Jenkins keeps secrets outside the repository, each stored under an
+      identifier. The declarative syntax lets an environment entry pull one in
+      by that identifier, so the file names the secret without containing it.
+      The pipeline syntax reference has the exact form.
+  - level: 3
+    text: >
+      Both entries go in the pipeline-level `environment` block. `REGISTRY_URL`
+      is a plain string. `REGISTRY_PASSWORD` uses the `credentials('…')`
+      helper, where the argument is the id of a credential configured in
+      Jenkins — any sensible id will do, because the id is not the secret. In
+      the Publish stage, read the variable the way a shell reads any
+      environment variable.
+
+references:
+  - title: Using credentials in Jenkins
+    url: https://www.jenkins.io/doc/book/using/using-credentials/
+  - title: Pipeline syntax — environment and credentials
+    url: https://www.jenkins.io/doc/book/pipeline/syntax/#environment
+  - title: Credentials Binding — handling credentials in a pipeline
+    url: https://www.jenkins.io/doc/book/using/using-credentials/#credentials-in-pipelines
+
+skills:
+  - cicd.secrets.reference
+  - cicd.secrets.antipatterns
+  - cicd.jenkins.environment
+  - cicd.jenkins.credentials

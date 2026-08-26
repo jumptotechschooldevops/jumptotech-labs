@@ -212,6 +212,23 @@ export {
   type AnsibleTopology,
 } from './ansible/topology.js';
 export { isAllowedManagedPath, isSafeWorkspacePath } from './ansible/paths.js';
+
+// --- CI/CD -------------------------------------------------------------------
+export {
+  WORKSPACE_TASKS,
+  WORKSPACE_TASK_IDS,
+  isWorkspaceTaskId,
+  workspaceTask,
+  type WorkspaceTaskDefinition,
+  type WorkspaceTaskId,
+  type WorkspaceTaskResult,
+} from './cicd/tasks.js';
+export {
+  CICD_INSPECTION_COMMANDS,
+  CicdLabProvider,
+  DEFAULT_CICD_SANDBOX_IMAGE,
+  type CicdProviderOptions,
+} from './providers/cicd-provider.js';
 export { DockerAnsibleSandbox, type DockerAnsibleSandboxOptions } from './ansible/sandbox.js';
 export {
   DockerRuntimeExecPort,
@@ -233,4 +250,9 @@ export {
   isContainerNodeRef,
   nodeRefForSandbox,
 } from './session/identifiers.js';
-export type { AnsibleRequirementType, AnsibleFamily } from './requirements.js';
+export type {
+  AnsibleRequirementType,
+  AnsibleFamily,
+  CicdRequirementType,
+  CicdFamily,
+} from './requirements.js';

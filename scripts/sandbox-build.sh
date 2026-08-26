@@ -19,6 +19,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LINUX_IMAGE="${LINUX_SANDBOX_IMAGE:-jumptotech/lab-linux:latest}"
 TERRAFORM_IMAGE="${TERRAFORM_SANDBOX_IMAGE:-jumptotech/lab-terraform:latest}"
 ANSIBLE_IMAGE="${ANSIBLE_SANDBOX_IMAGE:-jumptotech/lab-ansible:latest}"
+CICD_IMAGE="${CICD_SANDBOX_IMAGE:-jumptotech/lab-cicd:latest}"
 
 # Every tag, or none of them.
 #
@@ -32,22 +33,24 @@ ANSIBLE_IMAGE="${ANSIBLE_SANDBOX_IMAGE:-jumptotech/lab-ansible:latest}"
 # Counted rather than compared pairwise so that adding a fourth image cannot
 # reintroduce the gap by being left out of the condition.
 __set_count=0
-for __var in "${LINUX_SANDBOX_IMAGE:-}" "${TERRAFORM_SANDBOX_IMAGE:-}" "${ANSIBLE_SANDBOX_IMAGE:-}"; do
+for __var in "${LINUX_SANDBOX_IMAGE:-}" "${TERRAFORM_SANDBOX_IMAGE:-}" "${ANSIBLE_SANDBOX_IMAGE:-}" "${CICD_SANDBOX_IMAGE:-}"; do
   [[ -n "${__var}" ]] && __set_count=$((__set_count + 1))
 done
-if [[ "${__set_count}" -ne 0 ]] && [[ "${__set_count}" -ne 3 ]]; then
+if [[ "${__set_count}" -ne 0 ]] && [[ "${__set_count}" -ne 4 ]]; then
   echo "Refusing to build: only some sandbox image variables are set." >&2
   echo >&2
   echo "  LINUX_SANDBOX_IMAGE     = ${LINUX_SANDBOX_IMAGE:-<unset>}" >&2
   echo "  TERRAFORM_SANDBOX_IMAGE = ${TERRAFORM_SANDBOX_IMAGE:-<unset>}" >&2
   echo "  ANSIBLE_SANDBOX_IMAGE   = ${ANSIBLE_SANDBOX_IMAGE:-<unset>}" >&2
+  echo "  CICD_SANDBOX_IMAGE      = ${CICD_SANDBOX_IMAGE:-<unset>}" >&2
   echo >&2
-  echo "This script builds all three, so an unset one would be written to its" >&2
+  echo "This script builds all four, so an unset one would be written to its" >&2
   echo "shared ':latest' tag — the tag every other worktree runs from. Set all:" >&2
   echo >&2
   echo "  LINUX_SANDBOX_IMAGE=jumptotech/lab-linux:<suffix> \\" >&2
   echo "  TERRAFORM_SANDBOX_IMAGE=jumptotech/lab-terraform:<suffix> \\" >&2
   echo "  ANSIBLE_SANDBOX_IMAGE=jumptotech/lab-ansible:<suffix> \\" >&2
+  echo "  CICD_SANDBOX_IMAGE=jumptotech/lab-cicd:<suffix> \\" >&2
   echo "  npm run sandbox:build" >&2
   echo >&2
   echo "Or set none, to rebuild the canonical operator images." >&2
@@ -83,9 +86,15 @@ docker build \
   --tag "${ANSIBLE_IMAGE}" \
   "${REPO_ROOT}"
 
+echo "==> Building ${CICD_IMAGE}"
+docker build \
+  --file "${REPO_ROOT}/infrastructure/docker/sandbox-cicd.Dockerfile" \
+  --tag "${CICD_IMAGE}" \
+  "${REPO_ROOT}"
+
 echo
 echo "Sandbox images ready:"
-for image in "${LINUX_IMAGE}" "${TERRAFORM_IMAGE}" "${ANSIBLE_IMAGE}"; do
+for image in "${LINUX_IMAGE}" "${TERRAFORM_IMAGE}" "${ANSIBLE_IMAGE}" "${CICD_IMAGE}"; do
   docker image ls --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' "${image}"
 done
 echo

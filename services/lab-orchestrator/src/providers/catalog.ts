@@ -14,7 +14,15 @@
  */
 
 /** Every sandbox provider the lab schema may name. */
-export const LAB_PROVIDERS = ['kubernetes', 'linux', 'docker', 'terraform', 'aws', 'ansible'] as const;
+export const LAB_PROVIDERS = [
+  'kubernetes',
+  'linux',
+  'docker',
+  'terraform',
+  'aws',
+  'ansible',
+  'cicd',
+] as const;
 
 export type LabProviderId = (typeof LAB_PROVIDERS)[number];
 
@@ -102,6 +110,11 @@ export const PROVIDER_ISOLATION: Record<LabProviderId, IsolationMode> = {
   // answer: every one of them is a container, and the isolation boundary a
   // student is held inside is the container boundary, not something new.
   ansible: 'container',
+  // A CI/CD session is a project the student edits and a toolchain that builds
+  // it. That is a container like any other — the track is about *pipelines as
+  // code*, and the pipeline definitions are graded by reading them, so nothing
+  // here needs a second isolation model.
+  cicd: 'container',
 };
 
 /** The sandbox kind each provider produces. */
@@ -112,6 +125,7 @@ export const PROVIDER_SANDBOX_KIND: Record<LabProviderId, SandboxKind> = {
   terraform: 'container',
   aws: 'cloud-session',
   ansible: 'container',
+  cicd: 'container',
 };
 
 /**
