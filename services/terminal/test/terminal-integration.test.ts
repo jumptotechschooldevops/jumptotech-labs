@@ -21,6 +21,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
+import { createHmac } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -93,7 +94,14 @@ class TerminalClient {
     this.#ws = ws;
   }
 
-  static async connect(port: number, token: string): Promise<TerminalClient> {
+  /**
+   * Open a socket, optionally sending the auth frame.
+   *
+   * `token` is omitted by the tests that check what happens when a client never
+   * authenticates, or sends something else first — cases the handshake has to
+   * handle and which a helper that always authenticated could not reach.
+   */
+  static async connect(port: number, token?: string): Promise<TerminalClient> {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/terminal`);
     const client = new TerminalClient(ws);
 
@@ -108,7 +116,9 @@ class TerminalClient {
       if (frame.type === 'output') client.#buffer += String(frame.data);
     });
 
-    ws.send(JSON.stringify({ type: 'auth', token, cols: 120, rows: 40 }));
+    if (token !== undefined) {
+      ws.send(JSON.stringify({ type: 'auth', token, cols: 120, rows: 40 }));
+    }
     return client;
   }
 
@@ -192,10 +202,29 @@ suite('integration: student terminal against real kind', () => {
   let sessionB: LabSession;
   let clientA: TerminalClient;
 
-  function tokenFor(session: LabSession): string {
+  /*
+   * Two students, and the sessions really belong to them.
+   *
+   * Before PLATFORM-010 this suite started ownerless sessions, because
+   * sessions had no owner. They do now, and an ownerless one is reachable by
+   * nobody — `policy.ts` says so for HTTP and the credential exchange says so
+   * for the terminal. Starting an ownerless session here would therefore test
+   * a state no signed-in student can ever be in.
+   */
+  const OWNER_A = 'usr-0000000a';
+  const OWNER_B = 'usr-0000000b';
+
+  /**
+   * The token the API mints at Start Lab, for the session's real owner.
+   *
+   * `ownerUserId` defaults to the session's actual owner so that the ordinary
+   * case is written once; the tests that attack the binding pass a different
+   * one deliberately, which is the point.
+   */
+  function tokenFor(session: LabSession, ownerUserId?: string): string {
     return issueSessionToken({
       sessionId: session.sessionId,
-      ownerUserId: 'usr-00000001',
+      ownerUserId: ownerUserId ?? (session.ownerUserId as string),
       labId: session.labId,
       namespace: session.namespace,
       secret: SECRET,
@@ -244,8 +273,11 @@ suite('integration: student terminal against real kind', () => {
     );
     terminalPort = await listen(terminalServer);
 
-    sessionA = (await manager.start('K8S-001')).session;
-    sessionB = (await manager.start('K8S-001')).session;
+    sessionA = (await manager.start('K8S-001', OWNER_A)).session;
+    sessionB = (await manager.start('K8S-001', OWNER_B)).session;
+    // The owner really is stored, or every ownership assertion below is vacuous.
+    expect(sessionA.ownerUserId).toBe(OWNER_A);
+    expect(sessionB.ownerUserId).toBe(OWNER_B);
 
     clientA = await TerminalClient.connect(terminalPort, tokenFor(sessionA));
     await clientA.waitForFrame('ready');
@@ -349,7 +381,7 @@ suite('integration: student terminal against real kind', () => {
   it('refuses a forged or unsigned token outright', async () => {
     const forged = issueSessionToken({
       sessionId: sessionB.sessionId,
-      ownerUserId: 'usr-00000001',
+      ownerUserId: OWNER_B,
       labId: sessionB.labId,
       namespace: sessionB.namespace,
       secret: 'a-completely-different-secret',
@@ -391,6 +423,217 @@ suite('integration: student terminal against real kind', () => {
       expect(existsSync(kubeconfigPath!)).toBe(false);
     } finally {
       clientB.dispose();
+    }
+  }, 180_000);
+
+
+  // ------------------------------------------------ PLATFORM-010 authorization
+  //
+  // The handshake, attacked. Everything below drives a *real* WebSocket against
+  // the *real* terminal service, which resolves credentials from the *real*
+  // API — so a pass here is the whole chain, not a mocked slice of it.
+
+  it('refuses a connection that never sends a token', async () => {
+    const client = await TerminalClient.connect(terminalPort);
+    try {
+      // No auth frame at all. The socket is dropped after the grace period
+      // rather than left open for something to happen on.
+      const error = await client.waitForFrame('error', 30_000);
+      expect(error.code).toBe('AUTH_TIMEOUT');
+      await client.waitForClose();
+    } finally {
+      client.dispose();
+    }
+  }, 60_000);
+
+  it('refuses a first frame that is not an auth frame', async () => {
+    const client = await TerminalClient.connect(terminalPort);
+    try {
+      // Trying to type before authenticating.
+      client.send({ type: 'input', data: 'whoami\n' });
+      const error = await client.waitForFrame('error');
+      expect(error.code).toBe('UNAUTHENTICATED');
+      await client.waitForClose();
+    } finally {
+      client.dispose();
+    }
+  }, 60_000);
+
+  it('refuses a malformed token', async () => {
+    for (const token of ['', 'not-a-token', 'a.b.c', 'eyJhbGciOiJub25lIn0..', 'x'.repeat(5000)]) {
+      const client = await TerminalClient.connect(terminalPort, token);
+      try {
+        const error = await client.waitForFrame('error');
+        expect(error.code, token.slice(0, 16)).toBe('UNAUTHORIZED');
+        await client.waitForClose();
+      } finally {
+        client.dispose();
+      }
+    }
+  }, 120_000);
+
+  it('refuses an expired token', async () => {
+    // Correctly signed by the real secret, for the real session and its real
+    // owner — and issued in the past. The signature is not the only check.
+    const expired = issueSessionToken({
+      sessionId: sessionA.sessionId,
+      ownerUserId: OWNER_A,
+      labId: sessionA.labId,
+      namespace: sessionA.namespace,
+      secret: SECRET,
+      ttlSeconds: 60,
+      now: () => Date.now() - 3_600_000,
+    }).token;
+
+    const client = await TerminalClient.connect(terminalPort, expired);
+    try {
+      const error = await client.waitForFrame('error');
+      expect(error.code).toBe('UNAUTHORIZED');
+      expect(String(error.message)).toMatch(/expired/i);
+      await client.waitForClose();
+    } finally {
+      client.dispose();
+    }
+  }, 60_000);
+
+  it('refuses a token carrying no owner at all', async () => {
+    /*
+     * A token minted before ownership binding existed: correctly signed with
+     * the real secret, naming the real session, and carrying no `uid`. It must
+     * fail closed — reading "no owner claim" as "unowned, allow" is exactly the
+     * behaviour PLATFORM-010 removed.
+     */
+    const claims = {
+      sid: sessionA.sessionId,
+      labId: sessionA.labId,
+      namespace: sessionA.namespace,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3_600,
+    };
+    const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
+    const legacy = `${payload}.${createHmac('sha256', SECRET).update(payload).digest('base64url')}`;
+
+    const client = await TerminalClient.connect(terminalPort, legacy);
+    try {
+      const error = await client.waitForFrame('error');
+      expect(error.code).toBe('UNAUTHORIZED');
+      expect(String(error.message)).toMatch(/owner/i);
+      await client.waitForClose();
+    } finally {
+      client.dispose();
+    }
+  }, 60_000);
+
+  it('refuses User B’s owner id pointed at User A’s session', async () => {
+    /*
+     * The attack this milestone closed, over a real socket.
+     *
+     * A perfectly valid HMAC — right secret, right session id, right lab, right
+     * namespace — with the wrong owner. Before PLATFORM-010 nothing compared
+     * the two, and this connected. Now the API re-checks the claim against the
+     * live session record and refuses, so no PTY is ever spawned.
+     */
+    const crossUser = tokenFor(sessionA, OWNER_B);
+
+    const client = await TerminalClient.connect(terminalPort, crossUser);
+    try {
+      const error = await client.waitForFrame('error');
+      // The refusal comes from the credential exchange, not from the signature.
+      expect(String(error.code)).toMatch(/SESSION_NOT_OWNED|CREDENTIALS_UNAVAILABLE/);
+      // Nothing about the runtime leaks in the refusal.
+      expect(JSON.stringify(error)).not.toContain(sessionA.namespace);
+    } finally {
+      client.dispose();
+    }
+  }, 60_000);
+
+  it('refuses a forged session id, even with a well-formed owner', async () => {
+    // A session id that never existed, signed correctly. Ownership cannot be
+    // established for a row that is not there, so this is refused rather than
+    // treated as a new or unowned session.
+    const forgedSession = issueSessionToken({
+      sessionId: 'sess-00000000deadbeef',
+      ownerUserId: OWNER_A,
+      labId: sessionA.labId,
+      namespace: sessionA.namespace,
+      secret: SECRET,
+      ttlSeconds: 3_600,
+    }).token;
+
+    const client = await TerminalClient.connect(terminalPort, forgedSession);
+    try {
+      const error = await client.waitForFrame('error');
+      expect(error.type).toBe('error');
+      expect(JSON.stringify(error)).not.toContain(sessionA.namespace);
+    } finally {
+      client.dispose();
+    }
+  }, 60_000);
+
+  it('ignores a namespace the token claims and uses the session’s own', async () => {
+    /*
+     * The token carries a `namespace` claim, so the obvious question is whether
+     * it can steer the shell. It cannot: the terminal service resolves the
+     * binding from the API by session id, and the API reads the namespace out
+     * of the session record. The claim is a label, not an instruction.
+     */
+    const lying = issueSessionToken({
+      sessionId: sessionA.sessionId,
+      ownerUserId: OWNER_A,
+      labId: sessionA.labId,
+      namespace: sessionB.namespace, // somebody else's namespace
+      secret: SECRET,
+      ttlSeconds: 3_600,
+    }).token;
+
+    const client = await TerminalClient.connect(terminalPort, lying);
+    try {
+      const ready = await client.waitForFrame('ready');
+      // Session A's namespace, not the one the token named.
+      expect(ready.namespace).toBe(sessionA.namespace);
+      expect(ready.namespace).not.toBe(sessionB.namespace);
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      client.clearOutput();
+      client.run('kubectl config view --minify -o jsonpath={..namespace}; echo');
+      await client.waitForOutput(/lab-[0-9a-f]+/);
+      // The kubeconfig on disk agrees with the record, not with the claim.
+      expect(client.output).toContain(sessionA.namespace);
+      expect(client.output).not.toContain(sessionB.namespace);
+    } finally {
+      client.dispose();
+    }
+  }, 180_000);
+
+  it('gives the shell only the runtime belonging to its own session', async () => {
+    /*
+     * Its own connection, deliberately.
+     *
+     * The terminal service maps one session to one socket (`bySessionId`), so a
+     * later connection for the same session displaces the shared `clientA`
+     * fixture — which the namespace test above does. Depending on that fixture
+     * here would make this test's result an artefact of execution order rather
+     * than of the property it names.
+     */
+    const client = await TerminalClient.connect(terminalPort, tokenFor(sessionA));
+    try {
+      await client.waitForFrame('ready');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // The positive half of the isolation property: the PTY is authenticated
+      // as this session's ServiceAccount, in this session's namespace, and the
+      // API server refuses it everywhere else.
+      client.clearOutput();
+      client.run(`kubectl get pods -n ${sessionB.namespace} >/dev/null 2>&1; echo RC=$?`);
+      await client.waitForOutput(/RC=[0-9]+/);
+      expect(client.output).not.toMatch(/RC=0/);
+
+      client.clearOutput();
+      client.run('kubectl get pods >/dev/null 2>&1; echo OWN=$?');
+      await client.waitForOutput(/OWN=[0-9]+/);
+      expect(client.output).toMatch(/OWN=0/);
+    } finally {
+      client.dispose();
     }
   }, 180_000);
 

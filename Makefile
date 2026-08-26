@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 
-.PHONY: help setup cluster-up cluster-down sandbox-build sandbox-clean status up rebuild verify-api-image down logs test test-integration test-sandbox test-db db-up db-migrate db-status db-shell typecheck check reset clean
+.PHONY: help setup cluster-up cluster-down sandbox-build sandbox-clean status up rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container db-up db-migrate db-status db-shell typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -76,6 +76,26 @@ db-status: ## Show which migrations are applied and which are pending
 
 db-shell: ## Open psql against the development database
 	@docker compose exec postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
+test-terminal-container: ## Run the terminal integration suite inside a container (real PTY)
+	@echo "==> building the terminal test image (same base + native build as the shipped image)"
+	@docker build -q -f infrastructure/docker/terminal-test.Dockerfile -t jumptotech/terminal-test . >/dev/null
+	@echo "==> refreshing the kind kubeconfigs"
+	@kind get kubeconfig --name $${LAB_CLUSTER_NAME:-jumptotech-labs} \
+		> infrastructure/kind/generated/kubeconfig-host.yaml
+	@kind get kubeconfig --name $${LAB_CLUSTER_NAME:-jumptotech-labs} --internal \
+		> infrastructure/kind/generated/kubeconfig-internal.yaml
+	@docker run --rm --network kind \
+		-e RUN_INTEGRATION_TESTS=1 \
+		-e KUBECONFIG=/app/infrastructure/kind/generated/kubeconfig-internal.yaml \
+		-e RUNTIME_OWNER_ID="$${RUNTIME_OWNER_ID:-terminal-container}" \
+		-e JTT_TEST_RUN_ID="$${JTT_TEST_RUN_ID:-tc$$$$}" \
+		-v "$(PWD)/services:/app/services" \
+		-v "$(PWD)/apps:/app/apps" \
+		-v "$(PWD)/labs:/app/labs" \
+		-v "$(PWD)/test-support:/app/test-support" \
+		-v "$(PWD)/infrastructure:/app/infrastructure" \
+		jumptotech/terminal-test
 
 test-db: ## Run the persistence suites against a throwaway PostgreSQL
 	@docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
