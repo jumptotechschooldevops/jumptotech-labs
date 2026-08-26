@@ -194,8 +194,19 @@ describe('the sign-in transaction cookie', () => {
     ).toString('base64url');
 
     expect(openTransaction(`${swapped}.${signature}`, SECRET)).toBeNull();
-    // …and a tampered signature over the real payload.
-    expect(openTransaction(`${payload}.${signature.slice(0, -1)}A`, SECRET)).toBeNull();
+
+    /*
+     * …and a tampered signature over the real payload.
+     *
+     * The replacement character is chosen against the one already there. Always
+     * substituting 'A' looks like tampering but is a no-op roughly one time in
+     * sixty-four, when the signature happens to end in 'A' — a flake that would
+     * read as "the transaction guard failed" rather than as a test bug.
+     */
+    const lastChar = signature.slice(-1);
+    const flipped = `${signature.slice(0, -1)}${lastChar === 'A' ? 'B' : 'A'}`;
+    expect(flipped).not.toBe(signature);
+    expect(openTransaction(`${payload}.${flipped}`, SECRET)).toBeNull();
   });
 
   it('refuses one signed with a different secret', () => {

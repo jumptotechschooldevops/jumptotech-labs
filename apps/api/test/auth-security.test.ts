@@ -527,6 +527,36 @@ describe('the sign-in flow itself', () => {
     expect(header).not.toMatch(/Domain=/);
   });
 
+  it('rejects a returnTo carrying a control character, including CR and LF', () => {
+    /*
+     * Regression for a guard written with raw control bytes in the source.
+     *
+     * The check behaved correctly, but its literal held the actual 0x00 and
+     * 0x1F characters, so it rendered as "[ -]" in a grep and was invisible in
+     * an editor — one formatter away from silently becoming a different rule.
+     * It is now written as escapes, and this pins the behaviour so a future
+     * rewrite of that line cannot quietly narrow it.
+     *
+     * CR and LF are the ones that matter: `returnTo` is interpolated into a
+     * Location header, and a newline there is response splitting.
+     */
+    for (let code = 0; code <= 0x1f; code += 1) {
+      const hostile = `/labs${String.fromCharCode(code)}evil`;
+      expect(safeReturnTo(hostile), `U+${code.toString(16).padStart(4, '0')}`).toBe('/');
+    }
+    expect(safeReturnTo('/labs\u007Fevil')).toBe('/');
+
+    // The two that would be an actual header injection, named explicitly.
+    expect(safeReturnTo('/legit\r\nLocation: https://evil.example')).toBe('/');
+    expect(safeReturnTo('/legit\nSet-Cookie: jtt_session=stolen')).toBe('/');
+
+    // And ordinary paths — hyphens very much included — still survive, or the
+    // guard would be a denial of service on every real deep link.
+    expect(safeReturnTo('/#/labs/K8S-001')).toBe('/#/labs/K8S-001');
+    expect(safeReturnTo('/#/labs/ANSIBLE-010')).toBe('/#/labs/ANSIBLE-010');
+    expect(safeReturnTo('/progress?track=cs-fundamentals')).toBe('/progress?track=cs-fundamentals');
+  });
+
   it('never redirects anywhere but a same-origin path', () => {
     // The unit behind the callback's redirect. An attacker-chosen `returnTo` is
     // how a sign-in becomes an open redirect used to make a phishing link look
