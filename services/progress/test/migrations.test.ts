@@ -15,14 +15,16 @@ describe('migration files', () => {
   it('ships the schema with the package', async () => {
     const migrations = await loadMigrations(MIGRATIONS_DIR);
 
-    // PLATFORM-008 added 002; PLATFORM-009 added 003. The list is asserted so a migration cannot be
-    // added without someone noticing here, but the *safety* checks below apply
-    // to every file rather than to a numbered one — that is the invariant, and
-    // it should not need editing when 003 arrives.
+    // PLATFORM-008 added 002; PLATFORM-009 added 003; PLATFORM-010 added 004.
+    // The list is asserted so a migration cannot be added without someone
+    // noticing here, but the *safety* checks below apply to every file rather
+    // than to a numbered one — that is the invariant, and it should not need
+    // editing when 005 arrives.
     expect(migrations.map((m) => m.version)).toEqual([
       '001_progress',
       '002_sessions',
       '003_users_and_ownership',
+      '004_auth_sessions',
     ]);
     for (const migration of migrations) {
       expect(migration.checksum, migration.version).toMatch(/^[0-9a-f]{64}$/);
@@ -31,6 +33,34 @@ describe('migration files', () => {
     const progress = migrations.find((m) => m.version === '001_progress')!.sql;
     for (const table of ['students', 'lab_attempts', 'lab_progress', 'hint_usage']) {
       expect(progress).toContain(`CREATE TABLE ${table}`);
+    }
+
+    /*
+     * Browser sessions (PLATFORM-010) hold an index, not a credential.
+     *
+     * Asserted here rather than trusted to review: the whole security argument
+     * for this table is that a copy of it is worthless, and that argument rests
+     * on the primary key being a hash and on no token column existing.
+     */
+    const auth = migrations.find((m) => m.version === '004_auth_sessions')!.sql;
+    expect(auth).toContain('CREATE TABLE IF NOT EXISTS auth_sessions');
+    expect(auth).toContain('auth_session_id  CHAR(64)     PRIMARY KEY');
+    // Deleting a user must take their live browser sessions with it, in one
+    // statement, with no window in which a removed account still has a cookie.
+    expect(auth).toContain('REFERENCES users(user_id) ON DELETE CASCADE');
+    /*
+     * No credential column of any kind. If one is ever added, this fails.
+     *
+     * Comments are stripped first: the file's own prose explains *why* there is
+     * no client secret here, and a check that read the explanation as a
+     * violation would be unmaintainable.
+     */
+    const authStatements = auth
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('--'))
+      .join('\n');
+    for (const forbidden of ['access_token', 'id_token', 'refresh_token', 'password', 'secret']) {
+      expect(authStatements, forbidden).not.toContain(forbidden);
     }
 
     const sessions = migrations.find((m) => m.version === '002_sessions')!.sql;

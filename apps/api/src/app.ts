@@ -5,7 +5,11 @@ import {
 } from './auth/middleware.js';
 import type { IdentityResolver } from './auth/identity.js';
 import { DevelopmentIdentityResolver } from './auth/resolvers.js';
-import { InMemoryUserRepository } from './auth/users.js';
+import { InMemoryUserRepository, type UserRepository } from './auth/users.js';
+import { BrowserSessionAuthenticator } from './auth/browser-authenticator.js';
+import { InMemoryAuthSessionStore, type AuthSessionStore } from './auth/browser-session.js';
+import type { OidcBrowserClient } from './auth/oidc-client.js';
+import type { TokenVerifier } from './auth/oidc.js';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import type {
@@ -29,6 +33,7 @@ import { createSessionRoutes } from './routes/sessions.js';
 import { createInternalRoutes } from './routes/internal.js';
 import { createTrackRoutes } from './routes/tracks.js';
 import { createMeRoutes } from './routes/me.js';
+import { createAuthRoutes } from './routes/auth.js';
 
 /**
  * The learning-history half of the graph.
@@ -69,6 +74,23 @@ export interface CreateAppDeps {
   identityResolver?: IdentityResolver;
   /** One line per authorization decision. Never carries a credential. */
   authAudit?: AuthAuditLogger;
+  /**
+   * The browser sign-in half (PLATFORM-010).
+   *
+   * Optional so every existing test keeps composing an app without it. When
+   * absent, an in-memory auth-session store and an in-memory user store are
+   * used and `/auth/login` reports that no identity provider is configured —
+   * which is the truth for a deployment that supplied none, rather than a
+   * sign-in button that leads nowhere.
+   */
+  browserAuth?: {
+    users: UserRepository;
+    authSessions?: AuthSessionStore;
+    /** Null on a deployment with no OIDC client secret. */
+    client?: OidcBrowserClient | null;
+    /** Verifies the ID token; its audience is the client id. */
+    idTokenVerifier?: TokenVerifier | null;
+  };
 }
 
 function inMemoryProgress(config: ApiConfig): ProgressDeps {
@@ -94,10 +116,17 @@ export function createApp(deps: CreateAppDeps): Express {
   // CORS covers the browser-facing surface only. `/internal` is deliberately
   // registered outside it: no browser should be able to reach that router at
   // all, and it additionally requires the shared service secret.
+  /*
+   * `credentials: true` is what lets the browser send its session cookie.
+   *
+   * It is only safe alongside an explicit origin allow-list — never a
+   * wildcard — which `allowedOrigins` already is, and which the CORS
+   * specification enforces anyway by refusing to combine `*` with credentials.
+   */
   const browserCors = cors({
     origin: deps.config.allowedOrigins,
     methods: ['GET', 'POST', 'DELETE'],
-    credentials: false,
+    credentials: true,
   });
 
   app.get('/health', asyncRoute(async (_req, res) => {
@@ -144,10 +173,39 @@ export function createApp(deps: CreateAppDeps): Express {
    * `/internal` behind its own shared secret, unchanged.
    */
   const audit = deps.authAudit ?? (() => undefined);
-  const identity =
-    deps.identityResolver ?? new DevelopmentIdentityResolver(new InMemoryUserRepository());
-  const authenticated = authenticate(identity, audit);
+  const users = deps.browserAuth?.users ?? new InMemoryUserRepository();
+  const identity = deps.identityResolver ?? new DevelopmentIdentityResolver(users);
+  const authSessions = deps.browserAuth?.authSessions ?? new InMemoryAuthSessionStore();
+  const browser = new BrowserSessionAuthenticator({
+    sessions: authSessions,
+    users,
+    cookieName: deps.config.auth.cookie.name,
+  });
+  const authenticated = authenticate(identity, audit, browser);
   const sessionGuard = createSessionGuard(deps.sessions, audit);
+
+  /*
+   * `/auth` is outside `authenticate` on purpose.
+   *
+   * Three of its routes are how an unauthenticated caller *becomes*
+   * authenticated, and `/auth/session` must be able to answer "nobody" without
+   * that being a 401 the frontend has to special-case.
+   */
+  app.use(
+    '/auth',
+    browserCors,
+    createAuthRoutes({
+      client: deps.browserAuth?.client ?? null,
+      idTokenVerifier: deps.browserAuth?.idTokenVerifier ?? null,
+      users,
+      authSessions,
+      browser,
+      cookie: deps.config.auth.cookie,
+      appUrl: deps.config.auth.browserFlow?.appUrl ?? deps.config.allowedOrigins[0] ?? '',
+      transactionSecret: deps.config.terminalSessionSecret,
+      mode: deps.config.auth.mode,
+    }),
+  );
 
   const routes = { ...deps, ...learning, sessionGuard, identity: learning.identity };
   app.use('/api/labs', browserCors, authenticated, createLabRoutes(routes));

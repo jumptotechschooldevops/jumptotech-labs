@@ -16,6 +16,12 @@ import { buildIdentityResolver } from './auth/resolvers.js';
 import { buildSandboxComposition } from './composition.js';
 import { OidcTokenVerifier } from './auth/oidc.js';
 import { InMemoryUserRepository, PostgresUserRepository } from './auth/users.js';
+import { OidcBrowserClient } from './auth/oidc-client.js';
+import {
+  InMemoryAuthSessionStore,
+  PostgresAuthSessionStore,
+  type AuthSessionStore,
+} from './auth/browser-session.js';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import {
@@ -24,6 +30,11 @@ import {
   buildProgressRuntime,
 } from './progress.js';
 import { HttpTerminalControl, noopTerminalControl } from './terminal-control.js';
+
+/** Error text for a log line, without assuming the value is an Error. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -115,6 +126,82 @@ async function main(): Promise<void> {
       : '[auth] DEVELOPMENT identity — every caller is whoever they claim to be. Never for production.',
   );
 
+  /*
+   * The browser half — PLATFORM-010.
+   *
+   * Durable when a database is configured, so a signed-in browser survives an
+   * API restart and any instance can resolve a session it did not create —
+   * exactly the argument that made lab sessions durable in PLATFORM-008. In
+   * memory otherwise, and it says so, rather than quietly signing everyone out
+   * on every deploy without explanation.
+   */
+  const authSessions: AuthSessionStore = learning.database
+    ? new PostgresAuthSessionStore(learning.database)
+    : new InMemoryAuthSessionStore();
+  console.log(
+    learning.database
+      ? '[auth] durable browser sessions (postgres)'
+      : '[auth] no DATABASE_URL configured — browser sign-ins are IN MEMORY and are lost on restart',
+  );
+
+  /*
+   * The confidential OIDC client, when one is configured.
+   *
+   * Null without `OIDC_CLIENT_SECRET`, and `/auth/config` then tells the
+   * frontend that signing in is not available here — which is better than a
+   * button that leads to a 503. The secret is read here and never leaves the
+   * process except in the token-endpoint POST body.
+   */
+  const browserClient =
+    config.auth.oidc && config.auth.browserFlow
+      ? new OidcBrowserClient({
+          issuer: config.auth.oidc.issuer,
+          clientId: config.auth.oidc.clientId,
+          clientSecret: config.auth.browserFlow.clientSecret,
+          redirectUri: config.auth.browserFlow.redirectUri,
+          scopes: config.auth.browserFlow.scopes,
+        })
+      : null;
+
+  /*
+   * A second verifier, for the ID token.
+   *
+   * An ID token's audience is always the *client id*; an API access token's is
+   * `OIDC_AUDIENCE`. Verifying one with the other's expectation fails, so the
+   * two are separate instances of the same class rather than one loosened to
+   * accept both.
+   */
+  const idTokenVerifier =
+    config.auth.oidc && browserClient
+      ? new OidcTokenVerifier({
+          issuer: config.auth.oidc.issuer,
+          audience: config.auth.oidc.clientId,
+          ...(config.auth.oidc.jwksUri ? { jwksUri: config.auth.oidc.jwksUri } : {}),
+        })
+      : null;
+
+  if (browserClient) {
+    console.log(`[auth] browser sign-in enabled — redirect ${config.auth.browserFlow!.redirectUri}`);
+  } else if (config.auth.mode === 'oidc') {
+    console.log(
+      '[auth] browser sign-in NOT configured (no OIDC_CLIENT_SECRET) — the API accepts bearer tokens only',
+    );
+  }
+
+  /*
+   * Expired browser sessions are swept on the same timer budget as sandboxes.
+   *
+   * `resolve` already refuses an expired row, so this is housekeeping rather
+   * than a security control — but a table that only grows is an operational
+   * problem, and the sweep is one indexed DELETE.
+   */
+  const authSessionSweeper = setInterval(() => {
+    void authSessions.purgeExpired().catch((error: unknown) => {
+      console.error(`[auth] could not purge expired sessions: ${describeError(error)}`);
+    });
+  }, config.reaperIntervalSeconds * 1000);
+  authSessionSweeper.unref();
+
   const sessions = new SessionManager({
     registry,
     providers,
@@ -161,6 +248,7 @@ async function main(): Promise<void> {
     workspace,
     config,
     identityResolver,
+    browserAuth: { users, authSessions, client: browserClient, idTokenVerifier },
     // One structured line per authorization decision. Carries the user id and
     // the outcome, never a token or a claim beyond the identifier.
     authAudit: (event) => console.log(`[authz] ${JSON.stringify(event)}`),

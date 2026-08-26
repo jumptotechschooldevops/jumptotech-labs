@@ -25,11 +25,35 @@ import {
   loadDatabaseConfig,
   type DatabaseConfig,
 } from '@jumptotech/progress';
+import { DEFAULT_AUTH_SESSION_TTL_SECONDS } from './auth/browser-session.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../..');
 
-/** Authentication configuration (PLATFORM-009). */
+/**
+ * How the browser session cookie is written (PLATFORM-010).
+ *
+ * Every attribute here is a security decision made once, in configuration,
+ * rather than at each call site — which is how one `Set-Cookie` ends up missing
+ * `Secure`.
+ */
+export interface AuthCookieConfig {
+  name: string;
+  /**
+   * Off only for a plain-HTTP localhost deployment.
+   *
+   * Derived rather than defaulted to `false`: a deployment that forgets to set
+   * it gets `Secure`, and the only way to lose it is to be visibly on
+   * `http://localhost`.
+   */
+  secure: boolean;
+  /** Unset means host-only, which is the safer default. */
+  domain: string | undefined;
+  /** Browser session lifetime. There is no refresh; this is the whole budget. */
+  ttlSeconds: number;
+}
+
+/** Authentication configuration (PLATFORM-009, extended by PLATFORM-010). */
 export interface AuthConfig {
   /**
    * `oidc` in any real deployment. `development` accepts whoever the caller
@@ -40,6 +64,23 @@ export interface AuthConfig {
   mode: 'oidc' | 'development';
   /** Present when `mode` is `oidc`. */
   oidc: { issuer: string; clientId: string; audience: string; jwksUri?: string } | null;
+  /**
+   * The confidential-client half, present only when the browser sign-in flow is
+   * configured (PLATFORM-010).
+   *
+   * `clientSecret` lives here and **only** here: it is read from the API's
+   * environment, used in a server-to-server POST to the token endpoint, and is
+   * never serialised into any response, any log line, or anything the frontend
+   * can reach.
+   */
+  browserFlow: {
+    clientSecret: string;
+    redirectUri: string;
+    /** Where the browser lands after sign-in and after sign-out. */
+    appUrl: string;
+    scopes: string[];
+  } | null;
+  cookie: AuthCookieConfig;
   /** Mirrors NODE_ENV, so the startup gate can see the deployment kind. */
   nodeEnv: string | undefined;
 }
@@ -339,6 +380,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const audience = strFromEnv(env, 'OIDC_AUDIENCE', '');
   const jwksUri = strFromEnv(env, 'OIDC_JWKS_URI', '');
 
+  const publicOrigin = env.PUBLIC_ORIGIN?.trim() || undefined;
+  const allowedOrigins = (env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  /*
+   * Where the browser lives, so the callback knows where to send it back to.
+   *
+   * PUBLIC_ORIGIN when set, otherwise the first allowed origin — which is the
+   * only origin a cookie-carrying browser could have come from anyway, since
+   * CORS refuses the rest.
+   */
+  const appUrl = (publicOrigin ?? allowedOrigins[0] ?? 'http://localhost:3000').replace(/\/$/, '');
+  const clientSecret = strFromEnv(env, 'OIDC_CLIENT_SECRET', '');
+  const redirectUri = strFromEnv(env, 'OIDC_REDIRECT_URI', '') || `${appUrl}/auth/callback`;
+
+  /*
+   * `Secure` unless this is demonstrably a plain-HTTP localhost run.
+   *
+   * The failure mode to avoid is a production deployment that forgets the
+   * setting and silently ships a cookie a proxy can read. So the default is on,
+   * and losing it requires the app URL itself to say `http://localhost`.
+   */
+  const looksLocal = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(appUrl);
+  const cookieSecure = boolFromEnv(env, 'AUTH_COOKIE_SECURE', !looksLocal);
+
   return {
     /*
      * `oidc` is the default on purpose.
@@ -359,6 +427,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
               ...(jwksUri ? { jwksUri } : {}),
             }
           : null,
+      /*
+       * Null unless a client secret is present.
+       *
+       * The browser flow is opt-in on the secret rather than on a boolean: a
+       * deployment cannot accidentally advertise a sign-in route it has no
+       * credential to complete, and `/auth/config` can tell the frontend
+       * truthfully whether signing in is possible here.
+       */
+      browserFlow:
+        authMode === 'oidc' && clientSecret
+          ? {
+              clientSecret,
+              redirectUri,
+              appUrl,
+              scopes: strFromEnv(env, 'OIDC_SCOPES', 'openid profile email')
+                .split(/[\s,]+/)
+                .map((s) => s.trim())
+                .filter(Boolean),
+            }
+          : null,
+      cookie: {
+        name: strFromEnv(env, 'AUTH_COOKIE_NAME', 'jtt_session'),
+        secure: cookieSecure,
+        domain: env.AUTH_COOKIE_DOMAIN?.trim() || undefined,
+        ttlSeconds: intFromEnv(env, 'AUTH_SESSION_TTL_SECONDS', DEFAULT_AUTH_SESSION_TTL_SECONDS),
+      },
       nodeEnv: env.NODE_ENV,
     },
     port: intFromEnv(env, 'API_PORT', 4000),
@@ -366,10 +460,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     provider: env.LAB_PROVIDER ?? 'kind',
     clusterName: env.LAB_CLUSTER_NAME ?? 'jumptotech-labs',
     kubeconfigPath: env.KUBECONFIG || undefined,
-    allowedOrigins: (env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
-      .split(',')
-      .map((o) => o.trim())
-      .filter(Boolean),
+    allowedOrigins,
     terminalSessionSecret: secret,
     terminalSessionTtlSeconds: intFromEnv(env, 'TERMINAL_SESSION_TTL_SECONDS', 3600),
     terminalWsUrl: env.VITE_TERMINAL_WS_URL ?? 'ws://localhost:4001',
@@ -404,6 +495,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     nodeEnv: env.NODE_ENV ?? 'development',
     dockerEnabled: boolFromEnv(env, 'DOCKER_TRACK_ENABLED', true),
     dockerHost: env.DOCKER_HOST || undefined,
-    publicOrigin: env.PUBLIC_ORIGIN?.trim() || undefined,
+    publicOrigin,
   };
 }

@@ -8,6 +8,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { LabSession, SessionManager } from '@jumptotech/lab-orchestrator';
 import { AuthError, type AuthenticatedUser, type IdentityResolver } from './identity.js';
+import type { BrowserSessionAuthenticator } from './browser-authenticator.js';
 import { authorize, type Action } from './policy.js';
 import { sendError } from '../http.js';
 
@@ -38,14 +39,34 @@ function requestId(req: Request): string {
 /**
  * Resolve the caller, or refuse the request.
  *
- * The Authorization header is the only input. Nothing reads a body field, a
- * query parameter or a cookie, so there is no path by which a client can name
- * the user it wishes to be.
+ * Two credentials are accepted, in a fixed order, and **neither carries a user
+ * identifier the client chose**:
+ *
+ * ```text
+ *   1. Cookie: jtt_session=<opaque id>   the browser (PLATFORM-010)
+ *        └─ an index into a server-side record; the record names the user
+ *   2. Authorization: <credential>       services, tests, development mode
+ *        └─ a signed token; the signature names the user
+ * ```
+ *
+ * The cookie is tried first because it is the browser's path and the browser is
+ * the common case. A request carrying neither reaches the header resolver with
+ * `undefined`, which is what makes the development resolver's "no header means
+ * the default identity" behaviour — and the OIDC resolver's 401 — unchanged.
+ *
+ * A cookie that is *present but unusable* is a refusal, never a fall-through: a
+ * stale session must not quietly degrade into whatever the header path would
+ * have produced.
  */
-export function authenticate(resolver: IdentityResolver, audit: AuthAuditLogger = () => {}) {
+export function authenticate(
+  resolver: IdentityResolver,
+  audit: AuthAuditLogger = () => {},
+  browser?: BrowserSessionAuthenticator,
+) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      req.user = await resolver.resolve(req.get('authorization'));
+      const fromCookie = browser ? await browser.authenticate(req.get('cookie')) : null;
+      req.user = fromCookie ?? (await resolver.resolve(req.get('authorization')));
       next();
     } catch (error) {
       const authError =

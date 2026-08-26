@@ -40,6 +40,15 @@ export interface VerifiedClaims {
   subject: string;
   email?: string;
   displayName?: string;
+  /**
+   * The `nonce` claim, when the token carried one (PLATFORM-010).
+   *
+   * Only an ID token obtained through the browser authorization-code flow has
+   * one, and only that flow reads it — to prove the token answers *this*
+   * sign-in rather than a replayed earlier one. It is never consulted by an
+   * authorization decision and is not part of anyone's identity.
+   */
+  nonce?: string;
 }
 
 export class AuthError extends Error {

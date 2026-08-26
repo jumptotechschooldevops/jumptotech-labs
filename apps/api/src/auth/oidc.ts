@@ -89,6 +89,9 @@ export class OidcTokenVerifier implements TokenVerifier {
       subject,
       ...(claimString(payload, 'email') ? { email: claimString(payload, 'email')! } : {}),
       ...(claimString(payload, 'name') ? { displayName: claimString(payload, 'name')! } : {}),
+      // Carried through for the browser flow's replay check. Absent on a bearer
+      // access token, which never had an authorization request to bind to.
+      ...(claimString(payload, 'nonce') ? { nonce: claimString(payload, 'nonce')! } : {}),
     };
   }
 }
