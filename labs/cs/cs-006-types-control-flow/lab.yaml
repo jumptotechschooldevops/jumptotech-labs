@@ -1,0 +1,287 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-006 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# --- Why there is no grading harness ---------------------------------------
+#
+# The curriculum plan sketched this lab with a seeded harness that imports the
+# student's `decide` and prints PASS tokens. That is unsound at any file
+# permission: a harness that imports student code runs it in the same process,
+# so the student's module can print the tokens itself at import time and exit
+# before a single case is checked. Root ownership does not help, because the
+# attack is on the process, not the file.
+#
+# So the student's own program is run directly, against argument sets chosen so
+# that each one separates a correct implementation from a specific mistake:
+#
+#   10 9 2   comparing as text — "10" > "9" is False, which is why the seeded
+#            helper has never scaled down
+#   8 8 2    the equality boundary
+#   3 1 3    the minimum boundary, where `current > minimum` must be false
+#   1 0 0    truthiness — `if minimum and ...` silently stops working when the
+#            minimum is genuinely zero
+#   abc 1 1  input that is not a number at all
+#
+# Nothing on disk says what the right answer is for any of them. The seeded
+# decision log records what the *broken* helper decided, which is evidence, and
+# readings.txt is an input. Every expected value lives in this file, on the API
+# host, and the student runs without root and cannot reach it.
+#
+# Sources verified 2026-08-25 (see `references:`). Every expected decision was
+# computed by running the stated rules rather than reasoned about by hand.
+# ---------------------------------------------------------------------------
+id: CS-006
+slug: cs-006-types-control-flow
+title: Variables, Types and Control Flow
+track: cs
+topic: programming-foundations
+difficulty: beginner
+level: practice
+duration_minutes: 40
+order: 6
+
+environment:
+  provider: linux
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-005
+
+story: >
+  Kestrel's autoscaler helper has scaled up plenty of times. It has never once
+  scaled down.
+
+  Four of the five windows in last night's batch were over target and every one
+  of them was held. The values it was given are ordinary — twelve replicas
+  against a target of nine — and the rule it implements reads correctly if you
+  say it out loud.
+
+  The helper takes its numbers from the environment and from a readings file,
+  and both of those hand a program text. Nobody converted anything, and text
+  does not compare the way numbers do: as far as the helper is concerned,
+  twelve is not more than nine.
+
+objectives:
+  - Tell a value's type from where it came, and know that arguments and environment always arrive as text
+  - See that comparing numbers as text gives a different answer, and that the difference is silent
+  - Convert text to numbers, and handle the case where the text is not a number at all
+  - Use if/elif/else to express a rule with boundaries, and get the boundaries right
+  - Loop over a set of readings and produce one decision for each
+  - Put the rule in a function so it can be tested by calling it, rather than by rerunning the whole program
+
+task:
+  summary: Write a scaling decision program that compares numbers as numbers, gets the boundaries right, and rejects input that is not a number.
+  description: >
+    The evidence is in `/srv/kestrel/scaler`, read-only: `readings.txt` is what
+    the helper was asked about, and `decisions.log` is what it decided. Read
+    both, and work out which windows were decided wrongly before you write
+    anything. You will need `/home/student/py`, which does not exist yet.
+
+
+    Write `/home/student/py/scale.py` implementing this rule, with the decision
+    itself in a function so it can be reasoned about on its own:
+
+
+    | condition | decision |
+
+    | --- | --- |
+
+    | current is below target | `scale-up` |
+
+    | current is above target **and** above minimum | `scale-down` |
+
+    | anything else | `hold` |
+
+
+    Both boundaries are strict: a current equal to target is not below it, and
+    a current equal to minimum is not above it. A minimum of zero is a real
+    minimum, not a missing one.
+
+
+    **Two ways to run it.**
+
+
+    Given three numbers — `scale.py <current> <target> <minimum>` — print
+    exactly one line:
+
+
+    ```
+
+    DECISION=<decision> current=<current> target=<target> minimum=<minimum>
+
+    ```
+
+
+    Given `--file <path>`, read that file instead: one reading per line, three
+    numbers separated by spaces, and print one such line per reading in order.
+
+
+    **When the input is not a number.** If any value cannot be interpreted as
+    one, print `DECISION=invalid` and exit with status `2`. Do not guess a
+    value and do not carry on. Valid input exits `0`.
+
+
+    Your program is run against several different sets of numbers, so the rule
+    has to be applied rather than remembered; a program that contains the
+    expected lines instead of working them out is rejected.
+
+
+    Give it a `#!/usr/bin/env python3` first line and make it executable.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/scaler/readings.txt
+      label: The scaling readings are present
+    - type: file_content
+      path: /srv/kestrel/scaler/decisions.log
+      contains: "decision=hold"
+      label: The helper's own decision log is available to read
+    - type: file_content
+      path: /srv/kestrel/scaler/readings.txt
+      contains: "12 9 2"
+      label: The readings include the window everyone remembers
+    - type: file_exists
+      path: /srv/kestrel/scaler/README.txt
+      label: The evidence is described for the student
+
+requirements:
+  - type: script_executable
+    path: /home/student/py/scale.py
+    label: The scaling program exists and can be run as a program
+
+  # Comparing as text is the bug the whole lab is about: "10" > "9" is False.
+  - type: script_runs
+    path: /home/student/py/scale.py
+    args: ["10", "9", "2"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "DECISION=scale-down current=10 target=9 minimum=2"
+    label: A two-digit current above a one-digit target scales down
+  - type: script_runs
+    path: /home/student/py/scale.py
+    args: ["2", "5", "1"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "DECISION=scale-up current=2 target=5 minimum=1"
+    label: Below target scales up
+  - type: script_runs
+    path: /home/student/py/scale.py
+    args: ["8", "8", "2"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "DECISION=hold current=8 target=8 minimum=2"
+    label: Equal to target holds rather than scaling
+  - type: script_runs
+    path: /home/student/py/scale.py
+    args: ["3", "1", "3"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "DECISION=hold current=3 target=1 minimum=3"
+    label: Above target but already at the minimum holds
+  # A minimum of zero is a real minimum; `if minimum and ...` quietly stops
+  # working here, which is the truthiness half of the lesson.
+  - type: script_runs
+    path: /home/student/py/scale.py
+    args: ["1", "0", "0"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "DECISION=scale-down current=1 target=0 minimum=0"
+    label: A minimum of zero is treated as a real minimum
+  - type: script_runs
+    path: /home/student/py/scale.py
+    args: ["abc", "1", "1"]
+    expected_exit_code: 2
+    timeout_seconds: 15
+    output_contains:
+      - "DECISION=invalid"
+    label: Input that is not a number is rejected rather than guessed
+
+  # The loop, over the readings the helper actually got wrong.
+  - type: script_runs
+    path: /home/student/py/scale.py
+    args: ["--file", "/srv/kestrel/scaler/readings.txt"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "DECISION=scale-up current=2 target=5 minimum=1"
+      - "DECISION=scale-down current=12 target=9 minimum=2"
+      - "DECISION=hold current=7 target=7 minimum=3"
+      - "DECISION=hold current=4 target=2 minimum=4"
+      - "DECISION=scale-down current=9 target=3 minimum=2"
+    label: Every reading in the batch gets the decision it should have had
+
+  # A program that applies the rule formats these lines; one that contains them
+  # is a table, and would otherwise satisfy every check above at once.
+  - type: file_content_absent
+    path: /home/student/py/scale.py
+    contains: "current=10 target=9"
+    label: The program applies the rule rather than containing the answers
+  - type: file_content_absent
+    path: /home/student/py/scale.py
+    contains: "current=12 target=9"
+    label: The program is not a table of expected decisions
+
+hints:
+  - level: 1
+    text: >
+      Before writing anything, line `readings.txt` up against `decisions.log`
+      and mark the windows you think were decided wrongly. There are four
+      windows above target and only some of them were held for a defensible
+      reason — the others share a property, and noticing what the numbers in
+      those rows have in common is most of the diagnosis.
+  - level: 2
+    text: >
+      Arguments arrive in `sys.argv` and every one of them is a string, whatever
+      it looks like; the same is true of anything read from a file or from the
+      environment. Comparing two strings with `<` or `>` compares them character
+      by character, which is why a two-digit number can lose to a one-digit one.
+      `int()` converts, and raises `ValueError` when the text is not a number —
+      which is the case the program has to handle rather than crash on.
+  - level: 3
+    text: >
+      Put the rule in a function taking the three values and returning one of
+      the three words; then the two ways of running the program are just two
+      ways of feeding it. Order the branches so the boundaries land where the
+      table says: "below" and "above" are both strict, so equality falls through
+      to the last case. Be careful writing the minimum check as a truth test —
+      a minimum of zero is falsy as a number while the string "0" is not, and a
+      condition that mixes those up will look right in every reading except the
+      one that matters.
+
+references:
+  - title: Python tutorial — an informal introduction, numbers and strings
+    url: https://docs.python.org/3/tutorial/introduction.html
+  - title: Python tutorial — more control flow tools
+    url: https://docs.python.org/3/tutorial/controlflow.html
+  - title: Python — built-in types, truth value testing and comparisons
+    url: https://docs.python.org/3/library/stdtypes.html
+  - title: Python — built-in functions, including int()
+    url: https://docs.python.org/3/library/functions.html
+  - title: Python — sys.argv
+    url: https://docs.python.org/3/library/sys.html
+  - title: Python — built-in exceptions, including ValueError
+    url: https://docs.python.org/3/library/exceptions.html
+
+skills:
+  - cs.programming.types
+  - cs.programming.comparison
+  - cs.programming.control-flow
+  - cs.programming.functions
+  - cs.troubleshooting.silent-type-bug
+
+# certification: deliberately absent.
+#
+# CS-006 is FOUNDATIONAL SKILL content. A string compared against a number is
+# behind a great many production incidents, but it is not a published objective
+# of any certification and this lab claims none.

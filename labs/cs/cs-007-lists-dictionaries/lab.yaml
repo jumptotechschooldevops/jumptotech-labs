@@ -1,0 +1,266 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-007 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# --- Why the ranking is graded as one line ---------------------------------
+#
+# `output_contains` checks each expected string independently, so it cannot
+# assert that four lines came out in a particular order. The plan suggested
+# hashing the CSV instead; that was rejected, because `csv.writer` emits CRLF
+# by default and a student using the csv module correctly would fail a byte
+# hash. That would grade line endings, not understanding.
+#
+# So the program prints the ranking as a single `ORDER=` line. One literal,
+# order-exact, and indifferent to whitespace and line endings.
+#
+# --- Why the tie matters ---------------------------------------------------
+#
+# manchester and bristol both finish on 7, and manchester appears first in the
+# log. Sorting by count alone leaves them in insertion order, so the obvious
+# implementation returns leeds,manchester,bristol,cardiff — and every DEPOT
+# line is still correct. Only the ranking shows whether the tie-break was
+# applied at all, which is why it is graded separately from the counts.
+#
+# Sources verified 2026-08-25. Every expected value was computed from the
+# shipped fixture rather than reasoned about:
+#   scan-events.log        leeds 9, bristol 7, manchester 7, cardiff 3; total 26
+#                          (three unusable lines: one blank, one truncated, one
+#                          with no depot field)
+#   scan-events-small.log  york 3, cardiff 2; total 5
+# ---------------------------------------------------------------------------
+id: CS-007
+slug: cs-007-lists-dictionaries
+title: "Lists and Dictionaries: From Lines to Structure"
+track: cs
+topic: programming-foundations
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 7
+
+environment:
+  provider: linux
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-006
+
+story: >
+  Kestrel's scanners write one line per parcel scan, and ops wants to know
+  which depots are busiest. The script that answers today gives a different
+  answer every time it runs — not different numbers, but the same numbers in a
+  different order, which is enough for two people reading the same report to
+  disagree about which depot is second.
+
+  The log is also not as clean as the script assumes. The collector truncates a
+  line when it restarts, and one scanner has been shipping records with no
+  depot field at all since it was re-imaged. Nobody has checked whether those
+  lines are being counted as something.
+
+  A line of text is not data. Turning it into data — and deciding what shape
+  that data should be — is the whole job.
+
+objectives:
+  - Turn line-oriented text into records you can work with, and discard the lines that are not records
+  - Choose between a list and a dictionary by what you need to do with the data, not by habit
+  - Count occurrences by key, and see why a dictionary is the natural shape for that
+  - Rank results by more than one criterion, so that equal values still come out in a defined order
+  - Produce the same answer every time from the same input, and say why that matters to whoever reads the report
+
+task:
+  summary: Turn a night of scan lines into per-depot counts, ranked so that the answer never changes between runs.
+  description: >
+    The logs are in `/srv/kestrel/scans`, read-only. Read `README.txt` first,
+    then look at `scan-events.log` closely — not every line is a scan record.
+    You will need `/home/student/py` and `/home/student/ops`, neither of which
+    exists yet.
+
+
+    Write `/home/student/py/depots.py`, taking two arguments: the log file to
+    read, and the path to write a CSV to.
+
+
+    ```
+
+    depots.py <logfile> <csvpath>
+
+    ```
+
+
+    **What counts.** A usable line names the depot that recorded the scan, as a
+    `depot=<name>` field somewhere in the line. A line without one is not a
+    scan record and must not be counted as anything — not as a depot with an
+    empty name, and not as a scan with no depot.
+
+
+    **The ranking.** Order depots by scan count, highest first. Depots on the
+    same count are ordered by name, A to Z. That second rule is what makes the
+    report stable, and it is the reason two people can stop disagreeing.
+
+
+    **What to print**, in this order:
+
+
+    ```
+
+    DEPOT=<name> COUNT=<n>      one line per depot, in ranked order
+
+    ORDER=<name>,<name>,...     the ranking on one line, comma separated, no spaces
+
+    TOTAL=<n>                   how many usable scans there were altogether
+
+    ```
+
+
+    **What to write.** The CSV named on the command line: one line per depot in
+    the same ranked order, `<name>,<count>`, no header row.
+
+
+    Then run your program on `scan-events.log` yourself, writing its CSV to
+    `/home/student/ops/depots.csv`.
+
+
+    Your program is run against more than one log, so it has to do the work
+    rather than remember an answer; a program containing the expected ranking
+    instead of deriving it is rejected.
+
+
+    Give it a `#!/usr/bin/env python3` first line and make it executable.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/scans/scan-events.log
+      label: The overnight scan log is present
+    - type: file_exists
+      path: /srv/kestrel/scans/scan-events-small.log
+      label: The afternoon re-run is present
+    - type: file_content
+      path: /srv/kestrel/scans/scan-events.log
+      contains: "depot=manchester"
+      label: The log carries the depots the report is about
+    - type: file_exists
+      path: /srv/kestrel/scans/README.txt
+      label: The logs are described for the student
+
+requirements:
+  - type: script_executable
+    path: /home/student/py/depots.py
+    label: The report program exists and can be run as a program
+
+  # The overnight batch. TOTAL is what catches counting the unusable lines;
+  # ORDER is what catches ranking without the tie-break.
+  - type: script_runs
+    path: /home/student/py/depots.py
+    args: ["/srv/kestrel/scans/scan-events.log", "/tmp/cs007-check-a.csv"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "DEPOT=leeds COUNT=9"
+      - "DEPOT=bristol COUNT=7"
+      - "DEPOT=manchester COUNT=7"
+      - "DEPOT=cardiff COUNT=3"
+      - "ORDER=leeds,bristol,manchester,cardiff"
+      - "TOTAL=26"
+    label: The overnight batch is counted, ranked and totalled correctly
+  # A second log with different depots, different counts and a different
+  # ranking, so one remembered answer cannot satisfy both.
+  - type: script_runs
+    path: /home/student/py/depots.py
+    args: ["/srv/kestrel/scans/scan-events-small.log", "/tmp/cs007-check-b.csv"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "DEPOT=york COUNT=3"
+      - "DEPOT=cardiff COUNT=2"
+      - "ORDER=york,cardiff"
+      - "TOTAL=5"
+    label: A different batch is counted, ranked and totalled correctly
+
+  # A program that derives the ranking formats it; one that contains it is a
+  # remembered answer, and would otherwise satisfy both runs above.
+  - type: file_content_absent
+    path: /home/student/py/depots.py
+    contains: "ORDER=leeds,bristol"
+    label: The program derives the ranking rather than containing it
+  - type: file_content_absent
+    path: /home/student/py/depots.py
+    contains: "ORDER=york,cardiff"
+    label: The program is not a table of expected rankings
+
+  # The CSV the student produced from the overnight batch.
+  - type: file_exists
+    path: /home/student/ops/depots.csv
+    label: The report was written out as a CSV
+  - type: file_content
+    path: /home/student/ops/depots.csv
+    contains: "leeds,9"
+    label: The CSV carries the busiest depot and its count
+  - type: file_content
+    path: /home/student/ops/depots.csv
+    contains: "bristol,7"
+    label: The CSV carries a depot that finished level with another
+  - type: file_content
+    path: /home/student/ops/depots.csv
+    contains: "cardiff,3"
+    label: The CSV carries every depot, not only the busy ones
+
+hints:
+  - level: 1
+    text: >
+      Open the log and read it as a person before you write anything that reads
+      it as a program. Count how many lines there are and how many of them are
+      actually scan records — the difference is small, and it is the difference
+      between a total that is right and one that is quietly wrong. Then think
+      about what you need to hold while you go through the file: something
+      ordered, or something you can look up by name?
+  - level: 2
+    text: >
+      A dictionary maps a key to a value, which is the natural shape for
+      "how many times have I seen this name" — you look up the depot, and add
+      one. `collections.Counter` is a dictionary that already knows how to do
+      that, though a plain dict works fine. To get the depot out of a line,
+      `str.split()` breaks it into fields and `str.startswith()` or
+      `str.partition("=")` will pick the one you want; a line that has no such
+      field simply does not produce a record.
+  - level: 3
+    text: >
+      `sorted()` takes a `key` function that returns what to sort by, and a
+      tuple as that key sorts by its first element, then its second, and so on.
+      Sorting numbers descending while sorting names ascending in the same pass
+      is the thing to work out — negating the count is one way, and there are
+      others. Whatever you choose, check the two depots that finish level with
+      each other: if your ranking depends on which of them appeared first in the
+      file, the report will still move around between runs.
+
+references:
+  - title: Python tutorial — data structures, lists and dictionaries
+    url: https://docs.python.org/3/tutorial/datastructures.html
+  - title: Python — collections, including Counter
+    url: https://docs.python.org/3/library/collections.html
+  - title: Python — built-in functions, including sorted()
+    url: https://docs.python.org/3/library/functions.html
+  - title: Python — built-in types, dict and str methods
+    url: https://docs.python.org/3/library/stdtypes.html
+  - title: Python — sorting techniques
+    url: https://docs.python.org/3/howto/sorting.html
+  - title: Python — reading and writing files
+    url: https://docs.python.org/3/tutorial/inputoutput.html
+
+skills:
+  - cs.data.lists
+  - cs.data.dictionaries
+  - cs.data.parsing
+  - cs.data.sorting
+  - cs.programming.deterministic-output
+
+# certification: deliberately absent.
+#
+# CS-007 is FOUNDATIONAL SKILL content. Lists inside dictionaries inside lists
+# are the shape of every config file and API response an engineer will meet,
+# but this covers no published certification objective and claims none.

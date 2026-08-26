@@ -1,0 +1,309 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-004 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# Content is written from the Linux man-pages project, the GNU Bash manual and
+# the Python documentation. The company, the service, the leak, the crash log
+# and every word of the task are original JumpToTech content.
+#
+# Sources verified 2026-08-25. The graded values were measured by running the
+# fixture and the reference program inside this lab's own sandbox image:
+#   /proc/<pid>/limits "Max open files" soft -> 256   (set by the seed, and
+#                                                      recorded nowhere else)
+#   the descriptor table is dominated by sockets, alongside two regular spool
+#   files and the three standard descriptors — so the dominant kind has to be
+#   counted, not guessed from the service's source
+#   the reference program at soft limit 64 opens 61, at 128 opens 125: the
+#   limit counts *every* descriptor, including 0, 1 and 2, which is the point
+#
+# --- Why `OPENED` is safe to grade -----------------------------------------
+#
+# `script_runs` execs the program with exactly three descriptors open, so a
+# program that lowers its own limit to N and opens until it fails always
+# manages N - 3. Verified stable across five consecutive runs and three
+# different limits, and it holds for any implementation that opens until it
+# fails — files, sockets or anything else — so it grades the concept rather
+# than a chosen technique.
+#
+# --- Grading ---------------------------------------------------------------
+#
+# Two different limits, so a program that remembers one answer fails the other,
+# plus two `file_content_absent` checks so a program that contains the answers
+# instead of computing them is rejected. Same pairing as CS-002 and CS-003, and
+# necessary for the same reason: `output_contains` is a substring test over the
+# whole of stdout.
+#
+# No expected value exists inside the sandbox. The soft limit lives only in the
+# running process; the seed script that set it is deleted before the terminal
+# opens. The student is not root (`unprivileged_shell`), so the binaries the
+# verifier reads state back with cannot be replaced.
+# ---------------------------------------------------------------------------
+id: CS-004
+slug: cs-004-file-descriptors
+title: Files, File Descriptors, and "Too Many Open Files"
+track: cs
+topic: computer-basics
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 4
+
+environment:
+  provider: linux
+  # Investigation only: the student reads /proc and writes a small program.
+  # No route to root, so the binaries the verifier reads state back with
+  # cannot be replaced — see the platform's grading-integrity note.
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-003
+
+story: >
+  Kestrel Logistics' `scan-collector` has crashed three times this week. Each
+  time the message is the same:
+
+  `OSError: [Errno 24] Too many open files`
+
+  Each time, the engineer on call raised the limit and restarted it. It ran
+  longer, then died again. The log of those two "fixes" is still on the host.
+
+  The service is up right now and looks perfectly healthy: it is forwarding
+  batches, its memory is flat, and nothing in its own logs says anything is
+  wrong. It is also, at this moment, quietly on its way to crashing a fourth
+  time.
+
+  Nobody has yet looked at what it actually has open.
+
+objectives:
+  - Describe what a file descriptor is, and why 0, 1 and 2 are always spoken for
+  - Read a running process's descriptor table out of /proc and see what each entry points at
+  - Tell a leaked socket apart from an ordinary open file, and work out which kind dominates
+  - Find the soft and hard limits a process is actually running under, rather than the shell's
+  - Reproduce the failure deliberately in a program, and see that the limit counts every descriptor a process holds
+  - Say why raising the limit postpones a leak rather than fixing it
+
+task:
+  summary: Investigate the running scan-collector's descriptor table, reproduce its failure in a small program, and record what is actually wrong.
+  description: >
+    `scan-collector` is running now. Its previous crash log is at
+    `/var/log/kestrel/scan-collector.log.1`; read it first, then find the
+    process itself. You will need `/home/student/py` and `/home/student/ops`,
+    neither of which exists yet.
+
+
+    **Part 1 — look at what it has open.** Every open file, socket and pipe a
+    process holds is a numbered descriptor, and the kernel exposes them per
+    process under `/proc`. Find the collector's entries and look at what each
+    number points at — the entries are symbolic links, so a tool that follows a
+    link tells you the target. Three of them will be familiar from CS-001's
+    process contract. The rest are the problem.
+
+
+    Work out which *kind* of thing dominates the table. Counting is the only
+    honest way to answer that: the service opens more than one kind of thing,
+    and reading its source will not tell you which one is winning.
+
+
+    **Part 2 — find the limit it is really running under.** A process carries
+    its own soft and hard ceiling on descriptors, and it is not necessarily the
+    one your shell would report for itself. `/proc` publishes the limits of a
+    running process alongside its descriptors. Record the *soft* one.
+
+
+    **Part 3 — reproduce the failure on purpose.** Write
+    `/home/student/py/fdlimit.py`, taking a descriptor limit as its first
+    argument. It must lower its own soft limit to that number, then open
+    descriptors until the kernel refuses, catch the failure rather than
+    crashing, close what it opened, and print exactly four lines:
+
+
+    ```
+
+    LIMIT=<the limit it was given>
+
+    OPENED=<how many it managed to open>
+
+    ERRNO=<the numeric errno the kernel returned>
+
+    ERRNAME=<that errno's symbolic name>
+
+    ```
+
+
+    Exit `0` when the error really was the "too many open files" one, and
+    non-zero if some different error came back. Give it a
+    `#!/usr/bin/env python3` line and make it executable.
+
+
+    Compare `OPENED` with `LIMIT`. They will not be equal, and the difference
+    is not a rounding error — it is exactly the thing Part 1 asked you to
+    notice about the first three descriptors.
+
+
+    Your program runs against more than one limit, so it has to measure rather
+    than remember; one that contains the expected output instead of producing
+    it is rejected.
+
+
+    **Part 4 — write it up.** Create `/home/student/ops/fds.txt`, one
+    `KEY=value` per line:
+
+
+    ```
+
+    STDERR_FD=<the descriptor number standard error always uses>
+
+    LEAK_KIND=<socket|file|pipe — whichever dominates the collector's table>
+
+    COLLECTOR_SOFT_LIMIT=<the soft limit the running collector has>
+
+    REAL_FIX=<raise|close — what actually stops this recurring>
+
+    ```
+
+
+    Line order does not matter and extra lines are ignored.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /usr/local/bin/scan-collector
+      label: The collector service is installed
+    - type: process_running
+      pattern: /usr/local/bin/scan-collector
+      label: The collector is running and leaking
+    - type: port_listening
+      port: 9310
+      protocol: tcp
+      label: The collector is accepting scanner connections
+    - type: file_content
+      path: /var/log/kestrel/scan-collector.log.1
+      contains: "Too many open files"
+      label: The previous crashes are on disk for the student to read
+
+requirements:
+  # --- Part 3: reproducing EMFILE, graded by running the program -------------
+  - type: script_executable
+    path: /home/student/py/fdlimit.py
+    label: The reproduction program exists and can be run as a program
+  - type: script_runs
+    path: /home/student/py/fdlimit.py
+    args: ["64"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "LIMIT=64"
+      - "OPENED=61"
+      - "ERRNO=24"
+      - "ERRNAME=EMFILE"
+    label: The program reaches the descriptor ceiling and reports it correctly
+  - type: script_runs
+    path: /home/student/py/fdlimit.py
+    args: ["128"]
+    expected_exit_code: 0
+    timeout_seconds: 15
+    output_contains:
+      - "LIMIT=128"
+      - "OPENED=125"
+      - "ERRNO=24"
+      - "ERRNAME=EMFILE"
+    label: The program measures a second ceiling rather than repeating the first
+  # A program that reaches the limit computes how far it got. One that contains
+  # the answer is a transcript, and would satisfy both runs above at once.
+  - type: file_content_absent
+    path: /home/student/py/fdlimit.py
+    contains: "OPENED=61"
+    label: The program counts what it opened rather than containing the count
+  - type: file_content_absent
+    path: /home/student/py/fdlimit.py
+    contains: "OPENED=125"
+    label: The program is not a transcript of expected output
+
+  # --- Parts 1, 2 and 4: the investigation ----------------------------------
+  - type: file_exists
+    path: /home/student/ops/fds.txt
+    label: The findings file exists
+  - type: file_content
+    path: /home/student/ops/fds.txt
+    contains: "STDERR_FD=2"
+    label: The findings name the descriptor standard error always uses
+  - type: file_content
+    path: /home/student/ops/fds.txt
+    contains: "LEAK_KIND=socket"
+    label: The findings identify what dominates the collector's descriptor table
+  - type: file_content
+    path: /home/student/ops/fds.txt
+    contains: "COLLECTOR_SOFT_LIMIT=256"
+    label: The findings record the soft limit the collector is running under
+  - type: file_content
+    path: /home/student/ops/fds.txt
+    contains: "REAL_FIX=close"
+    label: The findings say what actually stops the crashes recurring
+
+hints:
+  - level: 1
+    text: >
+      The service is healthy by every measure anyone has looked at so far, so
+      look at something nobody has: what it is holding open. Find its process
+      id first — you know its name — and remember that the kernel publishes a
+      directory per process. Its previous crash log is worth reading before you
+      start; it tells you what was already tried.
+  - level: 2
+    text: >
+      `man 5 proc` documents the per-process directory, including the
+      subdirectory of open descriptors and the file listing the process's
+      resource limits. The descriptor entries are symbolic links: `ls -l` shows
+      what each points at, and `readlink` prints a single target on its own.
+      Counting how many of each kind there are is a job for `sort` and
+      `uniq -c`. Note that `ulimit -n` in your shell reports *your shell's*
+      limit, which is not the same question.
+  - level: 3
+    text: >
+      Python's `resource` module reads and sets the same limits `/proc` reports,
+      as a soft/hard pair; lowering your own soft limit is allowed, and raising
+      it above the hard one is not. Opening descriptors in a loop until the
+      kernel refuses raises `OSError`, and the exception carries the numeric
+      code that `errno.errorcode` will translate into a name. When you compare
+      how many you opened against the limit you set, remember that your process
+      did not start with an empty table — three descriptors were already spoken
+      for before your first line ran.
+
+references:
+  - title: proc(5) — the /proc filesystem
+    url: https://man7.org/linux/man-pages/man5/proc.5.html
+  - title: proc_pid_fd(5) — the per-process descriptor directory
+    url: https://man7.org/linux/man-pages/man5/proc_pid_fd.5.html
+  - title: proc_pid_limits(5) — a process's resource limits
+    url: https://man7.org/linux/man-pages/man5/proc_pid_limits.5.html
+  - title: getrlimit(2) — soft and hard resource limits
+    url: https://man7.org/linux/man-pages/man2/getrlimit.2.html
+  - title: open(2) — opening a file, and the errors it can return
+    url: https://man7.org/linux/man-pages/man2/open.2.html
+  - title: socket(2) — a socket is a descriptor too
+    url: https://man7.org/linux/man-pages/man2/socket.2.html
+  - title: errno(3) — error numbers and their names
+    url: https://man7.org/linux/man-pages/man3/errno.3.html
+  - title: GNU Bash manual — Bourne shell builtins, including ulimit
+    url: https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html
+  - title: Python — the resource module
+    url: https://docs.python.org/3/library/resource.html
+  - title: Python — the errno module
+    url: https://docs.python.org/3/library/errno.html
+
+skills:
+  - cs.os.file-descriptors
+  - cs.os.proc-filesystem
+  - cs.os.resource-limits
+  - cs.troubleshooting.emfile
+  - cs.programming.error-handling
+
+# certification: deliberately absent.
+#
+# CS-004 is FOUNDATIONAL SKILL content. "Too many open files" is one of the
+# most common production failures there is, but it is not a published objective
+# of any certification and this lab claims none.

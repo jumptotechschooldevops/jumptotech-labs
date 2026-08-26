@@ -1,0 +1,361 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-013 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# --- Why this grades counters and not a stopwatch --------------------------
+#
+# The plan graded a `FASTEST=<mode>` verdict from a three-way race. Measured in
+# the real sandbox before it was written down, that verdict does not survive a
+# busy machine — serial/threaded ratios across four runs at load 22:
+#
+#   CPU-bound : 1.79  0.61  0.84  0.71
+#   I/O-bound : 10.6  2.48  4.00  5.45
+#
+# Those bands nearly touch, so no threshold between them can separate honest
+# work from a contended host. The 0.5-CPU quota also makes the plan's expected
+# answer wrong twice over: extra processes cannot run in parallel here at all,
+# so `serial` won every CPU-bound race.
+#
+# The counters, re-measured at load 37, were exact every single time:
+#
+#   n sleeps         -> exactly n voluntary context switches   (n = 5, 12, 37)
+#   pure computation -> exactly 0 voluntary context switches
+#   n live threads   -> Threads: is exactly n+1 (15/15 under load)
+#   after joining    -> settles to 1, but ASYNCHRONOUSLY: reading once straight
+#                       after join() gave 3 in 1 run of 12, so the task tells
+#                       the student to poll for it rather than read once
+#   cpu.max          -> 0.5 while os.cpu_count() reports the host's count
+#
+# So the lab grades the mechanism the race was a proxy for. Nothing here is
+# timed, and a test asserts no requirement mentions a duration.
+#
+# --- What is deliberately not graded ---------------------------------------
+#
+# `CPUS_VISIBLE` — it is the host's CPU count, not a property of the student.
+# It must be *printed*, so the gap against the quota is something they saw,
+# but its value is never asserted.
+# ---------------------------------------------------------------------------
+id: CS-013
+slug: cs-013-threads-scheduling
+title: "Threads, Scheduling and Context Switching"
+track: cs
+topic: operating-systems
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 13
+
+environment:
+  provider: linux
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-011
+
+story: >
+  Kestrel's scan-ingest worker was short on throughput, so somebody doubled its
+  thread pool. Latency got worse. They doubled it again, and it got worse
+  still.
+
+  The worker checksums every block it receives, which is work the CPU does and
+  never waits for. Threads cannot make that finish sooner in Python, because
+  only one of them may execute bytecode at a time — and even if they could,
+  this container is allowed half a CPU. The pool is sized from the number of
+  CPUs the runtime reports, which is the machine's, not the container's.
+
+  So the pool is twenty threads competing for half a processor, and every one
+  added makes the queue longer rather than shorter.
+
+objectives:
+  - Say what a thread shares with its process and what it does not, and how the kernel counts them
+  - Explain the difference between a voluntary and an involuntary context switch, and what causes each
+  - Tell CPU-bound work from I/O-bound work by what it does to the switch counters rather than by timing it
+  - Explain why threads do not speed up CPU-bound Python, and why that is not the same reason as a CPU limit
+  - Read the CPU a container is actually allowed and explain why sizing a pool from the reported CPU count is wrong
+
+task:
+  summary: Measure what blocking and threading actually do to the kernel's counters, and find the CPU budget the worker ignored.
+  description: >
+    The worker is in `/srv/kestrel/ingest`, read-only. Read `README.txt` and
+    `scan-ingest.py`. You will need `/home/student/py` and `/home/student/ops`,
+    neither of which exists yet.
+
+
+    Nothing here is timed. A shared machine makes timings say whatever the
+    machine was doing at that moment, so you are measuring the counters the
+    kernel keeps instead — which say the same thing and say it exactly.
+
+
+    **The program.** Write `/home/student/py/workers.py`, taking a mode as its
+    first argument.
+
+
+    `workers.py switches <n>` — do two pieces of work and measure
+    `voluntary_ctxt_switches` from `/proc/self/status` immediately before and
+    after each. First, `<n>` units of work that *wait* — a short sleep is
+    enough. Then `<n>` units of work that never wait: computation only, no
+    sleeping, no reading, no writing. Print:
+
+
+    ```
+
+    UNITS=<n> IO_VOLUNTARY=<count> CPU_VOLUNTARY=<count>
+
+    ```
+
+
+    `workers.py threads <n>` — start `<n>` threads that stay alive, and while
+    they are alive read `Threads:` from `/proc/self/status`. Then let them
+    finish and read it again.
+
+
+    Both reads have to wait for the state they are reporting. Starting a thread
+    and joining one are both asynchronous with respect to the kernel's count:
+    `join()` returns when the thread's work is done, and the count settles a
+    moment later, so a single read taken straight afterwards will sometimes
+    still see threads that are on their way out. Poll for the count you expect
+    rather than reading once. Print:
+
+
+    ```
+
+    STARTED=<n> THREADS_DURING=<count> THREADS_AFTER=<count>
+
+    ```
+
+
+    `workers.py budget` — report the CPU count the runtime advertises, the CPU
+    the cgroup actually allows (`/sys/fs/cgroup/cpu.max` holds a quota and a
+    period), and whether the pool `scan-ingest.py` would build is larger than
+    that allowance. Print:
+
+
+    ```
+
+    CPUS_VISIBLE=<n> CPU_QUOTA=<cpus> OVERSUBSCRIBED=<yes or no>
+
+    ```
+
+
+    All three modes must exit `0`. Report what you measured — a count you did
+    not read is not a measurement.
+
+
+    **The write-up.** Record in `/home/student/ops/threads.txt`:
+
+
+    ```
+
+    WHY_THREADS_DONT_HELP_CPU=<the one-word Python reason>
+
+    WHY_MORE_WORKERS_DIDNT_HELP=<the one-word reason that is about this container>
+
+    BLOCKING_SHOWS_UP_AS=<voluntary or involuntary>
+
+    POOL_SIZE_SHOULD_FOLLOW=<what the pool should be sized from>
+
+    ```
+
+
+    The first two are different answers. One would be true on a machine with
+    forty idle cores; the other would not.
+
+
+    Give the program a `#!/usr/bin/env python3` first line and make it
+    executable.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/ingest/scan-ingest.py
+      label: The production worker is present
+    # The bug is that the pool is sized from the reported CPU count, so that
+    # line being there is part of the starting condition.
+    - type: file_content
+      path: /srv/kestrel/ingest/scan-ingest.py
+      contains: "os.cpu_count()"
+      label: The worker still sizes its pool from the reported CPU count
+    - type: file_content
+      path: /srv/kestrel/ingest/README.txt
+      contains: "doubled"
+      label: The incident notes are present
+    - type: file_exists
+      path: /sys/fs/cgroup/cpu.max
+      label: The cgroup CPU allowance is readable
+
+requirements:
+  - type: script_executable
+    path: /home/student/py/workers.py
+    label: The program exists and can be run as a program
+
+  # n sleeps produce exactly n voluntary switches; computation produces none.
+  # Three counts, so a typed-out answer fails two of them.
+  - type: script_runs
+    path: /home/student/py/workers.py
+    args: ["switches", "5"]
+    expected_exit_code: 0
+    timeout_seconds: 60
+    output_contains:
+      - "UNITS=5"
+      - "IO_VOLUNTARY=5"
+      - "CPU_VOLUNTARY=0"
+    label: Five waits cost five voluntary switches, and computing costs none
+  - type: script_runs
+    path: /home/student/py/workers.py
+    args: ["switches", "12"]
+    expected_exit_code: 0
+    timeout_seconds: 60
+    output_contains:
+      - "UNITS=12"
+      - "IO_VOLUNTARY=12"
+      - "CPU_VOLUNTARY=0"
+    label: Twelve waits cost twelve, which is what makes it a count and not a coincidence
+  - type: script_runs
+    path: /home/student/py/workers.py
+    args: ["switches", "37"]
+    expected_exit_code: 0
+    timeout_seconds: 60
+    output_contains:
+      - "UNITS=37"
+      - "IO_VOLUNTARY=37"
+      - "CPU_VOLUNTARY=0"
+    label: An awkward number of waits is counted rather than assumed
+
+  # The kernel counts the main thread too, so n live threads read as n+1.
+  - type: script_runs
+    path: /home/student/py/workers.py
+    args: ["threads", "8"]
+    expected_exit_code: 0
+    timeout_seconds: 60
+    output_contains:
+      - "STARTED=8"
+      - "THREADS_DURING=9"
+      - "THREADS_AFTER=1"
+    label: Eight live threads read as nine, and as one again once they are done
+  - type: script_runs
+    path: /home/student/py/workers.py
+    args: ["threads", "3"]
+    expected_exit_code: 0
+    timeout_seconds: 60
+    output_contains:
+      - "STARTED=3"
+      - "THREADS_DURING=4"
+      - "THREADS_AFTER=1"
+    label: A different number of threads is read rather than assumed
+
+  # The quota is set by the platform and is the same everywhere; the visible
+  # CPU count is the host's and is never asserted.
+  - type: script_runs
+    path: /home/student/py/workers.py
+    args: ["budget"]
+    expected_exit_code: 0
+    timeout_seconds: 60
+    output_contains:
+      - "CPUS_VISIBLE="
+      - "CPU_QUOTA=0.5"
+      - "OVERSUBSCRIBED=yes"
+    label: The CPU the container may use is found, and the pool is larger than it
+
+  # A correct program prints what it measured, so it contains none of these.
+  - type: file_content_absent
+    path: /home/student/py/workers.py
+    contains: "IO_VOLUNTARY=37"
+    label: The switches are counted rather than contained in the source
+  - type: file_content_absent
+    path: /home/student/py/workers.py
+    contains: "IO_VOLUNTARY=12"
+    label: The second count is measured rather than contained in the source
+  - type: file_content_absent
+    path: /home/student/py/workers.py
+    contains: "CPU_VOLUNTARY=0"
+    label: Computing costing nothing is measured rather than assumed
+  - type: file_content_absent
+    path: /home/student/py/workers.py
+    contains: "THREADS_DURING=9"
+    label: The thread count is read from status rather than worked out on paper
+  - type: file_content_absent
+    path: /home/student/py/workers.py
+    contains: "CPU_QUOTA=0.5"
+    label: The quota is read from the cgroup rather than contained in the source
+  - type: file_content_absent
+    path: /home/student/py/workers.py
+    contains: "OVERSUBSCRIBED=yes"
+    label: The comparison is made rather than its answer typed out
+
+  - type: command_output
+    command: grep
+    args: ["-x", "WHY_THREADS_DONT_HELP_CPU=gil", "/home/student/ops/threads.txt"]
+    contains: "WHY_THREADS_DONT_HELP_CPU=gil"
+    label: The write-up names why threads cannot speed up this work in Python
+  - type: command_output
+    command: grep
+    args: ["-x", "WHY_MORE_WORKERS_DIDNT_HELP=quota", "/home/student/ops/threads.txt"]
+    contains: "WHY_MORE_WORKERS_DIDNT_HELP=quota"
+    label: The write-up names the reason that is about this container, not Python
+  - type: command_output
+    command: grep
+    args: ["-x", "BLOCKING_SHOWS_UP_AS=voluntary", "/home/student/ops/threads.txt"]
+    contains: "BLOCKING_SHOWS_UP_AS=voluntary"
+    label: The write-up says which counter waiting moves
+  - type: command_output
+    command: grep
+    args: ["-x", "POOL_SIZE_SHOULD_FOLLOW=quota", "/home/student/ops/threads.txt"]
+    contains: "POOL_SIZE_SHOULD_FOLLOW=quota"
+    label: The write-up says what the pool should have been sized from
+
+hints:
+  - level: 1
+    text: >
+      `/proc/self/status` has both counters in it — one for switches the
+      process asked for and one for switches it was given. Read it before and
+      after a piece of work and subtract. A `time.sleep` is the simplest thing
+      that waits; a loop over `hashlib` is the simplest thing that does not.
+  - level: 2
+    text: >
+      A process gives up the CPU voluntarily when it asks for something it has
+      to wait for, and involuntarily when the scheduler takes the CPU back at
+      the end of its slice. That is why the two counters tell CPU-bound work
+      apart from I/O-bound work without a stopwatch. `Threads:` is in the same
+      file, and it counts the main thread as well as the ones you started — and
+      it is the kernel's count, not Python's, so it lags what `join()` has
+      already told you by a moment.
+  - level: 3
+    text: >
+      `/sys/fs/cgroup/cpu.max` holds two numbers, a quota and a period, both in
+      microseconds; dividing one by the other gives the CPUs this container may
+      use. `os.cpu_count()` does not consult it and never has, which is why a
+      pool sized from that number is sized for a machine the process is not
+      allowed to use. That gap is the bug in the story, and it is why the same
+      image behaves differently under a limit than it did on a laptop.
+
+references:
+  - title: pthreads(7) — threads and what they share
+    url: https://man7.org/linux/man-pages/man7/pthreads.7.html
+  - title: sched(7) — scheduling, time slices and preemption
+    url: https://man7.org/linux/man-pages/man7/sched.7.html
+  - title: proc(5) — /proc/[pid]/status, the switch counters and Threads
+    url: https://man7.org/linux/man-pages/man5/proc.5.html
+  - title: The Linux kernel — control group v2, and the cpu controller
+    url: https://docs.kernel.org/admin-guide/cgroup-v2.html
+  - title: Python — threading
+    url: https://docs.python.org/3/library/threading.html
+  - title: Python glossary — the global interpreter lock
+    url: https://docs.python.org/3/glossary.html
+
+skills:
+  - cs.os.threads
+  - cs.os.scheduling
+  - cs.os.context-switching
+  - cs.os.cgroup-cpu-limits
+  - cs.performance.thread-pool-sizing
+
+# certification: deliberately absent.
+#
+# CS-013 is FOUNDATIONAL SKILL content. Thread-pool sizing against a CPU limit
+# is a recurring production failure, but it is not a published objective of any
+# certification and this lab claims none.

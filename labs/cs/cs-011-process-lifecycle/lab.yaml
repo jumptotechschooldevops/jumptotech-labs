@@ -1,0 +1,308 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# CS-011 is FOUNDATIONAL SKILL content. It maps to no certification objective
+# and therefore carries no `certification:` block — see labs/cs/SOURCES.md.
+#
+# --- Nothing here is graded on wall-clock time -----------------------------
+#
+# The curriculum plan proposed grading "did not reap" with a short
+# `timeout_seconds`, so that a program which never waits fails by hanging.
+# That grades the machine as much as the student, and this repository has
+# already seen container reads go slow under load. It was replaced with an
+# outcome grade, which needs no timer:
+#
+#   CHILD_STATE=Z     read out of /proc/<child>/stat while the child is dead
+#                     and unreaped — a value, not a delay
+#   RAW=<n>           the raw wait status waitpid() returned
+#   CHILD_GONE=yes    /proc/<child> is gone once it has been reaped
+#
+# A program that never calls waitpid cannot print the last two at all, and it
+# exits promptly either way, so the timeout is a safety net rather than a
+# grading mechanism.
+#
+# --- Why the raw wait status is the discriminator --------------------------
+#
+# The exit code is handed to the program as an argument at run time, and the
+# raw status is that code shifted left by eight. Measured in the real image:
+# 7 -> 1792, 3 -> 768, 0 -> 0. Three runs with three different codes means a
+# program that prints a fixed answer fails two of them, and `file_content_absent`
+# bars the numbers from the source, so they have to come from waitpid.
+#
+# It is also the lesson: a wait status is not an exit code, which is why
+# `os.waitstatus_to_exitcode` exists and why 128+signal shows up in shells.
+#
+# --- What is deliberately NOT graded ---------------------------------------
+#
+# Not the identity of PID 1. That is whatever the container provider chose to
+# run, it is not a property of the lesson, and grading it would couple this
+# lab to a platform detail that may change. The write-up records invariants
+# the student can demonstrate instead: an orphan reparents to PID 1, a zombie
+# reads Z, and SIGKILL does not remove one.
+# ---------------------------------------------------------------------------
+id: CS-011
+slug: cs-011-process-lifecycle
+title: "Process Lifecycle: Fork, Exec, Zombies and PID 1"
+track: cs
+topic: operating-systems
+difficulty: beginner
+level: practice
+duration_minutes: 35
+order: 11
+
+environment:
+  provider: linux
+  capabilities:
+    - unprivileged_shell
+
+prerequisites:
+  - CS-005
+
+story: >
+  Kestrel's scan worker container ends each day with several hundred processes
+  marked `<defunct>`, and then cannot start any more. Restarting the container
+  clears it, for a while.
+
+  Nobody has managed to kill one. `kill -9` reports success and changes
+  nothing, which is the part that has everybody stuck: a process that ignores
+  SIGKILL is supposed to be impossible.
+
+  It is impossible. What is in the process table is not a process any more.
+  Nothing is left to kill — only an entry nobody has collected, held open
+  because the thing that started it never asked how it went.
+
+objectives:
+  - Describe how a process is created, and what fork returns to each of the two processes that come back from it
+  - Explain what a zombie is, why SIGKILL does not remove one, and what does
+  - Read a process's state and parent from /proc rather than inferring them
+  - Decode a wait status, and say why it is not the same number as the exit code
+  - Explain what PID 1 inherits, and why an entrypoint that never waits runs out of processes
+
+task:
+  summary: Make a zombie, watch SIGKILL fail to remove it, then reap it and report what the kernel actually handed back.
+  description: >
+    The worker is in `/srv/kestrel/worker`, read-only. Read `README.txt` and
+    `entrypoint.sh` — the bug is in plain sight, and it is what is *missing*.
+    You will need `/home/student/py` and `/home/student/ops`, neither of which
+    exists yet.
+
+
+    **The program.** Write `/home/student/py/spawn.py`, taking the exit code
+    the child should use as its first argument. In one run it must:
+
+
+    1. fork a child, and have the child exit with that code
+
+    2. while the child is dead but not yet collected, read its state out of
+       `/proc/<child>/stat` and report it
+
+    3. collect it, and report the raw status the kernel handed back — the
+       number `waitpid` returned, not the exit code you can derive from it
+
+    4. confirm the child is gone from `/proc`
+
+
+    It must print, on **stdout**:
+
+
+    ```
+
+    PARENT=<the parent's pid> CHILD=<the child's pid>
+
+    CHILD_STATE=<the state character you read>
+
+    REAPED=<the child's pid> STATUS=<the exit code> RAW=<the raw wait status>
+
+    CHILD_GONE=<yes or no>
+
+    ```
+
+
+    and exit `0`. Report what you actually read at each step — a run that
+    prints a state it did not look up is not an observation.
+
+
+    **The raw status is the point.** It is not the exit code. Work out the
+    relationship between the two from your own runs rather than from the
+    documentation, and you will also have worked out why a shell reports
+    `128 + signal` for a process that was killed.
+
+
+    **The investigation.** Using your own program and `ps`, establish three
+    things and record them in `/home/student/ops/zombies.txt`:
+
+
+    ```
+
+    ZOMBIE_STATE=<the state character a dead, uncollected child shows>
+
+    RAW_WAIT_STATUS=<the raw status for a child that exited with 7>
+
+    ORPHAN_PARENT=<the pid a child is reparented to when its parent dies first>
+
+    STATE_AFTER_SIGKILL=<the state a zombie is in after you SIGKILL it>
+
+    ```
+
+
+    Each line is a value you can make the machine show you. The last one is
+    what the team has been stuck on.
+
+
+    Give the program a `#!/usr/bin/env python3` first line and make it
+    executable.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /srv/kestrel/worker/entrypoint.sh
+      label: The production entrypoint is present
+    - type: file_content
+      path: /srv/kestrel/worker/entrypoint.sh
+      contains: "&"
+      label: The entrypoint starts its children in the background
+    # The bug is the absence of a wait, so the absence is part of the fixture.
+    - type: file_content_absent
+      path: /srv/kestrel/worker/entrypoint.sh
+      contains: "wait"
+      label: The entrypoint never waits for anything it started
+    - type: file_exists
+      path: /srv/kestrel/worker/README.txt
+      label: The incident notes are present
+
+requirements:
+  - type: script_executable
+    path: /home/student/py/spawn.py
+    label: The program exists and can be run as a program
+
+  # Three runs, three different exit codes. The raw status is the code shifted
+  # left by eight, so a program that prints a fixed answer fails two of these.
+  - type: script_runs
+    path: /home/student/py/spawn.py
+    args: ["7"]
+    expected_exit_code: 0
+    timeout_seconds: 30
+    output_contains:
+      - "PARENT="
+      - "CHILD="
+      - "CHILD_STATE=Z"
+      - "STATUS=7"
+      - "RAW=1792"
+      - "CHILD_GONE=yes"
+    label: A child is made, seen as a zombie, collected, and its status reported
+  - type: script_runs
+    path: /home/student/py/spawn.py
+    args: ["3"]
+    expected_exit_code: 0
+    timeout_seconds: 30
+    output_contains:
+      - "CHILD_STATE=Z"
+      - "STATUS=3"
+      - "RAW=768"
+    label: A different exit code produces a different wait status
+  - type: script_runs
+    path: /home/student/py/spawn.py
+    args: ["0"]
+    expected_exit_code: 0
+    timeout_seconds: 30
+    output_contains:
+      - "CHILD_STATE=Z"
+      - "STATUS=0"
+      - "RAW=0"
+    label: A child that succeeded is still a zombie until it is collected
+
+  # A correct program prints what it read and what waitpid returned, so it
+  # contains none of these: it prints `RAW={status}` and `STATUS={code}`.
+  - type: file_content_absent
+    path: /home/student/py/spawn.py
+    contains: "RAW=1792"
+    label: The wait status is read from the kernel rather than contained in the source
+  - type: file_content_absent
+    path: /home/student/py/spawn.py
+    contains: "RAW=768"
+    label: The second wait status is read from the kernel too
+  - type: file_content_absent
+    path: /home/student/py/spawn.py
+    contains: "STATUS=7"
+    label: The exit code is decoded rather than contained in the source
+  - type: file_content_absent
+    path: /home/student/py/spawn.py
+    contains: "CHILD_STATE=Z"
+    label: The child's state is read from /proc rather than asserted
+
+  # Whole-line matches: `contains` is a substring test, and several of the
+  # wrong answers here are superstrings of the right ones.
+  - type: command_output
+    command: grep
+    args: ["-x", "ZOMBIE_STATE=Z", "/home/student/ops/zombies.txt"]
+    contains: "ZOMBIE_STATE=Z"
+    label: The write-up names the state a dead, uncollected child shows
+  - type: command_output
+    command: grep
+    args: ["-x", "RAW_WAIT_STATUS=1792", "/home/student/ops/zombies.txt"]
+    contains: "RAW_WAIT_STATUS=1792"
+    label: The write-up records the raw status, not the exit code
+  - type: command_output
+    command: grep
+    args: ["-x", "ORPHAN_PARENT=1", "/home/student/ops/zombies.txt"]
+    contains: "ORPHAN_PARENT=1"
+    label: The write-up records what an orphan is reparented to
+  - type: command_output
+    command: grep
+    args: ["-x", "STATE_AFTER_SIGKILL=Z", "/home/student/ops/zombies.txt"]
+    contains: "STATE_AFTER_SIGKILL=Z"
+    label: The write-up records that SIGKILL leaves a zombie exactly where it was
+
+hints:
+  - level: 1
+    text: >
+      `os.fork()` returns twice, because after it there are two processes. It
+      returns `0` to the child and the child's pid to the parent, and that
+      return value is the only way each of them knows which one it is. Have the
+      child call `os._exit()` rather than falling off the end, so it does not
+      run the rest of your program a second time.
+  - level: 2
+    text: >
+      Field three of `/proc/<pid>/stat` is the state character, but the second
+      field is the command name in brackets and can itself contain spaces, so
+      split on the last `)` rather than on whitespace. Between the child
+      exiting and you collecting it there is a window in which it is dead and
+      still listed — that window is the whole subject, so look inside it rather
+      than racing past it.
+  - level: 3
+    text: >
+      `os.waitpid` returns a pair, and the second item is not the exit code:
+      it packs the code and the signal into one integer. Run your program with
+      a few different codes and put the two numbers side by side — the
+      relationship is a shift, and once you see it you will know why a killed
+      process shows up as 128 plus its signal number. `os.waitstatus_to_exitcode`
+      does the decoding for you once you know what it is decoding.
+
+references:
+  - title: fork(2) — create a child process
+    url: https://man7.org/linux/man-pages/man2/fork.2.html
+  - title: execve(2) — execute a program
+    url: https://man7.org/linux/man-pages/man2/execve.2.html
+  - title: wait(2) — wait for process to change state, and the status macros
+    url: https://man7.org/linux/man-pages/man2/wait.2.html
+  - title: proc(5) — /proc/[pid]/stat and the process state characters
+    url: https://man7.org/linux/man-pages/man5/proc.5.html
+  - title: Python — os, process management and waitstatus_to_exitcode
+    url: https://docs.python.org/3/library/os.html
+  - title: signal(7) — signals, and what cannot be caught or ignored
+    url: https://man7.org/linux/man-pages/man7/signal.7.html
+
+skills:
+  - cs.os.process-lifecycle
+  - cs.os.fork-exec
+  - cs.os.zombies-and-reaping
+  - cs.os.wait-status
+  - cs.troubleshooting.pid-exhaustion
+
+# certification: deliberately absent.
+#
+# CS-011 is FOUNDATIONAL SKILL content. It is why `tini` and `--init` exist and
+# why a container ignores `docker stop`, but it is not a published objective of
+# any certification and this lab claims none.

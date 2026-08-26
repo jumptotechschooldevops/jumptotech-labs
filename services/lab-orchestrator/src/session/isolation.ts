@@ -38,8 +38,22 @@ export const STUDENT_ROLE_BINDING = 'jumptotech-student';
 export const RBAC_PRACTICE_ROLE = 'jumptotech-rbac-practice';
 export const RBAC_PRACTICE_ROLE_BINDING = 'jumptotech-rbac-practice';
 
-/** Optional capabilities a lab may declare under `environment.capabilities`. */
-export const LAB_CAPABILITIES = ['rbac_authoring'] as const;
+/**
+ * Optional capabilities a lab may declare under `environment.capabilities`.
+ *
+ * `unprivileged_shell` is the odd one out: it *narrows* what the student's
+ * account can do rather than widening it. It exists because the Linux sandbox
+ * grants passwordless `sudo` — LINUX-002/003/005 are unteachable without it —
+ * and root inside the sandbox can replace the very binaries the verifier
+ * executes to read state back. A lab that does not teach system administration
+ * has no reason to carry that risk, and declares this to opt out.
+ *
+ * A grant-shaped vocabulary with a narrowing member is deliberate: the
+ * alternative was to make sudo opt-in, which would mean editing every Linux
+ * lab to ask for the privilege it has always had. Labs that say nothing keep
+ * exactly the environment they have today.
+ */
+export const LAB_CAPABILITIES = ['rbac_authoring', 'unprivileged_shell'] as const;
 export type LabCapability = (typeof LAB_CAPABILITIES)[number];
 
 export function labHasCapability(
