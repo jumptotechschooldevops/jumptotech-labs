@@ -55,6 +55,26 @@ import type {
 import { VerifyReader } from './reader.js';
 import { SandboxReader } from './sandbox-reader.js';
 import {
+  cfnCidrDisjoint,
+  cfnCidrFreeSpace,
+  cfnCidrValid,
+  cfnCidrWithin,
+  cfnOutputExists,
+  cfnPropertyDistinct,
+  cfnReferencesResolve,
+  cfnResourceExists,
+  cfnResourceProperty,
+  cfnResourceReference,
+  cfnTemplateValid,
+} from './handlers/cloudformation.js';
+import {
+  iamPolicyAllows,
+  iamPolicyDocument,
+  iamPolicyNoWildcard,
+  iamPolicyNotAllows,
+  iamPolicyStatement,
+} from './handlers/iam.js';
+import {
   podExists,
   podImage,
   podLabel,
@@ -371,6 +391,24 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_initialized: terraformInitialized,
   terraform_resource_exists: terraformResourceExists,
   terraform_output_equals: terraformOutputEquals,
+
+  iam_policy_document: iamPolicyDocument,
+  iam_policy_statement: iamPolicyStatement,
+  iam_policy_allows: iamPolicyAllows,
+  iam_policy_not_allows: iamPolicyNotAllows,
+  iam_policy_no_wildcard: iamPolicyNoWildcard,
+
+  cfn_template_valid: cfnTemplateValid,
+  cfn_resource_exists: cfnResourceExists,
+  cfn_resource_property: cfnResourceProperty,
+  cfn_resource_reference: cfnResourceReference,
+  cfn_references_resolve: cfnReferencesResolve,
+  cfn_output_exists: cfnOutputExists,
+  cfn_cidr_valid: cfnCidrValid,
+  cfn_cidr_within: cfnCidrWithin,
+  cfn_cidr_disjoint: cfnCidrDisjoint,
+  cfn_cidr_free_space: cfnCidrFreeSpace,
+  cfn_property_distinct: cfnPropertyDistinct,
 
   path_absent: pathAbsent,
   file_content_absent: fileContentAbsent,

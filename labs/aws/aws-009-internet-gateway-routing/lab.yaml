@@ -1,0 +1,331 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# EXECUTION MODEL: simulated Phase-0. AWS-009 runs in the ordinary Linux
+# sandbox. It creates no AWS resources, holds no AWS credentials, calls no AWS
+# API, and deploys nothing. The template is parsed and the architecture it
+# describes is graded in the verifier.
+#
+# MVP RECLASSIFICATION — recorded, not hidden. The approved curriculum classes
+# AWS-009 as R-CHEAP (real AWS). For the current MVP it ships as SIM by
+# explicit decision: the whole of objective 5.1.1's route-table and internet
+# gateway content is a *configuration* relationship, and a parsed template
+# proves those relationships exactly. No internet gateway, route table, route,
+# association, VPC or EC2 instance is created anywhere. What SIM does not
+# cover is observing the deployed state in a real account, and packet-level
+# reachability; neither is claimed. A separately approved real-AWS execution
+# tier remains the way to cover them.
+#
+# GRADING: semantic, and specifically *relational*. The lesson of this lab is
+# that a subnet is public because of what its route table routes to, not
+# because of what it is called — so every check here is about a relationship
+# between two resources, not the presence of a name. The Amazon VPC User Guide
+# states the rule the checks encode:
+#
+#   "If a subnet is associated with a route table that has a route to an
+#    internet gateway, it's known as a public subnet. If a subnet is
+#    associated with a route table that does not have a route to an internet
+#    gateway, it's known as a private subnet."
+#
+#   "To use an internet gateway, you must attach it to a VPC and configure
+#    routing."
+#
+# — Amazon VPC User Guide, "Enable internet access for a VPC using an internet
+#   gateway", read 2026-08-25.
+#
+# Certification claim: SOA-C03 Task 5.1 — skill 5.1.1, "Configure a VPC",
+# specifically its route tables and internet gateway. Objectives read from the
+# official exam guide on 2026-08-25.
+# ---------------------------------------------------------------------------
+id: AWS-009
+slug: aws-009-internet-gateway-routing
+title: Named Public, Routed Nowhere
+track: aws
+topic: aws-networking
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 9
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-008
+
+story: >
+  Every instance launched into the payments platform's public subnets comes up
+  with a public IPv4 address, exactly as designed. Not one of them can reach
+  anything outside the VPC. Package installs hang, outbound calls time out, and
+  the instances in the private subnets behave identically — which is the part
+  nobody can explain, because those two tiers are supposed to be different.
+
+  The subnets are named public. They are configured to hand out public
+  addresses. Neither of those is what makes a subnet public, and the VPC has
+  never had an internet gateway at all.
+
+  Give the public tier a way out, and leave the private tier without one.
+
+objectives:
+  - Attach an internet gateway to a VPC
+  - Route internet-bound traffic from a route table to that gateway
+  - Associate the public subnets with the route table that carries the route
+  - Recognise that a subnet's name and its public-IP setting do not make it public
+  - Keep the private tier private while doing it
+
+task:
+  summary: >
+    Give a two-zone VPC's public subnets a working path to the internet by
+    attaching an internet gateway and routing to it, without giving the private
+    subnets one.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. There are no
+    credentials here, nothing is deployed, no AWS API is called, and no AWS
+    resource is created. Your template is graded by parsing it and checking the
+    architecture it describes.
+
+    Everything is in `~/network`. Read `ticket-8830.txt` for what was reported
+    and the five things required, and `routing-notes.txt` for why the subnets
+    are unreachable despite being named and configured correctly. `vpc.yaml` is
+    the VPC and the file you edit.
+
+    Four separate things all have to be true before an instance in a public
+    subnet can reach the internet, and the design fails if any one is missing:
+    the gateway exists, the gateway is attached to this VPC, a route table has
+    a route whose target is that gateway, and the subnet is associated with
+    that route table. Each is graded on its own, so a partial answer tells you
+    which link is missing rather than just failing.
+
+    The existing `PrivateRouteTable` shows how a route table is declared and
+    how a subnet is associated with one. It has no route out, and that is
+    precisely what makes the private subnets private — leave it, and its two
+    associations, alone.
+
+    Do not change the subnets, their zones, or their addressing. They are
+    signed off, and this ticket is not about them.
+
+    **How this is graded.** The template is parsed, not searched. Resource
+    order, property order, indentation, quoting and YAML-versus-JSON make no
+    difference. Writing the answer into a comment, a note file, or a file of
+    your own changes nothing, because nothing outside the template is read.
+
+hints:
+  - level: 1
+    text: >
+      Start from the definition rather than from the template. The VPC User
+      Guide page on internet gateways defines a public subnet in one sentence,
+      and that sentence names three things and the relationships between them.
+      Write those three things down, then look at `vpc.yaml` and mark which of
+      them exist. You should find that none of them do.
+  - level: 2
+    text: >
+      The gateway is two resources, not one. Creating an internet gateway and
+      attaching it to a VPC are separate declarations in CloudFormation, and an
+      unattached gateway routes nothing — the guide is explicit that you must
+      attach it and then configure routing. The attachment names both the VPC
+      and the gateway.
+  - level: 3
+    text: >
+      A route lives inside a route table and needs two things: where the
+      traffic is going and what to hand it to. "Everything not already known to
+      this table" has a specific notation, and the target property for a
+      gateway is not called the same thing as the property that holds the
+      destination. Both are in the AWS::EC2::Route page of the CloudFormation
+      resource reference.
+  - level: 4
+    text: >
+      A route table only affects subnets that are associated with it. Copy the
+      pattern the private tier already uses — one association resource per
+      subnet, naming the subnet and the table — and make one for each public
+      subnet. Then check the private associations still point where they did:
+      re-pointing one of them at the public table would make a private subnet
+      public, which is the outcome R5 exists to prevent.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/network/vpc.yaml
+      label: The VPC template is in place
+    - type: file_exists
+      path: /home/student/network/ticket-8830.txt
+      label: The ticket is in place
+    - type: cfn_template_valid
+      path: /home/student/network/vpc.yaml
+      label: The template parses before any change
+    - type: cfn_resource_exists
+      path: /home/student/network/vpc.yaml
+      logical_id: PrivateRouteTable
+      resource_type: AWS::EC2::RouteTable
+      label: The private route table is present at the start
+
+requirements:
+  # A resource-count floor would only restate what the nineteen relational
+  # checks below already prove, and would add a second, vaguer failure line to
+  # every partial answer. This checks the template is still a template.
+  - type: cfn_template_valid
+    path: /home/student/network/vpc.yaml
+    format_version: '2010-09-09'
+    label: The template is still a valid CloudFormation template
+
+  # --- R1: the gateway exists and is attached to this VPC --------------------
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: InternetGateway
+    resource_type: AWS::EC2::InternetGateway
+    label: R1 — an internet gateway is declared
+
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: InternetGatewayAttachment
+    resource_type: AWS::EC2::VPCGatewayAttachment
+    label: R1 — the gateway attachment is declared
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: InternetGatewayAttachment
+    property: VpcId
+    references: Vpc
+    via: Ref
+    label: R1 — the attachment attaches to this VPC
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: InternetGatewayAttachment
+    property: InternetGatewayId
+    references: InternetGateway
+    via: Ref
+    label: R1 — the attachment attaches that internet gateway
+
+  # --- R2: a route table for the public tier, in this VPC --------------------
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicRouteTable
+    resource_type: AWS::EC2::RouteTable
+    label: R2 — a public route table is declared
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicRouteTable
+    property: VpcId
+    references: Vpc
+    via: Ref
+    label: R2 — the public route table belongs to this VPC
+
+  # --- R3: the route, in that table, to that gateway -------------------------
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicDefaultRoute
+    resource_type: AWS::EC2::Route
+    label: R3 — a route is declared
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicDefaultRoute
+    property: RouteTableId
+    references: PublicRouteTable
+    via: Ref
+    label: R3 — the route is in the public route table
+
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicDefaultRoute
+    property: DestinationCidrBlock
+    equals: 0.0.0.0/0
+    label: R3 — the route covers every destination the table does not already know
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicDefaultRoute
+    property: GatewayId
+    references: InternetGateway
+    via: Ref
+    label: R3 — the route's target is the internet gateway
+
+  # --- R4: the public subnets are associated with that table -----------------
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetARouteTableAssociation
+    resource_type: AWS::EC2::SubnetRouteTableAssociation
+    label: R4 — PublicSubnetA has a route table association
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetARouteTableAssociation
+    property: SubnetId
+    references: PublicSubnetA
+    via: Ref
+    label: R4 — that association is for PublicSubnetA
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetARouteTableAssociation
+    property: RouteTableId
+    references: PublicRouteTable
+    via: Ref
+    label: R4 — PublicSubnetA is associated with the public route table
+
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetBRouteTableAssociation
+    resource_type: AWS::EC2::SubnetRouteTableAssociation
+    label: R4 — PublicSubnetB has a route table association
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetBRouteTableAssociation
+    property: SubnetId
+    references: PublicSubnetB
+    via: Ref
+    label: R4 — that association is for PublicSubnetB
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetBRouteTableAssociation
+    property: RouteTableId
+    references: PublicRouteTable
+    via: Ref
+    label: R4 — PublicSubnetB is associated with the public route table
+
+  # --- R5: the private tier stays on the private table -----------------------
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetARouteTableAssociation
+    property: RouteTableId
+    references: PrivateRouteTable
+    via: Ref
+    label: R5 — PrivateSubnetA is still on the private route table
+
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetBRouteTableAssociation
+    property: RouteTableId
+    references: PrivateRouteTable
+    via: Ref
+    label: R5 — PrivateSubnetB is still on the private route table
+
+  - type: cfn_references_resolve
+    path: /home/student/network/vpc.yaml
+    label: Every reference in the template resolves
+
+skills:
+  - aws.networking.internet-gateway
+  - aws.networking.route-tables
+  - aws.networking.public-subnet-routing
+
+certification:
+  - certification: SOA-C03
+    relevant: true
+    domains:
+      - networking-and-content-delivery
+
+references:
+  - title: "Amazon VPC User Guide: Enable internet access using an internet gateway"
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html
+  - title: "Amazon VPC User Guide: Route tables"
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html
+  - title: "AWS CloudFormation User Guide: AWS::EC2::Route"
+    url: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-route.html
+  - title: "AWS CloudFormation User Guide: AWS::EC2::VPCGatewayAttachment"
+    url: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpcgatewayattachment.html

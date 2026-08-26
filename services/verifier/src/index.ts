@@ -54,12 +54,60 @@ export {
 } from './sandbox-reader.js';
 export { normalizeMode } from './handlers/filesystem.js';
 export {
+  IamPolicyParseError,
+  evaluateIamPolicy,
+  findStatements,
+  IAM_PRINCIPAL_TYPES,
+  matchesIamPattern,
+  parseIamPolicy,
+  principalMatches,
+  statementHasNotPrincipal,
+  statementHasPrincipal,
+  statementCoversAction,
+  statementCoversResource,
+  statementHasCondition,
+  wildcardStatements,
+  type ConditionSelector,
+  type IamCondition,
+  type IamDecision,
+  type IamPolicy,
+  type IamPrincipal,
+  type IamStatement,
+  type StatementSelector,
+} from './iam-policy.js';
+export {
+  CFN_PSEUDO_PARAMETERS,
+  CloudFormationParseError,
+  collectReferences,
+  outputReference,
+  parseCloudFormationTemplate,
+  readPath,
+  referenceAt,
+  unresolvedReferences,
+  valueEquals,
+  type CfnReference,
+  type CfnResource,
+  type CfnTemplate,
+} from './cloudformation.js';
+export {
   DockerVerifyReader,
   MAX_CONTAINER_FILE_BYTES,
   CONTAINER_FILE_TIMEOUT_MS,
 } from './docker-reader.js';
 export { imageMatches, normalizeImageReference } from './image.js';
 export { parseQuantity, quantitiesEqual } from './quantity.js';
+export {
+  AWS_MAX_PREFIX_LENGTH,
+  AWS_MIN_PREFIX_LENGTH,
+  AWS_RESERVED_ADDRESSES_PER_SUBNET,
+  cidrContains,
+  cidrsOverlap,
+  freeAddresses,
+  isRfc1918,
+  parseIpv4Cidr,
+  usableAddresses,
+  type Ipv4Cidr,
+} from './cidr.js';
 export {
   formatBytes,
   formatNanoCpus,

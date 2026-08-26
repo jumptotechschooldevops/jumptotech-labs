@@ -1,0 +1,212 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# AWS-005 is a SIMULATED lab. It runs in the ordinary Linux sandbox, creates no
+# AWS resources, holds no AWS credentials, and calls no AWS API. The policy is
+# graded by parsing and evaluating it.
+#
+# Uses only requirement types that already existed: no new verifier primitive
+# was added for this lab.
+#
+# Content is written from the IAM User Guide only.
+#
+# NO certification block, deliberately. SOA-C03 skill 4.1.1 covers implementing
+# IAM features, but privilege-escalation analysis via iam:PassRole is not named
+# by any current task statement, and 4.1.2 requires AWS tools this lab does not
+# use. This is a PRODUCTION SKILL — the approved curriculum classifies it that
+# way — and claiming exam coverage for it would overstate what it prepares a
+# student for. Objectives re-read from the official exam guide on 2026-08-25.
+# ---------------------------------------------------------------------------
+id: AWS-005
+slug: aws-005-passrole-escalation
+title: The Role You Can Hand Over
+track: aws
+topic: aws-identity
+difficulty: advanced
+level: practice
+duration_minutes: 45
+order: 5
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-004
+
+story: >
+  The JumpToTech Bank deploy pipeline has one job: launch EC2 instances and
+  attach the right role to each one so the application on it can reach the
+  services it needs. Its own policy grants no administrative permission at all,
+  which is why nobody looked at it for two years.
+
+  Security review looked at it this week alongside the account's role
+  inventory, and the two together are the finding. The pipeline can attach
+  *any* role to an instance — including the break-glass administrator role.
+  Anyone who can change what the pipeline deploys can read that role's
+  credentials off the instance and become an administrator, without ever having
+  been granted administration.
+
+objectives:
+  - Recognise a privilege-escalation path that no single policy statement names
+  - Explain why the permission to hand a role to a service is itself privileged
+  - Scope that permission to an approved set of roles
+  - Constrain which service a role may be handed to, using the condition key IAM provides
+
+task:
+  summary: >
+    Close a privilege-escalation path in a deploy pipeline's policy without
+    breaking the deployments it performs.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. No role exists.
+    The policy is graded by evaluating what it would permit.
+
+    Everything is in `~/escalation-review`. Read `README.md`, then
+    `roles-in-account.txt`, then `finding-8102.txt`. The inventory matters:
+    the escalation is not visible in the policy alone, only in what the roles
+    it can reach are able to do.
+
+    **Investigate before you edit.** Work out, from the policy as it stands,
+    which roles the pipeline can attach to an instance and what the most
+    privileged of those roles can do. That is the escalation, and it is the
+    thing you are closing.
+
+    Then edit `~/escalation-review/deployer-policy.json` so that every numbered
+    line of the finding holds. Two of them are about what must keep working, so
+    a policy that simply removes the permission fails as surely as one that
+    leaves it wide open.
+
+    The finding deliberately does not name the action or the condition key. Both
+    are documented, and finding them is part of the exercise.
+
+    **How this is graded.** The policy is parsed and evaluated, not searched.
+    Whitespace, key order, statement order, and string-versus-array make no
+    difference. What is checked is which roles the policy would and would not
+    let the pipeline hand over, whether the restriction to a single service is
+    stated, and whether the deployment permissions survived. Listing the
+    approved roles individually and matching them with a prefix are both
+    accepted — they mean the same thing.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/escalation-review/deployer-policy.json
+      label: The deploy pipeline policy is in place
+    - type: file_exists
+      path: /home/student/escalation-review/roles-in-account.txt
+      label: The role inventory is in place
+    - type: iam_policy_allows
+      path: /home/student/escalation-review/deployer-policy.json
+      action: iam:PassRole
+      resource: arn:aws:iam::123456789012:role/PlatformAdminRole
+      label: The escalation path is present at the start
+
+requirements:
+  - type: iam_policy_document
+    path: /home/student/escalation-review/deployer-policy.json
+    version: '2012-10-17'
+    label: The policy is a valid document declaring the 2012-10-17 version
+
+  # --- what must keep working ----------------------------------------------
+  - type: iam_policy_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: ec2:RunInstances
+    resource: '*'
+    label: The pipeline can still launch instances
+
+  - type: iam_policy_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:PassRole
+    resource: arn:aws:iam::123456789012:role/AppServerRole
+    label: The pipeline can still attach the application server role
+
+  - type: iam_policy_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:PassRole
+    resource: arn:aws:iam::123456789012:role/AppWorkerRole
+    label: The pipeline can still attach the worker role
+
+  # --- the escalation, closed ----------------------------------------------
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:PassRole
+    resource: arn:aws:iam::123456789012:role/PlatformAdminRole
+    label: The pipeline can no longer attach the administrator role
+
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:PassRole
+    resource: arn:aws:iam::123456789012:role/ReconciliationBatchRole
+    label: The pipeline can no longer attach the finance batch role
+
+  # --- and it may only hand roles to one service ---------------------------
+  - type: iam_policy_statement
+    path: /home/student/escalation-review/deployer-policy.json
+    effect: Allow
+    actions:
+      - iam:PassRole
+    condition:
+      operator: StringEquals
+      key: iam:PassedToService
+      value: ec2.amazonaws.com
+    label: Handing a role over is restricted to the EC2 service
+
+  # --- and the fix must not be "grant more IAM" -----------------------------
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:AttachRolePolicy
+    resource: arn:aws:iam::123456789012:role/AppServerRole
+    label: The pipeline was not given IAM write permissions
+
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:CreateRole
+    resource: arn:aws:iam::123456789012:role/AppServerRole
+    label: The pipeline cannot create roles either
+
+  - type: iam_policy_no_wildcard
+    path: /home/student/escalation-review/deployer-policy.json
+    field: Action
+    effect: Allow
+    label: No Allow statement uses "*" as its Action
+
+hints:
+  - level: 1
+    text: >
+      Start with the inventory, not the policy. List what each role can do,
+      then look at which of them the policy lets the pipeline reach. The
+      escalation is the gap between "this policy grants no administration" and
+      "this policy can hand out an administrator role".
+  - level: 2
+    text: >
+      The IAM User Guide has a page on granting a user permission to pass a
+      role to a service. It explains why the permission is privileged, and says
+      plainly how to limit which roles can be passed — the answer is an element
+      you already use in every other statement. The same page points at a
+      condition key for limiting which service the role may be passed to; that
+      key is listed on the IAM condition context keys page and applies to only
+      one action.
+  - level: 3
+    text: >
+      The action is `iam:PassRole`, and you limit which roles it covers with
+      the statement's `Resource` — either by listing the two approved role ARNs
+      or by matching them with a prefix. The condition key is
+      `iam:PassedToService`, compared with a string operator against the EC2
+      service principal. Leave the EC2 statement alone, and do not add any new
+      `iam:` action to the policy.
+
+references:
+  - title: IAM User Guide — Grant a user permissions to pass a role to an AWS service
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html
+  - title: IAM User Guide — IAM and AWS STS condition context keys
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_iam-condition-keys.html
+  - title: 'IAM User Guide — JSON policy elements: Condition'
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition.html
+  - title: IAM User Guide — Security best practices in IAM
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+
+skills:
+  - aws.iam.passrole
+  - aws.iam.privilege-escalation
+  - aws.iam.least-privilege

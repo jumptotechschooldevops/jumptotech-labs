@@ -1,0 +1,231 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# AWS-003 is a SIMULATED lab. It runs in the ordinary Linux sandbox, creates no
+# AWS resources, holds no AWS credentials, and calls no AWS API. The policy is
+# graded by parsing and evaluating it — see services/verifier/src/iam-policy.ts.
+#
+# It uses only requirement types that already existed before this lab: no new
+# verifier primitive was added for it.
+#
+# Content is written from the IAM User Guide only.
+#
+# Certification claim: SOA-C03 Task 4.1, skill 4.1.1 — "Implement IAM features
+# (for example, password policies, multi-factor authentication [MFA], roles,
+# federated identity, resource policies, policy conditions)". The lab covers the
+# policy-authoring part of that skill.
+#
+# It deliberately does NOT claim skill 4.1.2, "Troubleshoot and audit access
+# issues *by using AWS tools* (for example, CloudTrail, IAM Access Analyzer, IAM
+# policy simulator)" — this lab uses none of those tools, and claiming it would
+# overstate coverage. The evaluation-order rule itself is FOUNDATIONAL
+# KNOWLEDGE: documented IAM behaviour with no task statement of its own.
+# Objectives read from the official exam guide on 2026-08-24.
+# ---------------------------------------------------------------------------
+id: AWS-003
+slug: aws-003-explicit-deny
+title: Explicit Deny Wins
+track: aws
+topic: aws-identity
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 3
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-002
+
+story: >
+  The JumpToTech Bank platform team has been deploying by hand for three days.
+  Their build artifacts live in S3, their role has a policy that plainly allows
+  reading them, and reading them fails anyway.
+
+  Nothing in the policy changed. What changed is the bucket: customer exports
+  were moved into it during a reorganisation, and a control that was written
+  for a different layout is now catching far more than it was meant to.
+
+  Someone has already tried adding another Allow statement. It changed nothing,
+  and understanding why is most of this lab.
+
+objectives:
+  - Determine a policy's effective permissions rather than reading its intent
+  - Explain why adding an Allow cannot overcome an applicable explicit Deny
+  - Distinguish an explicit Deny from an implicit deny, and choose between them
+  - Narrow a control so it protects what it must without blocking what it must not
+
+task:
+  summary: >
+    Repair a developer role's policy so the operations the incident requires
+    are permitted, the protected prefix stays explicitly denied, and deletion
+    stays impossible.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. Nothing you
+    write is attached to anything or sent anywhere — the policy is graded by
+    evaluating what it would permit.
+
+    Read `~/access-review/README.md`, then `incident-6042.txt`. Then edit
+    `~/access-review/policy.json`.
+
+    **Before you change anything, work out what the current policy actually
+    does.** For each operation the incident lists, decide whether it is
+    currently permitted, denied by an explicit `Deny` statement, or denied
+    because nothing allows it. Those last two are not the same thing, and only
+    one of them can be fixed by adding an `Allow`.
+
+    Your finished policy must satisfy every line of the incident, including
+    line 6 — the customer-exports protection has to remain an explicit `Deny`
+    naming those three operations, not merely an absence of permission.
+
+    **How this is graded.** The policy is parsed and evaluated, not searched.
+    Whitespace, key order, statement order, and whether you write `Action` and
+    `Resource` as a string or an array make no difference whatsoever. What is
+    checked is what the policy would permit and refuse, and whether the
+    protection is expressed the way the auditors required.
+
+    Two review rules also apply, as always: no statement may use `"*"` on its
+    own as an `Action`, and none may use `"*"` on its own as a `Resource`.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/access-review/policy.json
+      label: The developer role policy is in place
+    - type: file_exists
+      path: /home/student/access-review/incident-6042.txt
+      label: The incident report is in place
+    - type: iam_policy_not_allows
+      path: /home/student/access-review/policy.json
+      action: s3:GetObject
+      resource: arn:aws:s3:::jumptotech-build-artifacts/builds/ledger-api-4.2.1.tar.gz
+      label: The starting policy reproduces the incident
+
+requirements:
+  - type: iam_policy_document
+    path: /home/student/access-review/policy.json
+    version: '2012-10-17'
+    label: The policy is a valid document declaring the 2012-10-17 version
+
+  # --- what the incident requires to work ---------------------------------
+  - type: iam_policy_allows
+    path: /home/student/access-review/policy.json
+    action: s3:ListBucket
+    resource: arn:aws:s3:::jumptotech-build-artifacts
+    label: The developer role may list the bucket
+
+  - type: iam_policy_allows
+    path: /home/student/access-review/policy.json
+    action: s3:GetObject
+    resource: arn:aws:s3:::jumptotech-build-artifacts/builds/ledger-api-4.2.1.tar.gz
+    label: The developer role may read a build artifact
+
+  - type: iam_policy_allows
+    path: /home/student/access-review/policy.json
+    action: s3:PutObject
+    resource: arn:aws:s3:::jumptotech-build-artifacts/builds/ledger-api-4.2.2.tar.gz
+    label: The developer role may upload a build artifact
+
+  # --- what must remain impossible ----------------------------------------
+  - type: iam_policy_not_allows
+    path: /home/student/access-review/policy.json
+    action: s3:GetObject
+    resource: arn:aws:s3:::jumptotech-build-artifacts/customer-exports/2026-07-balances.csv
+    label: Customer exports cannot be read
+
+  - type: iam_policy_not_allows
+    path: /home/student/access-review/policy.json
+    action: s3:PutObject
+    resource: arn:aws:s3:::jumptotech-build-artifacts/customer-exports/2026-07-balances.csv
+    label: Customer exports cannot be overwritten
+
+  - type: iam_policy_not_allows
+    path: /home/student/access-review/policy.json
+    action: s3:DeleteObject
+    resource: arn:aws:s3:::jumptotech-build-artifacts/customer-exports/2026-07-balances.csv
+    label: Customer exports cannot be deleted
+
+  - type: iam_policy_not_allows
+    path: /home/student/access-review/policy.json
+    action: s3:DeleteObject
+    resource: arn:aws:s3:::jumptotech-build-artifacts/builds/ledger-api-4.2.1.tar.gz
+    label: Build artifacts cannot be deleted either
+
+  # --- and how the protection must be expressed ----------------------------
+  #
+  # This is the check that separates an explicit Deny from an implicit one.
+  # A policy that merely stops granting access to customer-exports satisfies
+  # every `not_allows` above and still fails here, which is the whole point of
+  # line 6 of the incident.
+  - type: iam_policy_statement
+    path: /home/student/access-review/policy.json
+    effect: Deny
+    actions:
+      - s3:GetObject
+      - s3:PutObject
+      - s3:DeleteObject
+    resources:
+      - arn:aws:s3:::jumptotech-build-artifacts/customer-exports/2026-07-balances.csv
+    label: Customer exports are protected by an explicit Deny, not merely by omission
+
+  # --- review rules ---------------------------------------------------------
+  - type: iam_policy_no_wildcard
+    path: /home/student/access-review/policy.json
+    field: Action
+    effect: Allow
+    label: No Allow statement uses "*" as its Action
+
+  - type: iam_policy_no_wildcard
+    path: /home/student/access-review/policy.json
+    field: Resource
+    effect: Allow
+    label: No Allow statement uses "*" as its Resource
+
+hints:
+  - level: 1
+    text: >
+      Take the current policy and, for each operation the incident lists, walk
+      it statement by statement and write down what happens. You should end up
+      with three different reasons an operation can fail, not one. The
+      colleague who added another Allow on Wednesday assumed there was only one.
+  - level: 2
+    text: >
+      The IAM User Guide's policy evaluation logic page states the order the
+      enforcement code uses. Note what it says about a request that no statement
+      allows, and what it says about a request that even one Deny statement
+      applies to. Those two outcomes look identical from the outside and are
+      repaired in completely different ways. Also compare the Resource of the
+      Deny statement with the resources the incident actually wants protected.
+  - level: 3
+    text: >
+      The Deny statement's Resource covers the whole bucket, so it catches the
+      build artifacts as well as the customer exports — no Allow you add can
+      escape it, because an explicit Deny cannot be overridden. Narrowing that
+      Resource to the prefix the incident names is the repair. Separately,
+      uploading and listing are not denied by anything; they simply were never
+      allowed, and that is fixed by allowing them. Deleting build artifacts must
+      stay unallowed — do not add it, and do not deny it either.
+
+references:
+  - title: IAM User Guide — Policy evaluation logic
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html
+  - title: IAM User Guide — How AWS enforcement code logic evaluates requests to allow or deny access
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic_policy-eval-denyallow.html
+  - title: 'IAM User Guide — JSON policy elements: Resource'
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_resource.html
+  - title: IAM User Guide — Security best practices in IAM
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+
+skills:
+  - aws.iam.policy-evaluation
+  - aws.iam.explicit-deny
+  - aws.iam.effective-permissions
+
+certification:
+  - certification: SOA-C03
+    relevant: true
+    domains:
+      - security-and-compliance

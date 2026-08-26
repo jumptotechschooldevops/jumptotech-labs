@@ -1,0 +1,227 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# EXECUTION MODEL: simulated Phase-0 AWS evidence investigation.
+#
+# AWS-006 runs in the ordinary Linux sandbox. It creates no AWS resources,
+# holds no AWS credentials, calls no AWS API, and does not execute against real
+# AWS. The CloudTrail export under `cloudtrail/` is a fixture written to match
+# the documented record schema, using documentation-reserved identifiers only
+# (account 123456789012, AKIA/AROA/ASIA…EXAMPLE keys, RFC 5737 addresses).
+#
+# Graded with the existing `filesystem` family. No CloudTrail-specific verifier
+# was added, and no new shared-platform primitive was introduced: the student's
+# conclusions are canonical tokens — an eventName, an ARN, an ISO-8601
+# timestamp, an IP — compared line-anchored so a key prefix cannot satisfy a
+# different key's check.
+#
+# Certification claim: SOA-C03 Task 4.1, skill 4.1.2 — "Troubleshoot and audit
+# access issues by using AWS tools (for example, CloudTrail, IAM Access
+# Analyzer, IAM policy simulator)". This lab covers the CloudTrail half of that
+# skill: the evidence is a real-shaped trail and the work is the investigation.
+# It does not cover IAM Access Analyzer or the policy simulator, and claims
+# neither. Objective read from the official exam guide on 2026-08-25.
+# ---------------------------------------------------------------------------
+id: AWS-006
+slug: aws-006-cloudtrail-investigation
+title: Who Changed the Security Group
+track: aws
+topic: aws-operations
+difficulty: intermediate
+level: practice
+duration_minutes: 45
+order: 6
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-005
+
+story: >
+  At 03:16 on Tuesday the JumpToTech Bank payments API stopped accepting
+  traffic. The instances were running, the application was listening, and the
+  load balancer reported every target unhealthy. On-call restored service at
+  03:41 by re-adding a security group rule by hand.
+
+  Nobody on the call could say who removed it, or when. The change was not in
+  any pipeline run and nobody has owned up to it. What the account does have is
+  a CloudTrail export for that night.
+
+objectives:
+  - Read a CloudTrail record and name what each field tells you
+  - Trace an API call back to the identity that made it, including an assumed-role session
+  - Separate an attempted call that was refused from one that succeeded
+  - Reconstruct an incident timeline from evidence rather than from recollection
+
+task:
+  summary: >
+    Investigate a CloudTrail export, identify the API call that broke
+    production and the identity behind it, and record your findings.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. Nothing here
+    reaches AWS. The files under `~/incident-9214/cloudtrail` are an export of
+    management events, copied off so they can be read offline.
+
+    Start with `README.md`, then `incident-9214.txt` for the timeline and
+    `infrastructure.txt` for what the account actually contains — you will need
+    the inventory to know which security group matters.
+
+    Then investigate. The export is pretty-printed one field per line, so
+    ordinary tools work well: `grep -n`, `grep -A`/`-B` for surrounding context,
+    `less`, `sed -n`, `awk`, `find`. There is no `jq` in this sandbox. Any route
+    to the answer is fine — nothing about how you search is graded.
+
+    The export contains a full night of activity, most of it routine. More than
+    one event touches a security group, and more than one is an attempt at the
+    very call you are looking for. Read carefully enough to tell them apart:
+    an API call that was *refused* is recorded just as faithfully as one that
+    succeeded, and the difference is a field, not an absence.
+
+    Record your conclusions in `~/incident-9214/findings.env`. Replace every
+    `FILL_ME`. Use exactly `KEY=value` on its own line, with no spaces around
+    the `=` sign — the file is read as it stands.
+
+    Copy values exactly as CloudTrail records them. An `eventTime` is the
+    timestamp in the record, not a rounded one; an ARN is the full ARN; a
+    principal id is the value of that field, not the ARN again.
+
+    **How this is graded.** Your conclusions are graded, never your commands.
+    Nothing reads your shell history, and there is no single search you are
+    expected to have run.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/incident-9214/findings.env
+      label: The findings sheet is in place
+    - type: file_exists
+      path: /home/student/incident-9214/cloudtrail/2026-08-25T03.json
+      label: The CloudTrail export is in place
+    - type: file_exists
+      path: /home/student/incident-9214/infrastructure.txt
+      label: The account inventory is in place
+    - type: file_content
+      path: /home/student/incident-9214/findings.env
+      contains: "=FILL_ME"
+      label: The findings sheet starts out unanswered
+
+requirements:
+  # Every check is line-anchored with a leading newline so that one key's value
+  # cannot satisfy another key whose name ends with the same text.
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nEVENT_NAME=RevokeSecurityGroupIngress\n"
+    label: The API call that caused the outage is identified
+
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nEVENT_SOURCE=ec2.amazonaws.com\n"
+    label: The service that recorded the call is identified
+
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nEVENT_TIME=2026-08-25T03:14:52Z\n"
+    label: The time of the call is recorded exactly as CloudTrail has it
+
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nAWS_REGION=eu-west-1\n"
+    label: The Region the call was made to is identified
+
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nAFFECTED_SECURITY_GROUP=sg-0a1b2c3d4e5f60718\n"
+    label: The security group that was changed is identified
+
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nPRINCIPAL_ARN=arn:aws:sts::123456789012:assumed-role/PlatformDeployRole/deploy-9f31c2\n"
+    label: The principal that made the call is identified by its full ARN
+
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nPRINCIPAL_ID=AROAEXAMPLEROLE00004:deploy-9f31c2\n"
+    label: The principalId CloudTrail recorded for that identity is captured
+
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nSOURCE_IP=203.0.113.47\n"
+    label: The address the request came from is identified
+
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nOUTCOME=success\n"
+    label: The call is correctly reported as having succeeded
+
+  # --- the earlier attempt, which did not succeed ---------------------------
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nDENIED_PRINCIPAL_ARN=arn:aws:iam::123456789012:user/priya.raman\n"
+    label: The identity behind the earlier refused attempt is identified
+
+  - type: file_content
+    path: /home/student/incident-9214/findings.env
+    contains: "\nDENIED_ERROR_CODE=Client.UnauthorizedOperation\n"
+    label: The error CloudTrail recorded for the refused attempt is captured
+
+  # --- the sheet is a set of conclusions, not a copy of the evidence --------
+  - type: file_content_absent
+    path: /home/student/incident-9214/findings.env
+    contains: "=FILL_ME"
+    label: Every finding has been filled in
+
+  - type: file_content_absent
+    path: /home/student/incident-9214/findings.env
+    contains: "eventVersion"
+    label: The findings sheet holds conclusions rather than pasted records
+
+hints:
+  - level: 1
+    text: >
+      Work backwards from the timeline. Service broke at 03:16 and the fix was
+      to re-add a rule, so look for what removed one shortly before. Use the
+      inventory to decide which security group is the one in the production
+      path — more than one appears in the export, and only one of them is in
+      front of the payments instances.
+  - level: 2
+    text: >
+      The CloudTrail record contents reference in the AWS documentation lists
+      every field and what it means. Two are worth reading carefully here: the
+      one that appears only when a request returned an error, and the
+      userIdentity element, which for temporary credentials carries both the
+      session's own ARN and a sessionContext describing the role the session
+      came from. More than one record names the call you are looking for, so
+      check each one's outcome before deciding which caused the outage.
+  - level: 3
+    text: >
+      Two records in the 03:00 file share the same eventName. One carries an
+      errorCode and changed nothing; the other has no errorCode and a
+      responseElements block, and is the one that removed the rule. The
+      identity on that record is an assumed-role session — the ARN you want
+      begins `arn:aws:sts::` and ends with the session name, and the principalId
+      is the separate field on the same object, not the ARN. The refused
+      attempt belongs to a different person entirely.
+
+references:
+  - title: AWS CloudTrail User Guide — CloudTrail record contents
+    url: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-record-contents.html
+  - title: AWS CloudTrail User Guide — CloudTrail userIdentity element
+    url: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-user-identity.html
+  - title: AWS CloudTrail User Guide — What is AWS CloudTrail?
+    url: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html
+  - title: IAM User Guide — Logging IAM and AWS STS API calls with AWS CloudTrail
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/cloudtrail-integration.html
+
+skills:
+  - aws.cloudtrail.record-fields
+  - aws.cloudtrail.incident-investigation
+  - aws.iam.identity-attribution
+
+certification:
+  - certification: SOA-C03
+    relevant: true
+    domains:
+      - security-and-compliance

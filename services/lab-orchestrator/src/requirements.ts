@@ -147,6 +147,85 @@ const common = {
   label: z.string().min(1).max(160).optional(),
 };
 
+/** `Allow` or `Deny`, as an IAM policy writes them. */
+const iamEffect = z.enum(['Allow', 'Deny']);
+
+/** An IAM action, e.g. `s3:GetObject`, `s3:Get*`, `*`. */
+const iamAction = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9*?:_-]+$/, 'must be an IAM action such as s3:GetObject');
+
+/** An ARN or ARN pattern, e.g. `arn:aws:s3:::bucket/*`. */
+const iamResource = z
+  .string()
+  .min(1)
+  .max(2048)
+  .regex(/^[^\s"]+$/, 'must be an ARN or ARN pattern with no whitespace');
+
+/**
+ * One principal a statement's `Principal` (or `NotPrincipal`) must name.
+ *
+ * Exact, never a pattern: AWS documents that a wildcard cannot match part of a
+ * principal name or ARN. `type` uses the documented spelling.
+ */
+const iamPrincipalSelector = z
+  .object({
+    type: z.enum(['AWS', 'Service', 'Federated', 'CanonicalUser']),
+    /** e.g. `ec2.amazonaws.com`, `arn:aws:iam::123456789012:role/deployer`. */
+    id: z
+      .string()
+      .min(1)
+      .max(2048)
+      .regex(/^[^\s"]+$/, 'must be a principal id or ARN with no whitespace'),
+  })
+  .strict();
+
+/** A CloudFormation logical ID: alphanumeric, as the template reference defines. */
+const cfnLogicalId = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Za-z0-9]+$/, 'must be an alphanumeric CloudFormation logical ID');
+
+/** A resource type such as `AWS::S3::Bucket`. */
+const cfnResourceType = z
+  .string()
+  .min(3)
+  .max(128)
+  .regex(/^[A-Za-z0-9]+::[A-Za-z0-9]+::[A-Za-z0-9]+$/, 'must look like AWS::S3::Bucket');
+
+/** A dotted property path, where a numeric segment indexes a list. */
+/** An IPv4 netmask length. */
+const cidrPrefixLength = z.number().int().min(0).max(32);
+
+const cfnPropertyPath = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/, 'must be a dotted property path such as Tags.0.Key');
+
+/** One condition a statement must carry. */
+const iamConditionSelector = z
+  .object({
+    /** e.g. `StringEquals`, `Bool`, `IpAddress`. */
+    operator: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9:]+$/, 'must be an IAM condition operator such as StringEquals'),
+    /** e.g. `aws:SourceIp`. */
+    key: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[A-Za-z0-9:._/-]+$/, 'must be an IAM condition key such as aws:SourceIp'),
+    /** When omitted, only the operator and key must be present. */
+    value: z.string().min(1).max(1024).optional(),
+  })
+  .strict();
+
 /** Kubernetes object kinds a requirement may name generically. */
 const CHECKABLE_KINDS = [
   'pod',
@@ -1363,6 +1442,305 @@ const sandboxRequirementSchemas = {
     })
     .strict(),
 
+  // --- IAM policy documents ------------------------------------------------
+  //
+  // These grade an IAM policy the student wrote, by *parsing* it. No check here
+  // matches text: the document is read into a normalised model, so key order,
+  // whitespace, `Action` as a string versus an array, and statement order are
+  // all irrelevant to the verdict — as they are to AWS.
+  //
+  // The reader is the sandbox filesystem, exactly as for Terraform state: the
+  // policy is an artefact on disk, and reading it needs no cloud account.
+
+  /** The file at `path` parses as a well-formed IAM policy document. */
+  iam_policy_document: z
+    .object({
+      type: z.literal('iam_policy_document'),
+      path: sandboxPath,
+      /** Optional exact `Version`, e.g. `2012-10-17`. */
+      version: z.string().min(1).max(32).optional(),
+      /** Optional exact number of statements the document must contain. */
+      statement_count: z.number().int().min(1).max(50).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * At least one statement satisfies every part of the selector.
+   *
+   * A statement "covers" an action or resource when one of its patterns matches
+   * it, with IAM's `*` and `?` wildcards — so `s3:Get*` covers `s3:GetObject`.
+   */
+  iam_policy_statement: z
+    .object({
+      type: z.literal('iam_policy_statement'),
+      path: sandboxPath,
+      effect: iamEffect.optional(),
+      sid: z.string().min(1).max(128).optional(),
+      /** The statement must cover every action listed. */
+      actions: z.array(iamAction).min(1).max(50).optional(),
+      /** The statement must cover every resource listed. */
+      resources: z.array(iamResource).min(1).max(50).optional(),
+      condition: iamConditionSelector.optional(),
+      /** Every principal listed must appear in the statement's `Principal`. */
+      principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
+      /** Every principal listed must appear in the statement's `NotPrincipal`. */
+      not_principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The policy as a whole permits this action on this resource.
+   *
+   * Evaluated the way AWS documents a single identity policy: an explicit Deny
+   * wins, otherwise a matching Allow grants.
+   */
+  iam_policy_allows: z
+    .object({
+      type: z.literal('iam_policy_allows'),
+      path: sandboxPath,
+      action: iamAction,
+      resource: iamResource,
+      ...common,
+    })
+    .strict(),
+
+  /** The policy does **not** permit this action on this resource. */
+  iam_policy_not_allows: z
+    .object({
+      type: z.literal('iam_policy_not_allows'),
+      path: sandboxPath,
+      action: iamAction,
+      resource: iamResource,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * No statement uses the bare `*` wildcard in the named field.
+   *
+   * The least-privilege check: `"Action": "*"` or `"Resource": "*"` is what a
+   * policy review flags first, and a lab that asks for least privilege has to
+   * be able to say so. `Principal` is the trust-policy equivalent — a role that
+   * trusts `"*"` can be assumed by anyone.
+   */
+  iam_policy_no_wildcard: z
+    .object({
+      type: z.literal('iam_policy_no_wildcard'),
+      path: sandboxPath,
+      field: z.enum(['Action', 'Resource', 'Principal']),
+      /** Restrict the check to statements of one effect. */
+      effect: iamEffect.optional(),
+      ...common,
+    })
+    .strict(),
+
+  // --- CloudFormation templates ---------------------------------------------
+  //
+  // These grade a template the student wrote or repaired, by *parsing* it. The
+  // YAML short forms are normalised to their canonical `Fn::` shape at parse
+  // time, so a YAML template and the equivalent JSON template are the same
+  // object, and resource order, property order and formatting are all
+  // irrelevant to the verdict — as they are to CloudFormation.
+  //
+  // The reader is the sandbox filesystem, as for Terraform state and IAM
+  // policies: a template is an artefact on disk, and reading it needs no cloud
+  // account and deploys nothing.
+
+  /** The file at `path` parses as a well-formed CloudFormation template. */
+  cfn_template_valid: z
+    .object({
+      type: z.literal('cfn_template_valid'),
+      path: sandboxPath,
+      /** Optional exact `AWSTemplateFormatVersion`, e.g. `2010-09-09`. */
+      format_version: z.string().min(1).max(32).optional(),
+      /** Optional floor on how many resources the template must declare. */
+      min_resources: z.number().int().min(1).max(200).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** A resource with this logical ID exists, and has this type. */
+  cfn_resource_exists: z
+    .object({
+      type: z.literal('cfn_resource_exists'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      resource_type: cfnResourceType,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A resource carries a property, optionally with an exact value.
+   *
+   * A one-element list is compared as the scalar it wraps, because
+   * `Action: sts:AssumeRole` and `Action: [sts:AssumeRole]` mean the same.
+   */
+  cfn_resource_property: z
+    .object({
+      type: z.literal('cfn_resource_property'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      property: cfnPropertyPath,
+      /** When omitted, the property need only be present. */
+      equals: z.string().min(1).max(1024).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * One resource's property refers to another resource.
+   *
+   * `via` names the intrinsic the reference must be made with, so a lab can
+   * require `Fn::GetAtt` where an ARN is needed and `Ref` where an id is.
+   */
+  cfn_resource_reference: z
+    .object({
+      type: z.literal('cfn_resource_reference'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      property: cfnPropertyPath,
+      /** Logical ID the property must point at. */
+      references: cfnLogicalId,
+      via: z.enum(['Ref', 'GetAtt', 'Sub']),
+      /** Required attribute for a `GetAtt`, e.g. `Arn`. */
+      attribute: z.string().min(1).max(128).regex(/^[A-Za-z0-9.]+$/).optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * Every `Ref`, `Fn::GetAtt` and `Fn::Sub` variable resolves.
+   *
+   * The check a failed deployment usually needed: a typo in a logical ID, or a
+   * `Sub` variable naming a parameter nobody declared.
+   */
+  cfn_references_resolve: z
+    .object({ type: z.literal('cfn_references_resolve'), path: sandboxPath, ...common })
+    .strict(),
+
+  /** An output exists, optionally pointing at a named resource. */
+  cfn_output_exists: z
+    .object({
+      type: z.literal('cfn_output_exists'),
+      path: sandboxPath,
+      name: cfnLogicalId,
+      /** Logical ID the output's `Value` must reference. */
+      references: cfnLogicalId.optional(),
+      ...common,
+    })
+    .strict(),
+
+  // ------------------------------------------------------------------ CIDR
+  //
+  // Network *design* checks. These grade the addressing a template lays out,
+  // not the text it lays it out in, so any plan that satisfies the stated
+  // constraints passes and no particular set of ranges is privileged.
+  //
+  // The AWS bounds they express are documented: a VPC or subnet IPv4 block
+  // lies between a /16 and a /28 netmask, and AWS reserves five addresses in
+  // every subnet. See Amazon VPC User Guide, "VPC CIDR blocks" and "Subnet
+  // CIDR blocks".
+
+  /** A property parses as an IPv4 CIDR block, within optional bounds. */
+  cfn_cidr_valid: z
+    .object({
+      type: z.literal('cfn_cidr_valid'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      property: cfnPropertyPath,
+      /** Inclusive netmask bounds. `prefix_min: 16` forbids anything wider. */
+      prefix_min: cidrPrefixLength.optional(),
+      prefix_max: cidrPrefixLength.optional(),
+      /** Floor on addresses the block holds, reserved ones included. */
+      min_addresses: z.number().int().min(1).max(4_294_967_296).optional(),
+      /** Floor on *assignable* addresses: five fewer than the block holds. */
+      min_usable: z.number().int().min(1).max(4_294_967_296).optional(),
+      /** Require the block to sit inside an RFC 1918 private range. */
+      rfc1918: z.boolean().optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.prefix_min === undefined || v.prefix_max === undefined || v.prefix_min <= v.prefix_max, {
+      message: 'prefix_min must not exceed prefix_max',
+    }),
+
+  /** Every listed resource's CIDR lies wholly inside another resource's. */
+  cfn_cidr_within: z
+    .object({
+      type: z.literal('cfn_cidr_within'),
+      path: sandboxPath,
+      /** The containing resource, e.g. the VPC. */
+      parent: cfnLogicalId,
+      parent_property: cfnPropertyPath,
+      /** The contained resources, e.g. the subnets. */
+      logical_ids: z.array(cfnLogicalId).min(1).max(64),
+      property: cfnPropertyPath,
+      ...common,
+    })
+    .strict(),
+
+  /** No two of the listed resources' CIDRs share an address. */
+  cfn_cidr_disjoint: z
+    .object({
+      type: z.literal('cfn_cidr_disjoint'),
+      path: sandboxPath,
+      logical_ids: z.array(cfnLogicalId).min(2).max(64),
+      property: cfnPropertyPath,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The listed resources leave room inside the parent for later growth.
+   *
+   * A VPC's CIDR cannot be resized after creation, so how much of it a first
+   * design consumes is a decision the student has to make on purpose.
+   */
+  cfn_cidr_free_space: z
+    .object({
+      type: z.literal('cfn_cidr_free_space'),
+      path: sandboxPath,
+      parent: cfnLogicalId,
+      parent_property: cfnPropertyPath,
+      logical_ids: z.array(cfnLogicalId).min(1).max(64),
+      property: cfnPropertyPath,
+      /** Share of the parent that must remain unallocated, 1-99. */
+      min_free_percent: z.number().int().min(1).max(99),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * How many different values the listed resources hold for a property.
+   *
+   * Bounded from either side, which is what lets a lab state both halves of a
+   * multi-AZ layout: subnets of one tier must be spread (`min_distinct`), and
+   * the two tiers of one zone must sit together (`max_distinct`). Setting both
+   * pins the count exactly. Nothing here is CIDR- or AZ-specific.
+   */
+  cfn_property_distinct: z
+    .object({
+      type: z.literal('cfn_property_distinct'),
+      path: sandboxPath,
+      logical_ids: z.array(cfnLogicalId).min(2).max(64),
+      property: cfnPropertyPath,
+      /** Floor on the number of different values across the set. */
+      min_distinct: z.number().int().min(1).max(64).optional(),
+      /** Ceiling on the number of different values across the set. */
+      max_distinct: z.number().int().min(1).max(64).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.min_distinct !== undefined || v.max_distinct !== undefined, {
+      message: 'must specify min_distinct, max_distinct, or both',
+    })
+    .refine((v) => v.min_distinct === undefined || v.max_distinct === undefined || v.min_distinct <= v.max_distinct, {
+      message: 'min_distinct must not exceed max_distinct',
+    }),
+
   // =========================================================================
   // Linux sandbox family
   // =========================================================================
@@ -2181,6 +2559,14 @@ export const REQUIREMENT_FAMILY_READERS = {
   filesystem: 'sandbox',
   terraform: 'sandbox',
   linux: 'sandbox',
+  // An IAM policy and a CloudFormation template are both *documents on disk*:
+  // they are graded by parsing an artefact in the session's sandbox, exactly
+  // as Terraform state is. Neither reaches an AWS account, holds a credential,
+  // or calls an API — see docs/aws-production-security-spec.md. They are their
+  // own families rather than `filesystem` checks because the provider table
+  // has to be able to say which providers can answer them.
+  iam: 'sandbox',
+  cloudformation: 'sandbox',
   docker: 'docker',
 } as const;
 
@@ -2336,6 +2722,30 @@ export const REQUIREMENT_FAMILIES = {
   terraform_initialized: 'terraform',
   terraform_resource_exists: 'terraform',
   terraform_output_equals: 'terraform',
+
+  // Read from a policy document on disk, parsed rather than matched. Grouped
+  // as their own family because the *meaning* of the artefact is IAM's, not the
+  // filesystem's — the same reason `terraform` is separate from `filesystem`.
+  iam_policy_document: 'iam',
+  iam_policy_statement: 'iam',
+  iam_policy_allows: 'iam',
+  iam_policy_not_allows: 'iam',
+  iam_policy_no_wildcard: 'iam',
+
+  // Parsed from a template on disk. Its own family for the same reason
+  // `terraform` is separate from `filesystem`: the meaning of the artefact is
+  // CloudFormation's, not the filesystem's.
+  cfn_template_valid: 'cloudformation',
+  cfn_resource_exists: 'cloudformation',
+  cfn_resource_property: 'cloudformation',
+  cfn_resource_reference: 'cloudformation',
+  cfn_references_resolve: 'cloudformation',
+  cfn_output_exists: 'cloudformation',
+  cfn_cidr_valid: 'cloudformation',
+  cfn_cidr_within: 'cloudformation',
+  cfn_cidr_disjoint: 'cloudformation',
+  cfn_cidr_free_space: 'cloudformation',
+  cfn_property_distinct: 'cloudformation',
 
   resource_absent: 'kubernetes',
 

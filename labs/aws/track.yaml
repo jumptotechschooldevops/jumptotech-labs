@@ -1,0 +1,10 @@
+# Optional track metadata. The track itself exists because labs declare it;
+# this file only says how it should be presented in the catalog.
+#
+# Every lab in this track is SIMULATED: it runs in a local sandbox, creates no
+# AWS resources, uses no AWS credentials, and calls no AWS API. Labs that need
+# a real AWS account are gated behind the account-pool architecture and are not
+# part of this track yet — see docs/aws-production-security-spec.md.
+title: AWS
+tagline: Identity, networking, and operations on AWS — practised from official documentation.
+order: 40

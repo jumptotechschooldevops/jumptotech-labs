@@ -1,0 +1,328 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# EXECUTION MODEL: simulated Phase-0. AWS-007 runs in the ordinary Linux
+# sandbox. It creates no AWS resources, holds no AWS credentials, calls no AWS
+# API, and deploys nothing. The template is parsed and the subnet arithmetic is
+# done in the verifier.
+#
+# GRADING: semantic throughout. There is no expected answer key. Every check
+# below states a *property* of the resulting address plan — a capacity, a
+# containment, an overlap, a distribution — so any plan that satisfies the
+# stated requirements passes, whichever ranges the student chooses. A student
+# who picks 172.16.0.0/16 and a student who picks 10.0.0.0/16 both pass.
+#
+# Certification claim: SOA-C03 Task 3.1 — skill 3.1.3, troubleshooting
+# deployment issues including subnet sizing; and Task 5.1 — skill 5.1.1,
+# "Configure a VPC". Objectives read from the official exam guide on
+# 2026-08-25.
+#
+# Every AWS constant these checks rely on is documented, not inferred:
+#   · a VPC or subnet IPv4 block lies between a /16 and a /28 netmask
+#   · AWS reserves five addresses in every subnet — the first four and the last
+#   · subnet CIDR blocks in one VPC cannot overlap
+#   · a VPC's CIDR block cannot be resized after creation
+#   · RFC 1918 ranges are the recommended choice for a VPC
+# — Amazon VPC User Guide, "VPC CIDR blocks" and "Subnet CIDR blocks",
+#   read 2026-08-25.
+# ---------------------------------------------------------------------------
+id: AWS-007
+slug: aws-007-vpc-cidr-plan
+title: The Address Plan That Cannot Grow
+track: aws
+topic: aws-networking
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 7
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-018
+
+story: >
+  The payments platform needs a VPC, and someone has already drawn one. They
+  sized each subnet to the servers being migrated this quarter, then picked a
+  VPC just large enough to hold those subnets, and sent it for review.
+
+  It came back. The VPC is sized for today and cannot be resized tomorrow.
+  Two of the ranges cover some of the same addresses. One subnet is not inside
+  the VPC at all. Both public subnets are in a single Availability Zone. And
+  the private subnets never say whether they are private.
+
+  Addressing is the one part of a VPC that is genuinely hard to change later,
+  which is why it is worth getting right before anything is deployed. Rework
+  the plan.
+
+objectives:
+  - Size a VPC CIDR block for growth, not for today's workload
+  - Divide it into subnets that are contained, non-overlapping, and correctly sized
+  - Account for the five addresses AWS reserves in every subnet
+  - Spread each tier across Availability Zones
+  - Distinguish public from private subnets in the template
+
+task:
+  summary: >
+    Rework a VPC address plan so that it satisfies nine stated rules —
+    capacity, containment, non-overlap, Availability Zone spread and room to
+    grow — choosing the ranges yourself.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. There are no
+    credentials here, nothing is deployed, and no AWS API is called. Your
+    template is graded by parsing it and doing the subnet arithmetic.
+
+    Everything you need is in `~/network`: `vpc.yaml` is the address plan and
+    the file you edit, `network-requirements.txt` states the nine requirements
+    R1-R9 it must satisfy, and `review.txt` says why the current draft was
+    rejected.
+
+    The five logical IDs — `Vpc`, `PublicSubnetA`, `PublicSubnetB`,
+    `PrivateSubnetA`, `PrivateSubnetB` — are fixed, because other modules
+    reference them. Every address range in the file is yours to change.
+
+    **There is no expected answer.** Your plan is graded on its properties:
+    whether each range is a valid CIDR block, whether every subnet lies inside
+    the VPC, whether any two overlap, how many addresses each subnet can
+    actually assign, how the Availability Zones are spread, and how much of the
+    VPC you left unallocated. Any plan that satisfies R1-R9 passes, whichever
+    ranges you choose: two students who pick different private ranges, and
+    divide them differently, are both correct.
+
+    Two requirements are easy to get wrong by exactly the amount that matters.
+    R5 and R6 are about addresses that can be *assigned*, which is not the
+    number a CIDR block contains; the VPC User Guide says how many are reserved
+    in every subnet and why. And a CIDR block written with host bits set is
+    accepted here exactly as AWS accepts it, by storing its canonical form.
+
+    **How this is graded.** The template is parsed, not searched. Resource
+    order, property order, indentation, quoting and YAML-versus-JSON make no
+    difference to the result.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/network/vpc.yaml
+      label: The draft template is in place
+    - type: file_exists
+      path: /home/student/network/network-requirements.txt
+      label: The requirements are in place
+    - type: cfn_template_valid
+      path: /home/student/network/vpc.yaml
+      label: The draft parses before any change
+    - type: cfn_resource_exists
+      path: /home/student/network/vpc.yaml
+      logical_id: Vpc
+      resource_type: AWS::EC2::VPC
+      label: The VPC is present at the start
+
+requirements:
+  # --- the template still has to be a template -------------------------------
+  - type: cfn_template_valid
+    path: /home/student/network/vpc.yaml
+    format_version: '2010-09-09'
+    min_resources: 5
+    label: The plan is still a valid CloudFormation template
+
+  # --- the five resources ----------------------------------------------------
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetA
+    resource_type: AWS::EC2::Subnet
+    label: PublicSubnetA is declared
+
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetB
+    resource_type: AWS::EC2::Subnet
+    label: PublicSubnetB is declared
+
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetA
+    resource_type: AWS::EC2::Subnet
+    label: PrivateSubnetA is declared
+
+  - type: cfn_resource_exists
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetB
+    resource_type: AWS::EC2::Subnet
+    label: PrivateSubnetB is declared
+
+  # --- R1, R2: the VPC range -------------------------------------------------
+  # prefix_min/prefix_max are the documented AWS bounds; min_addresses is the
+  # lab's own capacity floor. Together they admit any RFC 1918 /16.
+  - type: cfn_cidr_valid
+    path: /home/student/network/vpc.yaml
+    logical_id: Vpc
+    property: CidrBlock
+    prefix_min: 16
+    prefix_max: 28
+    min_addresses: 65536
+    rfc1918: true
+    label: R1, R2 — the VPC uses a private range large enough to grow into
+
+  # --- R5: public subnet capacity --------------------------------------------
+  - type: cfn_cidr_valid
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetA
+    property: CidrBlock
+    prefix_min: 16
+    prefix_max: 28
+    min_usable: 251
+    label: R5 — PublicSubnetA can assign at least 251 addresses
+
+  - type: cfn_cidr_valid
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetB
+    property: CidrBlock
+    prefix_min: 16
+    prefix_max: 28
+    min_usable: 251
+    label: R5 — PublicSubnetB can assign at least 251 addresses
+
+  # --- R6: private subnet capacity -------------------------------------------
+  - type: cfn_cidr_valid
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetA
+    property: CidrBlock
+    prefix_min: 16
+    prefix_max: 28
+    min_usable: 4091
+    label: R6 — PrivateSubnetA can assign at least 4,091 addresses
+
+  - type: cfn_cidr_valid
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetB
+    property: CidrBlock
+    prefix_min: 16
+    prefix_max: 28
+    min_usable: 4091
+    label: R6 — PrivateSubnetB can assign at least 4,091 addresses
+
+  # --- R3: containment -------------------------------------------------------
+  - type: cfn_cidr_within
+    path: /home/student/network/vpc.yaml
+    parent: Vpc
+    parent_property: CidrBlock
+    logical_ids: [PublicSubnetA, PublicSubnetB, PrivateSubnetA, PrivateSubnetB]
+    property: CidrBlock
+    label: R3 — every subnet lies inside the VPC
+
+  # --- R4: no overlap --------------------------------------------------------
+  - type: cfn_cidr_disjoint
+    path: /home/student/network/vpc.yaml
+    logical_ids: [PublicSubnetA, PublicSubnetB, PrivateSubnetA, PrivateSubnetB]
+    property: CidrBlock
+    label: R4 — no two subnets cover the same address
+
+  # --- R9: room to grow ------------------------------------------------------
+  - type: cfn_cidr_free_space
+    path: /home/student/network/vpc.yaml
+    parent: Vpc
+    parent_property: CidrBlock
+    logical_ids: [PublicSubnetA, PublicSubnetB, PrivateSubnetA, PrivateSubnetB]
+    property: CidrBlock
+    min_free_percent: 50
+    label: R9 — at least half the VPC is left unallocated
+
+  # --- R7: Availability Zone spread ------------------------------------------
+  - type: cfn_property_distinct
+    path: /home/student/network/vpc.yaml
+    logical_ids: [PublicSubnetA, PublicSubnetB]
+    property: AvailabilityZone
+    min_distinct: 2
+    label: R7 — the public subnets are in different Availability Zones
+
+  - type: cfn_property_distinct
+    path: /home/student/network/vpc.yaml
+    logical_ids: [PrivateSubnetA, PrivateSubnetB]
+    property: AvailabilityZone
+    min_distinct: 2
+    label: R7 — the private subnets are in different Availability Zones
+
+  # --- R8: public and private are declared, not implied ----------------------
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetA
+    property: MapPublicIpOnLaunch
+    equals: 'true'
+    label: R8 — PublicSubnetA gives instances a public address
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: PublicSubnetB
+    property: MapPublicIpOnLaunch
+    equals: 'true'
+    label: R8 — PublicSubnetB gives instances a public address
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetA
+    property: MapPublicIpOnLaunch
+    equals: 'false'
+    label: R8 — PrivateSubnetA does not give instances a public address
+  - type: cfn_resource_property
+    path: /home/student/network/vpc.yaml
+    logical_id: PrivateSubnetB
+    property: MapPublicIpOnLaunch
+    equals: 'false'
+    label: R8 — PrivateSubnetB does not give instances a public address
+
+  # --- the subnets belong to this VPC ----------------------------------------
+  - type: cfn_references_resolve
+    path: /home/student/network/vpc.yaml
+    label: Every reference in the template resolves
+
+hints:
+  - level: 1
+    text: >
+      Work out the sizes before you pick any addresses. Each requirement in
+      network-requirements.txt is a number you can turn into a netmask, and
+      the order to do it in is: how big must each subnet be, how many of them
+      are there, how much of the VPC must be left over, and only then how big
+      must the VPC be. A plan drawn the other way round — subnets first, VPC
+      sized to fit — is the draft that was already rejected.
+  - level: 2
+    text: >
+      R5 and R6 are the two that catch people. The number of addresses a subnet
+      can assign is not the number its CIDR block contains: the Subnet CIDR
+      blocks page in the VPC User Guide lists exactly which addresses in every
+      subnet are unavailable and why. Count them, subtract, and then find the
+      smallest netmask that still clears the floor. A subnet that misses by
+      those few addresses is the most common way this lab fails.
+  - level: 3
+    text: >
+      Sketch the VPC as one range and lay the four subnets end to end inside it
+      rather than scattering them: contiguous blocks are far easier to check
+      for overlap by eye, and they leave the remaining space in one piece,
+      which is what R9 is really asking for. Confirm each subnet's last address
+      is still inside the VPC — the boundary is where containment usually
+      breaks.
+  - level: 4
+    text: >
+      Two requirements are properties in the template rather than arithmetic.
+      R7 is `AvailabilityZone`, and the two subnets of each tier must not carry
+      the same one. R8 is `MapPublicIpOnLaunch`, which must be true on both
+      public subnets and false on both private subnets — the draft omits it
+      entirely on the private pair, and an omitted property is not a false one.
+
+skills:
+  - aws.networking.vpc-cidr
+  - aws.networking.subnet-sizing
+  - aws.networking.availability-zones
+
+certification:
+  - certification: SOA-C03
+    relevant: true
+    domains:
+      - networking-and-content-delivery
+
+references:
+  - title: "Amazon VPC User Guide: VPC CIDR blocks"
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-cidr-blocks.html
+  - title: "Amazon VPC User Guide: Subnet CIDR blocks"
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html
+  - title: "Amazon VPC User Guide: IP addressing for your VPCs and subnets"
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-ip-addressing.html

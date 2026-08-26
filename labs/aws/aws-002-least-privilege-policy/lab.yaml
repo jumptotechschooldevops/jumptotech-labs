@@ -1,0 +1,203 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# AWS-002 is a SIMULATED lab. It runs in the ordinary Linux sandbox, creates no
+# AWS resources, holds no AWS credentials, and calls no AWS API. The student
+# writes an IAM policy document, and it is graded by *parsing* it — never by
+# matching text. See services/verifier/src/iam-policy.ts.
+#
+# Content is written from the IAM User Guide only.
+#
+# Certification claim: SOA-C03 Task 4.1, skill 4.1.1 — "Implement IAM features
+# (for example, password policies, multi-factor authentication [MFA], roles,
+# federated identity, resource policies, policy conditions)". This lab covers
+# the policy-authoring and policy-conditions part of that skill and claims
+# nothing else. Objective read from the official exam guide on 2026-08-24.
+# ---------------------------------------------------------------------------
+id: AWS-002
+slug: aws-002-least-privilege-policy
+title: Least Privilege, Exactly
+track: aws
+topic: aws-identity
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 2
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-001
+
+story: >
+  The JumpToTech Bank reconciliation job has been running with a policy that
+  allows every action on every resource. It was written on the afternoon the
+  job shipped, with a comment promising to tighten it later, and nobody did.
+
+  Security review has now rejected it. They have not told you what to write —
+  they have told you what the job needs, and left the policy to you. The job
+  still has to run tomorrow night, so a policy that is too tight fails just as
+  badly as one that is too loose.
+
+objectives:
+  - Translate a stated business requirement into an IAM policy document
+  - Scope actions and resources to exactly what a workload needs
+  - Constrain an action with a policy condition
+  - Recognise why a wildcard action or resource fails a least-privilege review
+
+task:
+  summary: >
+    Rewrite an over-permissive IAM policy so it grants the reconciliation job
+    exactly the access its ticket describes, and nothing more.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. Nothing you
+    write is attached to anything or sent anywhere — the policy is graded by
+    reading it and evaluating what it would mean.
+
+    Everything you need is in `~/aws-iam`. Read `README.md` first, then
+    `ticket-5120.txt`, which states what the job must be able to do, what it
+    must not be able to do, and the two review rules the policy has to satisfy.
+
+    Edit `~/aws-iam/policy.json` until it says exactly that.
+
+    **How this is graded.** The policy is parsed, not searched. Key order,
+    indentation, whether you write `Action` as a string or an array, and the
+    order of your statements make no difference at all — two policies that mean
+    the same thing are graded the same way. What is checked is what the policy
+    would actually permit and refuse:
+
+      * the document is a valid policy with `Version` `2012-10-17`;
+      * listing the bucket, reading objects and uploading objects are permitted;
+      * the upload permission carries the encryption condition the ticket names;
+      * deleting objects is not permitted;
+      * the payroll bucket is not reachable;
+      * no statement uses `"*"` on its own as an `Action` or as a `Resource`.
+
+    You may use one statement or several — whatever expresses the requirement
+    honestly. Note that listing a bucket and reading the objects inside it are
+    not the same resource.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/aws-iam/policy.json
+      label: The policy document is in place
+    - type: file_exists
+      path: /home/student/aws-iam/ticket-5120.txt
+      label: The change ticket is in place
+    - type: iam_policy_allows
+      path: /home/student/aws-iam/policy.json
+      action: s3:DeleteObject
+      resource: arn:aws:s3:::jumptotech-ledger-exports/*
+      label: The starting policy is the over-permissive one
+
+requirements:
+  - type: iam_policy_document
+    path: /home/student/aws-iam/policy.json
+    version: '2012-10-17'
+    label: The policy is a valid document declaring the 2012-10-17 version
+
+  - type: iam_policy_allows
+    path: /home/student/aws-iam/policy.json
+    action: s3:ListBucket
+    resource: arn:aws:s3:::jumptotech-ledger-exports
+    label: The job may list the ledger exports bucket
+
+  - type: iam_policy_allows
+    path: /home/student/aws-iam/policy.json
+    action: s3:GetObject
+    resource: arn:aws:s3:::jumptotech-ledger-exports/*
+    label: The job may read objects from the bucket
+
+  - type: iam_policy_allows
+    path: /home/student/aws-iam/policy.json
+    action: s3:PutObject
+    resource: arn:aws:s3:::jumptotech-ledger-exports/*
+    label: The job may upload objects to the bucket
+
+  - type: iam_policy_statement
+    path: /home/student/aws-iam/policy.json
+    effect: Allow
+    actions:
+      - s3:PutObject
+    resources:
+      - arn:aws:s3:::jumptotech-ledger-exports/*
+    condition:
+      operator: StringEquals
+      key: s3:x-amz-server-side-encryption
+      value: aws:kms
+    label: The upload permission is conditional on KMS server-side encryption
+
+  - type: iam_policy_not_allows
+    path: /home/student/aws-iam/policy.json
+    action: s3:DeleteObject
+    resource: arn:aws:s3:::jumptotech-ledger-exports/*
+    label: The job may not delete objects
+
+  - type: iam_policy_not_allows
+    path: /home/student/aws-iam/policy.json
+    action: s3:GetObject
+    resource: arn:aws:s3:::jumptotech-payroll/*
+    label: The job cannot reach the payroll bucket
+
+  - type: iam_policy_no_wildcard
+    path: /home/student/aws-iam/policy.json
+    field: Action
+    effect: Allow
+    label: No Allow statement uses "*" as its Action
+
+  - type: iam_policy_no_wildcard
+    path: /home/student/aws-iam/policy.json
+    field: Resource
+    effect: Allow
+    label: No Allow statement uses "*" as its Resource
+
+hints:
+  - level: 1
+    text: >
+      Work from the ticket, one numbered line at a time, and ask what each line
+      is about: which action, on which resource, under what circumstances. Two
+      of the lines are not permissions to add at all — they are permissions
+      that must be absent, which in IAM is usually achieved by simply not
+      granting them rather than by writing anything.
+  - level: 2
+    text: >
+      The IAM User Guide's JSON policy reference describes the elements a
+      statement is built from. A bucket and the objects inside it are different
+      resources with different ARNs, so an action that operates on the bucket
+      itself and an action that operates on an object generally cannot share a
+      single Resource value. The Condition element has its own page; note the
+      shape it takes — an operator, wrapping a context key, wrapping a value.
+  - level: 3
+    text: >
+      Listing is an action on the bucket ARN; reading and writing objects are
+      actions on the object ARN, which ends in `/*`. Because only the upload is
+      conditional, the upload usually ends up in its own statement — a
+      condition applies to the whole statement it sits in, so putting the read
+      and the upload together would constrain both. Deletion needs no Deny
+      statement: an action nobody allows is already denied. Check your JSON
+      parses before you check anything else.
+
+references:
+  - title: IAM User Guide — JSON policy elements reference
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies.html
+  - title: 'IAM User Guide — JSON policy elements: Resource'
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_resource.html
+  - title: 'IAM User Guide — JSON policy elements: Condition'
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition.html
+  - title: IAM User Guide — Security best practices in IAM
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+
+skills:
+  - aws.iam.policy-authoring
+  - aws.iam.least-privilege
+  - aws.iam.policy-conditions
+
+certification:
+  - certification: SOA-C03
+    relevant: true
+    domains:
+      - security-and-compliance

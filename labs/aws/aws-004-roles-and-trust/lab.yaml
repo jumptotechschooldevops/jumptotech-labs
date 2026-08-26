@@ -1,0 +1,194 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# AWS-004 is a SIMULATED lab. It runs in the ordinary Linux sandbox, creates no
+# AWS resources, holds no AWS credentials, and calls no AWS API. Both policies
+# are graded by parsing and evaluating them.
+#
+# Content is written from the IAM User Guide only.
+#
+# Certification claim: SOA-C03 Task 4.1, skill 4.1.1 — "Implement IAM features
+# (for example, password policies, multi-factor authentication [MFA], ROLES,
+# federated identity, RESOURCE POLICIES, policy conditions)". A role trust
+# policy is the IAM resource-based policy type, so both named elements of that
+# skill are exercised directly. Objective read from the official exam guide on
+# 2026-08-24. Skill 4.1.2 is not claimed: this lab uses no AWS tool.
+# ---------------------------------------------------------------------------
+id: AWS-004
+slug: aws-004-roles-and-trust
+title: Who May Assume This Role
+track: aws
+topic: aws-identity
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 4
+
+environment:
+  provider: linux
+
+prerequisites:
+  - AWS-003
+
+story: >
+  The JumpToTech Bank reconciliation batch runs on EC2 and gets its AWS
+  permissions from a role. Security review has just looked at that role for the
+  first time since it was created.
+
+  Their finding is not about what the role can do — they accepted that without
+  a change. It is about who is allowed to become it. The trust policy currently
+  allows anyone at all, and still names a contractor account from a project
+  that finished in March.
+
+objectives:
+  - Distinguish a permissions policy from a trust policy, and say which question each answers
+  - Express a trust relationship with a service principal
+  - Recognise why a wildcard principal in a trust policy is a finding rather than a convenience
+  - Choose the action an EC2 instance actually needs to assume a role
+
+task:
+  summary: >
+    Rewrite a role's trust policy so that only the EC2 service may assume it,
+    leaving the already-approved permissions policy untouched.
+  description: >
+    This lab environment is a Linux sandbox, not an AWS account. No role exists.
+    Both policies are graded by evaluating what they would mean.
+
+    `~/role-setup` holds two policies and the finding. Read `README.md`, then
+    `finding-7318.txt`.
+
+    **The two policies answer different questions.** `permissions-policy.json`
+    answers *what is this identity allowed to do?* — it is attached to the role
+    and lists S3 actions. `trust-policy.json` answers *who is allowed to become
+    this identity?* — it is attached to the same role, but it names principals
+    rather than resources, and the only action in it is the one used to assume
+    a role. Review accepted the permissions policy as it stands; **do not edit
+    it.** Changing it is a way to fail this lab, not to pass it.
+
+    Rewrite `trust-policy.json` so it satisfies every numbered line of the
+    finding. You will need the EC2 service's principal identifier, which is
+    documented; the finding deliberately does not give it to you.
+
+    **How this is graded.** Both policies are parsed, not searched. Whitespace,
+    key order, statement order, and whether you write a value as a string or a
+    one-element array make no difference. What is checked is which principals
+    the trust policy actually names, which action it allows, that no wildcard
+    principal remains, and that the permissions policy still says what review
+    approved.
+
+setup:
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: file_exists
+      path: /home/student/role-setup/trust-policy.json
+      label: The trust policy is in place
+    - type: file_exists
+      path: /home/student/role-setup/permissions-policy.json
+      label: The permissions policy is in place
+    - type: iam_policy_statement
+      path: /home/student/role-setup/trust-policy.json
+      effect: Allow
+      principals:
+        - type: AWS
+          id: '*'
+      label: The trust policy starts out trusting everyone
+
+requirements:
+  # --- the trust policy ----------------------------------------------------
+  - type: iam_policy_document
+    path: /home/student/role-setup/trust-policy.json
+    version: '2012-10-17'
+    statement_count: 1
+    label: The trust policy is a valid document with exactly one statement
+
+  - type: iam_policy_statement
+    path: /home/student/role-setup/trust-policy.json
+    effect: Allow
+    actions:
+      - sts:AssumeRole
+    principals:
+      - type: Service
+        id: ec2.amazonaws.com
+    label: The EC2 service is allowed to assume the role
+
+  - type: iam_policy_no_wildcard
+    path: /home/student/role-setup/trust-policy.json
+    field: Principal
+    effect: Allow
+    label: No statement trusts every principal
+
+  - type: iam_policy_no_wildcard
+    path: /home/student/role-setup/trust-policy.json
+    field: Action
+    effect: Allow
+    label: No statement in the trust policy uses "*" as its Action
+
+  # --- the permissions policy, which must survive untouched -----------------
+  - type: iam_policy_document
+    path: /home/student/role-setup/permissions-policy.json
+    version: '2012-10-17'
+    label: The permissions policy is still a valid document
+
+  - type: iam_policy_allows
+    path: /home/student/role-setup/permissions-policy.json
+    action: s3:GetObject
+    resource: arn:aws:s3:::jumptotech-reconciliation/inputs/2026-08-24.csv
+    label: The role can still read its reconciliation inputs
+
+  - type: iam_policy_not_allows
+    path: /home/student/role-setup/permissions-policy.json
+    action: s3:DeleteObject
+    resource: arn:aws:s3:::jumptotech-reconciliation/inputs/2026-08-24.csv
+    label: The role still cannot delete reconciliation inputs
+
+  - type: iam_policy_no_wildcard
+    path: /home/student/role-setup/permissions-policy.json
+    field: Resource
+    effect: Allow
+    label: The permissions policy still uses no "*" Resource
+
+hints:
+  - level: 1
+    text: >
+      Two files, two questions. Before editing anything, say out loud which of
+      them decides who can assume the role — the finding is entirely about that
+      one. Then look at what its `Principal` element currently names, and count
+      the statements.
+  - level: 2
+    text: >
+      The IAM User Guide's page on the `Principal` element lists every form a
+      principal can take, including the one used for an AWS service, and states
+      that a service principal is not an ARN and not an account number. The same
+      page explains what `"Principal": "*"` means and why it is a finding in a
+      role trust policy specifically. The action an instance profile needs is
+      the one AWS STS exposes for assuming a role with AWS credentials — not the
+      web-identity or SAML variants.
+  - level: 3
+    text: >
+      A service principal is written as `{"Service": "<something>.amazonaws.com"}`
+      and the identifier for EC2 is documented on that page. The finding wants
+      exactly one statement, so the contractor statement goes rather than being
+      edited. The action is `sts:AssumeRole`. Leave `permissions-policy.json`
+      exactly as you found it — one of the checks reads it to make sure you did.
+
+references:
+  - title: 'IAM User Guide — AWS JSON policy elements: Principal'
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html
+  - title: 'IAM User Guide — AWS JSON policy elements: NotPrincipal'
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_notprincipal.html
+  - title: IAM User Guide — Roles terms and concepts
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html
+  - title: IAM User Guide — Security best practices in IAM
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+
+skills:
+  - aws.iam.trust-policy
+  - aws.iam.service-principal
+  - aws.iam.roles
+
+certification:
+  - certification: SOA-C03
+    relevant: true
+    domains:
+      - security-and-compliance
