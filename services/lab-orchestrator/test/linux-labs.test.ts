@@ -403,6 +403,19 @@ setup:
     );
 
     expect(def.id).toBe('LINUX-901');
-    expect(def.environment).toEqual({ provider: 'linux', isolation: 'container', capabilities: [] });
+    // `network: 'none'` is the point of the assertion, not noise: a lab that
+    // declares no network keeps the boundary it has always had.
+    expect(def.environment).toEqual({
+      provider: 'linux',
+      isolation: 'container',
+      network: 'none',
+      // All three defaults are the point of the assertion: a lab that declares
+      // none of them keeps the boundary it has always had — no network, no
+      // second host, and no kernel capability beyond what its provider grants
+      // unconditionally.
+      sandbox_capabilities: [],
+      peer: false,
+      capabilities: [],
+    });
   });
 });

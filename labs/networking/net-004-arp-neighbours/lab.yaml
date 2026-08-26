@@ -1,0 +1,197 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Network scope. This is the first lab to declare `environment.network: link`,
+# which gives this session — and only this session — a private bridge with no
+# route off it. Nothing here reaches another sandbox, the host, or the internet:
+# the segment contains this container and its own gateway, and that is all.
+#
+# The three outcomes the student produces are properties of that segment rather
+# than injected faults: the gateway answers, an unused address on the same
+# prefix does not, and an address outside the prefix has no route to try.
+#
+# Content is written from RFC 826 (ARP, STD 37), RFC 1122, and the iproute2
+# man pages. Scenario, task wording, templates and answers are original
+# JumpToTech content.
+#
+# Classification: FOUNDATIONAL KNOWLEDGE, and a PRODUCTION SKILL for reading
+# neighbour state during an incident. Not mapped to a certification objective —
+# no current CKA or LFCS objective covers address resolution. See
+# labs/networking/CURRICULUM.md section 4.3.
+# ---------------------------------------------------------------------------
+id: NET-004
+slug: net-004-arp-neighbours
+title: Frames, MAC Addresses and ARP — How a Packet Finds a Neighbour
+track: networking
+topic: link-layer
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 4
+
+environment:
+  provider: linux
+  network: link
+
+prerequisites:
+  - NET-003
+
+story: >
+  A host with a perfectly correct address could not be reached last week, and
+  the review stalled because nobody could describe what happens between "send
+  this to that address" and a frame leaving the interface.
+
+  You have a machine on a segment of its own. Make it resolve a neighbour,
+  make it fail to resolve one, and then ask it for something it cannot even
+  try to resolve. The kernel keeps a record of all three, and that record —
+  not your recollection of what you typed — is what the review will read.
+
+objectives:
+  - Read a host's own segment from its addressing rather than being told it
+  - Make a host resolve a neighbour's hardware address and observe the result
+  - Tell an unanswered neighbour apart from a destination with no route
+  - Read the state the kernel keeps for each neighbour it has tried
+  - Explain which hardware address a frame carries when the destination is elsewhere
+
+task:
+  summary: Produce three different neighbour outcomes on this host's segment, and record what the kernel concluded about each.
+  description: >
+    Your working directory is `/home/student/l2`. Read `brief.txt` first — it
+    explains the three outcomes and, importantly, which tools work here.
+
+    Nothing tells you your addressing: this session's segment is allocated when
+    the lab starts, so you have to read your interface, your prefix and your
+    gateway off the machine with `ip addr` and `ip route`.
+
+    Then produce three outcomes. Reach for the gateway, which is on your
+    segment and answers. Reach for another address inside your own prefix that
+    nothing is using. Reach for `10.99.99.99`, which is outside it. Use a TCP
+    connection attempt rather than `ping` — the connection failing is expected
+    and irrelevant, because the kernel must resolve the neighbour before it can
+    send anything at all, and that is the part being observed.
+
+    Save the neighbour table to `findings.txt` once all three have been tried,
+    and complete `answers.txt`.
+
+    Two of these three leave an entry behind and one does not, and the
+    difference is the whole lesson: a host that cannot find a route never gets
+    as far as asking who its neighbour is.
+
+setup:
+  files:
+    - source: setup/brief.txt
+      path: l2/brief.txt
+      mode: "0644"
+    - source: setup/answers.txt
+      path: l2/answers.txt
+      mode: "0644"
+  verify:
+    - type: directory_exists
+      path: /home/student/l2
+      label: The working directory exists
+    - type: file_content
+      path: /home/student/l2/brief.txt
+      contains: "10.99.99.99"
+      label: The brief was seeded
+    # The lab is unsolvable without a link, so the baseline proves there is one
+    # before the student is handed a shell.
+    - type: file_content
+      path: /proc/net/dev
+      contains: "eth0"
+      label: This session's private segment is attached
+
+requirements:
+  # --- the kernel's own record ---------------------------------------------
+  #
+  # None of these three can be satisfied by writing a file, echoing the
+  # expected output or editing shell history: a neighbour entry only exists
+  # because traffic was actually sent and the kernel recorded what came back.
+  # Writing one by hand needs CAP_NET_ADMIN, which this sandbox does not grant.
+  - type: neighbour_state
+    device: eth0
+    state: [REACHABLE, STALE, DELAY, PROBE]
+    lladdr: present
+    label: A neighbour on this segment was resolved to a hardware address
+  - type: neighbour_state
+    device: eth0
+    state: [INCOMPLETE, FAILED]
+    lladdr: absent
+    label: An address on this segment was asked for and never answered
+  - type: neighbour_state
+    address: 10.99.99.99
+    absent: true
+    label: The off-segment destination never reached the neighbour stage
+
+  # --- the record the student keeps ----------------------------------------
+  - type: file_content
+    path: /home/student/l2/findings.txt
+    contains: "eth0"
+    label: The neighbour table was captured
+
+  # --- what it means --------------------------------------------------------
+  - type: file_content
+    path: /home/student/l2/answers.txt
+    contains: "arp_request_destination = broadcast"
+    label: The destination of a resolution request was identified
+  - type: file_content
+    path: /home/student/l2/answers.txt
+    contains: "off_subnet_frame_goes_to = the gateway"
+    label: The hardware address an off-segment frame carries was identified
+
+  # --- one answer per line --------------------------------------------------
+  #
+  # Each names the same line with a wrong value on it, so listing every option
+  # against a question fails instead of satisfying the checks above by accident.
+  - type: file_content_absent
+    path: /home/student/l2/answers.txt
+    contains: "arp_request_destination = unicast"
+    label: The request's destination was answered once, not hedged
+  - type: file_content_absent
+    path: /home/student/l2/answers.txt
+    contains: "off_subnet_frame_goes_to = the destination itself"
+    label: The off-segment frame question was answered once, not hedged
+
+hints:
+  - level: 1
+    text: >
+      An address identifies a host; it does not deliver anything. Between the
+      two sits a question the host has to ask its own segment, and the answer
+      it gets back is kept in a table you can read. Start by finding out what
+      your segment actually is — everything else follows from your own prefix.
+  - level: 2
+    text: >
+      `man ip-address` and `man ip-route` cover reading your addressing; the
+      gateway is the next hop of the route that is not a directly connected
+      one. `man ip-neighbour` covers the table the kernel keeps, and RFC 826
+      explains why the protocol exists at all. Remember that a connection
+      attempt does not have to succeed to make the kernel try to resolve — that
+      resolution happens first is the point.
+  - level: 3
+    text: >
+      `ip -brief addr show` and `ip route show` give you the interface, the
+      prefix and the gateway. Pick any address inside your prefix that is not
+      yours and not the gateway's for the unanswered case. `nc -w2 -v <addr> 9`
+      is enough to make the kernel try. `ip neigh show` prints the table; give
+      the unanswered one a few seconds to settle before you capture it, and
+      redirect the output into `findings.txt` with `>`.
+
+references:
+  - title: RFC 826 — An Ethernet Address Resolution Protocol, STD 37
+    url: https://www.rfc-editor.org/info/rfc826
+  - title: RFC 1122 — Requirements for Internet Hosts, section 2.3.2.1 (ARP)
+    url: https://www.rfc-editor.org/rfc/rfc1122.html
+  - title: ip-neighbour(8) — iproute2 manual page
+    url: https://man7.org/linux/man-pages/man8/ip-neighbour.8.html
+  - title: ip-route(8) — iproute2 manual page
+    url: https://man7.org/linux/man-pages/man8/ip-route.8.html
+  - title: ip-address(8) — iproute2 manual page
+    url: https://man7.org/linux/man-pages/man8/ip-address.8.html
+
+skills:
+  - net.l2.arp
+  - net.l2.mac
+  - net.l3.routing-decision
+  - net.troubleshoot.neighbour-state
+  - net.model.encapsulation
+
+certification: []

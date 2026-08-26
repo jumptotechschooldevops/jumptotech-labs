@@ -383,6 +383,101 @@ export const VERIFIER_COMMANDS = [
 
 export type VerifierCommand = (typeof VERIFIER_COMMANDS)[number];
 
+/**
+ * Binaries the *verifier* may run that a lab may never name.
+ *
+ * `VERIFIER_COMMANDS` above is lab-facing: a lab picks one and supplies argv.
+ * This list is the opposite arrangement — trusted verifier code owns both the
+ * executable and the whole argv, and a lab contributes only strictly validated
+ * operands that the handler places itself.
+ *
+ * `ip` is here rather than in the list above for exactly that reason. It is not
+ * read-only as a binary: `ip neigh add`, `ip link set`, `ip route del` all
+ * mutate. Exposing it to `command_output` would hand every lab author a way to
+ * change the sandbox's networking from a YAML file. `neighbour_state` runs the
+ * single form `ip -json neigh show`, which is a read, and nothing else can ask
+ * for `ip` at all.
+ */
+export const VERIFIER_INTERNAL_COMMANDS = ['ip'] as const;
+
+export type VerifierInternalCommand = (typeof VERIFIER_INTERNAL_COMMANDS)[number];
+
+/**
+ * The states the Linux neighbour table can hold, as `ip -json neigh show`
+ * reports them.
+ *
+ * These are the kernel's NUD ("neighbour unreachability detection") states.
+ * They matter to a lab because they are not interchangeable: a resolved entry
+ * is `REACHABLE` only while the kernel has recent confirmation, and ages to
+ * `STALE` on its own without anything being wrong. A lab that demanded
+ * `REACHABLE` would therefore fail a correct student who paused; one that
+ * accepts the set `[REACHABLE, STALE]` grades what it means to grade. At the
+ * other end, `INCOMPLETE` and `FAILED` are the states of a neighbour that never
+ * answered — which is a legitimate thing for a lab to require a student to
+ * produce.
+ */
+export const NEIGHBOUR_STATES = [
+  'PERMANENT',
+  'NOARP',
+  'REACHABLE',
+  'STALE',
+  'NONE',
+  'INCOMPLETE',
+  'DELAY',
+  'PROBE',
+  'FAILED',
+] as const;
+
+export type NeighbourState = (typeof NEIGHBOUR_STATES)[number];
+
+/**
+ * An IP address a lab may ask about.
+ *
+ * Deliberately a literal address and never a hostname or a range: the operand
+ * reaches an argv, and the narrower the shape the less there is to reason
+ * about. The character sets here cannot express a shell metacharacter, a path
+ * separator, or an option.
+ */
+const ipAddress = z
+  .string()
+  .min(2)
+  .max(45)
+  .refine(
+    (value) =>
+      /^(\d{1,3}\.){3}\d{1,3}$/.test(value)
+        ? value.split('.').every((octet) => Number(octet) <= 255)
+        : /^[0-9a-fA-F:]+$/.test(value) && value.includes(':'),
+    { message: 'must be an IPv4 or IPv6 literal address' },
+  );
+
+/**
+ * A local address a socket may be bound to.
+ *
+ * Accepts the forms a lab author would reasonably write: an IPv4 literal, an
+ * IPv6 literal with or without brackets, and the two wildcards — `0.0.0.0` for
+ * IPv4 and `::` for IPv6. `*` is accepted too, because that is how `ss` prints
+ * the IPv6 any-address socket on Linux, and an author reading their own
+ * terminal should be able to write down what they saw.
+ *
+ * Normalisation happens at comparison time, in one place, so the value a lab
+ * writes and the value the kernel reports cannot drift apart.
+ */
+const bindAddress = z
+  .string()
+  .min(1)
+  .max(47)
+  .regex(
+    /^(\*|\[?[0-9a-fA-F:]+\]?|(\d{1,3}\.){3}\d{1,3})$/,
+    'must be an IPv4 or IPv6 address, or a wildcard (0.0.0.0, ::, *)',
+  );
+
+/** A network interface name, as the kernel allows one. */
+const interfaceName = z
+  .string()
+  .min(1)
+  .max(15)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'must be a network interface name such as eth0');
+
 /** One argv element. Never concatenated into a string, never shell-expanded. */
 const commandArgument = z
   .string()
@@ -1843,6 +1938,21 @@ const sandboxRequirementSchemas = {
       type: z.literal('port_listening'),
       port: z.number().int().min(1).max(65535),
       protocol: z.enum(['tcp', 'udp']).default('tcp'),
+      /**
+       * The local address the socket must be bound to.
+       *
+       * Omitted, the check means what it has always meant: *something* is
+       * listening on this port, wherever it is bound. Naming an address makes
+       * the check the stricter question a networking lab needs — the
+       * difference between a service on `127.0.0.1` that only its own host can
+       * reach and one on `0.0.0.0` that the network can.
+       *
+       * A list accepts any one of several bindings, which is how a lab says
+       * "reachable off this host" without dictating an address family: an IPv4
+       * wildcard and an IPv6 wildcard are different bindings that both satisfy
+       * that sentence.
+       */
+      address: z.union([bindAddress, z.array(bindAddress).min(1).max(6)]).optional(),
       ...common,
     })
     .strict(),
@@ -1852,6 +1962,15 @@ const sandboxRequirementSchemas = {
       type: z.literal('port_not_listening'),
       port: z.number().int().min(1).max(65535),
       protocol: z.enum(['tcp', 'udp']).default('tcp'),
+      /**
+       * Restrict the absence to one binding.
+       *
+       * Omitted, the check means nothing at all is listening on the port.
+       * Naming an address asserts the narrower thing — that nothing is bound
+       * *there* — which is what a lab needs when a service is supposed to have
+       * moved off loopback rather than gone away.
+       */
+      address: z.union([bindAddress, z.array(bindAddress).min(1).max(6)]).optional(),
       ...common,
     })
     .strict(),
@@ -1891,6 +2010,88 @@ const sandboxRequirementSchemas = {
       expected_exit_code: z.number().int().min(0).max(255).default(0),
       output_contains: z.array(literalText).max(8).default([]),
       timeout_seconds: z.number().int().min(1).max(60).default(15),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * One entry in the kernel's neighbour table.
+   *
+   * The check a networking lab needs and no file read can answer: did this host
+   * actually resolve that neighbour, and what did the kernel conclude?
+   *
+   * Graded from `ip -json neigh show` inside the session's own sandbox — the
+   * kernel's own answer, per network namespace. It cannot be satisfied by
+   * writing a file, echoing the expected output, or editing shell history,
+   * because none of those put an entry in a neighbour table. Nor can a student
+   * forge one: `ip neigh add` needs CAP_NET_ADMIN, which no sandbox grants.
+   *
+   * `state` is a *set*, because more than one state is often correct — see
+   * `NEIGHBOUR_STATES`. `absent: true` asserts the opposite: that no entry
+   * exists at all, which is what an off-subnet destination with no route
+   * produces, and is a distinct lesson from a neighbour that failed to answer.
+   */
+  neighbour_state: z
+    .object({
+      type: z.literal('neighbour_state'),
+      /**
+       * The neighbour to look for. Optional, because the address often cannot
+       * be known when the lab is written: a session's bridge is allocated by
+       * the daemon, so its gateway is not a constant a lab author could name.
+       * Omitting it asks about *any* neighbour on the named interface, which is
+       * how a lab grades "this host resolved a neighbour on its link" without
+       * pretending to know which one.
+       */
+      address: ipAddress.optional(),
+      /** Restrict the match to one interface. Omit to match on any. */
+      device: interfaceName.optional(),
+      /** Any one of these states satisfies the check. */
+      state: z.array(z.enum(NEIGHBOUR_STATES)).min(1).max(NEIGHBOUR_STATES.length).optional(),
+      /** Whether the entry must carry a resolved hardware address. */
+      lladdr: z.enum(['present', 'absent']).optional(),
+      /** Assert that no entry for this address exists. */
+      absent: z.boolean().optional(),
+      ...common,
+    })
+    .strict()
+    .refine((r) => !(r.absent && (r.state || r.lladdr)), {
+      message: "absent: true cannot be combined with 'state' or 'lladdr'",
+    })
+    .refine((r) => r.address !== undefined || r.device !== undefined, {
+      message: "needs an 'address', a 'device', or both — an unqualified check would match anything",
+    })
+    .refine((r) => !r.absent || r.address !== undefined, {
+      message: "absent: true needs the 'address' it is asserting the absence of",
+    }),
+
+  /**
+   * One HTTP request, made by this session's peer against this session's
+   * sandbox.
+   *
+   * The check a reachability lab needs and no local observation can answer.
+   * "This service is reachable from another machine" is a claim only another
+   * machine can settle, and a student controls neither end of the measurement:
+   * the request is issued by a container the platform owns, on the session's
+   * own segment, against the sandbox's own container name.
+   *
+   * There is no `host` field, deliberately. The target is always this
+   * session's sandbox, so a lab cannot aim the platform's HTTP client at an
+   * address of its choosing — the one shape that would turn a grading check
+   * into a request forgery primitive.
+   */
+  http_request: z
+    .object({
+      type: z.literal('http_request'),
+      port: z.number().int().min(1).max(65535),
+      /** Request path. Never a full URL, and never a host. */
+      path: z
+        .string()
+        .min(1)
+        .max(255)
+        .regex(/^\/[A-Za-z0-9._~\-/]*$/, 'must be a path beginning with / and free of query syntax')
+        .default('/'),
+      expected_status: z.number().int().min(100).max(599).default(200),
+      timeout_seconds: z.number().int().min(1).max(30).default(5),
       ...common,
     })
     .strict(),
@@ -2770,6 +2971,8 @@ export const REQUIREMENT_FAMILIES = {
   command_output: 'linux',
   systemd_unit_section: 'linux',
   systemd_unit_directive: 'linux',
+  neighbour_state: 'linux',
+  http_request: 'linux',
 
   // --- Docker: one session's own daemon --------------------------------
   docker_container_exists: 'docker',

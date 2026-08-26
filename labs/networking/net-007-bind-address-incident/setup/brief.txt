@@ -1,0 +1,48 @@
+JumpToTech Bank — ledger-api is "done", and it is down
+======================================================
+
+The deploy is finished and the engineer who did it has evidence: they ran the
+health check on the box and got a 200. They ran it again while the incident
+call was open and got a 200 again.
+
+Every other machine gets connection refused, and the load balancer has taken
+the service out of rotation.
+
+Both of those are true at the same time. The service is healthy, it is
+answering, and it is answering to exactly one address — which is not one
+anybody else can use.
+
+
+WHAT IS HERE
+------------
+
+  ledger-api                  the service, supervised, running
+  /etc/ledger/api.conf        its configuration
+  incident/evidence/          somewhere to put what you observe
+
+There is one other machine on this segment. You cannot log into it — it is not
+yours — but it is there, and whether it can reach this service is the question
+the incident is actually about.
+
+
+WHAT TO DO
+----------
+
+First reproduce both results, because a diagnosis nobody can check is an
+opinion. Save what you get from this host into `evidence/local.txt`. Then work
+out what the socket table says about *where* the service is listening, and why
+that explains a refusal from anywhere else.
+
+Then repair it: make the service reachable from the segment rather than only
+from this host, and restart it through the supervisor so the change takes
+effect. `sv restart ledger-api` and `sv status ledger-api` are the two forms
+you are likely to want.
+
+Finally write `diagnosis.txt`, in whatever words you like, containing:
+
+  · the word `refused`, because that is what the other machine got, and
+  · the word `bind`, because that is what was wrong
+
+A refusal is not a timeout, and the difference tells you whether anything was
+listening at all. That distinction is the reason this took an hour instead of
+five minutes.

@@ -1,0 +1,59 @@
+JumpToTech Bank — ledger migration, network addressing brief
+============================================================
+
+The ledger service moves to a new environment next quarter. Networking has
+asked platform engineering for the addressing work before anyone provisions
+anything, because an overlapping range is cheap to fix on paper and expensive
+to fix after three environments are running on it.
+
+There are three pieces of work. Two of them are in files that are already
+in this directory; the third you create yourself.
+
+
+1. plan.txt — document four existing blocks, and propose three new ones
+---------------------------------------------------------------------
+Four blocks are already in use somewhere in the bank's estate. For each one,
+work out its network address, its broadcast address, the first and last
+address that can actually be assigned to a host, and how many assignable
+addresses it holds.
+
+Then propose three non-overlapping /20 blocks inside 10.20.0.0/16, one each
+for prod, staging and dev. Use consecutive blocks in ascending order, starting
+at the very first address of 10.20.0.0/16.
+
+
+2. classify.txt — say where each address can and cannot be routed
+-----------------------------------------------------------------
+Six addresses. For each, one of exactly these four values:
+
+    private      reserved for private internets
+    public       globally reachable
+    loopback     never leaves the host
+    link-local   only valid on a single link
+
+At least one of the six is not what most people assume at a glance. The
+authoritative list of reserved ranges is the IANA IPv4 Special-Purpose Address
+Registry, linked from this lab's references.
+
+
+3. kernel.txt — check your arithmetic against this machine's own kernel
+-----------------------------------------------------------------------
+You do not have to take the broadcast rule on faith. This host has a network
+prefix configured on it right now, and the kernel has already worked out that
+prefix's broadcast address and installed it in its local routing table.
+
+Capture that table into kernel.txt, and add one computed line to the same
+file. See the task description for the exact line.
+
+
+Answer format — this matters
+----------------------------
+plan.txt and classify.txt are templates. Every answer line ends with "= ".
+Type your value immediately after the space, and do not change the labels or
+the addresses that are already there. A line should end up looking exactly
+like this, with one space either side of the "=":
+
+    usable_count = 30
+
+Nothing here needs the network. This machine has no route off itself, and
+none of this work needs one.

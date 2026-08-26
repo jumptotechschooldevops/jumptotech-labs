@@ -30,7 +30,11 @@
  * dedicated broker service.
  */
 import { execFile } from 'node:child_process';
-import { assertValidContainerSandboxRef } from '../../session/identifiers.js';
+import {
+  CONTAINER_NETWORK_PATTERN,
+  assertValidContainerNetworkRef,
+  assertValidManagedContainerRef,
+} from '../../session/identifiers.js';
 import { MANAGED_LABEL } from '../../k8s/labels.js';
 
 /*
@@ -130,6 +134,28 @@ export class ContainerRuntimeError extends Error {
   }
 }
 
+/**
+ * A session's private lab network.
+ *
+ * Deliberately not a general Docker network description. There is no driver
+ * choice, no subnet, no `host` mode and no attachable flag, because a lab has
+ * no business asking for any of them: the only thing the platform offers is an
+ * isolated bridge with no route off itself. Widening this type is how host
+ * networking would eventually arrive by accident, so it stays closed.
+ */
+export interface NetworkSpec {
+  /** Trusted, derived from the session's sandbox reference. */
+  name: string;
+  /** Ownership labels, mirroring the container model. */
+  labels: Record<string, string>;
+}
+
+export interface NetworkInfo {
+  name: string;
+  id: string;
+  labels: Record<string, string>;
+}
+
 export interface ContainerRuntimePort {
   readonly name: string;
   /** Throws when the daemon cannot be reached. Resolves to its version. */
@@ -141,6 +167,17 @@ export interface ContainerRuntimePort {
   list(labelSelector: string): Promise<ContainerInfo[]>;
   remove(name: string): Promise<void>;
   exec(name: string, request: ContainerExecRequest): Promise<ContainerExecResult>;
+
+  /**
+   * Create one session's private lab network. Re-entrant: creating a network
+   * that already exists is success, so a retried Start Lab is safe.
+   */
+  networkCreate(spec: NetworkSpec): Promise<void>;
+  networkInspect(name: string): Promise<NetworkInfo | null>;
+  /** Remove a lab network. Removing one that is already gone is success. */
+  networkRemove(name: string): Promise<void>;
+  /** Every lab network carrying a label selector, for orphan reclamation. */
+  networkList(labelSelector: string): Promise<NetworkInfo[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +219,7 @@ export class DockerCliRuntime implements ContainerRuntimePort {
   }
 
   async create(spec: ContainerSpec): Promise<ContainerInfo> {
-    assertValidContainerSandboxRef(spec.name);
+    assertValidManagedContainerRef(spec.name);
     assertImageReference(spec.image);
 
     const argv = [
@@ -254,7 +291,7 @@ export class DockerCliRuntime implements ContainerRuntimePort {
   }
 
   async inspect(name: string): Promise<ContainerInfo | null> {
-    assertValidContainerSandboxRef(name);
+    assertValidManagedContainerRef(name);
     const result = await this.#docker([
       'inspect',
       '--type',
@@ -301,7 +338,7 @@ export class DockerCliRuntime implements ContainerRuntimePort {
       // Name-shape gate first: a container someone else labelled by hand never
       // enters the cleanup work list.
       try {
-        assertValidContainerSandboxRef(name);
+        assertValidManagedContainerRef(name);
       } catch {
         continue;
       }
@@ -312,7 +349,7 @@ export class DockerCliRuntime implements ContainerRuntimePort {
   }
 
   async remove(name: string): Promise<void> {
-    assertValidContainerSandboxRef(name);
+    assertValidManagedContainerRef(name);
     const result = await this.#docker(['rm', '--force', '--volumes', name], {
       timeoutMs: 60_000,
     });
@@ -324,8 +361,95 @@ export class DockerCliRuntime implements ContainerRuntimePort {
     }
   }
 
+  // ------------------------------------------------------------- networks
+  //
+  // Every method below validates the name against `jtt-net-<hex>` before it
+  // reaches an argv. Docker's own `bridge`, `host` and `none` networks cannot
+  // match that shape, so this code physically cannot name them.
+
+  async networkCreate(spec: NetworkSpec): Promise<void> {
+    assertValidContainerNetworkRef(spec.name);
+
+    const argv = [
+      'network',
+      'create',
+      // `--internal` is the whole point: the bridge exists, and there is no
+      // route off it. A lab gets a link and a neighbour, never egress.
+      '--internal',
+      '--driver',
+      'bridge',
+      spec.name,
+    ];
+    for (const [key, value] of Object.entries(spec.labels)) {
+      argv.push('--label', `${key}=${value}`);
+    }
+
+    const result = await this.#docker(argv, { timeoutMs: 60_000 });
+    // "already exists" is success: creation is re-entrant by design.
+    if (result.exitCode !== 0 && !/already exists/i.test(result.stderr)) {
+      throw new ContainerRuntimeError(
+        result.stderr.trim() || `docker network create exited with code ${result.exitCode}`,
+      );
+    }
+  }
+
+  async networkInspect(name: string): Promise<NetworkInfo | null> {
+    assertValidContainerNetworkRef(name);
+    const result = await this.#docker([
+      'network',
+      'inspect',
+      '--format',
+      '{{.Id}}\t{{json .Labels}}',
+      name,
+    ]);
+    if (result.exitCode !== 0) return null;
+
+    const [id, labelsJson] = result.stdout.trim().split('\t');
+    if (!id) return null;
+    return { name, id, labels: parseLabelsJson(labelsJson) };
+  }
+
+  async networkRemove(name: string): Promise<void> {
+    assertValidContainerNetworkRef(name);
+    const result = await this.#docker(['network', 'rm', name], { timeoutMs: 60_000 });
+    // "no such network" is success: teardown is re-entrant by design.
+    if (result.exitCode !== 0 && !/no such network/i.test(result.stderr)) {
+      throw new ContainerRuntimeError(
+        result.stderr.trim() || `docker network rm exited with code ${result.exitCode}`,
+      );
+    }
+  }
+
+  async networkList(labelSelector: string): Promise<NetworkInfo[]> {
+    const result = await this.#docker([
+      'network',
+      'ls',
+      '--filter',
+      `label=${labelSelector}`,
+      '--format',
+      '{{.Name}}',
+    ]);
+    if (result.exitCode !== 0) {
+      throw new ContainerRuntimeError(result.stderr.trim() || 'could not list networks');
+    }
+
+    const names = result.stdout
+      .split('\n')
+      .map((line) => line.trim())
+      // A daemon shared with other tooling may carry networks that are not
+      // ours; the name shape is the gate, exactly as it is for containers.
+      .filter((line) => CONTAINER_NETWORK_PATTERN.test(line));
+
+    const infos: NetworkInfo[] = [];
+    for (const name of names) {
+      const info = await this.networkInspect(name);
+      if (info) infos.push(info);
+    }
+    return infos;
+  }
+
   async exec(name: string, request: ContainerExecRequest): Promise<ContainerExecResult> {
-    assertValidContainerSandboxRef(name);
+    assertValidManagedContainerRef(name);
     if (!Array.isArray(request.argv) || request.argv.length === 0) {
       throw new ContainerRuntimeError('exec requires a non-empty argv array');
     }
@@ -461,6 +585,13 @@ export const GRANTABLE_CAPABILITIES = new Set([
   'SETPCAP',
   'KILL',
   'AUDIT_WRITE',
+  // Raw and packet sockets, for labs that teach packet capture. Grantable is
+  // not granted: no provider adds it by default, and the lab schema refuses it
+  // unless the lab is a Linux lab on its own per-session bridge — a segment
+  // holding exactly one container, so capture sees only the student's own
+  // traffic. `NET_ADMIN` is deliberately not here; mutating interfaces, routes
+  // and firewall rules is a different risk and a separate review.
+  'NET_RAW',
 ]);
 
 export function assertCapabilityName(capability: unknown): string {

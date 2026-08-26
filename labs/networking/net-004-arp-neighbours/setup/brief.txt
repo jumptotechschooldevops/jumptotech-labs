@@ -1,0 +1,71 @@
+JumpToTech Bank — payment gateway, link-layer review
+====================================================
+
+The team's mental model of the payment gateway stops at "it has an IP". That
+held until last week, when a host with a perfectly correct address could not
+be reached and nobody could say why, because nobody could say what happens
+between "send this to that address" and a frame leaving the interface.
+
+This host is on a small private segment of its own. Nothing else is on it
+except the segment's gateway, and there is no route off it — which is
+convenient, because it means you can produce all three outcomes below without
+touching anything real.
+
+Your job is to make the host resolve a neighbour, fail to resolve one, and
+then ask for something it cannot even try to resolve. The kernel records all
+three, and what it records is the evidence.
+
+
+FIRST, FIND YOUR OWN SEGMENT
+----------------------------
+
+The addressing here is allocated when your lab starts, so it is not written
+down anywhere — you have to read it off the machine. You need three things:
+
+  · the name of your non-loopback interface
+  · your own address and prefix length
+  · the address of the gateway on your segment
+
+`ip addr` and `ip route` between them will tell you all three.
+
+
+A NOTE ON TOOLS
+---------------
+
+`ping` will not work here. It needs a privilege this sandbox does not grant,
+and that is deliberate: the point is what the kernel does when *anything*
+tries to send, not what one tool does.
+
+Use a TCP connection attempt instead. It does not matter that nothing is
+listening — the kernel has to resolve the neighbour before it can send the
+first packet, which is the part you are here to watch. Any of these work:
+
+    nc -w2 -v <address> 9
+    socat -T2 - TCP:<address>:9
+
+The connection will fail. That is fine, and expected, in all three cases.
+
+
+THE THREE OUTCOMES
+------------------
+
+  resolved     Reach for the gateway. It is on your segment and it answers,
+               so the kernel learns its hardware address.
+
+  unanswered   Reach for some other address inside your own prefix — one you
+               can see from your addressing that nothing is using. The kernel
+               asks, nothing answers, and it records that.
+
+  no route     Reach for 10.99.99.99, which is outside your prefix and has no
+               route. Notice what the kernel does *not* do here.
+
+
+WHAT TO RECORD
+--------------
+
+`ip neigh` shows the table the kernel keeps. Save it, once you have produced
+all three outcomes, to:
+
+  findings.txt
+
+Then complete `answers.txt`, which is already in this directory.

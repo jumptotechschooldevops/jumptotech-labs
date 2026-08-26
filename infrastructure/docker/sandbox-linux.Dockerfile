@@ -65,6 +65,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Package set, justified line by line:
 #   procps psmisc                       ps, top, pgrep, kill, fuser (LINUX-004)
 #   iproute2 iputils-ping netcat socat  LINUX-006 networking
+#   tcpdump                             NET-008 packet capture. Present is not
+#                                       permitted: it ships with no setuid bit
+#                                       and no file capabilities, so it can only
+#                                       open a capture socket in a sandbox the
+#                                       platform granted CAP_NET_RAW — which is
+#                                       opt-in per lab and refused unless the
+#                                       lab also has its own isolated segment.
 #   curl                                LINUX-006 fetches a URL and LINUX-010's
 #                                       runbook checks a service with it; both
 #                                       cite `man curl`, and the image shipped
@@ -138,6 +145,7 @@ RUN set -eux; \
       psmisc \
       iproute2 \
       iputils-ping \
+      tcpdump \
       netcat-openbsd \
       socat \
       curl \
@@ -251,10 +259,24 @@ RUN set -eux; \
 # Debian's runit package enables a `default-syslog` service of its own. Nothing
 # in this image logs through syslog, and a stray running service would be noise
 # in exactly the lab that teaches a student to read `/etc/service` — so it is
-# removed, and every service a student sees is one a lab put there.
+# disabled, and every service that *runs* is one a lab put there.
+#
+# Disabled, not deleted, and the distinction is load-bearing. Removing
+# `/etc/sv/default-syslog` used to look tidier and cost this image the ability
+# to install a package ever again: `runit.postinst` runs
+# `NAME='default-syslog' ENABLE='yes' /lib/runit-helper/runit-helper postinst`,
+# whose `cpsv` aborts with `fatal: no service found for default-syslog` when the
+# definition is missing. That postinst fires on *any* later `apt-get install`,
+# so dpkg failed and every derived image build died with exit 100 — a defect
+# that only shows up the first time someone tries to add a tool.
+#
+# What a student sees is unchanged: `/etc/service` is the enabled set, and it
+# stays empty until a lab symlinks something into it. `/etc/sv` holds available
+# definitions, which is exactly what that directory is for.
 RUN set -eux; \
-    rm -rf /etc/runit/runsvdir/default/* /etc/sv/default-syslog; \
-    mkdir -p /etc/runit/runsvdir/default
+    rm -rf /etc/runit/runsvdir/default/*; \
+    mkdir -p /etc/runit/runsvdir/default; \
+    test -d /etc/sv/default-syslog
 
 # Interactive shell setup for the student account.
 #

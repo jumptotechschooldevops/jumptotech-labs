@@ -19,7 +19,10 @@ import type {
   ContainerInfo,
   ContainerRuntimePort,
   ContainerSpec,
+  NetworkInfo,
+  NetworkSpec,
 } from '../src/index.js';
+import { assertCapabilityName, assertValidContainerNetworkRef } from '../src/index.js';
 
 interface FakeEntry {
   type: 'file' | 'directory';
@@ -78,6 +81,20 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
   /** Seed scripts the provider installed and ran, in order, as `name`. */
   readonly seedScriptsRun: string[] = [];
 
+  /**
+   * Lab networks this fake daemon holds, keyed by name.
+   *
+   * A fake cannot show that `--internal` really blocks egress — that belongs to
+   * the integration suite against a real daemon. What it does model is the
+   * lifecycle the provider is responsible for: that a network is created before
+   * the container that joins it, that it is removed when the sandbox is, and
+   * that one session's network is never named by another's teardown.
+   */
+  readonly networks = new Map<string, NetworkInfo>();
+  /** Every network spec `networkCreate()` was called with. */
+  readonly networksCreated: NetworkSpec[] = [];
+  readonly networksRemoved: string[] = [];
+
   #images: Set<string>;
   unreachable: string | undefined;
   #seed: Record<string, Partial<FakeEntry>>;
@@ -125,6 +142,11 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
   }
 
   async create(spec: ContainerSpec): Promise<ContainerInfo> {
+    // The real runtime refuses any capability outside `GRANTABLE_CAPABILITIES`
+    // before it builds an argv. A fake that accepted one would hide precisely
+    // the bug that gate exists to catch, so it is modelled here too.
+    for (const capability of spec.capAdd ?? []) assertCapabilityName(capability);
+
     if (this.unreachable) throw new Error(this.unreachable);
     if (!this.#images.has(spec.image)) {
       throw new Error(`Unable to find image '${spec.image}' locally`);
@@ -228,6 +250,46 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
    * started running something new would fail loudly here rather than silently
    * appearing to work.
    */
+  // ------------------------------------------------------------- networks
+
+  async networkCreate(spec: NetworkSpec): Promise<void> {
+    if (this.unreachable) throw new Error(this.unreachable);
+    assertValidContainerNetworkRef(spec.name);
+    this.networksCreated.push(spec);
+    // Re-entrant, like the real thing: creating one that exists is success.
+    if (!this.networks.has(spec.name)) {
+      this.networks.set(spec.name, {
+        name: spec.name,
+        id: `netid-${spec.name}`,
+        labels: { ...spec.labels },
+      });
+    }
+  }
+
+  async networkInspect(name: string): Promise<NetworkInfo | null> {
+    if (this.unreachable) throw new Error(this.unreachable);
+    assertValidContainerNetworkRef(name);
+    return this.networks.get(name) ?? null;
+  }
+
+  async networkRemove(name: string): Promise<void> {
+    if (this.unreachable) throw new Error(this.unreachable);
+    assertValidContainerNetworkRef(name);
+    this.networksRemoved.push(name);
+    this.networks.delete(name);
+  }
+
+  async networkList(labelSelector: string): Promise<NetworkInfo[]> {
+    if (this.unreachable) throw new Error(this.unreachable);
+    const [key, value] = labelSelector.split('=');
+    return [...this.networks.values()].filter((n) => n.labels[String(key)] === value);
+  }
+
+  /** Put a network into the fake daemon without going through the provider. */
+  addNetwork(name: string, labels: Record<string, string> = {}): void {
+    this.networks.set(name, { name, id: `netid-${name}`, labels });
+  }
+
   async exec(name: string, request: ContainerExecRequest): Promise<ContainerExecResult> {
     if (this.unreachable) throw new Error(this.unreachable);
     this.execs.push({ container: name, request });

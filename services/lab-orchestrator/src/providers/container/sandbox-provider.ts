@@ -62,6 +62,10 @@ import {
 import {
   assertValidContainerSandboxRef,
   isContainerSandboxRef,
+  networkRefForSandbox,
+  peerRefForSandbox,
+  sandboxRefForNetwork,
+  isContainerNetworkRef,
 } from '../../session/identifiers.js';
 import { resolveSandboxPath, sandboxParent } from '../../session/sandbox-paths.js';
 import { loadSetupFiles, type LoadedSetupFile } from '../../session/setup-files.js';
@@ -77,6 +81,7 @@ import {
   MAX_SANDBOX_READ_BYTES,
   type ContainerInfo,
   type ContainerRuntimePort,
+  type NetworkInfo,
 } from './runtime.js';
 import {
   DEFAULT_RUNTIME_OWNER,
@@ -274,6 +279,42 @@ export class ContainerLabProvider implements LabProvider {
     const steps: ProvisionStep[] = [];
     const ref = this.#ref(context);
 
+    // One session, one private bridge. Created before the container that joins
+    // it, so the sandbox never briefly exists on the wrong network.
+    const labNetwork = this.#labNetwork(context);
+    const ownership = {
+      [MANAGED_CONTAINER_LABEL]: 'true',
+      [CONTAINER_SESSION_LABEL]: context.sessionId,
+      [CONTAINER_LAB_LABEL]: context.labId,
+      [CONTAINER_EXPIRES_LABEL]: String(context.expiresAtMs),
+      [CONTAINER_PROVIDER_LABEL]: this.id,
+    };
+
+    if (labNetwork) {
+      const networkStep = await this.#runStep(
+        steps,
+        'network-created',
+        'Lab network created',
+        async () => {
+          await this.#runtime.networkCreate({ name: labNetwork, labels: ownership });
+          return `private lab network ${labNetwork} created (internal: no route off it)`;
+        },
+      );
+      if (!networkStep.ok) {
+        return {
+          ok: false,
+          environment: this.#environment(context, 'error', { message: networkStep.detail }),
+          steps,
+          error: this.#toLabError(networkStep.error, 'PROVISION_FAILED', {
+            remediation: 'Check that Docker is running and can create a bridge network.',
+          }),
+        };
+      }
+    }
+
+    const capAdd = this.#capabilitiesFor(context);
+    const peer = this.#peer(context);
+
     const createStep = await this.#runStep(steps, 'environment-created', 'Environment created', async () => {
       // Re-entrant by design: a create over an existing sandbox replaces it
       // rather than failing, which is what makes a retried Start Lab safe.
@@ -287,8 +328,8 @@ export class ContainerLabProvider implements LabProvider {
         cpus: context.policy.sandbox.cpus,
         memory: context.policy.sandbox.memory,
         pidsLimit: context.policy.sandbox.pidsLimit,
-        network: context.policy.sandbox.network,
-        ...(this.#capabilities.length > 0 ? { capAdd: [...this.#capabilities] } : {}),
+        network: labNetwork ?? context.policy.sandbox.network,
+        ...(capAdd.length > 0 ? { capAdd } : {}),
         noNewPrivileges: this.#noNewPrivileges,
         labels: {
           [MANAGED_CONTAINER_LABEL]: 'true',
@@ -306,9 +347,14 @@ export class ContainerLabProvider implements LabProvider {
         // shells are `docker exec` children of it.
         command: [...this.#foregroundCommand],
       });
-      return `sandbox container ${ref} created (cpus=${context.policy.sandbox.cpus} memory=${context.policy.sandbox.memory} pids=${context.policy.sandbox.pidsLimit} network=${context.policy.sandbox.network})`;
+      return `sandbox container ${ref} created (cpus=${context.policy.sandbox.cpus} memory=${context.policy.sandbox.memory} pids=${context.policy.sandbox.pidsLimit} network=${labNetwork ?? context.policy.sandbox.network})`;
     });
     if (!createStep.ok) {
+      // The network outlived the container that was meant to join it. Take it
+      // back rather than leaving an orphan behind on a shared daemon.
+      if (labNetwork) {
+        await this.#removeLabNetwork(labNetwork, context.sessionId, steps);
+      }
       return {
         ok: false,
         environment: this.#environment(context, 'error', { message: createStep.detail }),
@@ -317,6 +363,41 @@ export class ContainerLabProvider implements LabProvider {
           remediation: `Check that Docker is running and that '${this.#image}' exists: npm run sandbox:build`,
         }),
       };
+    }
+
+    if (peer && labNetwork) {
+      const peerStep = await this.#runStep(steps, 'peer-created', 'Peer host created', async () => {
+        await this.#runtime.remove(peer).catch(() => undefined);
+        await this.#runtime.create({
+          name: peer,
+          image: this.#image,
+          hostname: 'jumptotech-peer',
+          // The peer is the platform's, not the student's: no capabilities at
+          // all, and no shell is ever attached to it. A student reaches it the
+          // only way a second host is reachable — over the network.
+          user: context.policy.sandbox.user,
+          workdir: this.#home,
+          cpus: context.policy.sandbox.cpus,
+          memory: context.policy.sandbox.memory,
+          pidsLimit: context.policy.sandbox.pidsLimit,
+          network: labNetwork,
+          noNewPrivileges: true,
+          labels: { ...ownership },
+          command: ['sleep', 'infinity'],
+        });
+        return `peer host ${peer} created on ${labNetwork}`;
+      });
+      if (!peerStep.ok) {
+        await this.#runtime.remove(peer).catch(() => undefined);
+        await this.#runtime.remove(ref).catch(() => undefined);
+        await this.#removeLabNetwork(labNetwork, context.sessionId, steps);
+        return {
+          ok: false,
+          environment: this.#environment(context, 'error', { message: peerStep.detail }),
+          steps,
+          error: this.#toLabError(peerStep.error, 'PROVISION_FAILED'),
+        };
+      }
     }
 
     const toolingStep = await this.#runStep(steps, 'sandbox-tooling', 'Sandbox tooling ready', async () =>
@@ -495,6 +576,11 @@ export class ContainerLabProvider implements LabProvider {
 
     if (info === null) {
       steps.push({ id: 'delete-sandbox', label: 'Sandbox deleted', status: 'ok', detail: 'already absent' });
+      // The container may be gone while its peer and network are not — a
+      // hand-removed sandbox, or a create that failed halfway. Teardown is
+      // idempotent, so reclaim whatever is left rather than leaving orphans.
+      await this.#removePeer(peerRefForSandbox(sandboxRef), expectedSessionId, steps);
+      await this.#removeLabNetwork(networkRefForSandbox(sandboxRef), expectedSessionId, steps);
       return { ok: true, namespaceGone: true, steps };
     }
 
@@ -520,6 +606,12 @@ export class ContainerLabProvider implements LabProvider {
       detail: gone ? sandboxRef : `${sandboxRef} is still shutting down`,
     });
 
+    // The peer, then the network. Ordered after the sandbox and before the
+    // bridge, because Docker refuses to remove a network still in use and a
+    // peer left behind would hold one open forever.
+    await this.#removePeer(peerRefForSandbox(sandboxRef), expectedSessionId, steps);
+    await this.#removeLabNetwork(networkRefForSandbox(sandboxRef), expectedSessionId, steps);
+
     return {
       ok: true,
       namespaceGone: gone,
@@ -530,11 +622,242 @@ export class ContainerLabProvider implements LabProvider {
     };
   }
 
+  // --------------------------------------------------------- lab network
+
+  /**
+   * The private network this session's sandbox joins, or `undefined`.
+   *
+   * `undefined` is the default and the historical behaviour: the container is
+   * created with whatever the policy says, which is `--network none`. Only a
+   * lab that declared `environment.network: link` gets a name here, and the
+   * name is derived from the session's own sandbox reference — trusted platform
+   * output, never a string from a lab definition or a browser.
+   */
+  /**
+   * The capabilities this container is created with.
+   *
+   * The provider's own unconditional set, plus anything the *lab* declared —
+   * merged here rather than at construction because a capability like
+   * `NET_RAW` belongs to one lab, not to every lab the provider ever runs.
+   *
+   * Three gates stand between a lab definition and `--cap-add`, and this is the
+   * middle one. The schema refuses `sandbox_capabilities` to any provider but
+   * `linux` and to any lab that has not also asked for its own segment; this
+   * method refuses to honour it for any provider but `linux` even if the schema
+   * were somehow bypassed; and the runtime checks every name against
+   * `GRANTABLE_CAPABILITIES` before it reaches an argv. `--cap-drop ALL` is
+   * applied unconditionally by the runtime regardless of any of this.
+   */
+  #capabilitiesFor(context: LabSessionContext): string[] {
+    const declared = context.lab.environment.sandbox_capabilities ?? [];
+    if (declared.length === 0 || this.id !== 'linux') return [...this.#capabilities];
+    return [...new Set([...this.#capabilities, ...declared])];
+  }
+
+  /**
+   * This session's peer container, or `undefined`.
+   *
+   * Only a lab that declared one gets a name here, and only on the Linux
+   * provider — the schema refuses the field elsewhere, and this refuses to
+   * honour it elsewhere even if the schema were bypassed.
+   */
+  #peer(context: LabSessionContext): string | undefined {
+    if (!context.lab.environment.peer || this.id !== 'linux') return undefined;
+    return peerRefForSandbox(this.#ref(context));
+  }
+
+  #labNetwork(context: LabSessionContext): string | undefined {
+    if (context.lab.environment.network !== 'link') return undefined;
+    return networkRefForSandbox(this.#ref(context));
+  }
+
+  /**
+   * Delete one session's peer, having proved it is ours and theirs.
+   *
+   * The same gates the sandbox teardown applies: the name shape first, then the
+   * live ownership labels re-read from the daemon, then the session label when
+   * one was named. A peer that fails any of them is left alone.
+   */
+  async #removePeer(
+    peerRef: string,
+    expectedSessionId: string | undefined,
+    steps: ProvisionStep[],
+  ): Promise<void> {
+    let info: ContainerInfo | null;
+    try {
+      info = await this.#runtime.inspect(peerRef);
+    } catch {
+      return;
+    }
+    if (!info) return;
+
+    if (info.labels[MANAGED_CONTAINER_LABEL] !== 'true') {
+      steps.push({
+        id: 'delete-peer',
+        label: 'Peer host deleted',
+        status: 'failed',
+        detail: `${peerRef} is not managed by JumpToTech — left alone`,
+      });
+      return;
+    }
+    const owner = info.labels[CONTAINER_SESSION_LABEL];
+    if (expectedSessionId && owner && owner !== expectedSessionId) {
+      steps.push({
+        id: 'delete-peer',
+        label: 'Peer host deleted',
+        status: 'failed',
+        detail: `${peerRef} belongs to another session — left alone`,
+      });
+      return;
+    }
+
+    try {
+      await this.#runtime.remove(peerRef);
+      steps.push({ id: 'delete-peer', label: 'Peer host deleted', status: 'ok', detail: peerRef });
+    } catch (error) {
+      steps.push({
+        id: 'delete-peer',
+        label: 'Peer host deleted',
+        status: 'failed',
+        detail: describe(error),
+      });
+    }
+  }
+
+  /**
+   * Ask this session's peer to make one HTTP request to this session's sandbox.
+   *
+   * The whole point of a peer: "reachable from another machine" is a claim only
+   * another machine can settle, and the student controls neither end of this
+   * measurement. The argv is built here from validated parts — a port, a path
+   * and a status — and the target is the sandbox's own container name, resolved
+   * by the segment's embedded DNS rather than by anything a lab supplies.
+   */
+  async requestFromPeer(
+    context: LabSessionContext,
+    request: { port: number; path: string; timeoutSeconds?: number },
+  ): Promise<{ reached: boolean; status?: number; detail?: string }> {
+    const peer = this.#peer(context);
+    if (!peer) return { reached: false, detail: 'this lab has no peer host' };
+
+    const target = this.#ref(context);
+    const timeout = Math.max(1, Math.min(30, request.timeoutSeconds ?? 5));
+    const result = await this.#runtime.exec(peer, {
+      argv: [
+        'curl',
+        '--silent',
+        '--show-error',
+        '--max-time',
+        String(timeout),
+        '--output',
+        '/dev/null',
+        '--write-out',
+        '%{http_code}',
+        `http://${target}:${request.port}${request.path}`,
+      ],
+      user: context.policy.sandbox.user,
+      timeoutMs: (timeout + 5) * 1000,
+    });
+
+    const code = Number.parseInt(result.stdout.trim(), 10);
+    if (!Number.isInteger(code) || code === 0) {
+      return { reached: false, detail: 'the peer could not reach the service' };
+    }
+    return { reached: true, status: code };
+  }
+
+  /**
+   * Delete one session's lab network, having proved it is ours and theirs.
+   *
+   * The same gates the container teardown applies, in the same order: the name
+   * shape first, then the *live* ownership labels re-read from the daemon, then
+   * the session label when a session was named. A network that fails any of
+   * them is left alone rather than deleted — which is what stops a stale record
+   * or a wrong argument from taking out `bridge`, `host`, `none`, or another
+   * session's topology.
+   */
+  async #removeLabNetwork(
+    networkRef: string,
+    expectedSessionId: string | undefined,
+    steps: ProvisionStep[],
+  ): Promise<void> {
+    if (!isContainerNetworkRef(networkRef)) {
+      steps.push({
+        id: 'delete-network',
+        label: 'Lab network deleted',
+        status: 'failed',
+        detail: `'${networkRef}' is not a JumpToTech lab network name`,
+      });
+      return;
+    }
+
+    let info;
+    try {
+      info = await this.#runtime.networkInspect(networkRef);
+    } catch (error) {
+      steps.push({
+        id: 'delete-network',
+        label: 'Lab network deleted',
+        status: 'failed',
+        detail: describe(error),
+      });
+      return;
+    }
+
+    if (!info) {
+      steps.push({
+        id: 'delete-network',
+        label: 'Lab network deleted',
+        status: 'ok',
+        detail: 'already absent',
+      });
+      return;
+    }
+
+    if (info.labels[MANAGED_CONTAINER_LABEL] !== 'true') {
+      steps.push({
+        id: 'delete-network',
+        label: 'Lab network deleted',
+        status: 'failed',
+        detail: `${networkRef} is not managed by JumpToTech — left alone`,
+      });
+      return;
+    }
+
+    const owner = info.labels[CONTAINER_SESSION_LABEL];
+    if (expectedSessionId && owner && owner !== expectedSessionId) {
+      steps.push({
+        id: 'delete-network',
+        label: 'Lab network deleted',
+        status: 'failed',
+        detail: `${networkRef} belongs to another session — left alone`,
+      });
+      return;
+    }
+
+    try {
+      await this.#runtime.networkRemove(networkRef);
+      steps.push({
+        id: 'delete-network',
+        label: 'Lab network deleted',
+        status: 'ok',
+        detail: networkRef,
+      });
+    } catch (error) {
+      steps.push({
+        id: 'delete-network',
+        label: 'Lab network deleted',
+        status: 'failed',
+        detail: describe(error),
+      });
+    }
+  }
+
   // --------------------------------------------------------------- cleanup
 
   async listManagedSandboxes(): Promise<ManagedSandbox[]> {
     const containers = await this.#runtime.list(MANAGED_CONTAINER_SELECTOR);
-    return containers
+    const sandboxes = containers
       .filter((c) => isContainerSandboxRef(c.name))
       // A shared daemon may host several providers' sandboxes; each reaps its own.
       .filter((c) => (c.labels[CONTAINER_PROVIDER_LABEL] ?? this.id) === this.id)
@@ -550,6 +873,37 @@ export class ContainerLabProvider implements LabProvider {
         expiresAtMs: parseExpiry(c.labels[CONTAINER_EXPIRES_LABEL]),
         phase: c.state,
       }));
+
+    // A lab network whose container has already gone is an orphan in its own
+    // right: nothing else would ever name it, and on a shared daemon it would
+    // sit there forever. Surfacing it as a sandbox lets the reaper reclaim it
+    // through the same ownership-checked teardown, with no reaper changes.
+    const known = new Set(sandboxes.map((s) => s.sandboxRef));
+    let networks: NetworkInfo[] = [];
+    try {
+      networks = await this.#runtime.networkList(MANAGED_CONTAINER_SELECTOR);
+    } catch {
+      // A daemon that cannot list networks still reports its containers.
+      return sandboxes;
+    }
+
+    for (const network of networks) {
+      if (!isContainerNetworkRef(network.name)) continue;
+      if ((network.labels[CONTAINER_PROVIDER_LABEL] ?? this.id) !== this.id) continue;
+      const sandboxRef = sandboxRefForNetwork(network.name);
+      if (known.has(sandboxRef)) continue;
+      sandboxes.push({
+        providerId: this.id,
+        sandboxRef,
+        sandboxKind: this.sandboxKind,
+        sessionId: network.labels[CONTAINER_SESSION_LABEL] ?? '',
+        labId: network.labels[CONTAINER_LAB_LABEL] ?? '',
+        expiresAtMs: parseExpiry(network.labels[CONTAINER_EXPIRES_LABEL]),
+        phase: 'exited',
+      });
+    }
+
+    return sandboxes;
   }
 
   // -------------------------------------------------------------- terminal

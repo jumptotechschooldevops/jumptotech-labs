@@ -1,0 +1,264 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Network scope. This lab runs in the standard Linux sandbox, created with
+# `--network none`. Nothing is published, nothing is reachable from another
+# sandbox, and no external address is contacted. Three of the four failures the
+# student reproduces are properties of that isolation — a closed port, an
+# address with no route, an unreachable resolver — and the fourth is a local
+# service that answers and then refuses at the application layer.
+#
+# Content is written from IETF standards (RFC 1122 §1.1.3, RFC 1123 §6,
+# RFC 9110 §15.6.4, RFC 9293), the Linux man-pages project (connect(2)) and
+# ITU-T Recommendation X.200. Scenario, task wording, templates and answers are
+# original JumpToTech content.
+#
+# Classification: FOUNDATIONAL SKILL. Not mapped to a certification objective —
+# no current CKA or LFCS objective covers protocol-layer triage. See
+# labs/networking/CURRICULUM.md section 4.3.
+# ---------------------------------------------------------------------------
+id: NET-003
+slug: net-003-osi-tcpip-layers
+title: Which Layer Is This Failure In?
+track: networking
+topic: layering
+difficulty: beginner
+level: practice
+duration_minutes: 30
+order: 3
+
+environment:
+  provider: linux
+
+prerequisites:
+  - NET-002
+
+story: >
+  Last month's outage took forty minutes. Thirty-eight of them went on
+  restarting an application whose problem was a route, because nobody stopped
+  to ask which layer the evidence pointed at.
+
+  The post-incident action was a drill, and you are the first through it. Four
+  failures are live on this host. Two of them look almost identical from a
+  browser and have nothing in common underneath; one of them is not a network
+  problem at all. Reproduce each, keep what the system actually said, and
+  commit to a diagnosis for each one.
+
+objectives:
+  - Reproduce a refused connection, an unreachable network and a failed name lookup
+  - Read an error message as evidence of which protocol reported it
+  - Map an OSI layer number onto the four layer names RFC 1122 defines
+  - Tell an application-layer refusal apart from a network failure
+  - Put the units of encapsulation in order
+
+task:
+  summary: Reproduce four real failures on this host, record what each one actually said, and classify the layer it came from.
+  description: >
+    Your working directory is `/home/student/triage`. Read `brief.txt` first —
+    it names the four failures and states the answer format.
+
+    Reproduce each failure from this shell and save the tool's real output into
+    `refused.txt`, `unreachable.txt`, `resolution.txt` and `app.txt`. Record
+    what the system printed, not a summary of it: the exact message is the
+    evidence, and it is what tells you which protocol reported the problem.
+
+    Three of the four are one command each. The fourth is not: the ledger API on
+    port 9109 is listening and will accept your connection happily. Opening a
+    socket to it proves nothing — you have to send an HTTP request and read the
+    reply before you see why it is failing. `nc` and `socat` can both do that,
+    and the reply contains a status line and a short body.
+
+    Then complete the two templates. In `triage.txt`, give the OSI layer number
+    of the protocol that reported each failure, and say which of the four is not
+    a network problem at all. In `model.txt`, map two of those layer numbers
+    onto the names RFC 1122 uses, and put the four units of encapsulation in
+    order from what the application produced down to what leaves the interface.
+
+    Answer each line once. A line listing several values is graded wrong even
+    when the right one is among them — a diagnosis you have not committed to is
+    not a diagnosis.
+
+    None of this needs a network. This container has no route off itself, which
+    is precisely why two of the four failures behave as they do.
+
+setup:
+  files:
+    - source: setup/brief.txt
+      path: triage/brief.txt
+      mode: "0644"
+    - source: setup/triage.txt
+      path: triage/triage.txt
+      mode: "0644"
+    - source: setup/model.txt
+      path: triage/model.txt
+      mode: "0644"
+  seed_scripts:
+    - setup/seed.sh
+  verify:
+    - type: port_listening
+      port: 9109
+      label: The ledger API is listening
+    - type: port_not_listening
+      port: 9110
+      label: Nothing is bound to the port used for the refused-connection case
+    - type: directory_exists
+      path: /home/student/triage
+      label: The working directory exists
+    - type: file_content
+      path: /home/student/triage/brief.txt
+      contains: "ledger.bank.invalid"
+      label: The brief was seeded
+    - type: file_content
+      path: /etc/resolv.conf
+      contains: "10.99.99.99"
+      label: The resolver is pinned, so name resolution fails the same way everywhere
+
+requirements:
+  # --- evidence: what the system actually said -----------------------------
+  - type: file_content
+    path: /home/student/triage/refused.txt
+    contains: "Connection refused"
+    label: The refused connection was reproduced and its error recorded
+  - type: file_content
+    path: /home/student/triage/unreachable.txt
+    contains: "Network is unreachable"
+    label: The unreachable network was reproduced and its error recorded
+  - type: file_content
+    path: /home/student/triage/resolution.txt
+    contains: "Temporary failure in name resolution"
+    label: The failed name lookup was reproduced and its error recorded
+  - type: file_content
+    path: /home/student/triage/app.txt
+    contains: "503 Service Unavailable"
+    label: The ledger API's status line was captured
+  - type: file_content
+    path: /home/student/triage/app.txt
+    contains: "JTT-LEDGER-503-7F2A"
+    label: The ledger API's response body was captured
+
+  # --- evidence: observed behaviour, not a transcript -----------------------
+  #
+  # The service records every connection it answers. This asks the sandbox
+  # whether that record is non-empty, so a student who typed a plausible HTTP
+  # response into app.txt without ever speaking to the service still fails.
+  - type: command_exit_code
+    command: test
+    args: ["-s", "/var/log/jumptotech/ledger-access.log"]
+    expected_exit_code: 0
+    as_user: root
+    label: The ledger API was actually contacted
+
+  # --- the diagnosis --------------------------------------------------------
+  - type: file_content
+    path: /home/student/triage/triage.txt
+    contains: "refused_layer = L4"
+    label: The refused connection is attributed to the correct layer
+  - type: file_content
+    path: /home/student/triage/triage.txt
+    contains: "unreachable_layer = L3"
+    label: The unreachable network is attributed to the correct layer
+  - type: file_content
+    path: /home/student/triage/triage.txt
+    contains: "resolution_layer = L7"
+    label: The failed name lookup is attributed to the correct layer
+  - type: file_content
+    path: /home/student/triage/triage.txt
+    contains: "app_503_layer = L7"
+    label: The ledger API's refusal is attributed to the correct layer
+  - type: file_content
+    path: /home/student/triage/triage.txt
+    contains: "not_a_network_problem = app_503"
+    label: The one failure that is not a network problem was identified
+
+  # --- one answer per line --------------------------------------------------
+  #
+  # Each check below names the same line with a *wrong* value on it. Listing
+  # every layer against a symptom would satisfy the checks above by accident;
+  # these make that fail, so the lab grades a diagnosis rather than a hedge.
+  - type: file_content_absent
+    path: /home/student/triage/triage.txt
+    contains: "refused_layer = L3"
+    label: The refused connection was diagnosed once, not hedged
+  - type: file_content_absent
+    path: /home/student/triage/triage.txt
+    contains: "unreachable_layer = L4"
+    label: The unreachable network was diagnosed once, not hedged
+  - type: file_content_absent
+    path: /home/student/triage/triage.txt
+    contains: "resolution_layer = L3"
+    label: The failed lookup was diagnosed once, not hedged
+  - type: file_content_absent
+    path: /home/student/triage/triage.txt
+    contains: "app_503_layer = L4"
+    label: The application refusal was diagnosed once, not hedged
+
+  # --- the two models -------------------------------------------------------
+  - type: file_content
+    path: /home/student/triage/model.txt
+    contains: "L4_rfc1122_name = transport"
+    label: OSI layer 4 is mapped to the correct RFC 1122 name
+  - type: file_content
+    path: /home/student/triage/model.txt
+    contains: "L3_rfc1122_name = internet"
+    label: OSI layer 3 is mapped to the correct RFC 1122 name
+  - type: file_content_absent
+    path: /home/student/triage/model.txt
+    contains: "L3_rfc1122_name = link"
+    label: OSI layer 3 was not mapped to the wrong RFC 1122 name
+  - type: file_content
+    path: /home/student/triage/model.txt
+    contains: "3 = packet"
+    label: Encapsulation was ordered correctly
+
+hints:
+  - level: 1
+    text: >
+      Work from the message, not from the symptom. Each of these four errors was
+      produced by a different piece of software: one by the kernel's TCP code
+      when the far side had nothing listening, one by its routing code before a
+      packet was ever sent, one by the resolver library, and one by an
+      application that answered you politely and said no. Name the reporter and
+      you have named the layer.
+  - level: 2
+    text: >
+      `man 2 connect` lists the errors a connection attempt can return and says
+      what each one means — two of your four are in that list, and they are not
+      the same failure. For the ledger API, remember that a socket opening
+      successfully is a transport-layer result; whatever the service then says
+      is a separate question, and you have to send a request to hear it.
+      RFC 1122 section 1.1.3 names the four layers it defines for Internet
+      hosts.
+  - level: 3
+    text: >
+      `nc -w2 -v 127.0.0.1 9110` and `nc -w2 -v 10.99.99.99 80` produce the
+      first two errors; `ping -c1 ledger.bank.invalid` produces the third.
+      Redirect each into its file with `>` and note that these tools write
+      errors to standard error, so `2>&1` matters. For the ledger API, pipe a
+      request into it — `printf 'GET /health HTTP/1.1\r\nHost: ledger\r\n
+      Connection: close\r\n\r\n' | nc -w3 127.0.0.1 9109` — and save the whole
+      reply, status line and body. In `model.txt`, the numbers ascend from what
+      the application produced towards the wire.
+
+references:
+  - title: RFC 1122 — Requirements for Internet Hosts, section 1.1.3 (the four layers)
+    url: https://www.rfc-editor.org/rfc/rfc1122.html
+  - title: RFC 1123 — Requirements for Internet Hosts, section 6 (DNS as a support application)
+    url: https://www.rfc-editor.org/rfc/rfc1123.html
+  - title: RFC 9293 — Transmission Control Protocol (TCP), STD 7
+    url: https://www.rfc-editor.org/info/rfc9293
+  - title: RFC 9110 — HTTP Semantics, section 15.6.4 (503 Service Unavailable)
+    url: https://www.rfc-editor.org/info/rfc9110
+  - title: connect(2) — Linux manual page, ERRORS
+    url: https://man7.org/linux/man-pages/man2/connect.2.html
+  - title: ITU-T Recommendation X.200 — OSI Basic Reference Model
+    url: https://www.itu.int/rec/T-REC-X.200-199407-I/en
+
+skills:
+  - net.model.osi
+  - net.model.tcpip
+  - net.model.encapsulation
+  - net.troubleshoot.layer-triage
+  - net.troubleshoot.error-classification
+  - net.l4.connection-refused
+
+certification: []

@@ -38,6 +38,19 @@ export interface SandboxPort {
     options?: { asRoot?: boolean; timeoutMs?: number },
   ): Promise<SandboxInspectResult>;
   /**
+   * Ask this session's peer to make one HTTP request to this session's sandbox.
+   *
+   * Optional, and offered only by a provider that created a peer. A lab that
+   * asks for it without one gets a failed check rather than a silent pass: the
+   * platform could not measure reachability, which is not the same as having
+   * measured it and found it good.
+   */
+  httpFromPeer?(request: {
+    port: number;
+    path: string;
+    timeoutSeconds?: number;
+  }): Promise<{ reached: boolean; status?: number; detail?: string }>;
+  /**
    * Run one path *the student wrote* inside their own sandbox, as themselves.
    *
    * Deliberately a separate capability from `inspect` rather than a widened
@@ -106,6 +119,7 @@ export class SandboxReader {
   readonly #cache = new Map<string, Promise<SandboxPathRead | null>>();
   #processes: Promise<ProcessEntry[]> | undefined;
   #sockets: Promise<ListeningSocket[]> | undefined;
+  #neighbours: Promise<NeighbourEntry[]> | undefined;
 
   constructor(private readonly port: SandboxPort) {}
 
@@ -200,6 +214,53 @@ export class SandboxReader {
       return parseListeningSockets(result.stdout);
     });
     return this.#sockets;
+  }
+
+  /** Whether this sandbox has a peer that can make requests on its behalf. */
+  get canRequestFromPeer(): boolean {
+    return typeof this.port.httpFromPeer === 'function';
+  }
+
+  /**
+   * One request from the session's peer. Never memoised: a lab may check the
+   * same endpoint before and after a repair, and a cached answer would report
+   * the state of the world as it was.
+   */
+  async httpFromPeer(request: {
+    port: number;
+    path: string;
+    timeoutSeconds?: number;
+  }): Promise<{ reached: boolean; status?: number; detail?: string }> {
+    if (!this.port.httpFromPeer) {
+      throw new SandboxUnreachableError('this lab environment has no peer host to ask');
+    }
+    return this.port.httpFromPeer(request);
+  }
+
+  /**
+   * The sandbox's neighbour table, read once per verification run.
+   *
+   * `ip -json neigh show` rather than `/proc/net/arp` on purpose. The legacy
+   * file carries only a flags column — `0x2` for a complete entry, `0x0` for an
+   * incomplete one — and cannot express the difference between a neighbour the
+   * kernel has recently confirmed and one whose entry has merely aged. The
+   * netlink-backed JSON reports the real NUD state, which is the thing a
+   * networking lab needs to grade.
+   *
+   * The argv is fixed here, in verifier code. A lab supplies an address and at
+   * most an interface name, and the handler compares them against the parsed
+   * result — no lab operand ever reaches this command line.
+   */
+  neighbours(): Promise<NeighbourEntry[]> {
+    this.#neighbours ??= this.inspect('ip', ['-json', 'neigh', 'show']).then((result) => {
+      if (result.exitCode !== 0) {
+        throw new SandboxUnreachableError(
+          result.stderr.trim() || 'could not read the neighbour table in your lab environment',
+        );
+      }
+      return parseNeighbours(result.stdout);
+    });
+    return this.#neighbours;
   }
 
   /**
@@ -326,6 +387,77 @@ export function parseProcessTable(text: string): ProcessEntry[] {
  * (`*:9105`), so the port is taken from after the last colon and everything
  * before it is reported as the address.
  */
+/** One row of the kernel neighbour table. */
+export interface NeighbourEntry {
+  /** The neighbour's protocol address. */
+  dst: string;
+  /** The interface the entry belongs to. */
+  dev: string;
+  /** The resolved hardware address, absent while unresolved. */
+  lladdr?: string;
+  /** NUD states, as the kernel reports them. Normally exactly one. */
+  state: string[];
+}
+
+/**
+ * Parse `ip -json neigh show`.
+ *
+ * Defensive on every field: a row that is not an object, or that carries no
+ * destination, is dropped rather than trusted. An unparseable document yields
+ * an empty table, which fails a positive check honestly instead of throwing.
+ */
+export function parseNeighbours(text: string): NeighbourEntry[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const entries: NeighbourEntry[] = [];
+  for (const row of parsed) {
+    if (typeof row !== 'object' || row === null) continue;
+    const record = row as Record<string, unknown>;
+    const dst = typeof record.dst === 'string' ? record.dst : undefined;
+    if (!dst) continue;
+    const dev = typeof record.dev === 'string' ? record.dev : '';
+    const lladdr = typeof record.lladdr === 'string' ? record.lladdr : undefined;
+    const state = Array.isArray(record.state)
+      ? record.state.filter((v): v is string => typeof v === 'string').map((v) => v.toUpperCase())
+      : [];
+    entries.push({ dst, dev, state, ...(lladdr ? { lladdr } : {}) });
+  }
+  return entries;
+}
+
+/**
+ * One local address, in the one spelling everything downstream compares.
+ *
+ * Both sides of a bind-address check pass through here — the value a lab wrote
+ * and the value the kernel reported — so the two cannot drift apart. What it
+ * settles, from what `ss` actually prints on Linux:
+ *
+ *   `[::1]`  → `::1`     brackets are presentation, not identity
+ *   `[::]`   → `::`      likewise
+ *   `*`      → `::`      how `ss` prints the IPv6 any-address socket
+ *   `0.0.0.0`→ `0.0.0.0` the IPv4 wildcard, a *different* binding from `::`
+ *
+ * The last line is the deliberate one. With `net.ipv6.bindv6only=0` — the Linux
+ * default — a socket bound to `::` also serves IPv4, so the two wildcards are
+ * often interchangeable in effect. They are not the same binding, and this
+ * check grades what a socket is bound to rather than what it can be reached
+ * over. A lab that accepts either says so by naming both, which is what the
+ * list form of `address` is for.
+ */
+export function normaliseBindAddress(address: string): string {
+  const trimmed = address.trim();
+  if (trimmed === '*') return '::';
+  const unbracketed =
+    trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed;
+  return unbracketed.toLowerCase();
+}
+
 export function parseListeningSockets(text: string): ListeningSocket[] {
   const sockets: ListeningSocket[] = [];
   for (const line of text.split('\n')) {

@@ -1,0 +1,60 @@
+JumpToTech Bank — ledger settlement, reconciliation failing
+===========================================================
+
+Since the migration, the ledger API's settlement poller has not reconciled a
+single batch. The application team has restarted it twice and escalated on the
+grounds that "the network is down".
+
+The network is not down. The API itself is healthy and answering on this host.
+What is failing is one specific thing the poller is trying to talk to, and the
+log it writes says so every few seconds if you read it.
+
+
+WHAT IS ON THIS HOST
+--------------------
+
+  /etc/ledger/settlement.conf        the poller's configuration
+  /var/log/jumptotech/settlement.log what the poller has been recording
+  ledger-api                         the API, healthy, answering on this host
+  settlement-poller                  the failing service
+
+The poller re-reads its configuration every cycle. You do not need to restart
+anything for a corrected setting to take effect — though watching the log while
+it picks the change up is a reasonable way to confirm you were right.
+
+
+THE QUESTION TO ANSWER
+----------------------
+
+Not "is the network down". The question is why *this* destination cannot be
+reached from *this* host, when the host is plainly working.
+
+Work it out from the machine, not from the ticket:
+
+  · what address and prefix does this host actually have
+  · what does its routing table say it can deliver to
+  · which destinations fall inside that, and which fall outside
+  · what is actually alive on this host's own segment, and how would you know
+  · what does the poller's own log say about each attempt
+
+The settlement endpoint the poller *should* be using is on this host's own
+segment. It is not this host itself — a service reconciling against its own
+address would not have needed a network in the first place. It sits where the
+first usable address of a segment conventionally sits, and it will answer for
+itself if you ask it. Confirm that before you trust it: an address you have not
+probed is an assumption, not a finding.
+
+Your own prefix is what tells you which address that is. Nothing in this
+directory does.
+
+
+WHAT TO FIX
+-----------
+
+Correct the poller's configuration so it points at a destination this host can
+actually reach, and leave it running.
+
+You cannot change this machine's routing table — the sandbox does not grant the
+privilege, and that is deliberate. Routing is what you are *diagnosing* here;
+the repair belongs in the application's configuration, which is where the fault
+was introduced. Telling those two apart is most of the skill.

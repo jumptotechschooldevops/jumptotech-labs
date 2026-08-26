@@ -52,7 +52,7 @@
  * by this process — building an image needs the Docker socket, and the same
  * rule that keeps `kind` cluster creation out of the API applies here.
  */
-import { VERIFIER_COMMANDS } from '../requirements.js';
+import { VERIFIER_COMMANDS, VERIFIER_INTERNAL_COMMANDS } from '../requirements.js';
 import type { ContainerRuntimePort } from './container/runtime.js';
 import { ContainerLabProvider } from './container/sandbox-provider.js';
 
@@ -132,7 +132,9 @@ export class LinuxLabProvider extends ContainerLabProvider {
       // sockets and account databases. These are the read-only binaries the
       // verifier may use to do it; the closed list lives in `requirements.ts`
       // so the lab schema and the provider cannot drift apart.
-      inspectionCommands: VERIFIER_COMMANDS,
+      // Lab-facing commands, plus the ones only trusted verifier code may run.
+      // A lab can name anything in the first list; nothing can name the second.
+      inspectionCommands: [...VERIFIER_COMMANDS, ...VERIFIER_INTERNAL_COMMANDS],
       ...(options.home ? { home: options.home } : {}),
       ...(options.now ? { now: options.now } : {}),
       ...(options.runtimeOwner ? { runtimeOwner: options.runtimeOwner } : {}),
