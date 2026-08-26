@@ -12,6 +12,7 @@ import {
   DEFAULT_LINUX_SANDBOX_IMAGE,
   DEFAULT_DOCKER_SANDBOX_IMAGE,
   DEFAULT_SESSION_POLICY,
+  DEFAULT_ANSIBLE_SANDBOX_IMAGE,
   DEFAULT_TERRAFORM_SANDBOX_IMAGE,
   type DockerSandboxPolicy,
   type SessionLifetimeConfig,
@@ -148,6 +149,8 @@ export interface SandboxProviderConfig {
   linuxImage: string;
   terraformEnabled: boolean;
   terraformImage: string;
+  ansibleEnabled: boolean;
+  ansibleImage: string;
   /** Registered but never enabled — see providers.ts and README → Docker. */
   dockerImage: string;
 }
@@ -386,6 +389,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       linuxImage: strFromEnv(env, 'LINUX_SANDBOX_IMAGE', DEFAULT_LINUX_SANDBOX_IMAGE),
       terraformEnabled: boolFromEnv(env, 'TERRAFORM_PROVIDER_ENABLED', true),
       terraformImage: strFromEnv(env, 'TERRAFORM_SANDBOX_IMAGE', DEFAULT_TERRAFORM_SANDBOX_IMAGE),
+      ansibleEnabled: boolFromEnv(env, 'ANSIBLE_PROVIDER_ENABLED', true),
+      ansibleImage: strFromEnv(env, 'ANSIBLE_SANDBOX_IMAGE', DEFAULT_ANSIBLE_SANDBOX_IMAGE),
       dockerImage: strFromEnv(env, 'DOCKER_SANDBOX_IMAGE', DEFAULT_DOCKER_SANDBOX_IMAGE),
     },
     progress: loadProgressConfig(env),

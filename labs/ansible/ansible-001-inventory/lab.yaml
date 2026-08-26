@@ -1,0 +1,137 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# This file is the single source of truth for the lab. The API loads it at
+# runtime and serves it to the frontend; nothing about this task is hardcoded
+# in React or in the verifier.
+#
+# There is deliberately no host, container, or credential named anywhere in
+# this file. Each student session gets its own control node, its own managed
+# nodes, and its own SSH key; the terminal and the verifier are both scoped to
+# that session by the session record.
+#
+# Content is written from the official Ansible documentation only.
+# ---------------------------------------------------------------------------
+id: ANSIBLE-001
+slug: ansible-001-inventory
+title: Build Your First Inventory
+track: ansible
+topic: fundamentals
+difficulty: beginner
+level: practice
+duration_minutes: 25
+order: 1
+
+environment:
+  provider: ansible
+  isolation: container
+
+prerequisites: []
+
+story: >
+  You have joined the automation team at JumpToTech Bank. The team manages a
+  fleet of servers, and every single thing they automate starts from the same
+  place: a list of machines and how they are grouped.
+
+  Two web servers have just been handed to you — node1 and node2. Nobody has
+  written them down anywhere yet, so as far as Ansible is concerned they do not
+  exist. Your first job is to make Ansible aware of them, and prove it can
+  actually reach them.
+
+objectives:
+  - Explain what an Ansible inventory is and why groups matter
+  - Write a static INI inventory containing a named host group
+  - Read the parsed inventory back with ansible-inventory
+  - Confirm real connectivity to managed nodes with the ping module
+
+task:
+  summary: Create an inventory containing a `web` group with node1 and node2, and prove Ansible can reach both.
+  description: >
+    An inventory is Ansible's list of the machines it manages. In its simplest
+    form it is a text file: host names, optionally arranged into groups. Groups
+    are what let you later say "configure every web server" instead of naming
+    machines one at a time.
+
+    Your project already contains an `ansible.cfg` that points at
+    `inventory.ini`. That file does not exist yet — create it.
+
+    It must define a group called `web` containing two hosts, `node1` and
+    `node2`. Those are the two managed nodes attached to your session. The
+    connection details are already configured — `ansible.cfg` sets the remote
+    user, and your control node already holds the session's SSH key — so the
+    inventory itself is the only thing standing between you and a working
+    `ansible web -m ping`.
+
+    Useful commands while you work:
+
+    `ansible-inventory --list` prints the inventory exactly as Ansible parsed
+    it, which is the fastest way to see whether your file says what you think
+    it says.
+
+    `ansible all -m ping` opens a real SSH connection to every host in the
+    inventory and asks it to answer. A host that replies `pong` is genuinely
+    reachable; nothing about it is simulated.
+
+# Verification is state-based. The verifier asks Ansible itself what the
+# inventory contains and whether the nodes answer — it never inspects your
+# shell history, so it does not matter how you created the file.
+requirements:
+  - type: file_exists
+    path: inventory.ini
+    label: An inventory file exists
+  - type: ansible_inventory_valid
+    label: Ansible can parse the inventory
+  - type: ansible_group_exists
+    group: web
+    hosts: [node1, node2]
+    label: A 'web' group contains node1 and node2
+  - type: ansible_connectivity
+    pattern: web
+    min_hosts: 2
+    label: Both web hosts answer ansible -m ping
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: file_exists
+      path: ansible.cfg
+      label: Ansible configuration is in place
+
+hints:
+  - level: 1
+    text: >
+      An inventory can be as simple as a few lines of text. Groups are declared
+      with a header line, and the hosts belonging to that group are listed
+      underneath it.
+  - level: 2
+    text: >
+      Read the "How to build your inventory" page in the official Ansible
+      documentation. It shows the INI format your `ansible.cfg` is already
+      expecting. After every edit, run `ansible-inventory --list` — if a host
+      or a group is missing there, it is missing as far as Ansible is concerned.
+  - level: 3
+    text: >
+      The group must be named exactly `web` and must contain both `node1` and
+      `node2`. Once `ansible-inventory --list` shows both hosts under that
+      group, run `ansible web -m ping`. A host that answers SUCCESS is genuinely
+      reachable; a host that answers UNREACHABLE is usually spelled differently
+      in your file than it is in the fleet.
+
+references:
+  - title: How to build your inventory
+    url: https://docs.ansible.com/ansible/latest/inventory_guide/intro_inventory.html
+  - title: ansible-inventory
+    url: https://docs.ansible.com/ansible/latest/cli/ansible-inventory.html
+  - title: ansible.builtin.ping module
+    url: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/ping_module.html
+
+skills:
+  - ansible.inventory.create
+  - ansible.inventory.groups
+  - ansible.connectivity.verify
+
+certification:
+  - certification: RHCE
+    relevant: true
+    domains:
+      - understand-core-components-of-ansible

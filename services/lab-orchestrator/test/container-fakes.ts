@@ -112,7 +112,11 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
 
   constructor(options: FakeRuntimeOptions = {}) {
     this.#images = new Set(
-      options.images ?? ['jumptotech/lab-linux:latest', 'jumptotech/lab-terraform:latest'],
+      options.images ?? [
+        'jumptotech/lab-linux:latest',
+        'jumptotech/lab-terraform:latest',
+        'jumptotech/lab-ansible:latest',
+      ],
     );
     this.unreachable = options.unreachable;
     this.#seed = options.seed ?? {};
@@ -145,7 +149,10 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
     // The real runtime refuses any capability outside `GRANTABLE_CAPABILITIES`
     // before it builds an argv. A fake that accepted one would hide precisely
     // the bug that gate exists to catch, so it is modelled here too.
-    for (const capability of spec.capAdd ?? []) assertCapabilityName(capability);
+    // Same gate the real runtime applies, provider and all: a fake that
+    // validated more loosely would let a provider-restricted capability pass
+    // in tests and fail against a real daemon.
+    for (const capability of spec.capAdd ?? []) assertCapabilityName(capability, spec.provider);
 
     if (this.unreachable) throw new Error(this.unreachable);
     if (!this.#images.has(spec.image)) {
@@ -308,6 +315,14 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
         const binary = args[0];
         if (binary === 'terraform' && container.spec.image.includes('terraform')) {
           return ok('Terraform v1.9.8\non linux_arm64\n');
+        }
+        // The Ansible control node's tooling check. Modelled per image, like
+        // Terraform's, so a provider pointed at the wrong image still fails.
+        if (binary === 'ansible' && container.spec.image.includes('ansible')) {
+          return ok('ansible [core 2.18.1]\n');
+        }
+        if (binary === 'ssh' && container.spec.image.includes('ansible')) {
+          return ok('OpenSSH_9.9p2\n');
         }
         return fail(`env: '${String(binary)}': No such file or directory`);
       }

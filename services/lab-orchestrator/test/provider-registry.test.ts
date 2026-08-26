@@ -157,6 +157,7 @@ describe('availability is reported, not thrown', () => {
       'docker',
       'terraform',
       'aws',
+      'ansible',
     ]);
     expect(statuses.every((s) => !s.registered && !s.available)).toBe(true);
   });

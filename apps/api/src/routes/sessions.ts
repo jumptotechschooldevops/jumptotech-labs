@@ -25,6 +25,7 @@ import type { SessionGuard } from '../auth/middleware.js';
 import { Router, type Response } from 'express';
 import {
   SessionError,
+  type AnsibleSandboxPort,
   type DockerEngineFactory,
   type KubernetesPort,
   type LabRegistry,
@@ -52,6 +53,14 @@ export interface SessionRoutesDeps {
   sessionGuard: SessionGuard;
   k8s: KubernetesPort;
   engines?: DockerEngineFactory;
+  /**
+   * Reads one Ansible session's topology, for verification.
+   *
+   * Stateless with respect to sessions — every method takes the sandbox id —
+   * so one port serves every Ansible session and none of them can name
+   * another's containers.
+   */
+  ansible?: AnsibleSandboxPort;
   workspace?: WorkspacePort;
   config: ApiConfig;
   /**
@@ -139,7 +148,7 @@ export function toSessionPayload(manager: SessionManager, session: LabSession) {
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps): Router {
-  const { registry, sessions, k8s, engines, workspace, progress } = deps;
+  const { registry, sessions, k8s, engines, ansible, workspace, progress } = deps;
   const log = deps.logger ?? (() => undefined);
   const router = Router();
   /*
@@ -178,6 +187,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       ...(session.provider === 'docker' && engines
         ? { docker: engines.session(sandboxRef) }
         : {}),
+      // An Ansible lab is graded across its whole topology, so its reader is a
+      // port over the session's containers rather than the single-sandbox one.
+      ...(session.provider === 'ansible' && ansible ? { ansible } : {}),
       ...(workspace ? { workspace: { port: workspace, sessionId: session.sessionId } } : {}),
     };
   }

@@ -88,8 +88,16 @@ function expectIssue(yaml: string, pattern: RegExp): void {
 describe('schema — a lab declares its substrate', () => {
   it('accepts the substrates the platform implements', () => {
     // The vocabulary is the platform's, not this track's: PLATFORM-004 added
-    // linux and terraform alongside kubernetes and docker.
-    expect([...LAB_PROVIDERS]).toEqual(['kubernetes', 'linux', 'docker', 'terraform', 'aws']);
+    // linux and terraform alongside kubernetes and docker, and the AWS and
+    // Ansible tracks added their own since.
+    expect([...LAB_PROVIDERS]).toEqual([
+      'kubernetes',
+      'linux',
+      'docker',
+      'terraform',
+      'aws',
+      'ansible',
+    ]);
     expect(parseLabDefinition(dockerYaml()).environment).toEqual({
       provider: 'docker',
       isolation: 'container',

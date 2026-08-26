@@ -22,6 +22,7 @@ import {
   REQUIREMENT_FAMILY_READERS,
   REQUIREMENT_TYPES,
   familyReader,
+  isAnsibleFamily,
   isDockerFamily,
   isKubernetesFamily,
   isSandboxFamily,
@@ -225,14 +226,15 @@ describe('family routing is exhaustive and disjoint', () => {
         isKubernetesFamily(family),
         isSandboxFamily(family),
         isDockerFamily(family),
+        isAnsibleFamily(family),
       ].filter(Boolean);
       return groups.length !== 1;
     });
     expect(misrouted).toEqual([]);
   });
 
-  it('routes every declared family to one of the three known readers', () => {
-    const known = new Set(['kubernetes', 'sandbox', 'docker']);
+  it('routes every declared family to one of the four known readers', () => {
+    const known = new Set(['kubernetes', 'sandbox', 'docker', 'ansible']);
     const stray = REQUIREMENT_FAMILY_LIST.filter((family) => !known.has(familyReader(family)));
     expect(stray).toEqual([]);
   });
@@ -247,6 +249,7 @@ describe('family routing is exhaustive and disjoint', () => {
       expect(isKubernetesFamily(family)).toBe(REQUIREMENT_FAMILY_READERS[family] === 'kubernetes');
       expect(isSandboxFamily(family)).toBe(REQUIREMENT_FAMILY_READERS[family] === 'sandbox');
       expect(isDockerFamily(family)).toBe(REQUIREMENT_FAMILY_READERS[family] === 'docker');
+      expect(isAnsibleFamily(family)).toBe(REQUIREMENT_FAMILY_READERS[family] === 'ansible');
     }
   });
 });

@@ -1,0 +1,6 @@
+---
+# Variables shared by every host in the `web` group.
+#
+# The ledger service is moving from port 8080 to port 9090.
+app_name: ledger
+app_port: 8080

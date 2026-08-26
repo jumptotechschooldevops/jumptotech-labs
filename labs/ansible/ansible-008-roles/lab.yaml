@@ -1,0 +1,166 @@
+id: ANSIBLE-008
+slug: ansible-008-roles
+title: Refactor a Playbook Into a Role
+track: ansible
+topic: roles
+difficulty: advanced
+level: practice
+duration_minutes: 40
+order: 8
+
+environment:
+  provider: ansible
+  isolation: container
+
+prerequisites:
+  - ANSIBLE-007
+
+story: >
+  There are now four playbooks in the JumpToTech Bank repository that configure
+  a web tier, and they contain the same four tasks with slightly different
+  spellings. When the log directory moved last month it was fixed in three of
+  them.
+
+  Your team lead wants the ledger's configuration extracted into something the
+  payments team can include in one line and nobody has to copy again.
+
+objectives:
+  - Explain what each directory in a role is for
+  - Move tasks, handlers, templates, and defaults into the right places
+  - Apply a role from a playbook with the roles keyword
+  - Distinguish role defaults from group variables and know which wins
+
+task:
+  summary: Convert the monolithic site.yml into a reusable `web` role, and reduce the playbook to applying it.
+  description: >
+    A role is a directory with a fixed layout. Ansible loads the pieces
+    automatically — you never write a path to them:
+
+    ```
+    roles/
+      web/
+        tasks/main.yml        the work
+        handlers/main.yml     handlers the tasks notify
+        templates/            template sources
+        defaults/main.yml     the role's own default values
+    ```
+
+    Restructure the project so that:
+
+    A role named `web` exists under `roles/`, containing at minimum
+    `tasks/main.yml`, `handlers/main.yml`, `templates/`, and
+    `defaults/main.yml`.
+
+    The four tasks and the `reload ledger` handler currently in `site.yml` live
+    in the role. `app.conf.j2` moves into the role's own `templates/`
+    directory.
+
+    `defaults/main.yml` gives `app_name`, `app_port`, and `app_release` sensible
+    default values, so the role does something reasonable even for a group that
+    defines none of them.
+
+    `site.yml` becomes a play that applies the role with the `roles:` keyword
+    and declares no tasks of its own.
+
+    The managed nodes must end up in exactly the state they were in before —
+    that is what makes this a refactor. `/etc/jumptotech/app.conf` still renders
+    the ledger settings and the node's own name, and
+    `/var/log/jumptotech/reload.log` still records that the reload happened.
+
+    One thing worth noticing while you work: role defaults have the *lowest*
+    precedence of any variable in Ansible. The values in `group_vars/web.yml`
+    will keep winning over your `defaults/main.yml`, and that is exactly the
+    intent — defaults are a fallback, not a setting.
+
+requirements:
+  - type: ansible_role_exists
+    role: web
+    requires: [tasks, handlers, templates, defaults]
+    used_by: site.yml
+    label: A 'web' role exists with the standard layout and site.yml applies it
+  - type: yaml_valid
+    path: roles/web/defaults/main.yml
+    label: The role declares its own defaults
+  - type: ansible_handler_exists
+    role: web
+    name: reload ledger
+    notified: true
+    label: The role owns the reload handler and notifies it
+  - type: ansible_playbook_valid
+    playbook: site.yml
+    label: Ansible accepts the refactored playbook
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf
+    hosts: all
+    contains:
+      - app_name=ledger
+      - app_port=9090
+      - app_release=2.4.1
+    label: Both nodes still render the ledger settings
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf
+    hosts: [node1]
+    contains:
+      - served_by=node1
+    label: node1 still renders its own hostname
+  - type: managed_file_content
+    path: /var/log/jumptotech/reload.log
+    hosts: all
+    contains:
+      - reloaded ledger
+    label: The reload still happens on both nodes
+  - type: ansible_idempotent
+    playbook: site.yml
+    label: A second run of the refactored playbook changes nothing
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: ansible_playbook_valid
+      playbook: site.yml
+      label: The starting playbook is runnable
+    - type: file_exists
+      path: templates/app.conf.j2
+      label: The starting template is in place
+
+hints:
+  - level: 1
+    text: >
+      Nothing in a role needs to be wired up by hand. Ansible finds
+      `tasks/main.yml`, `handlers/main.yml`, and the role's `templates/`
+      directory because of where they are, not because something points at
+      them.
+  - level: 2
+    text: >
+      Read "Roles" in the playbook guide, particularly the section on the role
+      directory structure and the one on using roles at the play level. Note
+      that a task list inside a role is just a list of tasks — there is no
+      `- name:`/`hosts:` wrapper, because the play already said which hosts.
+  - level: 3
+    text: >
+      A role's task file is the *contents* of the old `tasks:` list, not the
+      whole play. Once the template lives in `roles/web/templates/`, the old
+      top-level `templates/` copy is dead weight — and if you leave both, check
+      which one is actually being rendered. Confirm the refactor with
+      `ansible-playbook site.yml` twice: the first run may report changes, the
+      second must report none.
+
+references:
+  - title: Roles
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html
+  - title: Variable precedence
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html#variable-precedence-where-should-i-put-a-variable
+  - title: Sample Ansible setup
+    url: https://docs.ansible.com/ansible/latest/tips_tricks/sample_setup.html
+
+skills:
+  - ansible.roles.structure
+  - ansible.roles.apply
+  - ansible.roles.defaults
+  - ansible.idempotency.verify
+
+certification:
+  - certification: RHCE
+    relevant: true
+    domains:
+      - use-roles-and-modules

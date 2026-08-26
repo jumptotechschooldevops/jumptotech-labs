@@ -23,7 +23,7 @@
  *     a starter file can never be a script the platform then runs. Nothing in
  *     the platform runs starter files at all; this is belt and braces.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { LabDefinitionError, type LoadedLabDefinition } from '../lab-definition.js';
 import { assertSafeSandboxPath } from './sandbox-paths.js';
@@ -50,10 +50,70 @@ export function nonExecutableMode(mode: string): string {
   return (masked & 0o777).toString(8).padStart(3, '0');
 }
 
+/** Maximum files a `workspace_dir` may seed. A project, not a filesystem. */
+export const MAX_WORKSPACE_FILES = 64;
+
+/**
+ * Every file under `setup.workspace_dir`, as if the lab had listed them.
+ *
+ * Expanding here rather than adding a second seeding path is the whole point:
+ * what comes back is ordinary `setup.files` entries, so the size ceiling, the
+ * sandbox-path validation and the container-only rule below apply unchanged.
+ * A lab cannot reach outside its own directory, because the walk starts at the
+ * lab directory and never follows a symlink out of it.
+ */
+async function expandWorkspaceDir(
+  lab: LoadedLabDefinition,
+): Promise<Array<{ source: string; path: string; mode?: string }>> {
+  const dir = lab.setup.workspace_dir;
+  if (dir === undefined) return [];
+
+  const root = path.join(lab.directory, dir);
+  const found: Array<{ source: string; path: string; mode?: string }> = [];
+
+  async function walk(relative: string): Promise<void> {
+    const absolute = path.join(root, relative);
+    let entries;
+    try {
+      entries = await readdir(absolute, { withFileTypes: true });
+    } catch (cause) {
+      throw new LabDefinitionError(
+        `Cannot read setup.workspace_dir '${dir}': ${(cause as Error).message}`,
+        lab.sourcePath,
+        [],
+        lab.id,
+      );
+    }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const next = relative === '' ? entry.name : `${relative}/${entry.name}`;
+      // Regular files and real directories only. A symlink is skipped rather
+      // than followed: its target may sit outside the lab directory, and a
+      // seeded file must always be content the lab itself ships.
+      if (entry.isDirectory()) {
+        await walk(next);
+      } else if (entry.isFile()) {
+        if (found.length >= MAX_WORKSPACE_FILES) {
+          throw new LabDefinitionError(
+            `setup.workspace_dir '${dir}' holds more than ${MAX_WORKSPACE_FILES} files`,
+            lab.sourcePath,
+            [],
+            lab.id,
+          );
+        }
+        found.push({ source: `${dir}/${next}`, path: next });
+      }
+    }
+  }
+
+  await walk('');
+  return found;
+}
+
 export async function loadSetupFiles(lab: LoadedLabDefinition): Promise<LoadedSetupFile[]> {
   const files: LoadedSetupFile[] = [];
 
-  for (const declared of lab.setup.files) {
+  const declaredFiles = [...(await expandWorkspaceDir(lab)), ...lab.setup.files];
+  for (const declared of declaredFiles) {
     const absolute = resolveSourcePath(lab, declared.source);
 
     let content: string;
@@ -91,7 +151,8 @@ export async function loadSetupFiles(lab: LoadedLabDefinition): Promise<LoadedSe
     files.push({
       path: declared.path,
       content,
-      mode: nonExecutableMode(declared.mode),
+      // A workspace file declares no mode; 0644 is what a project file is.
+      mode: nonExecutableMode(declared.mode ?? '644'),
       source: declared.source,
     });
   }

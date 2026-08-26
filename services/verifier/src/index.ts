@@ -37,6 +37,8 @@ import {
   type VerificationReaders,
 } from './registry.js';
 import { SandboxReader, type SandboxPort } from './sandbox-reader.js';
+import type { AnsibleSandboxPort } from '@jumptotech/lab-orchestrator';
+import { AnsibleVerifyReader } from './ansible-reader.js';
 import { DockerVerifyReader } from './docker-reader.js';
 import type { CheckResult } from './contract.js';
 
@@ -150,6 +152,8 @@ export interface VerifyOptions {
   sandbox?: SandboxPort;
   /** Required for Docker labs: a port bound to *this session's* daemon. */
   docker?: DockerEnginePort;
+  /** Required for Ansible labs: a port bound to *this session's* topology. */
+  ansible?: AnsibleSandboxPort;
   lab: LabDefinition;
   /**
    * The session's private sandbox: namespace for Kubernetes labs, container
@@ -177,6 +181,7 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
     ...(options.docker
       ? { docker: new DockerVerifyReader(options.docker, namespace, options.workspace) }
       : {}),
+    ...(options.ansible ? { ansible: new AnsibleVerifyReader(options.ansible, namespace) } : {}),
   };
 
   let checks: CheckResult[];

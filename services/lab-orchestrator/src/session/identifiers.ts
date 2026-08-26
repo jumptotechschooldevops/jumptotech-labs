@@ -67,6 +67,22 @@ export const CONTAINER_NETWORK_PATTERN = /^jtt-net-[0-9a-f]{6,40}$/;
  */
 export const CONTAINER_PEER_PATTERN = /^jtt-peer-[0-9a-f]{6,40}$/;
 
+/**
+ * A session's Ansible managed node — `jtt-node1-<hex>`, `jtt-node2-<hex>`.
+ *
+ * An Ansible lab needs machines to configure, so its topology is a control
+ * node (the ordinary sandbox, where the student's shell lands) plus a small
+ * fixed number of managed nodes. Their names are derived from the same sandbox
+ * reference as the network and the peer, so the whole topology rises and falls
+ * together and no part of it can be pointed at another session.
+ *
+ * The index is in the *prefix* rather than the suffix so that the hex tail
+ * stays the session's own identifier in every name the platform uses, and so
+ * that `jtt-node1-…` can never be mistaken for a sandbox by
+ * `CONTAINER_SANDBOX_PATTERN`.
+ */
+export const CONTAINER_NODE_PATTERN = /^jtt-node[1-9]-[0-9a-f]{6,40}$/;
+
 /** Hex characters of entropy in a session id. 16 → 64 bits. */
 export const DEFAULT_SESSION_ID_ENTROPY_CHARS = 16;
 
@@ -341,6 +357,19 @@ export function isContainerPeerRef(input: unknown): input is string {
   return typeof input === 'string' && CONTAINER_PEER_PATTERN.test(input);
 }
 
+/** The managed-node container name for a sandbox reference and a 1-based index. */
+export function nodeRefForSandbox(sandboxRef: string, index: number): string {
+  const ref = assertValidContainerSandboxRef(sandboxRef);
+  if (!Number.isInteger(index) || index < 1 || index > 9) {
+    throw new InvalidSandboxRefError(String(index), 'managed node index must be 1..9');
+  }
+  return `jtt-node${index}-${ref.slice('jtt-lab-'.length)}`;
+}
+
+export function isContainerNodeRef(input: unknown): input is string {
+  return typeof input === 'string' && CONTAINER_NODE_PATTERN.test(input);
+}
+
 /**
  * A container this platform manages: a session sandbox, or a session's peer.
  *
@@ -351,6 +380,7 @@ export function isContainerPeerRef(input: unknown): input is string {
  */
 export function assertValidManagedContainerRef(input: unknown): string {
   if (isContainerPeerRef(input)) return input;
+  if (isContainerNodeRef(input)) return input;
   return assertValidContainerSandboxRef(input);
 }
 

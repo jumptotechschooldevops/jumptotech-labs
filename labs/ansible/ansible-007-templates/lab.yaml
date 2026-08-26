@@ -1,0 +1,157 @@
+id: ANSIBLE-007
+slug: ansible-007-templates
+title: Generate Configuration With Jinja2 Templates
+track: ansible
+topic: templates-and-handlers
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 7
+
+environment:
+  provider: ansible
+  isolation: container
+
+prerequisites:
+  - ANSIBLE-006
+
+story: >
+  The ledger configuration has outgrown the `content:` argument. It now needs a
+  worker count, a release number, the node's role, and — this is the part that
+  finally broke the old approach — the node's own hostname, which is different
+  on every machine.
+
+  Stuffing all of that into a `copy` task turns the playbook into a wall of
+  quoted text. The configuration file needs to become what it always was: a
+  document with holes in it.
+
+objectives:
+  - Explain when a template is the right tool and copy is not
+  - Write a Jinja2 template that renders variables and facts
+  - Deploy a template with the template module
+  - Confirm that the rendered result differs correctly per host
+
+task:
+  summary: Write templates/app.conf.j2 and deploy it so each node gets a configuration file rendered with its own values.
+  description: >
+    A Jinja2 template is an ordinary file with expressions in it. `{{ app_port }}`
+    is replaced by the value of `app_port` when the file is rendered — on the
+    control node, once per host, using that host's variables.
+
+    Alongside the variables you define, Ansible collects **facts** about every
+    machine it connects to. `ansible_facts['hostname']` is one of them, and the
+    magic variable `inventory_hostname` holds the name the inventory used. Both
+    are available inside a template with no extra work.
+
+    Create `templates/app.conf.j2` and deploy it to `/etc/jumptotech/app.conf`
+    on the `web` group with the `ansible.builtin.template` module, so that each
+    node ends up with a file containing these lines:
+
+    `app_name=ledger`
+
+    `app_port=9090`
+
+    `app_release=2.4.1`
+
+    `app_workers=4`
+
+    `node_role=` the role from that host's variables — `primary` on node1 and
+    `replica` on node2
+
+    `served_by=` the name of the node itself — `node1` on node1, `node2` on
+    node2
+
+    Every one of those values must come from a variable or a fact. A template
+    that spells `9090` out in full renders the right file today and the wrong
+    one the day the port changes, which is the failure this lab exists to
+    prevent.
+
+requirements:
+  - type: ansible_template_exists
+    path: templates/app.conf.j2
+    references:
+      - app_name
+      - app_port
+      - app_release
+      - app_workers
+      - node_role
+    label: A Jinja2 template renders every configured value
+  - type: ansible_task_exists
+    playbook: site.yml
+    module: template
+    label: The playbook deploys the file with the template module
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf
+    hosts: all
+    contains:
+      - app_name=ledger
+      - app_port=9090
+      - app_release=2.4.1
+      - app_workers=4
+    label: Both nodes render the shared application settings
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf
+    hosts: [node1]
+    contains:
+      - node_role=primary
+      - served_by=node1
+    label: node1 renders its own role and hostname
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf
+    hosts: [node2]
+    contains:
+      - node_role=replica
+      - served_by=node2
+    label: node2 renders its own role and hostname
+  - type: ansible_idempotent
+    playbook: site.yml
+    label: A second run of the playbook changes nothing
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: yaml_valid
+      path: group_vars/web.yml
+      label: Group variables are in place
+    - type: file_exists
+      path: host_vars/node1.yml
+      label: Host variables are in place
+
+hints:
+  - level: 1
+    text: >
+      Templates are rendered on the control node, not on the target. That is
+      why one file can produce two different results — it is rendered once per
+      host, with that host's variables in scope.
+  - level: 2
+    text: >
+      Read the `ansible.builtin.template` module page and "Templating (Jinja2)"
+      in the playbook guide. By convention the template module looks for its
+      source in a `templates/` directory relative to the playbook, so a bare
+      relative name is usually enough for `src`.
+  - level: 3
+    text: >
+      For the node's own name, either `inventory_hostname` or
+      `ansible_facts['hostname']` will do here. If the rendered file contains a
+      literal `{{ app_port }}` rather than a number, the file was copied rather
+      than templated — check which module the task uses. Inspect the result with
+      `ansible node1 -m command -a "cat /etc/jumptotech/app.conf"`.
+
+references:
+  - title: Templating (Jinja2)
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_templating.html
+  - title: ansible.builtin.template module
+    url: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/template_module.html
+  - title: Discovering variables - facts and magic variables
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_vars_facts.html
+
+skills:
+  - ansible.templates.jinja2
+  - ansible.templates.deploy
+  - ansible.variables.facts
+
+certification:
+  - certification: RHCE
+    relevant: true
+    domains:
+      - create-templates-for-configuration-files

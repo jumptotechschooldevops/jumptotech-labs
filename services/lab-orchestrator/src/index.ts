@@ -92,6 +92,7 @@ export {
   DockerCliRuntime,
   ContainerRuntimeError,
   GRANTABLE_CAPABILITIES,
+  PROVIDER_RESTRICTED_CAPABILITIES,
   assertCapabilityName,
   MANAGED_CONTAINER_LABEL,
   MANAGED_CONTAINER_SELECTOR,
@@ -187,3 +188,49 @@ export {
 export * from './session-token.js';
 
 export { LAB_NETWORK_MODES, type LabNetworkMode } from './providers/catalog.js';
+
+// --- Ansible -----------------------------------------------------------------
+export {
+  ALLOWED_MANAGED_ROOTS,
+  MAX_READ_BYTES as ANSIBLE_MAX_READ_BYTES,
+  ForbiddenSandboxPathError,
+  type AnsibleNodeName,
+  type AnsiblePathInfo,
+  type AnsiblePlaybookRun,
+  type AnsibleRunResult,
+  type AnsibleSandboxPort,
+} from './ansible/port.js';
+export {
+  ANSIBLE_CALLBACK_DIR,
+  ANSIBLE_CALLBACK_NAME,
+  ANSIBLE_MANAGED_USER,
+  ANSIBLE_SHELL_USER,
+  ANSIBLE_WORKSPACE_DIR,
+  InvalidSandboxIdError,
+  type AnsibleNode,
+  type AnsibleNodeRole,
+  type AnsibleTopology,
+} from './ansible/topology.js';
+export { isAllowedManagedPath, isSafeWorkspacePath } from './ansible/paths.js';
+export { DockerAnsibleSandbox, type DockerAnsibleSandboxOptions } from './ansible/sandbox.js';
+export {
+  DockerRuntimeExecPort,
+  type AnsibleExecPort,
+  type AnsibleExecResult,
+  type AnsibleExecSpec,
+} from './ansible/exec-port.js';
+export { topologyFor, managedNodeNames, DEFAULT_MANAGED_NODE_COUNT } from './ansible/topology.js';
+export {
+  ANSIBLE_MANAGED_NODE_CAPABILITIES,
+  ANSIBLE_MANAGED_NODE_COUNT,
+  ANSIBLE_SSH_PORT,
+  AnsibleLabProvider,
+  DEFAULT_ANSIBLE_SANDBOX_IMAGE,
+  type AnsibleProviderOptions,
+} from './providers/ansible-provider.js';
+export {
+  CONTAINER_NODE_PATTERN,
+  isContainerNodeRef,
+  nodeRefForSandbox,
+} from './session/identifiers.js';
+export type { AnsibleRequirementType, AnsibleFamily } from './requirements.js';

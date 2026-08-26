@@ -1,0 +1,146 @@
+id: ANSIBLE-006
+slug: ansible-006-handlers
+title: Handlers and Idempotent Change
+track: ansible
+topic: templates-and-handlers
+difficulty: intermediate
+level: practice
+duration_minutes: 35
+order: 6
+
+environment:
+  provider: ansible
+  isolation: container
+
+prerequisites:
+  - ANSIBLE-005
+
+story: >
+  The ledger service is moving from port 8080 to port 9090. The playbook writes
+  the new configuration perfectly, and the service carries on serving the old
+  port, because nothing told it to re-read the file.
+
+  The obvious fix — add a reload task at the end — is the wrong one. It would
+  reload the service on every single run, including the hundreds of runs where
+  nothing changed at all. What you want is a reload that happens when, and only
+  when, the configuration actually changed.
+
+objectives:
+  - Explain why a handler is not simply "a task at the end"
+  - Notify a handler from the task whose change requires it
+  - Predict when a handler will and will not run
+  - "Demonstrate that a playbook converges: a second run changes nothing"
+
+task:
+  summary: Move the ledger service to port 9090 and add a handler that records a reload only when the configuration actually changes.
+  description: >
+    A handler is a task that does not run when it is reached. It runs at the end
+    of the play, once, and only if some task notified it by reporting `changed`.
+
+    ```
+    tasks:
+      - name: Write the configuration
+        ansible.builtin.copy:
+          ...
+        notify: reload ledger
+
+    handlers:
+      - name: reload ledger
+        ...
+    ```
+
+    The name in `notify:` and the handler's `name:` must match exactly. That
+    string is the entire wiring, and a typo in it is silent — the playbook
+    succeeds and the handler simply never runs.
+
+    Make these true:
+
+    `group_vars/web.yml` sets `app_port` to 9090, and `/etc/jumptotech/app.conf`
+    on both nodes contains `app_port=9090`.
+
+    `site.yml` declares a handler named exactly `reload ledger`, and the task
+    that writes the configuration notifies it.
+
+    When the handler runs it writes `/var/log/jumptotech/reload.log` containing
+    the line `reloaded ledger`. Write a fixed string, not a timestamp — a file
+    whose content changes on every run can never be idempotent.
+
+    Then prove the property this lab is really about. Run
+    `ansible-playbook site.yml` twice in a row. The first run should report
+    changed tasks. The second should report `changed=0` and should not run the
+    handler at all, because nothing changed to notify it.
+
+requirements:
+  - type: ansible_playbook_valid
+    playbook: site.yml
+    label: Ansible accepts the playbook
+  - type: ansible_handler_exists
+    playbook: site.yml
+    name: reload ledger
+    notified: true
+    label: A 'reload ledger' handler exists and a task notifies it
+  - type: managed_file_content
+    path: /etc/jumptotech/app.conf
+    hosts: all
+    contains:
+      - app_port=9090
+    not_contains:
+      - app_port=8080
+    label: Both nodes serve the ledger on port 9090
+  - type: managed_file_content
+    path: /var/log/jumptotech/reload.log
+    hosts: all
+    contains:
+      - reloaded ledger
+    label: The reload actually happened on both nodes
+  - type: ansible_idempotent
+    playbook: site.yml
+    label: A second run of the playbook changes nothing
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: ansible_playbook_valid
+      playbook: site.yml
+      label: The starting playbook is runnable
+    - type: yaml_valid
+      path: group_vars/web.yml
+      label: Group variables are in place
+
+hints:
+  - level: 1
+    text: >
+      Handlers live in their own section of the play, beside `tasks:`, not
+      inside it. A handler that nothing notifies is dead code that Ansible will
+      happily ignore forever.
+  - level: 2
+    text: >
+      Read "Handlers: running operations on change" in the playbook guide. Note
+      what it says about when handlers run and how many times: once, at the end
+      of the play, no matter how many tasks notified them.
+  - level: 3
+    text: >
+      A handler only fires when the notifying task reports `changed`. If you
+      added the handler after the configuration was already in place, the copy
+      task now reports `ok` and your handler will never run — change the port
+      value, or remove `/etc/jumptotech/app.conf` from the nodes, and run again.
+      Run with `-v` if you want to see exactly which tasks reported changed.
+
+references:
+  - title: Handlers - running operations on change
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_handlers.html
+  - title: Desired state and idempotency
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_intro.html
+  - title: ansible.builtin.copy module
+    url: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/copy_module.html
+
+skills:
+  - ansible.handlers.notify
+  - ansible.handlers.declare
+  - ansible.idempotency.verify
+
+certification:
+  - certification: RHCE
+    relevant: true
+    domains:
+      - create-ansible-plays-and-playbooks

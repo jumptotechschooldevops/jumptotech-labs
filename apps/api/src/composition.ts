@@ -8,6 +8,10 @@
  * the same `waitFor` / provider graph.
  */
 import {
+  DockerAnsibleSandbox,
+  DockerCliRuntime,
+  DockerRuntimeExecPort,
+  type AnsibleSandboxPort,
   DockerCliFactory,
   InMemoryWorkspace,
   KubernetesClient,
@@ -80,6 +84,8 @@ export interface SandboxComposition {
   waitFor: RequirementWaiter;
   kubernetes: LabProvider;
   providers: ReturnType<typeof buildProviderRegistry>;
+  /** Reads an Ansible session's control node and managed nodes, for verification. */
+  ansible: AnsibleSandboxPort;
 }
 
 /** Build the sandbox substrate graph used by SessionManager and the verifier. */
@@ -124,15 +130,31 @@ export function buildSandboxComposition(options: BuildSandboxCompositionOptions)
    * verifier read the student's real workspace through the port `index.ts`
    * hands `createApp`. The two halves disagreed about where the workspace was.
    */
+  /*
+   * The Ansible reader.
+   *
+   * Built from the same container runtime the providers use, so verification
+   * reaches a session's control node and managed nodes through exactly the
+   * validated `docker exec` path everything else does. Stateless with respect
+   * to sessions: every method takes the sandbox id, so one port serves every
+   * session and none can name another's containers.
+   */
+  const containerRuntime =
+    options.containerRuntime ??
+    new DockerCliRuntime({ binary: options.config.sandbox.containerBinary });
+  const ansible = new DockerAnsibleSandbox({
+    docker: new DockerRuntimeExecPort(containerRuntime),
+  });
+
   const providers = buildProviderRegistry({
     config: options.config,
     kubernetes,
     engines,
     workspace,
     waitForRequirements: waitFor,
-    ...(options.containerRuntime ? { containerRuntime: options.containerRuntime } : {}),
+    containerRuntime,
     ...(options.sleep ? { sleep: options.sleep } : {}),
   });
 
-  return { k8s, engines, workspace, waitFor, kubernetes, providers };
+  return { k8s, engines, workspace, waitFor, kubernetes, providers, ansible };
 }

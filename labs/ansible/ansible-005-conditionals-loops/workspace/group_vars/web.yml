@@ -1,0 +1,12 @@
+---
+# Variables shared by every host in the `web` group.
+#
+# `app_directories` is a list. Somewhere in your playbook, one task should
+# create all of them — not four tasks that each create one.
+app_release: "2.4.1"
+
+app_directories:
+  - bin
+  - conf
+  - logs
+  - releases

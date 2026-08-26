@@ -1,0 +1,3 @@
+---
+# node2 is the replica. It follows the primary; it never leads.
+node_role: replica

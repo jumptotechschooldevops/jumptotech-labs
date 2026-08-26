@@ -9,6 +9,7 @@ import { InMemoryUserRepository } from './auth/users.js';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import type {
+  AnsibleSandboxPort,
   DockerEngineFactory,
   KubernetesPort,
   LabRegistry,
@@ -50,6 +51,8 @@ export interface CreateAppDeps {
   k8s: KubernetesPort;
   /** Session-scoped Docker access, for verifying Docker labs. Optional in tests. */
   engines?: DockerEngineFactory;
+  /** Reads an Ansible session's topology, for verification. */
+  ansible?: AnsibleSandboxPort;
   /** Reads student-authored files, for Docker workspace checks. */
   workspace?: WorkspacePort;
   config: ApiConfig;

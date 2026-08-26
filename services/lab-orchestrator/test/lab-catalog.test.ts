@@ -484,9 +484,12 @@ describe('catalog — filtering (test requirement 5)', () => {
       );
     }
 
-    // A track nothing ships yet matches nothing rather than erroring.
-    expect(disk.trackIds).not.toContain('ansible');
-    expect(registry.list({ track: 'ansible' })).toHaveLength(0);
+    // A track nothing ships matches nothing rather than erroring. The name is
+    // synthetic on purpose: this assertion used to use 'ansible', and silently
+    // became vacuous the moment that track shipped.
+    const unshipped = 'track-that-ships-nothing';
+    expect(disk.trackIds).not.toContain(unshipped);
+    expect(registry.list({ track: unshipped })).toHaveLength(0);
   });
 
   it('filters by topic, difficulty and level consistently with the catalog', async () => {

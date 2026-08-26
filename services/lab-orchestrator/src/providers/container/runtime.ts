@@ -89,6 +89,25 @@ export interface ContainerSpec {
    */
   capAdd?: string[];
   /**
+   * Extra DNS names this container answers to *on its own network*.
+   *
+   * Docker's embedded DNS is per-network, so an alias is reachable only from
+   * containers on the same segment. That is what lets every Ansible session
+   * call its machines `node1` and `node2` without those names colliding
+   * between sessions — each pair lives on its own `--internal` bridge.
+   *
+   * Validated like every other argv input: a short lowercase label, so a lab
+   * or a topology bug cannot inject an argument here.
+   */
+  aliases?: string[];
+  /**
+   * Which provider is asking. Read only by the capability gate above.
+   *
+   * Optional so existing callers compile, and absent means "unidentified",
+   * which denies every restricted capability rather than allowing it.
+   */
+  provider?: string;
+  /**
    * `--security-opt no-new-privileges`. True unless a sandbox genuinely needs
    * setuid to work, which is only the case where `sudo` is part of the lesson.
    */
@@ -256,11 +275,17 @@ export class DockerCliRuntime implements ContainerRuntimePort {
       'no',
     ];
 
+    for (const alias of spec.aliases ?? []) {
+      if (!/^[a-z][a-z0-9-]{0,30}$/.test(alias)) {
+        throw new ContainerRuntimeError(`'${alias}' is not a valid network alias`);
+      }
+      argv.push('--network-alias', alias);
+    }
     // Everything is dropped first, then the sandbox's declared set is added
     // back one flag at a time — so the grant is always an explicit, auditable
     // list rather than the absence of a restriction.
     for (const capability of spec.capAdd ?? []) {
-      assertCapabilityName(capability);
+      assertCapabilityName(capability, spec.provider);
       argv.push('--cap-add', capability);
     }
     if (spec.noNewPrivileges !== false) {
@@ -592,12 +617,47 @@ export const GRANTABLE_CAPABILITIES = new Set([
   // traffic. `NET_ADMIN` is deliberately not here; mutating interfaces, routes
   // and firewall rules is a different risk and a separate review.
   'NET_RAW',
+  // chroot(2), for the OpenSSH privilege separation an Ansible managed node
+  // cannot start without. Restricted to the `ansible` provider below; see
+  // PROVIDER_RESTRICTED_CAPABILITIES for why membership here is not a grant.
+  'SYS_CHROOT',
 ]);
 
-export function assertCapabilityName(capability: unknown): string {
+/**
+ * Capabilities only one provider may ever ask for.
+ *
+ * `GRANTABLE_CAPABILITIES` says what the daemon boundary will accept at all.
+ * This says *who* may ask, and it exists because the two questions have
+ * different answers: `NET_RAW` is safe on a Linux lab holding its own bridge
+ * and unsafe on a Docker sandbox that shares a segment with the terminal
+ * service, and `SYS_CHROOT` is required by an Ansible managed node and by
+ * nothing else this platform runs.
+ *
+ * Without this table, adding a capability for one track would quietly widen
+ * every track that shares the runtime — the Terraform sandbox derives from the
+ * Linux image, the Ansible nodes derive from Alpine, and none of them should
+ * inherit another track's grants because the plumbing is common. A capability
+ * listed here is refused for every provider not named, and refused outright
+ * when the caller does not say which provider it is, so the failure mode is
+ * "denied" rather than "granted to whoever asked".
+ */
+export const PROVIDER_RESTRICTED_CAPABILITIES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['NET_RAW', new Set(['linux'])],
+  ['SYS_CHROOT', new Set(['ansible'])],
+]);
+
+export function assertCapabilityName(capability: unknown, providerId?: string): string {
   if (typeof capability !== 'string' || !GRANTABLE_CAPABILITIES.has(capability)) {
     throw new ContainerRuntimeError(
       `'${String(capability)}' is not a capability a sandbox may be granted (allowed: ${[...GRANTABLE_CAPABILITIES].join(', ')})`,
+    );
+  }
+  // Fail closed: a restricted capability requested by an unidentified caller is
+  // refused, so forgetting to pass the provider denies rather than permits.
+  const allowedProviders = PROVIDER_RESTRICTED_CAPABILITIES.get(capability);
+  if (allowedProviders && (providerId === undefined || !allowedProviders.has(providerId))) {
+    throw new ContainerRuntimeError(
+      `'${capability}' may only be granted to the ${[...allowedProviders].join(', ')} provider, not '${providerId ?? '<unspecified>'}'`,
     );
   }
   return capability;

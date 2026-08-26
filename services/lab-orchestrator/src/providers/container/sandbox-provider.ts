@@ -336,6 +336,10 @@ export class ContainerLabProvider implements LabProvider {
         pidsLimit: context.policy.sandbox.pidsLimit,
         network: labNetwork ?? context.policy.sandbox.network,
         ...(capAdd.length > 0 ? { capAdd } : {}),
+        // Names the asking provider so the runtime's restricted-capability
+        // table can answer "may *this* provider have NET_RAW?" rather than
+        // only "is NET_RAW grantable at all".
+        provider: this.id,
         noNewPrivileges: this.#noNewPrivileges,
         labels: {
           [MANAGED_CONTAINER_LABEL]: 'true',
@@ -626,6 +630,56 @@ export class ContainerLabProvider implements LabProvider {
         ? {}
         : { error: { code: 'DESTROY_FAILED' as const, message: `${sandboxRef} is still shutting down` } }),
     };
+  }
+
+  /**
+   * The ownership labels every container and network of a session carries.
+   *
+   * Exposed to subclasses because a provider whose session is more than one
+   * container — the Ansible topology — must label the rest of it identically.
+   * If the extra containers carried different labels the reaper would not
+   * recognise them, and an expired session would leak machines.
+   */
+  protected ownershipLabels(context: LabSessionContext): Record<string, string> {
+    return {
+      [MANAGED_CONTAINER_LABEL]: 'true',
+      [CONTAINER_SESSION_LABEL]: context.sessionId,
+      [CONTAINER_LAB_LABEL]: context.labId,
+      [CONTAINER_EXPIRES_LABEL]: String(context.expiresAtMs),
+      [CONTAINER_PROVIDER_LABEL]: this.id,
+      [RUNTIME_OWNER_LABEL]: this.#runtimeOwner,
+    };
+  }
+
+  /**
+   * Delete one container of this session, having proved it is ours and theirs.
+   *
+   * The same two gates the sandbox and the peer go through, in the same order:
+   * the managed label, then the session label read live from the daemon. A
+   * container failing either is left alone rather than removed, which is what
+   * stops a stale reference or a wrong argument from reaching into another
+   * session's topology.
+   */
+  protected async removeOwnedContainer(
+    ref: string,
+    expectedSessionId: string | undefined,
+  ): Promise<boolean> {
+    let info: ContainerInfo | null;
+    try {
+      info = await this.#runtime.inspect(ref);
+    } catch {
+      return false;
+    }
+    if (!info) return true;
+    if (info.labels[MANAGED_CONTAINER_LABEL] !== 'true') return false;
+    const owner = info.labels[CONTAINER_SESSION_LABEL];
+    if (expectedSessionId && owner && owner !== expectedSessionId) return false;
+    try {
+      await this.#runtime.remove(ref);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // --------------------------------------------------------- lab network

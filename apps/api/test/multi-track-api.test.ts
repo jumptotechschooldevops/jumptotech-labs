@@ -302,6 +302,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
       'docker',
       'terraform',
       'aws',
+      'ansible',
     ]);
     expect(response.body.data.labsLoaded).toBe(disk.labCount);
   });

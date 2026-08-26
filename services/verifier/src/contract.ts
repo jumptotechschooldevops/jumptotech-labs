@@ -6,12 +6,14 @@
  * this file plus the read-only `VerifyReader`.
  */
 import type {
+  AnsibleRequirementType,
   DockerRequirementType,
   KubernetesRequirementType,
   RequirementOf,
   RequirementType,
   SandboxRequirementType,
 } from '@jumptotech/lab-orchestrator';
+import type { AnsibleVerifyReader } from './ansible-reader.js';
 import type { VerifyReader } from './reader.js';
 import type { SandboxReader } from './sandbox-reader.js';
 import type { DockerVerifyReader } from './docker-reader.js';
@@ -61,6 +63,20 @@ export function pass(detail?: string): HandlerOutcome {
  * is a backstop for the narrower case: the family is right, but this one
  * observation is unavailable.
  */
+/**
+ * One Ansible requirement type's implementation.
+ *
+ * Structurally identical to the other handler shapes and separate on purpose:
+ * the reader it is handed can only read an Ansible session's topology, so a
+ * Kubernetes or sandbox handler cannot be registered in the Ansible table, or
+ * the reverse, even by mistake.
+ */
+export interface AnsibleVerifierHandler<T extends AnsibleRequirementType> {
+  readonly type: T;
+  label(requirement: RequirementOf<T>): string;
+  run(requirement: RequirementOf<T>, reader: AnsibleVerifyReader): Promise<HandlerOutcome>;
+}
+
 export function skip(detail: string): HandlerOutcome {
   return { ok: false, skipped: true, detail };
 }

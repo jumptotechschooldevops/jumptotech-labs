@@ -477,10 +477,13 @@ describe('GET /api/tracks', () => {
   });
 
   it('returns 404 for an unknown track and 400 for a malformed one', async () => {
-    // A track nothing ships — asserted, not assumed, so this test starts
-    // failing the day `ansible` becomes real rather than silently passing.
-    expect(disk.trackIds).not.toContain('ansible');
-    const missing = await request(buildApp().app).get('/api/tracks/ansible');
+    // A track nothing ships — asserted, not assumed. It used to be `ansible`,
+    // which did exactly what the old comment promised: it started failing the
+    // day that track became real. The name is synthetic now so the assertion
+    // stays about unknown tracks rather than about whichever track is next.
+    const unshipped = 'track-that-ships-nothing';
+    expect(disk.trackIds).not.toContain(unshipped);
+    const missing = await request(buildApp().app).get(`/api/tracks/${unshipped}`);
     expect(missing.status).toBe(404);
     expect(missing.body.error.code).toBe('TRACK_NOT_FOUND');
 
@@ -488,7 +491,7 @@ describe('GET /api/tracks', () => {
     expect(malformed.status).toBe(400);
     expect(malformed.body.error.code).toBe('INVALID_TRACK_ID');
 
-    const missingLabs = await request(buildApp().app).get('/api/tracks/ansible/labs');
+    const missingLabs = await request(buildApp().app).get(`/api/tracks/${unshipped}/labs`);
     expect(missingLabs.status).toBe(404);
   });
 

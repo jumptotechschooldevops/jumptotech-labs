@@ -49,6 +49,7 @@
  * is responsible for, without either registry having to know the others exist.
  */
 import { z } from 'zod';
+import { isAllowedManagedPath, isSafeWorkspacePath } from './ansible/paths.js';
 import { isSafeSandboxPath, MAX_SANDBOX_PATH_LENGTH } from './session/sandbox-paths.js';
 
 /**
@@ -2966,10 +2967,324 @@ const dockerRequirementSchemas = {
  * the mapped types make a missing handler a compile error rather than a runtime
  * surprise.
  */
+// ---------------------------------------------------------------------------
+// Ansible
+// ---------------------------------------------------------------------------
+
+/**
+ * A path inside the student's project on the control node.
+ *
+ * Relative, no traversal, conservative character class. `isSafeWorkspacePath`
+ * is the same function the sandbox uses at read time, so a path that validates
+ * here is a path the sandbox will accept — the two cannot drift.
+ */
+const workspacePath = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine(isSafeWorkspacePath, {
+    message: 'must be a relative path inside the lab workspace (letters, digits, . _ - and /)',
+  });
+
+/**
+ * A path on a managed node.
+ *
+ * Absolute, and confined to the directories the labs write into. A lab cannot
+ * write a requirement that reads `/etc/shadow` — see `ALLOWED_MANAGED_ROOTS`.
+ */
+const managedPath = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine(isAllowedManagedPath, {
+    message:
+      'must be an absolute managed-node path under an allowed root (/etc/jumptotech, /opt/jumptotech, /srv/jumptotech, /var/log/jumptotech, /var/www, /tmp/jumptotech)',
+  });
+
+/** A managed node in the session topology: `node1`, `node2`, … */
+const managedNodeName = z.string().regex(/^node[1-9]$/, 'must be a managed node such as node1');
+
+/**
+ * Which managed nodes a check applies to.
+ *
+ * `all` is the default and the interesting case: a multi-node lab passes only
+ * when *every* node reached the desired state, which is exactly the property a
+ * "configure both web servers" exercise is teaching.
+ */
+const hostSelection = z
+  .union([z.literal('all'), z.array(managedNodeName).min(1).max(4)])
+  .default('all');
+
+/** An inventory pattern, e.g. `all`, `web`, `node1`. */
+const inventoryPattern = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_][A-Za-z0-9_.:,!&*-]*$/, 'must be an inventory pattern such as all or web');
+
+const inventoryName = z
+  .string()
+  .min(1)
+  .max(63)
+  .regex(/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/, 'must be an inventory group or host name');
+
+const roleName = z
+  .string()
+  .min(1)
+  .max(63)
+  .regex(/^[a-z0-9_][a-z0-9_-]*$/, 'must be a lowercase role name such as web');
+
+/** A module reference: `copy`, `ansible.builtin.copy`, `template`. */
+const moduleName = z
+  .string()
+  .min(2)
+  .max(96)
+  .regex(/^[a-z0-9_]+(\.[a-z0-9_]+){0,2}$/, 'must be a module name such as copy or ansible.builtin.copy');
+
+/** Free text a check looks for inside a file. Never a regular expression. */
+const contentFragment = z.string().min(1).max(512);
+
+
+const ansibleRequirementSchemas = {
+  // --- the student's project ----------------------------------------------
+  /** The file parses as YAML. The most common first failure in every lab. */
+  yaml_valid: z.object({ type: z.literal('yaml_valid'), path: workspacePath, ...common }).strict(),
+
+  /**
+   * `ansible-inventory --list` succeeds and returns a parseable inventory.
+   *
+   * Deliberately the real command rather than a YAML/INI parse of our own: the
+   * question a student is being taught to answer is "does *Ansible* accept my
+   * inventory", and only Ansible can answer that.
+   */
+  ansible_inventory_valid: z
+    .object({ type: z.literal('ansible_inventory_valid'), ...common })
+    .strict(),
+
+  ansible_group_exists: z
+    .object({
+      type: z.literal('ansible_group_exists'),
+      group: inventoryName,
+      /** Hosts that must be members. Order is irrelevant. */
+      hosts: z.array(inventoryName).max(8).optional(),
+      min_hosts: z.number().int().min(1).max(16).optional(),
+      ...common,
+    })
+    .strict(),
+
+  ansible_host_exists: z
+    .object({
+      type: z.literal('ansible_host_exists'),
+      host: inventoryName,
+      /** Require membership of this group as well as mere presence. */
+      group: inventoryName.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /** `ansible-playbook --syntax-check` passes. */
+  ansible_playbook_valid: z
+    .object({
+      type: z.literal('ansible_playbook_valid'),
+      playbook: workspacePath,
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The playbook contains a task using a given module, and/or with a given name.
+   *
+   * A structural check on the YAML the student wrote, not on console output.
+   * Module matching ignores the collection prefix, so `copy` and
+   * `ansible.builtin.copy` are the same answer — which they are.
+   */
+  ansible_task_exists: z
+    .object({
+      type: z.literal('ansible_task_exists'),
+      playbook: workspacePath,
+      module: moduleName.optional(),
+      /** Match on the task's `name:`, case-insensitively and as a substring. */
+      name: z.string().min(1).max(160).optional(),
+      /** Require the task to carry a `when:` condition. */
+      has_when: z.boolean().optional(),
+      /** Require the task to carry a `loop:` / `with_items:`. */
+      has_loop: z.boolean().optional(),
+      /** Require the task to notify this handler. */
+      notifies: z.string().min(1).max(160).optional(),
+      ...common,
+    })
+    .strict()
+    .refine(
+      (v) =>
+        v.module !== undefined ||
+        v.name !== undefined ||
+        v.has_when === true ||
+        v.has_loop === true ||
+        v.notifies !== undefined,
+      {
+        message:
+          'must state something to look for: module, name, has_when, has_loop, or notifies',
+      },
+    ),
+
+  /** A role exists with the standard directory layout. */
+  ansible_role_exists: z
+    .object({
+      type: z.literal('ansible_role_exists'),
+      role: roleName,
+      /** Directory the role must contain, each with a main.yml where relevant. */
+      requires: z
+        .array(z.enum(['tasks', 'handlers', 'templates', 'defaults', 'vars', 'files', 'meta']))
+        .max(7)
+        .default(['tasks']),
+      /** Roles directory, relative to the project. */
+      roles_dir: workspacePath.default('roles'),
+      /**
+       * A playbook that must actually apply the role.
+       *
+       * A role nobody includes is a directory tree, not automation — this is
+       * what distinguishes "converted the playbook into a role" from "created
+       * a role and left the old playbook doing the work".
+       */
+      used_by: workspacePath.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * A handler exists, in a playbook or in a role.
+   *
+   * `notified_by` additionally requires some task to `notify:` it — the part
+   * students most often leave out, and the reason a handler silently never runs.
+   */
+  ansible_handler_exists: z
+    .object({
+      type: z.literal('ansible_handler_exists'),
+      name: z.string().min(1).max(160),
+      /** Look in this playbook's `handlers:` section. */
+      playbook: workspacePath.optional(),
+      /** Look in `roles/<role>/handlers/main.yml`. */
+      role: roleName.optional(),
+      roles_dir: workspacePath.default('roles'),
+      /** Require a task somewhere in the same file to notify it. */
+      notified: z.boolean().default(false),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.playbook !== undefined || v.role !== undefined, {
+      message: 'must specify playbook, role, or both',
+    }),
+
+  /** A Jinja2 template exists and actually templates something. */
+  ansible_template_exists: z
+    .object({
+      type: z.literal('ansible_template_exists'),
+      path: workspacePath,
+      /** Variable names the template must reference, e.g. `app_port`. */
+      references: z.array(inventoryName).max(8).default([]),
+      ...common,
+    })
+    .strict(),
+
+  // --- state on the managed nodes -----------------------------------------
+  managed_file_exists: z
+    .object({
+      type: z.literal('managed_file_exists'),
+      path: managedPath,
+      hosts: hostSelection,
+      kind: z.enum(['file', 'directory']).default('file'),
+      /**
+       * `absent` is what makes a conditionals lab gradable: "this file exists
+       * on the primary and *not* on the replica" is the whole point of `when:`,
+       * and a check that could only assert presence would pass a playbook that
+       * ignored the condition entirely.
+       */
+      state: z.enum(['present', 'absent']).default('present'),
+      /** Octal permissions the file must carry, e.g. `0644`. */
+      mode: z.string().regex(/^0?[0-7]{3}$/, 'must be an octal mode such as 0644').optional(),
+      ...common,
+    })
+    .strict(),
+
+  managed_file_content: z
+    .object({
+      type: z.literal('managed_file_content'),
+      path: managedPath,
+      hosts: hostSelection,
+      /** Every fragment must appear. Substrings, never regular expressions. */
+      contains: z.array(contentFragment).max(8).default([]),
+      /** No fragment may appear. */
+      not_contains: z.array(contentFragment).max(8).default([]),
+      /** The whole file, compared after trimming trailing whitespace. */
+      equals: z.string().max(4096).optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.contains.length > 0 || v.not_contains.length > 0 || v.equals !== undefined, {
+      message: 'must specify contains, not_contains, or equals',
+    }),
+
+  /**
+   * A daemon is (or is not) running on the managed nodes.
+   *
+   * Sandbox nodes are containers with no init system, so this is honestly a
+   * process check: is a process with this name running. It is real observed
+   * state on the node, and it is documented as such rather than dressed up as
+   * a systemd unit query that could not be true here.
+   */
+  managed_service_state: z
+    .object({
+      type: z.literal('managed_service_state'),
+      service: z.string().min(1).max(64).regex(/^[A-Za-z0-9_.-]+$/, 'must be a process name'),
+      hosts: hostSelection,
+      expected: z.enum(['running', 'stopped']).default('running'),
+      ...common,
+    })
+    .strict(),
+
+  // --- runtime ------------------------------------------------------------
+  /**
+   * Real connectivity: `ansible <pattern> -m ping` from the control node.
+   *
+   * Nothing here is simulated. The check passes only when Ansible opened an SSH
+   * session to every matched host and the ping module answered `pong`.
+   */
+  ansible_connectivity: z
+    .object({
+      type: z.literal('ansible_connectivity'),
+      pattern: inventoryPattern.default('all'),
+      min_hosts: z.number().int().min(1).max(16).default(1),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * The playbook converges: run it twice, and the second run changes nothing.
+   *
+   * `require_initial_change` additionally proves the first run *did* something,
+   * by clearing `reset_paths` on every managed node first. Those paths go
+   * through the same allow-list as every other managed-node path, so this can
+   * only ever clear directories the labs themselves own.
+   */
+  ansible_idempotent: z
+    .object({
+      type: z.literal('ansible_idempotent'),
+      playbook: workspacePath,
+      require_initial_change: z.boolean().default(false),
+      reset_paths: z.array(managedPath).max(8).default([]),
+      ...common,
+    })
+    .strict()
+    .refine((v) => !v.require_initial_change || v.reset_paths.length > 0, {
+      message: 'require_initial_change needs reset_paths, so the first run has something to do',
+    }),
+} as const;
+
 const requirementSchemas = {
   ...kubernetesRequirementSchemas,
   ...sandboxRequirementSchemas,
   ...dockerRequirementSchemas,
+  ...ansibleRequirementSchemas,
 } as const;
 
 /** Every requirement type the platform supports, in documentation order. */
@@ -3031,6 +3346,12 @@ export const REQUIREMENT_FAMILY_READERS = {
   iam: 'sandbox',
   cloudformation: 'sandbox',
   docker: 'docker',
+  // An Ansible check is observed across a *set* of containers — the control
+  // node and the managed nodes — over the session's own segment, so it needs a
+  // reader of its own rather than the single-sandbox one. Keeping it a distinct
+  // family is also what stops an Ansible check being written into a Linux lab,
+  // where there are no managed nodes for it to be true about.
+  ansible: 'ansible',
 } as const;
 
 export type RequirementFamily = keyof typeof REQUIREMENT_FAMILY_READERS;
@@ -3045,6 +3366,7 @@ type FamiliesFor<G extends ReaderGroup> = {
 export type KubernetesFamily = FamiliesFor<'kubernetes'>;
 export type SandboxFamily = FamiliesFor<'sandbox'>;
 export type DockerFamily = FamiliesFor<'docker'>;
+export type AnsibleFamily = FamiliesFor<'ansible'>;
 
 /** Every family, in declaration order. */
 export const REQUIREMENT_FAMILY_LIST = Object.keys(
@@ -3066,6 +3388,10 @@ export function isSandboxFamily(family: RequirementFamily): family is SandboxFam
 
 export function isDockerFamily(family: RequirementFamily): family is DockerFamily {
   return REQUIREMENT_FAMILY_READERS[family] === 'docker';
+}
+
+export function isAnsibleFamily(family: RequirementFamily): family is AnsibleFamily {
+  return REQUIREMENT_FAMILY_READERS[family] === 'ansible';
 }
 
 export const REQUIREMENT_FAMILIES = {
@@ -3272,6 +3598,27 @@ export const REQUIREMENT_FAMILIES = {
   dockerfile_valid: 'docker',
 
   docker_resource_absent: 'docker',
+
+  // --- Ansible: the control node and its managed nodes -------------------
+  //
+  // Every one of these is observed across the session's own topology — the
+  // student's project on the control node, or real state on a managed node
+  // reached over the session segment. None of them is answerable from a
+  // single-container sandbox, which is why they are their own family.
+  yaml_valid: 'ansible',
+  ansible_inventory_valid: 'ansible',
+  ansible_group_exists: 'ansible',
+  ansible_host_exists: 'ansible',
+  ansible_playbook_valid: 'ansible',
+  ansible_task_exists: 'ansible',
+  ansible_role_exists: 'ansible',
+  ansible_handler_exists: 'ansible',
+  ansible_template_exists: 'ansible',
+  managed_file_exists: 'ansible',
+  managed_file_content: 'ansible',
+  managed_service_state: 'ansible',
+  ansible_connectivity: 'ansible',
+  ansible_idempotent: 'ansible',
   // `as const satisfies` rather than a plain annotation: the literal family of
   // each type has to survive for `RequirementTypeOf` to be able to filter on
   // it, while `satisfies` still enforces that every requirement type is
@@ -3303,6 +3650,9 @@ export function requirementTypesForFamily(family: RequirementFamily): Requiremen
 
 /** Requirement types verified by reading a session's own Docker daemon. */
 export type DockerRequirementType = RequirementTypeOf<DockerFamily>;
+
+/** Requirement types answered across an Ansible session's control and managed nodes. */
+export type AnsibleRequirementType = RequirementTypeOf<AnsibleFamily>;
 
 export const KUBERNETES_REQUIREMENT_TYPES = requirementTypesForFamily(
   'kubernetes',

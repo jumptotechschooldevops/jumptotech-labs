@@ -14,7 +14,7 @@
  */
 
 /** Every sandbox provider the lab schema may name. */
-export const LAB_PROVIDERS = ['kubernetes', 'linux', 'docker', 'terraform', 'aws'] as const;
+export const LAB_PROVIDERS = ['kubernetes', 'linux', 'docker', 'terraform', 'aws', 'ansible'] as const;
 
 export type LabProviderId = (typeof LAB_PROVIDERS)[number];
 
@@ -97,6 +97,11 @@ export const PROVIDER_ISOLATION: Record<LabProviderId, IsolationMode> = {
   terraform: 'container',
   // No sandbox is created for AWS labs yet — see AwsLabProvider.
   aws: 'none',
+  // An Ansible session is a *set* of containers — one control node and two
+  // managed nodes on one private segment — but `container` is still the honest
+  // answer: every one of them is a container, and the isolation boundary a
+  // student is held inside is the container boundary, not something new.
+  ansible: 'container',
 };
 
 /** The sandbox kind each provider produces. */
@@ -106,6 +111,7 @@ export const PROVIDER_SANDBOX_KIND: Record<LabProviderId, SandboxKind> = {
   docker: 'container',
   terraform: 'container',
   aws: 'cloud-session',
+  ansible: 'container',
 };
 
 /**

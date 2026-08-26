@@ -39,6 +39,7 @@ import {
   type RequirementWaiter,
   type WorkspacePort,
   ProviderRegistry,
+  AnsibleLabProvider,
   TerraformLabProvider,
   type ContainerRuntimePort,
   type LabProvider,
@@ -105,6 +106,20 @@ export function buildProviderRegistry(options: BuildProviderRegistryOptions): Pr
           enabled: false,
           disabledReason:
             'The Terraform provider is switched off (TERRAFORM_PROVIDER_ENABLED=false).',
+        }),
+  });
+
+  registry.register({
+    provider: new AnsibleLabProvider({
+      runtime,
+      image: config.sandbox.ansibleImage,
+      runtimeOwner: config.sandbox.runtimeOwner,
+    }),
+    ...(config.sandbox.ansibleEnabled
+      ? {}
+      : {
+          enabled: false,
+          disabledReason: 'The Ansible provider is switched off (ANSIBLE_PROVIDER_ENABLED=false).',
         }),
   });
 

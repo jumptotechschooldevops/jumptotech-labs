@@ -44,7 +44,7 @@ async function main(): Promise<void> {
     console.error(`[api] No labs loaded from ${config.labsDir}. Check LABS_DIR.`);
   }
 
-  const { k8s, engines, workspace, kubernetes, providers } = buildSandboxComposition({ config });
+  const { k8s, engines, workspace, kubernetes, providers, ansible } = buildSandboxComposition({ config });
 
   const terminal = config.terminalControlUrl
     ? new HttpTerminalControl({
@@ -157,6 +157,7 @@ async function main(): Promise<void> {
     sessions,
     k8s,
     engines,
+    ansible,
     workspace,
     config,
     identityResolver,

@@ -133,6 +133,18 @@ export const OFFICIAL_DOC_HOSTS: Record<string, readonly string[]> = {
    * coverage. A certification vendor's training site is not a technical source
    * of truth, and this allowlist is what "official documentation" means.
    */
+  /*
+   * Ansible has a single upstream: the project's own documentation. Every
+   * reference in the track's ten labs is a page under docs.ansible.com — the
+   * module index, the inventory and playbook guides, and the user guide pages
+   * on variables, conditionals, handlers, templating and roles.
+   *
+   * Deliberately narrow. Red Hat's product documentation and its training
+   * pages are not here: the track teaches ansible-core, claims no
+   * certification, and a vendor's course catalogue is not a technical source
+   * of truth.
+   */
+  ansible: ['docs.ansible.com'],
   cs: [
     'docs.python.org',
     'peps.python.org',
@@ -187,6 +199,11 @@ export const PROVIDER_REQUIREMENT_FAMILIES: Record<LabProviderId, readonly Requi
   // never against the sandbox filesystem — see the `docker` family.
   docker: ['docker'],
   aws: [],
+  // An Ansible lab reads its own project files through the control node's
+  // filesystem, and everything else through the Ansible reader. It does not
+  // get `linux`: an inspection command answered by the control node would say
+  // nothing about the managed nodes, which is where the lab's state lives.
+  ansible: ['filesystem', 'ansible'],
 };
 
 /**
@@ -310,6 +327,19 @@ const setupFileSchema = z
   })
   .strict();
 
+/**
+ * A directory name inside the lab's own folder. One segment, no traversal.
+ *
+ * Deliberately not a path: `workspace` and `files`, never `../../etc` and
+ * never a nested route. The lab directory is the boundary, and one segment is
+ * the simplest rule that cannot be argued with.
+ */
+const workspaceDirName = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'must be a single directory name such as workspace');
+
 const setupSchema = z
   .object({
     /** Applied into the session namespace, in order, before the terminal opens. */
@@ -328,6 +358,21 @@ const setupSchema = z
      * throwaway container belonging to one session.
      */
     seed_scripts: z.array(seedScriptPath).max(10).default([]),
+    /**
+     * A directory in the lab's own folder, seeded whole into the sandbox home.
+     *
+     * `files` names one source and one destination at a time, which is right
+     * for a lab that stages two or three files. An Ansible lab stages a
+     * *project* — `ansible.cfg`, an inventory, `group_vars/`, `host_vars/`,
+     * `templates/`, a playbook — and listing fifteen paths per lab would put
+     * the shape of the project in the lab definition rather than in the
+     * directory a reader can look at.
+     *
+     * It is not a new seeding mechanism: the loader expands it into `files`,
+     * so the same size ceiling, the same path validation and the same
+     * container-only rule apply to every file that arrives this way.
+     */
+    workspace_dir: workspaceDirName.optional(),
     /**
      * The Docker track's equivalent of `manifests`.
      *
@@ -710,6 +755,12 @@ function checkProviderCapabilities(def: LabDefinition, issues: string[]): void {
   if (def.environment.network === 'link' && PROVIDER_ISOLATION[provider] !== 'container') {
     issues.push(
       `environment.network 'link' needs a sandbox container, which the '${provider}' provider does not create`,
+    );
+  }
+
+  if (def.setup.workspace_dir !== undefined && PROVIDER_ISOLATION[provider] !== 'container') {
+    issues.push(
+      `setup.workspace_dir is seeded into a sandbox container, which the '${provider}' provider does not create`,
     );
   }
 

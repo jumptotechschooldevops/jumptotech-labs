@@ -1,0 +1,167 @@
+id: ANSIBLE-009
+slug: ansible-009-multi-node-deployment
+title: Deploy Across a Two-Node Web Tier
+track: ansible
+topic: multi-node-automation
+difficulty: advanced
+level: challenge
+duration_minutes: 45
+order: 9
+
+environment:
+  provider: ansible
+  isolation: container
+
+prerequisites:
+  - ANSIBLE-008
+
+story: >
+  The ledger status page goes live on Monday. It sits behind a load balancer,
+  which means a request can land on either web server, which means both servers
+  must serve the same page or customers will see one of two different answers
+  depending on luck.
+
+  Last release, node2 was missed. The page was correct for ninety percent of
+  requests, the incident was open for six hours, and the root cause was
+  somebody deploying by hand and stopping after the first machine.
+
+  ```text
+      control
+         │
+     ┌───┴───┐
+   node1   node2
+  ```
+
+  You are automating it so that never happens again.
+
+objectives:
+  - Configure an entire group of hosts from a single playbook run
+  - Render per-host content while keeping shared settings shared
+  - Start a service without breaking the playbook's idempotency
+  - Verify that both nodes converged, not just the first one
+
+task:
+  summary: Deploy the ledger status page to both web nodes and get nginx serving on each, with a playbook that stays idempotent.
+  description: >
+    Write `site.yml` (using a role if you prefer) so that a single
+    `ansible-playbook site.yml` leaves **both** hosts in the `web` group in this
+    state:
+
+    A directory `/var/www/status` exists.
+
+    A file `/var/www/status/index.html` exists containing these three lines,
+    with the last one differing per host:
+
+    `service=ledger`
+
+    `release=2.4.1`
+
+    `node=` the name of the node serving it — `node1` on node1, `node2` on
+    node2
+
+    An `nginx` process is running.
+
+    The service part is the interesting half. `nginx` is installed on both nodes
+    but nothing is running it, and these nodes have no init system — starting it
+    means running the binary. That is easy to do once and surprisingly easy to
+    do badly: a task that simply runs `nginx` succeeds the first time and fails
+    on every subsequent run, because the port is already bound.
+
+    So the playbook has to ask before it acts. Check whether the process is
+    already running, capture the answer with `register:`, and start nginx only
+    `when:` it is not. A command that only inspects the system should also
+    declare `changed_when: false` — it changes nothing, and saying so is what
+    keeps the second run at zero changes.
+
+    Both requirements below that mention "every web host" are all-or-nothing.
+    Half a deployment is the failure this lab is about.
+
+requirements:
+  - type: ansible_playbook_valid
+    playbook: site.yml
+    label: Ansible accepts the playbook
+  - type: managed_file_exists
+    path: /var/www/status
+    kind: directory
+    hosts: all
+    label: The status document root exists on every web host
+  - type: managed_file_content
+    path: /var/www/status/index.html
+    hosts: all
+    contains:
+      - service=ledger
+      - release=2.4.1
+    label: Every web host serves the same ledger release
+  - type: managed_file_content
+    path: /var/www/status/index.html
+    hosts: [node1]
+    contains:
+      - node=node1
+    label: node1 identifies itself on its status page
+  - type: managed_file_content
+    path: /var/www/status/index.html
+    hosts: [node2]
+    contains:
+      - node=node2
+    label: node2 identifies itself on its status page
+  - type: managed_service_state
+    service: nginx
+    expected: running
+    hosts: all
+    label: nginx is running on every web host
+  - type: ansible_idempotent
+    playbook: site.yml
+    label: A second run of the playbook changes nothing
+
+setup:
+  workspace_dir: workspace
+  verify:
+    - type: yaml_valid
+      path: group_vars/web.yml
+      label: Group variables are in place
+    - type: ansible_inventory_valid
+      label: Ansible can parse the inventory
+
+hints:
+  - level: 1
+    text: >
+      One play, targeting the group, is all it takes to reach both machines.
+      You should never name node1 or node2 in the playbook — the inventory
+      already did.
+  - level: 2
+    text: >
+      For the page itself, a template renders the shared values and the host's
+      own name in one pass. For the service, read the `register` section of
+      "Conditionals" together with the `changed_when` and `failed_when`
+      documentation: a command that checks something should never report itself
+      as a change, and a check that finds nothing should not fail the play.
+  - level: 3
+    text: >
+      `pgrep -x nginx` exits non-zero when nothing is running, which is
+      information rather than a failure — `failed_when: false` lets you keep the
+      result and decide for yourself. Verify both nodes independently before you
+      call it done: `ansible web -m command -a "cat /var/www/status/index.html"`
+      prints each host's copy separately.
+
+references:
+  - title: Patterns - targeting hosts and groups
+    url: https://docs.ansible.com/ansible/latest/inventory_guide/intro_patterns.html
+  - title: Conditionals
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_conditionals.html
+  - title: Error handling in playbooks
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_error_handling.html
+  - title: ansible.builtin.command module
+    url: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/command_module.html
+
+skills:
+  - ansible.deployment.multi-node
+  - ansible.templates.deploy
+  - ansible.logic.conditionals
+  - ansible.idempotency.verify
+
+certification:
+  - certification: RHCE
+    relevant: true
+    domains:
+      - create-ansible-plays-and-playbooks
+      - use-roles-and-modules

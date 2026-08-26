@@ -18,30 +18,39 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LINUX_IMAGE="${LINUX_SANDBOX_IMAGE:-jumptotech/lab-linux:latest}"
 TERRAFORM_IMAGE="${TERRAFORM_SANDBOX_IMAGE:-jumptotech/lab-terraform:latest}"
+ANSIBLE_IMAGE="${ANSIBLE_SANDBOX_IMAGE:-jumptotech/lab-ansible:latest}"
 
-# Both tags, or neither.
+# Every tag, or none of them.
 #
-# This script always builds both images, and the Terraform one is built FROM the
+# This script builds all three images, and the Terraform one is built FROM the
 # Linux one. Setting only `LINUX_SANDBOX_IMAGE` — the natural thing to do when
 # testing a Linux change — therefore built a private Linux tag and then quietly
 # overwrote the shared `jumptotech/lab-terraform:latest` that every other
 # worktree runs from. Refusing the half-configured case is the whole point:
 # a shared tag must never be rewritten by accident.
-if { [[ -n "${LINUX_SANDBOX_IMAGE:-}" ]] && [[ -z "${TERRAFORM_SANDBOX_IMAGE:-}" ]]; } ||
-   { [[ -z "${LINUX_SANDBOX_IMAGE:-}" ]] && [[ -n "${TERRAFORM_SANDBOX_IMAGE:-}" ]]; }; then
-  echo "Refusing to build: only one sandbox image variable is set." >&2
+#
+# Counted rather than compared pairwise so that adding a fourth image cannot
+# reintroduce the gap by being left out of the condition.
+__set_count=0
+for __var in "${LINUX_SANDBOX_IMAGE:-}" "${TERRAFORM_SANDBOX_IMAGE:-}" "${ANSIBLE_SANDBOX_IMAGE:-}"; do
+  [[ -n "${__var}" ]] && __set_count=$((__set_count + 1))
+done
+if [[ "${__set_count}" -ne 0 ]] && [[ "${__set_count}" -ne 3 ]]; then
+  echo "Refusing to build: only some sandbox image variables are set." >&2
   echo >&2
   echo "  LINUX_SANDBOX_IMAGE     = ${LINUX_SANDBOX_IMAGE:-<unset>}" >&2
   echo "  TERRAFORM_SANDBOX_IMAGE = ${TERRAFORM_SANDBOX_IMAGE:-<unset>}" >&2
+  echo "  ANSIBLE_SANDBOX_IMAGE   = ${ANSIBLE_SANDBOX_IMAGE:-<unset>}" >&2
   echo >&2
-  echo "This script builds both images, so the unset one would be written to its" >&2
-  echo "shared ':latest' tag — the tag every other worktree runs from. Set both:" >&2
+  echo "This script builds all three, so an unset one would be written to its" >&2
+  echo "shared ':latest' tag — the tag every other worktree runs from. Set all:" >&2
   echo >&2
   echo "  LINUX_SANDBOX_IMAGE=jumptotech/lab-linux:<suffix> \\" >&2
   echo "  TERRAFORM_SANDBOX_IMAGE=jumptotech/lab-terraform:<suffix> \\" >&2
+  echo "  ANSIBLE_SANDBOX_IMAGE=jumptotech/lab-ansible:<suffix> \\" >&2
   echo "  npm run sandbox:build" >&2
   echo >&2
-  echo "Or set neither, to rebuild the canonical operator images." >&2
+  echo "Or set none, to rebuild the canonical operator images." >&2
   exit 1
 fi
 
@@ -68,9 +77,15 @@ docker build \
   --tag "${TERRAFORM_IMAGE}" \
   "${REPO_ROOT}"
 
+echo "==> Building ${ANSIBLE_IMAGE}"
+docker build \
+  --file "${REPO_ROOT}/infrastructure/docker/sandbox-ansible.Dockerfile" \
+  --tag "${ANSIBLE_IMAGE}" \
+  "${REPO_ROOT}"
+
 echo
 echo "Sandbox images ready:"
-for image in "${LINUX_IMAGE}" "${TERRAFORM_IMAGE}"; do
+for image in "${LINUX_IMAGE}" "${TERRAFORM_IMAGE}" "${ANSIBLE_IMAGE}"; do
   docker image ls --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' "${image}"
 done
 echo

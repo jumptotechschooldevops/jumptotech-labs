@@ -1,0 +1,10 @@
+---
+# Variables shared by every host in the `web` group.
+#
+# These are the values your template should render. Do not repeat them inside
+# the template itself — a template that hard-codes a value is a copy with extra
+# steps.
+app_name: ledger
+app_port: 9090
+app_release: "2.4.1"
+app_workers: 4

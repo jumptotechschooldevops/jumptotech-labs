@@ -31,12 +31,14 @@
  * already scoped to one session's sandbox.
  */
 import {
+  isAnsibleFamily,
   isDockerFamily,
   isDockerRequirementType,
   isKubernetesFamily,
   isSupportedRequirementType,
   requirementFamily,
   REQUIREMENT_TYPES,
+  type AnsibleRequirementType,
   type DockerRequirementType,
   type KubernetesRequirementType,
   type Requirement,
@@ -44,6 +46,7 @@ import {
   type SandboxRequirementType,
 } from '@jumptotech/lab-orchestrator';
 import type {
+  AnsibleVerifierHandler,
   CheckResult,
   CheckStatus,
   DockerVerifierHandler,
@@ -52,8 +55,29 @@ import type {
   SandboxVerifierHandler,
   VerifierHandler,
 } from './contract.js';
+import type { AnsibleVerifyReader } from './ansible-reader.js';
 import { VerifyReader } from './reader.js';
 import { SandboxReader } from './sandbox-reader.js';
+import {
+  ansibleConnectivity,
+  ansibleGroupExists,
+  ansibleHostExists,
+  ansibleInventoryValid,
+} from './handlers/ansible-inventory.js';
+import {
+  managedFileContent,
+  managedFileExists,
+  managedServiceState,
+} from './handlers/ansible-managed.js';
+import { ansibleIdempotent } from './handlers/ansible-idempotency.js';
+import {
+  ansibleHandlerExists,
+  ansiblePlaybookValid,
+  ansibleRoleExists,
+  ansibleTaskExists,
+  ansibleTemplateExists,
+  yamlValid,
+} from './handlers/ansible-project.js';
 import {
   cfnCidrDisjoint,
   cfnCidrFreeSpace,
@@ -495,6 +519,7 @@ export function registeredRequirementTypes(): RequirementType[] {
     ...Object.keys(KUBERNETES_HANDLERS),
     ...Object.keys(SANDBOX_HANDLERS),
     ...Object.keys(DOCKER_HANDLERS),
+    ...Object.keys(ANSIBLE_HANDLERS),
   ] as RequirementType[];
 }
 
@@ -503,7 +528,8 @@ export function hasHandler(type: string): boolean {
   return (
     Object.hasOwn(KUBERNETES_HANDLERS, type) ||
     Object.hasOwn(SANDBOX_HANDLERS, type) ||
-    Object.hasOwn(DOCKER_HANDLERS, type)
+    Object.hasOwn(DOCKER_HANDLERS, type) ||
+    Object.hasOwn(ANSIBLE_HANDLERS, type)
   );
 }
 
@@ -526,6 +552,7 @@ export interface VerificationReaders {
   kubernetes?: VerifyReader | undefined;
   sandbox?: SandboxReader | undefined;
   docker?: DockerVerifyReader | undefined;
+  ansible?: AnsibleVerifyReader | undefined;
 }
 
 /**
@@ -555,6 +582,30 @@ function toReaders(input: AnyVerifyReader | VerificationReaders): VerificationRe
   if (input instanceof SandboxReader) return { sandbox: input };
   return input;
 }
+
+/**
+ * Every Ansible requirement type, mapped to its handler.
+ *
+ * The mapped type is the completeness guarantee, exactly as it is for the other
+ * three families: adding an `ansible_*` requirement without writing a handler
+ * fails to compile rather than throwing at Check Solution time.
+ */
+const ANSIBLE_HANDLERS: { [K in AnsibleRequirementType]: AnsibleVerifierHandler<K> } = {
+  yaml_valid: yamlValid,
+  ansible_inventory_valid: ansibleInventoryValid,
+  ansible_group_exists: ansibleGroupExists,
+  ansible_host_exists: ansibleHostExists,
+  ansible_playbook_valid: ansiblePlaybookValid,
+  ansible_task_exists: ansibleTaskExists,
+  ansible_role_exists: ansibleRoleExists,
+  ansible_handler_exists: ansibleHandlerExists,
+  ansible_template_exists: ansibleTemplateExists,
+  managed_file_exists: managedFileExists,
+  managed_file_content: managedFileContent,
+  managed_service_state: managedServiceState,
+  ansible_connectivity: ansibleConnectivity,
+  ansible_idempotent: ansibleIdempotent,
+};
 
 /**
  * Run one requirement.
@@ -609,6 +660,28 @@ export async function verifyRequirement(
       };
     }
     const outcome = await handler.run(requirement as never, available.docker);
+    return {
+      id,
+      label,
+      status: outcomeStatus(outcome),
+      ...(outcome.detail ? { detail: outcome.detail } : {}),
+    };
+  }
+
+  if (isAnsibleFamily(family)) {
+    const handler = ANSIBLE_HANDLERS[
+      requirement.type as AnsibleRequirementType
+    ] as AnsibleVerifierHandler<AnsibleRequirementType>;
+    const label = requirement.label ?? handler.label(requirement as never);
+    if (!available.ansible) {
+      return {
+        id,
+        label,
+        status: 'skipped',
+        detail: 'This lab environment has no Ansible control node to check against',
+      };
+    }
+    const outcome = await handler.run(requirement as never, available.ansible);
     return {
       id,
       label,

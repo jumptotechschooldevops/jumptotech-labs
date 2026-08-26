@@ -1,0 +1,34 @@
+---
+# The ledger configuration playbook, as handed over.
+#
+# It has not run successfully since the handover. Nobody has written down what
+# is wrong with it, and there is more than one thing.
+- name: Configure the ledger service
+  hosts: web
+  tasks:
+    - name: Ensure the configuration directory exists
+      ansible.builtin.file:
+        path: /etc/jumptotech
+        state: directoy
+        mode: "0755"
+
+    - name: Ensure the log directory exists
+      ansible.builtin.file:
+        path: /var/log/jumptotech
+        state: directory
+        mode: "0755"
+
+    - name: Deploy the application configuration
+      ansible.builtin.template:
+        src: app.conf.j2
+        dest: /etc/jumptotech/app.conf
+        mode: "0644"
+      notify: reload app
+
+  handlers:
+    - name: reload ledger
+      ansible.builtin.copy:
+        dest: /var/log/jumptotech/reload.log
+        mode: "0644"
+        content: |
+          reloaded ledger
