@@ -12,6 +12,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { renderWithAuth } from './auth-harness';
 import { ProgressPage } from '../src/pages/ProgressPage';
 import type { AttemptSummary, ProgressSnapshot } from '../src/lib/types';
 import progressFixture from './fixtures/me-progress.json';
@@ -42,7 +43,7 @@ beforeEach(() => {
 });
 
 async function renderPage(onOpenLab = vi.fn()) {
-  render(<ProgressPage onBack={vi.fn()} onOpenLab={onOpenLab} />);
+  renderWithAuth(<ProgressPage onBack={vi.fn()} onOpenLab={onOpenLab} />);
   await waitFor(() => expect(screen.getByText(/of 12 labs completed/)).toBeTruthy());
   return { onOpenLab };
 }
@@ -74,7 +75,7 @@ describe('ProgressPage', () => {
   });
 
   it('marks each lab completed, in progress, or neither', async () => {
-    const { container } = render(<ProgressPage onBack={vi.fn()} onOpenLab={vi.fn()} />);
+    const { container } = renderWithAuth(<ProgressPage onBack={vi.fn()} onOpenLab={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('of 12 labs completed')).toBeTruthy());
 
     const completed = container.querySelectorAll('.tracklabs__item--completed');
@@ -138,7 +139,7 @@ describe('ProgressPage', () => {
         error: { code: 'PROGRESS_UNAVAILABLE', message: 'Your progress could not be read.' },
       }),
     );
-    render(<ProgressPage onBack={vi.fn()} onOpenLab={vi.fn()} />);
+    renderWithAuth(<ProgressPage onBack={vi.fn()} onOpenLab={vi.fn()} />);
 
     // An empty dashboard and a broken one look identical to a student, so the
     // page must never render the first when it means the second.

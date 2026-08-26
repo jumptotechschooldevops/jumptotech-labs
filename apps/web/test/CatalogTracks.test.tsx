@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { renderWithAuth } from './auth-harness';
 import { CatalogPage } from '../src/pages/CatalogPage';
 import type { LabSummary, TrackSummary } from '../src/lib/types';
 
@@ -119,7 +120,7 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 async function renderCatalog(onOpenLab = vi.fn()) {
-  render(<CatalogPage onOpenLab={onOpenLab} />);
+  renderWithAuth(<CatalogPage onOpenLab={onOpenLab} />);
   await waitFor(() => expect(screen.getByText('Files and Directories')).toBeTruthy());
   return { onOpenLab };
 }
@@ -243,7 +244,7 @@ describe('a catalog with two tracks', () => {
       tracks: [TRACKS[0]!],
       count: 2,
     });
-    render(<CatalogPage onOpenLab={vi.fn()} />);
+    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
 
     // A row of one is not a choice; the page goes straight to the labs.

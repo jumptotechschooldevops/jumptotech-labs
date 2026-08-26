@@ -16,6 +16,7 @@
  * ```
  */
 import { useEffect, useMemo, useState } from 'react';
+import { UserMenu } from '../components/UserMenu';
 import { ApiRequestError, api } from '../lib/api';
 import type {
   ApiError,
@@ -235,6 +236,7 @@ export function CatalogPage({
             </button>
           )}
           <span className="topbar__track">catalog</span>
+          <UserMenu />
         </div>
       </header>
 

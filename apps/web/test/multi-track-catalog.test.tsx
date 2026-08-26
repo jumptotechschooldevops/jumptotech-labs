@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { renderWithAuth } from './auth-harness';
 import { CatalogPage } from '../src/pages/CatalogPage';
 import { StartOverlay } from '../src/components/StartOverlay';
 import type { LabSummary, ProvisionStep, TrackSummary } from '../src/lib/types';
@@ -109,7 +110,7 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 async function renderCatalog(onOpenLab = vi.fn()) {
-  render(<CatalogPage onOpenLab={onOpenLab} />);
+  renderWithAuth(<CatalogPage onOpenLab={onOpenLab} />);
   await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
   return { onOpenLab };
 }
@@ -131,7 +132,7 @@ describe('CatalogPage — more than one track', () => {
       tracks: TRACKS,
       count: 3,
     });
-    render(<CatalogPage onOpenLab={vi.fn()} />);
+    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
 
     const headings = screen
@@ -155,7 +156,7 @@ describe('CatalogPage — more than one track', () => {
       tracks: [{ ...TRACKS[1]!, tagline: undefined }],
       count: 1,
     });
-    render(<CatalogPage onOpenLab={vi.fn()} />);
+    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('Run Your First Container')).toBeTruthy());
 
     expect(screen.queryByText(/daemon underneath them/)).toBeNull();
@@ -178,7 +179,7 @@ describe('CatalogPage — more than one track', () => {
       ],
       count: 1,
     });
-    render(<CatalogPage onOpenLab={vi.fn()} />);
+    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByText('Write a Terraform Module')).toBeTruthy());
     expect(screen.getByRole('heading', { name: 'Terraform' })).toBeTruthy();

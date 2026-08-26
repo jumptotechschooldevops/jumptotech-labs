@@ -7,6 +7,8 @@
  *   #/labs/K8S-001    → lab workspace
  */
 import { useCallback, useEffect, useState } from 'react';
+import { AuthGate } from './components/AuthGate';
+import { AuthProvider } from './lib/AuthContext';
 import { CatalogPage } from './pages/CatalogPage';
 import { LabPage } from './pages/LabPage';
 import { ProgressPage } from './pages/ProgressPage';
@@ -20,7 +22,14 @@ function routeFromHash(hash: string): Route {
   return { view: 'catalog' };
 }
 
-export function App() {
+/**
+ * The signed-in application.
+ *
+ * Split from `App` so the gate can decide whether to mount it at all: an
+ * unauthenticated browser never renders a catalog, never fires a lab request,
+ * and never gets a 401 it has to explain away.
+ */
+function AuthenticatedApp() {
   const [route, setRoute] = useState<Route>(() => routeFromHash(window.location.hash));
 
   useEffect(() => {
@@ -50,4 +59,20 @@ export function App() {
     return <ProgressPage onBack={goHome} onOpenLab={openLab} />;
   }
   return <CatalogPage onOpenLab={openLab} onOpenProgress={openProgress} />;
+}
+
+/**
+ * Identity first, then everything else — PLATFORM-010.
+ *
+ * `AuthProvider` owns the answer to "who is this", `AuthGate` decides whether
+ * the app is mounted, and no page below has to think about it.
+ */
+export function App() {
+  return (
+    <AuthProvider>
+      <AuthGate>
+        <AuthenticatedApp />
+      </AuthGate>
+    </AuthProvider>
+  );
 }

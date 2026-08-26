@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { renderWithAuth } from './auth-harness';
 import { CatalogPage } from '../src/pages/CatalogPage';
 import type { LabSummary, TrackSummary } from '../src/lib/types';
 
@@ -156,7 +157,7 @@ describe('CatalogPage — provider readiness', () => {
       providers: [],
     });
 
-    render(<CatalogPage onOpenLab={vi.fn()} />);
+    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('Files, Directories & Permissions')).toBeTruthy());
 
     expect(screen.getByRole('button', { name: 'View lab' })).toBeTruthy();
@@ -166,7 +167,7 @@ describe('CatalogPage — provider readiness', () => {
 
 /** Render and wait for the catalog to load. */
 async function renderCatalog(onOpenLab = vi.fn()) {
-  render(<CatalogPage onOpenLab={onOpenLab} />);
+  renderWithAuth(<CatalogPage onOpenLab={onOpenLab} />);
   await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
   return { onOpenLab };
 }
@@ -248,7 +249,7 @@ describe('CatalogPage', () => {
       tracks: [{ ...TRACKS[0]!, difficulties: ['beginner', 'advanced'] }],
       count: 1,
     });
-    render(<CatalogPage onOpenLab={vi.fn()} />);
+    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
 
     // Only one difficulty is present in the data, so no difficulty row renders;
@@ -258,7 +259,7 @@ describe('CatalogPage', () => {
 
   it('reports an API failure instead of rendering an empty catalog', async () => {
     listLabs.mockRejectedValue(new Error('boom'));
-    render(<CatalogPage onOpenLab={vi.fn()} />);
+    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
     expect(screen.getByText('UNEXPECTED_ERROR')).toBeTruthy();
@@ -266,7 +267,7 @@ describe('CatalogPage', () => {
 
   it('explains an empty catalog rather than showing a blank page', async () => {
     listLabs.mockResolvedValue({ labs: [], tracks: [], count: 0 });
-    render(<CatalogPage onOpenLab={vi.fn()} />);
+    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByText('No labs found')).toBeTruthy());
   });

@@ -12,11 +12,19 @@ export default defineConfig({
     watch: { usePolling: true, interval: 300 },
     /*
      * Same-origin development: leave VITE_API_URL / VITE_TERMINAL_WS_URL unset
-     * and the UI calls `/api/*` and `/terminal` on this dev server, which
-     * forwards to the api and terminal processes on localhost.
+     * and the UI calls `/api/*`, `/auth/*` and `/terminal` on this dev server,
+     * which forwards to the api and terminal processes on localhost.
+     *
+     * `/auth` must be same-origin like the rest: the session cookie is
+     * host-only and `SameSite=Lax`, so it is only ever sent back to the origin
+     * that set it.
      */
     proxy: {
       '/api': {
+        target: process.env.VITE_DEV_API_PROXY ?? 'http://127.0.0.1:4000',
+        changeOrigin: true,
+      },
+      '/auth': {
         target: process.env.VITE_DEV_API_PROXY ?? 'http://127.0.0.1:4000',
         changeOrigin: true,
       },
@@ -33,6 +41,10 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
+        target: process.env.VITE_DEV_API_PROXY ?? 'http://127.0.0.1:4000',
+        changeOrigin: true,
+      },
+      '/auth': {
         target: process.env.VITE_DEV_API_PROXY ?? 'http://127.0.0.1:4000',
         changeOrigin: true,
       },

@@ -8,6 +8,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { renderWithAuth } from './auth-harness';
 import { CatalogPage } from '../src/pages/CatalogPage';
 import type { LabSummary, ProgressSnapshot, TrackSummary } from '../src/lib/types';
 import progressFixture from './fixtures/me-progress.json';
@@ -38,7 +39,7 @@ beforeEach(() => {
 });
 
 async function renderCatalog(props: Partial<Parameters<typeof CatalogPage>[0]> = {}) {
-  render(<CatalogPage onOpenLab={vi.fn()} {...props} />);
+  renderWithAuth(<CatalogPage onOpenLab={vi.fn()} {...props} />);
   await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
 }
 
@@ -53,7 +54,7 @@ describe('the catalog shows where the student stands', () => {
   });
 
   it('says nothing at all about a lab the student has never opened', async () => {
-    const { container } = render(<CatalogPage onOpenLab={vi.fn()} />);
+    const { container } = renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
     await waitFor(() => expect(screen.getAllByText('✓ Completed').length).toBe(2));
 
     // Ten Kubernetes labs, eight of them untouched: no badge, no "Not started"

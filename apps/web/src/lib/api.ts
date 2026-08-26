@@ -17,6 +17,7 @@ import type {
   TrackSummary,
   VerificationResult,
 } from './types';
+import { announceAuthExpired } from './auth';
 import { describeApiTarget, resolveApiBase } from './urls';
 
 const API_URL = resolveApiBase();
@@ -37,6 +38,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${API_URL}${path}`, {
       ...init,
+      /*
+       * Send the session cookie — PLATFORM-010.
+       *
+       * The cookie is HttpOnly, so this is the *only* way the browser can
+       * present it, and there is nothing here to read or attach by hand. The
+       * API pairs this with an explicit origin allow-list; a wildcard CORS
+       * origin cannot be combined with credentials at all.
+       */
+      credentials: 'include',
       headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
     });
   } catch (cause) {
@@ -58,7 +68,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     });
   }
 
-  if (!body.ok) throw new ApiRequestError(response.status, body.error);
+  if (!body.ok) {
+    /*
+     * A 401 means the session this browser thought it had is gone — expired,
+     * signed out elsewhere, or never real. Announce it once, here, so the auth
+     * provider re-queries the server; every caller then gets the same answer
+     * instead of each deciding for itself what a 401 meant.
+     *
+     * The error is still thrown: the call that failed did fail, and the caller
+     * has its own error state to render.
+     */
+    if (response.status === 401) announceAuthExpired();
+    throw new ApiRequestError(response.status, body.error);
+  }
   return body.data;
 }
 

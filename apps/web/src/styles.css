@@ -1111,3 +1111,96 @@ code {
   .attempts__item { grid-template-columns: 1fr auto; row-gap: 6px; }
   .attempts__when, .attempts__counts { grid-column: 1 / -1; }
 }
+
+/* ---------------------------------------------------------------------------
+   Authentication — PLATFORM-010.
+
+   The sign-in gate is a full-page state rather than a modal: nothing behind it
+   has loaded, so there is nothing for a modal to sit on top of.
+   --------------------------------------------------------------------------- */
+
+.auth-gate {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.auth-gate__title {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: -0.01em;
+}
+
+.auth-gate__lede {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+
+.auth-gate__status { margin: 0; color: var(--text-dim); }
+.auth-gate__status--error { color: var(--danger); font-weight: 600; }
+
+.auth-gate__detail {
+  margin: 0;
+  max-width: 60ch;
+  font-size: 13px;
+  color: var(--text-faint);
+  line-height: 1.6;
+}
+
+.auth-gate__detail code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.auth-gate__unconfigured {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  padding: 16px 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+
+.auth-gate__unconfigured p { margin: 0; }
+
+/* Sits inside `.topbar__right`, so it stays inline with the other controls. */
+.user-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-menu__identity {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.user-menu__role {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--info);
+}
+
+/* Deliberately loud: a development identity is nobody's proven identity. */
+.user-menu__role--dev {
+  color: var(--warn);
+  border-color: var(--warn);
+}

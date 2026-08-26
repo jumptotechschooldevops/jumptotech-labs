@@ -12,6 +12,7 @@
  * survive a restart rather than quietly implying it will.
  */
 import { useEffect, useState } from 'react';
+import { UserMenu } from '../components/UserMenu';
 import { ApiRequestError, api } from '../lib/api';
 import type {
   ApiError,
@@ -137,6 +138,7 @@ export function ProgressPage({
             Catalog
           </button>
           <span className="topbar__track">progress</span>
+          <UserMenu />
         </div>
       </header>
 
