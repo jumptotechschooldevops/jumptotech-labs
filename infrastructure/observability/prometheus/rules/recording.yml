@@ -17,26 +17,31 @@ groups:
     interval: 15s
     rules:
       - record: jtt:lab_start:rate5m
-        expr: sum(rate(jtt_lab_start_total[5m]))
+        expr: sum(rate(jtt_lab_start_outcome_total[5m]))
 
       - record: jtt:lab_start_failed:rate5m
-        expr: sum(rate(jtt_lab_start_total{outcome!="success"}[5m]))
+        expr: sum(rate(jtt_lab_start_outcome_total{outcome!="success"}[5m]))
 
       # The single number behind "are students able to start labs?".
+      #
+      # Reads `jtt_lab_start_outcome_total`, NOT `jtt_lab_start_total`. The
+      # latter carries `lab_id`, so its series are sparse enough that `rate()`
+      # returns zero over a window in which starts genuinely failed. See the
+      # comment on `labStartOutcomes` in services/observability/src/metrics.ts.
       - record: jtt:lab_start_failure:ratio5m
         expr: |
-          sum(rate(jtt_lab_start_total{outcome!="success"}[5m]))
-            / clamp_min(sum(rate(jtt_lab_start_total[5m])), 0.001)
+          sum(rate(jtt_lab_start_outcome_total{outcome!="success"}[5m]))
+            / clamp_min(sum(rate(jtt_lab_start_outcome_total[5m])), 0.001)
 
       - record: jtt:lab_start_failure:ratio10m
         expr: |
-          sum(rate(jtt_lab_start_total{outcome!="success"}[10m]))
-            / clamp_min(sum(rate(jtt_lab_start_total[10m])), 0.001)
+          sum(rate(jtt_lab_start_outcome_total{outcome!="success"}[10m]))
+            / clamp_min(sum(rate(jtt_lab_start_outcome_total[10m])), 0.001)
 
       - record: jtt:lab_start_success:ratio5m
         expr: |
-          sum(rate(jtt_lab_start_total{outcome="success"}[5m]))
-            / clamp_min(sum(rate(jtt_lab_start_total[5m])), 0.001)
+          sum(rate(jtt_lab_start_outcome_total{outcome="success"}[5m]))
+            / clamp_min(sum(rate(jtt_lab_start_outcome_total[5m])), 0.001)
 
       # Capacity as a fraction. `jtt_sessions_active` is summed because it is
       # split by provider and status; the limit is a single global gauge.

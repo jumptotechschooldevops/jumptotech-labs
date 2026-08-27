@@ -92,7 +92,15 @@ async function main(): Promise<void> {
    * silently falling back to memory — telling students their progress is saved
    * when it is not would be worse than not starting.
    */
-  const learning = await buildProgressRuntime(config, logger.legacy('migration.applied'));
+  const learning = await buildProgressRuntime(
+    config,
+    logger.legacy('migration.applied'),
+    ({ applied, latest }) => {
+      metrics.database.migrationsApplied.set(applied);
+      metrics.database.migrationVersion.set({ version: latest }, 1);
+      logger.info('migration.applied', { count: applied, migrationVersion: latest });
+    },
+  );
 
   /*
    * Session bookkeeping is durable when a database is configured.

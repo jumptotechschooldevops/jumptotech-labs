@@ -161,8 +161,24 @@ export function createCommonMetrics(registry: Registry, service: string): Common
   };
 }
 
+/**
+ * Every outcome `POST /api/labs/:id/start` can produce.
+ *
+ * Exported so a route cannot invent a value the alerting counter was never
+ * initialised for — an uninitialised series reintroduces exactly the
+ * invisible-first-increment problem `labStartOutcomes` exists to solve.
+ */
+export const LAB_START_OUTCOMES = [
+  'success',
+  'capacity_reached',
+  'provider_unavailable',
+  'provision_failed',
+  'unauthorized',
+] as const;
+
 export interface SessionMetrics {
   labStarts: Counter;
+  labStartOutcomes: Counter;
   provisionDuration: Histogram;
   provisionStepDuration: Histogram;
   labResets: Counter;
@@ -182,10 +198,44 @@ export function createSessionMetrics(registry: Registry): SessionMetrics {
   return {
     labStarts: new client.Counter({
       name: 'jtt_lab_start_total',
-      help: 'Start Lab requests by outcome.',
+      help: 'Start Lab requests by outcome. High cardinality — for diagnosis, not alerting.',
       labelNames: ['track', 'lab_id', 'provider', 'outcome'],
       ...common,
     }),
+
+    /*
+     * The same events, aggregated, for the alerting path.
+     *
+     * ## Why a second counter rather than summing the first
+     *
+     * `jtt_lab_start_total` carries `lab_id`, so on a platform that is not busy
+     * each series appears once, at 1, and never moves again. Prometheus cannot
+     * see the 0→1 step of a series that did not previously exist — it treats
+     * the first sample as the baseline — so `rate()` and `increase()` both
+     * return **zero** over a window in which eight starts genuinely failed.
+     * Summing afterwards does not help: the sparseness is in the underlying
+     * series, and `sum(rate(...))` sums zeroes.
+     *
+     * That was measured, not reasoned about: incident exercise 3 produced eight
+     * failed starts, `jtt_lab_start_total` read 8, and
+     * `sum(rate(jtt_lab_start_total[5m]))` read 0 — which would have meant
+     * `LabStartsFailingHard`, the platform's headline student-facing alert,
+     * silently never firing on a quiet cohort.
+     *
+     * This counter carries only `outcome`, and every value is initialised to
+     * zero at construction, so each series exists from the first scrape and its
+     * first real increment is a visible step.
+     */
+    labStartOutcomes: (() => {
+      const counter = new client.Counter({
+        name: 'jtt_lab_start_outcome_total',
+        help: 'Start Lab requests by outcome only. Low cardinality — the alerting path.',
+        labelNames: ['outcome'],
+        ...common,
+      });
+      for (const outcome of LAB_START_OUTCOMES) counter.inc({ outcome }, 0);
+      return counter;
+    })(),
 
     provisionDuration: new client.Histogram({
       name: 'jtt_lab_provision_duration_seconds',

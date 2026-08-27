@@ -85,10 +85,21 @@ than offering a lab that dies on Start.
    A recent restart with different `jtt_config_info` labels is your answer more
    often than not.
 
-7. **Rule out the availability probe lying to you.** `jtt_provider_available`
-   may still be 1: the probe is a cheap ping and does not exercise creation. A
-   green provider tile does **not** mean labs can start — that is the trap this
-   incident is built around.
+7. **Read the provider gauge as a hint, not an answer.**
+
+   Measured during incident exercise 3: removing the Linux sandbox image *did*
+   flip `jtt_provider_available{provider="linux"}` to 0, because that provider's
+   readiness probe checks the image exists. So the gauge is not blind.
+
+   It is also not sufficient. The probe is far cheaper than a real create, so a
+   full disk, a resource ceiling the host cannot satisfy, or a registry the
+   sandbox cannot reach all produce **green provider, failing starts**. Read the
+   two together:
+
+   | provider gauge | starts | Reading |
+   |---|---|---|
+   | 0 | failing | The substrate is out — RB-09 / RB-06 |
+   | 1 | failing | Creation-time only: disk, ceilings, egress. Stay here. |
 
 ## 5. Fix
 

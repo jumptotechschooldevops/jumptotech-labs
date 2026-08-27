@@ -4015,24 +4015,24 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 
 **Remaining limitations — do not deploy this as-is**
 
-1. **No authentication.** Anyone who can reach the ports can start a lab.
-   Session possession is the only authorization mechanism, and it is an MVP
-   stopgap, **not production authentication**. A leaked or shoulder-surfed
-   session id grants full control of that session. Real identity is a later
-   story; the session id becomes a claim exchange rather than a bare capability.
-1b. **The student identity behind stored progress is a development identity,
-   not a login.** PLATFORM-005 needed an owner for the history it writes, so
-   every request is attributed to a configured student id — by default
-   `dev-student-001`. Nobody proves anything: anyone who can reach the API *is*
-   that student and can read and add to that student's history. With
-   `DEV_STUDENT_HEADER_ENABLED=true` (off by default, off in compose) a header
-   selects any other student, which is a laptop-only convenience for testing two
-   students and an obvious data-exposure hole anywhere else. The API states this
-   in every response (`"authenticated": false`) rather than implying an account.
-   What it does *not* do is invent fake security: no student id is accepted from
-   a query string or a body, reads are owner-scoped in the query, and replacing
-   the resolver with a verified session or JWT subject changes one class. See
-   [Development student identity](#development-student-identity).
+> **This list was written before PLATFORM-006 to PLATFORM-010 and several of its
+> items had become false.** They are corrected in place below rather than
+> deleted, because a security section that overstates a gap is a smaller problem
+> than one that understates it — but an operator reading a stale claim makes bad
+> decisions in both directions. Corrected during PLATFORM-003.
+
+1. ~~**No authentication.**~~ **Fixed in PLATFORM-009 / PLATFORM-010.** The API
+   verifies OIDC tokens against the provider's JWKS (issuer, audience,
+   `exp`/`nbf`, real signature check), browser sign-in is an authorization-code
+   flow with PKCE behind a server-side opaque session cookie, and every session
+   operation is authorised against a stored `owner_user_id`. `AUTH_MODE`
+   defaults to `oidc` and the API refuses to start with `AUTH_MODE=development`
+   under `NODE_ENV=production`. See [docs/authentication.md](docs/authentication.md).
+1b. ~~**Progress is attributed to a development identity.**~~ **Fixed in
+   PLATFORM-010.** An authenticated caller's history is attributed to the user
+   the server verified; the development header is consulted only when nobody has
+   authenticated at all. What remains true: there is **no role administration
+   surface**, so roles change by direct SQL only.
 2. **Container isolation is not VM-grade tenant isolation, for any track.**
    Namespaces and containers alike share one kernel; a container-escape or
    kernel vulnerability crosses every boundary described above. This is stated
@@ -4040,8 +4040,13 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    containers, not virtual machines, and they should not be described to anyone
    as equivalent. Production needs gVisor, Kata or Firecracker underneath, plus
    seccomp profiles.
-2b. **The orchestrator and the terminal service reach the host's Docker daemon
-   in local development.** That is how the container tracks work today, and it
+2b. ~~**The orchestrator and the terminal service reach the host's Docker
+   daemon.**~~ **Fixed in PLATFORM-007.** `sandboxd` is the only process with a
+   container runtime, and neither service a browser can reach holds one. Its
+   three capabilities (`attach`, `runtime`, `docker`) have separate credentials
+   and it refuses to start if two are equal. The original text follows for
+   context:
+    That is how the container tracks work today, and it
    is a capability neither process would hold in production: anything able to
    drive that daemon is effectively root on the host. The production shape is a
    dedicated sandbox-broker service owning a rootless, per-tenant daemon, with
@@ -4069,8 +4074,11 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    create containers on that host.** It binds loopback by default and warns
    loudly when told to bind wider; the Docker Compose flow needs it wider, which
    makes that flow development-only.
-7. **Sandbox session state is in memory.** Restarting the API forgets *active
-   sessions* — a student mid-lab loses their environment handle and starts
+7. ~~**Sandbox session state is in memory.**~~ **Fixed in PLATFORM-008.**
+   Sessions are durable in PostgreSQL, capacity admission happens inside a
+   transaction with an advisory lock, and state changes are conditional writes
+   so two instances cannot both win. The original text follows for context:
+   **(historical)** Restarting the API forgets *active sessions* — a student mid-lab loses their environment handle and starts
    again. Sandboxes are not leaked when that happens (the reaper reclaims
    namespaces and containers alike from their own labels), and since
    PLATFORM-005 their *history* is not lost either: attempts and progress are
@@ -4089,11 +4097,24 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    `infrastructure/kind/generated/` with mode 644 so the containers' non-root
    users can read them. They are git-ignored and belong to a throwaway local
    cluster; treat them as credentials anyway.
-11. **The web container runs the Vite dev server**, which is not a production
-   server.
-12. **TLS is not configured.** Everything is plain HTTP/WS on localhost, which
-    also means the terminal token and the internal service secret travel in
-    clear text on the local network.
+11. ~~**The web container runs the Vite dev server.**~~ It serves a production
+   Vite build from nginx — see `infrastructure/docker/web.Dockerfile`.
+12. **TLS is not configured.** Still true. Everything is plain HTTP/WS on
+    localhost, which also means the terminal token and the internal service
+    secret travel in clear text on the local network. Termination is expected
+    from a proxy in front (Cloudflare Tunnel, an ALB); the platform ships none.
+
+13. **The platform is observable but not yet multi-instance.** Since
+    PLATFORM-003 every service emits structured JSON logs with a correlation id
+    that crosses process boundaries, exposes Prometheus metrics on a separate
+    authenticated listener, and answers `/livez` and `/readyz`; Prometheus,
+    Alertmanager and Grafana ship as a compose profile with eight dashboards,
+    31 alerts and a runbook per alert. See
+    [docs/observability.md](docs/observability.md). What is still missing is
+    **per-sandbox resource metrics** (they need a collector inside `sandboxd`,
+    because cAdvisor would need the Docker socket), **distributed tracing**, and
+    **any database backup or restore procedure** — the last is stated plainly in
+    [RB-02](docs/runbooks/RB-02-database.md) rather than implied.
 
 ---
 

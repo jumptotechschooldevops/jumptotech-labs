@@ -3,8 +3,14 @@
 **Alerts:** `DatabaseDown` (critical), `DatabasePoolSaturated` (warning),
 `ProgressStoreIsMemory` (critical)
 **Typical cause:** container stopped, disk full, connection exhaustion
-**Blast radius:** sessions, ownership, progress and browser sign-ins. The
-catalogue keeps serving from memory, so the site looks alive and nothing works.
+**Blast radius:** effectively the whole API. Sessions, ownership, progress and
+browser sign-ins all live in the database — and because `authenticate` resolves
+the caller through the Postgres-backed user store, **every `/api/*` route
+returns 401**, including the catalogue.
+
+That is worth knowing in advance, because 401 across the board looks like an
+authentication incident (RB-14) rather than a database one. `jtt_db_up` is what
+tells the two apart. Measured during incident exercise 1, not assumed.
 
 ## 1. Confirm it is real
 
@@ -30,6 +36,12 @@ completely different fixes. This is the distinction the dashboard exists for.
 docker compose ps postgres
 curl -s localhost:9400/readyz | jq '.data.checks[] | select(.name=="database")'
 ```
+
+Use **`/readyz` on :9400, not `/health` on :4000.** `/health` reads the session
+count, so a database outage degrades it too; it now reports `active: -1` rather
+than failing outright, but `/readyz` is the endpoint that names the failing
+dependency directly and it is on a listener that shares nothing with the
+student-facing one.
 
 ## 3. Immediate mitigation
 

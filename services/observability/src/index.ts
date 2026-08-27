@@ -56,6 +56,7 @@ export {
 export {
   createRegistry,
   setCollector,
+  LAB_START_OUTCOMES,
   createCommonMetrics,
   createSessionMetrics,
   createProviderMetrics,

@@ -202,14 +202,42 @@ export function createApp(deps: CreateAppDeps): Express {
   });
 
   app.get('/health', asyncRoute(async (_req, res) => {
+    /*
+     * Every dependency read here is individually guarded — PLATFORM-003.
+     *
+     * This endpoint used to throw a 500 when the database was unreachable,
+     * because `activeCount()` queries it. That is precisely backwards: the
+     * operator endpoint went dark at the moment it was most needed, and an
+     * operator's first move — curl /health — returned a generic error that said
+     * nothing about which dependency had failed.
+     *
+     * Found by running incident exercise 1 (docs/incident-exercises.md), not by
+     * reasoning about it.
+     *
+     * The success payload is unchanged, so the five suites that assert this
+     * shape still pass; a failing dependency now reports itself instead of
+     * taking the whole response with it.
+     */
+    const safely = async <T>(read: () => Promise<T>, fallback: T): Promise<T> => {
+      try {
+        return await read();
+      } catch {
+        return fallback;
+      }
+    };
+
     // Provider readiness belongs on /health because an operator's first
     // question after "are the labs loaded?" is "which tracks can actually run
     // here?" — and the answer is a live probe, not configuration.
-    const providers = await deps.sessions.providers.statuses();
+    const providers = await safely(() => deps.sessions.providers.statuses(), []);
     // Where learning history is going, and whether it is really going there.
     // An operator must be able to see "memory" at a glance rather than
     // discovering it when a restart loses a cohort's progress.
-    const store = await learning.progress.health();
+    const store = await safely(() => learning.progress.health(), {
+      store: 'unknown',
+      ok: false,
+      detail: 'health check failed',
+    });
     sendOk(res, {
       service: 'api',
       status: 'ok',
@@ -224,7 +252,9 @@ export function createApp(deps: CreateAppDeps): Express {
         ...(provider.reason ? { reason: provider.reason } : {}),
       })),
       sessions: {
-        active: await deps.sessions.activeCount(),
+        // -1 rather than 0: zero is a real, reassuring number and would be a
+        // lie. A negative count is unmistakably "not known".
+        active: await safely(() => deps.sessions.activeCount(), -1),
         maxActive: deps.sessions.lifetimes.maxActiveSessions,
       },
       progress: {

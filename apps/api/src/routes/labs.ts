@@ -227,6 +227,8 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       provider: lab.environment.provider,
       outcome,
     });
+    // The low-cardinality twin that the alerts read — see `labStartOutcomes`.
+    deps.metrics?.sessions.labStartOutcomes.inc({ outcome });
     obs[outcome === 'success' ? 'info' : 'warn'](
       outcome === 'success' ? 'lab.start.succeeded' : 'lab.start.failed',
       {

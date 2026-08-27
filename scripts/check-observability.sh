@@ -64,26 +64,35 @@ else
 fi
 
 say "Prometheus config"
-# The scrape token file is bind-mounted at runtime and git-ignored, so a fresh
-# clone has no such file and `promtool check config` would fail on a path that
-# is correct. A placeholder is created only when one is genuinely absent.
-token_created=false
-if [ ! -f infrastructure/observability/secrets/scrape-token ]; then
-  mkdir -p infrastructure/observability/secrets
-  printf 'placeholder-for-config-validation-only' \
-    > infrastructure/observability/secrets/scrape-token
-  token_created=true
-fi
-if out=$(run_promtool check config infrastructure/observability/prometheus/prometheus.yml 2>&1); then
-  ok "prometheus.yml valid, $(printf '%s' "$out" | grep -c 'SUCCESS') files checked"
-elif [ $? -eq 127 ]; then
-  bad "neither promtool nor a Docker daemon is available — config NOT validated"
+#
+# `rule_files` in prometheus.yml are container-absolute (/etc/prometheus/...),
+# because that is where the compose file mounts them. Validating the config
+# therefore has to happen with the same layout, or promtool correctly reports
+# that the rule files do not exist — a false failure about a correct config.
+#
+# The layout is assembled in a temp directory and mounted as ONE volume:
+# mounting `secrets/` separately inside a read-only `/etc/prometheus` fails,
+# because Docker cannot create the nested mountpoint in a read-only layer.
+#
+# The scrape token is a runtime bind mount and git-ignored, so a fresh clone has
+# none; the copy gets a placeholder, and the real one is never read here.
+if ! docker info >/dev/null 2>&1; then
+  bad "no Docker daemon — prometheus.yml NOT validated (its rule paths are container-absolute)"
 else
-  printf '%s\n' "$out"
-  bad "promtool check config failed"
-fi
-if [ "$token_created" = true ]; then
-  rm -f infrastructure/observability/secrets/scrape-token
+  staging=$(mktemp -d)
+  trap 'rm -rf "$staging"' EXIT
+  cp -R infrastructure/observability/prometheus/. "$staging/"
+  mkdir -p "$staging/secrets"
+  printf 'placeholder-for-config-validation-only' > "$staging/secrets/scrape-token"
+
+  if out=$(docker run --rm -v "$staging:/etc/prometheus:ro" \
+        --entrypoint promtool "$PROM_IMAGE" \
+        check config /etc/prometheus/prometheus.yml 2>&1); then
+    ok "prometheus.yml valid, and every rule_files path resolves"
+  else
+    printf '%s\n' "$out"
+    bad "promtool check config failed"
+  fi
 fi
 
 say "Alertmanager config"

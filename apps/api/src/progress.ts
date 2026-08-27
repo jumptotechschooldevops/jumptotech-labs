@@ -49,6 +49,8 @@ export interface ProgressRuntime {
 export async function buildProgressRuntime(
   config: ApiConfig,
   log: (message: string) => void = () => undefined,
+  /** Reports the schema state once, after migrations run. */
+  onMigrations?: (state: { applied: number; latest: string }) => void,
 ): Promise<ProgressRuntime> {
   const settings = config.progress;
   const identity = new DevStudentIdentity({
@@ -80,6 +82,19 @@ export async function buildProgressRuntime(
         ? `applied ${report.applied.length} migration(s)`
         : 'schema up to date',
     );
+    /*
+     * The schema version, as a metric — PLATFORM-003.
+     *
+     * RB-02's recovery checklist says to confirm the schema is intact after a
+     * database incident, because a database that comes back on an *empty*
+     * volume looks healthy in every other respect: it accepts connections, the
+     * pool is fine, `jtt_db_up` is 1, and a cohort's history is gone. The
+     * migration version is what distinguishes "recovered" from "recreated".
+     */
+    onMigrations?.({
+      applied: report.applied.length + report.skipped.length,
+      latest: [...report.applied, ...report.skipped].sort().pop() ?? 'none',
+    });
   } else {
     await database.ping();
     log('DATABASE_AUTO_MIGRATE is off — run `npm run db:migrate` before starting');

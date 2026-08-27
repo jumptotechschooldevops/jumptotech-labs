@@ -48,9 +48,28 @@ inhibit_rules:
 
   # The broker's runtime being gone explains every provider that depends on it,
   # and the lab-start failures those providers cause.
+  #
+  # `sandbox_kind="container"` rather than every ProviderUnavailable: a
+  # Kubernetes-provider outage is a genuinely separate incident and must never
+  # be suppressed by a broker problem.
+  - source_matchers: [alertname="SandboxdRuntimeDown"]
+    target_matchers: [alertname="ProviderUnavailable", sandbox_kind="container"]
   - source_matchers: [alertname="SandboxdRuntimeDown"]
     target_matchers:
-      - alertname=~"ProviderUnavailable|LabStartsFailingHard|LabStartFailureRateElevated|ProvisioningSlow|TerminalConnectionFailures"
+      - alertname=~"LabStartsFailingHard|LabStartFailureRateElevated|ProvisioningSlow|TerminalConnectionFailures"
+
+  # The broker process being gone entirely, as opposed to its runtime.
+  #
+  # This needs its own pair of rules because the `equal: ['service']` rule above
+  # cannot match: ServiceDown carries service="sandboxd" (the service that is
+  # down) while ProviderUnavailable carries service="api" (the service that
+  # *reports* it). Measured during incident exercise 2, where stopping the
+  # broker produced six notifications for one root cause.
+  - source_matchers: [alertname="ServiceDown", job="sandboxd"]
+    target_matchers: [alertname="ProviderUnavailable", sandbox_kind="container"]
+  - source_matchers: [alertname="ServiceDown", job="sandboxd"]
+    target_matchers:
+      - alertname=~"LabStartsFailingHard|LabStartFailureRateElevated|ProvisioningSlow|TerminalConnectionFailures|TerminalPtyDrift"
 
   # Critical beats warning for the same alert on the same target.
   - source_matchers: [severity="critical"]

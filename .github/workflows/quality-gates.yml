@@ -62,5 +62,42 @@ jobs:
           grep -q 'buildSandboxComposition' apps/api/src/index.ts
           grep -q 'buildRequirementWaiter' apps/api/src/composition.ts
 
+      # --- PLATFORM-003 -----------------------------------------------------
+      #
+      # Scoped deliberately to what proves the observability story, and no
+      # further: this is not a general CI redesign, and the integration and DB
+      # suites stay gated exactly as they were.
+      #
+      # `npm test` above already covers the metric contracts, the redaction
+      # corpus, the label policy, dashboard/alert validity and the health
+      # semantics. What it cannot cover is whether the rule files are valid to
+      # the *programs that consume them*, which is what promtool and amtool are
+      # for. The GitHub runner has a Docker daemon, so both run from their
+      # official images and no tool has to be installed.
+      #
+      # One script rather than inline steps, so `make observability-check` on a
+      # laptop and CI run exactly the same checks — a CI-only validation is one
+      # that gets discovered in a pull request rather than before it.
+      - name: Observability configuration (promtool, amtool, dashboards)
+        run: bash scripts/check-observability.sh
+
+      # A grep, not a test, because it is asserting the *absence* of something
+      # from a compose file rather than a property of running code. Mounting the
+      # Docker socket into a monitoring container would reintroduce the exact
+      # root-equivalent capability the runtime broker exists to remove.
+      - name: Observability containers hold no container runtime
+        run: |
+          if grep -q 'docker.sock' docker-compose.observability.yml; then
+            echo "docker-compose.observability.yml mounts a Docker socket" >&2
+            exit 1
+          fi
+          for net in sandboxes kind; do
+            if awk '/^  (prometheus|grafana|alertmanager):/,/^  [a-z]/' \
+                 docker-compose.observability.yml | grep -q "$net"; then
+              echo "an observability container joins the $net network" >&2
+              exit 1
+            fi
+          done
+
       - name: Build
         run: npm run build
