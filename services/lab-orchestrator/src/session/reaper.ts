@@ -128,7 +128,12 @@ export class SessionReaper {
   constructor(private readonly options: ReaperOptions) {
     this.#metrics = options.metrics ?? {};
     this.#now = options.now ?? (() => Date.now());
-    this.#log = options.log ?? ((message) => console.log(`[reaper] ${message}`));
+    /*
+     * Silent by default, matching `SessionManager`. A library writing to stdout
+     * on its own initiative is how unstructured lines survive a migration to
+     * structured logging; the composition root always injects one.
+     */
+    this.#log = options.log ?? (() => undefined);
     this.#orphanGraceMs = options.orphanGraceMs ?? 60_000;
     this.#retentionMs = options.retentionMs ?? 15 * 60_000;
     this.#providers =
