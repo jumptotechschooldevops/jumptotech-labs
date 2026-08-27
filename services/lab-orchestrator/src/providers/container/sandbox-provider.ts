@@ -80,6 +80,8 @@ import {
   MANAGED_CONTAINER_LABEL,
   MANAGED_CONTAINER_SELECTOR,
   MAX_SANDBOX_READ_BYTES,
+  type ContainerExecRequest,
+  type ContainerExecResult,
   type ContainerInfo,
   type ContainerRuntimePort,
   type NetworkInfo,
@@ -145,6 +147,26 @@ export interface ContainerProviderOptions {
   home?: string;
   /** Binaries a lab's own environment must contain for this provider to be usable. */
   requiredBinaries?: string[];
+  /**
+   * This provider's sandbox is a *set* of containers and always needs its own
+   * private segment, whatever the lab says.
+   *
+   * `environment.network: link` is a **lab author's** request: this lesson needs
+   * a link, an address and a neighbour. That is the right shape for a Linux
+   * networking lab, where some labs need one and most do not. It is the wrong
+   * shape for Ansible, where the *topology* needs one — a control node and two
+   * managed nodes have to be able to reach each other, and no Ansible lab can
+   * work without that. Leaving it to the lab meant every Ansible lab had to
+   * remember a field that is not really theirs to set, and none of them did:
+   * the track could not provision at all, failing with `network
+   * jtt-net-<hex> not found` at the first managed node.
+   *
+   * Setting it here does not widen anything. The network is created
+   * `--internal` — a bridge with no route off it — exactly as the lab-declared
+   * one is, and the `NET_RAW` gate that `network: link` also unlocks is
+   * separate and restricted to the `linux` provider.
+   */
+  requiresLabNetwork?: boolean;
   /**
    * Capabilities added back after `--cap-drop ALL`, from the closed list in
    * `runtime.ts`. Empty for every provider whose labs do not administer the
@@ -226,6 +248,7 @@ export class ContainerLabProvider implements LabProvider {
   readonly #image: string;
   readonly #home: string;
   readonly #requiredBinaries: string[];
+  readonly #requiresLabNetwork: boolean;
   readonly #capabilities: string[];
   readonly #containerUser: string | undefined;
   readonly #hostname: string;
@@ -243,6 +266,7 @@ export class ContainerLabProvider implements LabProvider {
     this.#image = options.image;
     this.#home = options.home ?? '/home/student';
     this.#requiredBinaries = options.requiredBinaries ?? [];
+    this.#requiresLabNetwork = options.requiresLabNetwork ?? false;
     this.#capabilities = options.capabilities ?? [];
     this.#containerUser = options.containerUser;
     this.#hostname = options.hostname ?? 'lab';
@@ -652,6 +676,31 @@ export class ContainerLabProvider implements LabProvider {
    * If the extra containers carried different labels the reaper would not
    * recognise them, and an expired session would leak machines.
    */
+  /**
+   * The sandbox home, for a subclass that seeds files of its own.
+   *
+   * Read-only, and deliberately the *same* value the base class resolves every
+   * verifier path under, so a subclass cannot seed into a directory the rest of
+   * the provider does not know about.
+   */
+  protected get homeDir(): string {
+    return this.#home;
+  }
+
+  /**
+   * Run one command in a sandbox this provider created.
+   *
+   * For a subclass whose topology needs more setup than the base lifecycle
+   * does — the Ansible control node's SSH identity is the only case today.
+   * It goes through the same runtime port, with the same argv-array discipline
+   * and the same `stdin` route for file content, so nothing a subclass seeds
+   * can become part of a command line.
+   */
+  protected execInSandbox(ref: string, request: ContainerExecRequest): Promise<ContainerExecResult> {
+    assertValidContainerSandboxRef(ref);
+    return this.#runtime.exec(ref, { workdir: this.#home, ...request });
+  }
+
   protected ownershipLabels(context: LabSessionContext): Record<string, string> {
     return {
       [MANAGED_CONTAINER_LABEL]: 'true',
@@ -739,7 +788,8 @@ export class ContainerLabProvider implements LabProvider {
   }
 
   #labNetwork(context: LabSessionContext): string | undefined {
-    if (context.lab.environment.network !== 'link') return undefined;
+    // Either the lab asked for a link, or the provider's own topology needs one.
+    if (!this.#requiresLabNetwork && context.lab.environment.network !== 'link') return undefined;
     return networkRefForSandbox(this.#ref(context));
   }
 
@@ -1198,7 +1248,7 @@ export class ContainerLabProvider implements LabProvider {
     const found: string[] = [];
     for (const binary of this.#requiredBinaries) {
       const probe = await this.#runtime.exec(ref, {
-        argv: ['/usr/bin/env', binary, '--version'],
+        argv: ['/usr/bin/env', binary, versionFlagFor(binary)],
         user: context.policy.sandbox.user,
         workdir: this.#home,
         timeoutMs: 30_000,
@@ -1208,7 +1258,13 @@ export class ContainerLabProvider implements LabProvider {
           `'${binary}' is not usable inside ${this.#image}: ${probe.stderr.trim() || `exit ${probe.exitCode}`}`,
         );
       }
-      found.push(`${binary} ${firstLine(probe.stdout)}`);
+      /*
+       * stdout, or stderr when the tool reports its version there.
+       *
+       * `ssh -V` writes to stderr, which is unusual but long-standing. Reading
+       * only stdout made a working `ssh` report an empty version string.
+       */
+      found.push(`${binary} ${firstLine(probe.stdout) || firstLine(probe.stderr)}`);
     }
 
     return found.length > 0 ? `${who}; ${found.join('; ')}` : `unprivileged user '${who}'`;
@@ -1616,6 +1672,30 @@ function parseExpiry(raw: string | undefined): number {
   if (!raw) return 0;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+
+/**
+ * How to ask a binary for its version.
+ *
+ * `--version` for almost everything, and that is what this probe assumed. It is
+ * wrong for exactly one of the binaries the platform requires: OpenSSH's `ssh`
+ * has no long options at all, so `ssh --version` is parsed as the option `-`
+ * and exits non-zero — which made the Ansible provider refuse to start *every*
+ * session with "'ssh' is not usable inside jumptotech/lab-ansible:latest",
+ * against an image whose `ssh` works perfectly.
+ *
+ * That went unnoticed because the Ansible provider was switched off in the
+ * shipped stack; turning it on is what surfaced it. A table rather than a
+ * special case, so the next tool with its own spelling is one line.
+ */
+const VERSION_FLAGS: Record<string, string> = {
+  // OpenSSH: `-V`, and it prints to stderr.
+  ssh: '-V',
+};
+
+function versionFlagFor(binary: string): string {
+  return VERSION_FLAGS[binary] ?? '--version';
 }
 
 function firstLine(text: string): string {

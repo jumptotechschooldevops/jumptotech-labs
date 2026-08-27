@@ -415,6 +415,33 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
         return ok(entry.content);
       }
 
+      /*
+       * SSH between containers on one lab network.
+       *
+       * Modelled rather than stubbed to `ok`, because what the Ansible
+       * provider's readiness wait is actually asking is "is there a machine
+       * answering by this name on my segment" — and a fake that always said yes
+       * would pass whether or not the provider had put the nodes on the right
+       * network, which is the thing worth checking.
+       */
+      case '/usr/bin/ssh': {
+        // The destination is the last argument before the remote command.
+        const destination = args.length >= 2 ? args[args.length - 2] : undefined;
+        if (!destination) return fail('ssh: no destination');
+        const peer = [...this.containers.values()].find(
+          (candidate) =>
+            (candidate.spec.aliases ?? []).includes(destination) ||
+            candidate.spec.name === destination,
+        );
+        if (!peer) {
+          return fail(`ssh: Could not resolve hostname ${destination}`);
+        }
+        if (peer.spec.network !== container.spec.network) {
+          return fail(`ssh: connect to host ${destination} port 22: Connection refused`);
+        }
+        return ok('');
+      }
+
       // --- allow-listed inspection commands, for the `linux` family ---------
       case 'cat': {
         // Only `/proc/<pid>/environ` is modelled here; everything else a lab
