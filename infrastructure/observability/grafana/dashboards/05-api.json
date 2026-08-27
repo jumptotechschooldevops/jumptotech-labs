@@ -1,0 +1,577 @@
+{
+  "uid": "jtt-api",
+  "title": "JTT \u2014 API",
+  "description": "RED metrics for the API, plus verification outcomes.",
+  "tags": [
+    "jumptotech",
+    "api"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "annotations": {
+    "list": [
+      {
+        "name": "Deploys / restarts",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "jtt-prometheus"
+        },
+        "enable": true,
+        "iconColor": "rgba(255, 96, 96, 1)",
+        "expr": "changes(jtt_process_start_time_seconds[5m]) > 0",
+        "titleFormat": "{{service}} restarted",
+        "step": "60s"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 89,
+      "type": "timeseries",
+      "title": "Request rate by route",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "sum by (route) (rate(jtt_http_requests_total{service=\"api\"}[5m]))",
+          "legendFormat": "{{route}}",
+          "refId": "M"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 91,
+      "type": "timeseries",
+      "title": "Status classes",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "sum by (status_class) (rate(jtt_http_requests_total{service=\"api\"}[5m]))",
+          "legendFormat": "{{status_class}}",
+          "refId": "O"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 93,
+      "type": "timeseries",
+      "title": "Latency p50/p95/p99 (Start Lab excluded)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(jtt_http_request_duration_seconds_bucket{service=\"api\",route!=\"/api/labs/:id/start\"}[10m])))",
+          "legendFormat": "p50",
+          "refId": "Q"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(jtt_http_request_duration_seconds_bucket{service=\"api\",route!=\"/api/labs/:id/start\"}[10m])))",
+          "legendFormat": "p95",
+          "refId": "R"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(jtt_http_request_duration_seconds_bucket{service=\"api\",route!=\"/api/labs/:id/start\"}[10m])))",
+          "legendFormat": "p99",
+          "refId": "S"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 97,
+      "type": "timeseries",
+      "title": "Start Lab latency (its own axis)",
+      "description": "Separated because it is bounded by sandbox provisioning, not by the API. Mixing it into the general p95 makes correct behaviour look like a latency incident.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(jtt_http_request_duration_seconds_bucket{service=\"api\",route=\"/api/labs/:id/start\"}[10m])))",
+          "legendFormat": "p95 start",
+          "refId": "U"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 100,
+      "type": "table",
+      "title": "5xx by route",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "topk(10, sum by (route) (increase(jtt_http_requests_total{service=\"api\",status_class=\"5xx\"}[1h])))",
+          "legendFormat": "",
+          "refId": "V",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "id": 101,
+      "type": "timeseries",
+      "title": "In-flight requests",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "jtt_http_requests_in_flight",
+          "legendFormat": "{{service}}",
+          "refId": "Y"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 103,
+      "type": "timeseries",
+      "title": "Event loop lag p99",
+      "description": "Above ~200ms the process is CPU-bound and everything it serves is slow, including its own health endpoints.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "jtt_nodejs_eventloop_lag_p99_seconds",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 105,
+      "type": "timeseries",
+      "title": "Heap used",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "jtt_nodejs_heap_size_used_bytes",
+          "legendFormat": "{{service}}",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 107,
+      "type": "timeseries",
+      "title": "Verification results",
+      "description": "`fail` is a student who has not finished \u2014 the most normal event in the product. Only `error` is an outage.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "sum by (result) (rate(jtt_verification_total[10m])) * 60",
+          "legendFormat": "{{result}}",
+          "refId": "E"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 109,
+      "type": "timeseries",
+      "title": "Verification errors by code",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "sum by (code) (increase(jtt_verification_errors_total[10m]))",
+          "legendFormat": "{{code}}",
+          "refId": "G"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

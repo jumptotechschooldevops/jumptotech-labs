@@ -296,6 +296,15 @@ async function main(): Promise<void> {
     log: logger.legacy('reaper.sweep.completed'),
     metrics: {
       onSweep: (event) => {
+        /*
+         * `started` seeds the last-success timestamp without counting as a
+         * sweep — see `SessionReaper.start()`. Counting it would inflate the
+         * sweep rate by one per deploy.
+         */
+        if (event.outcome === 'started') {
+          metrics.reaper.lastSuccess.set(Date.now() / 1000);
+          return;
+        }
         metrics.reaper.sweeps.inc({ outcome: event.outcome });
         metrics.reaper.sweepDuration.observe(event.durationMs / 1000);
         if (event.outcome === 'ok') {

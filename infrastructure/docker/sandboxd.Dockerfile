@@ -31,6 +31,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json        apps/api/package.json
 COPY apps/web/package.json        apps/web/package.json
+COPY services/observability/package.json    services/observability/package.json
 COPY services/lab-orchestrator/package.json services/lab-orchestrator/package.json
 COPY services/progress/package.json         services/progress/package.json
 COPY services/sandboxd/package.json         services/sandboxd/package.json
@@ -69,6 +70,7 @@ WORKDIR /app
 
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json package-lock.json tsconfig.base.json ./
+COPY services/observability services/observability
 COPY services/lab-orchestrator services/lab-orchestrator
 COPY services/sandboxd        services/sandboxd
 

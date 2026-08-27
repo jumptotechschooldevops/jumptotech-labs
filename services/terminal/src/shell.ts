@@ -27,6 +27,7 @@
  * an append-only registration would have left the old shell's exit still wired
  * to the live session.
  */
+import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
 import * as pty from 'node-pty';
 import WebSocket from 'ws';
 
@@ -128,7 +129,14 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
     let onData: (data: string) => void = () => undefined;
     let onExit: (event: ShellExit) => void = () => undefined;
 
-    const ws = new WebSocket(url, { headers: { 'x-internal-secret': options.secret } });
+    const ws = new WebSocket(url, {
+      headers: {
+        'x-internal-secret': options.secret,
+        // Correlation only. The broker's attach authorization is the `attach`
+        // scope secret above and the ownership gates behind it.
+        ...(currentRequestId() ? { [REQUEST_ID_HEADER]: currentRequestId()! } : {}),
+      },
+    });
 
     const timer = setTimeout(() => {
       if (settled) return;

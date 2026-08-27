@@ -17,6 +17,7 @@
  * `SessionManager` catches and logs failures here and proceeds, which is the
  * part that actually matters for isolation and cost.
  */
+import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
 import type { TerminalTerminator } from '@jumptotech/lab-orchestrator';
 
 export interface HttpTerminalControlOptions {
@@ -49,6 +50,8 @@ export class HttpTerminalControl implements TerminalTerminator {
         headers: {
           'content-type': 'application/json',
           'x-internal-secret': this.options.secret,
+          // Correlation only — see broker-runtime.ts.
+          ...(currentRequestId() ? { [REQUEST_ID_HEADER]: currentRequestId()! } : {}),
         },
         body: JSON.stringify({ sessionId }),
         signal: controller.signal,

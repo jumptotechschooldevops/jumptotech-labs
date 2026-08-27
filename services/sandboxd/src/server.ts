@@ -49,7 +49,10 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import {
+  normaliseRequestId,
   silentLogger,
+  withContext,
+  REQUEST_ID_HEADER,
   type CommonMetrics,
   type Logger,
   type SandboxdMetrics,
@@ -220,7 +223,25 @@ export function createSandboxd(deps: SandboxdDeps): Server {
   const bySessionId = new Map<string, WebSocket>();
 
   const httpServer = createServer((req, res) => {
-    void (async () => {
+    /*
+     * Re-enter the caller's correlation id — PLATFORM-003.
+     *
+     * The API and the terminal send `x-request-id`; running the handler inside
+     * that context means every line this service writes for this request joins
+     * the caller's, so one grep returns the whole causal chain across three
+     * processes.
+     *
+     * `normaliseRequestId` validates the shape and mints a fresh id when the
+     * header is absent or malformed. The value influences nothing but logging:
+     * authorization is the scope secret, and the container name is derived from
+     * the session id by HMAC, neither of which this touches.
+     */
+    const requestId = normaliseRequestId(
+      typeof req.headers[REQUEST_ID_HEADER] === 'string'
+        ? (req.headers[REQUEST_ID_HEADER] as string)
+        : undefined,
+    );
+    void withContext({ requestId }, async () => {
       if (req.method === 'GET' && req.url === '/health') {
         sendJson(res, 200, {
           status: 'ok',
@@ -271,6 +292,19 @@ export function createSandboxd(deps: SandboxdDeps): Server {
             });
             metrics?.runtimeOps.inc({ op, outcome: 'success' });
             metrics?.runtimeOpDuration.observe({ op }, (Date.now() - startedAt) / 1000);
+            /*
+             * `create` and `remove` are logged; `inspect`, `list` and `ping`
+             * are not. The first two are the lifecycle events an operator
+             * reconstructs an incident from; the rest run several times per
+             * scrape and would bury them.
+             */
+            if (op === 'create' || op === 'remove') {
+              obs.info('sandbox.runtime.op', {
+                op,
+                outcome: 'success',
+                durationMs: Date.now() - startedAt,
+              });
+            }
             sendJson(res, 200, { ok: true, data });
           } catch (error) {
             const { status, body } = runtimeErrorResponse(error);
@@ -337,7 +371,7 @@ export function createSandboxd(deps: SandboxdDeps): Server {
       // There is no other HTTP surface. Not a 404 page, not a directory,
       // nothing that could grow into a control API by accident.
       sendJson(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'not found' } });
-    })();
+    });
   });
 
   /**

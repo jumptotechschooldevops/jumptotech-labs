@@ -1,0 +1,27 @@
+groups:
+  - name: terminal
+    rules:
+      - alert: TerminalConnectionFailures
+        expr: jtt:terminal_connection_failure:ratio10m > 0.20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'more than 20% of terminal connections are failing'
+          description: >-
+            Break it down by outcome: origin_rejected is configuration,
+            unauthorized is token or clock skew, no_credentials and
+            shell_start_failed are the sandbox path.
+          runbook_url: docs/runbooks/RB-12-terminal.md
+
+      # Two services counting the same shells from opposite ends. Sustained
+      # disagreement means a PTY outlived its socket or vice versa — a leak that
+      # neither service can see on its own.
+      - alert: TerminalPtyDrift
+        expr: abs(sum(jtt_sandboxd_shells_open) - sum(jtt_terminal_connections_open)) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'broker PTYs and terminal sockets disagree by {{ $value }}'
+          runbook_url: docs/runbooks/RB-12-terminal.md

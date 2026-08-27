@@ -25,6 +25,7 @@
  * still holds if this client is wrong. Adding a second copy here would invite
  * the two to drift and would suggest the remote check is optional.
  */
+import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
 import type {
   ContainerExecRequest,
   ContainerExecResult,
@@ -35,6 +36,12 @@ import type {
   NetworkSpec,
 } from './runtime.js';
 import { ContainerRuntimeError } from './runtime.js';
+
+/** The ambient correlation id as a header, or nothing outside a request. */
+function requestIdHeader(): Record<string, string> {
+  const id = currentRequestId();
+  return id ? { [REQUEST_ID_HEADER]: id } : {};
+}
 
 export interface BrokerRuntimeOptions {
   /** `http://sandboxd:4002`. Configuration, never a value from a request. */
@@ -131,6 +138,15 @@ export class BrokerRuntime implements ContainerRuntimePort {
       response = await this.#fetch(`${this.#baseUrl}/v1/runtime`, {
         method: 'POST',
         headers: {
+          /*
+           * Correlation across the process boundary — PLATFORM-003.
+           *
+           * Purely descriptive: the broker uses it to tag its log lines and
+           * for nothing else. It is never an authorization input, never a key
+           * into a store, and never trusted to be unique. Authorization here
+           * is, and remains, the scoped `x-internal-secret` below.
+           */
+          ...requestIdHeader(),
           'content-type': 'application/json',
           'x-internal-secret': this.#secret,
         },

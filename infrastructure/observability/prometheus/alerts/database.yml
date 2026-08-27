@@ -1,0 +1,38 @@
+groups:
+  - name: database
+    rules:
+      - alert: DatabaseDown
+        expr: jtt_db_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'the platform database is unreachable'
+          description: >-
+            Sessions, ownership, progress and browser sign-ins all live there.
+            The catalogue keeps serving from memory; nothing else works.
+          runbook_url: docs/runbooks/RB-02-database.md
+
+      # Above zero while the database is still answering means the application
+      # is starved of connections, not that the database is dead. Two different
+      # incidents that otherwise present identically as "everything is slow".
+      - alert: DatabasePoolSaturated
+        expr: jtt_db_pool_connections{state="waiting"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'requests are queuing for a database connection'
+          runbook_url: docs/runbooks/RB-02-database.md
+
+      # The API falls back to an in-memory store when DATABASE_URL is unset and
+      # says so once, at startup, in a log nobody reads three weeks later —
+      # after a restart has silently discarded a cohort's progress.
+      - alert: ProgressStoreIsMemory
+        expr: jtt_db_store_info{store="memory"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'learning history is IN MEMORY and will be lost on restart'
+          runbook_url: docs/runbooks/RB-02-database.md

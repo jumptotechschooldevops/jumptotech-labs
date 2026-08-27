@@ -1,0 +1,62 @@
+groups:
+  - name: sessions
+    rules:
+      # The headline student-facing alert. Thresholds are a ratio, not a count,
+      # so a quiet evening with two failures does not page anybody.
+      - alert: LabStartsFailingHard
+        expr: jtt:lab_start_failure:ratio5m > 0.30
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'more than 30% of Start Lab requests are failing'
+          description: >-
+            Students cannot reliably start labs. Scope it by lab_id, track and
+            provider before touching anything — one lab, one track, one provider
+            and everything are four different incidents.
+          runbook_url: docs/runbooks/RB-03-lab-start-failures.md
+
+      - alert: LabStartFailureRateElevated
+        expr: jtt:lab_start_failure:ratio10m > 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'more than 10% of Start Lab requests are failing'
+          runbook_url: docs/runbooks/RB-03-lab-start-failures.md
+
+      # Capacity exhausted is measured by refusals, not by utilisation.
+      # Utilisation at 100% with nobody being turned away is a full platform
+      # working exactly as designed; a refusal is a student who was told no.
+      - alert: CapacityExhausted
+        expr: increase(jtt_session_capacity_rejections_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'students are being refused for lack of capacity'
+          description: >-
+            MAX_ACTIVE_SESSIONS has been reached and Start Lab is returning
+            LAB_CAPACITY_REACHED. There is no queue past the cap.
+          runbook_url: docs/runbooks/RB-04-capacity.md
+
+      - alert: CapacityNearExhausted
+        expr: jtt:sessions_utilization:ratio > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'sandbox capacity is above 85%'
+          runbook_url: docs/runbooks/RB-04-capacity.md
+
+      - alert: ProvisioningSlow
+        expr: jtt:lab_provision_duration:p95_15m > 60
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'p95 provisioning for {{ $labels.provider }} is above 60s'
+          description: >-
+            Read the provisioning *step* breakdown before anything else — it
+            names the subsystem, which p95 alone never does.
+          runbook_url: docs/runbooks/RB-10-provisioning-slow.md

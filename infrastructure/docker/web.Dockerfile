@@ -13,6 +13,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json        apps/api/package.json
 COPY apps/web/package.json        apps/web/package.json
+COPY services/observability/package.json    services/observability/package.json
 COPY services/lab-orchestrator/package.json services/lab-orchestrator/package.json
 COPY services/progress/package.json         services/progress/package.json
 COPY services/terminal/package.json         services/terminal/package.json

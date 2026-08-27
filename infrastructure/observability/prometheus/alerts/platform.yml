@@ -1,0 +1,63 @@
+# Platform-level alerts — PLATFORM-003.
+#
+# Severity policy:
+#   critical  students are affected now, or a safety mechanism has stopped.
+#             Pages. Must have a runbook whose step 3 restores service.
+#   warning   degraded, or heading somewhere bad. Ticket, not a page.
+#
+# Every rule carries `runbook_url`. `alerts-have-runbooks.test.ts` fails the
+# build if one points at a file that does not exist — an alert whose runbook is
+# a dead link is worse than no runbook, because it costs an operator the two
+# minutes they spend looking for it.
+
+groups:
+  - name: platform
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"api|terminal|sandboxd"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ $labels.job }} is not being scraped'
+          description: >-
+            Prometheus cannot reach {{ $labels.job }}. Either the process is
+            gone, or its observability listener is. Students are affected if
+            this is api or terminal.
+          runbook_url: docs/runbooks/RB-01-service-down.md
+
+      - alert: ServiceNotReady
+        expr: jtt_readyz_ok == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ $labels.service }} reports itself not ready'
+          description: >-
+            The instance is alive but says it cannot serve. Read /readyz for the
+            failing check — it names the dependency and nothing else.
+          runbook_url: docs/runbooks/RB-01-service-down.md
+
+      - alert: NoLabsLoaded
+        expr: jtt_labs_loaded == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'the API loaded no lab definitions'
+          description: >-
+            LABS_DIR is wrong or the mount is missing. The catalogue is empty and
+            nothing can be started.
+          runbook_url: docs/runbooks/RB-07-no-labs-loaded.md
+
+      - alert: LabDefinitionErrors
+        expr: jtt_lab_load_errors > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $value }} lab definitions were rejected at startup'
+          description: >-
+            Those labs are absent from the catalogue. The startup log names each
+            one with the validation error.
+          runbook_url: docs/runbooks/RB-07-no-labs-loaded.md

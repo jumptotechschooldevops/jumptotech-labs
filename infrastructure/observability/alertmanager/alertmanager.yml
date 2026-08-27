@@ -1,0 +1,58 @@
+# Alertmanager — PLATFORM-003.
+#
+# The receiver is a stub. Where alerts actually go — PagerDuty, Opsgenie, a
+# Slack webhook — is a deployment decision and deliberately not made here; this
+# story's job is to produce correct, actionable alerts, not to choose whose
+# phone rings. Point `webhook_configs.url` at something real to finish it.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: default
+  # Group by alertname and service so one condition across three instances is
+  # one notification, not three.
+  group_by: ['alertname', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  # Critical alerts are re-sent hourly; a warning that nobody has acted on does
+  # not need repeating every hour and becomes noise if it does.
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: default
+      repeat_interval: 1h
+
+receivers:
+  - name: default
+    webhook_configs:
+      - url: http://127.0.0.1:5001/alerts
+        send_resolved: true
+
+# One root cause, one page.
+#
+# Without these, a database outage fires DatabaseDown, ApiErrorRateHigh,
+# LabStartsFailingHard and AuthFailureSpike simultaneously — four pages, three
+# of them describing symptoms of the first. An operator triaging four alerts
+# spends their first minutes deciding which one is real.
+inhibit_rules:
+  # A service that is not being scraped cannot produce meaningful alerts about
+  # itself; suppress everything else carrying its label.
+  - source_matchers: [alertname="ServiceDown"]
+    target_matchers: [severity=~"warning|critical"]
+    equal: ['service']
+
+  - source_matchers: [alertname="DatabaseDown"]
+    target_matchers:
+      - alertname=~"ApiErrorRateHigh|LabStartsFailingHard|LabStartFailureRateElevated|AuthFailureSpike|DatabasePoolSaturated|VerificationErrorRate"
+
+  # The broker's runtime being gone explains every provider that depends on it,
+  # and the lab-start failures those providers cause.
+  - source_matchers: [alertname="SandboxdRuntimeDown"]
+    target_matchers:
+      - alertname=~"ProviderUnavailable|LabStartsFailingHard|LabStartFailureRateElevated|ProvisioningSlow|TerminalConnectionFailures"
+
+  # Critical beats warning for the same alert on the same target.
+  - source_matchers: [severity="critical"]
+    target_matchers: [severity="warning"]
+    equal: ['alertname', 'service']

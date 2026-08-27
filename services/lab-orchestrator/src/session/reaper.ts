@@ -148,6 +148,24 @@ export class SessionReaper {
   /** Begin sweeping. The timer is unref'd so it never holds the process open. */
   start(): void {
     if (this.#timer) return;
+
+    /*
+     * Seed the last-success timestamp at start.
+     *
+     * `jtt_reaper_last_success_timestamp_seconds` defaults to 0, and the alert
+     * is `time() - <gauge> > 300`. Unseeded, that evaluates to the current Unix
+     * time on a freshly started process — so `ReaperStalled` fires immediately
+     * and permanently on every deploy, which is both wrong and the fastest way
+     * to get the most important reliability alert in the platform silenced.
+     *
+     * Seeding says "cleanup is up to date as of now", which at start is true in
+     * the only sense that matters: nothing has had time to leak, and the first
+     * sweep is one interval away. If the sweep then never runs, the alert still
+     * fires 300s later — which is exactly the case it exists for.
+     */
+    this.#emit((m) =>
+      m.onSweep?.({ outcome: 'started', durationMs: 0, orphansByProvider: {} }),
+    );
     this.#timer = setInterval(() => {
       void this.sweep().catch((error: unknown) => {
         this.#log(`sweep failed: ${describe(error)}`);

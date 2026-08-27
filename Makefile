@@ -15,7 +15,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell typecheck check reset clean
+.PHONY: help setup observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -38,8 +38,42 @@ setup: ## First-time setup: .env + kind cluster
 			echo "generated $$v"; \
 		fi; \
 	done
+	@# Observability credentials (PLATFORM-003). The scrape token is generated
+	@# separately from every other secret because it is handed to a monitoring
+	@# system and each service refuses to start if it matches one of theirs.
+	@for v in OBSERVABILITY_SCRAPE_TOKEN GRAFANA_ADMIN_PASSWORD; do \
+		if ! grep -qE "^$$v=.+" .env; then \
+			sed -i.bak "/^$$v=$$/d" .env && rm -f .env.bak; \
+			echo "$$v=$$(openssl rand -hex 32)" >> .env; \
+			echo "generated $$v"; \
+		fi; \
+	done
+	@$(MAKE) observability-token
 	@$(MAKE) cluster-up
 	@$(MAKE) sandbox-build
+
+observability-token: ## Write the scrape token where Prometheus reads it
+	@mkdir -p infrastructure/observability/secrets
+	@grep -E '^OBSERVABILITY_SCRAPE_TOKEN=' .env \
+		| head -1 | cut -d= -f2- | tr -d '\n' \
+		> infrastructure/observability/secrets/scrape-token
+	@chmod 600 infrastructure/observability/secrets/scrape-token
+	@echo "wrote infrastructure/observability/secrets/scrape-token (git-ignored)"
+
+observability-up: ## Start the stack with Prometheus, Alertmanager and Grafana
+	@$(MAKE) observability-token
+	@$(COMPOSE) -f docker-compose.observability.yml --profile observability up -d --build
+	@echo ""
+	@echo "  Grafana       http://127.0.0.1:$${GRAFANA_PORT:-3001}  (admin / GRAFANA_ADMIN_PASSWORD in .env)"
+	@echo "  Prometheus    http://127.0.0.1:$${PROMETHEUS_PORT:-9090}"
+	@echo "  Alertmanager  http://127.0.0.1:$${ALERTMANAGER_PORT:-9093}"
+	@echo ""
+
+observability-down: ## Stop the observability stack, leaving the platform running
+	@$(COMPOSE) -f docker-compose.observability.yml --profile observability rm -sf prometheus alertmanager grafana
+
+observability-check: ## Validate rules and dashboards without starting anything
+	@bash scripts/check-observability.sh
 
 cluster-up: ## Create the local kind cluster
 	@bash scripts/cluster-up.sh

@@ -1,0 +1,47 @@
+groups:
+  - name: api
+    rules:
+      - alert: ApiErrorRateHigh
+        expr: jtt:http_error:ratio10m{service="api"} > 0.02
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'more than 2% of API requests are 5xx'
+          runbook_url: docs/runbooks/RB-11-api-errors-and-latency.md
+
+      - alert: ApiLatencyHigh
+        expr: jtt:http_duration:p95_10m{service="api"} > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'API p95 latency is above 1s'
+          description: >-
+            Start Lab is excluded from this expression — it is legitimately slow
+            and has its own alert (ProvisioningSlow).
+          runbook_url: docs/runbooks/RB-11-api-errors-and-latency.md
+
+      - alert: EventLoopLagHigh
+        expr: jtt_nodejs_eventloop_lag_p99_seconds > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.service }} event loop p99 lag is above 200ms'
+          description: >-
+            The process is CPU-bound or blocked. Everything it serves is slow,
+            including its own health endpoints.
+          runbook_url: docs/runbooks/RB-11-api-errors-and-latency.md
+
+      - alert: VerificationErrorRate
+        expr: jtt:verification_error:ratio10m > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'more than 5% of Check Solution requests cannot read the environment'
+          description: >-
+            result="error" only — a student who has not solved the lab yet is
+            result="fail" and is not counted here.
+          runbook_url: docs/runbooks/RB-13-verification.md

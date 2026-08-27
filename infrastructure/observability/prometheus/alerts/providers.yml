@@ -1,0 +1,30 @@
+groups:
+  - name: providers
+    rules:
+      # Gated on `jtt_provider_labs_total > 0` so a provider with no labs in the
+      # catalogue — AWS, which is architecture-only and reports unavailable
+      # forever by design — never pages anybody.
+      - alert: ProviderUnavailable
+        expr: jtt_provider_available == 0 and on(provider) jtt_provider_labs_total > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'provider {{ $labels.provider }} cannot run labs'
+          description: >-
+            Every lab backed by this provider will refuse to start. The
+            Providers dashboard shows how many that is.
+          runbook_url: docs/runbooks/RB-09-provider-unavailable.md
+
+      - alert: SandboxdRuntimeDown
+        expr: jtt_sandboxd_runtime_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'the container runtime under the broker is unreachable'
+          description: >-
+            Distinct from ServiceDown: the broker is answering, the runtime
+            beneath it is not. Six tracks are affected; the Kubernetes track is
+            not.
+          runbook_url: docs/runbooks/RB-06-sandboxd.md

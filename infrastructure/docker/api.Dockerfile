@@ -53,6 +53,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json        apps/api/package.json
 COPY apps/web/package.json        apps/web/package.json
+COPY services/observability/package.json    services/observability/package.json
 COPY services/lab-orchestrator/package.json services/lab-orchestrator/package.json
 COPY services/progress/package.json         services/progress/package.json
 COPY services/terminal/package.json         services/terminal/package.json
@@ -65,6 +66,7 @@ RUN npm ci --omit=dev --workspace @jumptotech/api --include-workspace-root --ign
  && npm cache clean --force
 
 COPY tsconfig.base.json ./
+COPY services/observability services/observability
 COPY services/lab-orchestrator services/lab-orchestrator
 COPY services/verifier        services/verifier
 # Carries `migrations/` with it, so the image knows its own schema and the

@@ -1,0 +1,20 @@
+# Dashboard provisioning — PLATFORM-003.
+#
+# The JSON files are the source of truth and live in git. `allowUiUpdates` is
+# false on purpose: a dashboard edited in the browser and not committed is a
+# dashboard that disappears on the next deploy, usually without anyone noticing
+# until they need it.
+
+apiVersion: 1
+
+providers:
+  - name: jumptotech
+    orgId: 1
+    folder: JumpToTech Labs
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,123 @@
+# Recording rules — PLATFORM-003.
+#
+# Ratios and rates that more than one dashboard panel and more than one alert
+# need. Computing them once here means a panel and the alert that fires beside
+# it cannot disagree about what "the failure rate" means — which is exactly the
+# discrepancy that makes an operator distrust a dashboard mid-incident.
+#
+# Naming follows the Prometheus convention `level:metric:operation`.
+#
+# Every ratio divides by `clamp_min(..., 0.001)`. A ratio with a zero
+# denominator is NaN, an alert on NaN never fires, and "no requests at all"
+# would therefore look identical to "everything is fine" — which is the worst
+# possible failure mode for a platform-health alert.
+
+groups:
+  - name: jtt-sessions
+    interval: 15s
+    rules:
+      - record: jtt:lab_start:rate5m
+        expr: sum(rate(jtt_lab_start_total[5m]))
+
+      - record: jtt:lab_start_failed:rate5m
+        expr: sum(rate(jtt_lab_start_total{outcome!="success"}[5m]))
+
+      # The single number behind "are students able to start labs?".
+      - record: jtt:lab_start_failure:ratio5m
+        expr: |
+          sum(rate(jtt_lab_start_total{outcome!="success"}[5m]))
+            / clamp_min(sum(rate(jtt_lab_start_total[5m])), 0.001)
+
+      - record: jtt:lab_start_failure:ratio10m
+        expr: |
+          sum(rate(jtt_lab_start_total{outcome!="success"}[10m]))
+            / clamp_min(sum(rate(jtt_lab_start_total[10m])), 0.001)
+
+      - record: jtt:lab_start_success:ratio5m
+        expr: |
+          sum(rate(jtt_lab_start_total{outcome="success"}[5m]))
+            / clamp_min(sum(rate(jtt_lab_start_total[5m])), 0.001)
+
+      # Capacity as a fraction. `jtt_sessions_active` is summed because it is
+      # split by provider and status; the limit is a single global gauge.
+      - record: jtt:sessions_utilization:ratio
+        expr: sum(jtt_sessions_active) / clamp_min(max(jtt_sessions_capacity_limit), 1)
+
+      - record: jtt:lab_provision_duration:p95_15m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, provider) (rate(jtt_lab_provision_duration_seconds_bucket[15m]))
+          )
+
+  - name: jtt-runtime
+    interval: 15s
+    rules:
+      # THE LEAK NUMBER.
+      #
+      # Containers the runtime holds minus sessions the store knows about. Both
+      # sides are read from their own source of truth at scrape time, which is
+      # what makes the subtraction trustworthy — two maintained counters would
+      # drift into a permanent false difference.
+      #
+      # `or vector(0)` on each side so the rule still evaluates when one service
+      # is down; without it the whole expression goes empty and the leak alert
+      # silently stops existing at the moment a leak is most likely.
+      #
+      # A NEGATIVE value is meaningful and is deliberately not clamped: it means
+      # the store holds sessions whose container is already gone. Briefly that
+      # is a teardown in flight — an ENDING session still counts as occupying
+      # capacity until the delete is confirmed, which is correct. Persistently,
+      # it is a stuck teardown, and RB-05 says what to do about it.
+      - record: jtt:sandbox_leak:count
+        expr: |
+          (sum(jtt_sandboxd_containers_managed) or vector(0))
+            - (sum(jtt_sessions_active) or vector(0))
+
+      - record: jtt:reaper_seconds_since_success
+        expr: time() - max(jtt_reaper_last_success_timestamp_seconds)
+
+  - name: jtt-http
+    interval: 15s
+    rules:
+      - record: jtt:http_error:ratio10m
+        expr: |
+          sum by (service) (rate(jtt_http_requests_total{status_class="5xx"}[10m]))
+            / clamp_min(sum by (service) (rate(jtt_http_requests_total[10m])), 0.001)
+
+      # Start Lab is excluded on purpose: it legitimately takes up to
+      # DOCKER_SANDBOX_READY_TIMEOUT_SECONDS (180s) plus an image pull, and
+      # including it would make the API latency alert fire on correct behaviour.
+      # Provisioning has its own histogram and its own alert.
+      - record: jtt:http_duration:p95_10m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, service) (
+              rate(jtt_http_request_duration_seconds_bucket{route!="/api/labs/:id/start"}[10m])
+            )
+          )
+
+  - name: jtt-verification
+    interval: 15s
+    rules:
+      # `result="error"` only. `fail` is a student who has not solved it yet —
+      # the most normal event in the product — and alerting on it would page
+      # someone every time a class starts.
+      - record: jtt:verification_error:ratio10m
+        expr: |
+          sum(rate(jtt_verification_total{result="error"}[10m]))
+            / clamp_min(sum(rate(jtt_verification_total[10m])), 0.001)
+
+  - name: jtt-auth
+    interval: 15s
+    rules:
+      - record: jtt:auth_failure:ratio5m
+        expr: |
+          sum(rate(jtt_auth_attempts_total{outcome!="success"}[5m]))
+            / clamp_min(sum(rate(jtt_auth_attempts_total[5m])), 0.001)
+
+      - record: jtt:terminal_connection_failure:ratio10m
+        expr: |
+          sum(rate(jtt_terminal_connections_total{outcome!="established"}[10m]))
+            / clamp_min(sum(rate(jtt_terminal_connections_total[10m])), 0.001)

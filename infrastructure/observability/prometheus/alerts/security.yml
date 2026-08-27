@@ -1,0 +1,78 @@
+groups:
+  - name: security
+    rules:
+      # No threshold above zero, deliberately.
+      #
+      # Each service holds only the scope secrets it needs, so in a correct
+      # deployment the terminal cannot authenticate to /v1/docker even if it
+      # tried. A denial means a misconfiguration or something presenting a
+      # credential it should not have. There is no benign explanation.
+      - alert: ScopeDenialDetected
+        expr: increase(jtt_sandboxd_scope_denials_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'a caller presented the wrong capability credential to sandboxd'
+          description: >-
+            scope={{ $labels.scope }} endpoint={{ $labels.endpoint }}. Expected
+            to be zero at all times.
+          runbook_url: docs/runbooks/RB-08-security-events.md
+
+      # The signal that separates somebody probing session ids from an ordinary
+      # bug. A student never legitimately requests a session that is not theirs:
+      # the browser only ever holds its own.
+      - alert: AuthzOwnershipDenialSpike
+        expr: sum(rate(jtt_authz_decisions_total{result="denied-not-owner"}[5m])) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'sustained attempts to reach sessions the caller does not own'
+          runbook_url: docs/runbooks/RB-08-security-events.md
+
+      - alert: AuthFailureSpike
+        expr: jtt:auth_failure:ratio5m > 0.30 and sum(rate(jtt_auth_attempts_total{outcome!="success"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'authentication is failing for more than 30% of requests'
+          description: >-
+            Both conditions are required: a ratio alone fires on a quiet night
+            with two failures, and a rate alone fires on a busy morning that is
+            working fine.
+          runbook_url: docs/runbooks/RB-14-auth.md
+
+      - alert: JwksFetchFailing
+        expr: increase(jtt_oidc_jwks_fetch_total{outcome!="success"}[10m]) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'cannot retrieve signing keys from the identity provider'
+          description: >-
+            Token verification fails closed, so nobody can sign in. Cached keys
+            may mask this until they expire.
+          runbook_url: docs/runbooks/RB-14-auth.md
+
+      - alert: SecurityEventBurst
+        expr: sum(increase(jtt_security_events_total[10m])) > 20
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'unusual number of security-relevant refusals'
+          description: >-
+            Break down by event. origin_rejected in bulk is usually a
+            misconfigured ALLOWED_ORIGINS after a deploy, not an attack.
+          runbook_url: docs/runbooks/RB-08-security-events.md
+
+      - alert: MetricsScrapeDenied
+        expr: increase(jtt_observability_scrape_denied_total[10m]) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'something is trying to read /metrics without a valid token'
+          runbook_url: docs/runbooks/RB-08-security-events.md

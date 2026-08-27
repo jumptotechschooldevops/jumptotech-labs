@@ -1,0 +1,188 @@
+# ---------------------------------------------------------------------------
+# The observability stack — PLATFORM-003.
+#
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.runtime.yml \
+#                  -f docker-compose.observability.yml up -d
+#
+# or `make observability-up`, which is the same thing.
+#
+# ## What this does NOT get
+#
+# **No Docker socket.** Not for cAdvisor, not for anything. Mounting the socket
+# into a monitoring container would reintroduce exactly the root-equivalent
+# capability the runtime broker was built to remove — and it would do it in a
+# container whose whole job is to be reachable by a browser. Per-sandbox CPU and
+# memory therefore has to come from `sandboxd`, which legitimately holds the
+# socket, as a bounded metric set. That is a later story, and its absence is
+# recorded in docs/observability.md rather than worked around here.
+#
+# **No `sandboxes` or `kind` network.** These containers talk to three
+# `/metrics` endpoints on the default network and nothing else. They have no
+# route to a student sandbox and no route to the cluster.
+#
+# **No published port beyond loopback.** Everything below binds 127.0.0.1, so
+# reaching Grafana means being on the host or forwarding a port deliberately.
+# ---------------------------------------------------------------------------
+
+services:
+  # Each application service gains its observability port. The values are
+  # defaults that already match the code; they are named here so an operator can
+  # see the whole exposure model in one file.
+  api:
+    environment:
+      OBSERVABILITY_PORT: 9400
+      OBSERVABILITY_SCRAPE_TOKEN: ${OBSERVABILITY_SCRAPE_TOKEN:?set OBSERVABILITY_SCRAPE_TOKEN in .env (make setup generates one)}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JTT_VERSION: ${JTT_VERSION:-0.1.0}
+      JTT_COMMIT: ${JTT_COMMIT:-unknown}
+    ports:
+      # Operator-only, exactly like the API's own port. nginx has no
+      # `proxy_pass` for this, so it is unreachable through the web container
+      # whatever happens to a `location` block.
+      - "127.0.0.1:${API_OBSERVABILITY_PORT:-9400}:9400"
+    healthcheck:
+      # `/readyz`, not `/health`: this is the endpoint that knows whether the
+      # database is reachable and the catalogue loaded, so `depends_on:
+      # service_healthy` now means what it says.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9400/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  terminal:
+    environment:
+      OBSERVABILITY_PORT: 9401
+      OBSERVABILITY_SCRAPE_TOKEN: ${OBSERVABILITY_SCRAPE_TOKEN:?set OBSERVABILITY_SCRAPE_TOKEN in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JTT_VERSION: ${JTT_VERSION:-0.1.0}
+      JTT_COMMIT: ${JTT_COMMIT:-unknown}
+    ports:
+      - "127.0.0.1:${TERMINAL_OBSERVABILITY_PORT:-9401}:9401"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9401/livez').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  sandboxd:
+    environment:
+      OBSERVABILITY_PORT: 9402
+      OBSERVABILITY_SCRAPE_TOKEN: ${OBSERVABILITY_SCRAPE_TOKEN:?set OBSERVABILITY_SCRAPE_TOKEN in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JTT_VERSION: ${JTT_VERSION:-0.1.0}
+      JTT_COMMIT: ${JTT_COMMIT:-unknown}
+    ports:
+      - "127.0.0.1:${SANDBOXD_OBSERVABILITY_PORT:-9402}:9402"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: [observability]
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "65534:65534"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Local retention only. Long-term storage (Thanos, Mimir) is explicitly
+      # out of scope; 15 days is comfortably longer than any incident review.
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+      - --web.listen-address=0.0.0.0:9090
+    volumes:
+      - type: bind
+        source: ./infrastructure/observability/prometheus/prometheus.yml
+        target: /etc/prometheus/prometheus.yml
+        read_only: true
+      - type: bind
+        source: ./infrastructure/observability/prometheus/rules
+        target: /etc/prometheus/rules
+        read_only: true
+      - type: bind
+        source: ./infrastructure/observability/prometheus/alerts
+        target: /etc/prometheus/alerts
+        read_only: true
+      # The scrape token as a file, so it never appears in a scrape config, in
+      # `docker compose config` output, or in this repository.
+      - type: bind
+        source: ./infrastructure/observability/secrets
+        target: /etc/prometheus/secrets
+        read_only: true
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - default
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: [observability]
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "65534:65534"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=0.0.0.0:9093
+    volumes:
+      - type: bind
+        source: ./infrastructure/observability/alertmanager/alertmanager.yml
+        target: /etc/alertmanager/alertmanager.yml
+        read_only: true
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    networks:
+      - default
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: [observability]
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env (make setup generates one)}
+      # Anonymous access off, sign-up off. The dashboards carry capacity,
+      # failure rates and catalogue shape; they are operator tooling, not a
+      # status page.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - type: bind
+        source: ./infrastructure/observability/grafana/provisioning
+        target: /etc/grafana/provisioning
+        read_only: true
+      - type: bind
+        source: ./infrastructure/observability/grafana/dashboards
+        target: /var/lib/grafana/dashboards
+        read_only: true
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - default
+
+volumes:
+  prometheus-data:
+    name: ${COMPOSE_PROJECT_NAME:-jumptotech-labs}-prometheus-data
+  alertmanager-data:
+    name: ${COMPOSE_PROJECT_NAME:-jumptotech-labs}-alertmanager-data
+  grafana-data:
+    name: ${COMPOSE_PROJECT_NAME:-jumptotech-labs}-grafana-data

@@ -1,0 +1,63 @@
+groups:
+  - name: runtime
+    rules:
+      # The most important reliability alert in the platform.
+      #
+      # Cleanup is invisible when it works. A counter that stops rising looks
+      # identical to a quiet period, so the signal is a timestamp that rises on
+      # its own. 300s is five missed sweeps at CLEANUP_INTERVAL_SECONDS=60.
+      - alert: ReaperStalled
+        expr: jtt:reaper_seconds_since_success > 300
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'no successful cleanup sweep for {{ $value | humanizeDuration }}'
+          description: >-
+            Nothing is reclaiming expired, idle or orphaned sandboxes. Capacity
+            will fill and the host will run out of disk. This does not
+            self-resolve.
+          runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
+
+      - alert: SandboxLeakSuspected
+        expr: jtt:sandbox_leak:count > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $value }} sandboxes are not accounted for by any session'
+          description: >-
+            Containers the runtime holds minus sessions the store knows about.
+            A brief spike during a start is normal; a sustained value is a leak.
+          runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
+
+      - alert: OrphansPersisting
+        expr: sum(jtt_reaper_orphans_found) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'the reaper keeps finding {{ $value }} orphaned sandboxes'
+          runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
+
+      - alert: ReaperDeleteFailures
+        expr: increase(jtt_reaper_delete_failures_total[15m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'cleanup is failing to delete sandboxes on {{ $labels.provider }}'
+          runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
+
+      - alert: ReaperRefusingForeignOwner
+        expr: increase(jtt_reaper_skipped_total{reason="foreign_owner"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'the reaper found sandboxes wearing this platform''s labels that it does not own'
+          description: >-
+            Either two deployments share a runtime with the same labels and
+            different RUNTIME_OWNER_ID, or something is imitating platform
+            ownership metadata. Both need looking at.
+          runbook_url: docs/runbooks/RB-08-security-events.md

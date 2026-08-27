@@ -1,0 +1,68 @@
+# Prometheus — PLATFORM-003.
+#
+# Scrapes the second listener each service runs (:9400 api, :9401 terminal,
+# :9402 sandboxd), never the port students reach. Those listeners are bound to
+# loopback on the host and are not proxied by nginx; inside the Compose network
+# Prometheus reaches them by service name.
+#
+# The bearer token is read from a file rather than written here, so the scrape
+# credential never appears in a config file that is committed, mounted, or
+# printed by `docker compose config`.
+
+global:
+  # 15s against a 30s provider-availability memo: the registry answers from
+  # cache on alternate scrapes, so monitoring never doubles the rate at which
+  # this platform interrogates a container runtime that may already be sick.
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  # Rules are evaluated on the same cadence, so an alert's `for:` duration means
+  # what it says rather than being rounded up by a slower loop.
+  evaluation_interval: 15s
+  external_labels:
+    platform: jumptotech-labs
+
+rule_files:
+  - /etc/prometheus/rules/recording.yml
+  - /etc/prometheus/alerts/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  # Prometheus watching itself. Without this, "the alert never fired" and
+  # "Prometheus was down" look identical after the fact.
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: api
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/scrape-token
+    static_configs:
+      - targets: ['api:9400']
+        labels:
+          service: api
+
+  - job_name: terminal
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/scrape-token
+    static_configs:
+      - targets: ['terminal:9401']
+        labels:
+          service: terminal
+
+  - job_name: sandboxd
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/scrape-token
+    static_configs:
+      - targets: ['sandboxd:9402']
+        labels:
+          service: sandboxd

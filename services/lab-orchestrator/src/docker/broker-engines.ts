@@ -38,6 +38,7 @@
  * Guessing a sandbox name therefore buys nothing — there is no wire field for
  * it.
  */
+import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
 import {
   DockerUnreachableError,
   type CreateNetworkSpec,
@@ -126,7 +127,12 @@ class BrokerCall {
     try {
       response = await this.#fetch(`${this.#baseUrl}/v1/docker`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-internal-secret': this.#secret },
+        headers: {
+          'content-type': 'application/json',
+          'x-internal-secret': this.#secret,
+          // Correlation only — see broker-runtime.ts.
+          ...(currentRequestId() ? { [REQUEST_ID_HEADER]: currentRequestId()! } : {}),
+        },
         body: JSON.stringify({ op, ...payload }),
         signal: controller.signal,
       });

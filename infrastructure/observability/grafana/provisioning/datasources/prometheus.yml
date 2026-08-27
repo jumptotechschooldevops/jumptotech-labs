@@ -1,0 +1,21 @@
+# Grafana datasource — PLATFORM-003.
+#
+# Provisioned as code so a fresh container comes up with working dashboards and
+# nobody has to click through a setup wizard during an incident.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # Pinned: every dashboard JSON references this uid. Changing it silently
+    # breaks all eight.
+    uid: jtt-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Matches the scrape interval, so Grafana's automatic step never asks for
+      # finer resolution than the data actually has.
+      timeInterval: 15s
