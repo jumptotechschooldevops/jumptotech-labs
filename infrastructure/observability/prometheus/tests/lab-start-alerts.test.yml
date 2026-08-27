@@ -1,0 +1,295 @@
+# Regression tests for the lab-start alerts — PLATFORM-003.
+#
+# `promtool test rules` evaluates the real recording rules and the real alert
+# rules against synthetic series, so these are tests of the shipped PromQL
+# rather than of a copy of it. Run by `make observability-check` and by CI.
+#
+# ## What these exist to stop happening again
+#
+# Incident exercise 3 produced eight genuinely failed lab starts and
+# `LabStartsFailingHard` never fired. The cause was not an absent series, a
+# counter reset, or scrape timing — it was that `for: 5m` was paired with
+# `rate(...[5m])`. A bounded burst only keeps a 5-minute rate non-zero for about
+# five minutes after it ends, so the condition could hold for at most
+# `window + burst_duration`; the entire firing margin was the burst's own
+# length. Against the old rules, `promtool` puts the only firing evaluation at
+# t=10m30s and nowhere else, and IE-3's real ten-second burst left no margin at
+# all.
+#
+# The last case below pins that: it drives the exact IE-3 shape and asserts the
+# alert fires — it fails against the old expression and passes against the new
+# one.
+
+rule_files:
+  - ../rules/recording.yml
+  - ../alerts/sessions.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ---------------------------------------------------------------- 1. healthy
+  # A busy, entirely successful platform. Nothing should page.
+  - interval: 15s
+    name: normal successful lab starts do not alert
+    input_series:
+      # One successful start every 15s for 20 minutes.
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+1x80'
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+0x80'
+      - series: 'jtt_lab_start_outcome_total{outcome="capacity_reached"}'
+        values: '0+0x80'
+    promql_expr_test:
+      - expr: jtt:lab_start_failures:increase10m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'jtt:lab_start_failures:increase10m'
+            value: 0
+      - expr: jtt:lab_start_failure:ratio10m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'jtt:lab_start_failure:ratio10m'
+            value: 0
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LabStartFailureRateElevated
+        exp_alerts: []
+
+  # ------------------------------------------------------- 2. a genuine spike
+  # Sustained failures — the "image is missing and a class is starting" case.
+  #
+  # ## Why the burst sits in the middle of the window
+  #
+  # `increase()` is an *estimate*: it extrapolates towards the window edges, so
+  # a window edge that lands on a slope produces a value that moves by ±1
+  # between runs (promtool's evaluation base is not aligned to the series). The
+  # alert does not care — a threshold of 5 is not sensitive to ±1 — but an
+  # assertion on the exact count in the annotation would flake, and a flaky test
+  # is worse than no test.
+  #
+  # Placing the burst well inside the window means both edges fall in flat
+  # regions, where the extrapolated contribution is zero and the count is exact.
+  - interval: 15s
+    name: a real provisioning failure spike fires the critical alert
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+0x130'
+      # Flat for 6 minutes, 16 failures across 2 minutes, flat thereafter.
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+0x24 2+2x7 16+0x100'
+    alert_rule_test:
+      # Two failures in. The count floor is deliberately not met — a couple of
+      # failures must never page.
+      - eval_time: 6m30s
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      # At 13m the window is 3m–13m: the whole burst, with flat data either side.
+      - eval_time: 13m
+        alertname: LabStartsFailingHard
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: '16 lab starts failed in the last 10 minutes (>30% of attempts)'
+              description: "Students cannot reliably start labs. Scope it by lab_id, track and provider before touching anything — one lab, one track, one provider and everything are four different incidents."
+              runbook_url: docs/runbooks/RB-03-lab-start-failures.md
+
+  # ------------------------------------------------- 3. mostly-healthy volume
+  # A busy platform with a handful of failures. The COUNT floor is met and the
+  # ratio is not — the critical alert must stay quiet. This is the case a
+  # count-only alert would get wrong.
+  - interval: 15s
+    name: a few failures on a busy platform do not page
+    input_series:
+      # ~3 successes per 15s.
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+3x80'
+      # 6 failures spread over the first 90 seconds, then nothing.
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+1x6 6+0x74'
+    promql_expr_test:
+      - expr: jtt:lab_start_failures:increase10m >= 5
+        eval_time: 8m
+        exp_samples:
+          - labels: 'jtt:lab_start_failures:increase10m'
+            value: 6
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: LabStartFailureRateElevated
+        exp_alerts: []
+
+  # ---------------------------------------------------------- 4. no traffic
+  # An idle platform. Every counter exists (they are zero-initialised at
+  # startup) and none of them moves. Nothing may fire — "no data" must never be
+  # indistinguishable from "everything is broken".
+  - interval: 15s
+    name: an idle platform raises no alert
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+0x80'
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+0x80'
+    promql_expr_test:
+      - expr: jtt:lab_start_failure:ratio10m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'jtt:lab_start_failure:ratio10m'
+            value: 0
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LabStartFailureRateElevated
+        exp_alerts: []
+
+  # ------------------------------------------------------- 5. absent series
+  # Nothing exports the metric at all — the API is gone, or has not scraped yet.
+  # `or vector(0)` is what stops the expression going empty; an empty expression
+  # is an alert that silently does not exist.
+  #
+  # A missing API is `ServiceDown`'s job, and Alertmanager inhibits the
+  # downstream noise. This alert must simply stay quiet rather than fire on
+  # nothing.
+  - interval: 15s
+    name: an absent series raises no alert
+    input_series:
+      - series: 'jtt_sessions_active{provider="linux",status="ACTIVE"}'
+        values: '0+0x80'
+    promql_expr_test:
+      - expr: jtt:lab_start_failures:increase10m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'jtt:lab_start_failures:increase10m'
+            value: 0
+      - expr: jtt:lab_start_failure:ratio10m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'jtt:lab_start_failure:ratio10m'
+            value: 0
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+
+  # -------------------------------------------------------- 6. counter reset
+  # An API restart. The counters are re-initialised to zero and climb again.
+  # `increase()` detects the decrease and does not count the reset itself as
+  # growth — a restart must never look like a failure spike.
+  #
+  # Two successes before the restart, then two failures after it: four events
+  # total, below the floor, so nothing fires. Were the reset miscounted, the
+  # apparent increase would jump past the threshold.
+  - interval: 15s
+    name: a counter reset is not a failure spike
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0 1 2 2 2 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0 0 0 0 0 0 0 1 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    promql_expr_test:
+      # Two real failures after the restart. Not five.
+      - expr: jtt:lab_start_failures:increase10m < 5
+        eval_time: 5m
+        exp_samples:
+          - labels: 'jtt:lab_start_failures:increase10m'
+            value: 2
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+
+  # ------------------------------------------------------------- 7. recovery
+  # Failures stop and successes resume. The alert must clear once the window has
+  # rolled past the failures, and must not linger beyond it.
+  #
+  # Same burst placement as case 2, for the same reason.
+  - interval: 15s
+    name: the alert clears after failures stop
+    input_series:
+      # Nothing succeeds during the incident; successes resume once it is over.
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+0x32 0+1x100'
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+0x24 2+2x7 16+0x100'
+    alert_rule_test:
+      # Firing while the window still holds the failures.
+      - eval_time: 13m
+        alertname: LabStartsFailingHard
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: '16 lab starts failed in the last 10 minutes (>30% of attempts)'
+              description: "Students cannot reliably start labs. Scope it by lab_id, track and provider before touching anything — one lab, one track, one provider and everything are four different incidents."
+              runbook_url: docs/runbooks/RB-03-lab-start-failures.md
+      # Cleared once the failures have aged out of the window. Not lingering.
+      - eval_time: 20m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LabStartFailureRateElevated
+        exp_alerts: []
+
+  # --------------------------------------------- 8. THE IE-3 REGRESSION CASE
+  # The exact shape that defeated the old expression: an idle platform, one
+  # short burst of eight failed starts, then silence.
+  #
+  # Against the old `rate(...[5m])` + `for: 5m` rules this produced no alert at
+  # 8m and exactly one firing evaluation at 10m30s. Against the count-based
+  # rules it fires two minutes after the burst and holds while the window still
+  # remembers it.
+  - interval: 15s
+    name: IE-3 — a short burst of failed starts still fires
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+0x80'
+      # Idle 5 minutes, 8 failures across one minute, then flat.
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+0x20 0+2x4 8+0x56'
+    promql_expr_test:
+      - expr: jtt:lab_start_failures:increase10m
+        eval_time: 8m
+        exp_samples:
+          - labels: 'jtt:lab_start_failures:increase10m'
+            value: 8
+    alert_rule_test:
+      # Still pending at 7m. The count crosses the floor of 5 at about 6m15s and
+      # `for: 2m` runs from there, so this pins that the alert is not twitchy —
+      # it waits out the two minutes rather than firing on the first sample.
+      - eval_time: 7m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      # Firing from ~8m15s, where the old rules produced nothing at all.
+      - eval_time: 8m30s
+        alertname: LabStartsFailingHard
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: '8 lab starts failed in the last 10 minutes (>30% of attempts)'
+              description: "Students cannot reliably start labs. Scope it by lab_id, track and provider before touching anything — one lab, one track, one provider and everything are four different incidents."
+              runbook_url: docs/runbooks/RB-03-lab-start-failures.md
+      # Still firing at 10m30s, which is the single evaluation the old rules
+      # managed — the fix widens a 15-second window into minutes.
+      - eval_time: 10m30s
+        alertname: LabStartsFailingHard
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: '8 lab starts failed in the last 10 minutes (>30% of attempts)'
+              description: "Students cannot reliably start labs. Scope it by lab_id, track and provider before touching anything — one lab, one track, one provider and everything are four different incidents."
+              runbook_url: docs/runbooks/RB-03-lab-start-failures.md

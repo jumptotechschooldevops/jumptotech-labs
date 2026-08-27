@@ -1,28 +1,54 @@
 groups:
   - name: sessions
     rules:
-      # The headline student-facing alert. Thresholds are a ratio, not a count,
-      # so a quiet evening with two failures does not page anybody.
+      # The headline student-facing alert.
+      #
+      # TWO conditions, deliberately, because either alone is wrong:
+      #
+      #   · a **count** floor — a ratio on its own is scale-blind. One failed
+      #     start on a quiet evening is a 100% failure ratio, and paging for it
+      #     is how an alert gets silenced before the day it matters.
+      #   · a **ratio** — a count on its own would page during a busy class in
+      #     which five starts failed out of four hundred.
+      #
+      # `for: 2m` against a 10-minute window. That ordering is the fix: the
+      # previous version paired `for: 5m` with `rate(...[5m])`, which meant the
+      # condition could never stay true long enough for a bounded burst. See the
+      # recording rules, and `tests/lab-start-alerts.test.yml` for the six cases
+      # this is pinned against.
+      #
+      # Five failures in ten minutes is a real threshold for this platform:
+      # MAX_ACTIVE_SESSIONS defaults to 20, so five students being turned away
+      # inside ten minutes is a substantial fraction of a cohort.
       - alert: LabStartsFailingHard
-        expr: jtt:lab_start_failure:ratio5m > 0.30
-        for: 5m
+        expr: |
+          jtt:lab_start_failures:increase10m >= 5
+            and
+          jtt:lab_start_failure:ratio10m > 0.30
+        for: 2m
         labels:
           severity: critical
         annotations:
-          summary: 'more than 30% of Start Lab requests are failing'
+          summary: '{{ $value | printf "%.0f" }} lab starts failed in the last 10 minutes (>30% of attempts)'
           description: >-
             Students cannot reliably start labs. Scope it by lab_id, track and
             provider before touching anything — one lab, one track, one provider
             and everything are four different incidents.
           runbook_url: docs/runbooks/RB-03-lab-start-failures.md
 
+      # The same shape one tier down: a lower floor and a lower ratio, and a
+      # longer `for` so it describes a sustained problem rather than a blip.
+      # Still well under the 10-minute window.
       - alert: LabStartFailureRateElevated
-        expr: jtt:lab_start_failure:ratio10m > 0.10
-        for: 10m
+        expr: |
+          jtt:lab_start_failures:increase10m >= 3
+            and
+          jtt:lab_start_failure:ratio10m > 0.10
+        for: 5m
         labels:
           severity: warning
         annotations:
-          summary: 'more than 10% of Start Lab requests are failing'
+          summary: '{{ $value | printf "%.0f" }} lab starts failed in the last 10 minutes (>10% of attempts)'
           runbook_url: docs/runbooks/RB-03-lab-start-failures.md
 
       # Capacity exhausted is measured by refusals, not by utilisation.

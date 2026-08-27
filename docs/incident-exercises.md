@@ -252,10 +252,27 @@ the 0→1 step of a series that did not previously exist. `LabStartsFailingHard`
 the platform's headline student-facing alert, would silently never have fired on
 a cohort that was not busy.
 
-Fixed with `jtt_lab_start_outcome_total`, carrying only `outcome` and
-initialised to zero for every value at startup, so each series exists from the
-first scrape. After the fix, the same injection gave
-`jtt:lab_start_failure:ratio5m = 1`.
+That was the first of **two** defects in the same alert, and fixing it exposed
+the second.
+
+*Half one — the metric.* `jtt_lab_start_outcome_total` was added, carrying only
+`outcome` and initialised to zero for every value at startup, so each series
+exists from the first scrape and its first real increment is a visible step.
+The same injection then produced a failure ratio of 1.0 where it had produced 0.
+
+*Half two — the expression.* With the metric fixed, the alert still would not
+fire on a **short** burst. `for: 5m` was paired with `rate(...[5m])`: a bounded
+burst keeps a five-minute rate non-zero for only about five minutes, so the
+condition could hold for at most `window + burst_duration` and the entire firing
+margin was the burst's own length. `promtool test rules` puts the old
+expression's only firing evaluation at exactly t=10m30s and nowhere else.
+
+Fixed by alerting on **counts over ten minutes** — `≥5 failures` *and* `>30% of
+attempts` — with `for: 2m`, comfortably shorter than the window. Re-running IE-3
+with a six-second burst now takes it to `firing` in 140 seconds; the same burst
+produced nothing at all before. Pinned by eight cases in
+`infrastructure/observability/prometheus/tests/lab-start-alerts.test.yml`, which
+fail against the old rules and pass against the new ones.
 
 **2. A runbook claim was too strong.** RB-03 said "a green provider tile does not
 mean labs can start". Measured: removing the image *did* flip
@@ -302,7 +319,7 @@ success proves one path.
 |---|---|---|---|
 | IE-1 PostgreSQL | `DatabaseDown` | 75s | `/health` 500s during a DB outage; schema-version metric never populated; RB-02 blast radius wrong |
 | IE-2 Broker | `ServiceDown` | 135s | Inhibition never matched — 6 pages for 1 cause |
-| IE-3 Provisioning | `LabStartsFailingHard` | 350s (sustained) | `rate()` blind to sparse per-lab series — headline alert could not fire |
+| IE-3 Provisioning | `LabStartsFailingHard` | **140s** (6s burst, after the fix) | Two defects: `rate()` blind to sparse per-lab series, then `for: 5m` paired with a 5m window — the headline alert could not fire at all |
 
 Every one of those was invisible to the unit tests, to `promtool`, and to
 reading the code. They were found by breaking a running platform and looking at

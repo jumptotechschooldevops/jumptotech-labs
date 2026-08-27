@@ -22,21 +22,47 @@ groups:
       - record: jtt:lab_start_failed:rate5m
         expr: sum(rate(jtt_lab_start_outcome_total{outcome!="success"}[5m]))
 
-      # The single number behind "are students able to start labs?".
+      # --- the alerting path -------------------------------------------------
       #
-      # Reads `jtt_lab_start_outcome_total`, NOT `jtt_lab_start_total`. The
-      # latter carries `lab_id`, so its series are sparse enough that `rate()`
-      # returns zero over a window in which starts genuinely failed. See the
-      # comment on `labStartOutcomes` in services/observability/src/metrics.ts.
-      - record: jtt:lab_start_failure:ratio5m
-        expr: |
-          sum(rate(jtt_lab_start_outcome_total{outcome!="success"}[5m]))
-            / clamp_min(sum(rate(jtt_lab_start_outcome_total[5m])), 0.001)
+      # COUNTS over 10 minutes, not rates over 5. This is the fix for the defect
+      # incident exercise 3 found, and the reasoning is worth keeping because the
+      # obvious expression is the broken one.
+      #
+      # `rate(X[5m])` holds a *bounded burst* as non-zero for only ~5 minutes
+      # after it ends. The alert then asked for `for: 5m` — five minutes of
+      # continuously true condition. The available truth is
+      # `window + burst_duration`, so the whole firing margin is the burst's own
+      # duration: a one-minute burst left a ~45-second firing window ten minutes
+      # after the incident began, and IE-3's ten-second burst left none at all.
+      # `promtool test rules` puts the old expression's only firing evaluation at
+      # exactly t=10m30s and nowhere else.
+      #
+      # A count does not have that property. Eight failures inside a 10-minute
+      # window read as eight for the whole window, so `for: 2m` has eight
+      # minutes of opportunity rather than zero.
+      #
+      # `or vector(0)` covers the series being absent entirely — the API down,
+      # or a scrape gap. Without it the expression goes empty, the alert
+      # silently stops existing, and "no data" is indistinguishable from
+      # "healthy" at exactly the moment that distinction matters.
+      - record: jtt:lab_start_failures:increase10m
+        expr: sum(increase(jtt_lab_start_outcome_total{outcome!="success"}[10m])) or vector(0)
 
+      - record: jtt:lab_start_attempts:increase10m
+        expr: sum(increase(jtt_lab_start_outcome_total[10m])) or vector(0)
+
+      # Failures as a proportion of attempts, over the same window as the count
+      # it is paired with — the two halves of the alert must describe the same
+      # ten minutes or they can contradict each other.
+      #
+      # `clamp_min(…, 1)` only ever bites when there were no attempts at all, in
+      # which case there were no failures either and the result is 0/1 = 0. It
+      # is not masking anything: failures are a subset of attempts, so the
+      # denominator cannot be smaller than the numerator.
       - record: jtt:lab_start_failure:ratio10m
         expr: |
-          sum(rate(jtt_lab_start_outcome_total{outcome!="success"}[10m]))
-            / clamp_min(sum(rate(jtt_lab_start_outcome_total[10m])), 0.001)
+          jtt:lab_start_failures:increase10m
+            / clamp_min(jtt:lab_start_attempts:increase10m, 1)
 
       - record: jtt:lab_start_success:ratio5m
         expr: |

@@ -1,6 +1,7 @@
 # RB-03 — Lab start failures
 
-**Alerts:** `LabStartsFailingHard` (critical, >30%), `LabStartFailureRateElevated` (warning, >10%)
+**Alerts:** `LabStartsFailingHard` (critical — ≥5 failures in 10m **and** >30% of attempts),
+`LabStartFailureRateElevated` (warning — ≥3 in 10m **and** >10%)
 **Typical cause:** a missing sandbox image, a resource ceiling, a full disk, a
 provider outage
 **Blast radius:** whichever labs share the failing dimension — read section 2
@@ -14,9 +15,18 @@ Overview — one red tile in a row of green — *is* the diagnosis.
 ## 1. Confirm it is real
 
 ```promql
-jtt:lab_start_failure:ratio5m
-sum by (outcome) (rate(jtt_lab_start_total[5m]))
+jtt:lab_start_failures:increase10m     # how many failed in the last 10 minutes
+jtt:lab_start_failure:ratio10m         # what proportion of attempts that was
+sum by (outcome) (increase(jtt_lab_start_outcome_total[10m]))
 ```
+
+Both halves matter, and the alert requires both. A count alone would page during
+a busy class in which five starts failed out of four hundred; a ratio alone is
+scale-blind, and one failed start on a quiet evening is a 100% failure ratio.
+
+Use `increase(...)` rather than `rate(...)` when investigating a **burst**. A
+five-minute rate forgets a short burst almost as fast as it happened, which is
+the defect incident exercise 3 found in this very alert.
 
 `outcome` is a closed enum and it decides which runbook you are actually in:
 

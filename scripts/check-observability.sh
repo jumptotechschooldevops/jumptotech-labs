@@ -95,6 +95,24 @@ else
   fi
 fi
 
+say "Alert rule behaviour"
+#
+# `promtool test rules` evaluates the REAL recording and alert rules against
+# synthetic series, so these are tests of the shipped PromQL rather than of a
+# copy of it. They exist because IE-3 produced eight genuinely failed lab starts
+# and the alert never fired — a defect that `check rules` passes cleanly, since
+# the expression was perfectly valid and simply could not become true for long
+# enough.
+if out=$(cd infrastructure/observability/prometheus/tests \
+      && run_promtool test rules ./*.test.yml 2>&1); then
+  ok "$(printf '%s' "$out" | grep -c 'SUCCESS') rule test file(s) pass"
+elif [ $? -eq 127 ]; then
+  bad "neither promtool nor a Docker daemon is available — rule behaviour NOT tested"
+else
+  printf '%s\n' "$out"
+  bad "promtool test rules failed — an alert does not behave as specified"
+fi
+
 say "Alertmanager config"
 if out=$(run_amtool check-config infrastructure/observability/alertmanager/alertmanager.yml 2>&1); then
   ok "alertmanager.yml valid"
