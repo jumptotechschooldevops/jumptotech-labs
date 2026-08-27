@@ -1,0 +1,24 @@
+{
+  "name": "@jumptotech/observability",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Structured logging, metrics, and the health/readiness listener (PLATFORM-003). Knows nothing about labs, sandboxes, or any provider.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./test/fakes.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "prom-client": "^14.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.6",
+    "@jumptotech/test-support": "*"
+  }
+}
