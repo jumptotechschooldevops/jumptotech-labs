@@ -48,6 +48,12 @@
  * privilege is bounded by that node.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import {
+  silentLogger,
+  type CommonMetrics,
+  type Logger,
+  type SandboxdMetrics,
+} from '@jumptotech/observability';
 import * as pty from 'node-pty';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ContainerRuntimePort } from '@jumptotech/lab-orchestrator';
@@ -87,6 +93,10 @@ export interface SandboxdDeps {
   /** Injected in tests so no real PTY is spawned. */
   spawn?: PtySpawn;
   log?: (message: string) => void;
+  /** Structured logging and metrics — PLATFORM-003. All optional. */
+  logger?: Logger;
+  metrics?: SandboxdMetrics;
+  common?: CommonMetrics;
 }
 
 /** The slice of `node-pty` this service uses. */
@@ -148,10 +158,62 @@ function defaultSpawn(command: string, args: string[], options: { cols: number; 
   };
 }
 
+/**
+ * Normalise a runtime verb to a bounded label.
+ *
+ * `runRuntimeOperation` dispatches on a closed switch, so an unknown verb never
+ * reaches the runtime — but it would still reach a *metric* if the raw string
+ * were used, and a caller could then mint one series per request. Anything
+ * unrecognised collapses to `unknown`.
+ */
+function knownRuntimeOp(op: string): string {
+  return RUNTIME_OPS.has(op) ? op : 'unknown';
+}
+
+function knownDockerOp(op: string): string {
+  return DOCKER_OPS.has(op) ? op : 'unknown';
+}
+
+/** Kept in step with the switch in `runtime-routes.ts`. */
+const RUNTIME_OPS = new Set([
+  'ping',
+  'imageExists',
+  'create',
+  'inspect',
+  'list',
+  'remove',
+  'exec',
+  'networkCreate',
+  'networkInspect',
+  'networkRemove',
+  'networkList',
+]);
+
+/** Kept in step with the operation list in `docker-ops.ts`. */
+const DOCKER_OPS = new Set([
+  'create',
+  'destroy',
+  'inspect',
+  'status',
+  'exec',
+  'readFile',
+  'listContainers',
+  'inspectContainer',
+  'containerLogs',
+  'listImages',
+  'inspectImage',
+  'listNetworks',
+  'listVolumes',
+  'buildInfo',
+]);
+
 export function createSandboxd(deps: SandboxdDeps): Server {
   const { config, inspector } = deps;
   const spawn = deps.spawn ?? defaultSpawn;
-  const log = deps.log ?? ((m: string) => console.log(`[sandboxd] ${m}`));
+  const obs = deps.logger ?? silentLogger();
+  const metrics = deps.metrics ?? null;
+  const common = deps.common ?? null;
+  const log = deps.log ?? ((m: string) => obs.info('sandbox.runtime.op', {}, m));
 
   const shells = new Map<WebSocket, LiveShell>();
   /** One shell per session. A second attach replaces the first. */
@@ -191,17 +253,37 @@ export function createSandboxd(deps: SandboxdDeps): Server {
           });
           return;
         }
-        try {
-          const body = await readJsonBody(req);
-          const data = await runRuntimeOperation(String(body.op), body, {
-            runtime: deps.runtime,
-            runtimeOwner: config.runtimeOwner,
-          });
-          sendJson(res, 200, { ok: true, data });
-        } catch (error) {
-          const { status, body } = runtimeErrorResponse(error);
-          if (status >= 500) log(`runtime operation failed: ${String(error)}`);
-          sendJson(res, status, body);
+        {
+          const startedAt = Date.now();
+          let op = 'unknown';
+          try {
+            const body = await readJsonBody(req);
+            /*
+             * `op` is safe as a label only because `runRuntimeOperation`
+             * dispatches on a closed switch — an unrecognised verb throws
+             * before reaching the runtime. The value is normalised here so a
+             * caller cannot invent a series by sending a novel string.
+             */
+            op = knownRuntimeOp(String(body.op));
+            const data = await runRuntimeOperation(String(body.op), body, {
+              runtime: deps.runtime,
+              runtimeOwner: config.runtimeOwner,
+            });
+            metrics?.runtimeOps.inc({ op, outcome: 'success' });
+            metrics?.runtimeOpDuration.observe({ op }, (Date.now() - startedAt) / 1000);
+            sendJson(res, 200, { ok: true, data });
+          } catch (error) {
+            const { status, body } = runtimeErrorResponse(error);
+            metrics?.runtimeOps.inc({
+              op,
+              outcome: status >= 500 ? 'failed' : 'refused',
+            });
+            metrics?.runtimeOpDuration.observe({ op }, (Date.now() - startedAt) / 1000);
+            if (status >= 500) {
+              obs.error('sandbox.runtime.op', { op, outcome: 'failed', err: error });
+            }
+            sendJson(res, status, body);
+          }
         }
         return;
       }
@@ -230,14 +312,24 @@ export function createSandboxd(deps: SandboxdDeps): Server {
           });
           return;
         }
-        try {
-          const body = await readJsonBody(req);
-          const data = await deps.docker.run(String(body.op), body);
-          sendJson(res, 200, { ok: true, data });
-        } catch (error) {
-          const { status, body } = dockerErrorResponse(error);
-          if (status >= 500) log(`docker operation failed: ${String(error)}`);
-          sendJson(res, status, body);
+        {
+          const startedAt = Date.now();
+          let op = 'unknown';
+          try {
+            const body = await readJsonBody(req);
+            op = knownDockerOp(String(body.op));
+            const data = await deps.docker.run(String(body.op), body);
+            metrics?.dockerOps.inc({ op, outcome: 'success' });
+            metrics?.runtimeOpDuration.observe({ op }, (Date.now() - startedAt) / 1000);
+            sendJson(res, 200, { ok: true, data });
+          } catch (error) {
+            const { status, body } = dockerErrorResponse(error);
+            metrics?.dockerOps.inc({ op, outcome: status >= 500 ? 'failed' : 'refused' });
+            if (status >= 500) {
+              obs.error('sandbox.runtime.op', { op, outcome: 'failed', err: error });
+            }
+            sendJson(res, status, body);
+          }
         }
         return;
       }
@@ -269,7 +361,29 @@ export function createSandboxd(deps: SandboxdDeps): Server {
     }
     const decision = authorizeScope(req.headers['x-internal-secret'], scope, config.scopeSecrets);
     if (!decision.ok) {
-      log(`refused ${String(req.url)}: ${decision.denial}`);
+      /*
+       * This counter should be flat zero forever.
+       *
+       * Each service is given only the scope secrets it needs, so a denial
+       * means either a misconfiguration or something presenting a credential it
+       * should not hold. There is no benign explanation, which is why the alert
+       * on it has no threshold above zero.
+       *
+       * `endpoint` is safe as a label: it is one of three exact-match paths
+       * from `ENDPOINT_SCOPES`, not a caller-supplied string.
+       */
+      metrics?.scopeDenials.inc({ scope, endpoint: String(req.url ?? 'unknown') });
+      common?.securityEvents.inc({ service: 'sandboxd', event: 'scope_denied' });
+      obs.error(
+        'security.event',
+        {
+          securityEvent: 'scope_denied',
+          scope,
+          endpoint: String(req.url ?? 'unknown'),
+          reason: decision.denial,
+        },
+        'a caller presented the wrong capability credential',
+      );
       sendJson(res, 403, {
         ok: false,
         error: { code: 'SCOPE_DENIED', message: decision.message ?? 'not authorized' },
@@ -284,7 +398,13 @@ export function createSandboxd(deps: SandboxdDeps): Server {
   httpServer.on('upgrade', (req, socket, head) => {
     const deny = upgradeRefusal(req, config);
     if (deny) {
-      log(`upgrade refused: ${deny}`);
+      metrics?.attaches.inc({ outcome: 'denied', deny_reason: 'upgrade_refused' });
+      common?.securityEvents.inc({ service: 'sandboxd', event: 'scope_denied' });
+      obs.warn('sandbox.attach.denied', {
+        outcome: 'denied',
+        denyReason: 'upgrade_refused',
+        reason: deny,
+      });
       socket.write(`HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n`);
       socket.destroy();
       return;
@@ -395,7 +515,27 @@ export function createSandboxd(deps: SandboxdDeps): Server {
     } catch (error) {
       const code = error instanceof AttachDeniedError ? error.code : 'ATTACH_FAILED';
       const message = error instanceof Error ? error.message : String(error);
-      log(`attach denied for ${sessionId}: ${code} — ${message}`);
+      metrics?.attaches.inc({ outcome: 'denied', deny_reason: code });
+      /*
+       * An ownership refusal is a security event, not merely an error.
+       *
+       * These are the gates that stop one student's terminal reaching another
+       * student's sandbox — a container that is not managed, not this owner's,
+       * or not this session's. They hold silently today; counting them is what
+       * makes "the boundary was tested" distinguishable from "nobody tried".
+       */
+      if (error instanceof AttachDeniedError) {
+        common?.securityEvents.inc({
+          service: 'sandboxd',
+          event: 'attach_ownership_refused',
+        });
+      }
+      obs.warn('sandbox.attach.denied', {
+        sessionId,
+        outcome: 'denied',
+        denyReason: code,
+        code,
+      }, message);
       send(ws, { type: 'error', code, message });
       ws.close(4403, code);
       return;
@@ -416,7 +556,12 @@ export function createSandboxd(deps: SandboxdDeps): Server {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log(`pty spawn failed for ${sessionId}: ${message}`);
+      metrics?.attaches.inc({ outcome: 'failed', deny_reason: 'pty_spawn_failed' });
+      obs.error('sandbox.attach.denied', {
+        sessionId,
+        outcome: 'failed',
+        denyReason: 'pty_spawn_failed',
+      }, message);
       send(ws, { type: 'error', code: 'PTY_SPAWN_FAILED', message: 'Could not start a shell.' });
       ws.close(1011, 'pty spawn failed');
       return;
@@ -431,7 +576,18 @@ export function createSandboxd(deps: SandboxdDeps): Server {
     };
     shells.set(ws, shell);
     bySessionId.set(sessionId, ws);
+    metrics?.attaches.inc({ outcome: 'opened', deny_reason: 'none' });
+    metrics?.shellsOpen.set(shells.size);
 
+    /*
+     * VOLUME ONLY — the same rule as `services/terminal`.
+     *
+     * `data` is the student's shell output. It is never logged, decoded,
+     * sampled, or used as a label. Nothing is counted here at all: the byte
+     * counter lives in the terminal service, which is the one place the stream
+     * is already being handled, and duplicating it here would mean a second
+     * copy of code that must never look at the payload.
+     */
     term.onData((data) => send(ws, { type: 'output', data }));
     term.onExit(({ exitCode, signal }) => {
       send(ws, { type: 'exit', exitCode, ...(signal !== undefined ? { signal } : {}) });
@@ -445,7 +601,12 @@ export function createSandboxd(deps: SandboxdDeps): Server {
       user: target.user,
       workdir: target.workdir,
     });
-    log(`attached ${sessionId} → ${target.ref} as ${target.user} (${shells.size} live)`);
+    obs.info('sandbox.attach.opened', {
+      sessionId,
+      sandboxRef: target.ref,
+      outcome: 'opened',
+      count: shells.size,
+    });
   }
 
   function closeFor(ws: WebSocket, code: string): void {
@@ -466,7 +627,8 @@ export function createSandboxd(deps: SandboxdDeps): Server {
     } catch {
       /* already dead */
     }
-    log(`detached ${shell.sessionId} (${shells.size} live)`);
+    metrics?.shellsOpen.set(shells.size);
+    obs.info('sandbox.attach.closed', { sessionId: shell.sessionId, count: shells.size });
   }
 
   httpServer.on('close', () => {

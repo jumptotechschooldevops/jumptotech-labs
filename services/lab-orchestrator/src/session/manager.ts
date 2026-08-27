@@ -189,6 +189,59 @@ export interface SessionManagerOptions {
   listener?: SessionLifecycleListener;
   now?: () => number;
   logger?: (message: string) => void;
+  /**
+   * Observability hooks — PLATFORM-003.
+   *
+   * Plain callbacks, deliberately: this package must not learn about
+   * Prometheus, and a metric type here would put a monitoring dependency
+   * underneath every provider. The API adapts these to counters in its own
+   * composition root, exactly as it already does for `logger`.
+   *
+   * Every hook is optional and every call site swallows a throwing hook — a
+   * broken metric must never fail a student's lab.
+   */
+  metrics?: SessionMetricsHooks;
+}
+
+/** See `SessionManagerOptions.metrics`. */
+export interface SessionMetricsHooks {
+  onProvision?(event: {
+    provider: string;
+    sandboxKind: string;
+    /** `success` or `failed`. */
+    outcome: string;
+    durationMs: number;
+    /** Per-step timings, so "provisioning is slow" becomes "the pull is slow". */
+    steps: Array<{ name: string; outcome: string; durationMs: number }>;
+  }): void;
+  onTransition?(from: string, to: string): void;
+  onCapacityRejected?(track: string): void;
+  onSessionEnded?(event: {
+    provider: string;
+    /** `student`, `idle`, `expired`, `orphaned`, `failed`. */
+    reason: string;
+    lifetimeSeconds: number;
+  }): void;
+}
+
+/**
+ * Collapse a teardown into a bounded reason label.
+ *
+ * `reason` reaching `#teardown` is free text — the reaper builds sentences like
+ * `idle for more than 1200s`, and `SessionManager.expire` accepts whatever a
+ * caller passes. Free text is exactly what must never become a metric label:
+ * `idle for more than 1200s` and `idle for more than 900s` are two series for
+ * one condition, and a caller could put anything at all in there.
+ *
+ * So the *text* stays in the log line, where it is useful and bounded by
+ * retention, and the *metric* gets one of four values.
+ */
+function endReasonFor(done: 'ENDED' | 'EXPIRED', detail: string): string {
+  if (done === 'ENDED') return 'student';
+  const lowered = detail.toLowerCase();
+  if (lowered.includes('idle')) return 'idle';
+  if (lowered.includes('lifetime') || lowered.includes('expired')) return 'expired';
+  return 'expired';
 }
 
 export interface StartSessionResult {
@@ -241,6 +294,7 @@ export class SessionManager {
   readonly #listener: SessionLifecycleListener | undefined;
   readonly #now: () => number;
   readonly #log: (message: string) => void;
+  readonly #metrics: SessionMetricsHooks;
 
   /**
    * Capacity is reserved synchronously, before the first `await`, so two
@@ -265,6 +319,22 @@ export class SessionManager {
     this.#listener = options.listener;
     this.#now = options.now ?? (() => Date.now());
     this.#log = options.logger ?? (() => undefined);
+    this.#metrics = options.metrics ?? {};
+  }
+
+  /**
+   * Call an observability hook without ever letting it affect the caller.
+   *
+   * A counter that throws — a label policy violation, a registry misuse — must
+   * not turn a successful lab start into a 500. Instrumentation is allowed to
+   * be wrong; the platform is not allowed to break because of it.
+   */
+  #emit(call: (hooks: SessionMetricsHooks) => void): void {
+    try {
+      call(this.#metrics);
+    } catch {
+      /* an instrumentation failure is never a platform failure */
+    }
   }
 
   get policy(): SessionPolicy {
@@ -356,18 +426,22 @@ export class SessionManager {
      * test catches.
      */
     const session = await this.#insertSession(lab, provider, ownerUserId);
+    this.#emit((m) => m.onTransition?.('none', 'CREATING'));
 
     const context = this.#contextFor(lab, session);
+    const provisionStartedAt = this.#now();
     let result: CreateResult;
     try {
       result = await provider.create(context);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      this.#recordProvision(session, provisionStartedAt, 'failed', []);
       await this.#failSession(session, context, message);
       throw new SessionError('SESSION_PROVISION_FAILED', message);
     }
 
     if (!result.ok) {
+      this.#recordProvision(session, provisionStartedAt, 'failed', result.steps);
       const message = result.error?.message ?? 'Failed to create the lab environment';
       await this.#failSession(session, context, message);
       throw new SessionError(
@@ -378,12 +452,15 @@ export class SessionManager {
       );
     }
 
+    this.#recordProvision(session, provisionStartedAt, 'success', result.steps);
+
     const nowIso = new Date(this.#now()).toISOString();
     const active = await this.#store.update(session.sessionId, {
       status: 'ACTIVE',
       environmentId: result.environment.environmentId,
       lastActivityAt: nowIso,
     });
+    this.#emit((m) => m.onTransition?.('CREATING', 'ACTIVE'));
 
     this.#log(
       `session ${session.sessionId} ACTIVE (lab=${lab.id} provider=${session.provider} ` +
@@ -454,6 +531,7 @@ export class SessionManager {
         this.#lifetimes.maxActiveSessions,
       );
       if (!admitted) {
+        this.#emit((m) => m.onCapacityRejected?.(lab.track));
         throw new SessionError(
           'LAB_CAPACITY_REACHED',
           `All ${this.#lifetimes.maxActiveSessions} practice environments are currently in use.`,
@@ -485,7 +563,41 @@ export class SessionManager {
       endedAt: new Date(this.#now()).toISOString(),
     });
     this.#release(session.sessionId);
+    this.#emit((m) => m.onTransition?.(session.status, 'FAILED'));
+    this.#emit((m) =>
+      m.onSessionEnded?.({
+        provider: session.provider,
+        reason: 'failed',
+        lifetimeSeconds: Math.max(0, (this.#now() - Date.parse(session.createdAt)) / 1000),
+      }),
+    );
     this.#log(`session ${session.sessionId} FAILED: ${reason}`);
+  }
+
+  /** Observe one provisioning attempt, including its per-step breakdown. */
+  #recordProvision(
+    session: LabSession,
+    startedAt: number,
+    outcome: string,
+    steps: readonly ProvisionStep[],
+  ): void {
+    this.#emit((m) =>
+      m.onProvision?.({
+        provider: session.provider,
+        sandboxKind: session.sandboxKind,
+        outcome,
+        durationMs: Math.max(0, this.#now() - startedAt),
+        steps: steps
+          .filter((step) => typeof step.durationMs === 'number')
+          .map((step) => ({
+            // `id` rather than `label`: it is the stable, bounded identifier.
+            // A label is prose and would put unbounded text in a metric.
+            name: step.id,
+            outcome: step.status,
+            durationMs: step.durationMs ?? 0,
+          })),
+      }),
+    );
   }
 
   // ------------------------------------------------------------- retrieval
@@ -808,6 +920,14 @@ export class SessionManager {
         endedAt: new Date(this.#now()).toISOString(),
       })) ?? marked;
     this.#release(session.sessionId);
+    this.#emit((m) => m.onTransition?.(inProgress, done));
+    this.#emit((m) =>
+      m.onSessionEnded?.({
+        provider: ended.provider,
+        reason: endReasonFor(done, reason),
+        lifetimeSeconds: Math.max(0, (this.#now() - Date.parse(ended.createdAt)) / 1000),
+      }),
+    );
     this.#log(`session ${session.sessionId} ${done} (${reason})`);
 
     // The sandbox is gone; tell whoever keeps the durable record. Emitted here

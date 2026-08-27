@@ -24,6 +24,7 @@ import {
   type LoadedLabDefinition,
   type SessionManager,
 } from '@jumptotech/lab-orchestrator';
+import { silentLogger } from '@jumptotech/observability';
 import type { LabAttempt } from '@jumptotech/progress';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { progressErrorResponse, resolveStudent } from '../identity.js';
@@ -211,7 +212,32 @@ function handleDomainError(res: Response, error: unknown): boolean {
 export function createLabRoutes(deps: SessionRoutesDeps): Router {
   const { registry, sessions, config, progress, identity } = deps;
   const log = deps.logger ?? (() => undefined);
+  const obs = deps.obs ?? silentLogger();
   const router = Router();
+
+  /** One Start Lab outcome, counted and logged the same way every time. */
+  function recordStart(
+    lab: { id: string; track: string; environment: { provider: string } },
+    outcome: string,
+    fields: { durationMs?: number; sessionId?: string; reason?: string; code?: string } = {},
+  ): void {
+    deps.metrics?.sessions.labStarts.inc({
+      track: lab.track,
+      lab_id: lab.id,
+      provider: lab.environment.provider,
+      outcome,
+    });
+    obs[outcome === 'success' ? 'info' : 'warn'](
+      outcome === 'success' ? 'lab.start.succeeded' : 'lab.start.failed',
+      {
+        labId: lab.id,
+        track: lab.track,
+        provider: lab.environment.provider,
+        outcome,
+        ...fields,
+      },
+    );
+  }
 
   /** Resolve `:id` → definition, replying with the right error if it fails. */
   function resolveLab(req: Request, res: Response): LoadedLabDefinition | null {
@@ -293,6 +319,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
      */
     const owner = req.user;
     if (!owner) {
+      recordStart(def, 'unauthorized');
       sendError(res, 401, {
         code: 'AUTH_REQUIRED',
         message: 'Starting a lab requires authentication.',
@@ -300,10 +327,28 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       return;
     }
 
+    const startedAt = Date.now();
     let started;
     try {
       started = await sessions.start(def.id, owner.userId);
     } catch (error) {
+      /*
+       * The outcome label is a closed enum derived from the error *code*, never
+       * from its message. A message is prose that changes with a reword; a code
+       * is the contract, and it is what the dashboard's stacked panel is built
+       * on.
+       */
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code: unknown }).code)
+          : 'unknown';
+      const outcome =
+        code === 'LAB_CAPACITY_REACHED'
+          ? 'capacity_reached'
+          : code === 'PROVIDER_UNAVAILABLE'
+            ? 'provider_unavailable'
+            : 'provision_failed';
+      recordStart(def, outcome, { durationMs: Date.now() - startedAt, code });
       // The sandbox never came up. Close the attempt honestly rather than
       // leaving a row that says the student is still working on it.
       if (attempt) {
@@ -347,6 +392,11 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
         config.terminalSessionTtlSeconds,
         Math.max(60, Math.ceil((Date.parse(started.session.expiresAt) - Date.now()) / 1000)),
       ),
+    });
+
+    recordStart(def, 'success', {
+      durationMs: Date.now() - startedAt,
+      sessionId: started.session.sessionId,
     });
 
     sendOk(res, {

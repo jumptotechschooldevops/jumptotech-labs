@@ -31,6 +31,12 @@ import {
   verifySessionToken,
   type TerminalSessionClaims,
 } from '@jumptotech/lab-orchestrator/session-token';
+import {
+  silentLogger,
+  type CommonMetrics,
+  type Logger,
+  type TerminalMetrics,
+} from '@jumptotech/observability';
 import type { TerminalConfig } from './config.js';
 import {
   CredentialsUnavailableError,
@@ -77,7 +83,31 @@ interface Session {
   maxTimer: NodeJS.Timeout;
 }
 
-export function createTerminalServer(config: TerminalConfig): Server {
+/**
+ * Observability handles for this server instance.
+ *
+ * Module-level `log()` already existed and is used from helpers that have no
+ * reference to the server, so the structured logger and the metrics replace it
+ * in place rather than being threaded through fifteen call sites. `createTerminalServer`
+ * is called once per process.
+ */
+let obs: Logger = silentLogger();
+let terminalMetrics: TerminalMetrics | null = null;
+let securityMetrics: CommonMetrics | null = null;
+
+export function createTerminalServer(
+  config: TerminalConfig,
+  observability?: {
+    logger: Logger;
+    terminal: TerminalMetrics;
+    common: CommonMetrics;
+  },
+): Server {
+  if (observability) {
+    obs = observability.logger;
+    terminalMetrics = observability.terminal;
+    securityMetrics = observability.common;
+  }
   /**
    * Constant-time comparison of the shared internal secret.
    *
@@ -480,7 +510,25 @@ export function createTerminalServer(config: TerminalConfig): Server {
    * detached has had its listeners cleared, so its exit never ends the session.
    */
   function wireShell(ws: WebSocket, term: Shell): void {
-    term.onData((data) => send(ws, { type: 'output', data }));
+    /*
+     * VOLUME ONLY, and this is the most important comment in this file.
+     *
+     * `data` is the student's terminal output. It is never logged, never
+     * decoded, never sampled, never buffered for inspection, and never used as
+     * a metric label. `data.length` is taken and the string is passed straight
+     * through to the socket.
+     *
+     * On the Linux track a student is routinely setting passwords, reading
+     * /etc/shadow, and generating keys — this is the single most sensitive
+     * stream in the platform. A byte count answers every operational question
+     * worth asking (is the shell alive, is something flooding it) and reveals
+     * none of it. `terminal-no-content-logging.test.ts` asserts no logger call
+     * receives this value.
+     */
+    term.onData((data) => {
+      terminalMetrics?.bytes.inc({ direction: 'out' }, data.length);
+      send(ws, { type: 'output', data });
+    });
     term.onExit(({ exitCode, signal }) => {
       send(ws, { type: 'exit', exitCode, ...(signal !== undefined ? { signal } : {}) });
       endSession(ws);
@@ -495,7 +543,16 @@ export function createTerminalServer(config: TerminalConfig): Server {
     verifyClient: ({ origin }, done) => {
       // Browsers always send Origin; reject anything not on the allow-list.
       if (origin && !config.allowedOrigins.includes(origin)) {
-        log(`rejected connection from disallowed origin '${origin}'`);
+        terminalMetrics?.connections.inc({ outcome: 'origin_rejected' });
+        securityMetrics?.securityEvents.inc({ service: 'terminal', event: 'origin_rejected' });
+        // The origin is *not* logged as a field: it is attacker-chosen and
+        // unbounded. It stays in the message, where the redactor sees it and
+        // retention bounds it.
+        obs.warn(
+          'terminal.connection.rejected',
+          { outcome: 'origin_rejected', securityEvent: 'origin_rejected' },
+          `rejected connection from disallowed origin '${origin}'`,
+        );
         done(false, 403, 'Forbidden origin');
         return;
       }
@@ -505,6 +562,8 @@ export function createTerminalServer(config: TerminalConfig): Server {
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     if (sessions.size >= config.maxSessions) {
+      terminalMetrics?.connections.inc({ outcome: 'capacity' });
+      obs.warn('terminal.connection.rejected', { outcome: 'capacity', count: sessions.size });
       send(ws, { type: 'error', code: 'CAPACITY', message: 'Too many active terminal sessions.' });
       ws.close(1013, 'capacity');
       return;
@@ -516,6 +575,8 @@ export function createTerminalServer(config: TerminalConfig): Server {
     // A socket that never authenticates is dropped quickly.
     const authTimer = setTimeout(() => {
       if (!authenticated) {
+        terminalMetrics?.connections.inc({ outcome: 'auth_timeout' });
+        obs.warn('terminal.connection.rejected', { outcome: 'auth_timeout' });
         send(ws, { type: 'error', code: 'AUTH_TIMEOUT', message: 'No session token received.' });
         ws.close(4401, 'auth timeout');
       }
@@ -543,6 +604,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
             code: 'UNAUTHENTICATED',
             message: 'First message must be an auth frame.',
           });
+          terminalMetrics?.connections.inc({ outcome: 'unauthenticated' });
           ws.close(4401, 'unauthenticated');
           return;
         }
@@ -556,7 +618,18 @@ export function createTerminalServer(config: TerminalConfig): Server {
         } catch (error) {
           const msg =
             error instanceof InvalidSessionTokenError ? error.message : 'Session token rejected';
-          log(`auth failed from ${req.socket.remoteAddress ?? 'unknown'}: ${msg}`);
+          terminalMetrics?.connections.inc({ outcome: 'unauthorized' });
+          /*
+           * The remote address is not a log *field*: it is personal data under
+           * most regimes and is forbidden as a metric label for the same
+           * reason. It stays in the message, where retention bounds it and an
+           * operator investigating an incident can still find it.
+           */
+          obs.warn(
+            'terminal.connection.rejected',
+            { outcome: 'unauthorized' },
+            `auth failed from ${req.socket.remoteAddress ?? 'unknown'}: ${msg}`,
+          );
           send(ws, { type: 'error', code: 'UNAUTHORIZED', message: msg });
           ws.close(4401, 'unauthorized');
           return;
@@ -718,7 +791,13 @@ export function createTerminalServer(config: TerminalConfig): Server {
             ? error.code
             : 'CREDENTIALS_UNAVAILABLE';
       const msg = error instanceof Error ? error.message : String(error);
-      log(`session ${claims.sid}: terminal binding failed — ${msg}`);
+      terminalMetrics?.connections.inc({ outcome: 'no_credentials' });
+      obs.error('terminal.connection.rejected', {
+        sessionId: claims.sid,
+        outcome: 'no_credentials',
+        code,
+        err: error,
+      });
       await discardCredentials();
       send(ws, { type: 'error', code, message: msg });
       ws.close(4403, 'no credentials');
@@ -776,6 +855,12 @@ export function createTerminalServer(config: TerminalConfig): Server {
         code,
         message: `Could not start a shell: ${message}`,
       });
+      terminalMetrics?.connections.inc({ outcome: 'shell_start_failed' });
+      obs.error('terminal.connection.rejected', {
+        sessionId: claims.sid,
+        outcome: 'shell_start_failed',
+        code,
+      });
       ws.close(1011, 'shell start failed');
       return false;
     }
@@ -800,6 +885,14 @@ export function createTerminalServer(config: TerminalConfig): Server {
     };
     sessions.set(ws, session);
     bySessionId.set(claims.sid, ws);
+    startedAtByWs.set(ws, Date.now());
+    terminalMetrics?.connections.inc({ outcome: 'established' });
+    terminalMetrics?.connectionsOpen.set(sessions.size);
+    obs.info('terminal.connection.opened', {
+      sessionId: claims.sid,
+      sandboxKind: plan.sandboxKind,
+      count: sessions.size,
+    });
 
     wireShell(ws, term);
 
@@ -829,10 +922,20 @@ export function createTerminalServer(config: TerminalConfig): Server {
     if (ws.readyState === ws.OPEN) ws.close(4408, code);
   }
 
+  /** When each socket's shell opened, for the session-duration histogram. */
+  const startedAtByWs = new Map<WebSocket, number>();
+
   function endSession(ws: WebSocket): void {
     const session = sessions.get(ws);
     if (!session) return;
     sessions.delete(ws);
+    const startedAt = startedAtByWs.get(ws);
+    startedAtByWs.delete(ws);
+    if (startedAt !== undefined) {
+      terminalMetrics?.sessionDuration.observe((Date.now() - startedAt) / 1000);
+    }
+    terminalMetrics?.connectionsOpen.set(sessions.size);
+    terminalMetrics?.closes.inc({ code: String(ws.readyState === ws.OPEN ? 'server' : 'client') });
     if (bySessionId.get(session.claims.sid) === ws) bySessionId.delete(session.claims.sid);
     clearTimeout(session.idleTimer);
     clearTimeout(session.maxTimer);
@@ -846,7 +949,10 @@ export function createTerminalServer(config: TerminalConfig): Server {
     // ends, not when a socket drops — a reconnect must not lose their Dockerfile.
     void removeSessionKubeconfig(session.kubeconfigPath);
     void removeSessionDockerCerts(session.dockerCertDir);
-    log(`session ${session.claims.sid} ended (${sessions.size} active)`);
+    obs.info('terminal.connection.closed', {
+      sessionId: session.claims.sid,
+      count: sessions.size,
+    });
   }
 
   httpServer.on('close', () => {
@@ -861,8 +967,15 @@ function send(ws: WebSocket, message: ServerMessage): void {
   ws.send(JSON.stringify(message));
 }
 
+/**
+ * The pre-existing free-text seam, now structured.
+ *
+ * Kept as a function with the same signature so the call sites that build a
+ * sentence keep working; the redactor runs over the message on the way out, so
+ * an un-migrated line still cannot leak.
+ */
 function log(message: string): void {
-  console.log(`[terminal] ${message}`);
+  obs.info('terminal.connection.opened', {}, message);
 }
 
 /** Message text for a thrown value, for logs only. Never sent to a browser. */

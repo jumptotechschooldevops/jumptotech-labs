@@ -1,5 +1,13 @@
+import {
+  loadObservabilityConfig,
+  assertScrapeTokenIsDistinct,
+  type ObservabilityConfig,
+} from '@jumptotech/observability';
+
 export interface TerminalConfig {
   port: number;
+  /** Structured logging, metrics and the health listener (PLATFORM-003). */
+  observability: ObservabilityConfig;
   sessionSecret: string;
   allowedOrigins: string[];
   /**
@@ -114,8 +122,29 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     );
   }
 
+  const observability = loadObservabilityConfig({
+    service: 'terminal',
+    defaultPort: 9401,
+    env,
+  });
+
+  /*
+   * The scrape token must not be any of the credentials this service holds.
+   *
+   * It matters more here than anywhere: the terminal is the one process a
+   * student types into, and it deliberately holds only the `attach` scope. A
+   * scrape token equal to that credential would hand the read-only monitoring
+   * path the ability to open a shell.
+   */
+  assertScrapeTokenIsDistinct(observability.scrapeToken, {
+    TERMINAL_SESSION_SECRET: sessionSecret,
+    INTERNAL_SERVICE_SECRET: env.INTERNAL_SERVICE_SECRET,
+    SANDBOXD_ATTACH_SECRET: env.SANDBOXD_ATTACH_SECRET,
+  });
+
   return {
     port: intFromEnv(env, 'TERMINAL_PORT', 4001),
+    observability,
     sessionSecret,
     allowedOrigins: (env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
       .split(',')

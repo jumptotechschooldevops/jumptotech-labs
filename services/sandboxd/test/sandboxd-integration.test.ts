@@ -46,7 +46,7 @@ import {
   deriveSandboxRef,
 } from '@jumptotech/lab-orchestrator';
 import { ownershipLabels, testRunId } from '@jumptotech/test-support/run-id';
-import type { SandboxdConfig } from '../src/config.js';
+import { defaultObservabilityConfig, type SandboxdConfig } from '../src/config.js';
 import { DockerSandboxInspector } from '../src/inspector.js';
 import { createSandboxd } from '../src/server.js';
 
@@ -138,6 +138,7 @@ beforeAll(async () => {
   await reapThisRun();
 
   const config: SandboxdConfig = {
+    observability: defaultObservabilityConfig('sandboxd', 0),
     port: 0,
     bindAddress: '127.0.0.1',
     scopeSecrets: { attach: INTERNAL_SECRET + '-attach', runtime: INTERNAL_SECRET + '-runtime', docker: INTERNAL_SECRET + '-docker' },

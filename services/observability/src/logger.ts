@@ -78,6 +78,8 @@ export interface LogFields {
   scope?: string;
   endpoint?: string;
   requirementType?: string;
+  /** Why an attach was refused. A bounded enum, never free text. */
+  denyReason?: string;
   operation?: string;
   migrationVersion?: string;
 
@@ -125,7 +127,7 @@ export interface LogFields {
 const ALLOWED_FIELDS = [
   'requestId', 'userId', 'sessionId', 'attemptId',
   'labId', 'track', 'provider', 'implementation', 'sandboxKind', 'sandboxRef',
-  'step', 'op', 'scope', 'endpoint', 'requirementType', 'operation', 'migrationVersion',
+  'step', 'op', 'scope', 'endpoint', 'requirementType', 'denyReason', 'operation', 'migrationVersion',
   'outcome', 'reason', 'result', 'code', 'status', 'count', 'durationMs',
   'route', 'method',
   'securityEvent', 'authorizationResult', 'action',

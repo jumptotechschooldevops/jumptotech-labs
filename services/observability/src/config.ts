@@ -16,6 +16,11 @@ export interface ObservabilityConfig {
   allowAnonymousMetrics: boolean;
   logLevel: LogLevel;
   maxLineBytes: number;
+  /**
+   * Fraction of 2xx access lines to keep. 4xx and 5xx are never sampled — see
+   * `http-metrics.ts`. Metrics are unaffected: only the log line is dropped.
+   */
+  httpSampleRate: number;
   version: string;
   commit: string;
 }
@@ -33,6 +38,17 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`Environment variable ${name} must be a positive integer, got '${raw}'`);
+  }
+  return parsed;
+}
+
+/** A 0–1 fraction. Out of range is a configuration error, not a clamp. */
+function rateFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const raw = env[name];
+  if (!raw || raw.trim() === '') return fallback;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new Error(`Environment variable ${name} must be a number between 0 and 1, got '${raw}'`);
   }
   return parsed;
 }
@@ -75,6 +91,7 @@ export function loadObservabilityConfig(options: LoadObservabilityOptions): Obse
     allowAnonymousMetrics,
     logLevel: level,
     maxLineBytes: intFromEnv(env, 'LOG_MAX_LINE_BYTES', 8192),
+    httpSampleRate: rateFromEnv(env, 'LOG_HTTP_SAMPLE_RATE', 1),
     version: (env.JTT_VERSION ?? '0.1.0').trim(),
     commit: (env.JTT_COMMIT ?? 'unknown').trim(),
   };

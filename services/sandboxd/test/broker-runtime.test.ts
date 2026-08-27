@@ -19,13 +19,14 @@ import {
   type ContainerInfo,
   type ContainerRuntimePort,
 } from '@jumptotech/lab-orchestrator';
-import type { SandboxdConfig } from '../src/config.js';
+import { defaultObservabilityConfig, type SandboxdConfig } from '../src/config.js';
 import { createSandboxd } from '../src/server.js';
 
 const SECRET = 'internal-service-secret-for-tests';
 const OWNER = 'jumptotech';
 
 const config: SandboxdConfig = {
+  observability: defaultObservabilityConfig('sandboxd', 0),
   port: 0,
   bindAddress: '127.0.0.1',
   scopeSecrets: { attach: SECRET + '-attach', runtime: SECRET + '-runtime', docker: SECRET + '-docker' },

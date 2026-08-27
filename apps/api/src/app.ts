@@ -26,6 +26,20 @@ import {
   ProgressService,
   type StudentIdentityResolver,
 } from '@jumptotech/progress';
+import {
+  httpObservability,
+  silentLogger,
+  createRegistry,
+  createCommonMetrics,
+  createSessionMetrics,
+  createVerificationMetrics,
+  createAuthMetrics,
+  type CommonMetrics,
+  type SessionMetrics,
+  type VerificationMetrics,
+  type AuthMetrics,
+  type Logger,
+} from '@jumptotech/observability';
 import type { ApiConfig } from './config.js';
 import { asyncRoute, sendError, sendOk } from './http.js';
 import { createLabRoutes } from './routes/labs.js';
@@ -75,6 +89,23 @@ export interface CreateAppDeps {
   /** One line per authorization decision. Never carries a credential. */
   authAudit?: AuthAuditLogger;
   /**
+   * Structured logging and metrics — PLATFORM-003.
+   *
+   * Optional so every existing test keeps composing an app without one. When
+   * absent the logger is silent and the metrics go to a throwaway registry, so
+   * instrumented handlers behave identically without a suite having to know
+   * they are instrumented.
+   */
+  observability?: {
+    logger: Logger;
+    metrics: {
+      common: CommonMetrics;
+      sessions: SessionMetrics;
+      verification: VerificationMetrics;
+      auth: AuthMetrics;
+    };
+  };
+  /**
    * The browser sign-in half (PLATFORM-010).
    *
    * Optional so every existing test keeps composing an app without it. When
@@ -105,12 +136,53 @@ function inMemoryProgress(config: ApiConfig): ProgressDeps {
   };
 }
 
+/**
+ * Metrics for a caller that supplied none.
+ *
+ * A private registry, never served: handlers can increment unconditionally, so
+ * there is no `if (metrics)` at any call site, and a test composing `createApp`
+ * gets working counters that nobody scrapes.
+ */
+function detachedObservability(): NonNullable<CreateAppDeps['observability']> {
+  const registry = createRegistry({ service: 'api', defaultMetrics: false });
+  return {
+    logger: silentLogger(),
+    metrics: {
+      common: createCommonMetrics(registry, 'api'),
+      sessions: createSessionMetrics(registry),
+      verification: createVerificationMetrics(registry),
+      auth: createAuthMetrics(registry),
+    },
+  };
+}
+
 export function createApp(deps: CreateAppDeps): Express {
   const app = express();
   const learning = deps.progress ?? inMemoryProgress(deps.config);
+  const observability = deps.observability ?? detachedObservability();
 
   // No `x-powered-by`, and small request bodies only — nothing here needs more.
   app.disable('x-powered-by');
+
+  /*
+   * Correlation and HTTP metrics, before everything.
+   *
+   * Registered first so `req` is inside an AsyncLocalStorage context for the
+   * whole request — including the body parser and the error handler — and every
+   * log line written anywhere below inherits the same `requestId` without any
+   * of that code being handed one. `/health` is included deliberately: an
+   * operator polling it should show up in the same latency series as anyone
+   * else.
+   */
+  app.use(
+    httpObservability({
+      service: 'api',
+      metrics: observability.metrics.common,
+      logger: observability.logger,
+      sampleRate: deps.config.observability.httpSampleRate,
+    }),
+  );
+
   app.use(express.json({ limit: '16kb' }));
 
   // CORS covers the browser-facing surface only. `/internal` is deliberately
@@ -181,7 +253,13 @@ export function createApp(deps: CreateAppDeps): Express {
     users,
     cookieName: deps.config.auth.cookie.name,
   });
-  const authenticated = authenticate(identity, audit, browser);
+  const authenticated = authenticate(identity, audit, browser, ({ source, outcome }) => {
+    observability.metrics.auth.attempts.inc({
+      mode: deps.config.auth.mode,
+      source,
+      outcome,
+    });
+  });
   const sessionGuard = createSessionGuard(deps.sessions, audit);
 
   /*
@@ -207,7 +285,24 @@ export function createApp(deps: CreateAppDeps): Express {
     }),
   );
 
-  const routes = { ...deps, ...learning, sessionGuard, identity: learning.identity };
+  const routes = {
+    ...deps,
+    ...learning,
+    sessionGuard,
+    identity: learning.identity,
+    /*
+     * The existing `(message: string) => void` seam, preserved.
+     *
+     * `record()` and the routes' own best-effort catch blocks already speak it,
+     * and rewriting every one of those call sites to change how a bookkeeping
+     * failure is reported would mix a logging change into handlers that also
+     * decide what a student sees. The adapter gives those lines structure and
+     * redaction for free; `obs` below is what new instrumentation uses.
+     */
+    logger: observability.logger.legacy('progress.write_failed', 'warn'),
+    obs: observability.logger,
+    metrics: observability.metrics,
+  };
   app.use('/api/labs', browserCors, authenticated, createLabRoutes(routes));
   app.use('/api/tracks', browserCors, authenticated, createTrackRoutes(routes));
   app.use('/api/sessions', browserCors, authenticated, createSessionRoutes(routes));
@@ -220,8 +315,9 @@ export function createApp(deps: CreateAppDeps): Express {
 
   // Central error handler — never leak a stack trace to the client.
   app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
-    // eslint-disable-next-line no-console
-    console.error('[api] unhandled error:', error);
+    // The logger serialises the error without its stack and redacts the
+    // message; the client still gets a structured code and nothing else.
+    observability.logger.error('http.request.failed', { err: error });
     sendError(res, 500, {
       code: 'INTERNAL_ERROR',
       message: 'An unexpected error occurred while handling the request.',

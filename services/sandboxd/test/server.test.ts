@@ -19,7 +19,7 @@ import {
   deriveSandboxRef,
 } from '@jumptotech/lab-orchestrator';
 import type { SandboxSnapshot } from '../src/attach.js';
-import type { SandboxdConfig } from '../src/config.js';
+import { defaultObservabilityConfig, type SandboxdConfig } from '../src/config.js';
 import { createSandboxd, upgradeRefusal, type BrokerPty } from '../src/server.js';
 
 const SECRET = 'internal-service-secret-for-tests';
@@ -29,6 +29,7 @@ const SESSION_B = 'sess-bbbbbbbbbbbbbbbb';
 
 const config: SandboxdConfig = {
   port: 0,
+  observability: defaultObservabilityConfig('sandboxd', 0),
   bindAddress: '127.0.0.1',
   scopeSecrets: { attach: SECRET + '-attach', runtime: SECRET + '-runtime', docker: SECRET + '-docker' },
   derivationSecret: DERIVATION,

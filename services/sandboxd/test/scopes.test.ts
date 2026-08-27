@@ -28,7 +28,7 @@ import {
   type DockerEnginePort,
   type DockerSandboxPolicy,
 } from '@jumptotech/lab-orchestrator';
-import { SCOPE_ENV, loadScopeSecrets, type SandboxdConfig } from '../src/config.js';
+import { SCOPE_ENV, loadScopeSecrets, type SandboxdConfig, defaultObservabilityConfig } from '../src/config.js';
 import { DockerOps, SANDBOX_COMPONENT } from '../src/docker-ops.js';
 import { authorizeScope, scopeForEndpoint, SANDBOXD_SCOPES } from '../src/scopes.js';
 import { createSandboxd } from '../src/server.js';
@@ -63,6 +63,7 @@ const POLICY: DockerSandboxPolicy = {
 
 const config: SandboxdConfig = {
   port: 0,
+  observability: defaultObservabilityConfig('sandboxd', 0),
   bindAddress: '127.0.0.1',
   scopeSecrets: { attach: TERMINAL_CRED, runtime: API_RUNTIME_CRED, docker: API_DOCKER_CRED },
   derivationSecret: DERIVATION,

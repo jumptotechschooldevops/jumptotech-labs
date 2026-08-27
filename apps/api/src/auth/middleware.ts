@@ -62,17 +62,30 @@ export function authenticate(
   resolver: IdentityResolver,
   audit: AuthAuditLogger = () => {},
   browser?: BrowserSessionAuthenticator,
+  /**
+   * Counts credential outcomes — PLATFORM-003.
+   *
+   * Takes the *source* (cookie or header) and a bounded outcome, never the
+   * credential and never any part of it. `outcome` comes from the error code,
+   * which is already a closed union; the message is deliberately not used,
+   * because the message is the part that never says which check failed.
+   */
+  onAttempt: (event: { source: string; outcome: string }) => void = () => {},
 ) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const source = req.get('cookie') ? 'cookie' : req.get('authorization') ? 'header' : 'none';
     try {
       const fromCookie = browser ? await browser.authenticate(req.get('cookie')) : null;
       req.user = fromCookie ?? (await resolver.resolve(req.get('authorization')));
+      onAttempt({ source, outcome: 'success' });
       next();
     } catch (error) {
       const authError =
         error instanceof AuthError
           ? error
           : new AuthError('AUTH_INVALID_TOKEN', 'The credentials supplied are not valid.');
+
+      onAttempt({ source, outcome: authError.code });
 
       audit({
         requestId: requestId(req),

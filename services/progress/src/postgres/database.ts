@@ -31,6 +31,7 @@ export interface SqlExecutor {
 export class PostgresDatabase implements SqlExecutor {
   readonly #pool: pg.Pool;
   readonly #description: string;
+  #onPoolError: (message: string) => void = () => undefined;
 
   constructor(pool: pg.Pool, description: string) {
     this.#pool = pool;
@@ -38,8 +39,36 @@ export class PostgresDatabase implements SqlExecutor {
     // An idle client erroring (server restart, network blip) must not take the
     // process down; the pool discards it and the next query gets a fresh one.
     this.#pool.on('error', (error: Error) => {
-      console.error(`[db] idle client error: ${error.message}`);
+      this.#onPoolError(error.message);
     });
+  }
+
+  /**
+   * Where a pool error goes — PLATFORM-003.
+   *
+   * A setter rather than a constructor argument because the database is built
+   * inside `buildProgressRuntime`, before the composition root has finished
+   * assembling. Until it is set the handler is a no-op, which is the same
+   * behaviour as before with one fewer unstructured line on stdout.
+   */
+  onPoolError(handler: (message: string) => void): void {
+    this.#onPoolError = handler;
+  }
+
+  /**
+   * Connection pool counters, for `jtt_db_pool_connections`.
+   *
+   * `waiting` is the one worth alerting on: above zero while the database is
+   * still answering means the application is starved of connections rather than
+   * the database being dead — a different incident with a different fix, and
+   * one that otherwise presents identically as "everything is slow".
+   */
+  poolStats(): { total: number; idle: number; waiting: number } {
+    return {
+      total: this.#pool.totalCount,
+      idle: this.#pool.idleCount,
+      waiting: this.#pool.waitingCount,
+    };
   }
 
   static fromConfig(config: DatabaseConfig): PostgresDatabase {

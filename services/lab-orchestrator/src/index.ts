@@ -81,6 +81,7 @@ export * from './providers/catalog.js';
 export {
   ProviderRegistry,
   singleProviderRegistry,
+  type ProviderMetricsHooks,
   type ProviderRegistration,
   type ProviderStatus,
 } from './providers/registry.js';
@@ -174,6 +175,7 @@ export {
   type SessionLifecycleListener,
   type SessionLifetimeConfig,
   type SessionManagerOptions,
+  type SessionMetricsHooks,
   type SandboxInspectResult,
   type SandboxReadPort,
   type SessionView,
@@ -184,6 +186,7 @@ export {
 export {
   SessionReaper,
   type ReaperOptions,
+  type ReaperMetricsHooks,
   type SweepReason,
   type SweepResult,
 } from './session/reaper.js';

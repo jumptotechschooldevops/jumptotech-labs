@@ -56,15 +56,64 @@ export interface ProviderStatus extends ProviderAvailability {
 /** How long a probe result is trusted before the registry re-checks. */
 const DEFAULT_AVAILABILITY_TTL_MS = 30_000;
 
+/**
+ * Observability hooks — PLATFORM-003.
+ *
+ * Called on a cache *miss* only, which is the point: the registry already
+ * memoises probes for 30 seconds, so instrumenting here means a Prometheus
+ * scrape every 15 seconds adds no probe load at all. Emitting from the scrape
+ * instead would double the rate at which the platform interrogates a container
+ * runtime that may already be the thing in trouble.
+ */
+export interface ProviderMetricsHooks {
+  onProbe?(event: {
+    provider: string;
+    implementation: string;
+    sandboxKind: string;
+    available: boolean;
+    /** `available`, `unavailable`, `disabled`, or `error`. */
+    result: string;
+    durationMs: number;
+  }): void;
+  /** Fired only when availability flips, so the log is not a heartbeat. */
+  onAvailabilityChanged?(event: {
+    provider: string;
+    available: boolean;
+    reason?: string;
+  }): void;
+}
+
 export class ProviderRegistry {
   readonly #providers = new Map<LabProviderId, ProviderRegistration>();
   readonly #cache = new Map<LabProviderId, { at: number; status: ProviderStatus }>();
   readonly #ttlMs: number;
   readonly #now: () => number;
+  #metrics: ProviderMetricsHooks = {};
 
   constructor(options: { availabilityTtlMs?: number; now?: () => number } = {}) {
     this.#ttlMs = options.availabilityTtlMs ?? DEFAULT_AVAILABILITY_TTL_MS;
     this.#now = options.now ?? (() => Date.now());
+  }
+
+  /**
+   * Attach observability after construction.
+   *
+   * The registry is built in `buildSandboxComposition`, before the API's metric
+   * groups exist, so this is a setter rather than a constructor argument. It is
+   * additive and idempotent; nothing about resolution changes.
+   */
+  observe(hooks: ProviderMetricsHooks): this {
+    this.#metrics = hooks;
+    return this;
+  }
+
+  /** An instrumentation failure must never make a provider look unavailable. */
+  #emit(call: (hooks: ProviderMetricsHooks) => void): void {
+    try {
+      call(this.#metrics);
+    } catch {
+      /* provider resolution is more important than counting it */
+    }
   }
 
   register(registration: ProviderRegistration): this {
@@ -179,7 +228,9 @@ export class ProviderRegistry {
       registered: true,
     };
 
+    const probeStartedAt = this.#now();
     let status: ProviderStatus;
+    let result: string;
     if (registration.enabled === false) {
       status = {
         ...base,
@@ -187,17 +238,48 @@ export class ProviderRegistry {
         reason: registration.disabledReason ?? 'disabled by configuration',
         ...(registration.remediation ? { remediation: registration.remediation } : {}),
       };
+      result = 'disabled';
     } else {
       try {
         const probed = await registration.provider.availability();
         status = { ...base, ...probed };
+        result = status.available ? 'available' : 'unavailable';
       } catch (error) {
         status = {
           ...base,
           available: false,
           reason: error instanceof Error ? error.message : String(error),
         };
+        result = 'error';
       }
+    }
+
+    this.#emit((m) =>
+      m.onProbe?.({
+        provider: providerId,
+        implementation: status.implementation,
+        sandboxKind: status.sandboxKind,
+        available: status.available,
+        result,
+        durationMs: Math.max(0, this.#now() - probeStartedAt),
+      }),
+    );
+
+    /*
+     * Log the *edge*, not the level.
+     *
+     * A line every 30 seconds saying a provider is still fine is a heartbeat
+     * nobody reads and everybody filters, and it would bury the one line that
+     * matters. The gauge carries the level; the log carries the change.
+     */
+    if (cached && cached.status.available !== status.available) {
+      this.#emit((m) =>
+        m.onAvailabilityChanged?.({
+          provider: providerId,
+          available: status.available,
+          ...(status.reason ? { reason: status.reason } : {}),
+        }),
+      );
     }
 
     this.#cache.set(providerId, { at: this.#now(), status });

@@ -58,6 +58,14 @@ export interface AuthSessionStore {
   destroyAllForUser(userId: string): Promise<number>;
   /** Drop expired rows. Called on a timer by the composition root. */
   purgeExpired(): Promise<number>;
+  /**
+   * How many sign-ins are currently valid — PLATFORM-003.
+   *
+   * Optional so an existing implementation (a test double, most of all) keeps
+   * satisfying this interface; the metric is simply absent where it is not
+   * implemented, which is better than a store inventing a number.
+   */
+  countActive?(): Promise<number>;
 }
 
 /**
@@ -163,6 +171,15 @@ export class InMemoryAuthSessionStore implements AuthSessionStore {
     }
     return removed;
   }
+
+  async countActive(): Promise<number> {
+    const now = this.#now();
+    let live = 0;
+    for (const record of this.#byHash.values()) {
+      if (Date.parse(record.expiresAt) > now) live += 1;
+    }
+    return live;
+  }
 }
 
 export interface AuthSessionSqlExecutor {
@@ -244,5 +261,19 @@ export class PostgresAuthSessionStore implements AuthSessionStore {
       `DELETE FROM auth_sessions WHERE expires_at <= now() RETURNING auth_session_id`,
     );
     return rows.length;
+  }
+
+  /**
+   * Live sign-ins, for `jtt_auth_sessions_active`.
+   *
+   * Counts rows rather than returning any of them: the metric needs a number,
+   * and a query that selected session identifiers would put credential-adjacent
+   * data on a path it has no reason to travel.
+   */
+  async countActive(): Promise<number> {
+    const { rows } = await this.db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM auth_sessions WHERE expires_at > now()`,
+    );
+    return Number.parseInt(rows[0]?.count ?? '0', 10);
   }
 }

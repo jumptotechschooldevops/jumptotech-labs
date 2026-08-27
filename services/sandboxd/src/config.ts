@@ -69,8 +69,16 @@ export function loadScopeSecrets(env: NodeJS.ProcessEnv): ScopeSecrets {
   return secrets;
 }
 
+import {
+  loadObservabilityConfig,
+  assertScrapeTokenIsDistinct,
+  type ObservabilityConfig,
+} from '@jumptotech/observability';
+
 export interface SandboxdConfig {
   port: number;
+  /** Structured logging, metrics and the health listener (PLATFORM-003). */
+  observability: ObservabilityConfig;
   /** Loopback in development; `0.0.0.0` when the callers are other containers. */
   bindAddress: string;
   /**
@@ -175,6 +183,28 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
   return parsed;
 }
 
+/**
+ * Observability defaults for a config built by hand.
+ *
+ * Exists so the suites that construct a `SandboxdConfig` literal do not each
+ * hand-roll the same block — and so adding a field to `ObservabilityConfig`
+ * later is one edit rather than four.
+ */
+export function defaultObservabilityConfig(service: string, port: number): ObservabilityConfig {
+  return {
+    service,
+    port,
+    host: '127.0.0.1',
+    scrapeToken: '',
+    allowAnonymousMetrics: true,
+    logLevel: 'error',
+    maxLineBytes: 8192,
+    httpSampleRate: 1,
+    version: '0.0.0-test',
+    commit: 'test',
+  };
+}
+
 export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): SandboxdConfig {
   const scopeSecrets = loadScopeSecrets(env);
 
@@ -191,8 +221,30 @@ export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): Sandbo
     );
   }
 
+  const observability = loadObservabilityConfig({
+    service: 'sandboxd',
+    defaultPort: 9402,
+    env,
+  });
+
+  /*
+   * The scrape token must differ from all three scope secrets.
+   *
+   * `loadScopeSecrets` already refuses two equal scope secrets, because equal
+   * secrets collapse the attach/runtime/docker boundary back to where it
+   * started. The scrape credential is handed to a monitoring system and is the
+   * most widely distributed of the four, so it is held to the same rule.
+   */
+  assertScrapeTokenIsDistinct(observability.scrapeToken, {
+    SANDBOXD_ATTACH_SECRET: scopeSecrets.attach,
+    SANDBOXD_RUNTIME_SECRET: scopeSecrets.runtime,
+    SANDBOXD_DOCKER_SECRET: scopeSecrets.docker,
+    NAMESPACE_DERIVATION_SECRET: derivationSecret,
+  });
+
   return {
     port: intFromEnv(env, 'SANDBOXD_PORT', 4002),
+    observability,
     bindAddress: env.SANDBOXD_BIND ?? '127.0.0.1',
     scopeSecrets,
     derivationSecret,

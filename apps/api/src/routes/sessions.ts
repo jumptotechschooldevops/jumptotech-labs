@@ -38,11 +38,27 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import { verifyLab } from '@jumptotech/verifier';
 import type { ProgressService, StudentIdentityResolver } from '@jumptotech/progress';
+import {
+  silentLogger,
+  type AuthMetrics,
+  type CommonMetrics,
+  type Logger,
+  type SessionMetrics,
+  type VerificationMetrics,
+} from '@jumptotech/observability';
 import type { ApiConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { progressErrorResponse } from '../identity.js';
 import { record } from '../progress.js';
 import { toAttemptPayload } from './me.js';
+
+/** The metric groups the browser-facing routers write to. */
+export interface RouteMetrics {
+  sessions: SessionMetrics;
+  verification: VerificationMetrics;
+  auth: AuthMetrics;
+  common: CommonMetrics;
+}
 
 export interface SessionRoutesDeps {
   registry: LabRegistry;
@@ -78,6 +94,15 @@ export interface SessionRoutesDeps {
   /** False when history is in memory only. */
   durable: boolean;
   logger?: (message: string) => void;
+  /**
+   * Structured logging and metrics — PLATFORM-003.
+   *
+   * Separate from `logger` above, which stays the `(message: string) => void`
+   * seam the best-effort bookkeeping paths already use. Both optional, so every
+   * existing test composes these routers unchanged.
+   */
+  obs?: Logger;
+  metrics?: RouteMetrics;
 }
 
 /** HTTP status for each session-domain error code. */
@@ -151,6 +176,7 @@ export function toSessionPayload(manager: SessionManager, session: LabSession) {
 }
 
 export function createSessionRoutes(deps: SessionRoutesDeps): Router {
+  const obs = deps.obs ?? silentLogger();
   const { registry, sessions, k8s, engines, ansible, workspace, progress } = deps;
   const log = deps.logger ?? (() => undefined);
   const router = Router();
@@ -246,6 +272,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     }
 
     const lab = registry.get(session.labId);
+    const verifyStartedAt = Date.now();
     const result = await verifyLab({
       lab,
       namespace: session.sandboxRef ?? session.namespace,
@@ -253,7 +280,59 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     });
     await sessions.touch(session.sessionId, 'check');
 
+    /*
+     * `pass`, `fail` and `error` are three different things, and collapsing any
+     * two of them makes the metric useless.
+     *
+     * `fail` is a student who has not finished yet — the single most normal
+     * event in the product. `error` is the environment being unreadable, which
+     * is an outage. An alert on "not passed" would page somebody every time a
+     * class starts; the alert is on `error` alone.
+     */
+    const verdict = result.error ? 'error' : result.passed ? 'pass' : 'fail';
+    deps.metrics?.verification.checks.inc({
+      track: lab.track,
+      lab_id: lab.id,
+      result: verdict,
+    });
+    deps.metrics?.verification.duration.observe(
+      { track: lab.track, provider: session.provider },
+      (Date.now() - verifyStartedAt) / 1000,
+    );
+    /*
+     * Per requirement *type*, not per lab.
+     *
+     * One broken handler shows up as a scattering of unrelated labs failing;
+     * only this dimension names the actual culprit. `verifyRequirements`
+     * returns checks in the order of `lab.requirements`, so the type comes from
+     * there — `CheckResult` deliberately carries the student-facing label
+     * rather than the internal type.
+     */
+    const requirements = lab.requirements as readonly { type: string }[];
+    result.checks.forEach((check, index) => {
+      const type = requirements[index]?.type;
+      if (!type) return;
+      deps.metrics?.verification.requirements.inc({
+        requirement_type: type,
+        result: check.status,
+      });
+    });
+
+    obs[result.error ? 'error' : 'info'](
+      result.error ? 'verify.errored' : result.passed ? 'verify.passed' : 'verify.failed',
+      {
+        sessionId: session.sessionId,
+        labId: lab.id,
+        track: lab.track,
+        provider: session.provider,
+        result: verdict,
+        durationMs: Date.now() - verifyStartedAt,
+        ...(result.error ? { code: result.error.code } : {}),
+      },
+    );
+
     if (result.error) {
+      deps.metrics?.verification.errors.inc({ code: result.error.code });
       // The environment could not be read, so no check actually happened —
       // recording one would inflate `check_count` with a cluster outage.
       sendError(res, 503, {
@@ -313,7 +392,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       if (progressErrorResponse(res, error)) return;
       // The store is unavailable. Revealing a hint still worked in the browser;
       // saying otherwise would be a worse lie than losing the record.
-      log(`could not record hint: ${error instanceof Error ? error.message : String(error)}`);
+      obs.warn('progress.write_failed', { operation: 'recordHint', err: error });
       sendOk(res, { recorded: false, persisted: false, revealedCount: null });
       return;
     }

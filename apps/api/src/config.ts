@@ -26,6 +26,11 @@ import {
   type DatabaseConfig,
 } from '@jumptotech/progress';
 import { DEFAULT_AUTH_SESSION_TTL_SECONDS } from './auth/browser-session.js';
+import {
+  loadObservabilityConfig,
+  assertScrapeTokenIsDistinct,
+  type ObservabilityConfig,
+} from '@jumptotech/observability';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../..');
@@ -86,6 +91,8 @@ export interface AuthConfig {
 }
 
 export interface ApiConfig {
+  /** Structured logging, metrics, and the health listener (PLATFORM-003). */
+  observability: ObservabilityConfig;
   port: number;
   labsDir: string;
   provider: string;
@@ -452,6 +459,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const audience = strFromEnv(env, 'OIDC_AUDIENCE', '');
   const jwksUri = strFromEnv(env, 'OIDC_JWKS_URI', '');
 
+  const observability = loadObservabilityConfig({ service: 'api', defaultPort: 9400, env });
+
+  /*
+   * The scrape token is read-only and is handed to a monitoring system; the
+   * secrets below authorise privileged internal operations. Sharing one value
+   * would collapse that boundary — the same argument `sandboxd` already makes
+   * about its three scope secrets, applied across services.
+   */
+  assertScrapeTokenIsDistinct(observability.scrapeToken, {
+    TERMINAL_SESSION_SECRET: secret,
+    INTERNAL_SERVICE_SECRET: env.INTERNAL_SERVICE_SECRET,
+    NAMESPACE_DERIVATION_SECRET: env.NAMESPACE_DERIVATION_SECRET,
+    SANDBOXD_RUNTIME_SECRET: env.SANDBOXD_RUNTIME_SECRET,
+    SANDBOXD_DOCKER_SECRET: env.SANDBOXD_DOCKER_SECRET,
+    SANDBOXD_ATTACH_SECRET: env.SANDBOXD_ATTACH_SECRET,
+    OIDC_CLIENT_SECRET: env.OIDC_CLIENT_SECRET,
+    POSTGRES_PASSWORD: env.POSTGRES_PASSWORD,
+  });
+
   const publicOrigin = env.PUBLIC_ORIGIN?.trim() || undefined;
   const allowedOrigins = (env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
     .split(',')
@@ -575,5 +601,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     dockerEnabled: boolFromEnv(env, 'DOCKER_TRACK_ENABLED', true),
     dockerHost: env.DOCKER_HOST || undefined,
     publicOrigin,
+    observability,
   };
 }

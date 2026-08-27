@@ -33,7 +33,7 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import { issueSessionToken } from '@jumptotech/lab-orchestrator/session-token';
 import { createSandboxd, type BrokerPty } from '@jumptotech/sandboxd/server';
-import type { SandboxdConfig } from '@jumptotech/sandboxd/config';
+import { defaultObservabilityConfig, type SandboxdConfig } from '@jumptotech/sandboxd/config';
 import type { SandboxSnapshot } from '@jumptotech/sandboxd/attach';
 import { loadTerminalConfig } from '../src/config.js';
 import { createTerminalServer } from '../src/server.js';
@@ -162,6 +162,7 @@ async function bringUpStack(containers: Record<string, SandboxSnapshot>): Promis
   const ptys: ReturnType<typeof fakePty>[] = [];
   const argvs: string[][] = [];
   const brokerConfig: SandboxdConfig = {
+    observability: defaultObservabilityConfig('sandboxd', 0),
     port: 0,
     bindAddress: '127.0.0.1',
     scopeSecrets: { attach: INTERNAL_SECRET + '-attach', runtime: INTERNAL_SECRET + '-runtime', docker: INTERNAL_SECRET + '-docker' },

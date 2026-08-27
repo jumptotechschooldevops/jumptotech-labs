@@ -30,29 +30,46 @@ import {
   buildProgressRuntime,
 } from './progress.js';
 import { HttpTerminalControl, noopTerminalControl } from './terminal-control.js';
-
-/** Error text for a log line, without assuming the value is an Error. */
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+import { buildApiObservability } from './observability.js';
+import { installRuntimeCollectors } from './observability-collectors.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
 
+  /*
+   * Observability is built first, before anything that could want to log.
+   *
+   * It also runs the redaction self-test, so a deployment whose secrets the
+   * scanner cannot recognise stops here — before a single line is written.
+   */
+  const observability = buildApiObservability(config);
+  const { logger, metrics } = observability;
+
   if (process.getuid?.() === 0) {
-    console.warn(
-      '[api] WARNING: running as root. The provided container images run as the non-root `node` user; see README → Security.',
+    logger.warn(
+      'config.loaded',
+      { reason: 'running_as_root' },
+      'running as root — the provided container images run as the non-root `node` user; see README → Security',
     );
   }
 
   const registry = new LabRegistry(config.labsDir);
   await registry.load();
+  metrics.sessions.labsLoaded.set(registry.size);
+  metrics.sessions.labLoadErrors.set(registry.loadErrors.length);
   if (registry.loadErrors.length > 0) {
-    console.warn('[api] lab definition problems:');
-    for (const err of registry.loadErrors) console.warn(`  - ${err}`);
+    logger.warn(
+      'config.loaded',
+      { count: registry.loadErrors.length, reason: 'lab_definition_problems' },
+      `lab definition problems: ${registry.loadErrors.join('; ')}`,
+    );
   }
   if (registry.size === 0) {
-    console.error(`[api] No labs loaded from ${config.labsDir}. Check LABS_DIR.`);
+    logger.error(
+      'config.loaded',
+      { reason: 'no_labs_loaded' },
+      `no labs loaded from ${config.labsDir} — check LABS_DIR`,
+    );
   }
 
   const { k8s, engines, workspace, kubernetes, providers, ansible } = buildSandboxComposition({ config });
@@ -75,9 +92,7 @@ async function main(): Promise<void> {
    * silently falling back to memory — telling students their progress is saved
    * when it is not would be worse than not starting.
    */
-  const learning = await buildProgressRuntime(config, (message) =>
-    console.log(`[progress] ${message}`),
-  );
+  const learning = await buildProgressRuntime(config, logger.legacy('migration.applied'));
 
   /*
    * Session bookkeeping is durable when a database is configured.
@@ -96,11 +111,16 @@ async function main(): Promise<void> {
   const sessionStore = learning.database
     ? new PostgresSessionStore(learning.database)
     : new InMemorySessionStore();
-  console.log(
-    learning.database
-      ? '[sessions] durable session store (postgres)'
-      : '[sessions] no DATABASE_URL configured — sessions are IN MEMORY and are lost on restart',
-  );
+  metrics.database.storeInfo.set({ store: learning.store }, 1);
+  if (learning.database) {
+    logger.info('config.loaded', { store: 'postgres', durable: true }, 'durable session store');
+  } else {
+    logger.warn(
+      'config.loaded',
+      { store: 'memory', durable: false },
+      'no DATABASE_URL configured — sessions are IN MEMORY and are lost on restart',
+    );
+  }
 
   /*
    * Identity, decided once at startup.
@@ -120,11 +140,16 @@ async function main(): Promise<void> {
       ? { verifier: new OidcTokenVerifier(config.auth.oidc) }
       : {}),
   });
-  console.log(
-    identityResolver.mode === 'oidc'
-      ? `[auth] OIDC (issuer ${config.auth.oidc?.issuer})`
-      : '[auth] DEVELOPMENT identity — every caller is whoever they claim to be. Never for production.',
-  );
+  if (identityResolver.mode === 'oidc') {
+    logger.info('config.loaded', { authMode: 'oidc' }, `OIDC identity (issuer ${config.auth.oidc?.issuer})`);
+  } else {
+    metrics.common.securityEvents.inc({ service: 'api', event: 'dev_identity_in_use' });
+    logger.warn(
+      'config.loaded',
+      { authMode: 'development', securityEvent: 'dev_identity_in_use' },
+      'DEVELOPMENT identity — every caller is whoever they claim to be. Never for production.',
+    );
+  }
 
   /*
    * The browser half — PLATFORM-010.
@@ -138,10 +163,12 @@ async function main(): Promise<void> {
   const authSessions: AuthSessionStore = learning.database
     ? new PostgresAuthSessionStore(learning.database)
     : new InMemoryAuthSessionStore();
-  console.log(
+  logger[learning.database ? 'info' : 'warn'](
+    'config.loaded',
+    { store: learning.database ? 'postgres' : 'memory' },
     learning.database
-      ? '[auth] durable browser sessions (postgres)'
-      : '[auth] no DATABASE_URL configured — browser sign-ins are IN MEMORY and are lost on restart',
+      ? 'durable browser sessions'
+      : 'no DATABASE_URL configured — browser sign-ins are IN MEMORY and are lost on restart',
   );
 
   /*
@@ -181,10 +208,16 @@ async function main(): Promise<void> {
       : null;
 
   if (browserClient) {
-    console.log(`[auth] browser sign-in enabled — redirect ${config.auth.browserFlow!.redirectUri}`);
+    logger.info(
+      'config.loaded',
+      { authMode: config.auth.mode },
+      `browser sign-in enabled — redirect ${config.auth.browserFlow!.redirectUri}`,
+    );
   } else if (config.auth.mode === 'oidc') {
-    console.log(
-      '[auth] browser sign-in NOT configured (no OIDC_CLIENT_SECRET) — the API accepts bearer tokens only',
+    logger.info(
+      'config.loaded',
+      { authMode: 'oidc' },
+      'browser sign-in NOT configured (no OIDC_CLIENT_SECRET) — the API accepts bearer tokens only',
     );
   }
 
@@ -196,9 +229,17 @@ async function main(): Promise<void> {
    * problem, and the sweep is one indexed DELETE.
    */
   const authSessionSweeper = setInterval(() => {
-    void authSessions.purgeExpired().catch((error: unknown) => {
-      console.error(`[auth] could not purge expired sessions: ${describeError(error)}`);
-    });
+    void authSessions
+      .purgeExpired()
+      .then((purged) => {
+        if (typeof purged === 'number' && purged > 0) {
+          metrics.database.authSessionsPurged.inc(purged);
+          logger.info('auth.sessions.purged', { count: purged });
+        }
+      })
+      .catch((error: unknown) => {
+        logger.error('auth.sessions.purged', { outcome: 'failed', err: error });
+      });
   }, config.reaperIntervalSeconds * 1000);
   authSessionSweeper.unref();
 
@@ -210,10 +251,38 @@ async function main(): Promise<void> {
     lifetimes: config.lifetimes,
     namespaceSecret: config.namespaceSecret,
     terminal,
-    listener: new AttemptClosingListener(learning.progress, (message) =>
-      console.log(`[progress] ${message}`),
+    listener: new AttemptClosingListener(
+      learning.progress,
+      logger.legacy('progress.write_failed', 'warn'),
     ),
-    logger: (message) => console.log(`[sessions] ${message}`),
+    logger: logger.legacy('session.transition'),
+    metrics: {
+      onProvision: (event) => {
+        metrics.sessions.provisionDuration.observe(
+          { provider: event.provider, sandbox_kind: event.sandboxKind, outcome: event.outcome },
+          event.durationMs / 1000,
+        );
+        for (const step of event.steps) {
+          metrics.sessions.provisionStepDuration.observe(
+            { provider: event.provider, step: step.name, outcome: step.outcome },
+            step.durationMs / 1000,
+          );
+        }
+      },
+      onTransition: (from, to) => {
+        metrics.sessions.stateTransitions.inc({ from, to });
+      },
+      onCapacityRejected: (track) => {
+        metrics.sessions.capacityRejections.inc({ track });
+      },
+      onSessionEnded: (event) => {
+        metrics.sessions.labEnds.inc({ provider: event.provider, reason: event.reason });
+        metrics.sessions.sessionLifetime.observe(
+          { provider: event.provider, end_reason: event.reason },
+          event.lifetimeSeconds,
+        );
+      },
+    },
   });
 
   // Students are never responsible for cleanup. The reaper reclaims expired,
@@ -224,6 +293,31 @@ async function main(): Promise<void> {
     providers,
     intervalMs: config.reaperIntervalSeconds * 1000,
     retentionMs: config.sessionRetentionMinutes * 60_000,
+    log: logger.legacy('reaper.sweep.completed'),
+    metrics: {
+      onSweep: (event) => {
+        metrics.reaper.sweeps.inc({ outcome: event.outcome });
+        metrics.reaper.sweepDuration.observe(event.durationMs / 1000);
+        if (event.outcome === 'ok') {
+          // A timestamp, not a counter: a counter that stops rising looks
+          // exactly like a quiet period, and "cleanup stopped" has to be
+          // detectable without anyone noticing an absence.
+          metrics.reaper.lastSuccess.set(Date.now() / 1000);
+          for (const [provider, count] of Object.entries(event.orphansByProvider)) {
+            metrics.reaper.orphansFound.set({ provider }, count);
+          }
+        }
+      },
+      onReclaimed: (reason, provider) => {
+        metrics.reaper.reclaimed.inc({ reason, provider });
+      },
+      onSkipped: (reason) => {
+        metrics.reaper.skipped.inc({ reason });
+      },
+      onDeleteFailed: (provider, reason) => {
+        metrics.reaper.deleteFailures.inc({ provider, reason });
+      },
+    },
   });
   reaper.start();
 
@@ -235,7 +329,7 @@ async function main(): Promise<void> {
     progress: learning.progress,
     maxSessionSeconds: config.lifetimes.maxSessionSeconds,
     intervalMs: config.reaperIntervalSeconds * 1000,
-    log: (message) => console.log(`[progress] ${message}`),
+    log: logger.legacy('progress.write_failed', 'warn'),
   });
   attemptSweeper.start();
 
@@ -249,9 +343,42 @@ async function main(): Promise<void> {
     config,
     identityResolver,
     browserAuth: { users, authSessions, client: browserClient, idTokenVerifier },
-    // One structured line per authorization decision. Carries the user id and
-    // the outcome, never a token or a claim beyond the identifier.
-    authAudit: (event) => console.log(`[authz] ${JSON.stringify(event)}`),
+    observability: {
+      logger,
+      metrics: {
+        common: metrics.common,
+        sessions: metrics.sessions,
+        verification: metrics.verification,
+        auth: metrics.auth,
+      },
+    },
+    /*
+     * One line per authorization decision, and one counter increment.
+     *
+     * `authorizationResult` on the metric is exactly the value on the audit
+     * line, so the two can never disagree about what happened — which matters
+     * because a rising `denied-not-owner` rate is the signal that distinguishes
+     * somebody probing session ids from an ordinary bug.
+     */
+    authAudit: (event) => {
+      metrics.auth.authzDecisions.inc({
+        action: event.action,
+        result: event.authorizationResult,
+      });
+      logger.info('authz.decision', {
+        requestId: event.requestId,
+        ...(event.authenticatedUserId ? { userId: event.authenticatedUserId } : {}),
+        ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+        action: event.action,
+        authorizationResult: event.authorizationResult,
+      });
+      if (event.authorizationResult === 'denied-not-owner') {
+        metrics.common.securityEvents.inc({
+          service: 'api',
+          event: 'unowned_session_access',
+        });
+      }
+    },
     progress: {
       progress: learning.progress,
       identity: learning.identity,
@@ -260,35 +387,98 @@ async function main(): Promise<void> {
     },
   });
 
+  /*
+   * Scrape-time collectors, and the database probe that backs `/readyz`.
+   *
+   * Registered before the listener starts so the first scrape is already
+   * truthful rather than reporting zeroes for a cycle.
+   */
+  installRuntimeCollectors({
+    metrics,
+    sessions,
+    registry,
+    progress: learning.progress,
+    database: learning.database,
+    authSessions,
+    config,
+    logger,
+    recordDatabaseProbe: observability.recordDatabaseProbe,
+  });
+
+  const observabilityServer = observability.start({
+    databaseConfigured: learning.database !== null,
+    labsLoaded: () => registry.size,
+  });
+
+  metrics.common.configInfo.set(
+    {
+      service: 'api',
+      auth_mode: config.auth.mode,
+      lab_provider: config.provider,
+      store: learning.store,
+    },
+    1,
+  );
+  metrics.sessions.capacityLimit.set(config.lifetimes.maxActiveSessions);
+
   const server = app.listen(config.port, '0.0.0.0', () => {
-    console.log(`[api] listening on :${config.port}`);
-    console.log(`[api] kubernetes substrate=${kubernetes.name} cluster=${config.clusterName}`);
+    observability.markStarted();
+
+    logger.info(
+      'process.started',
+      {
+        port: config.port,
+        labsLoaded: registry.size,
+        store: learning.store,
+        durable: learning.durable,
+        authMode: config.auth.mode,
+        version: config.observability.version,
+        commit: config.observability.commit,
+      },
+      `api listening on :${config.port} — ${registry.size} labs, kubernetes substrate=${kubernetes.name} ` +
+        `cluster=${config.clusterName} endpoint=${k8s.clusterEndpoint().server}`,
+    );
+
+    logger.info(
+      'config.loaded',
+      { reason: 'session_lifetimes' },
+      `sessions: max=${config.lifetimes.maxActiveSessions} lifetime=${config.lifetimes.maxSessionSeconds / 60}m ` +
+        `idle=${config.lifetimes.idleTimeoutSeconds / 60}m warn=${config.lifetimes.warningSeconds / 60}m`,
+    );
+
+    logger.info(
+      'config.loaded',
+      { reason: 'docker_track' },
+      config.dockerEnabled
+        ? `docker sandboxes: image=${config.policy.docker.image} network=${config.policy.docker.network} ` +
+            `memory=${config.policy.docker.memory} cpus=${config.policy.docker.cpus} pids=${config.policy.docker.pidsLimit}`
+        : 'docker track disabled (DOCKER_TRACK_ENABLED=false)',
+    );
+
     void sessions.providers.statuses().then((statuses) => {
       for (const status of statuses) {
-        console.log(
-          `[api] provider ${status.providerId}: ${status.available ? 'available' : `unavailable — ${status.reason ?? 'unknown'}`}`,
+        logger[status.available ? 'info' : 'warn'](
+          'provider.registered',
+          {
+            provider: status.providerId,
+            implementation: status.implementation,
+            sandboxKind: status.sandboxKind,
+            outcome: status.available ? 'available' : 'unavailable',
+            ...(status.reason ? { reason: status.reason } : {}),
+          },
+          `provider ${status.providerId}: ${status.available ? 'available' : `unavailable — ${status.reason ?? 'unknown'}`}`,
         );
       }
     });
-    console.log(`[api] labs=${registry.size} from ${config.labsDir}`);
-    console.log(
-      `[api] progress store=${learning.store} durable=${learning.durable} student=${config.progress.devStudentId} (development identity — not authentication)`,
-    );
-    console.log(`[api] kubernetes=${k8s.clusterEndpoint().server}`);
-    console.log(
-      config.dockerEnabled
-        ? `[api] docker sandboxes: image=${config.policy.docker.image} network=${config.policy.docker.network} memory=${config.policy.docker.memory} cpus=${config.policy.docker.cpus} pids=${config.policy.docker.pidsLimit}`
-        : '[api] docker track disabled (DOCKER_TRACK_ENABLED=false)',
-    );
-    console.log(
-      `[api] sessions: max=${config.lifetimes.maxActiveSessions} lifetime=${config.lifetimes.maxSessionSeconds / 60}m idle=${config.lifetimes.idleTimeoutSeconds / 60}m warn=${config.lifetimes.warningSeconds / 60}m`,
-    );
   });
 
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
+      logger.info('process.stopping', {}, `${signal} received`);
       reaper.stop();
       attemptSweeper.stop();
+      clearInterval(authSessionSweeper);
+      observabilityServer.close();
       server.close(() => {
         // Release the connection pool so a restart does not leave connections
         // hanging on the database side.
@@ -300,6 +490,15 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
+  /*
+   * Deliberately `console.error` and not the structured logger.
+   *
+   * This is the one path where the logger may not exist yet — the redaction
+   * self-test and the label policy both run inside `buildApiObservability`, and
+   * a failure there has to be reportable. Those messages name a variable or a
+   * metric, never a value.
+   */
+  // eslint-disable-next-line no-console
   console.error('[api] failed to start:', error instanceof Error ? error.message : error);
   process.exit(1);
 });

@@ -27,7 +27,7 @@ import {
   type DockerSandboxPolicy,
   type RunContainerSpec,
 } from '@jumptotech/lab-orchestrator';
-import type { SandboxdConfig } from '../src/config.js';
+import { defaultObservabilityConfig, type SandboxdConfig } from '../src/config.js';
 import { DockerOps, SANDBOX_COMPONENT } from '../src/docker-ops.js';
 import { createSandboxd } from '../src/server.js';
 
@@ -51,6 +51,7 @@ const POLICY: DockerSandboxPolicy = {
 };
 
 const config: SandboxdConfig = {
+  observability: defaultObservabilityConfig('sandboxd', 0),
   port: 0,
   bindAddress: '127.0.0.1',
   scopeSecrets: { attach: SECRET + '-attach', runtime: SECRET + '-runtime', docker: SECRET + '-docker' },

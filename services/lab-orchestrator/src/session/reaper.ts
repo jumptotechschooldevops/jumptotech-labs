@@ -70,6 +70,36 @@ export interface ReaperOptions {
   retentionMs?: number;
   now?: () => number;
   log?: (message: string) => void;
+  /**
+   * Observability hooks — PLATFORM-003. Plain callbacks; see
+   * `SessionManagerOptions.metrics` for why this package takes no metric type.
+   */
+  metrics?: ReaperMetricsHooks;
+}
+
+/** See `ReaperOptions.metrics`. */
+export interface ReaperMetricsHooks {
+  onSweep?(event: {
+    /** `ok` or `failed`. */
+    outcome: string;
+    durationMs: number;
+    /**
+     * Managed sandboxes this pass found that the store had no record of.
+     *
+     * Reported as a gauge per provider rather than a counter, because the
+     * question is "how many are unaccounted for right now", not "how many have
+     * ever been". A steady non-zero value is a leak; a brief spike during a
+     * start is normal.
+     */
+    orphansByProvider: Record<string, number>;
+  }): void;
+  onReclaimed?(reason: string, provider: string): void;
+  /**
+   * A refusal to delete. `foreign_owner` is also a security signal: something
+   * the platform does not own is wearing its ownership labels.
+   */
+  onSkipped?(reason: string): void;
+  onDeleteFailed?(provider: string, reason: string): void;
 }
 
 export interface SweepResult {
@@ -93,8 +123,10 @@ export class SessionReaper {
   readonly #orphanGraceMs: number;
   readonly #retentionMs: number;
   readonly #providers: ProviderRegistry;
+  readonly #metrics: ReaperMetricsHooks;
 
   constructor(private readonly options: ReaperOptions) {
+    this.#metrics = options.metrics ?? {};
     this.#now = options.now ?? (() => Date.now());
     this.#log = options.log ?? ((message) => console.log(`[reaper] ${message}`));
     this.#orphanGraceMs = options.orphanGraceMs ?? 60_000;
@@ -102,6 +134,15 @@ export class SessionReaper {
     this.#providers =
       options.providers ??
       (options.provider ? singleProviderRegistry(options.provider) : options.sessions.providers);
+  }
+
+  /** An instrumentation failure must never stop cleanup. */
+  #emit(call: (hooks: ReaperMetricsHooks) => void): void {
+    try {
+      call(this.#metrics);
+    } catch {
+      /* cleanup is more important than counting it */
+    }
   }
 
   /** Begin sweeping. The timer is unref'd so it never holds the process open. */
@@ -140,15 +181,40 @@ export class SessionReaper {
     // correct: the next tick picks up whatever this one did not finish.
     if (this.#sweeping) return result;
     this.#sweeping = true;
+    const startedAt = this.#now();
+    this.#orphansThisSweep = {};
+    let failed = false;
     try {
       await this.#sweepSessions(result);
       await this.#sweepOrphans(result);
       await this.#sweepRetention(result);
+    } catch (error) {
+      failed = true;
+      throw error;
     } finally {
       this.#sweeping = false;
+      /*
+       * `errors` non-empty still counts as a completed sweep.
+       *
+       * One unreachable provider must not make the whole pass look failed —
+       * the other providers' sandboxes really were reclaimed, and marking the
+       * sweep failed would fire the "cleanup has stopped" alert while cleanup
+       * is in fact running. A thrown error is a different matter: nothing
+       * after it ran.
+       */
+      this.#emit((m) =>
+        m.onSweep?.({
+          outcome: failed ? 'failed' : 'ok',
+          durationMs: Math.max(0, this.#now() - startedAt),
+          orphansByProvider: this.#orphansThisSweep,
+        }),
+      );
     }
     return result;
   }
+
+  /** Orphan counts for the sweep in flight, reported as a gauge when it ends. */
+  #orphansThisSweep: Record<string, number> = {};
 
   // --- sessions the store knows about --------------------------------------
 
@@ -192,6 +258,7 @@ export class SessionReaper {
         if (outcome.destroy.namespaceGone) {
           result.removed.push(ref);
           result.reasons[ref] = reason;
+          this.#emit((m) => m.onReclaimed?.(reason, session.provider));
           this.#log(`removed ${ref} (${reason}, provider=${session.provider}, lab=${session.labId})`);
         } else {
           result.pending.push(ref);
@@ -232,34 +299,49 @@ export class SessionReaper {
         continue;
       }
 
+      // Counted even when the grace period means nothing is deleted yet: the
+      // gauge answers "how many sandboxes is nobody accounting for", and one
+      // still inside its grace window is exactly that, briefly.
+      let orphans = 0;
+
       for (const sandbox of managed) {
         if (known.has(sandbox.sandboxRef)) continue;
         // Already going away on its own.
         if (sandbox.phase === 'Terminating' || sandbox.phase === 'removing') continue;
 
+        orphans += 1;
+
         // An unlabelled expiry is left for an operator: the platform will not
         // guess a deadline for a sandbox it cannot date.
         if (sandbox.expiresAtMs === 0) {
+          this.#emit((m) => m.onSkipped?.('no_expiry_label'));
           this.#log(`leaving ${sandbox.sandboxRef} alone (managed but carries no expiry label)`);
           continue;
         }
-        if (now < sandbox.expiresAtMs + this.#orphanGraceMs) continue;
+        if (now < sandbox.expiresAtMs + this.#orphanGraceMs) {
+          this.#emit((m) => m.onSkipped?.('within_grace_period'));
+          continue;
+        }
 
         const outcome = await provider.destroySandbox(sandbox.sandboxRef);
         if (outcome.namespaceGone) {
           result.removed.push(sandbox.sandboxRef);
           result.reasons[sandbox.sandboxRef] = 'orphaned';
+          this.#emit((m) => m.onReclaimed?.('orphaned', provider.id));
           this.#log(
             `removed ${sandbox.sandboxRef} (orphaned, provider=${provider.id}, lab=${sandbox.labId || 'unknown'})`,
           );
         } else if (outcome.ok) {
           result.pending.push(sandbox.sandboxRef);
         } else {
+          this.#emit((m) => m.onDeleteFailed?.(provider.id, outcome.error?.code ?? 'unknown'));
           result.errors.push(
             `${sandbox.sandboxRef}: ${outcome.error?.message ?? 'unknown error'}`,
           );
         }
       }
+
+      this.#orphansThisSweep[provider.id] = orphans;
     }
   }
 
