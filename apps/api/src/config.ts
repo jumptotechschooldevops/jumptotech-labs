@@ -236,6 +236,41 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
   return parsed;
 }
 
+/**
+ * Refuse to serve a production deployment from a localhost origin.
+ *
+ * Three values are derived from the app URL, and every one of them is something
+ * a student's browser has to be able to reach:
+ *
+ *   · the OIDC `redirect_uri` — where the identity provider sends them back;
+ *   · the post-logout redirect;
+ *   · the terminal WebSocket URL handed out by Start Lab.
+ *
+ * All three defaulted to `http://localhost:3000` when nothing was configured,
+ * and a default is exactly the wrong shape for them: a deployment that forgot
+ * `PUBLIC_ORIGIN` did not fail to start, it started and issued sign-in links
+ * pointing at the student's own machine. The symptom is a login loop and a
+ * terminal that never connects, and neither says why.
+ *
+ * So in production the localhost default is not a default at all — it is a
+ * refusal, in the same spirit as `AUTH_MODE=development` being refused there.
+ * Development is untouched: `looksLocal` is the normal case on a laptop.
+ */
+export function assertPublicOriginConfigured(options: {
+  nodeEnv: string;
+  appUrl: string;
+  looksLocal: boolean;
+}): void {
+  if (options.nodeEnv !== 'production' || !options.looksLocal) return;
+  throw new Error(
+    `NODE_ENV=production but the public origin resolved to '${options.appUrl}'. ` +
+      'A production deployment cannot serve OIDC callbacks, logout redirects or ' +
+      'terminal WebSocket URLs from localhost. ' +
+      'Set PUBLIC_ORIGIN to the origin students use in the browser ' +
+      '(and ALLOWED_ORIGINS to match), e.g. PUBLIC_ORIGIN=https://labs.example.com.',
+  );
+}
+
 function strFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: string): string {
   const raw = env[name];
   return raw && raw.trim().length > 0 ? raw.trim() : fallback;
@@ -434,6 +469,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const looksLocal = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(appUrl);
   const cookieSecure = boolFromEnv(env, 'AUTH_COOKIE_SECURE', !looksLocal);
 
+  assertPublicOriginConfigured({ nodeEnv: env.NODE_ENV ?? 'development', appUrl, looksLocal });
 
   return {
     /*

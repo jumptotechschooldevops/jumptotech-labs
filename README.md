@@ -1540,12 +1540,25 @@ npm run dev:terminal
 npm run dev:web
 ```
 
-**The shipped `docker compose` stack cannot run Linux labs**, deliberately: no
-container in it is given a container runtime, and the Docker socket is never
-mounted into any of them — the same rule that keeps cluster creation on the
-host. Inside Compose, `LINUX_PROVIDER_ENABLED` and
-`TERMINAL_CONTAINER_EXEC_ENABLED` are off, the Linux labs stay in the catalog,
-and their cards say plainly that they cannot be started there.
+**The compose stack runs Linux labs through `sandboxd`**, the runtime broker.
+It is the only process in the stack given a container runtime; the `api` and
+`terminal` services have none, and the Docker socket is mounted into neither.
+`make up` includes it:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.runtime.yml up
+```
+
+Before the broker existed the container-backed tracks were switched off here,
+because attaching a shell meant running `docker exec` *in the terminal service*
+— the one process a student types into. That is the whole reason 81 of the 114
+labs could not run in a deployed stack. See
+[docs/runtime-architecture.md](docs/runtime-architecture.md).
+
+The base file without that overlay still runs the Kubernetes track alone, with
+no container runtime anywhere (`make up-kubernetes-only`); the container tracks
+then stay in the catalog and their cards say plainly that they cannot be started
+there.
 
 Without the image built, nothing pretends to work either: the provider reports
 itself unavailable with the exact command to fix it, and the catalog marks its
@@ -1625,9 +1638,18 @@ plainly what it does and does not protect against.
 
 | Component | Privilege | Why |
 |---|---|---|
-| `api` | host Docker socket | Creates and destroys sandbox containers. No shell, no PTY, no path from student input to a command line. |
+| `sandboxd` | host Docker socket | The only holder. Eleven verbs and one PTY endpoint, no passthrough. Not published to the host, no route through the web proxy, and refuses any request carrying an `Origin` header. |
+| `api` | **none** | Creates and destroys every kind of sandbox through the broker, the Docker track included. |
 | sandbox container | `--privileged` | Docker-in-Docker requires it: the inner daemon creates cgroups, mounts filesystems, and programs iptables. Created by the platform; no student process runs in it. |
-| `terminal` | **none** | No socket, no `DOCKER_HOST`, no ambient credential. Each PTY gets one session's client certificate, deleted when the shell ends. |
+| `terminal` | **none** | No socket, no `DOCKER_HOST`, no ambient credential. Each PTY gets one session's client certificate, or a broker socket bound to one session. |
+
+> The Docker track goes through the broker too. Its `DockerEnginePort` is
+> brokered as a closed list of named operations — `createSandbox` takes a
+> session id, a lab id and an expiry, and `sandboxd` supplies the image, the
+> `--privileged` flag and every resource ceiling from its own configuration — so
+> the API needs no socket for it either. All 114 labs now run with no Docker
+> socket in any browser-reachable service. See
+> [docs/runtime-architecture.md](docs/runtime-architecture.md) § 3.3.
 
 The point of the arrangement: the one process a student can type into cannot
 reach the host daemon, and the one process that can reach the host daemon never
@@ -2322,14 +2344,16 @@ frontend changing.
 Missing either substrate is not fatal: the catalog still loads, and the tracks
 that cannot run say so with the real reason.
 
-> **The container tracks need the services running on your host.**
+> **The container tracks run in compose, through the runtime broker.**
 >
-> The Linux and Terraform providers drive a container runtime, and the terminal
-> service attaches a PTY with `docker exec`. Inside the shipped
-> `docker compose` stack neither container is given access to a runtime — the
-> compose file mounts no Docker socket anywhere, deliberately, and PLATFORM-004
-> did not change that. So in compose the Kubernetes track works and the
-> container tracks report themselves unavailable.
+> The Linux, Networking, CS, AWS, Terraform, Ansible and CI/CD providers drive a
+> container runtime, and a shell has to be attached to what they create. Both
+> now go through `sandboxd`, which is the only service given a runtime — so
+> `make up` runs those tracks and neither the `api` nor the `terminal` container
+> holds a Docker socket. See
+> [docs/runtime-architecture.md](docs/runtime-architecture.md).
+>
+> Running the services on your host still works and is what a laptop wants:
 >
 > To use them, run the services on your host, where they inherit your own
 > Docker context:
@@ -2484,7 +2508,7 @@ Then open:
 | web | http://localhost:3000 | the UI |
 | api | http://localhost:4000/health | REST API |
 | terminal | http://localhost:4001/health | WebSocket terminal gateway |
-| broker | http://127.0.0.1:4002/health | sandbox broker (host process, Linux track; needs the internal secret) |
+| sandboxd | http://127.0.0.1:4002/health | the runtime broker — the only process with a container runtime (`npm run dev:sandboxd`, or the `sandboxd` compose service) |
 
 Check everything at once:
 
@@ -2512,7 +2536,7 @@ export DATABASE_URL="postgresql://jumptotech:<password>@localhost:5432/jumptotec
 npm run dev:api        # :4000
 npm run dev:terminal   # :4001  (needs Node 22 for node-pty)
 npm run dev:web        # :3000
-npm run sandbox:broker # :4002  (Linux track; needs the Docker socket)
+npm run dev:sandboxd   # :4002  (the runtime broker; the only process needing the Docker socket)
 ```
 
 ### Shutting down
