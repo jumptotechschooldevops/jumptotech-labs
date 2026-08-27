@@ -26,25 +26,81 @@
  * suite is covered the moment it is written.
  */
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { REPO_ROOT } from './helpers.js';
 
 /** Variables that unlock host execution — kept in step with the guard. */
 const OPT_IN = ['RUN_INTEGRATION_TESTS', 'RUN_DOCKER_INTEGRATION_TESTS', 'RUN_DB_TESTS'];
 
-const TEST_DIRS = [
-  'services/lab-orchestrator/test',
-  'services/verifier/test',
-  'services/progress/test',
-  'services/terminal/test',
-  // Absent until 2026-08-27, which is why sandboxd ran unguarded for two months
-  // without this suite noticing — the "guard installed for every workspace"
-  // check below only ever looked at the directories named here. sandboxd is the
-  // one service holding the Docker socket, so it was the worst omission.
-  'services/sandboxd/test',
-  'apps/api/test',
-];
+/** The setup module every workspace's config has to install. */
+const SETUP_FILE = 'test-support/vitest.setup.ts';
+
+/**
+ * Where a workspace may keep its vitest configuration.
+ *
+ * Two names, because `apps/web` keeps its test config inside `vite.config.ts`
+ * alongside the dev server. The old check hardcoded `vitest.config.ts`, so even
+ * listing `apps/web` would have thrown ENOENT rather than checked it.
+ */
+const CONFIG_NAMES = ['vitest.config.ts', 'vite.config.ts'] as const;
+
+/** The runtime proof each workspace owes — see `test-support/guard-contract.ts`. */
+const GUARD_TEST = 'host-execution-guard.test.ts';
+
+/**
+ * Every workspace that runs vitest, discovered rather than listed.
+ *
+ * This used to be a hand-maintained array of test directories, and the header
+ * above claimed the scan meant "a new suite is covered the moment it is
+ * written". That was true of *files inside the listed directories* and false of
+ * *workspaces*: a whole workspace absent from the array was invisible. It cost
+ * two months of `services/sandboxd` running unguarded, and `apps/web` was
+ * missing for longer than that.
+ *
+ * So the list is derived from the same `workspaces` globs npm resolves, and a
+ * workspace counts if it has a `test` script that runs vitest. Adding a
+ * workspace now opts it into every check below without anyone remembering to.
+ */
+function vitestWorkspaces(): string[] {
+  const manifest = JSON.parse(
+    readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'),
+  ) as { workspaces?: string[] };
+
+  const found: string[] = [];
+  for (const pattern of manifest.workspaces ?? []) {
+    // The globs in use are exactly `dir/*` or a literal directory. Anything
+    // else would silently match nothing, so it is rejected rather than ignored.
+    const segments = pattern.split('/');
+    const head = segments[0] ?? '';
+    const candidates =
+      segments.length === 2 && segments[1] === '*'
+        ? readdirSync(path.join(REPO_ROOT, head)).map((entry) => `${head}/${entry}`)
+        : [pattern];
+
+    for (const workspace of candidates) {
+      const pkg = path.join(REPO_ROOT, workspace, 'package.json');
+      if (!existsSync(pkg)) continue;
+      const scripts = (JSON.parse(readFileSync(pkg, 'utf8')) as { scripts?: Record<string, string> })
+        .scripts;
+      if (scripts?.test?.includes('vitest')) found.push(workspace);
+    }
+  }
+  return found.sort();
+}
+
+/** A workspace's vitest config, whichever of the two names it uses. */
+function configFor(workspace: string): string {
+  for (const name of CONFIG_NAMES) {
+    const candidate = path.join(REPO_ROOT, workspace, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  // Reported as a failure by the caller rather than thrown here, so the message
+  // names the workspace instead of a bare ENOENT.
+  return path.join(REPO_ROOT, workspace, CONFIG_NAMES[0]);
+}
+
+const TEST_DIRS = vitestWorkspaces().map((workspace) => `${workspace}/test`);
 
 function testFiles(): string[] {
   const found: string[] = [];
@@ -108,16 +164,67 @@ describe('test classification (PLATFORM-006)', () => {
     }
   });
 
-  it('keeps the guard installed for every workspace that runs node tests', () => {
+  it('discovers every workspace that runs vitest, including apps/web', () => {
+    // The check that matters is that discovery is not a list someone has to
+    // remember to extend. Naming the two that were historically missed keeps a
+    // regression from being silent: a scan that quietly stopped finding them
+    // would otherwise still pass every assertion below, vacuously.
+    const workspaces = vitestWorkspaces();
+    expect(workspaces).toContain('apps/web');
+    expect(workspaces).toContain('services/sandboxd');
+    expect(workspaces.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('keeps the guard installed for every workspace that runs vitest', () => {
     // A workspace without the setup file is a hole: its suites could reach the
     // host and nothing would say so.
-    for (const dir of TEST_DIRS) {
-      const workspace = path.join(REPO_ROOT, path.dirname(dir));
-      const config = path.join(workspace, 'vitest.config.ts');
-      const source = readFileSync(config, 'utf8');
+    for (const workspace of vitestWorkspaces()) {
+      const config = configFor(workspace);
       expect(
-        source.includes('test-support/vitest.setup.ts'),
+        existsSync(config),
+        `${workspace} runs vitest but has none of ${CONFIG_NAMES.join(' / ')} — it cannot be installing the guard`,
+      ).toBe(true);
+
+      const source = readFileSync(config, 'utf8');
+      // Not a bare `includes`: the setup file has to be reached from a
+      // `setupFiles` entry, on a line that is not commented out. A config that
+      // merely mentions the path in prose used to satisfy this.
+      const installs = source
+        .split('\n')
+        .some(
+          (line) =>
+            line.includes(SETUP_FILE) &&
+            !line.trimStart().startsWith('*') &&
+            !line.trimStart().startsWith('//'),
+        );
+      expect(
+        installs,
         `${path.relative(REPO_ROOT, config)} does not install the host-execution guard`,
+      ).toBe(true);
+      expect(
+        source.includes('setupFiles'),
+        `${path.relative(REPO_ROOT, config)} names ${SETUP_FILE} but has no setupFiles entry`,
+      ).toBe(true);
+    }
+  });
+
+  it('makes every workspace prove the guard at runtime, not just declare it', () => {
+    // Configuration is a claim; the guard test is the evidence. A config can
+    // point `setupFiles` at a path that no longer resolves and still read as
+    // correct — this is what fails when that happens, in the workspace where it
+    // happened. See `test-support/guard-contract.ts`.
+    for (const workspace of vitestWorkspaces()) {
+      const guardTest = path.join(REPO_ROOT, workspace, 'test', GUARD_TEST);
+      expect(
+        existsSync(guardTest),
+        `${workspace} has no test/${GUARD_TEST} — nothing proves its guard is actually installed`,
+      ).toBe(true);
+
+      const source = readFileSync(guardTest, 'utf8');
+      expect(
+        source.includes('@jumptotech/test-support/guard-contract') ||
+          source.includes('@jumptotech/test-support/host-execution'),
+        `${workspace}/test/${GUARD_TEST} does not use the shared guard contract, so it may assert nothing`,
       ).toBe(true);
     }
   });

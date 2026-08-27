@@ -17,7 +17,9 @@ import { execFile } from 'node:child_process';
 import {
   HostExecutionDenied,
   guardChildProcess,
+  guardNodePty,
   hostExecutionAllowed,
+  patchLoadedChildProcess,
 } from '@jumptotech/test-support/host-execution';
 import {
   ownedByThisRun,
@@ -89,6 +91,64 @@ describe('an integration run opts in explicitly', () => {
   it('hands back the real module untouched when allowed', () => {
     const actual = { execFile: () => 'real', spawn: () => 'real' };
     expect(guardChildProcess(actual, { RUN_INTEGRATION_TESTS: '1' })).toBe(actual);
+  });
+});
+
+// ------------------------------------- the two surfaces child_process missed
+
+describe('node-pty is guarded too, because it is not a child_process wrapper', () => {
+  // `pty.spawn` is a native binding. Every call went straight past
+  // `guardChildProcess`, and `services/terminal/src/shell.ts` calls it with no
+  // injection seam — so the hole was reachable, not theoretical.
+  it('denies every process-starting entry point node-pty offers', () => {
+    const guarded = guardNodePty(
+      Object.fromEntries(
+        ['spawn', 'fork', 'open', 'createTerminal'].map((k) => [k, () => 'real']),
+      ),
+      {},
+    );
+    for (const api of Object.keys(guarded)) {
+      expect(() => (guarded[api] as () => void)(), api).toThrow(HostExecutionDenied);
+    }
+  });
+
+  it('names the surface in the diagnostic, so the fix is obvious', () => {
+    const guarded = guardNodePty({ spawn: () => 'real' }, {});
+    try {
+      (guarded.spawn as (c: string) => void)('/bin/sh');
+      expect.unreachable('node-pty spawn resolved instead of being denied');
+    } catch (error) {
+      expect((error as HostExecutionDenied).api).toBe('node-pty.spawn');
+    }
+  });
+
+  it('hands back the real module untouched when allowed', () => {
+    const actual = { spawn: () => 'real' };
+    expect(guardNodePty(actual, { RUN_INTEGRATION_TESTS: '1' })).toBe(actual);
+  });
+});
+
+describe('the loaded builtin is patched, for the environment mocking cannot reach', () => {
+  // Under `environment: 'jsdom'` a *named* import binds to the real builtin and
+  // never sees `vi.mock`, which is why `apps/web` ran unguarded. Patching the
+  // module object is what closes that, so it has to keep working.
+  it('replaces every entry point on the object it is handed', () => {
+    const moduleExports: Record<string, unknown> = {
+      execFile: () => 'real',
+      spawn: () => 'real',
+      execSync: () => 'real',
+    };
+    expect(patchLoadedChildProcess(moduleExports, {})).toBe(3);
+    for (const api of Object.keys(moduleExports)) {
+      expect(() => (moduleExports[api] as () => void)(), api).toThrow(HostExecutionDenied);
+    }
+  });
+
+  it('leaves the module alone when an integration run has opted in', () => {
+    const original = () => 'real';
+    const moduleExports: Record<string, unknown> = { execFile: original };
+    expect(patchLoadedChildProcess(moduleExports, { RUN_INTEGRATION_TESTS: '1' })).toBe(0);
+    expect(moduleExports.execFile).toBe(original);
   });
 });
 

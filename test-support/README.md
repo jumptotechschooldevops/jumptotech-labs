@@ -22,12 +22,26 @@ convention — by construction.
 
 `<name>.test.ts`
 
-- **No host process.** `node:child_process` is replaced by
+- **No host process.** `node:child_process` **and `node-pty`** are replaced by
   [`host-execution.ts`](./host-execution.ts); `execFile`, `exec`, `spawn`,
-  `fork` and their sync forms all throw `HostExecutionDenied` naming the binary
-  and argv. Fail closed: a new escape hatch added tomorrow is caught by this.
-- **No real Docker, kind, kubectl, or network.**
+  `fork`, their sync forms, and `pty.spawn` all throw `HostExecutionDenied`
+  naming the binary and argv. Fail closed: a new escape hatch added tomorrow is
+  caught by this. `node-pty` is covered separately because it is a native
+  binding rather than a `child_process` wrapper, so it was invisible to the
+  original guard.
+- **No real Docker, kind, kubectl, or outbound network.** Binding a listener on
+  `127.0.0.1` port `0` is permitted and several suites do it: an ephemeral
+  loopback port is self-contained, reaches nothing outside the process, and
+  cannot collide with another worktree. What is prohibited is depending on
+  something this process did not itself create — a fixed port, a remote host, a
+  daemon socket.
 - **Deterministic and parallel-safe**: nothing shared, nothing ordered.
+- **Proven per workspace, not assumed.** Every workspace that runs vitest owns a
+  `test/host-execution-guard.test.ts` calling
+  [`guard-contract.ts`](./guard-contract.ts), so the assertion runs inside that
+  workspace's real configuration. `test-classification.test.ts` fails the build
+  for a workspace that has no such file, no vitest config, or a config that
+  names the setup file only in a comment.
 
 Need a provider that shells out? Inject a fake runner — the seam already exists
 on every one of them:

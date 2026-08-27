@@ -117,3 +117,74 @@ export function guardChildProcess<T extends Record<string, unknown>>(
   }
   return patched as T;
 }
+
+/**
+ * Patch the loaded builtin itself, for the environments where mocking is not
+ * enough.
+ *
+ * `vi.mock('node:child_process')` covers a *namespace* import everywhere, but
+ * under `environment: 'jsdom'` a **named** import — `import { execFile } from
+ * 'node:child_process'` — binds to the real builtin and walks straight past the
+ * mock. `apps/web` is the workspace that runs jsdom, so its guard was inert:
+ * the config named the setup file, the setup file ran, and the guard still did
+ * nothing. Proven by running the same suite under `--environment node`, where
+ * the identical import is guarded.
+ *
+ * Mutating the CJS module object closes that, because a named import under
+ * jsdom reads the property off exactly this object. It runs after the mocks are
+ * registered and is a belt-and-braces layer, not a replacement: the `vi.mock`
+ * calls remain the primary mechanism for every other environment.
+ *
+ * Returns the number of entry points patched, so a caller can assert it did
+ * something rather than assuming.
+ */
+export function patchLoadedChildProcess(
+  moduleExports: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  if (hostExecutionAllowed(env)) return 0;
+
+  const denied = ['execFile', 'exec', 'spawn', 'fork', 'execFileSync', 'execSync', 'spawnSync'];
+  let patched = 0;
+  for (const api of denied) {
+    if (!(api in moduleExports)) continue;
+    moduleExports[api] = (...callArgs: unknown[]) => {
+      throw describeCall(api, callArgs);
+    };
+    patched += 1;
+  }
+  return patched;
+}
+
+/**
+ * The same guard for `node-pty`.
+ *
+ * `node-pty` is a native binding, not a `child_process` wrapper, so every call
+ * to `pty.spawn` walked straight past `guardChildProcess` — it started a real
+ * process on the host and the guard never saw it. That was not theoretical:
+ * `services/terminal/src/shell.ts` calls `pty.spawn` directly, with none of the
+ * injection seam that `sandboxd`'s `BrokerDeps.spawn` provides, so a unit test
+ * that reached that line would have opened a real PTY on the developer's
+ * machine.
+ *
+ * Kept as a separate function rather than folded into `guardChildProcess`
+ * because the surfaces have nothing in common: `node-pty` exports
+ * `spawn`/`fork`/`open`/`createTerminal`, and only some of those overlap by
+ * name with `child_process`.
+ */
+export function guardNodePty<T extends Record<string, unknown>>(
+  actual: T,
+  env: NodeJS.ProcessEnv = process.env,
+): T {
+  if (hostExecutionAllowed(env)) return actual;
+
+  const denied = ['spawn', 'fork', 'open', 'createTerminal'];
+  const patched: Record<string, unknown> = { ...actual };
+  for (const api of denied) {
+    if (!(api in actual)) continue;
+    patched[api] = (...callArgs: unknown[]) => {
+      throw describeCall(`node-pty.${api}`, callArgs);
+    };
+  }
+  return patched as T;
+}

@@ -7,7 +7,8 @@
   "exports": {
     "./host-execution": "./host-execution.ts",
     "./run-id": "./test-run-id.ts",
-    "./setup": "./vitest.setup.ts"
+    "./setup": "./vitest.setup.ts",
+    "./guard-contract": "./guard-contract.ts"
   },
   "devDependencies": {
     "vitest": "^3.2.6"

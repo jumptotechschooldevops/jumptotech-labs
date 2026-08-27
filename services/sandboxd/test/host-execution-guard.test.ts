@@ -48,6 +48,11 @@ import {
   guardChildProcess,
   hostExecutionAllowed,
 } from '@jumptotech/test-support/host-execution';
+import { nodePtyGuardContract } from '@jumptotech/test-support/guard-contract';
+
+// sandboxd hands out PTYs, so `node-pty` is as much a way onto the host as
+// `child_process` is — and until the guard covered it, it was an unwatched one.
+nodePtyGuardContract('services/sandboxd');
 
 /**
  * A name that is not on the PATH and never will be. See the header: the guard
