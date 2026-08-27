@@ -100,7 +100,7 @@ export function buildContainerRuntime(config: ApiConfig): ContainerRuntimePort {
   if (config.sandbox.runtimeBrokerUrl) {
     return new BrokerRuntime({
       baseUrl: config.sandbox.runtimeBrokerUrl,
-      secret: config.internalServiceSecret,
+      secret: config.sandbox.runtimeBrokerCredential,
     });
   }
   return new DockerCliRuntime({
@@ -128,7 +128,7 @@ export function buildDockerEngines(config: ApiConfig): DockerEngineFactory {
   if (config.sandbox.runtimeBrokerUrl) {
     return new BrokerDockerEngines({
       baseUrl: config.sandbox.runtimeBrokerUrl,
-      secret: config.internalServiceSecret,
+      secret: config.sandbox.dockerBrokerCredential,
     });
   }
   return new DockerCliFactory(config.dockerHost ? { dockerHost: config.dockerHost } : {});

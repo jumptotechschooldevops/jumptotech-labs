@@ -28,6 +28,16 @@ setup: ## First-time setup: .env + kind cluster
 		rm -f .env.bak && echo "created .env with generated secrets")
 	@grep -q '^POSTGRES_PASSWORD=' .env || (echo "POSTGRES_PASSWORD=$$(openssl rand -hex 16)" >> .env && \
 		echo "added a generated POSTGRES_PASSWORD to your existing .env")
+	@# One credential per sandboxd capability. Generated separately on purpose:
+	@# sandboxd refuses to start if any two are equal, because that collapses the
+	@# boundary between "open a shell" and "drive the container runtime".
+	@for v in SANDBOXD_ATTACH_SECRET SANDBOXD_RUNTIME_SECRET SANDBOXD_DOCKER_SECRET; do \
+		if ! grep -qE "^$$v=.+" .env; then \
+			sed -i.bak "/^$$v=$$/d" .env && rm -f .env.bak; \
+			echo "$$v=$$(openssl rand -hex 24)" >> .env; \
+			echo "generated $$v"; \
+		fi; \
+	done
 	@$(MAKE) cluster-up
 	@$(MAKE) sandbox-build
 

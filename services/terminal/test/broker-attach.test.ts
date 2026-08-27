@@ -164,7 +164,7 @@ async function bringUpStack(containers: Record<string, SandboxSnapshot>): Promis
   const brokerConfig: SandboxdConfig = {
     port: 0,
     bindAddress: '127.0.0.1',
-    internalServiceSecret: INTERNAL_SECRET,
+    scopeSecrets: { attach: INTERNAL_SECRET + '-attach', runtime: INTERNAL_SECRET + '-runtime', docker: INTERNAL_SECRET + '-docker' },
     derivationSecret: DERIVATION,
     runtimeOwner: 'jumptotech',
     containerBinary: 'docker',
@@ -194,6 +194,7 @@ async function bringUpStack(containers: Record<string, SandboxSnapshot>): Promis
     INTERNAL_SERVICE_SECRET: INTERNAL_SECRET,
     API_INTERNAL_URL: `http://127.0.0.1:${apiPort}`,
     SANDBOX_BROKER_URL: `http://127.0.0.1:${brokerPort}`,
+    SANDBOXD_ATTACH_SECRET: `${INTERNAL_SECRET}-attach`,
     TERMINAL_SANDBOX_BROKER_ENABLED: 'true',
     // Off, so nothing below can be passing because this process ran a shell.
     TERMINAL_CONTAINER_EXEC_ENABLED: 'false',

@@ -415,7 +415,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
       if (config.sandboxBrokerEnabled) {
         const attachment = await brokerShell({
           brokerUrl: config.sandboxBrokerUrl,
-          secret: config.internalServiceSecret,
+          secret: config.sandboxBrokerCredential,
           sessionId: session.claims.sid,
           cols: session.cols,
           rows: session.rows,
@@ -735,7 +735,9 @@ export function createTerminalServer(config: TerminalConfig): Server {
       if (viaBroker) {
         const attachment = await brokerShell({
           brokerUrl: config.sandboxBrokerUrl,
-          secret: config.internalServiceSecret,
+          // The attach credential, not the API secret: this process holds no
+          // authority over the broker's runtime or Docker capabilities.
+          secret: config.sandboxBrokerCredential,
           // From the token this service verified at `auth`. The socket never
           // supplied it, and nothing else about the sandbox is sent at all.
           sessionId: claims.sid,

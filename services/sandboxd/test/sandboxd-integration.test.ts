@@ -140,7 +140,7 @@ beforeAll(async () => {
   const config: SandboxdConfig = {
     port: 0,
     bindAddress: '127.0.0.1',
-    internalServiceSecret: INTERNAL_SECRET,
+    scopeSecrets: { attach: INTERNAL_SECRET + '-attach', runtime: INTERNAL_SECRET + '-runtime', docker: INTERNAL_SECRET + '-docker' },
     derivationSecret: DERIVATION_SECRET,
     runtimeOwner: RUNTIME_OWNER,
     containerBinary: 'docker',
@@ -162,7 +162,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   const { port } = server!.address() as AddressInfo;
   brokerUrl = `http://127.0.0.1:${port}`;
-  client = new BrokerRuntime({ baseUrl: brokerUrl, secret: INTERNAL_SECRET });
+  client = new BrokerRuntime({ baseUrl: brokerUrl, secret: INTERNAL_SECRET + '-runtime' });
 }, 180_000);
 
 afterAll(async () => {
@@ -179,7 +179,7 @@ async function attach(sessionId: string): Promise<{
   close(): void;
 }> {
   const ws = new WebSocket(`${brokerUrl.replace('http', 'ws')}/v1/attach`, {
-    headers: { 'x-internal-secret': INTERNAL_SECRET },
+    headers: { 'x-internal-secret': INTERNAL_SECRET + '-attach' },
   });
   await new Promise((resolve, reject) => {
     ws.on('open', resolve);

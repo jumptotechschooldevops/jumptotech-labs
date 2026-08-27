@@ -47,13 +47,13 @@
  * runtime node that is *not* the machine serving the web tier, so that
  * privilege is bounded by that node.
  */
-import { createServer, type IncomingMessage, type Server } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import * as pty from 'node-pty';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { ContainerRuntimePort } from '@jumptotech/lab-orchestrator';
 import { AttachDeniedError, attachArgv, resolveAttachTarget, type SandboxInspectorPort } from './attach.js';
 import type { SandboxdConfig } from './config.js';
+import { authorizeScope, scopeForEndpoint, type SandboxdScope } from './scopes.js';
 import { dockerErrorResponse, type DockerOps } from './docker-ops.js';
 import {
   readJsonBody,
@@ -110,13 +110,6 @@ interface LiveShell {
   term: BrokerPty;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
-}
-
-function secretsMatch(presented: unknown, expected: string): boolean {
-  if (typeof presented !== 'string' || presented.length === 0) return false;
-  const a = Buffer.from(presented);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function defaultSpawn(command: string, args: string[], options: { cols: number; rows: number }): BrokerPty {
@@ -187,20 +180,7 @@ export function createSandboxd(deps: SandboxdDeps): Server {
           sendJson(res, 405, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'POST only' } });
           return;
         }
-        if (req.headers.origin !== undefined) {
-          sendJson(res, 401, {
-            ok: false,
-            error: { code: 'UNAUTHORIZED', message: 'this endpoint is not browser-facing' },
-          });
-          return;
-        }
-        if (!secretsMatch(req.headers['x-internal-secret'], config.internalServiceSecret)) {
-          sendJson(res, 401, {
-            ok: false,
-            error: { code: 'UNAUTHORIZED', message: 'internal service secret required' },
-          });
-          return;
-        }
+        if (!admit(req, res, 'runtime')) return;
         if (!deps.runtime) {
           sendJson(res, 503, {
             ok: false,
@@ -239,20 +219,7 @@ export function createSandboxd(deps: SandboxdDeps): Server {
           sendJson(res, 405, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'POST only' } });
           return;
         }
-        if (req.headers.origin !== undefined) {
-          sendJson(res, 401, {
-            ok: false,
-            error: { code: 'UNAUTHORIZED', message: 'this endpoint is not browser-facing' },
-          });
-          return;
-        }
-        if (!secretsMatch(req.headers['x-internal-secret'], config.internalServiceSecret)) {
-          sendJson(res, 401, {
-            ok: false,
-            error: { code: 'UNAUTHORIZED', message: 'internal service secret required' },
-          });
-          return;
-        }
+        if (!admit(req, res, 'docker')) return;
         if (!deps.docker) {
           sendJson(res, 503, {
             ok: false,
@@ -280,6 +247,37 @@ export function createSandboxd(deps: SandboxdDeps): Server {
       sendJson(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'not found' } });
     })();
   });
+
+  /**
+   * The two gates every HTTP endpoint passes, in order.
+   *
+   * `Origin` first, because it is the cheaper check and the one that makes a
+   * browser structurally unable to reach this service. Then the scope: the
+   * credential must be the one configured for *this* capability, not merely a
+   * credential this deployment recognises.
+   *
+   * Returns false having already answered, so a handler's whole authorization
+   * is one `if (!admit(...)) return;` and cannot be half-written.
+   */
+  function admit(req: IncomingMessage, res: ServerResponse, scope: SandboxdScope): boolean {
+    if (req.headers.origin !== undefined) {
+      sendJson(res, 401, {
+        ok: false,
+        error: { code: 'UNAUTHORIZED', message: 'this endpoint is not browser-facing' },
+      });
+      return false;
+    }
+    const decision = authorizeScope(req.headers['x-internal-secret'], scope, config.scopeSecrets);
+    if (!decision.ok) {
+      log(`refused ${String(req.url)}: ${decision.denial}`);
+      sendJson(res, 403, {
+        ok: false,
+        error: { code: 'SCOPE_DENIED', message: decision.message ?? 'not authorized' },
+      });
+      return false;
+    }
+    return true;
+  }
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
 
@@ -491,11 +489,23 @@ export function upgradeRefusal(req: IncomingMessage, config: SandboxdConfig): st
   if (req.headers.origin !== undefined) {
     return 'requests carrying an Origin header are not accepted; this endpoint is not browser-facing';
   }
-  if (!secretsMatch(req.headers['x-internal-secret'], config.internalServiceSecret)) {
-    return 'missing or incorrect internal service secret';
-  }
-  if (req.url !== '/v1/attach') {
+  /*
+   * The path decides the scope, and it is resolved before the credential is
+   * looked at — so a credential valid for `runtime` or `docker` opens nothing
+   * here, and an unknown path has no scope and is refused rather than falling
+   * through to a default.
+   */
+  const scope = scopeForEndpoint(req.url);
+  if (scope === null) {
     return `no broker endpoint at '${String(req.url)}'`;
+  }
+  if (scope !== 'attach') {
+    // Reachable only if a non-WebSocket endpoint were ever added to the table.
+    return `'${String(req.url)}' is not a WebSocket endpoint`;
+  }
+  const decision = authorizeScope(req.headers['x-internal-secret'], scope, config.scopeSecrets);
+  if (!decision.ok) {
+    return decision.message ?? 'not authorized';
   }
   return null;
 }

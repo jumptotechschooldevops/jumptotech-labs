@@ -8,17 +8,82 @@
  */
 
 import type { DockerSandboxPolicy } from '@jumptotech/lab-orchestrator';
+import { SANDBOXD_SCOPES, type SandboxdScope, type ScopeSecrets } from './scopes.js';
+
+/** The environment variable carrying each scope's secret. */
+export const SCOPE_ENV: Readonly<Record<SandboxdScope, string>> = {
+  attach: 'SANDBOXD_ATTACH_SECRET',
+  runtime: 'SANDBOXD_RUNTIME_SECRET',
+  docker: 'SANDBOXD_DOCKER_SECRET',
+};
+
+/**
+ * Read the per-scope secrets, and refuse the two ways they can be wrong.
+ *
+ * **Too short** is the ordinary check. **Equal to one another** is the
+ * interesting one: two scopes sharing a value silently collapses the boundary
+ * back to a single shared secret, which is precisely the arrangement this
+ * exists to remove — and it would do so with every test still passing, because
+ * every request would still be authorized. It is refused at startup, where an
+ * operator sees it, rather than becoming a property nobody can observe.
+ *
+ * A scope may be left unset. That switches the capability off — the endpoint
+ * then refuses everything — which is the right answer for a deployment that
+ * does not run the Docker track.
+ */
+export function loadScopeSecrets(env: NodeJS.ProcessEnv): ScopeSecrets {
+  const secrets = {} as Record<SandboxdScope, string>;
+
+  for (const scope of SANDBOXD_SCOPES) {
+    const raw = env[SCOPE_ENV[scope]]?.trim() ?? '';
+    if (raw && raw.length < 16) {
+      throw new Error(
+        `${SCOPE_ENV[scope]} must be at least 16 characters; \`make setup\` generates one.`,
+      );
+    }
+    secrets[scope] = raw;
+  }
+
+  if (SANDBOXD_SCOPES.every((s) => !secrets[s])) {
+    throw new Error(
+      `No sandboxd capability is configured. Set at least ${SCOPE_ENV.attach}; ` +
+        '`make setup` generates the whole set.',
+    );
+  }
+
+  const seen = new Map<string, SandboxdScope>();
+  for (const scope of SANDBOXD_SCOPES) {
+    const value = secrets[scope];
+    if (!value) continue;
+    const owner = seen.get(value);
+    if (owner) {
+      throw new Error(
+        `${SCOPE_ENV[scope]} and ${SCOPE_ENV[owner]} are the same value. Each capability ` +
+          'needs its own secret: sharing one lets a caller that holds either exercise both, ' +
+          'which is the boundary this separation exists to create.',
+      );
+    }
+    seen.set(value, scope);
+  }
+
+  return secrets;
+}
 
 export interface SandboxdConfig {
   port: number;
   /** Loopback in development; `0.0.0.0` when the callers are other containers. */
   bindAddress: string;
   /**
-   * Shared secret every caller must present. The same value the API and the
-   * terminal already use for `/internal` — one internal trust domain, one
-   * secret, rotated together.
+   * One secret per capability, and never one secret for all of them.
+   *
+   * This used to be a single `INTERNAL_SERVICE_SECRET`, shared with the value
+   * the terminal holds to talk to the API — so the terminal could authenticate
+   * to `/v1/docker` and drive the container runtime. See `scopes.ts`.
+   *
+   * Each caller is now given only what it needs: the terminal gets `attach`,
+   * the API gets `runtime` and `docker`, and nothing holds all three.
    */
-  internalServiceSecret: string;
+  scopeSecrets: ScopeSecrets;
   /**
    * The HMAC key a sandbox reference is derived from.
    *
@@ -111,12 +176,7 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
 }
 
 export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): SandboxdConfig {
-  const internalServiceSecret = env.INTERNAL_SERVICE_SECRET ?? '';
-  if (internalServiceSecret.length < 8) {
-    throw new Error(
-      'INTERNAL_SERVICE_SECRET must be set to at least 8 characters and must match the API and terminal services.',
-    );
-  }
+  const scopeSecrets = loadScopeSecrets(env);
 
   /*
    * Fails closed rather than defaulting. A broker that derived references from
@@ -134,7 +194,7 @@ export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): Sandbo
   return {
     port: intFromEnv(env, 'SANDBOXD_PORT', 4002),
     bindAddress: env.SANDBOXD_BIND ?? '127.0.0.1',
-    internalServiceSecret,
+    scopeSecrets,
     derivationSecret,
     runtimeOwner: env.RUNTIME_OWNER_ID ?? 'jumptotech',
     containerBinary: env.SANDBOX_CONTAINER_BINARY ?? 'docker',

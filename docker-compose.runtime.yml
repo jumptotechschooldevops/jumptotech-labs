@@ -26,7 +26,9 @@
 #   ✗ the terminal  — the one process a student types into. Worse.
 #   ✓ sandboxd      — reachable from nothing else. A closed list of named
 #                     operations, no passthrough, derives its own container
-#                     names, refuses any request carrying an `Origin` header.
+#                     names, refuses any request carrying an `Origin` header,
+#                     and authorizes each endpoint against its own capability
+#                     credential rather than one shared secret.
 #
 # So the socket is mounted here and nowhere else, and both the api and the
 # terminal reach it over the internal network with the shared service secret.
@@ -69,8 +71,23 @@ services:
       # Bound to every interface *on this network only*: there is no `ports:`
       # stanza below, so nothing outside the compose network can reach it.
       SANDBOXD_BIND: 0.0.0.0
-      # The same internal trust domain the terminal and the api already share.
-      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
+      # One secret per capability, and never one secret for all of them.
+      #
+      # These used to be a single INTERNAL_SERVICE_SECRET — the same value the
+      # terminal holds to talk to the api — so the terminal could authenticate
+      # to /v1/docker and drive the container runtime. Each caller now gets only
+      # what it needs, and this service is the only one holding all three.
+      #
+      #   attach   -> terminal   opens a PTY in one session's sandbox
+      #   runtime  -> api        creates/inspects/destroys sandboxes
+      #   docker   -> api        drives the Docker track's daemons
+      #
+      # sandboxd refuses to start if any two are equal: that would silently
+      # collapse the boundary back to where it started. `make setup` generates
+      # the set.
+      SANDBOXD_ATTACH_SECRET: ${SANDBOXD_ATTACH_SECRET:?set SANDBOXD_ATTACH_SECRET in .env (make setup generates one)}
+      SANDBOXD_RUNTIME_SECRET: ${SANDBOXD_RUNTIME_SECRET:?set SANDBOXD_RUNTIME_SECRET in .env (make setup generates one)}
+      SANDBOXD_DOCKER_SECRET: ${SANDBOXD_DOCKER_SECRET:?set SANDBOXD_DOCKER_SECRET in .env (make setup generates one)}
       # MUST equal the api's. Sandbox references are HMACs of the session id,
       # and this service re-derives them rather than being told one — so a
       # mismatch means every attach fails closed rather than attaching wrongly.
@@ -121,6 +138,11 @@ services:
       # Create, read and destroy sandboxes through the broker. Set, and this
       # service holds no container runtime at all — see apps/api/src/providers.ts.
       SANDBOX_BROKER_URL: http://sandboxd:4002
+      # Two capabilities, and deliberately not the third: opening a student's
+      # shell is the terminal's job, and a credential this service never holds
+      # is one a bug here cannot use.
+      SANDBOXD_RUNTIME_SECRET: ${SANDBOXD_RUNTIME_SECRET:?set SANDBOXD_RUNTIME_SECRET in .env (make setup generates one)}
+      SANDBOXD_DOCKER_SECRET: ${SANDBOXD_DOCKER_SECRET:?set SANDBOXD_DOCKER_SECRET in .env (make setup generates one)}
       # The six tracks this overlay exists for. On, because with the broker in
       # place the terminal can now actually attach to what these create — which
       # is the thing that was missing, and the reason they were pinned off in
@@ -152,6 +174,10 @@ services:
   terminal:
     environment:
       SANDBOX_BROKER_URL: http://sandboxd:4002
+      # `attach`, and nothing else. This is the one process a student types
+      # into; it holds no credential for the broker's runtime or Docker
+      # capabilities, so it cannot reach them even if it tried.
+      SANDBOXD_ATTACH_SECRET: ${SANDBOXD_ATTACH_SECRET:?set SANDBOXD_ATTACH_SECRET in .env (make setup generates one)}
       # Attach container-backed shells through the broker.
       TERMINAL_SANDBOX_BROKER_ENABLED: "true"
       # Stays off, and stays pinned. It is the *local* `docker exec` path, and

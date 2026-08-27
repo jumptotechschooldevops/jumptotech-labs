@@ -28,7 +28,7 @@ const OWNER = 'jumptotech';
 const config: SandboxdConfig = {
   port: 0,
   bindAddress: '127.0.0.1',
-  internalServiceSecret: SECRET,
+  scopeSecrets: { attach: SECRET + '-attach', runtime: SECRET + '-runtime', docker: SECRET + '-docker' },
   derivationSecret: 'derivation-secret-for-tests',
   runtimeOwner: OWNER,
   containerBinary: 'docker',
@@ -91,7 +91,7 @@ async function connected(seed: Record<string, ContainerInfo> = {}) {
   return {
     ...fake,
     port,
-    client: new BrokerRuntime({ baseUrl: `http://127.0.0.1:${port}`, secret: SECRET }),
+    client: new BrokerRuntime({ baseUrl: `http://127.0.0.1:${port}`, secret: SECRET + '-runtime' }),
   };
 }
 
@@ -147,13 +147,13 @@ describe('BrokerRuntime round trip', () => {
   it('is refused without the internal secret', async () => {
     const { port } = await connected();
     const wrong = new BrokerRuntime({ baseUrl: `http://127.0.0.1:${port}`, secret: 'nope' });
-    await expect(wrong.ping()).rejects.toThrow(/internal service secret/);
+    await expect(wrong.ping()).rejects.toThrow(/does not carry the 'runtime' capability/);
   });
 
   it('reports an unreachable broker as a runtime error, not a hang', async () => {
     const client = new BrokerRuntime({
       baseUrl: 'http://127.0.0.1:1',
-      secret: SECRET,
+      secret: SECRET + '-runtime',
       timeoutMs: 2_000,
     });
     await expect(client.ping()).rejects.toThrow(/unreachable/);

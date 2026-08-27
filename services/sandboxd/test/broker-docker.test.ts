@@ -53,7 +53,7 @@ const POLICY: DockerSandboxPolicy = {
 const config: SandboxdConfig = {
   port: 0,
   bindAddress: '127.0.0.1',
-  internalServiceSecret: SECRET,
+  scopeSecrets: { attach: SECRET + '-attach', runtime: SECRET + '-runtime', docker: SECRET + '-docker' },
   derivationSecret: DERIVATION,
   runtimeOwner: OWNER,
   containerBinary: 'docker',
@@ -166,7 +166,7 @@ async function connected(seed: Record<string, DockerContainerSnapshot> = {}) {
   return {
     ...fake,
     port,
-    engines_: new BrokerDockerEngines({ baseUrl: `http://127.0.0.1:${port}`, secret: SECRET }),
+    engines_: new BrokerDockerEngines({ baseUrl: `http://127.0.0.1:${port}`, secret: SECRET + '-docker' }),
   };
 }
 
@@ -283,7 +283,7 @@ describe('a broker outage fails closed', () => {
   it('reports the environment unreachable rather than falling back', async () => {
     const engines = new BrokerDockerEngines({
       baseUrl: 'http://127.0.0.1:1',
-      secret: SECRET,
+      secret: SECRET + '-docker',
       timeoutMs: 2_000,
     });
 
@@ -302,7 +302,7 @@ describe('a broker outage fails closed', () => {
       baseUrl: `http://127.0.0.1:${h.port}`,
       secret: 'not-the-secret',
     });
-    await expect(wrong.host.version()).rejects.toThrow(/internal service secret/);
+    await expect(wrong.host.version()).rejects.toThrow(/does not carry the 'docker' capability/);
   });
 
   it('answers 503 when the broker runs with the Docker track off', async () => {
@@ -315,7 +315,7 @@ describe('a broker outage fails closed', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;
 
-    const engines = new BrokerDockerEngines({ baseUrl: `http://127.0.0.1:${port}`, secret: SECRET });
+    const engines = new BrokerDockerEngines({ baseUrl: `http://127.0.0.1:${port}`, secret: SECRET + '-docker' });
     await expect(engines.host.version()).rejects.toThrow(/Docker track switched off/);
   });
 });

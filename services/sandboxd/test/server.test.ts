@@ -30,7 +30,7 @@ const SESSION_B = 'sess-bbbbbbbbbbbbbbbb';
 const config: SandboxdConfig = {
   port: 0,
   bindAddress: '127.0.0.1',
-  internalServiceSecret: SECRET,
+  scopeSecrets: { attach: SECRET + '-attach', runtime: SECRET + '-runtime', docker: SECRET + '-docker' },
   derivationSecret: DERIVATION,
   runtimeOwner: 'jumptotech',
   containerBinary: 'docker',
@@ -149,12 +149,12 @@ describe('upgradeRefusal', () => {
     ({ headers, url }) as never;
 
   it('accepts an internal caller on the attach path', () => {
-    expect(upgradeRefusal(req({ 'x-internal-secret': SECRET }), config)).toBeNull();
+    expect(upgradeRefusal(req({ 'x-internal-secret': SECRET + '-attach' }), config)).toBeNull();
   });
 
   it('refuses a caller with no secret, or the wrong one', () => {
-    expect(upgradeRefusal(req({}), config)).toMatch(/internal service secret/);
-    expect(upgradeRefusal(req({ 'x-internal-secret': 'nope' }), config)).toMatch(/secret/);
+    expect(upgradeRefusal(req({}), config)).toMatch(/credential is required/);
+    expect(upgradeRefusal(req({ 'x-internal-secret': 'nope' }), config)).toMatch(/'attach' capability/);
   });
 
   it('refuses anything sent by a browser, secret or not', () => {
@@ -162,15 +162,15 @@ describe('upgradeRefusal', () => {
     // makes the service structurally unreachable from a page even if the
     // internal secret ever leaked into one.
     const refusal = upgradeRefusal(
-      req({ 'x-internal-secret': SECRET, origin: 'http://localhost:3000' }),
+      req({ 'x-internal-secret': SECRET + '-attach', origin: 'http://localhost:3000' }),
       config,
     );
     expect(refusal).toMatch(/Origin/);
   });
 
   it('refuses any path but the attach endpoint', () => {
-    expect(upgradeRefusal(req({ 'x-internal-secret': SECRET }, '/'), config)).toMatch(/no broker endpoint/);
-    expect(upgradeRefusal(req({ 'x-internal-secret': SECRET }, '/v1/exec'), config)).toMatch(
+    expect(upgradeRefusal(req({ 'x-internal-secret': SECRET + '-attach' }, '/'), config)).toMatch(/no broker endpoint/);
+    expect(upgradeRefusal(req({ 'x-internal-secret': SECRET + '-attach' }, '/v1/exec'), config)).toMatch(
       /no broker endpoint/,
     );
   });
@@ -179,7 +179,7 @@ describe('upgradeRefusal', () => {
 describe('sandboxd attach', () => {
   it('opens a PTY into the session-derived container and pipes both ways', async () => {
     const harness = await start({ [refFor(SESSION_A)]: snapshotFor(SESSION_A) });
-    const ws = connect(harness.url, { 'x-internal-secret': SECRET });
+    const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
 
     await new Promise((resolve) => ws.on('open', resolve));
     ws.send(JSON.stringify({ type: 'attach', sessionId: SESSION_A, cols: 80, rows: 24 }));
@@ -214,7 +214,7 @@ describe('sandboxd attach', () => {
       [refFor(SESSION_B)]: snapshotFor(SESSION_B),
     });
 
-    const ws = connect(harness.url, { 'x-internal-secret': SECRET });
+    const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
     await new Promise((resolve) => ws.on('open', resolve));
     ws.send(
       JSON.stringify({
@@ -234,7 +234,7 @@ describe('sandboxd attach', () => {
 
   it('forwards a refusal with its code and opens nothing', async () => {
     const harness = await start({});
-    const ws = connect(harness.url, { 'x-internal-secret': SECRET });
+    const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
     await new Promise((resolve) => ws.on('open', resolve));
     ws.send(JSON.stringify({ type: 'attach', sessionId: SESSION_A }));
 
@@ -245,7 +245,7 @@ describe('sandboxd attach', () => {
 
   it('closes a socket that sends input before it has attached', async () => {
     const harness = await start({ [refFor(SESSION_A)]: snapshotFor(SESSION_A) });
-    const ws = connect(harness.url, { 'x-internal-secret': SECRET });
+    const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
     await new Promise((resolve) => ws.on('open', resolve));
     ws.send(JSON.stringify({ type: 'input', data: 'rm -rf /\r' }));
 
@@ -256,7 +256,7 @@ describe('sandboxd attach', () => {
 
   it('closes a socket that sends a frame it does not understand', async () => {
     const harness = await start({ [refFor(SESSION_A)]: snapshotFor(SESSION_A) });
-    const ws = connect(harness.url, { 'x-internal-secret': SECRET });
+    const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
     await new Promise((resolve) => ws.on('open', resolve));
     ws.send(JSON.stringify({ type: 'exec', argv: ['sh', '-c', 'id'] }));
 
@@ -268,12 +268,12 @@ describe('sandboxd attach', () => {
   it('replaces a session shell rather than running two against one sandbox', async () => {
     const harness = await start({ [refFor(SESSION_A)]: snapshotFor(SESSION_A) });
 
-    const first = connect(harness.url, { 'x-internal-secret': SECRET });
+    const first = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
     await new Promise((resolve) => first.on('open', resolve));
     first.send(JSON.stringify({ type: 'attach', sessionId: SESSION_A }));
     await nextFrame(first, ['attached']);
 
-    const second = connect(harness.url, { 'x-internal-secret': SECRET });
+    const second = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
     await new Promise((resolve) => second.on('open', resolve));
     second.send(JSON.stringify({ type: 'attach', sessionId: SESSION_A }));
     await nextFrame(second, ['attached']);
@@ -285,7 +285,7 @@ describe('sandboxd attach', () => {
 
   it('kills the PTY when the socket goes away', async () => {
     const harness = await start({ [refFor(SESSION_A)]: snapshotFor(SESSION_A) });
-    const ws = connect(harness.url, { 'x-internal-secret': SECRET });
+    const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
     await new Promise((resolve) => ws.on('open', resolve));
     ws.send(JSON.stringify({ type: 'attach', sessionId: SESSION_A }));
     await nextFrame(ws, ['attached']);

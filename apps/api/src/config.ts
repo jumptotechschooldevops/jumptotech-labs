@@ -214,6 +214,16 @@ export interface SandboxProviderConfig {
    * never quietly fall back to driving a daemon itself.
    */
   runtimeBrokerUrl: string;
+  /**
+   * This service's credentials for the broker, one per capability it uses.
+   *
+   * The API needs `runtime` (create, inspect and destroy sandboxes) and
+   * `docker` (the Docker track's daemons). It is never given `attach`: opening
+   * a student's shell is the terminal's job, and a credential this service
+   * does not hold is one a bug here cannot use. See sandboxd's `scopes.ts`.
+   */
+  runtimeBrokerCredential: string;
+  dockerBrokerCredential: string;
   linuxEnabled: boolean;
   linuxImage: string;
   terraformEnabled: boolean;
@@ -546,6 +556,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       runtimeHost: strFromEnv(env, 'SANDBOX_RUNTIME_HOST', ''),
       runtimeCertPath: strFromEnv(env, 'SANDBOX_RUNTIME_CERT_PATH', ''),
       runtimeBrokerUrl: strFromEnv(env, 'SANDBOX_BROKER_URL', ''),
+      runtimeBrokerCredential: strFromEnv(env, 'SANDBOXD_RUNTIME_SECRET', ''),
+      dockerBrokerCredential: strFromEnv(env, 'SANDBOXD_DOCKER_SECRET', ''),
       linuxEnabled: boolFromEnv(env, 'LINUX_PROVIDER_ENABLED', true),
       linuxImage: strFromEnv(env, 'LINUX_SANDBOX_IMAGE', DEFAULT_LINUX_SANDBOX_IMAGE),
       terraformEnabled: boolFromEnv(env, 'TERRAFORM_PROVIDER_ENABLED', true),

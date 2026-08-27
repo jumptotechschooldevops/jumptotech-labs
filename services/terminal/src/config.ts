@@ -21,6 +21,18 @@ export interface TerminalConfig {
    */
   sandboxBrokerUrl: string;
   /**
+   * This service's credential for the broker's **attach** capability, and only
+   * that one.
+   *
+   * Deliberately not `internalServiceSecret`. That value is this service's
+   * credential for the *API*, and while the broker accepted it too, this
+   * process — the one a student types into — could authenticate to
+   * `/v1/docker` and drive the container runtime. It never did; nothing
+   * stopped it. Holding a credential that opens exactly one endpoint is what
+   * turns "the terminal does not do that" into "the terminal cannot".
+   */
+  sandboxBrokerCredential: string;
+  /**
    * Where per-session credentials are written (0600, deleted on disconnect).
    *
    * Holds both kubeconfigs and Docker client certificate directories. Nothing
@@ -112,6 +124,7 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     apiInternalUrl: env.API_INTERNAL_URL ?? 'http://localhost:4000',
     internalServiceSecret: env.INTERNAL_SERVICE_SECRET || sessionSecret,
     sandboxBrokerUrl: env.SANDBOX_BROKER_URL ?? 'http://127.0.0.1:4002',
+    sandboxBrokerCredential: env.SANDBOXD_ATTACH_SECRET ?? '',
     credentialsDir: env.TERMINAL_CREDENTIALS_DIR ?? '/tmp/jumptotech-credentials',
     workDir: env.TERMINAL_WORKDIR ?? '/home/student',
     workspaceRoot: env.TERMINAL_WORKSPACE_ROOT ?? '/home/student/workspaces',
