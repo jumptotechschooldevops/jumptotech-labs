@@ -1,6 +1,14 @@
 /// <reference types="vitest" />
+import { fileURLToPath } from 'node:url';
+
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+
+// The host-execution guard lives outside this workspace, so the repository root
+// has to be on the allow list. Vite infers it when it can; under a relative
+// `--root` it cannot, and loading the guard is refused rather than the suite
+// running unguarded. Naming it changes nothing about what vite serves normally.
+const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
@@ -8,6 +16,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: Number(process.env.WEB_PORT ?? 3000),
     strictPort: true,
+    fs: { allow: [repositoryRoot] },
     // Docker Desktop bind mounts do not always deliver inotify events.
     watch: { usePolling: true, interval: 300 },
     /*
