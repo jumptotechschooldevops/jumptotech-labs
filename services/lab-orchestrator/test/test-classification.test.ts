@@ -38,6 +38,11 @@ const TEST_DIRS = [
   'services/verifier/test',
   'services/progress/test',
   'services/terminal/test',
+  // Absent until 2026-08-27, which is why sandboxd ran unguarded for two months
+  // without this suite noticing — the "guard installed for every workspace"
+  // check below only ever looked at the directories named here. sandboxd is the
+  // one service holding the Docker socket, so it was the worst omission.
+  'services/sandboxd/test',
   'apps/api/test',
 ];
 
