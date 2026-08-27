@@ -138,7 +138,15 @@ const EXEC_ALLOWLIST = new Set(['docker']);
  * running cluster. Requiring the component makes this provider's cleanup
  * strictly about the containers *it* created.
  */
-const SANDBOX_COMPONENT = 'docker-sandbox';
+/**
+ * The `component` label a Docker sandbox carries.
+ *
+ * Exported because the runtime broker enforces it too, and a second copy of the
+ * string is exactly how the two would drift — the value here and the value
+ * `sandboxd` checks must be the same one, or a destroy that should succeed is
+ * refused as somebody else's container.
+ */
+export const SANDBOX_COMPONENT = 'docker-sandbox';
 
 function isSandboxComponent(labels: Record<string, string>): boolean {
   return labels[COMPONENT_LABEL] === SANDBOX_COMPONENT;
@@ -268,6 +276,23 @@ export class DockerLabProvider implements LabProvider {
     };
   }
 
+  /**
+   * Tell the engine factory whose session this sandbox is, before anything
+   * names it.
+   *
+   * A local-daemon factory ignores this. A brokered one needs it: it addresses
+   * Docker by session id, never by container name, so the very first host call
+   * of a lifecycle — the idempotent wipe that runs *before* the sandbox
+   * exists — would otherwise have nothing to derive from and would refuse.
+   * Called at every entry point rather than only at `create`, so a reset, a
+   * destroy or a terminal binding after an API restart works too.
+   */
+  #bind(context: LabSessionContext): string {
+    const ref = sandboxRefOf(context);
+    this.#engines.bindSession?.(ref, context.sessionId);
+    return ref;
+  }
+
   /** The lab's declared initial state, or an empty plan. */
   #plan(context: LabSessionContext): DockerSetupPlan {
     return (
@@ -284,6 +309,7 @@ export class DockerLabProvider implements LabProvider {
   // ---------------------------------------------------------------- create
 
   async create(context: LabSessionContext): Promise<CreateResult> {
+    this.#bind(context);
     const steps: ProvisionStep[] = [];
     assertValidContainerSandboxRef(sandboxRefOf(context));
     const policy = context.policy.docker;
@@ -480,6 +506,7 @@ export class DockerLabProvider implements LabProvider {
   // ---------------------------------------------------------------- status
 
   async status(context: LabSessionContext): Promise<EnvironmentInfo> {
+    this.#bind(context);
     let sandbox;
     try {
       sandbox = await this.#engines.host.inspectContainer(sandboxRefOf(context));
@@ -521,6 +548,7 @@ export class DockerLabProvider implements LabProvider {
    * their private daemon go back to the baseline.
    */
   async reset(context: LabSessionContext): Promise<ResetResult> {
+    this.#bind(context);
     assertValidContainerSandboxRef(sandboxRefOf(context));
     const steps: ProvisionStep[] = [];
     const removed: string[] = [];
@@ -641,6 +669,7 @@ export class DockerLabProvider implements LabProvider {
   // --------------------------------------------------------------- destroy
 
   async destroy(context: LabSessionContext): Promise<DestroyResult> {
+    this.#bind(context);
     // The workspace is the student's, and it dies with the session.
     await this.#workspace.destroy(context.sessionId).catch(() => undefined);
     return this.destroySandbox(sandboxRefOf(context), context.sessionId);
@@ -671,6 +700,11 @@ export class DockerLabProvider implements LabProvider {
    */
   async destroySandbox(sandbox: string, expectedSessionId?: string): Promise<DestroyResult> {
     const steps: ProvisionStep[] = [];
+
+    // The reaper's entry point. It holds the stored session id, so a brokered
+    // factory can address the sandbox by the session that owns it — and when it
+    // does not, the factory refuses rather than guessing.
+    if (expectedSessionId) this.#engines.bindSession?.(sandbox, expectedSessionId);
 
     if (!isContainerSandboxRef(sandbox)) {
       return this.#refuseDestroy(steps, sandbox, `'${sandbox}' is not a JumpToTech lab sandbox name`);
@@ -817,6 +851,7 @@ export class DockerLabProvider implements LabProvider {
    * what comes back here is usable against exactly one daemon.
    */
   async getTerminalContext(context: LabSessionContext): Promise<TerminalContext> {
+    this.#bind(context);
     assertValidContainerSandboxRef(sandboxRefOf(context));
 
     const [ca, clientCert, clientKey] = await Promise.all([

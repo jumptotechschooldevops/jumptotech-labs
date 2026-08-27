@@ -60,6 +60,22 @@ export interface TerminalConfig {
    * developer's host, which is where the Linux and Terraform tracks run today.
    */
   containerExecEnabled: boolean;
+  /**
+   * Attach container-backed shells through `sandboxd` instead of running
+   * `docker exec` in this process.
+   *
+   * This is the setting that makes the container-backed tracks deployable. The
+   * local path needs a container runtime *here*, in the one process a student
+   * types into, which no real deployment may grant. With the broker on, this
+   * service holds no runtime at all: it opens an authenticated WebSocket to
+   * `sandboxBrokerUrl`, sends the session id it has already verified, and
+   * bridges bytes. The broker derives the container name itself.
+   *
+   * Takes precedence over `containerExecEnabled` when both are on, because a
+   * deployment that has a broker should never fall back to the local path
+   * silently.
+   */
+  sandboxBrokerEnabled: boolean;
 }
 
 function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
@@ -107,5 +123,6 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     promptHost: env.TERMINAL_PROMPT_HOST ?? 'lab',
     containerBinary: env.SANDBOX_CONTAINER_BINARY ?? 'docker',
     containerExecEnabled: boolFromEnv(env, 'TERMINAL_CONTAINER_EXEC_ENABLED', true),
+    sandboxBrokerEnabled: boolFromEnv(env, 'TERMINAL_SANDBOX_BROKER_ENABLED', false),
   };
 }

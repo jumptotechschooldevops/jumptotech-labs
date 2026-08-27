@@ -49,7 +49,7 @@ import {
   TerraformLabProvider,
   type LabSession,
 } from '@jumptotech/lab-orchestrator';
-import { ownedByThisRun, scopedName } from '@jumptotech/test-support/run-id';
+import { ownedByThisRun, scopedSandboxRef } from '@jumptotech/test-support/run-id';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 
@@ -415,10 +415,18 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     if (!enabled) return;
     const { providers } = await harness();
     const linux = providers.peek('linux')!;
-    // Scoped to this run: a fixed name would collide with a second integration
-    // run on the same daemon, and the `finally` below would then remove the
-    // *other* run's container mid-test.
-    const foreign = scopedName('lab', 'foreign');
+    /*
+     * Scoped to this run: a fixed name would collide with a second integration
+     * run on the same daemon, and the `finally` below would then remove the
+     * *other* run's container mid-test.
+     *
+     * It must also be a *validly shaped* sandbox reference. `scopedName` is
+     * not one — it embeds the run id and a dash, and the shape gate is
+     * `^jtt-lab-[0-9a-f]{6,40}$` — so `destroySandbox` refused this container
+     * for its name and never reached the ownership-label gate this test exists
+     * to prove. The assertion below is what caught that.
+     */
+    const foreign = scopedSandboxRef('cc');
 
     // A container with a name that would pass the shape gate, created outside
     // the platform and therefore carrying none of its labels.

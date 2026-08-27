@@ -60,6 +60,25 @@ RUN set -eux; \
     chmod 0755 /usr/local/bin/kubectl; \
     kubectl version --client=true --output=yaml >/dev/null
 
+# The `docker` CLI, for the sandboxd suite. That suite drives a real daemon over
+# a socket mounted at run time and opens real PTYs into real sandbox containers,
+# which is the one chain no unit test can stand in for. Nothing here reaches
+# production: the shipped `sandboxd` image builds its own copy.
+ARG DOCKER_CLI_VERSION=27.3.1
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) darch=x86_64 ;; \
+      arm64) darch=aarch64 ;; \
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/docker.tgz \
+      "https://download.docker.com/linux/static/stable/${darch}/docker-${DOCKER_CLI_VERSION}.tgz"; \
+    tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
+    rm -rf /tmp/docker.tgz /tmp/docker; \
+    docker --version
+
 WORKDIR /app
 
 # Only the manifests, so `npm ci` is cached independently of source edits. The
@@ -69,6 +88,7 @@ COPY apps/api/package.json        apps/api/package.json
 COPY apps/web/package.json        apps/web/package.json
 COPY services/lab-orchestrator/package.json services/lab-orchestrator/package.json
 COPY services/progress/package.json         services/progress/package.json
+COPY services/sandboxd/package.json         services/sandboxd/package.json
 COPY services/terminal/package.json         services/terminal/package.json
 COPY services/verifier/package.json         services/verifier/package.json
 COPY test-support/package.json              test-support/package.json

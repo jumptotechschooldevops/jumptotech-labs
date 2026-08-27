@@ -29,11 +29,13 @@
     "test:db": "vitest run --root services/progress && vitest run test/session-store-integration.test.ts --root services/lab-orchestrator && vitest run --no-file-parallelism test/progress-persistence-integration.test.ts test/auth-persistence-integration.test.ts --root apps/api",
     "dev:api": "npm run dev --workspace @jumptotech/api",
     "dev:terminal": "npm run dev --workspace @jumptotech/terminal",
+    "dev:sandboxd": "npm run dev --workspace @jumptotech/sandboxd",
     "dev:web": "npm run dev --workspace @jumptotech/web",
     "test:integration:terminal": "RUN_INTEGRATION_TESTS=1 vitest run test/terminal-integration.test.ts --root services/terminal",
     "test:integration:sandbox": "RUN_INTEGRATION_TESTS=1 vitest run test/sandbox-integration.test.ts --root apps/api",
     "test:composition": "vitest run test/composition.test.ts --root apps/api",
-    "verify:api-image": "bash scripts/verify-api-image-composition.sh"
+    "verify:api-image": "bash scripts/verify-api-image-composition.sh",
+    "test:integration:sandboxd": "RUN_INTEGRATION_TESTS=1 vitest run test/sandboxd-integration.test.ts --root services/sandboxd --testTimeout=300000 --hookTimeout=300000"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

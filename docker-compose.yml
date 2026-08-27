@@ -1,20 +1,48 @@
 # ---------------------------------------------------------------------------
-# JumpToTech Labs — local development stack (PLATFORM-002, PLATFORM-LINUX-001)
+# JumpToTech Labs — the base stack.
 #
-# Prerequisite: the substrates must exist first, and both are created on the
-# host, deliberately outside any web-facing process.
+# This file on its own runs the **Kubernetes track**: postgres, api, terminal,
+# web, and no container runtime anywhere. It is the floor, and it is deliberately
+# the least privileged arrangement the platform has.
+#
+# Everything beyond that is an overlay you name explicitly, because each one
+# costs something and the cost should be visible in the command:
+#
+#   docker compose up
+#       Kubernetes track. 19 labs. No Docker socket in any container.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.runtime.yml up
+#       + `sandboxd`, and every remaining track: Linux, Networking, CS, AWS,
+#       Terraform, Ansible, CI/CD and Docker. All 114 labs. The socket is
+#       mounted into `sandboxd` and nothing else.   (`make up`)
+#
+# ## Prerequisites, created on the host
 #
 #   npm run cluster:up      # Kubernetes track: kind cluster + kubeconfigs
-#   make linux-image        # Linux track: build the training image (once)
-#   make broker             # Linux track: the only holder of the Docker socket
-#   docker compose up --build
+#   make sandbox-build      # container tracks: the training images (once)
 #
-# The broker is not a service here on purpose: it needs the Docker socket, and
-# nothing in this file gets it. The api and terminal containers reach it over
-# `host.docker.internal`, which means the broker must bind an address a
-# container can reach — set SANDBOX_BROKER_BIND=0.0.0.0 on a development host
-# (see README → The Linux track). Without a broker running, the Kubernetes
-# track is unaffected and starting a Linux lab reports ENVIRONMENT_UNREACHABLE.
+# Both happen outside any web-facing process, for the same reason the socket
+# does: building an image and creating a cluster are privileged, and neither is
+# something a running service should be able to do.
+#
+# ## Who holds what
+#
+#   api       ← a cluster credential and the database. No container runtime, for
+#               any track: the container-backed ones go through the broker's
+#               eleven verbs, the Docker track through its fourteen operations.
+#   terminal  ← runs student PTYs. No cluster credential, no Docker socket, no
+#               DOCKER_HOST, no ambient credential of any kind. Each PTY is
+#               handed a namespace-scoped kubeconfig, or a sandbox-scoped client
+#               certificate, or a broker socket — per session, deleted with the
+#               shell.
+#   sandboxd  ← (runtime overlay) the only process with a container runtime. Not
+#               published to the host, not routed through the web proxy, refuses
+#               any request carrying an `Origin` header.
+#
+# The rule those three lines encode: the one process a student can type into
+# holds nothing, and the one process that holds a runtime never runs a student's
+# command line — it runs `docker exec` into a container it derived itself from
+# the session id and then label-checked.
 #
 # The api and terminal services join the `kind` Docker network so they can
 # reach the cluster's API server directly at
@@ -36,25 +64,6 @@
 #   · its data lives in a named volume, so `docker compose down` keeps the
 #     history. `docker compose down -v` is what deletes it, and `make clean`
 #     says so.
-#
-# PLATFORM-DOCKER: the Docker track needs one component to be able to create
-# containers, and the choice of which one is the central security decision here.
-#
-#   api       ← host Docker socket. Creates and destroys per-session sandboxes.
-#               No shell, no student input path, no PTY.
-#   terminal  ← NO Docker socket, no DOCKER_HOST, no ambient credential at all.
-#               Each PTY is handed a client certificate for its own session's
-#               sandbox, fetched per session and deleted with the shell.
-#
-# So the one process a student can type into cannot reach the host daemon, and
-# the one process that can reach the host daemon never runs a student's command.
-# Cluster creation still happens on the host, outside any web-facing process.
-#
-# Mounting the socket into `api` is nonetheless real privilege: it is equivalent
-# to root on this host. It is acceptable for a local development stack and is
-# documented as a deployment constraint in README → Docker sandbox security.
-# Set DOCKER_TRACK_ENABLED=false to run the Kubernetes track with no socket
-# mounted at all.
 # ---------------------------------------------------------------------------
 
 # Project name. `COMPOSE_PROJECT_NAME` takes precedence over this value, which is
@@ -118,7 +127,19 @@ services:
     cap_drop:
       - ALL
     environment:
-      NODE_ENV: production
+      # This file is the LOCAL DEVELOPMENT stack, and its AUTH_MODE default
+      # below is `development`. Pinning NODE_ENV=production here as well made
+      # the two contradict each other: `buildIdentityResolver` refuses that
+      # combination by design, so the api exited 1 at startup and the shipped
+      # stack could not come up at all.
+      #
+      # Defaulting to `development` makes the default coherent. The safety gate
+      # is untouched and still fires on the case it was written for — a real
+      # deployment whose NODE_ENV=production carries a stale
+      # AUTH_MODE=development. A production run sets both:
+      #
+      #   NODE_ENV=production AUTH_MODE=oidc docker compose up -d
+      NODE_ENV: ${NODE_ENV:-development}
       API_PORT: 4000
       LAB_PROVIDER: ${LAB_PROVIDER:-kind}
       LAB_CLUSTER_NAME: ${LAB_CLUSTER_NAME:-jumptotech-labs}
@@ -183,14 +204,37 @@ services:
       CLUSTER_SERVICE_CIDR: ${CLUSTER_SERVICE_CIDR:-10.96.0.0/16}
       STUDENT_CREDENTIAL_TTL_SECONDS: ${STUDENT_CREDENTIAL_TTL_SECONDS:-3600}
       # --- container-backed tracks (PLATFORM-004) ---
-      # Off in compose by design: this container is given no container runtime
-      # to drive — deliberately, for the same reason cluster creation happens on
-      # the host — and the honest catalog message is "switched off here" rather
-      # than a probe that fails. Run the services directly on your host
-      # (`npm run dev:api` and friends) to use the Linux and Terraform tracks.
-      LINUX_PROVIDER_ENABLED: ${LINUX_PROVIDER_ENABLED:-false}
+      # Off in compose by design, and PINNED rather than defaulted.
+      #
+      # The original `${VAR:-false}` form assumed this container has no runtime
+      # to drive. That stopped being true when the Docker track mounted the host
+      # socket here: the api *can* create a Linux/Ansible/CI-CD sandbox, so the
+      # provider reported itself available and the catalog offered those labs.
+      # The terminal service still cannot attach a PTY to one — it is given no
+      # runtime, deliberately — so a student who started such a lab got a
+      # sandbox and then a dead shell:
+      #
+      #   TERMINAL_CONTAINER_EXEC_ENABLED=false → "CONTAINER_EXEC_DISABLED"
+      #   TERMINAL_CONTAINER_EXEC_ENABLED=true  → "Cannot connect to the Docker
+      #                                            daemon at /var/run/docker.sock"
+      #
+      # and `.env.example` ships both of those set to `true` for host mode, so
+      # `make setup && docker compose up` hit it out of the box. Availability is
+      # decided by whether the api can *create* a sandbox and never asks whether
+      # the terminal can *attach* to one, so the two must be kept consistent
+      # here. Pinned, so a host-mode value in `.env` cannot leak in and make the
+      # catalog advertise a lab this stack cannot actually run.
+      #
+      # Ansible and CI-CD are listed for the same reason: both default to `true`
+      # in code, so leaving them out switched them silently on.
+      #
+      # Run the services on your host (`npm run dev:api` and friends) for these
+      # tracks — see README → Running the Linux track locally.
+      LINUX_PROVIDER_ENABLED: "false"
       LINUX_SANDBOX_IMAGE: ${LINUX_SANDBOX_IMAGE:-jumptotech/lab-linux:latest}
-      TERRAFORM_PROVIDER_ENABLED: ${TERRAFORM_PROVIDER_ENABLED:-false}
+      TERRAFORM_PROVIDER_ENABLED: "false"
+      ANSIBLE_PROVIDER_ENABLED: "false"
+      CICD_PROVIDER_ENABLED: "false"
       # Sandbox shape for container-backed sessions. These are the ceilings a
       # student's environment is created with, not suggestions.
       SANDBOX_CPUS: ${SANDBOX_CPUS:-0.5}
@@ -212,7 +256,11 @@ services:
       # header, which is only acceptable on a laptop — see README → Security.
       DEV_STUDENT_HEADER_ENABLED: ${DEV_STUDENT_HEADER_ENABLED:-false}
       # --- Docker track (PLATFORM-DOCKER) ---
-      DOCKER_TRACK_ENABLED: ${DOCKER_TRACK_ENABLED:-true}
+      #
+      # PINNED off here, because this file mounts no Docker socket anywhere and
+      # names no broker. The runtime overlay switches it on and points it at
+      # `sandboxd`, which is the only process that ever holds a Docker socket.
+      DOCKER_TRACK_ENABLED: "false"
       DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-docker:27-dind}
       DOCKER_SANDBOX_MEMORY: ${DOCKER_SANDBOX_MEMORY:-2g}
       DOCKER_SANDBOX_CPUS: ${DOCKER_SANDBOX_CPUS:-2}
@@ -234,20 +282,13 @@ services:
         source: ./labs
         target: /app/labs
         read_only: true
-      # The host Docker socket — see the header. This is the only service that
-      # gets it, and it is what creates and destroys per-session sandboxes.
-      # Remove this mount (and set DOCKER_TRACK_ENABLED=false) to run the
-      # Kubernetes track with no host Docker access anywhere in the stack.
-      - type: bind
-        source: /var/run/docker.sock
-        target: /var/run/docker.sock
-    # The socket is root-owned inside the Docker VM, and this service runs as
-    # `node`. Granting the socket's group is what lets a non-root process use it
-    # without running the API as root. On Docker Desktop the socket is
-    # root:root, so 0 is correct; on a Linux host set DOCKER_SOCKET_GID to the
-    # `docker` group's gid (`getent group docker | cut -d: -f3`).
-    group_add:
-      - "${DOCKER_SOCKET_GID:-0}"
+      # NOTE: no Docker socket. It used to be mounted here, and moving it out is
+      # the central change of the runtime architecture — see the header. This
+      # service is reachable from a browser through the web proxy, and a socket
+      # mounted into it is root on the runtime host one HTTP bug away from the
+      # public internet. Per-session sandboxes are created through `sandboxd`
+      # instead (docker-compose.runtime.yml), which is internal-only and offers
+      # eleven verbs rather than a daemon.
     depends_on:
       postgres:
         condition: service_healthy
@@ -297,9 +338,15 @@ services:
       TERMINAL_MAX_SESSION_SECONDS: ${TERMINAL_MAX_SESSION_SECONDS:-7200}
       # A container-backed session's shell is a PTY inside that session's own
       # sandbox container. This service cannot open one here: it is given no
-      # container runtime, by the same design decision as the api service — and
-      # the Docker socket is never mounted into any container in this file.
-      TERMINAL_CONTAINER_EXEC_ENABLED: ${TERMINAL_CONTAINER_EXEC_ENABLED:-false}
+      # container runtime, and the Docker socket is never mounted into it.
+      #
+      # PINNED, not defaulted. `.env.example` ships this `true` for host mode,
+      # and that value reaching this container turned a clear refusal into the
+      # student seeing a raw "Cannot connect to the Docker daemon at
+      # unix:///var/run/docker.sock". Switching it on here cannot make the
+      # attach work — only mounting the socket into this container could, and
+      # that is the one thing this file must never do.
+      TERMINAL_CONTAINER_EXEC_ENABLED: "false"
     ports:
       # Operator-only: students reach the terminal WebSocket through the web proxy.
       - "127.0.0.1:${TERMINAL_PORT:-4001}:4001"

@@ -212,6 +212,17 @@ export class ContainerLabProvider implements LabProvider {
   readonly sandboxKind = 'container' as const;
 
   readonly #runtime: ContainerRuntimePort;
+  /**
+   * Which runtime implementation is behind this provider — `docker` for a local
+   * daemon, `sandboxd` for the runtime broker.
+   *
+   * Diagnostic only, and read-only. It exists because "does this deployment's
+   * API hold a container runtime, or does it go through the broker" is a
+   * security-relevant question an operator and a regression test both need to
+   * be able to answer, and reflecting into private state to answer it is worse
+   * than saying it plainly. Nothing routes on this value.
+   */
+  readonly runtimeName: string;
   readonly #image: string;
   readonly #home: string;
   readonly #requiredBinaries: string[];
@@ -228,6 +239,7 @@ export class ContainerLabProvider implements LabProvider {
     this.id = options.id;
     this.name = options.name;
     this.#runtime = options.runtime;
+    this.runtimeName = options.runtime.name;
     this.#image = options.image;
     this.#home = options.home ?? '/home/student';
     this.#requiredBinaries = options.requiredBinaries ?? [];

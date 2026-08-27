@@ -410,8 +410,29 @@ export interface DockerEnginePort {
 export interface DockerEngineFactory {
   /** The daemon that hosts the sandbox containers themselves. */
   readonly host: DockerEnginePort;
-  /** A port bound to the isolated daemon inside one sandbox container. */
-  session(sandbox: string): DockerEnginePort;
+  /**
+   * Tell this factory which session a sandbox belongs to.
+   *
+   * Optional, and a no-op for a factory that drives a local daemon: it
+   * addresses containers by name and always could. A *brokered* factory cannot
+   * — the broker derives the sandbox name from a session id and accepts no
+   * container name — so it needs to be told the session before any operation
+   * that names the sandbox, including the pre-create wipe that happens before
+   * the sandbox exists.
+   */
+  bindSession?(sandbox: string, sessionId: string): void;
+  /**
+   * A port bound to the isolated daemon inside one sandbox container.
+   *
+   * `sessionId` is optional only because a local-daemon factory has no use for
+   * it: it addresses the sandbox by name and always could. A *brokered* factory
+   * cannot — the broker derives the sandbox name from the session id and
+   * accepts no container name at all — so every caller that holds a session id
+   * should pass it. Without one, a brokered factory can only serve sandboxes it
+   * created earlier in this process' lifetime, and refuses the rest rather than
+   * guessing.
+   */
+  session(sandbox: string, sessionId?: string): DockerEnginePort;
 }
 
 /** Split a `KEY=value` env list, as `docker inspect` reports it, into a map. */

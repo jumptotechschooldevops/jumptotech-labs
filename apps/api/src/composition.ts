@@ -9,10 +9,8 @@
  */
 import {
   DockerAnsibleSandbox,
-  DockerCliRuntime,
   DockerRuntimeExecPort,
   type AnsibleSandboxPort,
-  DockerCliFactory,
   InMemoryWorkspace,
   KubernetesClient,
   createLabProvider,
@@ -26,7 +24,11 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import { waitForRequirements } from '@jumptotech/verifier';
 import type { ApiConfig } from './config.js';
-import { buildProviderRegistry } from './providers.js';
+import {
+  buildContainerRuntime,
+  buildDockerEngines,
+  buildProviderRegistry,
+} from './providers.js';
 import { HttpTerminalWorkspace } from './terminal-workspace.js';
 
 export interface BuildRequirementWaiterOptions {
@@ -52,7 +54,9 @@ export function buildRequirementWaiter(options: BuildRequirementWaiterOptions): 
     const needsDocker = requirementsNeedDocker(input.requirements);
     return waitForRequirements({
       k8s,
-      ...(needsDocker ? { docker: engines.session(input.namespace) } : {}),
+      ...(needsDocker
+        ? { docker: engines.session(input.namespace, input.sessionId) }
+        : {}),
       // Only a Docker run can use it, and only when the caller said whose
       // workspace it is. A Kubernetes setup check never reaches this.
       ...(needsDocker && workspace && input.sessionId
@@ -96,8 +100,12 @@ export function buildSandboxComposition(options: BuildSandboxCompositionOptions)
       options.config.kubeconfigPath ? { kubeconfigPath: options.config.kubeconfigPath } : {},
     );
 
-  const engines =
-    options.engines ?? new DockerCliFactory(options.config.dockerHost ? { dockerHost: options.config.dockerHost } : {});
+  //
+  // `buildDockerEngines`, not a `DockerCliFactory` built here — the same lesson
+  // `containerRuntime` below already learned: a factory constructed at this
+  // seam silently overrode whatever the composition root had decided, so the
+  // configuration did nothing. One function, called once.
+  const engines = options.engines ?? buildDockerEngines(options.config);
 
   const workspace =
     options.workspace ??
@@ -139,9 +147,15 @@ export function buildSandboxComposition(options: BuildSandboxCompositionOptions)
    * to sessions: every method takes the sandbox id, so one port serves every
    * session and none can name another's containers.
    */
-  const containerRuntime =
-    options.containerRuntime ??
-    new DockerCliRuntime({ binary: options.config.sandbox.containerBinary });
+  //
+  // `buildContainerRuntime`, not a `DockerCliRuntime` built here. This line used
+  // to construct its own local-daemon runtime and hand it to
+  // `buildProviderRegistry`, which meant the registry's own choice — broker,
+  // dedicated runtime node, or ambient daemon — was overridden on every
+  // production path and the configuration silently did nothing. The Ansible
+  // reader and the providers must be on the same runtime, so they now ask the
+  // same function for it.
+  const containerRuntime = options.containerRuntime ?? buildContainerRuntime(options.config);
   const ansible = new DockerAnsibleSandbox({
     docker: new DockerRuntimeExecPort(containerRuntime),
   });

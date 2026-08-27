@@ -205,6 +205,24 @@ export interface DockerCliOptions {
   /** Path to the CLI. Not configurable from any request. */
   binary?: string;
   timeoutMs?: number;
+  /**
+   * The daemon to drive, e.g. `tcp://sandbox-engine:2376`.
+   *
+   * Explicit rather than ambient, and that is the point. Reading `DOCKER_HOST`
+   * out of the process environment meant the container tracks and the Docker
+   * track were forced onto the *same* daemon, because there is only one such
+   * variable — which is why a deployment could not put the per-session
+   * sandboxes on a dedicated runtime node while leaving the Docker track's
+   * `dind` engines where they were. Passing the address in separates them.
+   *
+   * Omitted means "whatever this process' environment says", which is the
+   * historical behaviour and what a laptop wants.
+   */
+  dockerHost?: string;
+  /** `DOCKER_CERT_PATH` for a TLS daemon. Only meaningful with `dockerHost`. */
+  certPath?: string;
+  /** `DOCKER_TLS_VERIFY`. Defaults to on whenever `certPath` is given. */
+  tlsVerify?: boolean;
   /** Injected in tests. */
   run?: (argv: string[], options: { timeoutMs: number; stdin?: string; maxBufferBytes?: number }) => Promise<ContainerExecResult>;
 }
@@ -213,12 +231,23 @@ export class DockerCliRuntime implements ContainerRuntimePort {
   readonly name = 'docker';
   readonly #binary: string;
   readonly #timeoutMs: number;
+  readonly #connection: DaemonConnection;
   readonly #run: NonNullable<DockerCliOptions['run']>;
 
   constructor(options: DockerCliOptions = {}) {
     this.#binary = options.binary ?? 'docker';
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.#run = options.run ?? ((argv, opts) => runProcess(this.#binary, argv, opts));
+    this.#connection = {
+      ...(options.dockerHost ? { dockerHost: options.dockerHost } : {}),
+      ...(options.certPath ? { certPath: options.certPath } : {}),
+      ...(options.tlsVerify !== undefined ? { tlsVerify: options.tlsVerify } : {}),
+    };
+    this.#run = options.run ?? ((argv, opts) => runProcess(this.#binary, argv, opts, this.#connection));
+  }
+
+  /** The daemon this runtime drives, for health reporting. `''` means ambient. */
+  get daemonAddress(): string {
+    return this.#connection.dockerHost ?? '';
   }
 
   async ping(): Promise<string> {
@@ -516,10 +545,44 @@ export class DockerCliRuntime implements ContainerRuntimePort {
 
 // --- helpers ---------------------------------------------------------------
 
+/** Where a `docker` invocation should point, when it is not the ambient default. */
+interface DaemonConnection {
+  dockerHost?: string;
+  certPath?: string;
+  tlsVerify?: boolean;
+}
+
+/**
+ * The environment one `docker` invocation runs with.
+ *
+ * A configured connection *replaces* the ambient one rather than merging with
+ * it: a deployment that names a runtime node must not have a stray `DOCKER_HOST`
+ * or `DOCKER_CONTEXT` in the process environment quietly redirect it somewhere
+ * else. With nothing configured, the ambient values pass through unchanged,
+ * which is what a developer's laptop relies on.
+ */
+function daemonEnv(connection: DaemonConnection): Record<string, string> {
+  if (connection.dockerHost) {
+    const tlsVerify = connection.tlsVerify ?? Boolean(connection.certPath);
+    return {
+      DOCKER_HOST: connection.dockerHost,
+      ...(connection.certPath ? { DOCKER_CERT_PATH: connection.certPath } : {}),
+      ...(tlsVerify ? { DOCKER_TLS_VERIFY: '1' } : {}),
+    };
+  }
+  return {
+    ...(process.env.DOCKER_HOST ? { DOCKER_HOST: process.env.DOCKER_HOST } : {}),
+    ...(process.env.DOCKER_CONTEXT ? { DOCKER_CONTEXT: process.env.DOCKER_CONTEXT } : {}),
+    ...(process.env.DOCKER_CERT_PATH ? { DOCKER_CERT_PATH: process.env.DOCKER_CERT_PATH } : {}),
+    ...(process.env.DOCKER_TLS_VERIFY ? { DOCKER_TLS_VERIFY: process.env.DOCKER_TLS_VERIFY } : {}),
+  };
+}
+
 function runProcess(
   binary: string,
   argv: string[],
   options: { timeoutMs: number; stdin?: string; maxBufferBytes?: number },
+  connection: DaemonConnection = {},
 ): Promise<ContainerExecResult> {
   return new Promise((resolve) => {
     const child = execFile(
@@ -532,8 +595,7 @@ function runProcess(
         env: {
           PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
           HOME: process.env.HOME ?? '/tmp',
-          ...(process.env.DOCKER_HOST ? { DOCKER_HOST: process.env.DOCKER_HOST } : {}),
-          ...(process.env.DOCKER_CONTEXT ? { DOCKER_CONTEXT: process.env.DOCKER_CONTEXT } : {}),
+          ...daemonEnv(connection),
         },
       },
       (error, stdout, stderr) => {

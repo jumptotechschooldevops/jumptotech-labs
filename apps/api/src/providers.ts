@@ -30,6 +30,9 @@ import {
   AwsLabProvider,
   AWS_PROVIDER_DISABLED_REASON,
   AWS_PROVIDER_REMEDIATION,
+  BrokerDockerEngines,
+  BrokerRuntime,
+  DockerCliFactory,
   DockerCliRuntime,
   DockerLabProvider,
   DOCKER_PROVIDER_DISABLED_REASON,
@@ -70,14 +73,74 @@ export interface BuildProviderRegistryOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/**
+ * The container runtime for the sandbox-backed tracks — Linux, Networking, CS,
+ * Terraform, Ansible and CI/CD.
+ *
+ * Three shapes, in descending order of how much privilege this process ends up
+ * holding:
+ *
+ *   1. `runtimeBrokerUrl` — none at all. Sandboxes are created, read and
+ *      destroyed through `sandboxd`, which is the only service with a runtime
+ *      and is not reachable from a browser. This is what a deployment uses.
+ *   2. `runtimeHost` — a dedicated runtime node over TLS. Better than the
+ *      host's own daemon, still real privilege in this process.
+ *   3. neither — the ambient Docker. A laptop, and the test suite.
+ *
+ * The broker wins when both are set, because a deployment that has one must
+ * never silently fall back to driving a daemon itself.
+ *
+ * Exported because `buildSandboxComposition` needs the *same* runtime for the
+ * Ansible reader that the providers get. It previously built its own
+ * `DockerCliRuntime` there and passed it down, which quietly overrode any
+ * choice made here — the composition root won, and the setting did nothing.
+ * One function, called once, is what stops that from being possible.
+ */
+export function buildContainerRuntime(config: ApiConfig): ContainerRuntimePort {
+  if (config.sandbox.runtimeBrokerUrl) {
+    return new BrokerRuntime({
+      baseUrl: config.sandbox.runtimeBrokerUrl,
+      secret: config.internalServiceSecret,
+    });
+  }
+  return new DockerCliRuntime({
+    binary: config.sandbox.containerBinary,
+    ...(config.sandbox.runtimeHost ? { dockerHost: config.sandbox.runtimeHost } : {}),
+    ...(config.sandbox.runtimeCertPath ? { certPath: config.sandbox.runtimeCertPath } : {}),
+  });
+}
+
+/**
+ * The Docker track's engine factory.
+ *
+ * The same choice `buildContainerRuntime` makes, for the one track that speaks
+ * `DockerEnginePort` instead of `ContainerRuntimePort`:
+ *
+ *   1. `runtimeBrokerUrl` — this process holds no Docker access at all. Sandbox
+ *      creation, certificate reads and verifier reads go through `sandboxd` as
+ *      fourteen named operations. This is what a deployment uses.
+ *   2. neither — a local daemon, for a laptop and for the test suite.
+ *
+ * The broker wins when set, for the same reason it does there: a deployment
+ * that has one must never silently fall back to driving a daemon itself.
+ */
+export function buildDockerEngines(config: ApiConfig): DockerEngineFactory {
+  if (config.sandbox.runtimeBrokerUrl) {
+    return new BrokerDockerEngines({
+      baseUrl: config.sandbox.runtimeBrokerUrl,
+      secret: config.internalServiceSecret,
+    });
+  }
+  return new DockerCliFactory(config.dockerHost ? { dockerHost: config.dockerHost } : {});
+}
+
 export function buildProviderRegistry(options: BuildProviderRegistryOptions): ProviderRegistry {
   const { config } = options;
   const registry = new ProviderRegistry();
 
   registry.register({ provider: options.kubernetes });
 
-  const runtime =
-    options.containerRuntime ?? new DockerCliRuntime({ binary: config.sandbox.containerBinary });
+  const runtime = options.containerRuntime ?? buildContainerRuntime(config);
 
   registry.register({
     provider: new LinuxLabProvider({

@@ -29,6 +29,7 @@ import {
 import { FakeContainerRuntime } from '@jumptotech/lab-orchestrator/testing/containers';
 import { loadConfig } from '../src/config.js';
 import { buildRequirementWaiter, buildSandboxComposition } from '../src/composition.js';
+import { buildDockerEngines } from '../src/providers.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'composition-test-secret-value';
@@ -365,5 +366,95 @@ describe('production entrypoint uses the shared composition module', () => {
     expect(indexSource).toMatch(/from '\.\/composition\.js'/);
     expect(indexSource).toMatch(/buildSandboxComposition\(/);
     expect(indexSource).not.toMatch(/requirementsNeedDocker\(input\.requirements\)/);
+  });
+});
+
+/**
+ * Which runtime the composition actually builds.
+ *
+ * The tests above inject a fake runtime, which is right for provider routing
+ * and useless for this question: the thing worth proving here is what
+ * production *constructs* when nobody injects one, because that is the decision
+ * that determines whether this service holds a Docker socket at all.
+ */
+describe('the container runtime a deployment gets', () => {
+  /** The provider graph with no container runtime injected. */
+  function realRuntime(env: Partial<NodeJS.ProcessEnv> = {}): string {
+    const config = testConfig({
+      INTERNAL_SERVICE_SECRET: 'an-internal-service-secret-for-tests',
+      ...env,
+    });
+    const { providers } = buildSandboxComposition({
+      config,
+      k8s: new FakeKubernetes(),
+      engines: new FakeDockerEngines({ images: ['docker:27-dind'] }),
+    });
+    return runtimeNameOf(providers);
+  }
+
+  it('drives a local Docker daemon when nothing is configured', () => {
+    // `DockerCliRuntime` names itself `docker`; `BrokerRuntime` names itself
+    // `sandboxd`. That name is the whole assertion.
+    expect(realRuntime()).toBe('docker');
+  });
+
+  it('drives the broker — and holds no daemon access — when SANDBOX_BROKER_URL is set', () => {
+    expect(realRuntime({ SANDBOX_BROKER_URL: 'http://sandboxd:4002' })).toBe('sandboxd');
+  });
+
+  it('prefers the broker over a daemon address, never the other way round', () => {
+    expect(
+      realRuntime({
+        SANDBOX_BROKER_URL: 'http://sandboxd:4002',
+        SANDBOX_RUNTIME_HOST: 'tcp://some-daemon:2376',
+      }),
+    ).toBe('sandboxd');
+  });
+});
+
+/** The runtime name a provider reports. See `ContainerLabProvider.runtimeName`. */
+function runtimeNameOf(providers: { peek(id: string): unknown }): string {
+  const provider = providers.peek('linux') as { runtimeName?: string } | null;
+  return provider?.runtimeName ?? 'none';
+}
+
+/**
+ * Which Docker engine a deployment gets.
+ *
+ * The Docker track is the one that speaks `DockerEnginePort`, and it was the
+ * last thing asking this service to hold a host Docker socket. The assertion
+ * that matters is what production *constructs*: a brokered factory whose every
+ * method is either a named broker operation or a hard refusal.
+ */
+describe('the Docker engine a deployment gets', () => {
+  function engines(env: Partial<NodeJS.ProcessEnv> = {}) {
+    return buildDockerEngines(
+      testConfig({ INTERNAL_SERVICE_SECRET: 'an-internal-service-secret-for-tests', ...env }),
+    );
+  }
+
+  it('drives a local Docker daemon when no broker is configured', () => {
+    expect(engines().constructor.name).toBe('DockerCliFactory');
+  });
+
+  it('drives the broker — and holds no daemon access — when SANDBOX_BROKER_URL is set', () => {
+    expect(engines({ SANDBOX_BROKER_URL: 'http://sandboxd:4002' }).constructor.name).toBe(
+      'BrokerDockerEngines',
+    );
+  });
+
+  it('cannot address a container it has no session for', () => {
+    // The whole point of the brokered factory: a sandbox name is not an
+    // argument the API can supply. There is no wire field for one.
+    const brokered = engines({ SANDBOX_BROKER_URL: 'http://sandboxd:4002' });
+    expect(() => brokered.session('jtt-lab-ffffffffffff')).toThrow(/no session is bound/i);
+  });
+
+  it('refuses the Docker operations the broker does not offer', async () => {
+    const brokered = engines({ SANDBOX_BROKER_URL: 'http://sandboxd:4002' });
+    // Never reaches the network: the refusal is in the client.
+    await expect(brokered.host.pullImage('alpine')).rejects.toThrow(/not a brokered Docker operation/);
+    await expect(brokered.host.listImages()).rejects.toThrow(/not a brokered Docker operation/);
+    await expect(brokered.host.removeNetwork('x')).rejects.toThrow(/not a brokered Docker operation/);
   });
 });

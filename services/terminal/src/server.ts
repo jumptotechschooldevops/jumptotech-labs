@@ -25,7 +25,6 @@
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import * as pty from 'node-pty';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   InvalidSessionTokenError,
@@ -42,6 +41,7 @@ import {
   writeSessionKubeconfig,
 } from './credentials.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
+import { brokerShell, localShell, ShellStartError, type Shell } from './shell.js';
 import {
   containerSpawnPlan,
   dockerSpawnPlan,
@@ -69,7 +69,7 @@ interface Session {
   kubeconfigPath: string | undefined;
   /** Present only for Docker sessions: the `DOCKER_CERT_PATH` directory. */
   dockerCertDir: string | undefined;
-  term: pty.IPty;
+  term: Shell;
   /** Last negotiated size, so a replacement shell opens at the same one. */
   cols: number;
   rows: number;
@@ -392,7 +392,8 @@ export function createTerminalServer(config: TerminalConfig): Server {
         // connection was.
         ownerUserId: session.claims.uid,
       });
-      if (context.kind !== 'container-exec' || !config.containerExecEnabled) return false;
+      if (context.kind !== 'container-exec') return false;
+      if (!config.sandboxBrokerEnabled && !config.containerExecEnabled) return false;
       plan = containerSpawnPlan(context, planOptionsFor(session.claims.labId));
     } catch (error) {
       log(`session ${sessionId}: reattach could not resolve a binding — ${describeError(error)}`);
@@ -409,15 +410,33 @@ export function createTerminalServer(config: TerminalConfig): Server {
       /* already gone */
     }
 
-    let term: pty.IPty;
+    let term: Shell;
     try {
-      term = pty.spawn(plan.command, plan.args, {
-        name: 'xterm-256color',
-        cols: session.cols,
-        rows: session.rows,
-        cwd: plan.cwd,
-        env: plan.env,
-      });
+      if (config.sandboxBrokerEnabled) {
+        const attachment = await brokerShell({
+          brokerUrl: config.sandboxBrokerUrl,
+          secret: config.internalServiceSecret,
+          sessionId: session.claims.sid,
+          cols: session.cols,
+          rows: session.rows,
+        });
+        // Same cross-check as the first attach: a reset recreates the sandbox
+        // under the same derived name, so a disagreement here is as wrong as it
+        // was there.
+        if (attachment.sandboxRef !== plan.sandboxRef) {
+          attachment.shell.kill();
+          throw new ShellStartError(
+            'SANDBOX_REF_MISMATCH',
+            'The runtime broker resolved a different sandbox for this session.',
+          );
+        }
+        term = attachment.shell;
+      } else {
+        term = localShell(
+          { command: plan.command, args: plan.args, cwd: plan.cwd, env: plan.env },
+          { cols: session.cols, rows: session.rows },
+        );
+      }
     } catch (error) {
       log(`session ${sessionId}: reattach failed — ${describeError(error)}`);
       send(ws, {
@@ -460,8 +479,13 @@ export function createTerminalServer(config: TerminalConfig): Server {
    * wired exactly like an original one — and a shell that `reattachSession`
    * detached has had its listeners cleared, so its exit never ends the session.
    */
-  function wireShell(ws: WebSocket, term: pty.IPty): void {
-    wireShell(ws, term);
+  function wireShell(ws: WebSocket, term: Shell): void {
+    term.onData((data) => send(ws, { type: 'output', data }));
+    term.onExit(({ exitCode, signal }) => {
+      send(ws, { type: 'exit', exitCode, ...(signal !== undefined ? { signal } : {}) });
+      endSession(ws);
+      if (ws.readyState === ws.OPEN) ws.close(1000, 'shell exited');
+    });
   }
 
   const wss = new WebSocketServer({
@@ -619,6 +643,8 @@ export function createTerminalServer(config: TerminalConfig): Server {
     let plan: SpawnPlan;
     let kubeconfigPath: string | undefined;
     let dockerCertDir: string | undefined;
+    /** True when the PTY lives in `sandboxd` rather than in this process. */
+    let viaBroker = false;
 
     /** Undo whatever this attempt wrote, on any path that does not start a shell. */
     const discardCredentials = async (): Promise<void> => {
@@ -639,15 +665,30 @@ export function createTerminalServer(config: TerminalConfig): Server {
       const planOptions = planOptionsFor(claims.labId);
 
       if (context.kind === 'container-exec') {
-        if (!config.containerExecEnabled) {
+        /*
+         * Two ways to reach a sandbox container, and the order is deliberate.
+         *
+         * The broker wins whenever it is configured, because a deployment that
+         * has one must never silently fall back to running `docker exec` in
+         * this process — that fallback is exactly the privilege this service is
+         * built not to hold. The local path remains for a developer running
+         * the services directly on a laptop.
+         */
+        if (config.sandboxBrokerEnabled) {
+          viaBroker = true;
+        } else if (!config.containerExecEnabled) {
           throw new CredentialsUnavailableError(
             'CONTAINER_EXEC_DISABLED',
             'This terminal service is not configured to attach to sandbox containers.',
           );
         }
+        // Built either way: it re-validates every field of the context against
+        // this service's own patterns, and it carries the sandbox handle the
+        // `ready` frame reports. Only the local path spawns from it.
         plan = containerSpawnPlan(context, planOptions);
         log(
-          `session ${claims.sid}: attaching to sandbox container ${plan.sandboxRef} as ${context.user}`,
+          `session ${claims.sid}: attaching to sandbox container ${plan.sandboxRef} as ${context.user}` +
+            (viaBroker ? ' via the runtime broker' : ''),
         );
       } else if (context.kind === 'docker-daemon') {
         dockerCertDir = await writeSessionDockerCerts(config.credentialsDir, claims.sid, context);
@@ -689,25 +730,51 @@ export function createTerminalServer(config: TerminalConfig): Server {
       return false;
     }
 
-    let term: pty.IPty;
+    let term: Shell;
     try {
-      term = pty.spawn(plan.command, plan.args, {
-        name: 'xterm-256color',
-        cols: clampCols(cols),
-        rows: clampRows(rows),
-        cwd: plan.cwd,
-        env: plan.env,
-      });
+      if (viaBroker) {
+        const attachment = await brokerShell({
+          brokerUrl: config.sandboxBrokerUrl,
+          secret: config.internalServiceSecret,
+          // From the token this service verified at `auth`. The socket never
+          // supplied it, and nothing else about the sandbox is sent at all.
+          sessionId: claims.sid,
+          cols: clampCols(cols),
+          rows: clampRows(rows),
+        });
+        /*
+         * Cross-check, cheap and worth having. The API said this session's
+         * sandbox is `plan.sandboxRef`; the broker independently derived a name
+         * from the same session id and attached to that. They must agree. If
+         * they ever did not, one of the two derivation secrets is wrong and the
+         * student is about to be given somebody else's container — so this
+         * refuses rather than reconciling.
+         */
+        if (attachment.sandboxRef !== plan.sandboxRef) {
+          attachment.shell.kill();
+          throw new ShellStartError(
+            'SANDBOX_REF_MISMATCH',
+            'The runtime broker resolved a different sandbox for this session.',
+          );
+        }
+        term = attachment.shell;
+      } else {
+        term = localShell(
+          { command: plan.command, args: plan.args, cwd: plan.cwd, env: plan.env },
+          { cols: clampCols(cols), rows: clampRows(rows) },
+        );
+      }
     } catch (error) {
+      const code = error instanceof ShellStartError ? error.code : 'PTY_SPAWN_FAILED';
       const message = error instanceof Error ? error.message : String(error);
-      log(`failed to spawn PTY: ${message}`);
+      log(`failed to start shell for ${claims.sid}: ${code} — ${message}`);
       await discardCredentials();
       send(ws, {
         type: 'error',
-        code: 'PTY_SPAWN_FAILED',
+        code,
         message: `Could not start a shell: ${message}`,
       });
-      ws.close(1011, 'pty spawn failed');
+      ws.close(1011, 'shell start failed');
       return false;
     }
 
@@ -732,12 +799,7 @@ export function createTerminalServer(config: TerminalConfig): Server {
     sessions.set(ws, session);
     bySessionId.set(claims.sid, ws);
 
-    term.onData((data) => send(ws, { type: 'output', data }));
-    term.onExit(({ exitCode, signal }) => {
-      send(ws, { type: 'exit', exitCode, ...(signal !== undefined ? { signal } : {}) });
-      endSession(ws);
-      if (ws.readyState === ws.OPEN) ws.close(1000, 'shell exited');
-    });
+    wireShell(ws, term);
 
     send(ws, {
       type: 'ready',

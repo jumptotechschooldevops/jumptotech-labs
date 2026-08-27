@@ -1,0 +1,164 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — the container runtime overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.runtime.yml up
+#   make up
+#
+# This is what makes every track runnable from a deployed stack. Without it, only
+# the Kubernetes track's 19 labs can start.
+#
+#   · the six container-backed tracks — Linux, Networking, CS, AWS, Terraform,
+#     Ansible, CI/CD — through `ContainerRuntimePort`, eleven verbs;
+#   · the Docker track through `DockerEnginePort`, fourteen named operations.
+#
+# Both go through `sandboxd`. Neither puts a Docker socket anywhere a browser
+# can reach.
+#
+# ## The one decision this file makes
+#
+# Container-backed labs need two privileged things: something must *create* the
+# sandbox, and something must *attach a PTY* to it. Both are a container
+# runtime. The question is only ever which process holds it.
+#
+#   ✗ the api       — reachable from a browser through the web proxy. A socket
+#                     here is root on the runtime host, one HTTP bug from the
+#                     public internet.
+#   ✗ the terminal  — the one process a student types into. Worse.
+#   ✓ sandboxd      — reachable from nothing else. A closed list of named
+#                     operations, no passthrough, derives its own container
+#                     names, refuses any request carrying an `Origin` header.
+#
+# So the socket is mounted here and nowhere else, and both the api and the
+# terminal reach it over the internal network with the shared service secret.
+#
+# ## What is deliberately absent
+#
+#   · no `ports:` on sandboxd. It is not published to the host, and the web
+#     proxy has no route to it. The only things that can address it are the two
+#     services on this network that hold the internal secret.
+#   · no socket, and no `DOCKER_HOST`, in the api or the terminal.
+#   · no host filesystem in sandboxd beyond the socket itself.
+#
+# ## Deployment note
+#
+# On a single-host compose stack, `sandboxd` and the web tier share a kernel, so
+# what this buys is a much smaller and much better-audited attack surface rather
+# than a hard partition. A real deployment puts `sandboxd` on a runtime node
+# that is not the machine serving the web tier — the wiring is identical, only
+# `SANDBOX_BROKER_URL` changes. See docs/runtime-architecture.md.
+# ---------------------------------------------------------------------------
+
+services:
+  sandboxd:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/sandboxd.Dockerfile
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    mem_limit: 512m
+    environment:
+      NODE_ENV: production
+      SANDBOXD_PORT: 4002
+      # Bound to every interface *on this network only*: there is no `ports:`
+      # stanza below, so nothing outside the compose network can reach it.
+      SANDBOXD_BIND: 0.0.0.0
+      # The same internal trust domain the terminal and the api already share.
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
+      # MUST equal the api's. Sandbox references are HMACs of the session id,
+      # and this service re-derives them rather than being told one — so a
+      # mismatch means every attach fails closed rather than attaching wrongly.
+      NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:-${TERMINAL_SESSION_SECRET}}
+      # Which sandboxes this broker will touch at all. Two stacks on one daemon
+      # get two owners and neither can see the other's containers.
+      RUNTIME_OWNER_ID: ${RUNTIME_OWNER_ID:-jumptotech}
+      SANDBOXD_MAX_SESSIONS: ${SANDBOXD_MAX_SESSIONS:-32}
+      # --- the Docker track ---
+      #
+      # These are the values that actually shape a `docker:dind` sandbox, and
+      # they live here because this is the process that applies them. The API
+      # sends a session id, a lab id and an expiry; the image, the
+      # `--privileged` flag and every resource ceiling below are read from this
+      # environment and cannot be named by any caller. See
+      # services/sandboxd/src/docker-ops.ts.
+      DOCKER_TRACK_ENABLED: ${DOCKER_TRACK_ENABLED:-true}
+      DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-docker:27-dind}
+      DOCKER_SANDBOX_PRIVILEGED: ${DOCKER_SANDBOX_PRIVILEGED:-true}
+      DOCKER_SANDBOX_MEMORY: ${DOCKER_SANDBOX_MEMORY:-2g}
+      DOCKER_SANDBOX_CPUS: ${DOCKER_SANDBOX_CPUS:-2}
+      DOCKER_SANDBOX_PIDS_LIMIT: ${DOCKER_SANDBOX_PIDS_LIMIT:-512}
+      DOCKER_SANDBOX_MAX_CONTAINERS: ${DOCKER_SANDBOX_MAX_CONTAINERS:-10}
+      DOCKER_SANDBOX_NETWORK: ${DOCKER_SANDBOX_NETWORK:-jumptotech-sandboxes}
+      DOCKER_SANDBOX_DAEMON_PORT: ${DOCKER_SANDBOX_DAEMON_PORT:-2376}
+      DOCKER_SANDBOX_READY_TIMEOUT_SECONDS: ${DOCKER_SANDBOX_READY_TIMEOUT_SECONDS:-180}
+      DOCKER_SANDBOX_RESTART_ATTEMPTS: ${DOCKER_SANDBOX_RESTART_ATTEMPTS:-5}
+      DOCKER_SANDBOX_REGISTRY_MIRROR: ${DOCKER_SANDBOX_REGISTRY_MIRROR:-}
+      SANDBOXD_IDLE_TIMEOUT_SECONDS: ${TERMINAL_IDLE_TIMEOUT_SECONDS:-1800}
+      SANDBOXD_MAX_SESSION_SECONDS: ${TERMINAL_MAX_SESSION_SECONDS:-7200}
+    volumes:
+      # The host Docker socket. This is the only mount of it in the whole
+      # stack, and this is the only service that gets one.
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    # The socket is root-owned and this service runs as `node`. Granting the
+    # socket's group lets a non-root process use it. On Docker Desktop the
+    # socket is root:root, so 0 is correct; on a Linux host set
+    # DOCKER_SOCKET_GID to the `docker` group's gid.
+    group_add:
+      - "${DOCKER_SOCKET_GID:-0}"
+    networks:
+      - default
+
+  api:
+    environment:
+      # Create, read and destroy sandboxes through the broker. Set, and this
+      # service holds no container runtime at all — see apps/api/src/providers.ts.
+      SANDBOX_BROKER_URL: http://sandboxd:4002
+      # The six tracks this overlay exists for. On, because with the broker in
+      # place the terminal can now actually attach to what these create — which
+      # is the thing that was missing, and the reason they were pinned off in
+      # the base file.
+      LINUX_PROVIDER_ENABLED: "true"
+      TERRAFORM_PROVIDER_ENABLED: "true"
+      ANSIBLE_PROVIDER_ENABLED: "true"
+      CICD_PROVIDER_ENABLED: "true"
+      # The Docker track, brokered. This service still gets no socket: with
+      # SANDBOX_BROKER_URL set, `buildDockerEngines` hands the provider a
+      # `BrokerDockerEngines`, whose every method is either a named broker
+      # operation or a hard refusal.
+      DOCKER_TRACK_ENABLED: ${DOCKER_TRACK_ENABLED:-true}
+      # Reported to the student as the ceilings their session runs under. The
+      # values that are actually applied are sandboxd's, above; these are set
+      # from the same variables so the two cannot disagree.
+      DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-docker:27-dind}
+      DOCKER_SANDBOX_MEMORY: ${DOCKER_SANDBOX_MEMORY:-2g}
+      DOCKER_SANDBOX_CPUS: ${DOCKER_SANDBOX_CPUS:-2}
+      DOCKER_SANDBOX_PIDS_LIMIT: ${DOCKER_SANDBOX_PIDS_LIMIT:-512}
+      DOCKER_SANDBOX_MAX_CONTAINERS: ${DOCKER_SANDBOX_MAX_CONTAINERS:-10}
+      DOCKER_SANDBOX_NETWORK: ${DOCKER_SANDBOX_NETWORK:-jumptotech-sandboxes}
+      DOCKER_SANDBOX_DAEMON_PORT: ${DOCKER_SANDBOX_DAEMON_PORT:-2376}
+      DOCKER_SANDBOX_READY_TIMEOUT_SECONDS: ${DOCKER_SANDBOX_READY_TIMEOUT_SECONDS:-180}
+    depends_on:
+      sandboxd:
+        condition: service_healthy
+
+  terminal:
+    environment:
+      SANDBOX_BROKER_URL: http://sandboxd:4002
+      # Attach container-backed shells through the broker.
+      TERMINAL_SANDBOX_BROKER_ENABLED: "true"
+      # Stays off, and stays pinned. It is the *local* `docker exec` path, and
+      # this service must never have a runtime to run it with. With the broker
+      # on it is not consulted at all; pinned so a host-mode value in `.env`
+      # cannot turn it back on.
+      TERMINAL_CONTAINER_EXEC_ENABLED: "false"
+    depends_on:
+      sandboxd:
+        condition: service_healthy

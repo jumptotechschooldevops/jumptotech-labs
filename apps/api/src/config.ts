@@ -187,6 +187,33 @@ export interface SandboxProviderConfig {
    * worktrees on a laptop — so that each reaps only what it created.
    */
   runtimeOwner: string;
+  /**
+   * The container runtime the per-session sandboxes live on.
+   *
+   * Empty means "this process' ambient Docker", which is what a laptop wants
+   * and what every existing test assumes. A deployment sets it to a dedicated
+   * runtime node — `tcp://sandbox-engine:2376` — so that creating a student's
+   * sandbox does not require this web-facing service to hold the *host's*
+   * daemon. It is deliberately separate from `DOCKER_HOST`: the Docker track's
+   * `dind` engines and the container tracks' sandboxes can then live on
+   * different daemons, which is the whole point.
+   */
+  runtimeHost: string;
+  /** `DOCKER_CERT_PATH` for `runtimeHost`, when it speaks TLS. */
+  runtimeCertPath: string;
+  /**
+   * The runtime broker's base URL, e.g. `http://sandboxd:4002`.
+   *
+   * Set, and this service creates and destroys student sandboxes **without
+   * holding a container runtime at all** — it asks `sandboxd`, which is the
+   * only process in the deployment with one. That is what makes the
+   * container-backed tracks deployable without mounting the host Docker socket
+   * into the service a browser can reach.
+   *
+   * Takes precedence over `runtimeHost`: a deployment that has a broker must
+   * never quietly fall back to driving a daemon itself.
+   */
+  runtimeBrokerUrl: string;
   linuxEnabled: boolean;
   linuxImage: string;
   terraformEnabled: boolean;
@@ -407,6 +434,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const looksLocal = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(appUrl);
   const cookieSecure = boolFromEnv(env, 'AUTH_COOKIE_SECURE', !looksLocal);
 
+
   return {
     /*
      * `oidc` is the default on purpose.
@@ -479,6 +507,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     sandbox: {
       containerBinary: strFromEnv(env, 'SANDBOX_CONTAINER_BINARY', 'docker'),
       runtimeOwner: strFromEnv(env, 'RUNTIME_OWNER_ID', DEFAULT_RUNTIME_OWNER),
+      runtimeHost: strFromEnv(env, 'SANDBOX_RUNTIME_HOST', ''),
+      runtimeCertPath: strFromEnv(env, 'SANDBOX_RUNTIME_CERT_PATH', ''),
+      runtimeBrokerUrl: strFromEnv(env, 'SANDBOX_BROKER_URL', ''),
       linuxEnabled: boolFromEnv(env, 'LINUX_PROVIDER_ENABLED', true),
       linuxImage: strFromEnv(env, 'LINUX_SANDBOX_IMAGE', DEFAULT_LINUX_SANDBOX_IMAGE),
       terraformEnabled: boolFromEnv(env, 'TERRAFORM_PROVIDER_ENABLED', true),

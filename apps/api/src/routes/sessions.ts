@@ -187,8 +187,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     return {
       ...(session.provider === 'kubernetes' ? { k8s } : {}),
       ...(sandboxPort ? { sandbox: sandboxPort } : {}),
+      // The session id, not just the sandbox name: a brokered engine derives
+      // the sandbox from the session and accepts no container name.
       ...(session.provider === 'docker' && engines
-        ? { docker: engines.session(sandboxRef) }
+        ? { docker: engines.session(sandboxRef, session.sessionId) }
         : {}),
       // An Ansible lab is graded across its whole topology, so its reader is a
       // port over the session's containers rather than the single-sandbox one.

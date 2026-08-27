@@ -88,6 +88,8 @@ export {
   ContainerLabProvider,
   type ContainerProviderOptions,
 } from './providers/container/sandbox-provider.js';
+export { BrokerRuntime, type BrokerRuntimeOptions } from './providers/container/broker-runtime.js';
+export { BrokerDockerEngines, type BrokerDockerOptions } from './docker/broker-engines.js';
 export {
   DockerCliRuntime,
   ContainerRuntimeError,
@@ -127,6 +129,7 @@ export {
 export {
   DockerLabProvider,
   SANDBOX_LABELS,
+  SANDBOX_COMPONENT,
   DEFAULT_DOCKER_SANDBOX_IMAGE,
   DOCKER_PROVIDER_DISABLED_REASON,
   DOCKER_PROVIDER_REMEDIATION,

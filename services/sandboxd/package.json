@@ -1,9 +1,18 @@
 {
-  "name": "@jumptotech/terminal",
+  "name": "@jumptotech/sandboxd",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "WebSocket terminal gateway. Runs a real PTY per authenticated lab session.",
+  "description": "Runtime broker. The only process that drives a container runtime; hands out PTYs bound to one session's own sandbox.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts",
+    "./config": "./src/config.ts",
+    "./attach": "./src/attach.ts",
+    "./inspector": "./src/inspector.ts",
+    "./protocol": "./src/protocol.ts",
+    "./docker-ops": "./src/docker-ops.ts"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
@@ -21,8 +30,6 @@
     "@types/ws": "^8.5.13",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8",
-    "@jumptotech/api": "*",
-    "@jumptotech/verifier": "*",
-    "@jumptotech/sandboxd": "*"
+    "@jumptotech/test-support": "*"
   }
 }
