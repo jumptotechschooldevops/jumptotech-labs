@@ -4,11 +4,51 @@
 # could reach main having been checked on one developer's laptop and nowhere
 # else. This runs what a developer runs.
 #
-# Only the hermetic gates run here. Integration and E2E suites need a real Docker
-# daemon and a kind cluster, and they are gated behind RUN_INTEGRATION_TESTS /
-# RUN_DOCKER_INTEGRATION_TESTS / RUN_DB_TESTS precisely so `npm test` stays
-# hermetic — see test-support/README.md. Wiring those into CI is PLATFORM-007b's
-# remaining work and needs per-job cluster isolation first.
+# ## Two stages, and why
+#
+# `gates` is hermetic: no daemon, no cluster, no database. It is the fan-out
+# point — every runtime job below `needs:` it, so a branch that does not
+# typecheck never spends seven runners' worth of image builds proving it.
+#
+# The runtime jobs are what PLATFORM-007b left open. The integration and E2E
+# suites are gated behind RUN_INTEGRATION_TESTS / RUN_DOCKER_INTEGRATION_TESTS /
+# RUN_DB_TESTS so that `npm test` stays hermetic (test-support/README.md), and
+# for a long time that meant they ran on developer laptops and nowhere else —
+# the one place they cannot be trusted, because a laptop's daemon, cluster and
+# leftover containers are shared with six other worktrees.
+#
+# Each runtime job gets a *fresh runner*, which is the isolation the laptop
+# could never offer: its own daemon, its own cluster, its own image store,
+# thrown away afterwards. That is why they are separate jobs rather than steps —
+# not for parallelism, but so that no two of them can see each other's
+# containers, networks, volumes or namespaces.
+#
+# ## Rules every runtime job here follows
+#
+#   · Node 22, the supported baseline (.nvmrc, README → Requirements).
+#   · An explicit `timeout-minutes`, so a hung daemon fails rather than burns.
+#   · A run-scoped `RUNTIME_OWNER_ID` and `JTT_TEST_RUN_ID`, so every object it
+#     creates is named after it and every cleanup filters on that name — the
+#     same ownership contract as docs/runtime-ownership.md.
+#   · Deterministic teardown in an `if: always()` step, and diagnostics captured
+#     *before* it.
+#   · No secrets, no cloud credentials, no registry logins. The AWS track is
+#     simulated and needs none; nothing here has any.
+#
+# ## What holds the Docker socket
+#
+# One job — `sandboxd-integration` — mounts `/var/run/docker.sock`, because the
+# suite under test *is* the broker that holds it: proving sandboxd's refusals
+# against a real daemon is the entire point, and a fake daemon proves nothing.
+# It is mounted into the throwaway test image, never into a lab sandbox and
+# never into a service that faces a student. No other job mounts it.
+#
+# NET_RAW is not something a runner grants. It reaches a container only through
+# the provider's capability gate (linux provider + `network: link` + an explicit
+# `sandbox_capabilities: [NET_RAW]` in the lab), and `networking-integration`
+# runs the suite that proves exactly that closed set — including that the Docker
+# provider can never obtain it.
+
 name: Quality gates
 
 on:
@@ -40,8 +80,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # The repo pins Node 22 (engines: >=20 <25).
-          node-version: 22
+          # One place decides the version, and it is the same file `nvm use`
+          # reads on a laptop. A literal here is a second source of truth that
+          # drifts silently.
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install
@@ -99,5 +141,490 @@ jobs:
             fi
           done
 
+      # `docker-compose.runtime.yml` says of its one socket mount: "this is the
+      # only mount of it in the whole stack, and this is the only service that
+      # gets one." That was a comment, which is to say it was true until someone
+      # added a second one. This is the same claim as a gate.
+      #
+      # A grep for the same reason the observability one above is a grep: it
+      # asserts the *absence* of a mount from a file, which no running code can
+      # observe. Handing the socket to the api, the terminal or the web tier
+      # would give a student-facing process the root-equivalent capability that
+      # the whole broker architecture exists to keep away from them.
+      - name: sandboxd is the only service holding a Docker socket
+        run: |
+          set -euo pipefail
+          for file in docker-compose.yml docker-compose.runtime.yml \
+                      docker-compose.observability.yml; do
+            # Comments are skipped deliberately: `docker-compose.yml` discusses
+            # the socket at length under both `api` and `terminal`, explaining
+            # why neither may have one. Prose about a mount is not a mount.
+            owner=$(awk '
+              /^[[:space:]]*#/ { next }
+              /^  [a-z][a-z0-9_-]*:/ { service = $1; sub(/:$/, "", service) }
+              /\/var\/run\/docker\.sock/ { print service }
+            ' "$file" | sort -u)
+            for service in $owner; do
+              if [ "$service" != "sandboxd" ]; then
+                echo "$file mounts the Docker socket into '$service'" >&2
+                exit 1
+              fi
+            done
+          done
+          echo "only sandboxd mounts /var/run/docker.sock"
+
       - name: Build
         run: npm run build
+
+  # ===========================================================================
+  # RUNTIME INTEGRATION GATES
+  #
+  # Everything below needs infrastructure the hermetic job deliberately cannot
+  # reach. Each job builds its own, on its own runner, and tears it down.
+  # ===========================================================================
+
+  # --- PostgreSQL -----------------------------------------------------------
+  #
+  # `make test-db` is the canonical path (README → Testing). It starts a
+  # throwaway `postgres:16-alpine`, runs the three persistence suites against
+  # it, and removes it whether they pass or fail — so there is no development
+  # database to point at, no password to configure, and nothing to leave dirty.
+  postgres-integration:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-postgres
+      JTT_TEST_RUN_ID: cipg${{ github.run_id }}
+      # Named explicitly rather than left to the default, so the port this job
+      # binds is a decision in this file rather than a collision to debug.
+      TEST_DB_PORT: 55432
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Persistence suites against a throwaway PostgreSQL
+        run: make test-db
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker ps -a --filter name=jumptotech-labs-test-db
+          docker logs --tail 200 jumptotech-labs-test-db 2>&1 || true
+
+      # `make test-db` removes the container on both paths; this covers the
+      # third, where the job was cancelled between the two.
+      - name: Clean up
+        if: always()
+        run: docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
+
+  # --- Kubernetes -----------------------------------------------------------
+  #
+  # A fresh kind cluster from the repository's own `scripts/cluster-up.sh`, not
+  # from a third-party action: the script is what a developer runs, and a CI
+  # cluster built some other way would prove a configuration nobody uses.
+  kind-integration:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    env:
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-kind
+      JTT_TEST_RUN_ID: cik8s${{ github.run_id }}
+      LAB_CLUSTER_NAME: jumptotech-labs
+      KIND_VERSION: v0.31.0
+      KUBECTL_VERSION: v1.34.2
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install kind and kubectl
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/kind \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          curl -fsSLo /tmp/kubectl \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+          kind --version
+          kubectl version --client
+
+      - name: Install
+        run: npm ci
+
+      - name: Create the cluster
+        run: npm run cluster:up
+
+      - name: Orchestrator integration suite
+        env:
+          RUN_INTEGRATION_TESTS: '1'
+          KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
+        run: |
+          npx vitest run test/integration.test.ts \
+            --root services/lab-orchestrator
+
+      - name: Whole-catalog Kubernetes suite
+        env:
+          RUN_INTEGRATION_TESTS: '1'
+          KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
+        run: |
+          npx vitest run test/labs-integration.test.ts \
+            --root services/lab-orchestrator
+
+      - name: Diagnostics
+        if: failure()
+        env:
+          KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
+        run: |
+          kubectl get nodes -o wide || true
+          kubectl get namespaces || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
+          mkdir -p /tmp/kind-logs
+          kind export logs /tmp/kind-logs --name "$LAB_CLUSTER_NAME" || true
+
+      - name: Upload cluster logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kind-logs-${{ github.run_id }}
+          path: /tmp/kind-logs
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Leaked lab namespaces
+        if: always()
+        run: |
+          KUBECONFIG=infrastructure/kind/generated/kubeconfig-host.yaml \
+            kubectl get namespaces -o name | grep -E 'lab-' || echo "no lab namespaces left"
+
+      - name: Delete the cluster
+        if: always()
+        run: kind delete cluster --name "$LAB_CLUSTER_NAME" || true
+
+  # --- Linux / Terraform / Ansible / CI-CD sandboxes -------------------------
+  #
+  # One job for the four container-backed tracks that share `sandbox-build.sh`,
+  # because they share the four images it builds and building them twice on two
+  # runners costs more than running the suites in sequence on one.
+  sandbox-integration:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-sandbox
+      JTT_TEST_RUN_ID: cisbx${{ github.run_id }}
+      RUN_INTEGRATION_TESTS: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # All four tags or none — the script refuses a half-configured set, and
+      # on a throwaway runner the canonical `:latest` tags are the right ones.
+      - name: Build the sandbox images
+        run: npm run sandbox:build
+
+      - name: Linux and Terraform sandboxes
+        run: npx vitest run test/sandbox-integration.test.ts --root apps/api
+
+      - name: Linux man pages
+        run: |
+          npx vitest run test/linux-man-pages-integration.test.ts \
+            --root services/lab-orchestrator
+
+      - name: Ansible runtime
+        run: |
+          npx vitest run test/ansible-runtime-integration.test.ts \
+            --root services/lab-orchestrator
+
+      - name: CI/CD runtime
+        run: |
+          npx vitest run test/cicd-runtime-integration.test.ts \
+            --root services/lab-orchestrator
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker ps -a
+          docker network ls
+          docker volume ls
+
+      - name: Leaked sandboxes
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/managed=true \
+            | xargs -r docker inspect -f '{{.Name}} {{.Config.Image}}' || true
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/managed=true | xargs -r docker rm -f || true
+          docker network ls -q --filter name=jtt-net- | xargs -r docker network rm || true
+
+  # --- Networking (NET-004 … NET-008 and the NET_RAW boundary) --------------
+  #
+  # Its own job rather than a step in `sandbox-integration`, because the thing
+  # it proves is an isolation boundary and the evidence should not be entangled
+  # with anything else's containers. These suites create per-session `--internal`
+  # networks, peer containers, and — for exactly two labs — a container holding
+  # CAP_NET_RAW. `net-raw-capability-integration` is the suite that proves the
+  # grant is a closed set: linux provider only, `network: link` only, declared
+  # in the lab only, and unobtainable by the Docker provider.
+  networking-integration:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-net
+      JTT_TEST_RUN_ID: cinet${{ github.run_id }}
+      RUN_INTEGRATION_TESTS: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # NET-004/005/006 read a prebuilt tag; NET-007, NET-008 and the NET_RAW
+      # suite build their own run-scoped tags and remove them afterwards.
+      - name: Build the Linux sandbox image
+        run: |
+          docker build -t jumptotech/lab-linux:net004-e2e \
+            -f infrastructure/docker/sandbox-linux.Dockerfile .
+
+      - name: NET-004 … NET-008
+        run: |
+          npx vitest run \
+            test/net004-integration.test.ts \
+            test/net005-integration.test.ts \
+            test/net006-integration.test.ts \
+            test/net007-integration.test.ts \
+            test/net008-integration.test.ts \
+            --root services/lab-orchestrator
+
+      - name: The NET_RAW capability boundary
+        run: |
+          npx vitest run test/net-raw-capability-integration.test.ts \
+            --root services/lab-orchestrator
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker ps -a
+          docker network ls --filter name=jtt-net-
+          docker network inspect $(docker network ls -q --filter name=jtt-net-) || true
+
+      - name: Leaked sandboxes, peers and segments
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/managed=true \
+            | xargs -r docker inspect -f '{{.Name}} {{.Config.Image}}' || true
+          docker network ls --filter name=jtt-net- --format '{{.Name}}' || true
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/managed=true | xargs -r docker rm -f || true
+          docker network ls -q --filter name=jtt-net- | xargs -r docker network rm || true
+
+  # --- Docker track ---------------------------------------------------------
+  #
+  # Per-session Docker-in-Docker: every session gets its own daemon in its own
+  # container, reached over mTLS with that session's client certificate. The
+  # host's socket is never handed to a sandbox, and `DockerLabProvider` cannot
+  # obtain NET_RAW — both are properties these suites assert rather than assume.
+  docker-integration:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-docker
+      JTT_TEST_RUN_ID: cidkr${{ github.run_id }}
+      RUN_DOCKER_INTEGRATION_TESTS: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Pulled once here rather than inside the first suite's ready-timeout, so
+      # a slow registry reads as a slow pull instead of a daemon that failed to
+      # start. The tag is the provider's own default.
+      - name: Pre-pull the sandbox daemon image
+        run: docker pull docker:27-dind
+
+      - name: Core Docker suite
+        run: |
+          npx vitest run test/docker-integration.test.ts \
+            --root services/lab-orchestrator \
+            --testTimeout=900000 --hookTimeout=900000
+
+      # Sequential, not one vitest invocation: each of these starts its own
+      # privileged dind sandbox, and six at once on a two-core runner turns a
+      # daemon-startup timeout into the thing being measured.
+      - name: Per-lab Docker suites (009 … 014)
+        run: |
+          set -euo pipefail
+          for suite in docker009 docker010 docker011 docker012 docker013 docker014; do
+            echo "::group::$suite"
+            npx vitest run "test/${suite}-integration.test.ts" \
+              --root services/lab-orchestrator \
+              --testTimeout=900000 --hookTimeout=900000
+            echo "::endgroup::"
+          done
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker ps -a
+          docker volume ls
+          docker network ls
+
+      - name: Leaked sandboxes and volumes
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/managed=true \
+            | xargs -r docker inspect -f '{{.Name}} {{.Config.Image}}' || true
+          docker volume ls --filter label=jumptotech.io/managed=true --format '{{.Name}}' || true
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/managed=true | xargs -r docker rm -f || true
+          docker volume ls -q --filter label=jumptotech.io/managed=true | xargs -r docker volume rm -f || true
+
+  # --- Terminal (real PTY) --------------------------------------------------
+  #
+  # `make test-terminal-container` runs the suite *inside* the terminal test
+  # image, not on the runner: `node-pty` is a native addon, the suite skips
+  # itself where it cannot spawn a PTY, and a skipped suite in CI is a gate that
+  # silently stopped gating. The container also joins the `kind` network, which
+  # is how the deployed terminal container reaches the API server.
+  terminal-integration:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-terminal
+      JTT_TEST_RUN_ID: citty${{ github.run_id }}
+      LAB_CLUSTER_NAME: jumptotech-labs
+      KIND_VERSION: v0.31.0
+      KUBECTL_VERSION: v1.34.2
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install kind and kubectl
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/kind \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          curl -fsSLo /tmp/kubectl \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+
+      - name: Install
+        run: npm ci
+
+      - name: Create the cluster
+        run: npm run cluster:up
+
+      - name: Terminal suite, in a container, against a real PTY
+        run: make test-terminal-container
+
+      - name: Diagnostics
+        if: failure()
+        env:
+          KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
+        run: |
+          kubectl get namespaces || true
+          kubectl get serviceaccounts -A || true
+          docker ps -a
+
+      - name: Delete the cluster
+        if: always()
+        run: kind delete cluster --name "$LAB_CLUSTER_NAME" || true
+
+  # --- sandboxd (the runtime broker) ----------------------------------------
+  #
+  # The one job that mounts the Docker socket, and the reason is the subject:
+  # `sandboxd` is the only process in the architecture that legitimately holds
+  # one, and the refusals it exists to enforce — a caller that cannot name a
+  # container, a session that cannot reach another session's sandbox — are only
+  # worth anything against a real daemon. The host suite short-circuits where it
+  # cannot spawn a PTY, so the make target runs it in the test image instead.
+  sandboxd-integration:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-sandboxd
+      JTT_TEST_RUN_ID: cisbd${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Broker suite, against a real daemon and real PTYs
+        run: make test-sandboxd-container
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker ps -a
+          docker network ls
+
+      - name: Leaked sandboxes
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/managed=true \
+            | xargs -r docker inspect -f '{{.Name}} {{.Config.Image}}' || true
+
+      - name: Clean up
+        if: always()
+        run: docker ps -aq --filter label=jumptotech.io/managed=true | xargs -r docker rm -f || true
