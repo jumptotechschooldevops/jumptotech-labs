@@ -63,11 +63,12 @@ observability-token: ## Write the scrape token where Prometheus reads it
 observability-up: ## Start the stack with Prometheus, Alertmanager and Grafana
 	@$(MAKE) observability-token
 	@$(COMPOSE) -f docker-compose.observability.yml --profile observability up -d --build
-	@echo ""
-	@echo "  Grafana       http://127.0.0.1:$${GRAFANA_PORT:-3001}  (admin / GRAFANA_ADMIN_PASSWORD in .env)"
-	@echo "  Prometheus    http://127.0.0.1:$${PROMETHEUS_PORT:-9090}"
-	@echo "  Alertmanager  http://127.0.0.1:$${ALERTMANAGER_PORT:-9093}"
-	@echo ""
+	@set -a; [ -f ./.env ] && . ./.env; set +a; \
+		echo ""; \
+		echo "  Grafana       http://127.0.0.1:$${GRAFANA_PORT:-3001}  (admin / GRAFANA_ADMIN_PASSWORD in .env)"; \
+		echo "  Prometheus    http://127.0.0.1:$${PROMETHEUS_PORT:-9090}"; \
+		echo "  Alertmanager  http://127.0.0.1:$${ALERTMANAGER_PORT:-9093}"; \
+		echo ""
 
 observability-down: ## Stop the observability stack, leaving the platform running
 	@$(COMPOSE) -f docker-compose.observability.yml --profile observability rm -sf prometheus alertmanager grafana

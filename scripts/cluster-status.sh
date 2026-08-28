@@ -7,6 +7,24 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLUSTER_NAME="${LAB_CLUSTER_NAME:-jumptotech-labs}"
 HOST_KUBECONFIG="${REPO_ROOT}/infrastructure/kind/generated/kubeconfig-host.yaml"
+# Ports come from `.env`, because that is where compose read them from when it
+# published them. Without this the report probes the defaults: on a stack whose
+# .env moves WEB_PORT, `make status` called the web container down — or worse,
+# found an unrelated container on :3000 and called it healthy.
+#
+# The shell environment still wins over `.env`, which is compose's own
+# precedence, so `WEB_PORT=33000 make status` keeps meaning what it says.
+env_default() {
+  local name="$1" line
+  [[ -n "${!name:-}" ]] && return 0
+  line="$(grep -E "^${name}=" "${REPO_ROOT}/.env" 2>/dev/null | tail -1)" || true
+  [[ -n "${line}" ]] && export "${name}=${line#*=}"
+  return 0
+}
+env_default API_PORT
+env_default TERMINAL_PORT
+env_default WEB_PORT
+
 API_PORT="${API_PORT:-4000}"
 TERMINAL_PORT="${TERMINAL_PORT:-4001}"
 WEB_PORT="${WEB_PORT:-3000}"

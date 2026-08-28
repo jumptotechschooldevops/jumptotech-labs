@@ -11,7 +11,16 @@
 #
 set -euo pipefail
 
-CONTAINER="${JTT_API_CONTAINER:-jumptotech-api}"
+# Compose names containers `<project>-<service>-<index>`, and no service sets a
+# `container_name`, so the running API container is `jumptotech-labs-api-1` on a
+# default `make up`. Ask compose rather than hardcoding it, so a stack started
+# with a custom COMPOSE_PROJECT_NAME still resolves.
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.runtime.yml)
+CONTAINER="${JTT_API_CONTAINER:-}"
+if [[ -z "$CONTAINER" ]]; then
+  CONTAINER="$(docker compose "${COMPOSE_FILES[@]}" ps -q api 2>/dev/null | head -1 || true)"
+fi
+CONTAINER="${CONTAINER:-jumptotech-labs-api-1}"
 MARKER='requirementsNeedDocker(input.requirements)'
 
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
