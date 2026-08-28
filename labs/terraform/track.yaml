@@ -1,0 +1,7 @@
+# Optional track metadata. The track itself exists because labs declare it;
+# this file only says how it should be presented in the catalog.
+#
+# `titleCase('terraform')` already produces the right title; this file is here
+# for the tagline, so the catalog card reads like every other track's.
+title: Terraform
+tagline: Infrastructure as code, planned and applied in a private sandbox.

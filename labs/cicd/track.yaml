@@ -1,0 +1,11 @@
+# Optional track metadata. The track itself exists because labs declare it;
+# this file only says how it should be presented in the catalog.
+#
+# The `title` is the reason this file exists. Without it the catalog falls back
+# to `titleCase('cicd')` and advertises a track called **"Cicd"** — the same
+# failure the `TRACK_TITLES` table in `lab-registry.ts` was added for when `aws`
+# title-cased to "Aws". Declaring it here is the mechanism the registry prefers
+# ("a track's preferred title comes from its `track.yaml`") and keeps a display
+# name out of application code.
+title: CI/CD
+tagline: Pipelines as code — build, test, and the automation that gates a release.

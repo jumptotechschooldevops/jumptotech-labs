@@ -1,0 +1,7 @@
+# Optional track metadata. The track itself exists because labs declare it;
+# this file only says how it should be presented in the catalog.
+#
+# `titleCase('ansible')` already produces the right title; this file is here for
+# the tagline, so the catalog card reads like every other track's.
+title: Ansible
+tagline: Inventories, playbooks, and configuration applied across real nodes.

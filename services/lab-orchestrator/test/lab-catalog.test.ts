@@ -17,7 +17,7 @@
  * `catalog-shape.ts` for why that is stronger than the counts it replaced.
  */
 import { beforeAll, describe, expect, it, onTestFinished } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -26,6 +26,8 @@ import {
   OFFICIAL_DOC_HOSTS,
   parseLabDefinition,
   LabDefinitionError,
+  titleCase,
+  trackTitle,
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 import { freshRealCatalog, realCatalog } from './real-catalog.js';
@@ -1052,3 +1054,63 @@ describe('schema — verification requirements (test requirement 12)', () => {
     }
   });
 });
+
+describe('catalog — no track reaches a student under a machine-generated name', () => {
+  /*
+   * The catalog served a track called **"Cicd"**.
+   *
+   * `trackTitle()` falls back to `titleCase(track)` when a track declares no
+   * title of its own, and `titleCase('cicd')` is "Cicd". That fallback is right
+   * for `ansible` and `terraform`, whose slugs title-case correctly, and wrong
+   * for any slug that is an acronym or contains punctuation — which is exactly
+   * why `TRACK_TITLES` was added for `aws` ("Aws"). `cicd` arrived later and
+   * nothing made it declare a title, so the frontend, `GET /api/labs` and every
+   * catalog card said "Cicd" to students.
+   *
+   * Counting tracks or listing their names here would just move the problem, so
+   * the assertion is structural: a shipped track must *declare* its title,
+   * either in its own `track.yaml` or in the `TRACK_TITLES` table. A new track
+   * added without one fails here rather than shipping under whatever
+   * `titleCase` produced.
+   */
+  it('every shipped track declares its title rather than inheriting titleCase', async () => {
+    const registry = await realRegistry();
+    const undeclared: string[] = [];
+
+    for (const summary of registry.tracks()) {
+      const meta = await loadTrackYamlTitle(summary.track);
+      const declaredInTable = trackTitle(summary.track) !== titleCase(summary.track);
+      if (!meta && !declaredInTable) undeclared.push(summary.track);
+    }
+
+    expect(
+      undeclared,
+      'these tracks would be presented under a title titleCase() invented: ' +
+        'add `title:` to labs/<track>/track.yaml',
+    ).toEqual([]);
+  });
+
+  it('presents CI/CD by its real name', async () => {
+    const cicd = (await realRegistry()).tracks().find((t) => t.track === 'cicd');
+    expect(cicd?.title).toBe('CI/CD');
+    expect(cicd?.title).not.toBe(titleCase('cicd'));
+  });
+
+  it('gives every shipped track a tagline for its catalog card', async () => {
+    const missing = (await realRegistry())
+      .tracks()
+      .filter((t) => !t.tagline)
+      .map((t) => t.track);
+    expect(missing, 'add `tagline:` to labs/<track>/track.yaml').toEqual([]);
+  });
+});
+
+/** Read only the declared `title:` from a track's `track.yaml`, if it has one. */
+async function loadTrackYamlTitle(track: string): Promise<string | null> {
+  try {
+    const contents = await readFile(path.join(LABS_DIR, track, 'track.yaml'), 'utf8');
+    return /^title:\s*(\S.*)$/m.exec(contents)?.[1]?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
