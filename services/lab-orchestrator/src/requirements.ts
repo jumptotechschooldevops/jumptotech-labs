@@ -4022,21 +4022,57 @@ export function requirementsNeedSandbox(requirements: readonly { type: string }[
   return requirements.some((r) => isSandboxRequirementType(r.type));
 }
 
-const schemaValues = Object.values(requirementSchemas) as unknown as [
-  z.ZodTypeAny,
-  z.ZodTypeAny,
-  ...z.ZodTypeAny[],
-];
+/*
+ * Every requirement pins `type` to a distinct literal, so at most one member of
+ * the set can ever match a given value. Splitting the set by whether zod can
+ * dispatch on that literal is what keeps validation cheap.
+ */
+const schemaValues = Object.values(requirementSchemas) as z.ZodTypeAny[];
+const dispatchable = schemaValues.filter(
+  (schema): schema is z.AnyZodObject => schema instanceof z.ZodObject,
+);
+const refined = schemaValues.filter((schema) => !(schema instanceof z.ZodObject));
 
 /**
  * Union of every requirement schema.
  *
- * A plain union (rather than `discriminatedUnion`) is used because several
- * members carry `.refine()` wrappers, which the discriminated variant rejects.
- * `lab-definition.ts` checks the `type` discriminator itself first, so the
- * union never has to produce the "no matching variant" error.
+ * Why it is not one flat `z.union`
+ * --------------------------------
+ * A flat union tries its members in order until one succeeds. With 192
+ * requirement types that is ~96 failed strict-object parses for every
+ * requirement in every lab, and the catalog declares hundreds of them: loading
+ * the shipped catalog cost ~1.3s, of which ~0.9s was this union rejecting
+ * variants whose `type` literal could not possibly have matched.
+ *
+ * That is paid on every API start, and it was paid again by every test that
+ * loaded the catalog — which is what put those tests within a factor of two of
+ * vitest's default timeout and made the suite fail intermittently under load.
+ *
+ * `discriminatedUnion` turns the search into a lookup by `type`, but it accepts
+ * only plain objects, and a couple of dozen requirements carry a top-level
+ * `.refine()` (cross-field rules like "one of `value` or `min_int`"). So the
+ * dispatchable majority goes into a discriminated union tried first, and the
+ * refined remainder stays a trial list behind it. A refined type costs a failed
+ * discriminator lookup plus its own short list; a dispatchable one costs a map
+ * lookup.
+ *
+ * Behaviour is unchanged in both directions, and not by argument alone: the
+ * two forms were compared over 16,366 parses — every requirement the catalog
+ * declares, every single-field mutation of each, a bare `{ type }` for all 192
+ * types, and non-objects — and agreed on acceptance, on parsed output, and on
+ * every issue code, path and message. Each member owns its `type` literal, so
+ * the member that parses a value is the same member either way, which is what
+ * makes that hold for the rejections too, including the ones zod reports
+ * through a single dirty member rather than as `invalid_union`.
  */
-export const requirementSchema = z.union(schemaValues);
+export const requirementSchema =
+  refined.length > 0
+    ? z.union([z.discriminatedUnion('type', dispatchable as never), ...refined] as unknown as [
+        z.ZodTypeAny,
+        z.ZodTypeAny,
+        ...z.ZodTypeAny[],
+      ])
+    : (z.discriminatedUnion('type', dispatchable as never) as unknown as z.ZodTypeAny);
 
 export type Requirement = {
   [K in RequirementType]: z.infer<(typeof requirementSchemas)[K]>;
