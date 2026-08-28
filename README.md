@@ -17,7 +17,7 @@ one student at a time: every lab session now gets its own namespace, its own
 ServiceAccount, its own RBAC, its own quota, and its own network policy, and it
 is cleaned up automatically when the student finishes or walks away.
 
-**PLATFORM-003** turned one lab into a catalog. There are now ten Kubernetes
+**PLATFORM-003** turned one lab into a catalog. There are now 19 Kubernetes
 labs, and the application contains no code that knows about any of them:
 adding a lab means adding a `lab.yaml`, and nothing else. See
 [The lab catalog](#the-lab-catalog).
@@ -44,7 +44,7 @@ completed**. The dividing line is the whole design:
 
 See [Persistent progress](#persistent-progress).
 
-**The Linux track is the proof.** Ten Linux labs — files, permissions, users
+**The Linux track is the proof.** The Linux labs — files, permissions, users
 and groups, processes, services, networking, logs, storage, shell scripting and
 troubleshooting — run on that second substrate through the same catalog, the
 same session lifecycle, the same terminal, and the same verifier. Adding them
@@ -161,7 +161,7 @@ Added by PLATFORM-004:
 
 Added by PLATFORM-003:
 
-- **A real catalog.** Ten Kubernetes labs, discovered from `labs/` at startup,
+- **A real catalog.** Kubernetes labs, discovered from `labs/` at startup,
   validated against a schema, and rejected with a precise developer error when
   malformed. Duplicate ids, duplicate slugs, dangling prerequisites, and
   prerequisite cycles are all refused.
@@ -206,7 +206,7 @@ Added by PLATFORM-005:
 
 Added by PLATFORM-LINUX-001:
 
-- **A second track.** Ten Linux labs, from files and permissions through
+- **A second track.** A Linux track, from files and permissions through
   services, networking, logs, storage, shell scripting, and a troubleshooting
   lab that seeds a real fault. The catalog, the API, and the React pages gained
   no knowledge of either track's name.
@@ -1058,7 +1058,13 @@ change the application either.** No component switches on a track name. The
 catalog renders track cards because the API reported more than one track, and a
 third track would render the same way without a line of frontend work.
 
-### The ten Kubernetes labs
+### The Kubernetes labs
+
+The track has grown to 19 labs. The table below is the foundation sequence,
+K8S-001 to K8S-010; the later labs (PVCs, RBAC, rolling updates, rollbacks,
+update strategies, init containers, sidecar logging, DaemonSets, StatefulSets)
+are listed by `GET /api/labs`, which is the source of truth — the catalog is
+read from `labs/` at startup and no count is compiled into the application.
 
 | Lab | Title | Topic | Level | Prerequisites | Starts from |
 |---|---|---|---|---|---|
@@ -1078,7 +1084,12 @@ platform, written from the official Kubernetes documentation. No wording,
 task, or solution is taken from any third-party training platform, and the
 loader rejects a definition that links to one.
 
-### The ten Linux labs
+### The Linux labs
+
+The track has grown to 17 labs. The table below is the foundation sequence,
+LINUX-001 to LINUX-010; the later labs (special permission bits, service
+environment and PATH, sudo policy, text sweeps, systemd units, cron, package
+integrity) are listed by `GET /api/labs`.
 
 | Lab | Title | Topic | Level | Prerequisites | Starts from |
 |---|---|---|---|---|---|
@@ -1376,7 +1387,9 @@ container lifecycle that also backs Terraform. It pins the image, the
 capability grant, the foreground process and the inspection vocabulary; the
 create/status/reset/destroy/cleanup machinery is the same code for both.
 
-### The ten labs
+### The foundation labs
+
+The Linux track ships 17 labs; these ten are the sequence the rest build on.
 
 | Lab | Topic | What it teaches |
 |---|---|---|
@@ -1579,7 +1592,11 @@ Docker is a **learning track and a provider capability**, not a replacement for
 the lab engine. It sits beside Kubernetes under the same catalog, the same
 session manager, the same reaper, and the same UI.
 
-### The ten Docker labs
+### The Docker labs
+
+The track ships 14 labs. The table below is the foundation sequence,
+DOCKER-001 to DOCKER-010; the later labs (inspect/exec/logs, publishing ports,
+layers and build cache, CMD vs ENTRYPOINT) are listed by `GET /api/labs`.
 
 | Lab | Title | Topic | Level | Starts from |
 |---|---|---|---|---|
@@ -4130,7 +4147,7 @@ Beyond the security items above:
   off unless `DOCKER_TRACK_ENABLED=true` — see
   [The Docker track](#the-docker-track) and
   [Docker sandbox strategy](#docker-sandbox-strategy). Where it cannot run, the
-  ten Docker labs still appear in the catalog and say why they cannot start.
+  Docker labs still appear in the catalog and say why they cannot start.
 - **The AWS track is architecture only.** No credential, role, or resource is
   ever created — see
   [Future AWS provider architecture](#future-aws-provider-architecture). There
@@ -4217,7 +4234,7 @@ Beyond the security items above:
   lab definitions appears in the catalog with no frontend work — but each track
   still needs a provider and, most likely, a requirement family.
 - The Docker track is gated by `DOCKER_TRACK_ENABLED` and by whether the API can
-  reach a host Docker daemon. When it cannot run, all ten Docker labs still
+  reach a host Docker daemon. When it cannot run, all Docker labs still
   appear in the catalog and report the real reason rather than disappearing.
 - K8S-007 checks the CronJob's configured schedule rather than waiting for a
   firing, so that correct work is not left unmarked for five minutes.
