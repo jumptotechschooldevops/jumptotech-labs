@@ -1,0 +1,87 @@
+# ---------------------------------------------------------------------------
+# ApiLatencyHigh must describe the interactive API, not lab teardown.
+#
+# The defect
+# ----------
+# `jtt:http_duration:p95_10m` excluded `POST /api/labs/:id/start`, which is
+# legitimately slow, but not `DELETE /api/sessions/:sessionId`. Ending a lab
+# deletes a namespace or a container synchronously; measured against the real
+# stack its p95 was **9.5s** against a 1s threshold, so `ApiLatencyHigh` sat
+# firing while the platform was working perfectly. Every student pressing
+# End Lab kept it there, and an alert that is always on cannot tell an operator
+# that the API has actually become slow.
+#
+# It was missed because End Lab is not a route of its own: it shares the
+# `/api/sessions/:sessionId` template with a sub-100ms `GET`, so the existing
+# `route!=` exclusion could not express it without taking the GET too.
+#
+# The first case below fails against the old expression (p95 ≈ 9.5s, alert
+# fires) and passes against the new one. The second pins what must NOT be
+# excluded: a genuinely slow GET on the same route still alerts.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../rules/recording.yml
+  - ../alerts/api.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ------------------------------------------- 1. slow teardown does not page
+  - interval: 15s
+    name: a slow End Lab does not make the API look slow
+    input_series:
+      # DELETE teardown: every request lands in the 10s bucket, none below it.
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="DELETE",route="/api/sessions/:sessionId",status_class="2xx",le="0.5"}'
+        values: '0+0x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="DELETE",route="/api/sessions/:sessionId",status_class="2xx",le="10"}'
+        values: '0+1x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="DELETE",route="/api/sessions/:sessionId",status_class="2xx",le="+Inf"}'
+        values: '0+1x80'
+      # The interactive API alongside it: fast GETs on the same route template.
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="0.5"}'
+        values: '0+4x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="10"}'
+        values: '0+4x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="+Inf"}'
+        values: '0+4x80'
+    promql_expr_test:
+      # Teardown removed, so the p95 is the fast GET's bucket, not 10s.
+      - expr: jtt:http_duration:p95_10m
+        eval_time: 15m
+        exp_samples:
+          # Interpolated inside the 0.5 bucket, and far under the 1s threshold —
+          # which is the point: without the exclusion this is 9.5s.
+          - labels: 'jtt:http_duration:p95_10m{service="api"}'
+            value: 0.4749999999999999
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ApiLatencyHigh
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ApiLatencyHigh
+        exp_alerts: []
+
+  # ----------------------------------- 2. the exclusion is not a blanket mute
+  - interval: 15s
+    name: a genuinely slow interactive request still alerts
+    input_series:
+      # Same route, but the GET is the slow one now. Nothing excludes this.
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="0.5"}'
+        values: '0+0x120'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="10"}'
+        values: '0+1x120'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="+Inf"}'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ApiLatencyHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+            exp_annotations:
+              summary: 'API p95 latency is above 1s'
+              description: >-
+                Start Lab and End Lab are excluded from this expression — both are legitimately slow (provisioning and teardown) and have their own alerts (ProvisioningSlow; ReaperStalled and the reaper failure alerts). What is left is the interactive API.
+              runbook_url: docs/runbooks/RB-11-api-errors-and-latency.md

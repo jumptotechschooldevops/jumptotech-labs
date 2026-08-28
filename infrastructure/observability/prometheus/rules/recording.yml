@@ -120,12 +120,32 @@ groups:
       # DOCKER_SANDBOX_READY_TIMEOUT_SECONDS (180s) plus an image pull, and
       # including it would make the API latency alert fire on correct behaviour.
       # Provisioning has its own histogram and its own alert.
+      #
+      # End Lab is excluded for exactly the same reason, and was missed because
+      # it is not a route of its own: `DELETE /api/sessions/:sessionId` shares a
+      # route template with a sub-100ms `GET`, so excluding by `route` alone
+      # would have taken the GET with it. Ending a session deletes a namespace
+      # or a container synchronously and measured p95 = 9.5s here, against a
+      # 1s threshold — so `ApiLatencyHigh` sat firing while nothing was wrong,
+      # and every student pressing End Lab kept it there. An alert that is
+      # always on cannot report that the API has actually become slow.
+      #
+      # Nothing loses coverage: teardown failures are what matter, and they have
+      # their own alerts (ReaperStalled, reaper delete failures, orphans found).
+      # The `unless` removes only that one method on that one route; the GET
+      # stays in the SLO.
       - record: jtt:http_duration:p95_10m
         expr: |
           histogram_quantile(
             0.95,
             sum by (le, service) (
               rate(jtt_http_request_duration_seconds_bucket{route!="/api/labs/:id/start"}[10m])
+                unless
+              rate(
+                jtt_http_request_duration_seconds_bucket{
+                  route="/api/sessions/:sessionId", method="DELETE"
+                }[10m]
+              )
             )
           )
 
