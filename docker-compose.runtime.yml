@@ -118,6 +118,10 @@ services:
       DOCKER_SANDBOX_REGISTRY_MIRROR: ${DOCKER_SANDBOX_REGISTRY_MIRROR:-}
       SANDBOXD_IDLE_TIMEOUT_SECONDS: ${TERMINAL_IDLE_TIMEOUT_SECONDS:-1800}
       SANDBOXD_MAX_SESSION_SECONDS: ${TERMINAL_MAX_SESSION_SECONDS:-7200}
+      # See the same variable in docker-compose.yml: sandboxd serves /metrics and
+      # refuses to start without a scrape token, so the default stack must supply
+      # one rather than leaving it to the observability overlay.
+      OBSERVABILITY_SCRAPE_TOKEN: ${OBSERVABILITY_SCRAPE_TOKEN:?set OBSERVABILITY_SCRAPE_TOKEN in .env (make setup generates one)}
     volumes:
       # The host Docker socket. This is the only mount of it in the whole
       # stack, and this is the only service that gets one.

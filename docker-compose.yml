@@ -156,6 +156,13 @@ services:
       TERMINAL_CONTROL_URL: http://terminal:4001
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
       NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:-${TERMINAL_SESSION_SECRET}}
+      # Every service that serves /metrics refuses to start without a scrape
+      # token (services/observability/src/listener.ts). It is required here, in
+      # the *base* stack, and not only in docker-compose.observability.yml:
+      # `make up` starts these services whether or not Prometheus is running, so
+      # a token supplied only by the observability overlay meant the default
+      # stack could not start at all. `make setup` generates one.
+      OBSERVABILITY_SCRAPE_TOKEN: ${OBSERVABILITY_SCRAPE_TOKEN:?set OBSERVABILITY_SCRAPE_TOKEN in .env (make setup generates one)}
       # --- authentication (PLATFORM-009 / PLATFORM-010) ---
       #
       # `development` is the compose default because a laptop has no identity
@@ -336,6 +343,13 @@ services:
       TERMINAL_MAX_SESSIONS: ${TERMINAL_MAX_SESSIONS:-16}
       TERMINAL_IDLE_TIMEOUT_SECONDS: ${TERMINAL_IDLE_TIMEOUT_SECONDS:-1800}
       TERMINAL_MAX_SESSION_SECONDS: ${TERMINAL_MAX_SESSION_SECONDS:-7200}
+      # Every service that serves /metrics refuses to start without a scrape
+      # token (services/observability/src/listener.ts). It is required here, in
+      # the *base* stack, and not only in docker-compose.observability.yml:
+      # `make up` starts these services whether or not Prometheus is running, so
+      # a token supplied only by the observability overlay meant the default
+      # stack could not start at all. `make setup` generates one.
+      OBSERVABILITY_SCRAPE_TOKEN: ${OBSERVABILITY_SCRAPE_TOKEN:?set OBSERVABILITY_SCRAPE_TOKEN in .env (make setup generates one)}
       # A container-backed session's shell is a PTY inside that session's own
       # sandbox container. This service cannot open one here: it is given no
       # container runtime, and the Docker socket is never mounted into it.
