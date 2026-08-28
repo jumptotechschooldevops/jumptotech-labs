@@ -34,6 +34,7 @@ import {
 } from '../src/index.js';
 import { verifyLab, waitForRequirements } from '@jumptotech/verifier';
 import { scanLabsDirectory } from './catalog-shape.js';
+import { realCatalog } from './real-catalog.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -120,8 +121,7 @@ suite('PLATFORM-003 integration: the lab catalog on real kind', () => {
   }
 
   beforeAll(async () => {
-    registry = new LabRegistry(path.join(repoRoot, 'labs'));
-    await registry.load();
+    registry = await realCatalog();
     expect(registry.loadErrors).toEqual([]);
     // Every shipped lab loads. Kubernetes labs are exercised here against a
     // real cluster; Linux, Terraform, and Docker labs load from the same

@@ -30,7 +30,6 @@ import {
   LAB_NETWORK_MODES,
   SANDBOX_CAPABILITIES,
   LabDefinitionError,
-  LabRegistry,
   LinuxLabProvider,
   MANAGED_CONTAINER_SELECTOR,
   loadLabDefinition,
@@ -41,6 +40,7 @@ import {
 } from '../src/index.js';
 import { FakeContainerRuntime } from './container-fakes.js';
 import { LABS_DIR, sessionContext } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const SANDBOX_A = 'jtt-lab-000000000001';
 const SANDBOX_B = 'jtt-lab-000000000002';
@@ -127,8 +127,7 @@ describe('the network a lab may ask for', () => {
 
 describe('labs that never asked for a network are untouched', () => {
   it('every shipped lab still resolves to none', async () => {
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
 
     expect(registry.loadErrors).toEqual([]);
     const declared = registry
@@ -144,8 +143,7 @@ describe('labs that never asked for a network are untouched', () => {
   });
 
   it('grants a kernel capability to only the labs that declare one, and only with a segment', async () => {
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
 
     const granted = registry
       .all()

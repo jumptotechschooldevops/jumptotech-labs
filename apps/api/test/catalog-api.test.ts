@@ -16,7 +16,7 @@
  * API serves the four tracks we happened to ship the day this was written".
  * Adding a track or a lab therefore needs no edit in this file.
  */
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
@@ -32,11 +32,10 @@ import {
   fixtureLabYaml,
   labsDirPlus,
   scanLabsDirectory,
-  temporaryLabsDirs,
 } from '@jumptotech/lab-orchestrator/testing/catalog';
-import { rm } from 'node:fs/promises';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'integration-test-secret-value';
@@ -90,16 +89,9 @@ function buildApp(options: FakeKubernetes | BuildOptions = {}) {
 }
 
 beforeAll(async () => {
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
   expect(registry.loadErrors).toEqual([]);
   disk = await scanLabsDirectory();
-});
-
-afterEach(async () => {
-  await Promise.all(
-    temporaryLabsDirs().map((dir) => rm(dir, { recursive: true, force: true })),
-  );
 });
 
 // -------------------------------------------------------- 30. GET /api/labs

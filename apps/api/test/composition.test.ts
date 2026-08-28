@@ -30,6 +30,7 @@ import { FakeContainerRuntime } from '@jumptotech/lab-orchestrator/testing/conta
 import { loadConfig } from '../src/config.js';
 import { buildRequirementWaiter, buildSandboxComposition } from '../src/composition.js';
 import { buildDockerEngines } from '../src/providers.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'composition-test-secret-value';
@@ -166,8 +167,7 @@ describe('buildSandboxComposition — provider routing', () => {
   let registry: LabRegistry;
 
   beforeAll(async () => {
-    registry = new LabRegistry(path.join(repoRoot, 'labs'));
-    await registry.load();
+    registry = await realCatalog();
     expect(registry.loadErrors).toEqual([]);
   });
 
@@ -288,8 +288,7 @@ describe('buildSandboxComposition — workspace routing', () => {
   let labs: LabRegistry;
 
   beforeAll(async () => {
-    labs = new LabRegistry(path.join(repoRoot, 'labs'));
-    await labs.load();
+    labs = await realCatalog();
     expect(labs.loadErrors).toEqual([]);
   });
 

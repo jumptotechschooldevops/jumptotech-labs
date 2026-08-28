@@ -13,23 +13,15 @@
  */
 import fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { LabRegistry } from '../src/index.js';
-import { LABS_DIR } from './helpers.js';
 import {
   citedManPages,
   DOCKERFILE,
   labProse,
   SANDBOX_MAN_PAGES,
 } from './sandbox-man-pages.js';
+import { realCatalog } from './real-catalog.js';
 
-let cached: LabRegistry | undefined;
-async function realRegistry(): Promise<LabRegistry> {
-  if (!cached) {
-    cached = new LabRegistry(LABS_DIR);
-    await cached.load();
-  }
-  return cached;
-}
+const realRegistry = realCatalog;
 
 // ------------------------------------------------- 1. labs cite what we ship
 

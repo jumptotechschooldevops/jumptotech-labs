@@ -9,7 +9,6 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import {
-  LabRegistry,
   MAX_SEED_SCRIPT_BYTES,
   PROVIDER_REQUIREMENT_FAMILIES,
   loadSeedScripts,
@@ -18,8 +17,8 @@ import {
   LabDefinitionError,
   type LoadedLabDefinition,
 } from '../src/index.js';
-import { LABS_DIR } from './helpers.js';
 import { scanLabsDirectory } from './catalog-shape.js';
+import { realCatalog } from './real-catalog.js';
 
 /**
  * The original fundamentals chain, in order, each lab requiring the one before.
@@ -58,14 +57,7 @@ const LINUX_IDS = [
   'LINUX-019',
 ];
 
-let cached: LabRegistry | undefined;
-async function realRegistry(): Promise<LabRegistry> {
-  if (!cached) {
-    cached = new LabRegistry(LABS_DIR);
-    await cached.load();
-  }
-  return cached;
-}
+const realRegistry = realCatalog;
 
 // ------------------------------------------------------- 1. definitions load
 

@@ -13,8 +13,6 @@
  * is named. The adversarial cases below are there to keep that true.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   LabRegistry,
   type DaemonSetSnapshot,
@@ -26,8 +24,8 @@ import {
   podSnapshot,
 } from '@jumptotech/lab-orchestrator/testing';
 import { verifyLab, verifyRequirement, VerifyReader } from '../src/index.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const NS = 'lab-00000000000a';
 const NS_B = 'lab-00000000000b';
 const IMAGE = 'busybox:1.36';
@@ -37,8 +35,7 @@ let registry: LabRegistry;
 let lab: LoadedLabDefinition;
 
 beforeAll(async () => {
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
   expect(registry.loadErrors).toEqual([]);
   lab = registry.get('K8S-018');
 });

@@ -36,6 +36,7 @@ import { scanLabsDirectory } from '@jumptotech/lab-orchestrator/testing/catalog'
 import { FakeContainerRuntime } from '@jumptotech/lab-orchestrator/testing/containers';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'integration-test-secret-value';
@@ -45,8 +46,7 @@ let registry: LabRegistry;
 let disk: Awaited<ReturnType<typeof scanLabsDirectory>>;
 
 beforeAll(async () => {
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
   expect(registry.loadErrors).toEqual([]);
   disk = await scanLabsDirectory();
 });

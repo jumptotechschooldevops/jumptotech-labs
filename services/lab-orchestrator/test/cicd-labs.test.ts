@@ -8,22 +8,15 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  LabRegistry,
   PROVIDER_REQUIREMENT_FAMILIES,
   requirementFamily,
   type LoadedLabDefinition,
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 import { scanLabsDirectory } from './catalog-shape.js';
+import { realCatalog } from './real-catalog.js';
 
-let cached: LabRegistry | undefined;
-async function realRegistry(): Promise<LabRegistry> {
-  if (!cached) {
-    cached = new LabRegistry(LABS_DIR);
-    await cached.load();
-  }
-  return cached;
-}
+const realRegistry = realCatalog;
 
 describe('the CI/CD track appears in the catalog', () => {
   it('loads with no definition errors anywhere in the catalog', async () => {

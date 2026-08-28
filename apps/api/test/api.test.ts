@@ -19,6 +19,7 @@ import {
 import { FakeKubernetes, podSnapshot } from '@jumptotech/lab-orchestrator/testing';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'integration-test-secret-value';
@@ -82,8 +83,7 @@ async function startSession(harness: Harness) {
 
 let registry: LabRegistry;
 beforeAll(async () => {
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
 });
 
 describe('GET /health', () => {

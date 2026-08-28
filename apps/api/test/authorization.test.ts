@@ -29,6 +29,7 @@ import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { DevelopmentIdentityResolver } from '../src/auth/resolvers.js';
 import { InMemoryUserRepository } from '../src/auth/users.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'integration-test-secret-value';
@@ -86,8 +87,7 @@ async function start(app: unknown, who: string) {
 }
 
 beforeEach(async () => {
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
   // One user store across a test, so Alice is the same Alice throughout.
   users = new InMemoryUserRepository();
 });

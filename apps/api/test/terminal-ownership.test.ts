@@ -49,6 +49,7 @@ import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { DevelopmentIdentityResolver } from '../src/auth/resolvers.js';
 import { InMemoryUserRepository } from '../src/auth/users.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'terminal-ownership-secret-value';
@@ -57,8 +58,7 @@ const BOB = 'Developer bob';
 
 let registry: LabRegistry;
 beforeAll(async () => {
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
 });
 
 let app: Express;

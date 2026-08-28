@@ -15,7 +15,6 @@ import { describe, expect, it } from 'vitest';
 import {
   DISALLOWED_DOC_HOSTS,
   LabDefinitionError,
-  LabRegistry,
   MAX_SEED_SCRIPT_BYTES,
   OFFICIAL_DOC_HOSTS,
   PROVIDER_REQUIREMENT_FAMILIES,
@@ -25,15 +24,9 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 import { scanLabsDirectory } from './catalog-shape.js';
+import { realCatalog } from './real-catalog.js';
 
-let cached: LabRegistry | undefined;
-async function realRegistry(): Promise<LabRegistry> {
-  if (!cached) {
-    cached = new LabRegistry(LABS_DIR);
-    await cached.load();
-  }
-  return cached;
-}
+const realRegistry = realCatalog;
 
 // ------------------------------------------------------- 1. definition loads
 

@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { LabRegistry, type LoadedLabDefinition } from '@jumptotech/lab-orchestrator';
 import { FakeKubernetes, deploymentSnapshot } from '@jumptotech/lab-orchestrator/testing';
 import { verifyLab, verifyRequirement, VerifyReader } from '../src/index.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const NS = 'lab-00000000000a';
@@ -35,8 +36,7 @@ let registry: LabRegistry;
 let lab: LoadedLabDefinition;
 
 beforeAll(async () => {
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
   expect(registry.loadErrors).toEqual([]);
   lab = registry.get('K8S-013');
 });

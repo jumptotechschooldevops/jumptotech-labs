@@ -21,7 +21,6 @@ import {
   AwsLabProvider,
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
-  LabRegistry,
   SessionManager,
   SessionReaper,
   DockerLabProvider,
@@ -36,7 +35,7 @@ import {
 import { FakeKubernetes, fakeExec } from './fakes.js';
 import { FakeContainerRuntime } from './container-fakes.js';
 import { FakeDockerEngines } from './docker-fakes.js';
-import { LABS_DIR } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 function registry(runtime = new FakeContainerRuntime()) {
   const reg = new ProviderRegistry({ availabilityTtlMs: 0 });
@@ -184,8 +183,7 @@ describe('single-provider registry', () => {
 
 /** A platform serving Kubernetes and Docker at once, against fakes for each. */
 async function platform() {
-  const labs = new LabRegistry(LABS_DIR);
-  await labs.load();
+  const labs = await realCatalog();
   expect(labs.loadErrors).toEqual([]);
 
   const k8s = new FakeKubernetes();

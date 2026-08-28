@@ -20,14 +20,13 @@ import {
   CONTAINER_SESSION_LABEL,
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
-  LabRegistry,
   LinuxLabProvider,
   MANAGED_CONTAINER_LABEL,
   SessionManager,
   SessionReaper,
 } from '../src/index.js';
 import { FakeContainerRuntime } from './container-fakes.js';
-import { LABS_DIR } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const HOUR = 3_600_000;
 const NOW = 1_700_000_000_000;
@@ -52,8 +51,7 @@ function labels(over: Record<string, string> = {}): Record<string, string> {
 }
 
 async function harness() {
-  const registry = new LabRegistry(LABS_DIR);
-  await registry.load();
+  const registry = await realCatalog();
   const runtime = new FakeContainerRuntime();
   const provider = new LinuxLabProvider({ runtime });
   const manager = new SessionManager({

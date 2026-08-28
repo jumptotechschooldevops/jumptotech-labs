@@ -17,7 +17,6 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import {
-  LabRegistry,
   PROVIDER_REQUIREMENT_FAMILIES,
   loadLabDefinition,
   loadSetupFiles,
@@ -26,15 +25,9 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 import { scanLabsDirectory } from './catalog-shape.js';
+import { realCatalog } from './real-catalog.js';
 
-let cached: LabRegistry | undefined;
-async function realRegistry(): Promise<LabRegistry> {
-  if (!cached) {
-    cached = new LabRegistry(LABS_DIR);
-    await cached.load();
-  }
-  return cached;
-}
+const realRegistry = realCatalog;
 
 function tf011Path(): string {
   return path.join(LABS_DIR, 'terraform', 'tf-011-execution-plan', 'lab.yaml');

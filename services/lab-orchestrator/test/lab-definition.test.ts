@@ -7,7 +7,8 @@ import {
   loadLabDefinition,
   parseLabDefinition,
 } from '../src/index.js';
-import { K8S_001_PATH, LABS_DIR, REPO_ROOT } from './helpers.js';
+import { K8S_001_PATH, REPO_ROOT } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const VALID_YAML = `
 id: K8S-999
@@ -176,8 +177,7 @@ describe('parseLabDefinition — validation', () => {
 
 describe('LabRegistry', () => {
   it('discovers K8S-001 from the labs directory', async () => {
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
 
     expect(registry.loadErrors).toEqual([]);
     expect(registry.size).toBeGreaterThanOrEqual(1);
@@ -186,15 +186,13 @@ describe('LabRegistry', () => {
   });
 
   it('accepts a lowercase id and canonicalises it', async () => {
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
 
     expect(registry.get('k8s-001').id).toBe('K8S-001');
   });
 
   it('throws LabNotFoundError for a valid but unknown id', async () => {
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
 
     expect(() => registry.get('K8S-404')).toThrow(/not found/i);
   });

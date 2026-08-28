@@ -28,7 +28,6 @@ import {
   CONTAINER_SESSION_LABEL,
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
-  LabRegistry,
   LinuxLabProvider,
   MANAGED_CONTAINER_LABEL,
   RUNTIME_OWNER_LABEL,
@@ -36,7 +35,7 @@ import {
   SessionReaper,
 } from '../src/index.js';
 import { FakeContainerRuntime } from './container-fakes.js';
-import { LABS_DIR } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const HOUR = 3_600_000;
 const NOW = 1_700_000_000_000;
@@ -59,8 +58,7 @@ function expiredSandbox(owner: string | undefined): Record<string, string> {
 }
 
 async function reaperFor(runtimeOwner: string, runtime: FakeContainerRuntime) {
-  const registry = new LabRegistry(LABS_DIR);
-  await registry.load();
+  const registry = await realCatalog();
   const provider = new LinuxLabProvider({ runtime, runtimeOwner });
   const sessions = new SessionManager({
     registry,
@@ -150,8 +148,7 @@ describe('a reaper reclaims only its own runtime owner’s sandboxes', () => {
   it('stamps its owner on every sandbox it creates', async () => {
     const runtime = new FakeContainerRuntime();
     const { provider } = await reaperFor(OWNER_A, runtime);
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
     const lab = registry.get('LINUX-001');
 
     await provider.create({

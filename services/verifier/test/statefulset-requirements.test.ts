@@ -11,8 +11,6 @@
  *      decoys that pass individual checks and confirm the lab still fails.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   LabRegistry,
   type LoadedLabDefinition,
@@ -21,8 +19,8 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import { FakeKubernetes, deploymentSnapshot, podSnapshot } from '@jumptotech/lab-orchestrator/testing';
 import { verifyLab, verifyRequirement, VerifyReader } from '../src/index.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const NS = 'lab-00000000000a';
 const NS_B = 'lab-00000000000b';
 const IMAGE = 'nginx:1.28-alpine';
@@ -31,8 +29,7 @@ let registry: LabRegistry;
 let lab: LoadedLabDefinition;
 
 beforeAll(async () => {
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
   expect(registry.loadErrors).toEqual([]);
   lab = registry.get('K8S-019');
 });

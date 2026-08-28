@@ -40,6 +40,7 @@ import { InMemoryUserRepository } from '../src/auth/users.js';
 import { InMemoryAuthSessionStore, mintAuthSessionId } from '../src/auth/browser-session.js';
 import { safeReturnTo } from '../src/routes/auth.js';
 import { startFakeIdentityProvider, foreignToken, type FakeIdentityProvider } from './oidc-identity.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'auth-security-terminal-session-secret';
@@ -51,8 +52,7 @@ let registry: LabRegistry;
 
 beforeAll(async () => {
   idp = await startFakeIdentityProvider();
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
 });
 
 afterAll(async () => {

@@ -18,7 +18,6 @@ import {
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
   KindLabProvider,
-  LabRegistry,
   LinuxLabProvider,
   ProviderRegistry,
   SessionError,
@@ -28,13 +27,12 @@ import {
 } from '../src/index.js';
 import { FakeKubernetes, fakeExec } from './fakes.js';
 import { FakeContainerRuntime } from './container-fakes.js';
-import { LABS_DIR } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const SECRET = 'a-test-namespace-derivation-secret';
 
 async function harness(options: { now?: () => number } = {}) {
-  const registry = new LabRegistry(LABS_DIR);
-  await registry.load();
+  const registry = await realCatalog();
 
   const k8s = new FakeKubernetes();
   const runtime = new FakeContainerRuntime();
@@ -184,8 +182,7 @@ describe('one session cannot reach another (test requirement 8)', () => {
   }, 30_000);
 
   it('refuses a lab whose provider is not registered, without creating a session', async () => {
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
     const providers = new ProviderRegistry({ availabilityTtlMs: 0 });
     providers.register({
       provider: new KindLabProvider({

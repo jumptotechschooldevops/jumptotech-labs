@@ -34,6 +34,7 @@ import {
 } from '@jumptotech/observability';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -125,8 +126,7 @@ describe('no credential reaches a log line from the composed app', () => {
   let labs: LabRegistry;
 
   beforeAll(async () => {
-    labs = new LabRegistry(path.join(repoRoot, 'labs'));
-    await labs.load();
+    labs = await realCatalog();
   });
 
   beforeEach(() => {

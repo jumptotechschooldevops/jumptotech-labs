@@ -35,7 +35,6 @@ import {
   InMemorySessionStore,
   KindLabProvider,
   KubernetesClient,
-  LabRegistry,
   SessionManager,
   issueSessionToken,
   type LabSession,
@@ -44,6 +43,7 @@ import { createApp } from '@jumptotech/api';
 import { loadConfig } from '@jumptotech/api/config';
 import { createTerminalServer } from '../src/server.js';
 import { loadTerminalConfig } from '../src/config.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const HOST_KUBECONFIG =
@@ -233,8 +233,7 @@ suite('integration: student terminal against real kind', () => {
   }
 
   beforeAll(async () => {
-    const registry = new LabRegistry(path.join(repoRoot, 'labs'));
-    await registry.load();
+    const registry = await realCatalog();
 
     const k8s = new KubernetesClient({ kubeconfigPath: HOST_KUBECONFIG });
     const provider = new KindLabProvider({

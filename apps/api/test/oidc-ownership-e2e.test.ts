@@ -45,6 +45,7 @@ import { OidcBrowserClient } from '../src/auth/oidc-client.js';
 import { InMemoryUserRepository } from '../src/auth/users.js';
 import { InMemoryAuthSessionStore } from '../src/auth/browser-session.js';
 import { startFakeIdentityProvider, type FakeIdentityProvider } from './oidc-identity.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'oidc-e2e-terminal-session-secret';
@@ -55,8 +56,7 @@ let registry: LabRegistry;
 
 beforeAll(async () => {
   idp = await startFakeIdentityProvider();
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
   expect(registry.loadErrors).toEqual([]);
 });
 

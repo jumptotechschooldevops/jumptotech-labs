@@ -21,7 +21,6 @@ import {
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
   KindLabProvider,
-  LabRegistry,
   LinuxLabProvider,
   ProviderRegistry,
   SessionManager,
@@ -30,7 +29,7 @@ import {
 } from '../src/index.js';
 import { FakeKubernetes, fakeExec } from './fakes.js';
 import { FakeContainerRuntime } from './container-fakes.js';
-import { LABS_DIR } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const SECRET = 'a-test-namespace-derivation-secret';
 
@@ -40,8 +39,7 @@ interface HarnessOptions {
 }
 
 async function harness(options: HarnessOptions = {}) {
-  const registry = new LabRegistry(LABS_DIR);
-  await registry.load();
+  const registry = await realCatalog();
   expect(registry.loadErrors).toEqual([]);
 
   const k8s = new FakeKubernetes();
@@ -174,8 +172,7 @@ describe('starting Linux sessions', () => {
     const providers = new ProviderRegistry({ availabilityTtlMs: 0 });
     providers.register({ provider: new LinuxLabProvider({ runtime }) });
 
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
     const sessions = new SessionManager({
       registry,
       providers,

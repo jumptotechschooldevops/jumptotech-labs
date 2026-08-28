@@ -19,8 +19,6 @@
  * solution, where it must pass.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   DOCKER_REQUIREMENT_TYPES,
   InMemoryWorkspace,
@@ -41,8 +39,8 @@ import {
   verifyLab,
   verifyRequirement,
 } from '../src/index.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SANDBOX_A = 'lab-00000000000a';
 const SANDBOX_B = 'lab-00000000000b';
 const SESSION_A = 'sess-000000000000000a';
@@ -50,8 +48,7 @@ const SESSION_A = 'sess-000000000000000a';
 let registry: LabRegistry;
 
 beforeAll(async () => {
-  registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  registry = await realCatalog();
   expect(registry.loadErrors).toEqual([]);
 });
 

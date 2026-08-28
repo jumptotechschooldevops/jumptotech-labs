@@ -36,6 +36,23 @@ convention — by construction.
   something this process did not itself create — a fixed port, a remote host, a
   daemon socket.
 - **Deterministic and parallel-safe**: nothing shared, nothing ordered.
+- **Expensive fixture work happens in `beforeAll`, never inside an `it`.**
+  vitest's default `testTimeout` is 5s and it is a budget for the *assertion*,
+  not for building what the assertion runs against. A one-time load billed to
+  whichever test touched it first is fine on an idle laptop and fails on a busy
+  one — which is precisely the flake this rule was written after. Build it in a
+  hook, give that hook a hook-sized timeout, and leave `testTimeout` alone: a
+  test that is genuinely slow should still fail.
+- **Expensive fixtures are shared, and shared fixtures are immutable.** The
+  shipped catalog is the one every suite needs and the one nothing may change:
+  take it from `realCatalog()`
+  (`@jumptotech/lab-orchestrator/testing/real-catalog`), which loads `labs/`
+  once per worker process, deep-freezes every definition it hands out, and
+  refuses to be reloaded. Never construct `new LabRegistry(LABS_DIR)` in a test.
+  A test that needs a catalog it can *change* builds its own temporary copy with
+  `labsDirPlus()`, which removes it when that test finishes — so no fixture is
+  reachable from any test that did not create it. The shipped disk scan
+  (`scanLabsDirectory()`) follows the same rule and is warmed in the same way.
 - **Proven per workspace, not assumed.** Every workspace that runs vitest owns a
   `test/host-execution-guard.test.ts` calling
   [`guard-contract.ts`](./guard-contract.ts), so the assertion runs inside that
@@ -116,6 +133,22 @@ builds both, so setting only the Linux one overwrites the shared
 
 Unit tests are isolated from *infrastructure*, not from *CPU*. A machine
 saturated by another worktree's E2E can still push a slow suite past its
-timeout. That is a scheduling problem, addressed by PLATFORM-007, not something
-the guard can fix — and it is why the guard reports a precise
+timeout, and the guard cannot fix that — which is why it reports a precise
 `HOST_EXECUTION_DENIED` instead of an ambiguous timeout.
+
+What that limitation is **not** an explanation for is a suite that was already
+spending seconds per test on work it did not need to repeat. This used to read
+as "a scheduling problem"; investigating an intermittent timeout in
+`lab-catalog.test.ts` and `runtime-owner.test.ts` showed it was mostly ours:
+`lab-orchestrator` performed 137 full validations of the shipped catalog per
+run, and the requirement schema was a 192-member flat union that made each one
+cost 1.3s. Both are fixed — 21 loads at ~0.1s each — and the contention headroom
+came with it. Before blaming the machine, measure what the suite is doing.
+
+Reducing the *number* of loads was only half of it. The remaining load per file
+was still charged to a test, so it still failed under enough contention; moving
+it into a hook is what closed it. The measure of whether this workspace is
+healthy is the slowest individual test, and it is now 110ms — the whole suite
+survives four simultaneous copies of itself on a ten-core machine with no
+timeout. If a new test pushes that number back into the seconds, it is doing
+fixture work in the wrong place.

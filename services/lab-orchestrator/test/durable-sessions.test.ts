@@ -20,7 +20,7 @@ import {
   type SessionStore,
 } from '../src/index.js';
 import { FakeContainerRuntime } from './container-fakes.js';
-import { LABS_DIR } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const LIFETIMES = {
   maxSessionSeconds: 3_600,
@@ -46,8 +46,7 @@ function instance(): SessionManager {
 }
 
 beforeEach(async () => {
-  registry = new LabRegistry(LABS_DIR);
-  await registry.load();
+  registry = await realCatalog();
   runtime = new FakeContainerRuntime();
   // One durable store, shared — the database in the real deployment.
   store = new InMemorySessionStore();

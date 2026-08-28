@@ -52,6 +52,7 @@ import {
 import { ownedByThisRun, scopedSandboxRef } from '@jumptotech/test-support/run-id';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const exec = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -113,8 +114,7 @@ interface Harness {
 }
 
 async function harness(options: { now?: () => number } = {}): Promise<Harness> {
-  const registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  const registry = await realCatalog();
 
   const config = loadConfig({
     TERMINAL_SESSION_SECRET: SECRET,

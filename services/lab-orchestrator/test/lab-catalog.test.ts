@@ -16,7 +16,7 @@
  * that fails to load, or is dropped as a duplicate, still fails loudly. See
  * `catalog-shape.ts` for why that is stronger than the counts it replaced.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, onTestFinished } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -28,11 +28,13 @@ import {
   LabDefinitionError,
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
+import { freshRealCatalog, realCatalog } from './real-catalog.js';
 import {
   fixtureLabYaml,
   labsDirPlus,
   scanLabsDirectory,
-  temporaryLabsDirs,
+  type DiscoveredCatalog,
+  type DiscoveredLab,
 } from './catalog-shape.js';
 
 /** The order `TrackSummary.difficulties` promises. */
@@ -114,12 +116,16 @@ function expectRejected(yaml: string): void {
   expect(() => parseLabDefinition(yaml)).toThrow(LabDefinitionError);
 }
 
-const tempDirs: string[] = [];
-
-/** Build a labs/ tree on disk: `{ 'kubernetes/k8s-901-demo': '<yaml>' }`. */
+/**
+ * Build a labs/ tree on disk: `{ 'kubernetes/k8s-901-demo': '<yaml>' }`.
+ *
+ * Each call gets its own `mkdtemp` directory and removes it when the test that
+ * asked for it finishes, so no fixture here is reachable from another test —
+ * in this file or in one running beside it.
+ */
 async function labsDir(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'jtt-labs-'));
-  tempDirs.push(root);
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   for (const [dir, contents] of Object.entries(files)) {
     const full = path.join(root, dir);
     await mkdir(full, { recursive: true });
@@ -129,35 +135,14 @@ async function labsDir(files: Record<string, string>): Promise<string> {
 }
 
 /**
- * The real catalog.
+ * The real catalog: one shared, immutable load per worker process.
  *
- * Loaded once and shared: the shipped labs do not change during a run, and the
- * 22 call sites below were re-reading and re-parsing all 33 `lab.yaml` files
- * every time — ~726 redundant parses per run, which is real work that made the
- * suite needlessly slow and, on a loaded machine, timeout-sensitive.
- *
- * Sharing is safe because `LabRegistry` is immutable once loaded and every
- * caller here only reads. The one test that genuinely needs two independent
- * loads — the determinism check — calls `freshRegistry()` instead, which is the
- * whole point of that test.
+ * `realCatalog()` lives in `real-catalog.ts` because every suite in this
+ * workspace needs the same thing, and each private copy of it was another full
+ * validation pass over all 114 `lab.yaml` files. See that module for what the
+ * duplication cost and why the shared instance is frozen.
  */
-let cachedRegistry: Promise<LabRegistry> | undefined;
-function realRegistry(): Promise<LabRegistry> {
-  cachedRegistry ??= freshRegistry();
-  return cachedRegistry;
-}
-
-/** A separate load of the same directory, for tests that compare two loads. */
-async function freshRegistry(): Promise<LabRegistry> {
-  const registry = new LabRegistry(LABS_DIR);
-  await registry.load();
-  return registry;
-}
-
-afterEach(async () => {
-  const dirs = [...tempDirs.splice(0), ...temporaryLabsDirs()];
-  await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
-});
+const realRegistry = realCatalog;
 
 // ---------------------------------------------------------------- discovery
 
@@ -187,9 +172,23 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
     }
   });
 
-  it('loads deterministically: two loads of one directory agree exactly', async () => {
-    const [a, b] = [await freshRegistry(), await freshRegistry()];
+  // The second, independent load is setup: a full validation pass over all 114
+  // labs, which does not belong on a 5s test clock any more than the first one
+  // did. The assertion below is what the test is about.
+  let independent: Awaited<ReturnType<typeof freshRealCatalog>>;
+  beforeAll(async () => {
+    independent = await freshRealCatalog();
+  }, 60_000);
 
+  it('loads deterministically: two loads of one directory agree exactly', async () => {
+    // One of the two loads is the shared one every other test here reads, so
+    // this compares an independent load against it rather than paying for two
+    // of its own. The property is unchanged — two separate `LabRegistry`
+    // instances, each having walked labs/ for itself, agree exactly — and the
+    // shared instance being frozen is what makes reusing it as one side safe.
+    const [a, b] = [await realRegistry(), independent];
+
+    expect(a).not.toBe(b);
     expect(a.all().map((l) => l.id)).toEqual(b.all().map((l) => l.id));
     expect(a.tracks()).toEqual(b.tracks());
   });
@@ -282,16 +281,92 @@ describe('catalog — discovery (test requirements 1, 2)', () => {
  * add `labs/<track>/` without touching a shared test.
  */
 describe('catalog — a valid new track is discovered without a code or test change', () => {
-  it('picks up an additional track, additively, with no expected count edited', async () => {
-    const baseline = await scanLabsDirectory();
-    const root = await labsDirPlus({
-      'fixture-track/track.yaml':
-        'title: Fixture Track\ntagline: A track that exists only in a temp directory.\norder: 5\n',
-      'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml(),
-    });
-    const registry = new LabRegistry(root);
+  /*
+   * Every fixture in this describe is built once, here.
+   *
+   * Each of these scenarios needs its own temporary catalog — a copy of all 114
+   * shipped labs, plus the overlay under test, then a full `LabRegistry.load()`
+   * over the result and sometimes a rescan. That is three catalog-sized
+   * operations per scenario, and while they sat inside the `it`s they were
+   * charged to vitest's 5s `testTimeout`. On an idle machine that fit; at 4x
+   * oversubscription it did not, and this was the last describe still timing
+   * out once the shared catalog and the shared disk scan had been moved into
+   * setup.
+   *
+   * So the construction moves too, and the tests below are assertions only.
+   * The fixtures stay one-per-scenario — they are deliberately different
+   * catalogs — but building them is setup, and setup gets a setup-sized budget
+   * rather than a test-sized one. Not one assertion changed.
+   */
+  const FIXTURE_BUILD_TIMEOUT_MS = 60_000;
+
+  let baseline: DiscoveredCatalog;
+  let added: { registry: LabRegistry; disk: DiscoveredCatalog };
+  let untitled: LabRegistry;
+  let invalid: LabRegistry;
+  let duplicateId: { registry: LabRegistry; shipped: DiscoveredLab };
+  let duplicateSlug: { registry: LabRegistry; shipped: DiscoveredLab };
+
+  async function registryOver(files: Record<string, string>): Promise<LabRegistry> {
+    const registry = new LabRegistry(await labsDirPlus(files));
     await registry.load();
-    const disk = await scanLabsDirectory(root);
+    return registry;
+  }
+
+  beforeAll(async () => {
+    baseline = await scanLabsDirectory();
+    // The lab whose file sorts first, so the shipped definition is the one that
+    // registers and the impostor is the one refused. `zz-` guarantees the
+    // fixture directory is walked last whatever tracks ship.
+    const shipped = [...baseline.labs].sort((a, b) => a.file.localeCompare(b.file))[0]!;
+
+    // Five independent catalogs. Built concurrently because they share nothing
+    // and the work is largely filesystem latency: serially this hook exceeded a
+    // minute under 4x oversubscription.
+    const [addedPair, untitledRegistry, invalidRegistry, dupId, dupSlug] = await Promise.all([
+      (async () => {
+        const root = await labsDirPlus({
+          'fixture-track/track.yaml':
+            'title: Fixture Track\ntagline: A track that exists only in a temp directory.\norder: 5\n',
+          'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml(),
+        });
+        const registry = new LabRegistry(root);
+        await registry.load();
+        return { registry, disk: await scanLabsDirectory(root) };
+      })(),
+      registryOver({ 'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml() }),
+      registryOver({
+        // Two ways to be invalid, one per lab: a key the schema does not know
+        // (and which could carry a command), and a substrate with no provider.
+        'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml({ extra: 'command: rm -rf /\n' }),
+        'fixture-track/fixture-902-demo/lab.yaml': fixtureLabYaml({
+          id: 'FIXTURE-902',
+          slug: 'fixture-902-demo',
+        }).replace('provider: linux', 'provider: firecracker'),
+      }),
+      registryOver({
+        'zz-fixture/fixture-901-demo/lab.yaml': fixtureLabYaml({
+          id: shipped.id,
+          track: 'zz-fixture',
+        }),
+      }),
+      registryOver({
+        'zz-fixture/fixture-901-demo/lab.yaml': fixtureLabYaml({
+          slug: shipped.slug,
+          track: 'zz-fixture',
+        }),
+      }),
+    ]);
+
+    added = addedPair;
+    untitled = untitledRegistry;
+    invalid = invalidRegistry;
+    duplicateId = { registry: dupId, shipped };
+    duplicateSlug = { registry: dupSlug, shipped };
+  }, FIXTURE_BUILD_TIMEOUT_MS);
+
+  it('picks up an additional track, additively, with no expected count edited', async () => {
+    const { registry, disk } = added;
 
     // The shipped-catalog assertions, verbatim, against a catalog with one more
     // track in it.
@@ -324,11 +399,7 @@ describe('catalog — a valid new track is discovered without a code or test cha
   });
 
   it('appears with no track.yaml at all, titled from its slug', async () => {
-    const root = await labsDirPlus({
-      'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml(),
-    });
-    const registry = new LabRegistry(root);
-    await registry.load();
+    const registry = untitled;
 
     expect(registry.loadErrors).toEqual([]);
     // No declared order, so it sorts after the annotated tracks, alphabetically.
@@ -341,18 +412,7 @@ describe('catalog — a valid new track is discovered without a code or test cha
   });
 
   it('rejects an invalid lab in a new track, and keeps the rest of the catalog', async () => {
-    const baseline = await scanLabsDirectory();
-    const root = await labsDirPlus({
-      // Two ways to be invalid, one per lab: a key the schema does not know
-      // (and which could carry a command), and a substrate with no provider.
-      'fixture-track/fixture-901-demo/lab.yaml': fixtureLabYaml({ extra: 'command: rm -rf /\n' }),
-      'fixture-track/fixture-902-demo/lab.yaml': fixtureLabYaml({
-        id: 'FIXTURE-902',
-        slug: 'fixture-902-demo',
-      }).replace('provider: linux', 'provider: firecracker'),
-    });
-    const registry = new LabRegistry(root);
-    await registry.load();
+    const registry = invalid;
 
     // A new track being data-driven does not make its YAML trusted: neither lab
     // registers, the track never reaches the catalog, and the shipped catalog
@@ -366,19 +426,7 @@ describe('catalog — a valid new track is discovered without a code or test cha
   });
 
   it('rejects a new track reusing a shipped lab id, and keeps the original', async () => {
-    const baseline = await scanLabsDirectory();
-    // The lab whose file sorts first, so the shipped definition is the one that
-    // registers and the impostor is the one refused. `zz-` guarantees the
-    // fixture directory is walked last whatever tracks ship.
-    const shipped = [...baseline.labs].sort((a, b) => a.file.localeCompare(b.file))[0]!;
-    const root = await labsDirPlus({
-      'zz-fixture/fixture-901-demo/lab.yaml': fixtureLabYaml({
-        id: shipped.id,
-        track: 'zz-fixture',
-      }),
-    });
-    const registry = new LabRegistry(root);
-    await registry.load();
+    const { registry, shipped } = duplicateId;
 
     expect(registry.loadErrors.join('\n')).toContain('duplicate lab id');
     expect(registry.size).toBe(baseline.labCount);
@@ -388,16 +436,7 @@ describe('catalog — a valid new track is discovered without a code or test cha
   });
 
   it('rejects a new track reusing a shipped slug, so catalog links stay stable', async () => {
-    const baseline = await scanLabsDirectory();
-    const shipped = [...baseline.labs].sort((a, b) => a.file.localeCompare(b.file))[0]!;
-    const root = await labsDirPlus({
-      'zz-fixture/fixture-901-demo/lab.yaml': fixtureLabYaml({
-        slug: shipped.slug,
-        track: 'zz-fixture',
-      }),
-    });
-    const registry = new LabRegistry(root);
-    await registry.load();
+    const { registry, shipped } = duplicateSlug;
 
     expect(registry.loadErrors.join('\n')).toContain(`duplicate slug '${shipped.slug}'`);
     expect(registry.size).toBe(baseline.labCount);

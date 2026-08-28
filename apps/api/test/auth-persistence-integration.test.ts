@@ -65,6 +65,7 @@ import { OidcBrowserClient } from '../src/auth/oidc-client.js';
 import { PostgresUserRepository } from '../src/auth/users.js';
 import { PostgresAuthSessionStore, hashAuthSessionId } from '../src/auth/browser-session.js';
 import { startFakeIdentityProvider, type FakeIdentityProvider } from './oidc-identity.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'auth-persistence-terminal-session-secret';
@@ -103,8 +104,7 @@ if (!enabled) {
 
   beforeAll(async () => {
     idp = await startFakeIdentityProvider();
-    registry = new LabRegistry(path.join(repoRoot, 'labs'));
-    await registry.load();
+    registry = await realCatalog();
     expect(registry.loadErrors).toEqual([]);
     db = connect();
     // Migration 004 is applied here, against the real server, before anything

@@ -34,6 +34,7 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 import { scanLabsDirectory } from './catalog-shape.js';
+import { realCatalog } from './real-catalog.js';
 
 const DOC_URL = 'https://docs.docker.com/reference/cli/docker/container/run/';
 
@@ -434,8 +435,7 @@ describe('track metadata is optional presentation, never a registry of tracks', 
   });
 
   it('reads the shipped tracks straight off disk', async () => {
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
     const disk = await scanLabsDirectory(LABS_DIR);
 
     // Every shipped track, in catalog order, with the title and order it

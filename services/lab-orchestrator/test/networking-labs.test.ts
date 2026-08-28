@@ -17,7 +17,6 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import {
   LabDefinitionError,
-  LabRegistry,
   MAX_SEED_SCRIPT_BYTES,
   OFFICIAL_DOC_HOSTS,
   PROVIDER_REQUIREMENT_FAMILIES,
@@ -29,6 +28,7 @@ import {
 } from '../src/index.js';
 import { LABS_DIR } from './helpers.js';
 import { scanLabsDirectory, type DiscoveredCatalog } from './catalog-shape.js';
+import { realCatalog } from './real-catalog.js';
 
 /**
  * What is on disk, read independently of the registry.
@@ -43,14 +43,7 @@ async function catalogOnDisk(): Promise<DiscoveredCatalog> {
   return discovered;
 }
 
-let cached: LabRegistry | undefined;
-async function realRegistry(): Promise<LabRegistry> {
-  if (!cached) {
-    cached = new LabRegistry(LABS_DIR);
-    await cached.load();
-  }
-  return cached;
-}
+const realRegistry = realCatalog;
 
 async function net002(): Promise<LoadedLabDefinition> {
   const registry = await realRegistry();

@@ -15,8 +15,6 @@
  * binding; it does not make a request, and DOCKER-012 claims only the binding.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   LabRegistry,
   requirementSchema,
@@ -25,16 +23,15 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import { FakeDockerDaemon, containerSpec } from '@jumptotech/lab-orchestrator/testing';
 import { DockerVerifyReader, verifyLab, verifyRequirement } from '../src/index.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SANDBOX_A = 'jtt-lab-00000000000a';
 const SANDBOX_B = 'jtt-lab-00000000000b';
 
 let lab: LoadedLabDefinition;
 
 beforeAll(async () => {
-  const registry = new LabRegistry(path.join(repoRoot, 'labs'));
-  await registry.load();
+  const registry = await realCatalog();
   expect(registry.loadErrors).toEqual([]);
   lab = registry.get('DOCKER-012');
 });

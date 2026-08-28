@@ -29,9 +29,11 @@
  * registry matches the catalog" is a comparison of two implementations rather
  * than a tautology.
  */
-import { cp, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { afterAll, beforeAll, onTestFinished } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { LABS_DIR } from './helpers.js';
 
@@ -136,12 +138,66 @@ export function scanLabsDirectory(labsDir: string = LABS_DIR): Promise<Discovere
   return cachedRealScan;
 }
 
+/**
+ * How long the one-time scan may take before we call it broken rather than slow.
+ *
+ * A hook budget, not a test budget — see the matching note in `real-catalog.ts`.
+ */
+const SCAN_WARMUP_TIMEOUT_MS = 30_000;
+
+/*
+ * Scan the shipped catalog in setup, for the same reason the registry is loaded
+ * in setup.
+ *
+ * `scanLabsDirectory()` memoises the real directory, so only the first caller in
+ * a file pays — and that first caller was a test, on its 5s clock. That is the
+ * identical defect `real-catalog.ts` fixes for `LabRegistry.load()`, and it is
+ * why fixing only the registry left `lab-catalog`, `cicd-labs` and
+ * `networking-labs` still timing out under 4x oversubscription: they were being
+ * billed for the *scan* instead.
+ *
+ * Every module that imports this one uses the real scan except the fixture's own
+ * test, so warming it here is very nearly free and never surprising.
+ */
+beforeAll(async () => {
+  await scanLabsDirectory();
+}, SCAN_WARMUP_TIMEOUT_MS);
+
+/**
+ * Memoised `parseYaml`, keyed by the document text.
+ *
+ * Every temporary catalog is a copy of the shipped one plus a file or two, so a
+ * scan of one re-parses 114 documents this process has already parsed — byte
+ * for byte the same, and therefore the same result. Keying on the text rather
+ * than on the path is what keeps that honest: each file is still read from the
+ * directory it is actually in, and a document whose bytes differ by so much as
+ * a space is parsed afresh.
+ */
+const parsedByText = new Map<string, unknown>();
+
+function parseCached(text: string): unknown {
+  if (parsedByText.has(text)) return parsedByText.get(text);
+  // Frozen because it is now shared between every scan of an identical
+  // document: a caller that wrote to it would change what a later scan of a
+  // different directory reports.
+  const parsed = deepFreeze(parseYaml(text) as unknown);
+  parsedByText.set(text, parsed);
+  return parsed;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+  return value;
+}
+
 async function scanLabsDirectoryUncached(labsDir: string): Promise<DiscoveredCatalog> {
   const files = await findLabFiles(labsDir);
 
   const labs: DiscoveredLab[] = [];
   for (const file of files) {
-    const raw = parseYaml(await readFile(file, 'utf8')) as Record<string, unknown> | null;
+    const raw = parseCached(await readFile(file, 'utf8')) as Record<string, unknown> | null;
     if (!raw || typeof raw !== 'object') continue;
     labs.push({
       id: String(raw.id),
@@ -200,7 +256,7 @@ async function readTrackYaml(file: string): Promise<TrackYaml | null> {
   } catch {
     return null;
   }
-  const raw = parseYaml(text) as TrackYaml | null;
+  const raw = parseCached(text) as TrackYaml | null;
   return raw && typeof raw === 'object' ? raw : null;
 }
 
@@ -282,22 +338,26 @@ ${overrides.extra ?? ''}`;
  */
 async function copyCatalogSkeleton(from: string, to: string): Promise<void> {
   await mkdir(to, { recursive: true });
-  for (const entry of await readdir(from, { withFileTypes: true })) {
-    const source = path.join(from, entry.name);
-    const target = path.join(to, entry.name);
-    if (entry.isDirectory()) {
-      await copyCatalogSkeleton(source, target);
-    } else if (entry.name === 'lab.yaml' || entry.name === 'track.yaml') {
-      await cp(source, target);
-    }
-  }
-}
-
-const tempRoots: string[] = [];
-
-/** Temporary directories created by this module, for a test's cleanup hook. */
-export function temporaryLabsDirs(): string[] {
-  return tempRoots.splice(0);
+  const entries = await readdir(from, { withFileTypes: true });
+  // Siblings are independent, and the work is syscall latency rather than CPU,
+  // so awaiting them one at a time serialised ~250 round trips for no reason.
+  await Promise.all(
+    entries.map((entry) => {
+      const source = path.join(from, entry.name);
+      const target = path.join(to, entry.name);
+      if (entry.isDirectory()) return copyCatalogSkeleton(source, target);
+      if (entry.name === 'lab.yaml' || entry.name === 'track.yaml') {
+        // COPYFILE_FICLONE asks the filesystem for a copy-on-write clone, which
+        // on APFS is a metadata operation rather than a read plus a write. Five
+        // fixtures x 228 files is 1140 copies per file that uses them, and it
+        // was enough to push the setup hook past a minute under 4x load. The
+        // flag degrades to an ordinary copy where the filesystem cannot clone,
+        // so this is a speed-up, not a dependency.
+        return copyFile(source, target, fsConstants.COPYFILE_FICLONE);
+      }
+      return Promise.resolve();
+    }),
+  );
 }
 
 /**
@@ -308,11 +368,49 @@ export function temporaryLabsDirs(): string[] {
  *
  * Working from a copy of the *real* catalog is what makes the resulting
  * assertions meaningful: the extra track has to coexist with everything already
- * shipped, rather than being discovered in an otherwise empty directory.
+ * shipped, rather than being discovered in an otherwise empty directory. It is
+ * also why the copy is mandatory: a test that wants to *change* a catalog must
+ * never be handed the shipped one, which `real-catalog.ts` shares and freezes.
+ *
+ * Cleanup is registered here rather than left to the caller. It used to be
+ * published through a module-level array that each suite had to remember to
+ * drain in its own `afterEach` — shared mutable state whose only enforcement
+ * was habit, and which silently leaked a copy of the whole catalog into the
+ * temp directory for any suite that forgot. Binding the removal to the test
+ * that asked for the directory makes forgetting impossible.
+ *
+ * Must be called from inside a test, which every caller already is.
  */
+/**
+ * Temporary catalogs awaiting removal.
+ *
+ * A directory built inside a test is removed when that test finishes, which is
+ * the tightest binding available. A directory built inside `beforeAll` cannot
+ * use that hook — there is no test to attach to — so it is swept at the end of
+ * the file instead. Building them in `beforeAll` is what keeps a copy-plus-load
+ * of the whole catalog off an individual test's 5s clock, so the suite-level
+ * fallback has to exist; without it those directories would leak.
+ */
+const pendingRoots = new Set<string>();
+
+afterAll(async () => {
+  const roots = [...pendingRoots];
+  pendingRoots.clear();
+  await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
+});
+
 export async function labsDirPlus(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'jtt-catalog-'));
-  tempRoots.push(root);
+  pendingRoots.add(root);
+  try {
+    onTestFinished(() => {
+      pendingRoots.delete(root);
+      return rm(root, { recursive: true, force: true });
+    });
+  } catch {
+    // Called from a suite-level hook rather than from a test; the `afterAll`
+    // above removes it.
+  }
   const labsRoot = path.join(root, 'labs');
   await copyCatalogSkeleton(LABS_DIR, labsRoot);
   for (const [relative, contents] of Object.entries(files)) {

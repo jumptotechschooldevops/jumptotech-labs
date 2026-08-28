@@ -12,7 +12,7 @@
  * `ansible-runtime-integration.test.ts`; this file asserts what the platform
  * *asks the daemon for*, which is where a regression would be introduced.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   ANSIBLE_MANAGED_NODE_CAPABILITIES,
   ANSIBLE_MANAGED_NODE_COUNT,
@@ -106,13 +106,36 @@ skills:
     };
   }
 
-  async function created() {
+  /*
+   * One creation, shared by every test below.
+   *
+   * All eight ask the same question — "what did the provider ask the daemon
+   * for?" — of the same single `create()` call, and every one of them only
+   * reads the result. Doing it eight times meant eight multi-container
+   * creations, and at 4x oversubscription that was enough for one of them to
+   * exceed the 5s `testTimeout`: this was the last test in the workspace still
+   * failing under load once the catalog fixtures were fixed.
+   *
+   * Built in `beforeAll` for the same reason the catalog is: it is setup, so it
+   * is charged to setup. Nothing here writes to `runtime` or `result`, which is
+   * what makes one copy safe to share.
+   */
+  const CREATE_TIMEOUT_MS = 30_000;
+
+  let shared: { runtime: FakeContainerRuntime; result: Awaited<ReturnType<AnsibleLabProvider['create']>> };
+
+  beforeAll(async () => {
     const runtime = new FakeContainerRuntime();
     const provider = new AnsibleLabProvider({ runtime });
     const result = await provider.create(
       sessionContext(ansibleLab(), { sandboxRef: SANDBOX, sessionId: 'sess-000000000000000a' }),
     );
-    return { runtime, result };
+    shared = { runtime, result };
+  }, CREATE_TIMEOUT_MS);
+
+  /** The shared creation. Kept as a function so the call sites read unchanged. */
+  async function created() {
+    return shared;
   }
 
   it('puts the control node and every managed node on one --internal network', async () => {

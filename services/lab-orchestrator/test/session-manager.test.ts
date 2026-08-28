@@ -10,13 +10,12 @@ import {
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
   KindLabProvider,
-  LabRegistry,
   SessionError,
   SessionManager,
   type LabProvider,
 } from '../src/index.js';
 import { FakeKubernetes, fakeExec } from './fakes.js';
-import { LABS_DIR } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const SECRET = 'a-namespace-derivation-secret';
 
@@ -29,8 +28,7 @@ interface Harness {
 }
 
 async function harness(overrides: { maxActiveSessions?: number; maxSessionSeconds?: number; idleTimeoutSeconds?: number } = {}): Promise<Harness> {
-  const registry = new LabRegistry(LABS_DIR);
-  await registry.load();
+  const registry = await realCatalog();
 
   const k8s = new FakeKubernetes();
   const clock = { now: 1_700_000_000_000 };

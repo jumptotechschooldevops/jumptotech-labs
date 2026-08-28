@@ -49,6 +49,7 @@ import {
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { AttemptClosingListener } from '../src/progress.js';
+import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const SECRET = 'integration-test-secret-value';
@@ -86,8 +87,7 @@ if (!enabled) {
     const pools: PostgresDatabase[] = [];
 
     beforeAll(async () => {
-      registry = new LabRegistry(path.join(repoRoot, 'labs'));
-      await registry.load();
+      registry = await realCatalog();
       expect(registry.loadErrors).toEqual([]);
 
       /*

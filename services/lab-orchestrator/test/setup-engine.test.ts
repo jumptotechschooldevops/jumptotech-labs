@@ -17,13 +17,13 @@ import {
   ALLOWED_SETUP_KINDS,
   KindLabProvider,
   LabDefinitionError,
-  LabRegistry,
   loadLabDefinition,
   loadSetupManifests,
   type LoadedLabDefinition,
 } from '../src/index.js';
 import { FakeKubernetes, fakeExec } from './fakes.js';
-import { LABS_DIR, sessionContext } from './helpers.js';
+import { sessionContext } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const NS_A = 'lab-00000000000a';
 const NS_B = 'lab-00000000000b';
@@ -206,8 +206,7 @@ describe('setup engine — reset restores the lab initial state (test requiremen
   });
 
   it('restores a troubleshooting lab to its broken starting condition', async () => {
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
     const lab = registry.get('K8S-010');
     const k8s = new FakeKubernetes();
 
@@ -294,8 +293,7 @@ describe('setup engine — setup cannot target protected namespaces or kinds (te
   });
 
   it('loads every shipped lab fixture without complaint', async () => {
-    const registry = new LabRegistry(LABS_DIR);
-    await registry.load();
+    const registry = await realCatalog();
 
     for (const lab of registry.all()) {
       const objects = await loadSetupManifests(lab);

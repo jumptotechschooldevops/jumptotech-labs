@@ -38,6 +38,7 @@ import {
   type SessionPolicy,
 } from '../src/index.js';
 import { verifyLab, waitForRequirements } from '@jumptotech/verifier';
+import { realCatalog } from './real-catalog.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -138,8 +139,7 @@ suite('integration: real kind cluster', () => {
   }
 
   beforeAll(async () => {
-    registry = new LabRegistry(path.join(repoRoot, 'labs'));
-    await registry.load();
+    registry = await realCatalog();
     expect(registry.loadErrors).toEqual([]);
 
     scratchDir = await mkdtemp(path.join(tmpdir(), 'jtt-integration-'));

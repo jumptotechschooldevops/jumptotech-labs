@@ -17,7 +17,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  LabRegistry,
   MAX_SEED_SCRIPT_BYTES,
   OFFICIAL_DOC_HOSTS,
   PROVIDER_REQUIREMENT_FAMILIES,
@@ -25,16 +24,9 @@ import {
   requirementFamily,
   type LoadedLabDefinition,
 } from '../src/index.js';
-import { LABS_DIR } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
-let cached: LabRegistry | undefined;
-async function realRegistry(): Promise<LabRegistry> {
-  if (!cached) {
-    cached = new LabRegistry(LABS_DIR);
-    await cached.load();
-  }
-  return cached;
-}
+const realRegistry = realCatalog;
 
 async function cs001(): Promise<LoadedLabDefinition> {
   return (await realRegistry()).get('CS-001');
