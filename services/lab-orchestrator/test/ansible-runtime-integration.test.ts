@@ -166,11 +166,17 @@ describe.skipIf(!ENABLED)('the Ansible topology, against a real daemon', () => {
 
   // --- the capability set is minimal ---------------------------------------
 
+  // Every assertion below reads already-provisioned state, but it reads it
+  // through the Docker daemon — and a `docker exec` round trip is not a
+  // five-millisecond operation on a busy host. vitest's default `testTimeout`
+  // is 5s, which is a budget for an assertion rather than for the out-of-process
+  // call the assertion is made of, so these are given the same explicit budget
+  // as their neighbours. See test-support/README.md.
   it('gives the control node — where the student is — no capabilities at all', async () => {
     const caps = await exec(A.control, ['grep', 'CapBnd', '/proc/1/status']);
     expect(caps.ok).toBe(true);
     expect(caps.out).toMatch(/CapBnd:\s+0{16}/);
-  });
+  }, 120_000);
 
   it('gives a managed node exactly the seven reviewed capabilities', async () => {
     const caps = await exec(nodeA(1), ['grep', 'CapBnd', '/proc/1/status']);
@@ -186,13 +192,13 @@ describe.skipIf(!ENABLED)('the Ansible topology, against a real daemon', () => {
     for (const [name, bit] of Object.entries(forbidden)) {
       expect((bits >> BigInt(bit)) & 1n, name).toBe(0n);
     }
-  });
+  }, 120_000);
 
   it('needs no NET_BIND_SERVICE, because sshd listens above 1024', async () => {
     const listening = await exec(nodeA(1), ['sh', '-c', 'netstat -ltn | grep 2222']);
     expect(listening.out).toContain('2222');
     expect(ANSIBLE_MANAGED_NODE_CAPABILITIES).not.toContain('NET_BIND_SERVICE');
-  });
+  }, 120_000);
 
   // --- the capability set is sufficient ------------------------------------
 
@@ -347,7 +353,7 @@ describe.skipIf(!ENABLED)('the Ansible topology, against a real daemon', () => {
       'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', nodeB(1),
     ]);
     expect(mine.out).not.toContain(theirs.stdout.trim());
-  });
+  }, 120_000);
 
   it('exposes no Docker socket and publishes no host port', async () => {
     const socket = await exec(A.control, ['sh', '-c', 'test -S /var/run/docker.sock && echo yes || echo no']);
@@ -357,7 +363,7 @@ describe.skipIf(!ENABLED)('the Ansible topology, against a real daemon', () => {
       const { stdout } = await docker(['inspect', '-f', '{{json .NetworkSettings.Ports}}', name]);
       expect(stdout.trim(), name).toMatch(/^(\{\}|null)$/);
     }
-  });
+  }, 120_000);
 
   it('keeps the private key out of anything `docker inspect` shows', async () => {
     for (const name of [nodeA(1), nodeA(2)]) {
@@ -365,5 +371,5 @@ describe.skipIf(!ENABLED)('the Ansible topology, against a real daemon', () => {
       expect(stdout, name).not.toContain('PRIVATE KEY');
       expect(stdout, name).toContain('JTT_AUTHORIZED_KEY');
     }
-  });
+  }, 120_000);
 });

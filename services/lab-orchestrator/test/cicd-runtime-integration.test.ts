@@ -154,7 +154,10 @@ describe.skipIf(!ENABLED)('the CI/CD sandbox, against a real daemon', () => {
   it('holds no capabilities at all', async () => {
     const caps = await exec(SESSIONS[0]!.ref, ['grep', 'CapBnd', '/proc/self/status']);
     expect(caps.out).toMatch(/CapBnd:\s+0{16}/);
-  });
+    // Explicit, like its neighbours: this reads provisioned state, but it reads
+    // it through a `docker exec`, and vitest's 5s default is a budget for an
+    // assertion rather than for the out-of-process call it is made of.
+  }, 120_000);
 
   it('has no Docker socket, no Docker client, and no route anywhere', async () => {
     const socket = await exec(SESSIONS[0]!.ref, [
@@ -176,7 +179,7 @@ describe.skipIf(!ENABLED)('the CI/CD sandbox, against a real daemon', () => {
       'inspect', '-f', '{{json .NetworkSettings.Ports}}', SESSIONS[0]!.ref,
     ]);
     expect(stdout.trim()).toMatch(/^(\{\}|null)$/);
-  });
+  }, 120_000);
 
   // --- five concurrent sessions ----------------------------------------------
 

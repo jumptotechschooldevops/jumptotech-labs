@@ -777,13 +777,21 @@ allow-lists the operations a lab needs and stamps ownership labels on everything
 created. Blast radius is whatever the allow-list permits — and the proxy is then
 the entire security boundary, where one missed field in a run spec undoes it.
 
-So PLATFORM-004 ships the *contract*: `DockerLabProvider` exists, is registered,
-is covered by the provider-registry tests, and reports itself unavailable with
-that reason. There is no Docker lab in `labs/`, and the catalog shows Docker
-under **Coming soon**. Enabling it later is a construction argument plus a
-sandbox image plus `labs/docker/…`; nothing above the provider changes.
+**The second design is the one that shipped.** PLATFORM-004 landed the
+contract — `DockerLabProvider` registered and covered by the provider-registry
+tests, reporting itself unavailable — and the track was built on top of it
+afterwards. What runs today is a per-session `docker:dind` sandbox reached over
+mutual TLS, brokered through `sandboxd` so that no browser-reachable service
+holds a socket. `labs/docker/` ships **14 labs**, the catalog lists them like
+any other track, and the properties above are asserted against a real daemon
+rather than argued for: seven integration suites
+(`docker-integration` plus `docker009`…`docker014`) cover separate image
+stores, cross-session certificate rejection, enforced `--memory`, and
+`OOMKilled` as the kernel actually reports it.
 
-**There is no Docker integration test, because there is nothing real to test.**
+For what that sandbox is and what its privileges buy, see
+[The Docker track](#the-docker-track) — this section is the *decision*, that one
+is the built thing.
 
 ### Session and provider binding
 
@@ -2354,9 +2362,17 @@ frontend changing.
 |---|---|---|
 | Kubernetes | a kind cluster | `npm run cluster:up` |
 | Linux | Docker + `jumptotech/lab-linux` | `npm run sandbox:build` |
+| Networking | Docker + `jumptotech/lab-linux` | `npm run sandbox:build` |
+| CS | Docker + `jumptotech/lab-linux` | `npm run sandbox:build` |
+| AWS | Docker + `jumptotech/lab-linux` | `npm run sandbox:build` — the track is **simulated**; it holds no cloud credentials and calls no AWS API |
 | Terraform | Docker + `jumptotech/lab-terraform` | `npm run sandbox:build` |
-| Docker | — | not enabled; see [Docker sandbox strategy](#docker-sandbox-strategy) |
-| AWS | — | not enabled; see [Future AWS provider architecture](#future-aws-provider-architecture) |
+| Ansible | Docker + `jumptotech/lab-ansible` | `npm run sandbox:build` |
+| CI/CD | Docker + `jumptotech/lab-cicd` | `npm run sandbox:build` |
+| Docker | Docker, and a daemon that permits privileged containers | nothing to build — each session gets its own `docker:dind`; see [The Docker track](#the-docker-track) |
+
+`npm run sandbox:build` builds all four sandbox images in one go, and refuses a
+half-configured image-tag override rather than overwriting a shared `:latest`
+another worktree is running from.
 
 Missing either substrate is not fatal: the catalog still loads, and the tracks
 that cannot run say so with the real reason.
@@ -2404,7 +2420,7 @@ that cannot run say so with the real reason.
 | Docker Compose | v2.39 | orchestrates the local stack |
 | [kind](https://kind.sigs.k8s.io/) | 0.31.0 | creates the local Kubernetes cluster |
 | kubectl | 1.34 | host-side cluster checks |
-| Node.js | 22 LTS or 24 | running tests / services outside Docker |
+| Node.js | 22 LTS (pinned by [`.nvmrc`](.nvmrc)) | running tests / services outside Docker |
 | Bash | 3.2+ | the `scripts/` helpers |
 | Terraform | 1.9.8 | **inside the sandbox image only** — you do not install it |
 | PostgreSQL | 16 (`postgres:16-alpine`) | **inside the compose stack only** — student progress; you do not install it |
@@ -2414,16 +2430,31 @@ Docker must be running with at least ~4 GB of memory available.
 macOS install:
 
 ```bash
-brew install kind kubectl node
+brew install kind kubectl
+brew install nvm    # then follow its caveats to load nvm in your shell
 ```
 
 Linux install: follow the official
 [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) and
 [kubectl](https://kubernetes.io/docs/tasks/tools/) instructions.
 
-> **Node version note.** The container images pin Node 22 LTS. `node-pty` is a
-> native addon and does not build against every Node release; if you run the
-> terminal service directly on your host, use Node 22.
+> **Node version note.** Node 22 LTS is the supported development and runtime
+> baseline: it is what the container images pin, what CI runs, and what every
+> integration suite is validated against. `node-pty` is a native addon and does
+> not build against every Node release, so a newer Node breaks the terminal and
+> sandboxd suites rather than the product — the fix is to move the developer to
+> Node 22, not to loosen the product.
+>
+> The repository carries an [`.nvmrc`](.nvmrc), so the standard local setup is:
+>
+> ```bash
+> nvm use          # reads .nvmrc; `nvm install` first if you do not have 22 yet
+> node --version   # v22.x
+> npm --version
+> ```
+>
+> `nvm` is not a hard requirement — any Node 22 install works — but every
+> command in this README assumes you are on one.
 
 ---
 
@@ -2433,6 +2464,7 @@ Linux install: follow the official
 git clone <repository-url>
 cd jumptotech-labs
 
+nvm use          # Node 22, from .nvmrc
 cp .env.example .env
 ```
 
@@ -3419,8 +3451,9 @@ make test-sandbox
 ```
 
 The end-to-end terminal suite additionally needs a working `node-pty`, which
-means Node 22 (see [Requirements](#requirements)). On a host running a newer
-Node it skips itself with a message rather than failing:
+means Node 22 — run `nvm use` first (see [Requirements](#requirements)). On a
+host running a newer Node it skips itself with a message rather than failing,
+which is why `make test-terminal-container` below is the path CI takes:
 
 ```bash
 RUN_INTEGRATION_TESTS=1 \
@@ -3472,30 +3505,42 @@ stores, whether one session's client certificate is actually rejected by another
 session's daemon, whether `--memory` is actually applied. A fake that returned
 "denied" would prove none of it, so nothing in that file is faked.
 
-Persistence tests against a **real PostgreSQL** — no cluster and no sandbox
-images needed, just Docker:
+Persistence tests against a **real PostgreSQL**. `make test-db` is the
+canonical command — it is what CI runs and the only path this repository
+supports:
 
 ```bash
 make test-db
 TEST_DB_PORT=55440 make test-db   # if 55432 is already taken on your machine
 ```
 
-That target starts a throwaway `postgres:16-alpine`, runs the migrations against
-it, and executes two suites before removing it again:
+No cluster and no sandbox images are needed, just Docker. **It does not touch
+your development database.** The target starts a *throwaway*
+`postgres:16-alpine` of its own — its own container, its own port, its own
+credentials, thrown away when the run ends whether it passed or failed — so
+there is no development password to look up, nothing in `.env` to configure,
+and no state left behind to make the next run disagree with this one.
+
+It then runs the three persistence suites against it:
 
 ```text
-services/progress   the repository contract, run against PostgreSQL itself —
-                    the constraints, the ON CONFLICT clauses, the transaction
-                    boundaries, and the migration runner (idempotence, the
-                    checksum guard)
-apps/api            the headline claim end to end: complete a lab, destroy the
-                    sandbox, throw the whole API process away, and read the
-                    progress back from a brand-new one
+services/progress       the repository contract, run against PostgreSQL itself —
+                        the constraints, the ON CONFLICT clauses, the transaction
+                        boundaries, and the migration runner (idempotence, the
+                        checksum guard)
+services/lab-orchestrator  the session store: sessions that outlive the process
+                        that created them, and the ownership guards on them
+apps/api                the headline claim end to end: complete a lab, destroy
+                        the sandbox, throw the whole API process away, and read
+                        the progress back from a brand-new one
 ```
 
 The same contract suite runs against the in-memory store in `npm test`, which is
-what stops the fallback quietly becoming a different product. To point the
-suites at a database you already have:
+what stops the fallback quietly becoming a different product.
+
+Pointing the suites at a database you already have is possible but is not the
+supported path — you own the cleanup, and a suite that finds leftover rows from
+a previous run reports a failure that is not a defect:
 
 ```bash
 RUN_DB_TESTS=1 \

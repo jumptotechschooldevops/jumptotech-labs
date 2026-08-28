@@ -179,10 +179,15 @@ test-db: ## Run the persistence suites against a throwaway PostgreSQL
 	@docker run --rm -d --name jumptotech-labs-test-db \
 		-e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=jumptotech_labs_test \
 		-p $${TEST_DB_PORT:-55432}:5432 postgres:16-alpine >/dev/null
-	@for i in $$(seq 1 30); do \
-		docker exec jumptotech-labs-test-db pg_isready -U test -d jumptotech_labs_test >/dev/null 2>&1 && break; \
-		sleep 1; \
-	done
+	@# Not `pg_isready`: that probes the server's unix socket from inside the
+	@# container and is satisfied by the temporary postmaster the official image
+	@# runs `initdb` against, while a query from the host still gets
+	@# ECONNRESET. The gate has to perform the operation it is gating — see
+	@# scripts/wait-for-postgres.mjs.
+	@node scripts/wait-for-postgres.mjs \
+		postgresql://test:test@localhost:$${TEST_DB_PORT:-55432}/jumptotech_labs_test 90 \
+		|| { docker logs --tail 40 jumptotech-labs-test-db; \
+		     docker rm -f jumptotech-labs-test-db >/dev/null; exit 1; }
 	@RUN_DB_TESTS=1 \
 		TEST_DATABASE_URL=postgresql://test:test@localhost:$${TEST_DB_PORT:-55432}/jumptotech_labs_test \
 		npm run test:db; \
