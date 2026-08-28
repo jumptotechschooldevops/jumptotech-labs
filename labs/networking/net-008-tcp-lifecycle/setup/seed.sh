@@ -43,12 +43,18 @@ install -d -m 0755 /etc/sv/ledger-echo /etc/sv/ledger-metrics
 cat > /etc/sv/ledger-echo/run <<'SH'
 #!/bin/sh
 exec 2>&1
-exec socat -T 30 TCP4-LISTEN:9200,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-tcp-echo
+# `-T 60`, not 10: socat's -T is a total *inactivity* timeout on the whole
+# circuit, and the SYSTEM: handler is a shell script, so that budget is
+# really being spent on fork + exec + first schedule. At 10s a loaded host
+# spends it, socat tears the connection down, and a client talking to a
+# perfectly healthy service records `000`. 60s cannot be reached by
+# scheduling delay and still reaps a peer that connects and goes silent.
+exec socat -T 60 TCP4-LISTEN:9200,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-tcp-echo
 SH
 cat > /etc/sv/ledger-metrics/run <<'SH'
 #!/bin/sh
 exec 2>&1
-exec socat -T 30 UDP4-RECVFROM:9201,fork SYSTEM:/usr/local/bin/jtt-udp-echo
+exec socat -T 60 UDP4-RECVFROM:9201,fork SYSTEM:/usr/local/bin/jtt-udp-echo
 SH
 chmod 0755 /etc/sv/ledger-echo/run /etc/sv/ledger-metrics/run
 ln -sfn /etc/sv/ledger-echo /etc/service/ledger-echo

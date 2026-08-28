@@ -50,7 +50,13 @@ chmod 0755 /usr/local/bin/jtt-ledger-response
 cat > /usr/local/bin/ledger-api <<'SH'
 #!/bin/bash
 # The bank's ledger API. Answers HTTP on TCP 9109, and has no healthy upstream.
-exec socat -T 10 TCP-LISTEN:9109,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-ledger-response
+# `-T 60`, not 10: socat's -T is a total *inactivity* timeout on the whole
+# circuit, and the SYSTEM: handler is a shell script, so that budget is
+# really being spent on fork + exec + first schedule. At 10s a loaded host
+# spends it, socat tears the connection down, and a client talking to a
+# perfectly healthy service records `000`. 60s cannot be reached by
+# scheduling delay and still reaps a peer that connects and goes silent.
+exec socat -T 60 TCP-LISTEN:9109,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-ledger-response
 SH
 chmod 0755 /usr/local/bin/ledger-api
 

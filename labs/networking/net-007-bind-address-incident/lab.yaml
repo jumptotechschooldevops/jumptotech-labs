@@ -110,6 +110,14 @@ requirements:
     port: 8080
     path: /health
     expected_status: 200
+    # 20s, not the 5s default. The far side is answered by a shell script that
+    # socat forks and execs per connection, so this budget is spent on process
+    # startup before it is spent on the network — and on a busy host that is
+    # more than five seconds. A refusal, which is what an unrepaired lab
+    # produces, is immediate and costs none of it: raising this cannot make a
+    # loopback-bound service look reachable, it only stops a scheduler delay
+    # being reported to a student as "nobody could reach you".
+    timeout_seconds: 20
     label: The other machine on this segment can reach the service
 
   # --- and the local state that explains it ---------------------------------

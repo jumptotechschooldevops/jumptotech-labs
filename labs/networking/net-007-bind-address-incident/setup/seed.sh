@@ -42,14 +42,20 @@ bind=$(sed -n 's/^[[:space:]]*bind_address[[:space:]]*=[[:space:]]*//p' "$conf" 
 port=$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*//p' "$conf" | head -1)
 bind=${bind:-127.0.0.1}
 port=${port:-8080}
+# `-T 60`, not 10: socat's -T is a total *inactivity* timeout on the whole
+# circuit, and the SYSTEM: handler is a shell script, so that budget is
+# really being spent on fork + exec + first schedule. At 10s a loaded host
+# spends it, socat tears the connection down, and a client talking to a
+# perfectly healthy service records `000`. 60s cannot be reached by
+# scheduling delay and still reaps a peer that connects and goes silent.
 case "$bind" in
   *:*)
     stripped=${bind#[}; stripped=${stripped%]}
-    exec socat -T 10 "TCP6-LISTEN:${port},bind=[${stripped}],reuseaddr,fork" \
+    exec socat -T 60 "TCP6-LISTEN:${port},bind=[${stripped}],reuseaddr,fork" \
       SYSTEM:/usr/local/bin/jtt-ledger-health
     ;;
   *)
-    exec socat -T 10 "TCP4-LISTEN:${port},bind=${bind},reuseaddr,fork" \
+    exec socat -T 60 "TCP4-LISTEN:${port},bind=${bind},reuseaddr,fork" \
       SYSTEM:/usr/local/bin/jtt-ledger-health
     ;;
 esac

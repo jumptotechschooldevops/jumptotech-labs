@@ -39,7 +39,13 @@ cat > /etc/sv/ledger-api/run <<'SH'
 #!/bin/sh
 exec 2>&1
 export JTT_SERVICE=ledger-api
-exec socat -T 10 TCP-LISTEN:9105,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-api-response
+# `-T 60`, not 10: socat's -T is a total *inactivity* timeout on the whole
+# circuit, and the SYSTEM: handler is a shell script, so that budget is
+# really being spent on fork + exec + first schedule. At 10s a loaded host
+# spends it, socat tears the connection down, and a client talking to a
+# perfectly healthy service records `000`. 60s cannot be reached by
+# scheduling delay and still reaps a peer that connects and goes silent.
+exec socat -T 60 TCP-LISTEN:9105,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-api-response
 SH
 
 # payments-api — binds whatever its configuration says, which is the fault.
@@ -60,11 +66,11 @@ case "$bind" in
   *:*)
     stripped=${bind#[}
     stripped=${stripped%]}
-    exec socat -T 10 "TCP6-LISTEN:${port},bind=[${stripped}],reuseaddr,fork" \
+    exec socat -T 60 "TCP6-LISTEN:${port},bind=[${stripped}],reuseaddr,fork" \
       SYSTEM:/usr/local/bin/jtt-api-response
     ;;
   *)
-    exec socat -T 10 "TCP4-LISTEN:${port},bind=${bind},reuseaddr,fork" \
+    exec socat -T 60 "TCP4-LISTEN:${port},bind=${bind},reuseaddr,fork" \
       SYSTEM:/usr/local/bin/jtt-api-response
     ;;
 esac

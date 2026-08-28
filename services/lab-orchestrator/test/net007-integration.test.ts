@@ -85,15 +85,26 @@ async function shell(ref: string, script: string, user = 'root') {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Move the service's bind address and wait for the socket to follow. */
+/**
+ * Move the service's bind address and wait for the socket to follow.
+ *
+ * The write goes to a temporary file and is renamed into place rather than
+ * `tee`d over the original. `tee` truncates on open, so for as long as the
+ * write takes there is a configuration file with no `bind_address` line in it
+ * — and `ledger-api` reading one falls back to loopback. A restart landing in
+ * that window leaves a service bound to 127.0.0.1 while the file on disk says
+ * `0.0.0.0`, which reads as a product failure and is not one. `mv` within a
+ * filesystem is atomic, so no reader can observe a half-written file.
+ */
 async function setBindAddress(ref: string, address: string, expected = address) {
   const conf = await shell(ref, `cat ${CONF}`);
   await runtime.exec(ref, {
-    argv: ['tee', CONF],
+    argv: ['tee', `${CONF}.next`],
     user: 'root',
     stdin: conf.stdout.replace(/bind_address\s*=.*/, `bind_address = ${address}`),
     timeoutMs: 30_000,
   });
+  await shell(ref, `chmod 0644 ${CONF}.next && mv ${CONF}.next ${CONF}`);
   await shell(ref, 'sv restart ledger-api');
 
   const deadline = Date.now() + 60_000;
@@ -121,6 +132,53 @@ async function teardown() {
     if (info && info.labels[CONTAINER_SESSION_LABEL] !== session.sessionId) continue;
     await provider.destroySandbox(session.sandboxRef, session.sessionId).catch(() => undefined);
   }
+}
+
+/**
+ * What the service actually looked like when a check disagreed with the test.
+ *
+ * `expected [ { …(4) } ] to deeply equal []` names neither the check that
+ * failed nor the state that failed it, and this suite runs against a shared
+ * daemon where the interesting failures are the ones that need a busy machine
+ * to appear. Printing the socket table, the configuration bytes, the process
+ * tree and both sides of the measurement turns one of those into a diagnosis
+ * instead of a re-run. It costs nothing on the passing path: it is only ever
+ * called once a check has already failed.
+ */
+async function describeService(context: LabSessionContext): Promise<string> {
+  const ref = context.sandboxRef!;
+  const peer = peerRefForSandbox(ref);
+  const probes: Array<[string, () => Promise<string>]> = [
+    ['when', async () => (await shell(ref, 'date -Ins')).stdout],
+    ['listening sockets', async () => (await shell(ref, 'ss -ltnp')).stdout],
+    ['configuration', async () => (await shell(ref, `od -c ${CONF} | tail -6`)).stdout],
+    ['processes', async () => (await shell(ref, 'ps -eo pid,ppid,etimes,args')).stdout],
+    ['supervisor', async () => (await shell(ref, 'sv status ledger-api 2>&1')).stdout],
+    ['from this host', async () => (await shell(ref, "curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/health || echo 'curl failed'")).stdout],
+    ['from the peer, three times', async () => (await shell(peer, `for _ in 1 2 3; do curl -s -o /dev/null -w '%{http_code} ' --max-time 10 http://${ref}:8080/health || printf 'failed '; done; echo`)).stdout],
+  ];
+  const out = ['\n--- NET-007: what the sandbox actually looked like ---'];
+  for (const [name, probe] of probes) {
+    try {
+      out.push(`${name}:\n${(await probe()).trimEnd()}`);
+    } catch (error) {
+      out.push(`${name}: could not be read — ${(error as Error).message}`);
+    }
+  }
+  return out.join('\n');
+}
+
+/** Fail with the failing checks *and* the state that produced them. */
+async function expectAllChecksPass(context: LabSessionContext) {
+  const result = await check(context);
+  const failed = result.checks.filter((c) => c.status !== 'pass');
+  if (failed.length > 0) {
+    const detail = failed.map((c) => `  ${c.label}: ${c.detail ?? c.status}`).join('\n');
+    throw new Error(
+      `${failed.length} check(s) did not pass:\n${detail}\n${await describeService(context)}`,
+    );
+  }
+  expect(result.passed).toBe(true);
 }
 
 describe.skipIf(!ENABLED)('NET-007 end to end, against a real daemon', () => {
@@ -179,16 +237,14 @@ describe.skipIf(!ENABLED)('NET-007 end to end, against a real daemon', () => {
       status: 200,
     });
 
-    const after = await check(context);
-    expect(after.checks.filter((c) => c.status !== 'pass')).toEqual([]);
-    expect(after.passed).toBe(true);
+    await expectAllChecksPass(context);
 
     // Put it back on loopback: the peer stops being able to reach it.
     await setBindAddress(context.sandboxRef!, '127.0.0.1');
     expect((await check(context)).passed).toBe(false);
 
     await setBindAddress(context.sandboxRef!, '0.0.0.0');
-    expect((await check(context)).passed).toBe(true);
+    await expectAllChecksPass(context);
 
     // Reset restores the fault and discards the student's evidence.
     const reset = await provider.reset(context);
@@ -208,7 +264,7 @@ describe.skipIf(!ENABLED)('NET-007 end to end, against a real daemon', () => {
     // And it can be solved again.
     await shell(context.sandboxRef!, WRITE_EVIDENCE);
     await setBindAddress(context.sandboxRef!, '0.0.0.0');
-    expect((await check(context)).passed).toBe(true);
+    await expectAllChecksPass(context);
   }, 1_800_000);
 
   it('cannot be passed by making the local view look repaired', async () => {
@@ -234,7 +290,7 @@ ${WRITE_EVIDENCE}`,
     expect(failed).toContain('The service listens where the segment can reach it');
 
     await setBindAddress(context.sandboxRef!, '0.0.0.0');
-    expect((await check(context)).passed).toBe(true);
+    await expectAllChecksPass(context);
   }, 900_000);
 
   it('gives each session its own peer, and one cannot answer for another', async () => {
@@ -251,7 +307,7 @@ ${WRITE_EVIDENCE}`,
     // Solve A only. B is untouched and still failing.
     await shell(a.sandboxRef!, WRITE_EVIDENCE);
     await setBindAddress(a.sandboxRef!, '0.0.0.0');
-    expect((await check(a)).passed).toBe(true);
+    await expectAllChecksPass(a);
     expect((await check(b)).passed).toBe(false);
 
     // A's peer cannot reach B's sandbox: separate segments, no route between.

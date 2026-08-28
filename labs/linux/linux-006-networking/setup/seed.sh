@@ -23,7 +23,13 @@ chmod 0755 /usr/local/bin/jtt-edge-banner
 cat > /usr/local/bin/edge-proxy <<'SH'
 #!/bin/bash
 # The bank's edge proxy. Answers HTTP on TCP 9105.
-exec socat -T 10 TCP-LISTEN:9105,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-edge-banner
+# `-T 60`, not 10: socat's -T is a total *inactivity* timeout on the whole
+# circuit, and the SYSTEM: handler is a shell script, so that budget is
+# really being spent on fork + exec + first schedule. At 10s a loaded host
+# spends it, socat tears the connection down, and a client talking to a
+# perfectly healthy service records `000`. 60s cannot be reached by
+# scheduling delay and still reaps a peer that connects and goes silent.
+exec socat -T 60 TCP-LISTEN:9105,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-edge-banner
 SH
 chmod 0755 /usr/local/bin/edge-proxy
 

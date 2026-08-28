@@ -95,7 +95,13 @@ install -d -m 0755 /etc/sv/ledger-api /etc/sv/settlement-poller
 cat > /etc/sv/ledger-api/run <<'SH'
 #!/bin/sh
 exec 2>&1
-exec socat -T 10 TCP-LISTEN:9120,reuseaddr,fork SYSTEM:/usr/local/bin/ledger-health
+# `-T 60`, not 10: socat's -T is a total *inactivity* timeout on the whole
+# circuit, and the SYSTEM: handler is a shell script, so that budget is
+# really being spent on fork + exec + first schedule. At 10s a loaded host
+# spends it, socat tears the connection down, and a client talking to a
+# perfectly healthy service records `000`. 60s cannot be reached by
+# scheduling delay and still reaps a peer that connects and goes silent.
+exec socat -T 60 TCP-LISTEN:9120,reuseaddr,fork SYSTEM:/usr/local/bin/ledger-health
 SH
 cat > /etc/sv/settlement-poller/run <<'SH'
 #!/bin/sh

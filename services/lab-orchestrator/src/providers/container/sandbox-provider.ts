@@ -136,6 +136,25 @@ const MAX_INSPECT_OUTPUT_BYTES = 256 * 1024;
 /** How long one seed script may take before the sandbox is declared broken. */
 const SEED_TIMEOUT_MS = 120_000;
 
+/**
+ * How many times a peer measurement may be taken before it is given up on.
+ *
+ * Only attempts that produced *no verdict* are repeated — see
+ * `requestFromPeer`. A refused connection answers on the first try, so this
+ * never slows down the failing case a lab is actually built around.
+ */
+const PEER_REQUEST_ATTEMPTS = 3;
+
+/**
+ * The curl exit codes that mean the peer looked and could not get there.
+ *
+ * 6 is "could not resolve host" and 7 is "failed to connect": both are the far
+ * side reporting what it observed, which is a real answer. Notably absent is
+ * 28, "operation timed out" — under contention that is as likely to be this
+ * host as the network, and it is not evidence a student should be failed on.
+ */
+const CURL_COULD_NOT_CONNECT = new Set([6, 7]);
+
 export interface ContainerProviderOptions {
   id: LabProviderId;
   /** Implementation name shown to operators, e.g. `docker-linux`. */
@@ -854,6 +873,32 @@ export class ContainerLabProvider implements LabProvider {
    * measurement. The argv is built here from validated parts — a port, a path
    * and a status — and the target is the sandbox's own container name, resolved
    * by the segment's embedded DNS rather than by anything a lab supplies.
+   *
+   * ## "Not reached" and "not measured" are different answers
+   *
+   * A peer that connects and is refused has *answered the question*. An exec
+   * that never produced a verdict has not — and reporting the second as the
+   * first fails a student whose repair was correct. That is not hypothetical:
+   * on a loaded host one budget covers the `docker exec`, the request, and the
+   * fork of the handler that answers it, and a NET-007 run has been observed
+   * graded "another host could not reach the service" while the service was
+   * bound to `0.0.0.0` and the same peer answered `200` three times a moment
+   * later.
+   *
+   * So a verdict is only accepted when curl actually reached one:
+   *
+   *   · a parsed status code            → reached, and this is the status
+   *   · curl exited 6 or 7              → the peer looked and could not connect
+   *                                       or could not resolve. That is a real
+   *                                       negative, it is instantaneous, and it
+   *                                       is what an unrepaired lab produces —
+   *                                       so it is returned immediately and
+   *                                       costs no extra time.
+   *   · anything else                   → no verdict. Measure again.
+   *
+   * Retrying cannot turn an unreachable service into a reachable one: a refusal
+   * is deterministic and every attempt gets the same one. It only removes the
+   * case where the platform failed to look and said "nobody could reach you".
    */
   async requestFromPeer(
     context: LabSessionContext,
@@ -864,28 +909,39 @@ export class ContainerLabProvider implements LabProvider {
 
     const target = this.#ref(context);
     const timeout = Math.max(1, Math.min(30, request.timeoutSeconds ?? 5));
-    const result = await this.#runtime.exec(peer, {
-      argv: [
-        'curl',
-        '--silent',
-        '--show-error',
-        '--max-time',
-        String(timeout),
-        '--output',
-        '/dev/null',
-        '--write-out',
-        '%{http_code}',
-        `http://${target}:${request.port}${request.path}`,
-      ],
-      user: context.policy.sandbox.user,
-      timeoutMs: (timeout + 5) * 1000,
-    });
+    let inconclusive = 'the peer could not reach the service';
 
-    const code = Number.parseInt(result.stdout.trim(), 10);
-    if (!Number.isInteger(code) || code === 0) {
-      return { reached: false, detail: 'the peer could not reach the service' };
+    for (let attempt = 1; attempt <= PEER_REQUEST_ATTEMPTS; attempt++) {
+      const result = await this.#runtime.exec(peer, {
+        argv: [
+          'curl',
+          '--silent',
+          '--show-error',
+          '--max-time',
+          String(timeout),
+          '--output',
+          '/dev/null',
+          '--write-out',
+          '%{http_code}',
+          `http://${target}:${request.port}${request.path}`,
+        ],
+        user: context.policy.sandbox.user,
+        timeoutMs: (timeout + 5) * 1000,
+      });
+
+      const code = Number.parseInt(result.stdout.trim(), 10);
+      if (Number.isInteger(code) && code > 0) return { reached: true, status: code };
+
+      if (!result.timedOut && CURL_COULD_NOT_CONNECT.has(result.exitCode)) {
+        return { reached: false, detail: 'the peer could not reach the service' };
+      }
+
+      inconclusive = result.timedOut
+        ? 'the peer host did not answer in time, so reachability could not be measured'
+        : 'the request from the peer host did not complete, so reachability could not be measured';
     }
-    return { reached: true, status: code };
+
+    return { reached: false, detail: inconclusive };
   }
 
   /**

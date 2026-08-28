@@ -48,7 +48,13 @@ if [ -r "$conf" ]; then
   . "$conf"
 fi
 echo "$(date -Is) ledger-api: starting on port ${PORT}" >> /var/log/jumptotech/ledger-api.log
-socat -T 10 "TCP-LISTEN:${PORT},reuseaddr,fork" SYSTEM:/usr/local/bin/jtt-edge-banner &
+# `-T 60`, not 10: socat's -T is a total *inactivity* timeout on the whole
+# circuit, and the SYSTEM: handler is a shell script, so that budget is
+# really being spent on fork + exec + first schedule. At 10s a loaded host
+# spends it, socat tears the connection down, and a client talking to a
+# perfectly healthy service records `000`. 60s cannot be reached by
+# scheduling delay and still reaps a peer that connects and goes silent.
+socat -T 60 "TCP-LISTEN:${PORT},reuseaddr,fork" SYSTEM:/usr/local/bin/jtt-edge-banner &
 child=$!
 trap 'kill "$child" 2>/dev/null' TERM INT
 wait "$child"
@@ -80,7 +86,7 @@ cat > /usr/local/bin/legacy-exporter <<'SH'
 #!/bin/bash
 # Decommissioned in the 2026-08-12 migration. Still running on this host, and
 # still holding the port the ledger API needs.
-socat -T 10 TCP-LISTEN:9105,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-edge-banner &
+socat -T 60 TCP-LISTEN:9105,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-edge-banner &
 child=$!
 trap 'kill "$child" 2>/dev/null' TERM INT
 wait "$child"
