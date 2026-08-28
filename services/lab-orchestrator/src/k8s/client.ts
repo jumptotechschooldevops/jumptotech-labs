@@ -94,6 +94,79 @@ export interface KubernetesClientOptions {
   context?: string;
 }
 
+/**
+ * How many times an apply re-reads and retries after a `409 Conflict`.
+ *
+ * Five is client-go's `retry.DefaultRetry` count, for the same reason: a
+ * conflict means somebody else won a race we can simply re-run, and a handful
+ * of attempts clears every realistic contender while still failing loudly
+ * against a controller that is rewriting the object continuously.
+ */
+const APPLY_CONFLICT_ATTEMPTS = 5;
+
+/**
+ * Apply one object, resolving optimistic-concurrency conflicts.
+ *
+ * The defect this exists for
+ * --------------------------
+ * `applyObjects` reads an object for its `resourceVersion` and then `replace`s
+ * it. That is optimistic concurrency: if anything writes to the object between
+ * the read and the replace, the API server rejects the write with `409
+ * Conflict` and the apply fails.
+ *
+ * For the guardrail objects that is not a rare race, it is the expected case.
+ * `reset()` purges the namespace and *then* reconciles guardrails, and the
+ * quota controller rewrites `ResourceQuota.status.used` on every pod that
+ * terminates — so the platform re-applies the quota during the exact window in
+ * which the quota controller is busiest. A student resetting a lab with a few
+ * replicas could get:
+ *
+ *     Platform guardrails restored — failed
+ *     Operation cannot be fulfilled on resourcequotas
+ *     "jumptotech-session-quota": the object has been modified
+ *
+ * Re-reading and retrying is the resolution optimistic concurrency is designed
+ * around, not a retry papering over an unknown flake: the conflict is a
+ * *reported*, specific, self-clearing condition, the retry re-reads rather than
+ * repeating a stale write, and every other status code still fails on the first
+ * attempt.
+ *
+ * Split out of the method so it can be tested without a cluster.
+ */
+export async function applyWithConflictRetry(ops: {
+  read: () => Promise<{ metadata?: { resourceVersion?: string } }>;
+  replace: (resourceVersion: string | undefined) => Promise<unknown>;
+  create: () => Promise<unknown>;
+  attempts?: number;
+  /** Injected by tests so the backoff costs no wall clock. */
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const attempts = ops.attempts ?? APPLY_CONFLICT_ATTEMPTS;
+  const sleep = ops.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      let existing: { metadata?: { resourceVersion?: string } };
+      try {
+        existing = await ops.read();
+      } catch (readError) {
+        if (statusCodeOf(readError) !== 404) throw readError;
+        // Absent, so create it. A 409 here means somebody created it between
+        // our read and our create, which the loop below resolves by re-reading.
+        await ops.create();
+        return;
+      }
+      await ops.replace(existing.metadata?.resourceVersion);
+      return;
+    } catch (error) {
+      if (statusCodeOf(error) !== 409 || attempt >= attempts) throw error;
+      // A short, growing pause: the contending controller is mid-write, and
+      // re-reading instantly just loses the same race again.
+      await sleep(10 * attempt);
+    }
+  }
+}
+
 export class KubernetesClient implements KubernetesPort {
   readonly #core: k8s.CoreV1Api;
   readonly #apps: k8s.AppsV1Api;
@@ -804,6 +877,7 @@ export class KubernetesClient implements KubernetesPort {
     });
   }
 
+
   // --- writes -------------------------------------------------------------
 
   async applyObjects(
@@ -821,21 +895,15 @@ export class KubernetesClient implements KubernetesPort {
       } as k8s.KubernetesObject;
 
       try {
-        try {
-          const existing = await this.#objects.read(
-            spec as ObjectReadRef,
-          );
-          await this.#objects.replace({
-            ...spec,
-            metadata: {
-              ...spec.metadata,
-              resourceVersion: existing.metadata?.resourceVersion,
-            },
-          });
-        } catch (readError) {
-          if (statusCodeOf(readError) !== 404) throw readError;
-          await this.#objects.create(spec);
-        }
+        await applyWithConflictRetry({
+          read: () => this.#objects.read(spec as ObjectReadRef),
+          replace: (resourceVersion) =>
+            this.#objects.replace({
+              ...spec,
+              metadata: { ...spec.metadata, resourceVersion },
+            }),
+          create: () => this.#objects.create(spec),
+        });
       } catch (error) {
         throw new ManifestApplyError(
           `Could not apply ${object.kind}/${object.metadata.name} into ${namespace}: ${messageOf(error)}`,
