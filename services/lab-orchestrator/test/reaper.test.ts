@@ -25,6 +25,7 @@ async function harness(lifetimes: { maxSessionSeconds?: number; idleTimeoutSecon
   const registry = await realCatalog();
 
   const k8s = new FakeKubernetes();
+  const store = new InMemorySessionStore();
   const clock = { now: 1_700_000_000_000 };
   const provider = new KindLabProvider({
     k8s,
@@ -44,7 +45,7 @@ async function harness(lifetimes: { maxSessionSeconds?: number; idleTimeoutSecon
   const manager = new SessionManager({
     registry,
     provider,
-    store: new InMemorySessionStore(),
+    store,
     policy: DEFAULT_SESSION_POLICY,
     lifetimes: {
       maxSessionSeconds: lifetimes.maxSessionSeconds ?? 3_600,
@@ -71,7 +72,7 @@ async function harness(lifetimes: { maxSessionSeconds?: number; idleTimeoutSecon
     log: () => undefined,
   });
 
-  return { manager, provider, k8s, clock, reaper, terminated };
+  return { manager, provider, k8s, clock, reaper, terminated, store };
 }
 
 describe('expired sessions (story test 21)', () => {
@@ -292,5 +293,98 @@ describe('retention', () => {
 
     expect(result.forgotten).toEqual([session.sessionId]);
     expect(await manager.get(session.sessionId)).toBeNull();
+  });
+});
+
+describe('a teardown whose owner died', () => {
+  /*
+   * The leak this closes.
+   *
+   * `end()` marks a session `ENDING` and then destroys its sandbox. If the
+   * process dies between those two steps the row stays `ENDING` — and only
+   * `end()` can claim `ENDING`, so the reaper's `expire()` was refused on every
+   * pass, forever. Two such rows were found in a running database two days
+   * after the run that created them, still being retried every 60 seconds and
+   * still refused.
+   *
+   * That is not merely an untidy row. `ENDING` is in `OCCUPYING_STATUSES`, so
+   * each one holds a `MAX_ACTIVE_SESSIONS` slot permanently and its sandbox is
+   * never destroyed. Enough of them and the platform refuses to start any lab
+   * at all, with no way back except editing the database by hand.
+   *
+   * The rule that caused it is still right for its actual purpose — a reaper
+   * must not relabel an End a student is in the middle of — so the fix does not
+   * remove it. It only stops applying it once no live End can possibly still be
+   * running, which the absolute deadline settles.
+   */
+  /** Claim the teardown, then lose the process before the sandbox is destroyed. */
+  async function abandonEnd(
+    store: { transition: InMemorySessionStore['transition'] },
+    sessionId: string,
+  ) {
+    await store.transition(sessionId, ['ACTIVE'], 'ENDING', {
+      statusReason: 'ended by student',
+    });
+  }
+
+  it('is taken over once the session is past its absolute deadline', async () => {
+    const { manager, k8s, clock, reaper, store } = await harness({ maxSessionSeconds: 600 });
+    const { session } = await manager.start('K8S-001');
+
+    await abandonEnd(store, session.sessionId);
+    expect((await manager.get(session.sessionId))?.status).toBe('ENDING');
+    expect(await k8s.getNamespace(session.namespace), 'the sandbox is still there').not.toBeNull();
+
+    // Before the deadline the refusal stands: a live End must not be relabelled.
+    const early = await reaper.sweep();
+    expect(early.removed).toEqual([]);
+    expect((await manager.get(session.sessionId))?.status).toBe('ENDING');
+
+    // Past it, there is no live End left to protect.
+    clock.now += 11 * MINUTE;
+    const late = await reaper.sweep();
+
+    expect(late.removed).toEqual([session.namespace]);
+    expect(await k8s.getNamespace(session.namespace)).toBeNull();
+    expect((await manager.get(session.sessionId))?.status).toBe('EXPIRED');
+  });
+
+  it('gives back the MAX_ACTIVE_SESSIONS slot it was holding', async () => {
+    const { manager, clock, reaper, store } = await harness({ maxSessionSeconds: 600 });
+    const { session } = await manager.start('K8S-001');
+
+    await abandonEnd(store, session.sessionId);
+    expect(await manager.activeCount(), 'ENDING occupies a slot').toBe(1);
+
+    clock.now += 11 * MINUTE;
+    await reaper.sweep();
+
+    expect(await manager.activeCount(), 'the slot must come back').toBe(0);
+  });
+
+  it('leaves a live End alone, so a student is never relabelled EXPIRED', async () => {
+    const { manager, reaper, clock, store } = await harness({ maxSessionSeconds: 3_600 });
+    const { session } = await manager.start('K8S-001');
+
+    await abandonEnd(store, session.sessionId);
+
+    // Well inside the lifetime: a real End is seconds old, not an hour.
+    clock.now += 2 * MINUTE;
+    await reaper.sweep();
+
+    expect((await manager.get(session.sessionId))?.status).toBe('ENDING');
+  });
+
+  it('still refuses an EXPIRING session to a student pressing End', async () => {
+    // The mirror image of the rule, which the fix must not have loosened.
+    const { manager, store } = await harness({ maxSessionSeconds: 3_600 });
+    const { session } = await manager.start('K8S-001');
+
+    await store.transition(session.sessionId, ['ACTIVE'], 'EXPIRING', {
+      statusReason: 'reaper owns this',
+    });
+
+    const result = await manager.end(session.sessionId);
+    expect(result.session.status).toBe('EXPIRING');
   });
 });

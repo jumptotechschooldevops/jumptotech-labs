@@ -276,8 +276,24 @@ export class SessionReaper {
       // provider recorded on the session — so a Kubernetes namespace and a
       // Linux container both reach EXPIRED through the same state machine.
       const ref = session.sandboxRef ?? session.namespace;
+      /*
+       * Adopt a teardown whose owner is gone.
+       *
+       * `expire()` normally cannot claim a session left in `ENDING`, so that it
+       * never relabels a student's End that is still running. But if the
+       * process holding that `ENDING` died, nothing else ever will claim it:
+       * the row stays in `ENDING` for good, holds one of the
+       * `MAX_ACTIVE_SESSIONS` slots for good, and its sandbox is never
+       * destroyed.
+       *
+       * Past the absolute deadline there is no live End to protect — End takes
+       * seconds and the deadline is an hour out — so the sweep takes the
+       * teardown over. Before it, the refusal stands exactly as before.
+       */
       try {
-        const outcome = await this.options.sessions.expire(session.sessionId, detail);
+        const outcome = await this.options.sessions.expire(session.sessionId, detail, {
+          adoptAbandoned: expired,
+        });
         if (outcome.destroy.namespaceGone) {
           result.removed.push(ref);
           result.reasons[ref] = reason;

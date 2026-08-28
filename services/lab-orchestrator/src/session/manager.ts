@@ -823,10 +823,21 @@ export class SessionManager {
     return this.#teardown(session, 'ENDING', 'ENDED', 'ended by student');
   }
 
-  /** Reaper collected the session. */
-  async expire(sessionId: string, reason: string): Promise<TeardownResult> {
+  /**
+   * Reaper collected the session.
+   *
+   * `adoptAbandoned` lets this claim a teardown left in the *opposite*
+   * in-flight state (`ENDING`) by a process that is no longer running. See
+   * `#teardown` for why that is normally refused, and why it must not be
+   * refused forever.
+   */
+  async expire(
+    sessionId: string,
+    reason: string,
+    options: { adoptAbandoned?: boolean } = {},
+  ): Promise<TeardownResult> {
     const session = await this.require(sessionId);
-    return this.#teardown(session, 'EXPIRING', 'EXPIRED', reason);
+    return this.#teardown(session, 'EXPIRING', 'EXPIRED', reason, options.adoptAbandoned ?? false);
   }
 
   /**
@@ -841,6 +852,7 @@ export class SessionManager {
     inProgress: Extract<SessionStatus, 'ENDING' | 'EXPIRING'>,
     done: Extract<SessionStatus, 'ENDED' | 'EXPIRED'>,
     reason: string,
+    adoptAbandoned = false,
   ): Promise<TeardownResult> {
     if (isTerminalStatus(session.status)) {
       return {
@@ -863,13 +875,31 @@ export class SessionManager {
      * teardown must be resumable — the reaper re-enters this path every pass
      * until the sandbox is verifiably gone, and that is the idempotence the
      * whole cleanup design rests on.
+     *
+     * That rule protects a teardown with a *live* owner, and it used to apply
+     * even when there was no owner left at all. If the process holding an
+     * `ENDING` teardown died between the claim and the destroy, nothing could
+     * ever resume it: only `end()` claims `ENDING`, and `end()` only runs when
+     * a student presses End — which will never happen again for that session.
+     * The reaper retried every 60 seconds forever, was refused every time, and
+     * the row sat in `ENDING` permanently. Since `ENDING` is in
+     * `OCCUPYING_STATUSES`, each one also held a `MAX_ACTIVE_SESSIONS` slot for
+     * good, so enough of them stop the platform starting any lab at all — and
+     * the sandbox itself was never destroyed.
+     *
+     * `adoptAbandoned` closes that off. The reaper sets it only for a session
+     * already past its absolute deadline, at which point no live teardown can
+     * still be running: End takes seconds, and the deadline is an hour away.
+     * Live contention is refused exactly as before.
      */
-    const marked = await this.#store.transition(
-      session.sessionId,
-      ['CREATING', 'ACTIVE', 'RESETTING', inProgress],
-      inProgress,
-      { statusReason: reason },
-    );
+    const claimable: SessionStatus[] = ['CREATING', 'ACTIVE', 'RESETTING', inProgress];
+    if (adoptAbandoned) {
+      claimable.push(inProgress === 'EXPIRING' ? 'ENDING' : 'EXPIRING');
+    }
+
+    const marked = await this.#store.transition(session.sessionId, claimable, inProgress, {
+      statusReason: reason,
+    });
 
     if (!marked) {
       // Someone else owns this teardown, or it already finished. Report what is
