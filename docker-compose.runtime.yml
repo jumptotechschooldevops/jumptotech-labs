@@ -31,13 +31,14 @@
 #                     credential rather than one shared secret.
 #
 # So the socket is mounted here and nowhere else, and both the api and the
-# terminal reach it over the internal network with the shared service secret.
+# terminal reach it over the internal network, each with only the capability
+# secret its endpoint requires.
 #
 # ## What is deliberately absent
 #
 #   · no `ports:` on sandboxd. It is not published to the host, and the web
 #     proxy has no route to it. The only things that can address it are the two
-#     services on this network that hold the internal secret.
+#     services on this network that hold a capability secret for it.
 #   · no socket, and no `DOCKER_HOST`, in the api or the terminal.
 #   · no host filesystem in sandboxd beyond the socket itself.
 #
@@ -91,7 +92,7 @@ services:
       # MUST equal the api's. Sandbox references are HMACs of the session id,
       # and this service re-derives them rather than being told one — so a
       # mismatch means every attach fails closed rather than attaching wrongly.
-      NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:-${TERMINAL_SESSION_SECRET}}
+      NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:?set NAMESPACE_DERIVATION_SECRET in .env (make secrets generates one)}
       # Which sandboxes this broker will touch at all. Two stacks on one daemon
       # get two owners and neither can see the other's containers.
       #

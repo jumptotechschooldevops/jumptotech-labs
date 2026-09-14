@@ -154,8 +154,13 @@ services:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
       # Lets the API close a student's shell the moment their session ends.
       TERMINAL_CONTROL_URL: http://terminal:4001
-      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
-      NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:-${TERMINAL_SESSION_SECRET}}
+      # BETA-P0-010: required, and never defaulted to TERMINAL_SESSION_SECRET.
+      # Both used to be `${X:-${TERMINAL_SESSION_SECRET}}`, which made the key the
+      # terminal verifies browser tokens with also the key to /internal and the
+      # key hiding session ids behind namespace names. Who receives each secret
+      # is pinned by infrastructure/secret-distribution.json and its tests.
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:?set INTERNAL_SERVICE_SECRET in .env (make secrets generates one)}
+      NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:?set NAMESPACE_DERIVATION_SECRET in .env (make secrets generates one)}
       # Which runtime owns what this stack creates: stamped on every Kubernetes
       # namespace and sandbox container, and required on everything cleanup
       # touches. MUST be the same value sandboxd gets (docker-compose.runtime.yml)
@@ -323,6 +328,16 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # BETA-P0-010. The image starts as root only long enough to drop to the
+    # `student` account inside the process (services/terminal/src/process-identity.ts).
+    # That in-process uid change is what makes the kernel mark the service
+    # non-dumpable, so a student shell — the same account — cannot read this
+    # service's environment or memory, where TERMINAL_SESSION_SECRET,
+    # INTERNAL_SERVICE_SECRET and SANDBOXD_ATTACH_SECRET live. Both capabilities
+    # are cleared by the drop itself; the running service holds none.
+    cap_add:
+      - SETUID
+      - SETGID
     # Student shells create files; give them a bounded, non-persistent HOME.
     tmpfs:
       # Student shells write here. Larger than the Kubernetes-only stack needed:
@@ -342,7 +357,7 @@ services:
       # kubeconfig, or a sandbox-scoped Docker client certificate, fetched per
       # session from the API and deleted when the shell ends.
       API_INTERNAL_URL: http://api:4000
-      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:?set INTERNAL_SERVICE_SECRET in .env (make secrets generates one)}
       TERMINAL_CREDENTIALS_DIR: /run/jumptotech
       TERMINAL_WORKDIR: /home/student
       TERMINAL_WORKSPACE_ROOT: ${TERMINAL_WORKSPACE_ROOT:-/home/student/workspaces}

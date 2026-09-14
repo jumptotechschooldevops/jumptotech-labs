@@ -1,6 +1,7 @@
 import {
   assertLabelPolicy,
   assertSecretsAreRedactable,
+  isProductionEnv,
   createCommonMetrics,
   createLogger,
   createObservabilityListener,
@@ -9,10 +10,24 @@ import {
 } from '@jumptotech/observability';
 
 import { loadTerminalConfig } from './config.js';
+import { dropServiceIdentity } from './process-identity.js';
 import { createTerminalServer } from './server.js';
 
 function main(): void {
   const config = loadTerminalConfig();
+
+  /*
+   * First, before a listener or a shell exists — BETA-P0-010.
+   *
+   * Student shells run as the account this drops to. Dropping *inside* this
+   * process is what closes its environment and memory — where the three secrets
+   * above now live — to those shells. See process-identity.ts.
+   */
+  const identity = dropServiceIdentity({
+    uid: config.dropToUid,
+    gid: config.dropToGid,
+    production: isProductionEnv(process.env),
+  });
 
   const logger = createLogger({
     service: 'terminal',
@@ -33,6 +48,29 @@ function main(): void {
     SANDBOXD_ATTACH_SECRET: config.sandboxBrokerCredential,
     OBSERVABILITY_SCRAPE_TOKEN: config.observability.scrapeToken,
   });
+
+  if (identity.kind === 'dropped') {
+    logger.info(
+      'config.loaded',
+      { reason: 'service_identity_dropped' },
+      `dropped to ${identity.uid}:${identity.gid}; student shells cannot read this process' environment`,
+    );
+  } else {
+    logger.warn(
+      'config.loaded',
+      { reason: `service_identity_${identity.reason.replace(/-/g, '_')}` },
+      'service identity unchanged — DEVELOPMENT ONLY: a shell running as this account could read ' +
+        "this process' environment; production refuses to start this way",
+    );
+  }
+  for (const name of config.developmentSecretFallbacks ?? []) {
+    logger.warn(
+      'config.loaded',
+      { reason: 'development_secret_fallback' },
+      `${name} is not set and falls back to TERMINAL_SESSION_SECRET — DEVELOPMENT ONLY; ` +
+        'production refuses to start this way (`make secrets` generates a separate value)',
+    );
+  }
 
   const registry = createRegistry({ service: 'terminal' });
   const common = createCommonMetrics(registry, 'terminal');
@@ -57,7 +95,7 @@ function main(): void {
     logger.warn(
       'config.loaded',
       { reason: 'running_as_root' },
-      'running as root — student shells inherit this process’ user; the provided image runs as the non-root `student` user',
+      'still running as root — student shells inherit this process’ user; the provided image starts as root and drops to `student` (TERMINAL_DROP_TO_UID)',
     );
   }
 

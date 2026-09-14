@@ -45,7 +45,8 @@ export type SecretKind =
   | 'aws-key'
   | 'oauth'
   | 'email'
-  | 'kubeconfig';
+  | 'kubeconfig'
+  | 'configured-secret';
 
 interface Pattern {
   kind: SecretKind;
@@ -114,6 +115,34 @@ const PATTERNS: readonly Pattern[] = [
  */
 const MAX_SCANNED_CHARS = 8192;
 
+/**
+ * Exact values this process was configured with, redacted whatever their shape.
+ *
+ * The patterns below recognise the shapes this platform *generates*. Some
+ * credentials it only *receives*: an identity provider issues the OIDC client
+ * secret (Auth0's is base64url, Google's is `GOCSPX-…`, Keycloak's is 32
+ * alphanumerics) and an operator chooses a managed database's password. None of
+ * those has a shape a pattern can promise to cover, and refusing to boot on a
+ * legitimate provider secret is not an answer either. So the configuration
+ * loader registers them here and every log value is checked for them literally.
+ *
+ * Longest first, so a secret that contains another is replaced whole.
+ */
+let literalSecrets: string[] = [];
+
+/** Shorter than this is too likely to collide with ordinary words to redact literally. */
+const MIN_LITERAL_SECRET_LENGTH = 8;
+
+/** Redact these exact values from every future log line in this process. */
+export function registerSecretValues(values: Iterable<string | undefined>): void {
+  const next = new Set(literalSecrets);
+  for (const value of values) {
+    const trimmed = value?.trim() ?? '';
+    if (trimmed.length >= MIN_LITERAL_SECRET_LENGTH) next.add(trimmed);
+  }
+  literalSecrets = [...next].sort((a, b) => b.length - a.length);
+}
+
 /** Replace every recognised secret in `value`. */
 export function redactString(value: string): string {
   const input = value.length > MAX_SCANNED_CHARS
@@ -121,6 +150,11 @@ export function redactString(value: string): string {
     : value;
 
   let out = input;
+  // Before the patterns: once a pattern has replaced part of a configured
+  // secret, the remainder no longer matches it literally.
+  for (const secret of literalSecrets) {
+    if (out.includes(secret)) out = out.split(secret).join('[REDACTED:configured-secret]');
+  }
   for (const { kind, re } of PATTERNS) {
     // `lastIndex` is reset because these are module-level /g regexes reused
     // across calls; a stale index silently skips the head of the next string.
@@ -215,7 +249,9 @@ export function assertSecretsAreRedactable(
         '  · regenerate the secret in a recognised shape — `openssl rand -hex 32`',
         '    is what `make setup` uses and what the hex-secret pattern covers;',
         '  · add a pattern for the new shape in services/observability/src/redact.ts',
-        '    and cover it in test/redact.test.ts.',
+        '    and cover it in test/redact.test.ts;',
+        '  · for a credential issued by someone else (an OIDC client secret, a managed',
+        '    database password), register it with `registerSecretValues` before this check.',
       ].join('\n'),
     );
   }

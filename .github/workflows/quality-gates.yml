@@ -173,6 +173,14 @@ jobs:
           done
           echo "only sandboxd mounts /var/run/docker.sock"
 
+      # BETA-P0-010. `npm test` already reads the compose files as text against
+      # infrastructure/secret-distribution.json; this asks `docker compose config`
+      # instead, so overlays, merges and interpolation are resolved the way the
+      # running stack resolves them. Sentinel values only, from a temporary env
+      # file and a scrubbed environment; it prints variable and service names.
+      - name: Each service receives exactly its allowed secrets
+        run: node scripts/check-secret-distribution.mjs
+
       - name: Build
         run: npm run build
 

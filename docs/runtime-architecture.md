@@ -295,7 +295,8 @@ and fell back to port 22.
 | `TERMINAL_SANDBOX_BROKER_ENABLED` | terminal | Attach shells through the broker rather than locally. |
 | `TERMINAL_CONTAINER_EXEC_ENABLED` | terminal | The local `docker exec` path. Must be `false` in any deployment. |
 | `NAMESPACE_DERIVATION_SECRET` | api, sandboxd | **Must be identical.** Sandbox references are HMACs of the session id. A mismatch fails closed. |
-| `INTERNAL_SERVICE_SECRET` | api, terminal, sandboxd | One internal trust domain, one secret. |
+| `INTERNAL_SERVICE_SECRET` | api, terminal | API ⇄ terminal calls only. sandboxd never receives it: each broker endpoint takes its own `SANDBOXD_*_SECRET`. Must differ from `TERMINAL_SESSION_SECRET` in production. See [secret-boundaries.md](secret-boundaries.md). |
+| `SANDBOXD_ATTACH_SECRET` / `_RUNTIME_SECRET` / `_DOCKER_SECRET` | terminal / api / api — and sandboxd | One capability each. The api is refused `attach`; the terminal is refused the other two. |
 | `RUNTIME_OWNER_ID` | api, sandboxd | **Must be identical.** The deployment's one runtime owner: stamped on every namespace and sandbox, required on everything cleanup touches. Required under `NODE_ENV=production`; a mismatch leaks brokered sandboxes. See [runtime-ownership.md](runtime-ownership.md). |
 | `SANDBOX_RUNTIME_HOST` | api | A dedicated runtime node over TLS, when there is no broker. The broker wins if both are set. |
 

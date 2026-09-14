@@ -32,6 +32,7 @@ import type { Server } from 'node:http';
 import {
   assertLabelPolicy,
   assertSecretsAreRedactable,
+  registerSecretValues,
   cachedCheck,
   createAuthMetrics,
   createCommonMetrics,
@@ -58,7 +59,7 @@ import {
 
 import type { SessionMetricsHooks } from '@jumptotech/lab-orchestrator';
 
-import type { ApiConfig } from './config.js';
+import { databasePasswordOf, type ApiConfig } from './config.js';
 
 export interface ApiMetrics {
   common: CommonMetrics;
@@ -100,6 +101,17 @@ export function buildApiObservability(config: ApiConfig): ApiObservability {
    * weeks later. Values are passed but never echoed — the failure names the
    * variable only.
    */
+  /*
+   * The two credentials this service is *issued* rather than generates.
+   *
+   * An identity provider decides the client secret's shape and an operator the
+   * database password's, so no pattern can promise to recognise them. They are
+   * registered for exact-value redaction first, which is what lets the
+   * self-test below cover them without refusing a legitimate provider secret.
+   */
+  const databasePassword = databasePasswordOf(config.progress.database).value;
+  registerSecretValues([config.auth.browserFlow?.clientSecret, databasePassword]);
+
   assertSecretsAreRedactable({
     TERMINAL_SESSION_SECRET: config.terminalSessionSecret,
     INTERNAL_SERVICE_SECRET: config.internalServiceSecret,
@@ -107,7 +119,18 @@ export function buildApiObservability(config: ApiConfig): ApiObservability {
     SANDBOXD_RUNTIME_SECRET: config.sandbox.runtimeBrokerCredential,
     SANDBOXD_DOCKER_SECRET: config.sandbox.dockerBrokerCredential,
     OBSERVABILITY_SCRAPE_TOKEN: config.observability.scrapeToken,
+    OIDC_CLIENT_SECRET: config.auth.browserFlow?.clientSecret,
+    POSTGRES_PASSWORD: databasePassword,
   });
+
+  for (const name of config.developmentSecretFallbacks) {
+    logger.warn(
+      'config.loaded',
+      { reason: 'development_secret_fallback' },
+      `${name} is not set and falls back to TERMINAL_SESSION_SECRET — DEVELOPMENT ONLY; ` +
+        'production refuses to start this way (`make secrets` generates a separate value)',
+    );
+  }
 
   const registry = createRegistry({ service: 'api' });
   const metrics: ApiMetrics = {

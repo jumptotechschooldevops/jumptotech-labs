@@ -75,9 +75,28 @@ export function loadScopeSecrets(env: NodeJS.ProcessEnv): ScopeSecrets {
 
 import {
   loadObservabilityConfig,
+  assertProductionSecrets,
   assertScrapeTokenIsDistinct,
+  isProductionEnv,
   type ObservabilityConfig,
 } from '@jumptotech/observability';
+
+/**
+ * Secrets `sandboxd` must never be given — BETA-P0-010.
+ *
+ * The broker holds its three scope secrets and the derivation key and nothing
+ * else. It never verifies a browser token, never calls the API, and never
+ * touches the database or the identity provider; a production broker that
+ * finds any of those credentials in its environment refuses to start.
+ */
+export const SANDBOXD_FORBIDDEN_SECRETS: readonly string[] = [
+  'TERMINAL_SESSION_SECRET',
+  'INTERNAL_SERVICE_SECRET',
+  'OIDC_CLIENT_SECRET',
+  'POSTGRES_PASSWORD',
+  'DATABASE_URL',
+  'GRAFANA_ADMIN_PASSWORD',
+];
 
 export interface SandboxdConfig {
   port: number;
@@ -231,6 +250,21 @@ export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): Sandbo
     );
   }
 
+  /*
+   * The derivation key names every sandbox; a scope secret authorizes a call.
+   * One value doing both would let any caller holding that scope compute the
+   * sandbox reference of any session id — refused in every environment, the
+   * same way two equal scope secrets are.
+   */
+  for (const scope of SANDBOXD_SCOPES) {
+    if (scopeSecrets[scope] && scopeSecrets[scope] === derivationSecret.trim()) {
+      throw new Error(
+        `NAMESPACE_DERIVATION_SECRET and ${SCOPE_ENV[scope]} are the same value. The key that ` +
+          'derives sandbox references must not also be a credential a caller presents.',
+      );
+    }
+  }
+
   // sandboxd is always NODE_ENV=production in compose, so a missing owner stops
   // it here rather than letting it guard a different owner than the API stamps.
   const runtimeOwner = resolveRuntimeOwner(env);
@@ -256,6 +290,31 @@ export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): Sandbo
     NAMESPACE_DERIVATION_SECRET: derivationSecret,
   });
 
+  const dockerEnabled = boolFromEnv(env, 'DOCKER_TRACK_ENABLED', false);
+
+  /*
+   * BETA-P0-010 — the broker validates its own capabilities.
+   *
+   * Development may leave a scope unset (the endpoint then refuses everything)
+   * and may use short test credentials. Production may not: `attach` and
+   * `runtime` serve every container-backed track, `docker` is required whenever
+   * the Docker track is on, and each must be a real, distinct secret.
+   */
+  if (isProductionEnv(env)) {
+    assertProductionSecrets({
+      service: 'sandboxd',
+      env,
+      secrets: [
+        { name: SCOPE_ENV.attach, value: scopeSecrets.attach, required: true },
+        { name: SCOPE_ENV.runtime, value: scopeSecrets.runtime, required: true },
+        { name: SCOPE_ENV.docker, value: scopeSecrets.docker, required: dockerEnabled },
+        { name: 'NAMESPACE_DERIVATION_SECRET', value: derivationSecret, required: true },
+        { name: 'OBSERVABILITY_SCRAPE_TOKEN', value: observability.scrapeToken, required: true },
+      ],
+      forbidden: SANDBOXD_FORBIDDEN_SECRETS,
+    });
+  }
+
   return {
     port: intFromEnv(env, 'SANDBOXD_PORT', 4002),
     observability,
@@ -269,7 +328,7 @@ export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): Sandbo
     // Must match the API's SANDBOX_USER / SANDBOX_HOME: the API tells the
     // student's browser which sandbox they have, and this service decides who
     // they are inside it. Disagreement is a shell with the wrong identity.
-    docker: boolFromEnv(env, 'DOCKER_TRACK_ENABLED', false) ? loadDockerPolicy(env) : null,
+    docker: dockerEnabled ? loadDockerPolicy(env) : null,
     sandboxUser: env.SANDBOX_USER?.trim() || 'student',
     sandboxHome: env.SANDBOX_HOME?.trim() || '/home/student',
     maxSessions: intFromEnv(env, 'SANDBOXD_MAX_SESSIONS', 32),
