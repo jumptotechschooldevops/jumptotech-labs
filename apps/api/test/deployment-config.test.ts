@@ -33,6 +33,9 @@ const PRODUCTION_ENV = {
   PUBLIC_ORIGIN: 'https://labs.example.com',
   ALLOWED_ORIGINS: 'https://labs.example.com',
   RUNTIME_OWNER_ID: 'labs-prod',
+  // BETA-P0-014: production sign-in requires durable sessions, so a database.
+  // Loopback, which the BETA-P0-012 transport gate accepts without TLS.
+  DATABASE_URL: 'postgresql://jumptotech:8e3b6d1f9a4c7e2b5d0f8a3c6e1b9d4f@127.0.0.1:5432/jumptotech_labs',
 } as NodeJS.ProcessEnv;
 
 describe('a production deployment cannot serve itself from localhost', () => {

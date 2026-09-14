@@ -712,6 +712,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       cookieDomain: env.AUTH_COOKIE_DOMAIN?.trim() || undefined,
       scopes,
       devStudentHeaderEnabled: progress.allowStudentHeader,
+      // Presence only. Whether it is reached safely is the database transport
+      // gate's decision, below (BETA-P0-012).
+      databaseConfigured: progress.database !== null,
     });
   }
 

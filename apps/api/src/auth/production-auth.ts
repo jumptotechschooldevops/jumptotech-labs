@@ -56,6 +56,8 @@ export interface ProductionAuthInput {
   cookieDomain: string | undefined;
   scopes: string[];
   devStudentHeaderEnabled: boolean;
+  /** `DATABASE_URL` or `POSTGRES_HOST` names a PostgreSQL database. */
+  databaseConfigured: boolean;
 }
 
 /**
@@ -219,6 +221,14 @@ export function productionAuthProblems(input: ProductionAuthInput): string[] {
 
   problems.push(...scopeProblems(input.scopes));
 
+  // --- where a signed-in browser is remembered ----------------------------
+  if (!input.databaseConfigured) {
+    problems.push(
+      'DATABASE_URL is not set: production sign-in requires durable PostgreSQL-backed sessions. ' +
+        'Without it every sign-in lives in process memory, is lost on each restart, and is invisible to a second instance.',
+    );
+  }
+
   // --- development identity switches --------------------------------------
   if (input.devStudentHeaderEnabled) {
     problems.push(
@@ -227,6 +237,22 @@ export function productionAuthProblems(input: ProductionAuthInput): string[] {
   }
 
   return problems;
+}
+
+/**
+ * The same rule at the composition root, where the stores are actually chosen.
+ *
+ * `loadConfig` already refuses a production configuration with no database; this
+ * is the second line, so that no future path to an `ApiConfig` can quietly hand
+ * a production process the in-memory session, user and progress stores.
+ */
+export function assertDurableStoresInProduction(input: { nodeEnv: string; durable: boolean }): void {
+  if (input.nodeEnv.trim() !== 'production' || input.durable) return;
+  throw new AuthError(
+    'AUTH_MISCONFIGURED',
+    'api refuses to start under NODE_ENV=production without a PostgreSQL database: browser sessions would be in memory.',
+    'Set DATABASE_URL. See docs/authentication.md §4.2 (BETA-P0-014).',
+  );
 }
 
 /** Refuse to start, listing every problem at once so a deploy is fixed in one pass. */

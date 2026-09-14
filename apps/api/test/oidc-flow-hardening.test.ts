@@ -598,4 +598,3 @@ describe('state-changing requests must come from an allowed origin', () => {
     expect(res.status).toBe(200);
   });
 });
-

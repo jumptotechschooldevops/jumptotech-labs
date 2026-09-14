@@ -53,6 +53,9 @@ const PRODUCTION = {
   SANDBOXD_RUNTIME_SECRET: hex('runtime').slice(0, 48),
   SANDBOXD_DOCKER_SECRET: hex('docker').slice(0, 48),
   RUNTIME_OWNER_ID: 'labs-prod',
+  // BETA-P0-014: production sign-in requires durable sessions, so a database.
+  // Loopback, which the BETA-P0-012 transport gate accepts without TLS.
+  DATABASE_URL: `postgresql://jumptotech:${hex('database-password').slice(0, 32)}@127.0.0.1:5432/jumptotech_labs`,
 } as NodeJS.ProcessEnv;
 
 const ca = createTestCa();

@@ -23,7 +23,7 @@
  *   · **`azp` is enforced for ID tokens** (OIDC Core §3.1.3.7): a token issued to
  *     several audiences must name this client as the authorized party.
  */
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from 'jose';
 import { AuthError, type VerifiedClaims } from './identity.js';
 import { assertProviderEndpoint, fetchDiscoveryDocument } from './discovery.js';
 
@@ -62,7 +62,28 @@ export interface OidcConfig {
   authorizedParty?: string;
   /** Injected in tests; discovery only. */
   fetchImpl?: typeof fetch;
+  /**
+   * Told once per real JWKS retrieval — never on a cached key lookup — and once
+   * per failed attempt to discover `jwks_uri`. Wired to
+   * `jtt_oidc_jwks_fetch_total`, which RB-14 and `JwksFetchFailing` read.
+   */
+  onJwksFetch?: (outcome: JwksFetchOutcome) => void;
 }
+
+/**
+ * Why a key retrieval ended the way it did. A closed set, so it is safe as a
+ * metric label: no URL, issuer, `kid` or provider text ever reaches it.
+ */
+export type JwksFetchOutcome =
+  | 'success'
+  /** The JWKS endpoint answered, but not `200` (a redirect included: jose refuses to follow one). */
+  | 'http_error'
+  /** No answer: DNS, connection, TLS or the timeout. */
+  | 'network_error'
+  /** `200`, but not a JSON JWK Set. */
+  | 'invalid_response'
+  /** `jwks_uri` could not be learned from discovery, so no keys were fetched at all. */
+  | 'discovery_failed';
 
 /** The verifier, so tests can supply one without a network. */
 export interface TokenVerifier {
@@ -102,8 +123,54 @@ export class OidcTokenVerifier implements TokenVerifier {
     this.#config = config;
     if (config.jwksUri) {
       // Configured explicitly: parse now, so a typo fails at startup.
-      this.#keys = Promise.resolve(createRemoteJWKSet(new URL(config.jwksUri)));
+      this.#keys = Promise.resolve(this.#remoteKeySet(config.jwksUri));
     }
+  }
+
+  /**
+   * A remote key set whose every retrieval is reported.
+   *
+   * `jose` caches keys and refetches only when they go stale or an unknown
+   * `kid` arrives, so counting here — at the fetch, not at `verify` — is what
+   * makes the metric mean "retrievals" rather than "tokens checked". The fetch
+   * itself is unchanged: the same global `fetch`, request and redirect policy
+   * `jose` would use, with TLS verification left at Node's default.
+   */
+  #remoteKeySet(jwksUri: string): KeySet {
+    const report = this.#config.onJwksFetch;
+    if (!report) return createRemoteJWKSet(new URL(jwksUri));
+    const record = (outcome: JwksFetchOutcome): void => safely(report, outcome);
+    return createRemoteJWKSet(new URL(jwksUri), {
+      [customFetch]: async (url: string, init: RequestInit) => {
+        let response: Response;
+        try {
+          response = await fetch(url, init);
+        } catch (error) {
+          record('network_error');
+          throw error;
+        }
+        if (response.status !== 200) {
+          record('http_error');
+          return response;
+        }
+        // Read once, judge it, and hand `jose` an identical body to parse.
+        let body: string;
+        try {
+          body = await response.text();
+        } catch (error) {
+          record('network_error');
+          throw error;
+        }
+        let keys: unknown;
+        try {
+          keys = (JSON.parse(body) as { keys?: unknown } | null)?.keys;
+        } catch {
+          keys = undefined;
+        }
+        record(Array.isArray(keys) ? 'success' : 'invalid_response');
+        return new Response(body, { status: response.status, headers: response.headers });
+      },
+    });
   }
 
   /**
@@ -118,11 +185,12 @@ export class OidcTokenVerifier implements TokenVerifier {
       const pending = fetchDiscoveryDocument(this.#config.issuer, {
         ...(this.#config.fetchImpl ? { fetchImpl: this.#config.fetchImpl } : {}),
       }).then((document) =>
-        createRemoteJWKSet(new URL(assertProviderEndpoint(document.jwks_uri, 'JWKS URI', this.#config.issuer))),
+        this.#remoteKeySet(assertProviderEndpoint(document.jwks_uri, 'JWKS URI', this.#config.issuer)),
       );
       this.#keys = pending;
       pending.catch(() => {
         if (this.#keys === pending) this.#keys = undefined;
+        if (this.#config.onJwksFetch) safely(this.#config.onJwksFetch, 'discovery_failed');
       });
     }
     return this.#keys;
@@ -170,6 +238,14 @@ export class OidcTokenVerifier implements TokenVerifier {
       // access token, which never had an authorization request to bind to.
       ...(claimString(payload, 'nonce') ? { nonce: claimString(payload, 'nonce')! } : {}),
     };
+  }
+}
+
+function safely(report: (outcome: JwksFetchOutcome) => void, outcome: JwksFetchOutcome): void {
+  try {
+    report(outcome);
+  } catch {
+    // Bookkeeping must never decide whether a token verifies.
   }
 }
 

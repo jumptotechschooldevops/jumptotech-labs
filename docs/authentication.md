@@ -267,6 +267,8 @@ Nothing is written to `localStorage` or `sessionStorage` by the auth layer.
 - **Auth sessions are per-deployment.** With `DATABASE_URL` set they are durable
   and shared across API instances; without it they are in memory and are lost on
   restart, exactly like lab sessions, and the API logs which one it is using.
+  Under `NODE_ENV=production` there is no "without it": the API refuses to start
+  (§4.2).
 - **No role administration surface.** Roles change in the database only.
 - **Single logout is best-effort.** The API returns the provider's end-session
   URL; whether the provider honours it is the provider's business. See §4.7,
@@ -323,12 +325,16 @@ of these holds (`apps/api/src/auth/production-auth.ts`):
 | Cookie | `AUTH_COOKIE_SECURE=false`; `AUTH_COOKIE_DOMAIN` that does not domain-match the public host |
 | Scopes | no `openid`; `offline_access` (refused wherever browser sign-in is configured) |
 | Dev identity | `DEV_STUDENT_HEADER_ENABLED=true` |
+| Durable sessions | neither `DATABASE_URL` nor `POSTGRES_HOST` set — browser sessions, users, lab sessions and progress would all be in memory. The database connection still has to pass the BETA-P0-012 transport gate (verified TLS, loopback, a Unix socket, or the declared single-host bridge) |
 | TLS | `NODE_TLS_REJECT_UNAUTHORIZED` set (existing, BETA-P0-011) |
 
 Ordering is preserved: runtime owner (P0-008), then secrets (P0-010), then TLS
-(P0-011), then authentication — so a weak secret is still reported as itself.
-`buildIdentityResolver` keeps its own refusal of development mode as a second
-line.
+(P0-011), then authentication, then the database transport (P0-012) — so a weak
+secret is still reported as itself. `buildIdentityResolver` keeps its own
+refusal of development mode as a second line, and `index.ts` calls
+`assertDurableStoresInProduction` before choosing any store, so no other path to
+an `ApiConfig` can hand production the in-memory fallbacks. Outside production
+an unset `DATABASE_URL` still means in-memory stores, with a startup warning.
 
 ### 4.3 Cookie and session security
 
@@ -405,14 +411,25 @@ reachable once `NODE_ENV=production`.
   authenticates is admitted and provisioned as `STUDENT`. For a private beta,
   restricting admission (a group/role claim, an email-domain rule, or an
   invitation table) has to be chosen; it is not provider-neutral to guess.
-- **DURABLE SESSIONS IN PRODUCTION — DECISION REQUIRED.** Without
-  `DATABASE_URL` the API still falls back to in-memory auth sessions (logged as a
-  warning), exactly as lab sessions and progress do. Making a database mandatory
-  in production is a platform-wide decision, not an auth one.
+- **Durable sessions in production — resolved.** Production OIDC requires a
+  PostgreSQL database and refuses to start without one (§4.2); there is no
+  in-memory fallback for a private beta, where a restart would sign every
+  student out and a second instance could not see the first one's sessions.
 - **IDLE TIMEOUT / REFRESH — DECISION REQUIRED.** Sessions have an absolute
   lifetime only. An idle timeout, or refresh tokens, each change what is stored.
 
-### 4.8 What CI must still prove
+### 4.8 Key retrieval is observable
+
+`jtt_oidc_jwks_fetch_total{outcome}` counts each real JWKS retrieval made by
+either verifier (bearer access tokens and browser ID tokens) — never a cached
+key lookup — plus each failed attempt to learn `jwks_uri` from discovery.
+`outcome` is a closed set: `success`, `http_error` (non-200, redirects
+included), `network_error` (DNS, connection, TLS, timeout), `invalid_response`
+(200 but not a JSON JWK Set), `discovery_failed`. No URL, issuer or `kid` is a
+label. `JwksFetchFailing` alerts on the non-success outcomes; RB-14 uses the
+success series as a recovery check. Proven in `apps/api/test/jwks-fetch-metric.test.ts`.
+
+### 4.9 What CI must still prove
 
 - The suites in §4.3–4.5 run in `npm test` (api: `production-oidc-config`,
   `oidc-flow-hardening`; web: `token-storage`), alongside the P0-010 secret and

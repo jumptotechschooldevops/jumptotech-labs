@@ -61,6 +61,9 @@ const PRODUCTION = {
   OBSERVABILITY_SCRAPE_TOKEN: hex('scrape-token'),
   // Required under production since BETA-P0-008; not a secret.
   RUNTIME_OWNER_ID: 'labs-prod',
+  // BETA-P0-014: production sign-in requires durable sessions, so a database.
+  // Loopback, which the BETA-P0-012 transport gate accepts without TLS.
+  DATABASE_URL: `postgresql://jumptotech:${hex('database-password').slice(0, 32)}@127.0.0.1:5432/jumptotech_labs`,
 } as NodeJS.ProcessEnv;
 
 function refusal(env: NodeJS.ProcessEnv): string {
@@ -142,7 +145,9 @@ describe('API secrets under NODE_ENV=production', () => {
     });
 
     it('refuses a configured database with no password at all', () => {
-      expect(refusal({ ...PRODUCTION, POSTGRES_HOST: 'db.internal' })).toContain('POSTGRES_PASSWORD is not set');
+      expect(refusal({ ...PRODUCTION, DATABASE_URL: undefined, POSTGRES_HOST: 'db.internal' })).toContain(
+        'POSTGRES_PASSWORD is not set',
+      );
     });
 
     it('accepts a real database password in either form', () => {
@@ -157,7 +162,13 @@ describe('API secrets under NODE_ENV=production', () => {
         }),
       ).not.toThrow();
       expect(() =>
-        loadConfig({ ...PRODUCTION, POSTGRES_HOST: 'db.internal', POSTGRES_PASSWORD: password, DATABASE_SSL: 'true' }),
+        loadConfig({
+          ...PRODUCTION,
+          DATABASE_URL: undefined,
+          POSTGRES_HOST: 'db.internal',
+          POSTGRES_PASSWORD: password,
+          DATABASE_SSL: 'true',
+        }),
       ).not.toThrow();
     });
 

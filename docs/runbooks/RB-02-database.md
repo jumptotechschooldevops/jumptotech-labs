@@ -83,7 +83,9 @@ is stuck.
 Not an outage. `DATABASE_URL` is unset, so the API is running on the in-memory
 store and **a restart will silently discard every student's progress**. It says
 so once at startup, in a line nobody re-reads three weeks later. Set
-`DATABASE_URL` and redeploy.
+`DATABASE_URL` and redeploy. A `NODE_ENV=production` API cannot be in this
+state — it refuses to start without a database (BETA-P0-014) — so this firing
+means the deployment is not running as production.
 
 ## 5. Fix
 

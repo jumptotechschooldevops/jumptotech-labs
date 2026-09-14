@@ -8,7 +8,7 @@
  */
 import type { AuthConfig } from '../config.js';
 import { OidcBrowserClient } from './oidc-client.js';
-import { OidcTokenVerifier } from './oidc.js';
+import { OidcTokenVerifier, type JwksFetchOutcome } from './oidc.js';
 
 export interface BrowserSignIn {
   /** Null without `OIDC_CLIENT_SECRET`; `/auth/config` then reports sign-in unavailable. */
@@ -18,7 +18,7 @@ export interface BrowserSignIn {
 
 export function buildBrowserSignIn(
   auth: AuthConfig,
-  options: { fetchImpl?: typeof fetch } = {},
+  options: { fetchImpl?: typeof fetch; onJwksFetch?: (outcome: JwksFetchOutcome) => void } = {},
 ): BrowserSignIn {
   if (!auth.oidc || !auth.browserFlow) return { client: null, idTokenVerifier: null };
 
@@ -51,6 +51,7 @@ export function buildBrowserSignIn(
       requiredClaims: ['iat'],
       authorizedParty: auth.oidc.clientId,
       ...fetchImpl,
+      ...(options.onJwksFetch ? { onJwksFetch: options.onJwksFetch } : {}),
     }),
   };
 }

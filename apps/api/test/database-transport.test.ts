@@ -33,6 +33,8 @@ const PRODUCTION = {
   OIDC_ISSUER: 'https://issuer.example.com',
   OIDC_CLIENT_ID: 'jumptotech-labs',
   OIDC_AUDIENCE: 'jumptotech-labs',
+  // BETA-P0-014: the confidential client's credential is required in production.
+  OIDC_CLIENT_SECRET: hex('oidc-client').slice(0, 40),
   PUBLIC_ORIGIN: 'https://labs.example.com',
   ALLOWED_ORIGINS: 'https://labs.example.com',
   TERMINAL_SESSION_SECRET: hex('terminal-session'),
@@ -110,8 +112,14 @@ describe('the api database transport under NODE_ENV=production', () => {
     ).toMatch(/exists only for plaintext/);
   });
 
-  it('resolves no transport without a database', () => {
-    expect(loadConfig(PRODUCTION).progress.databaseTransport).toBeNull();
+  it('refuses production with no database at all, and resolves no transport without one elsewhere', () => {
+    // BETA-P0-014: production sign-in needs durable sessions, so "no database"
+    // is a refusal there rather than a transport of null.
+    expect(refusal(PRODUCTION)).toMatch(/DATABASE_URL is not set: production sign-in requires durable/);
+    expect(
+      loadConfig({ TERMINAL_SESSION_SECRET: 'a-long-enough-dev-secret' } as NodeJS.ProcessEnv).progress
+        .databaseTransport,
+    ).toBeNull();
   });
 
   it('keeps the owner, secret and broker transport gates ahead of the database gate', () => {

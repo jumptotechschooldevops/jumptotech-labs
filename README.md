@@ -3844,7 +3844,9 @@ curl -s localhost:4000/health | jq '.data.progress'
 
 To run without a database on purpose, unset `DATABASE_URL`: the API starts on
 the in-memory store and says so at startup, on `/health` (`"store": "memory"`)
-and on the dashboard (*"not saved to a database"*).
+and on the dashboard (*"not saved to a database"*). Development only — under
+`NODE_ENV=production` the API refuses to start without a database
+(BETA-P0-014).
 
 **My progress disappeared**
 `docker compose down -v` and `make clean` delete the `postgres-data` volume.

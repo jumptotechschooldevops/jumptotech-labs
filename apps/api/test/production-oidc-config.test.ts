@@ -17,6 +17,7 @@ import { loadConfig } from '../src/config.js';
 import {
   MAX_AUTH_SESSION_TTL_SECONDS,
   MIN_AUTH_SESSION_TTL_SECONDS,
+  assertDurableStoresInProduction,
   bareOrigin,
   cookieDomainMatches,
 } from '../src/auth/production-auth.js';
@@ -39,6 +40,8 @@ const PRODUCTION = {
   NAMESPACE_DERIVATION_SECRET: hex('p0014-namespace'),
   OBSERVABILITY_SCRAPE_TOKEN: hex('p0014-scrape'),
   RUNTIME_OWNER_ID: 'labs-prod',
+  // Durable browser sessions; loopback passes the BETA-P0-012 transport gate.
+  DATABASE_URL: `postgresql://jumptotech:${hex('p0014-database').slice(0, 32)}@127.0.0.1:5432/jumptotech_labs`,
 } as NodeJS.ProcessEnv;
 
 function refusal(env: NodeJS.ProcessEnv): string {
@@ -114,6 +117,57 @@ describe('production rejects missing OIDC configuration', () => {
     expect(message).toContain('OIDC_ISSUER is not set');
     expect(message).toContain('OIDC_CLIENT_ID is not set');
     expect(message).toContain('OIDC_AUDIENCE is not set');
+  });
+});
+
+describe('production sign-in requires durable sessions', () => {
+  it('refuses a production API with no database, rather than signing students in to memory', () => {
+    const message = refusal({ ...PRODUCTION, DATABASE_URL: undefined });
+    expect(message).toContain('DATABASE_URL is not set: production sign-in requires durable PostgreSQL-backed sessions');
+  });
+
+  it('accepts either database form, over a transport production allows', () => {
+    const password = hex('p0014-database-host').slice(0, 32);
+    expect(loadConfig({ ...PRODUCTION, DATABASE_URL: undefined, POSTGRES_HOST: 'db.internal', POSTGRES_PASSWORD: password, DATABASE_SSL: 'true' }).progress.database).not.toBeNull();
+  });
+
+  it('does not weaken the BETA-P0-012 transport gate to satisfy the requirement', () => {
+    const remotePlaintext = `postgresql://jumptotech:${hex('p0014-database').slice(0, 32)}@db.internal.example:5432/labs`;
+    expect(refusal({ ...PRODUCTION, DATABASE_URL: remotePlaintext })).toMatch(/api refuses to send the database password/);
+  });
+
+  it('lists the missing database with every other problem, in one refusal', () => {
+    const message = refusal({ ...PRODUCTION, DATABASE_URL: undefined, AUTH_COOKIE_SECURE: 'false' });
+    expect(message).toContain('DATABASE_URL is not set');
+    expect(message).toContain('AUTH_COOKIE_SECURE must not be false');
+  });
+
+  it('keeps the in-memory fallback for local development, explicitly outside production', () => {
+    for (const env of [
+      { TERMINAL_SESSION_SECRET: 'a-long-enough-dev-secret', AUTH_MODE: 'development' },
+      { TERMINAL_SESSION_SECRET: 'a-long-enough-dev-secret', NODE_ENV: 'test', OIDC_ISSUER: 'http://127.0.0.1:9/', OIDC_CLIENT_ID: 'client', OIDC_AUDIENCE: 'api', OIDC_CLIENT_SECRET: 'local-client-secret' },
+    ]) {
+      expect(loadConfig(env as NodeJS.ProcessEnv).progress.database).toBeNull();
+    }
+  });
+
+  it('refuses again at the composition root, where the stores are chosen', () => {
+    expect(() => assertDurableStoresInProduction({ nodeEnv: 'production', durable: false })).toThrow(
+      /without a PostgreSQL database: browser sessions would be in memory/,
+    );
+    expect(() => assertDurableStoresInProduction({ nodeEnv: 'production', durable: true })).not.toThrow();
+    for (const nodeEnv of ['development', 'test', '']) {
+      expect(() => assertDurableStoresInProduction({ nodeEnv, durable: false })).not.toThrow();
+    }
+  });
+
+  it('is wired into the composition root before any store is chosen', () => {
+    const source = readFileSync(path.join(API_ROOT, 'src/index.ts'), 'utf8');
+    const gate = source.indexOf('assertDurableStoresInProduction(');
+    expect(gate).toBeGreaterThan(-1);
+    for (const fallback of ['new InMemorySessionStore()', 'new InMemoryUserRepository(', 'new InMemoryAuthSessionStore()']) {
+      expect(source.indexOf(fallback), fallback).toBeGreaterThan(gate);
+    }
   });
 });
 
