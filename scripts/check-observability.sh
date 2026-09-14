@@ -22,6 +22,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+ROOT=$PWD
 
 PROM_IMAGE="prom/prometheus:v2.54.1"
 ALERT_IMAGE="prom/alertmanager:v0.27.0"
@@ -31,11 +32,16 @@ say() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; failures=$((failures + 1)); }
 
+# The container fallback mounts the whole repository and starts in the caller's
+# directory inside it. Mounting only `$PWD` hid everything above it: the rule
+# tests run from `prometheus/tests` and name `../rules/*.yml`, so wherever
+# promtool is not installed — CI — none of those files existed in the container,
+# promtool only warned, and every expectation ran against rules never loaded.
 run_promtool() {
   if command -v promtool >/dev/null 2>&1; then
     promtool "$@"
   elif docker info >/dev/null 2>&1; then
-    docker run --rm -v "$PWD:/w" -w /w --entrypoint promtool "$PROM_IMAGE" "$@"
+    docker run --rm -v "$ROOT:/w" -w "/w${PWD#"$ROOT"}" --entrypoint promtool "$PROM_IMAGE" "$@"
   else
     return 127
   fi
@@ -45,10 +51,44 @@ run_amtool() {
   if command -v amtool >/dev/null 2>&1; then
     amtool "$@"
   elif docker info >/dev/null 2>&1; then
-    docker run --rm -v "$PWD:/w" -w /w --entrypoint amtool "$ALERT_IMAGE" "$@"
+    docker run --rm -v "$ROOT:/w" -w "/w${PWD#"$ROOT"}" --entrypoint amtool "$ALERT_IMAGE" "$@"
   else
     return 127
   fi
+}
+
+# Print every `rule_files` entry in $1 that matches no file, resolved against $2
+# after stripping the container prefix $3 when there is one.
+#
+# promtool does not refuse this on its own: `test rules` only warns about a
+# pattern that matches nothing, and `check config` accepts a glob that matches
+# nothing — so a missing rule file was skipped while the check reported success.
+# A file with no readable entries is reported too, so a list this cannot parse
+# never passes as an empty one.
+unresolved_rule_files() {
+  local file=$1 base=$2 prefix=${3:-} entries entry pattern match found
+  entries=$(awk '
+    /^rule_files:/ { in_list = 1; next }
+    in_list && /^[[:space:]]*-[[:space:]]/ {
+      sub(/^[[:space:]]*-[[:space:]]*/, ""); gsub(/["\047]/, ""); print; next
+    }
+    in_list && /^[^[:space:]#]/ { in_list = 0 }
+  ' "$file")
+  if [ -z "$entries" ]; then
+    printf '  %s declares no rule_files\n' "$file"
+    return 0
+  fi
+  while IFS= read -r entry; do
+    found=0
+    pattern=${entry#"$prefix"}
+    case "$pattern" in /*) ;; *) pattern="$base/$pattern" ;; esac
+    for match in $pattern; do
+      if [ -e "$match" ]; then found=1; fi
+    done
+    if [ "$found" -eq 0 ]; then
+      printf '  %s: rule_files entry %s matches no file\n' "$file" "$entry"
+    fi
+  done <<<"$entries"
 }
 
 say "Prometheus rules"
@@ -85,7 +125,18 @@ else
   mkdir -p "$staging/secrets"
   printf 'placeholder-for-config-validation-only' > "$staging/secrets/scrape-token"
 
-  if out=$(docker run --rm -v "$staging:/etc/prometheus:ro" \
+  # `mktemp -d` is 0700 and owned by whoever runs this, but the image runs
+  # promtool as `nobody`. On Linux that is `permission denied` before a line is
+  # read — how CI failed — while Docker Desktop's file sharing ignores the mode,
+  # which is how it passed on a Mac. Nothing here is secret (a copy of committed
+  # config and a placeholder token), so it is made world-readable.
+  chmod -R a+rX "$staging"
+
+  unresolved=$(unresolved_rule_files "$staging/prometheus.yml" "$staging" /etc/prometheus/)
+  if [ -n "$unresolved" ]; then
+    printf '%s\n' "$unresolved"
+    bad "prometheus.yml names a rule file that does not exist"
+  elif out=$(docker run --rm -v "$staging:/etc/prometheus:ro" \
         --entrypoint promtool "$PROM_IMAGE" \
         check config /etc/prometheus/prometheus.yml 2>&1); then
     ok "prometheus.yml valid, and every rule_files path resolves"
@@ -103,14 +154,32 @@ say "Alert rule behaviour"
 # and the alert never fired — a defect that `check rules` passes cleanly, since
 # the expression was perfectly valid and simply could not become true for long
 # enough.
-if out=$(cd infrastructure/observability/prometheus/tests \
-      && run_promtool test rules ./*.test.yml 2>&1); then
-  ok "$(printf '%s' "$out" | grep -c 'SUCCESS') rule test file(s) pass"
-elif [ $? -eq 127 ]; then
-  bad "neither promtool nor a Docker daemon is available — rule behaviour NOT tested"
+#
+# Every rule file a test names must exist, and promtool must actually have read
+# it. A pattern it cannot match is only a warning, after which the expectations
+# run against rules that were never loaded — silently passing any test that does
+# not depend on them.
+tests_dir=infrastructure/observability/prometheus/tests
+unresolved=$(for test_file in "$tests_dir"/*.test.yml; do
+  unresolved_rule_files "$test_file" "$tests_dir"
+done)
+if [ -n "$unresolved" ]; then
+  printf '%s\n' "$unresolved"
+  bad "a rule test names a rule file that does not exist — rule behaviour NOT tested"
 else
-  printf '%s\n' "$out"
-  bad "promtool test rules failed — an alert does not behave as specified"
+  status=0
+  out=$(cd "$tests_dir" && run_promtool test rules ./*.test.yml 2>&1) || status=$?
+  if [ "$status" -eq 127 ]; then
+    bad "neither promtool nor a Docker daemon is available — rule behaviour NOT tested"
+  elif grep -q 'no file match pattern' <<<"$out"; then
+    printf '%s\n' "$out"
+    bad "promtool could not read a rule file a test names — rule behaviour NOT tested"
+  elif [ "$status" -ne 0 ]; then
+    printf '%s\n' "$out"
+    bad "promtool test rules failed — an alert does not behave as specified"
+  else
+    ok "$(printf '%s' "$out" | grep -c 'SUCCESS') rule test file(s) pass"
+  fi
 fi
 
 say "Alertmanager config"
