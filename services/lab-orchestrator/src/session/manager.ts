@@ -757,58 +757,83 @@ export class SessionManager {
    * Status polling deliberately does NOT call this: if it did, an open browser
    * tab would keep an abandoned environment alive forever. The absolute
    * deadline (`expiresAt`) is never moved.
+   *
+   * One conditional write, so the decision is the store's. This used to read
+   * the session and then write unconditionally, and an End landing between the
+   * two had `lastActivityAt` stamped onto its ENDED row. When the write
+   * declines, the session is read back so the caller is shown what it now is
+   * rather than the copy it started with.
    */
   async touch(sessionId: string, reason: ActivityReason): Promise<LabSession | null> {
-    const session = await this.#store.get(sessionId);
-    if (!session) return null;
-    if (session.status !== 'ACTIVE' && session.status !== 'RESETTING') return session;
     void reason;
-    return this.#store.update(sessionId, {
-      lastActivityAt: new Date(this.#now()).toISOString(),
-    });
+    const touched = await this.#store.touchActivity(sessionId, new Date(this.#now()).toISOString());
+    return touched ?? this.#store.get(sessionId);
   }
 
   /**
-   * Record activity through the store's conditional write.
+   * Record terminal activity. Same conditional write and deadline rules as
+   * `touch`, without the read-back: the terminal only needs to know whether
+   * anything was recorded.
    *
-   * `touch` reads and then writes, so an End landing between the two still has
-   * `lastActivityAt` stamped onto its row. Button-driven reasons arrive once per
-   * click; terminal input arrives continuously and races End as a matter of
-   * course, so it goes through `SessionStore.touchActivity`, which writes only
-   * while the session still occupies a sandbox. Same deadline rules as `touch`:
-   * the absolute deadline is never moved.
+   * There is no status pre-check. A pre-check is a read, and a session End
+   * claims after it is exactly the one the write must refuse — so the write's
+   * own condition is the only check that means anything.
    *
    * Returns `null` when nothing was recorded.
    */
   async touchActivity(sessionId: string, reason: ActivityReason): Promise<LabSession | null> {
-    const session = await this.#store.get(sessionId);
-    if (!session || (session.status !== 'ACTIVE' && session.status !== 'RESETTING')) return null;
     void reason;
     return this.#store.touchActivity(sessionId, new Date(this.#now()).toISOString());
   }
 
   // ----------------------------------------------------------------- reset
 
-  /** Reset only the requesting session's namespace. */
+  /**
+   * Reset only the requesting session's sandbox.
+   *
+   * Every status change here is a `transition`, never an `update`.
+   *
+   * The claim (ACTIVE → RESETTING) comes before any runtime work, so of two
+   * simultaneous resets exactly one replaces the sandbox; the other is refused
+   * with `SESSION_NOT_ACTIVE`, the same conflict a reset of a busy session has
+   * always received.
+   *
+   * The release (RESETTING → ACTIVE) is conditional too. A teardown — End, or
+   * the reaper — may claim a RESETTING session, and once it has, nothing may
+   * move the session back. A reset that loses its claim that way removes
+   * whatever it rebuilt and reports the conflict rather than success.
+   */
   async reset(sessionId: string): Promise<{ session: LabSession; result: ResetResult }> {
     const { session, lab } = await this.requireActive(sessionId);
     const context = this.#contextFor(lab, session);
 
-    await this.#store.update(sessionId, { status: 'RESETTING' });
+    const claimed = await this.#store.transition(sessionId, ['ACTIVE'], 'RESETTING');
+    if (!claimed) throw await this.#resetConflict(sessionId);
+
     let result: ResetResult;
     try {
       result = await this.#providerFor(session).reset(context);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.#store.update(sessionId, { status: 'ACTIVE', statusReason: message });
+      const released = await this.#store.transition(sessionId, ['RESETTING'], 'ACTIVE', {
+        statusReason: message,
+      });
+      if (!released) {
+        this.#log(`session ${sessionId}: reset failed after a teardown claimed it — ${message}`);
+        await this.#discardLostReset(session, context);
+        throw await this.#resetConflict(sessionId);
+      }
       throw new SessionError('SESSION_RESET_FAILED', message);
     }
 
-    const updated = await this.#store.update(sessionId, {
-      status: 'ACTIVE',
+    const updated = await this.#store.transition(sessionId, ['RESETTING'], 'ACTIVE', {
       lastActivityAt: new Date(this.#now()).toISOString(),
       ...(result.ok ? {} : { statusReason: result.error?.message ?? 'reset failed' }),
     });
+    if (!updated) {
+      await this.#discardLostReset(session, context);
+      throw await this.#resetConflict(sessionId);
+    }
 
     /*
      * Reconnect the student's shell, for the providers whose reset replaces the
@@ -831,7 +856,70 @@ export class SessionManager {
       });
     }
 
-    return { session: updated ?? session, result };
+    return { session: updated, result };
+  }
+
+  /**
+   * The refusal for a reset that did not hold its claim, describing the session
+   * as it is now.
+   *
+   * Usually another reset is running (RESETTING) or a teardown owns the session
+   * (ENDING, ENDED, …). If a competing reset has already finished, the session
+   * reads ACTIVE again, and the caller is told to retry rather than shown a
+   * status that contradicts the refusal.
+   */
+  async #resetConflict(sessionId: string): Promise<SessionError> {
+    const current = await this.#store.get(sessionId);
+    if (!current) {
+      return new SessionError(
+        'SESSION_NOT_FOUND',
+        'That lab session does not exist, or it has already been cleaned up.',
+        'Start the lab again to get a fresh environment.',
+      );
+    }
+    return new SessionError(
+      'SESSION_NOT_ACTIVE',
+      current.status === 'ACTIVE'
+        ? 'This lab session was changed by another request.'
+        : `This lab session is ${current.status}.`,
+      isTerminalStatus(current.status)
+        ? 'Start the lab again to get a fresh environment.'
+        : 'The environment is busy; try again in a moment.',
+      { status: current.status },
+    );
+  }
+
+  /**
+   * Remove what a reset rebuilt after a teardown took the session from it.
+   *
+   * A teardown is the only thing besides this reset that can move a session
+   * out of RESETTING. It may have destroyed the sandbox, and even recorded
+   * ENDED, while the provider was still recreating it. The recreated sandbox
+   * would then outlive its session — and the orphan sweep would not reclaim it,
+   * because the session row still exists. Destroy is idempotent, so running it
+   * after or alongside the teardown's own destroy is safe.
+   *
+   * A failure here is logged, not thrown: the student's End already stands,
+   * and the reply to the reset is a conflict either way.
+   */
+  async #discardLostReset(session: LabSession, context: LabSessionContext): Promise<void> {
+    this.#log(`session ${session.sessionId}: reset lost its claim to a teardown; discarding its sandbox`);
+    try {
+      const destroy = await this.#providerFor(session).destroy(context);
+      if (!destroy.ok || !destroy.namespaceGone) {
+        this.#log(
+          `session ${session.sessionId}: sandbox rebuilt by a lost reset not yet removed — ${
+            destroy.error?.message ?? 'still present'
+          }`,
+        );
+      }
+    } catch (error) {
+      this.#log(
+        `session ${session.sessionId}: could not discard sandbox rebuilt by a lost reset — ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   // ------------------------------------------------------- end / expire
@@ -962,12 +1050,26 @@ export class SessionManager {
       return { session: current, destroy };
     }
 
-    const ended =
-      (await this.#store.update(session.sessionId, {
-        status: done,
-        statusReason: reason,
-        endedAt: new Date(this.#now()).toISOString(),
-      })) ?? marked;
+    /*
+     * Finish with a conditional write as well.
+     *
+     * Resuming a teardown is allowed (`inProgress` is claimable from itself), so
+     * two Ends can both hold ENDING and both reach this line. An unconditional
+     * write let both record ENDED and both notify the listener, closing the
+     * attempt twice. Only the first to move the row from `inProgress` records
+     * the ending; the other reports the state it finds.
+     */
+    const ended = await this.#store.transition(session.sessionId, [inProgress], done, {
+      statusReason: reason,
+      endedAt: new Date(this.#now()).toISOString(),
+    });
+    if (!ended) {
+      const current = (await this.#store.get(session.sessionId)) ?? marked;
+      this.#log(
+        `session ${session.sessionId}: ${done} already recorded by another teardown — now ${current.status}`,
+      );
+      return { session: current, destroy };
+    }
     this.#release(session.sessionId);
     this.#emit((m) => m.onTransition?.(inProgress, done));
     this.#emit((m) =>

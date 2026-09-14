@@ -39,6 +39,7 @@
  * of these statements. The table holds identifiers and timestamps.
  */
 import {
+  ACTIVITY_STATUSES,
   OCCUPYING_STATUSES,
   occupiesCapacity,
   type LabSession,
@@ -219,8 +220,9 @@ export class PostgresSessionStore implements SessionStore {
   /**
    * Activity, which may never revive a finished session.
    *
-   * Restricted to the occupying states for that reason: a ping racing an End
-   * must not move `ENDED` back to `ACTIVE`.
+   * Restricted to the states a student can be working in for that reason: a
+   * ping racing an End must not move `ENDED` back to `ACTIVE`, and must not
+   * stamp a row End has already claimed as `ENDING` either.
    */
   async touchActivity(sessionId: string, at: string): Promise<LabSession | null> {
     const { rows } = await this.db.query<SessionRow>(
@@ -228,7 +230,7 @@ export class PostgresSessionStore implements SessionStore {
           SET last_activity_at = $1, revision = revision + 1
         WHERE session_id = $2 AND status = ANY($3)
         RETURNING ${COLUMNS}`,
-      [at, sessionId, [...OCCUPYING_STATUSES]],
+      [at, sessionId, [...ACTIVITY_STATUSES]],
     );
     return rows[0] ? toSession(rows[0]) : null;
   }

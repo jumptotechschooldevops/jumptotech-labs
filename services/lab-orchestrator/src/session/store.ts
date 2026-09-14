@@ -11,7 +11,12 @@
  * exists — the cluster is. The reaper reconciles the two, which is what makes
  * an API restart survivable even though this store is not.
  */
-import { occupiesCapacity, type LabSession, type SessionStatus } from './types.js';
+import {
+  acceptsActivity,
+  occupiesCapacity,
+  type LabSession,
+  type SessionStatus,
+} from './types.js';
 
 export interface SessionStore {
   create(session: LabSession): Promise<void>;
@@ -56,7 +61,11 @@ export interface SessionStore {
    *
    * Separate from `update` because it must never revive a finished session: an
    * activity ping that arrives after End must not move ENDED back to ACTIVE.
-   * Returns `null` when the session is not in an occupying state.
+   *
+   * One conditional write, restricted to `ACTIVITY_STATUSES`. Not the occupying
+   * set: that includes ENDING and EXPIRING, so activity racing End could still
+   * be stamped onto a row End had claimed. Returns `null` when nothing was
+   * written.
    */
   touchActivity(sessionId: string, at: string): Promise<LabSession | null>;
 
@@ -196,9 +205,9 @@ export class InMemorySessionStore implements SessionStore {
 
   async touchActivity(sessionId: string, at: string): Promise<LabSession | null> {
     const current = this.#bySessionId.get(sessionId);
-    // An activity ping for a finished session is ignored rather than reviving
-    // it: the deadline has already been acted on.
-    if (!current || !occupiesCapacity(current.status)) return null;
+    // An activity ping for a finished session, or one being torn down, is
+    // ignored rather than reviving it: the deadline has already been acted on.
+    if (!current || !acceptsActivity(current.status)) return null;
     return this.update(sessionId, { lastActivityAt: at });
   }
 

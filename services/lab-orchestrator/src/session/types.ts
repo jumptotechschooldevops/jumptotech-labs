@@ -51,6 +51,19 @@ export function isTerminalStatus(status: SessionStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
 
+/**
+ * Statuses in which a student can be working, so activity may be recorded.
+ *
+ * Narrower than the occupying set on purpose. ENDING and EXPIRING hold a
+ * sandbox a teardown already owns, and CREATING one nobody has used yet: an
+ * activity write racing End used to land on the row End had just claimed.
+ */
+export const ACTIVITY_STATUSES: readonly SessionStatus[] = ['ACTIVE', 'RESETTING'];
+
+export function acceptsActivity(status: SessionStatus): boolean {
+  return ACTIVITY_STATUSES.includes(status);
+}
+
 export function occupiesCapacity(status: SessionStatus): boolean {
   return OCCUPYING_STATUSES.includes(status);
 }
