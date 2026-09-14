@@ -29,7 +29,9 @@ import {
 import { DEFAULT_AUTH_SESSION_TTL_SECONDS } from './auth/browser-session.js';
 import {
   loadObservabilityConfig,
+  assertProductionSecrets,
   assertScrapeTokenIsDistinct,
+  isProductionEnv,
   type ObservabilityConfig,
 } from '@jumptotech/observability';
 
@@ -113,6 +115,17 @@ export interface ApiConfig {
   internalServiceSecret: string;
   /** Keys the session-id → namespace derivation. */
   namespaceSecret: string;
+  /**
+   * Secrets that were not configured and were filled from
+   * `TERMINAL_SESSION_SECRET` instead — BETA-P0-010.
+   *
+   * Development only, and logged as such at startup. Under `NODE_ENV=production`
+   * the list is always empty, because `loadConfig` refuses to start rather than
+   * fall back: three secrets with one value are one secret, and a leaked
+   * terminal session key would then also open `/internal` and invert namespace
+   * names back into session ids.
+   */
+  developmentSecretFallbacks: string[];
   lifetimes: SessionLifetimeConfig;
   policy: SessionPolicy;
   /** Container-backed sandbox providers (PLATFORM-004). */
@@ -244,6 +257,46 @@ export interface SandboxProviderConfig {
   cicdImage: string;
   /** Registered but never enabled — see providers.ts and README → Docker. */
   dockerImage: string;
+}
+
+/**
+ * Secrets the API must never be given — BETA-P0-010.
+ *
+ * Opening a student's shell in a sandbox is the terminal's capability. A
+ * credential this service never holds is one no bug here can use, so a
+ * production API that finds it in its environment refuses to start rather than
+ * quietly carrying it.
+ */
+export const API_FORBIDDEN_SECRETS: readonly string[] = ['SANDBOXD_ATTACH_SECRET'];
+
+/**
+ * Minimum length for credentials this platform receives rather than generates:
+ * an identity provider's client secret, a managed database's password.
+ */
+const EXTERNAL_SECRET_MIN_LENGTH = 16;
+
+/**
+ * The database password, wherever the deployment put it.
+ *
+ * Compose hands the API a `DATABASE_URL` with the password inline; other
+ * deployments inject `POSTGRES_PASSWORD` separately. Both are the same secret,
+ * and the startup gates and the log redactor need the value either way. Never
+ * logged, and the source is named so a refusal says which variable to fix.
+ */
+export function databasePasswordOf(database: DatabaseConfig | null): {
+  source: string;
+  value: string | undefined;
+} {
+  if (!database) return { source: 'POSTGRES_PASSWORD', value: undefined };
+  if (database.url) {
+    try {
+      const raw = new URL(database.url).password;
+      return { source: 'the password in DATABASE_URL', value: raw ? decodeURIComponent(raw) : undefined };
+    } catch {
+      return { source: 'the password in DATABASE_URL', value: undefined };
+    }
+  }
+  return { source: 'POSTGRES_PASSWORD', value: database.password };
 }
 
 function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -515,6 +568,70 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   // default the API could disagree with sandboxd about.
   const runtimeOwner = resolveRuntimeOwner(env);
 
+  /*
+   * BETA-P0-010 — every secret is its own value, and production says so.
+   *
+   * INTERNAL_SERVICE_SECRET and NAMESPACE_DERIVATION_SECRET used to *default* to
+   * TERMINAL_SESSION_SECRET, in code and in compose alike. That made the one
+   * value the terminal holds to verify browser tokens also the key to
+   * `/internal` (anyone's kubeconfig) and the key that hides session ids behind
+   * namespace names. The fallback survives for a laptop running
+   * `npm run dev:api` with one generated value, is reported at startup, and is
+   * refused outright in production.
+   */
+  const explicitInternalSecret = env.INTERNAL_SERVICE_SECRET?.trim() ?? '';
+  const explicitNamespaceSecret = env.NAMESPACE_DERIVATION_SECRET?.trim() ?? '';
+  const developmentSecretFallbacks = [
+    ...(explicitInternalSecret ? [] : ['INTERNAL_SERVICE_SECRET']),
+    ...(explicitNamespaceSecret ? [] : ['NAMESPACE_DERIVATION_SECRET']),
+  ];
+
+  const runtimeBrokerUrl = strFromEnv(env, 'SANDBOX_BROKER_URL', '');
+  const runtimeBrokerCredential = strFromEnv(env, 'SANDBOXD_RUNTIME_SECRET', '');
+  const dockerBrokerCredential = strFromEnv(env, 'SANDBOXD_DOCKER_SECRET', '');
+  const dockerEnabled = boolFromEnv(env, 'DOCKER_TRACK_ENABLED', true);
+  const progress = loadProgressConfig(env);
+
+  if (isProductionEnv(env)) {
+    const databasePassword = databasePasswordOf(progress.database);
+    assertProductionSecrets({
+      service: 'api',
+      env,
+      secrets: [
+        { name: 'TERMINAL_SESSION_SECRET', value: secret, required: true },
+        { name: 'INTERNAL_SERVICE_SECRET', value: explicitInternalSecret, required: true },
+        { name: 'NAMESPACE_DERIVATION_SECRET', value: explicitNamespaceSecret, required: true },
+        // Only what this service uses: `runtime` whenever sandboxes are
+        // brokered, `docker` only when the Docker track is brokered too.
+        {
+          name: 'SANDBOXD_RUNTIME_SECRET',
+          value: runtimeBrokerCredential,
+          required: runtimeBrokerUrl !== '',
+        },
+        {
+          name: 'SANDBOXD_DOCKER_SECRET',
+          value: dockerBrokerCredential,
+          required: runtimeBrokerUrl !== '' && dockerEnabled,
+        },
+        { name: 'OBSERVABILITY_SCRAPE_TOKEN', value: observability.scrapeToken, required: true },
+        // Optional: without it the browser sign-in flow is simply off.
+        {
+          name: 'OIDC_CLIENT_SECRET',
+          value: clientSecret,
+          required: false,
+          minLength: EXTERNAL_SECRET_MIN_LENGTH,
+        },
+        {
+          name: databasePassword.source,
+          value: databasePassword.value,
+          required: progress.database !== null,
+          minLength: EXTERNAL_SECRET_MIN_LENGTH,
+        },
+      ],
+      forbidden: API_FORBIDDEN_SECRETS,
+    });
+  }
+
   return {
     /*
      * `oidc` is the default on purpose.
@@ -573,10 +690,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     terminalSessionTtlSeconds: intFromEnv(env, 'TERMINAL_SESSION_TTL_SECONDS', 3600),
     terminalWsUrl: env.VITE_TERMINAL_WS_URL ?? 'ws://localhost:4001',
     terminalControlUrl: env.TERMINAL_CONTROL_URL || undefined,
-    // Defaults to the terminal session secret so a single generated secret is
-    // enough to run the stack locally; document splitting them in production.
-    internalServiceSecret: env.INTERNAL_SERVICE_SECRET || secret,
-    namespaceSecret: env.NAMESPACE_DERIVATION_SECRET || secret,
+    // The fallback is development-only: production refused above.
+    internalServiceSecret: explicitInternalSecret || secret,
+    namespaceSecret: explicitNamespaceSecret || secret,
+    developmentSecretFallbacks,
     lifetimes: {
       maxSessionSeconds,
       idleTimeoutSeconds,
@@ -593,9 +710,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       runtimeOwnerSource: runtimeOwner.source,
       runtimeHost: strFromEnv(env, 'SANDBOX_RUNTIME_HOST', ''),
       runtimeCertPath: strFromEnv(env, 'SANDBOX_RUNTIME_CERT_PATH', ''),
-      runtimeBrokerUrl: strFromEnv(env, 'SANDBOX_BROKER_URL', ''),
-      runtimeBrokerCredential: strFromEnv(env, 'SANDBOXD_RUNTIME_SECRET', ''),
-      dockerBrokerCredential: strFromEnv(env, 'SANDBOXD_DOCKER_SECRET', ''),
+      runtimeBrokerUrl,
+      runtimeBrokerCredential,
+      dockerBrokerCredential,
       linuxEnabled: boolFromEnv(env, 'LINUX_PROVIDER_ENABLED', true),
       linuxImage: strFromEnv(env, 'LINUX_SANDBOX_IMAGE', DEFAULT_LINUX_SANDBOX_IMAGE),
       terraformEnabled: boolFromEnv(env, 'TERRAFORM_PROVIDER_ENABLED', true),
@@ -606,11 +723,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       cicdImage: strFromEnv(env, 'CICD_SANDBOX_IMAGE', DEFAULT_CICD_SANDBOX_IMAGE),
       dockerImage: strFromEnv(env, 'DOCKER_SANDBOX_IMAGE', DEFAULT_DOCKER_SANDBOX_IMAGE),
     },
-    progress: loadProgressConfig(env),
+    progress,
     reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',
-    dockerEnabled: boolFromEnv(env, 'DOCKER_TRACK_ENABLED', true),
+    dockerEnabled,
     dockerHost: env.DOCKER_HOST || undefined,
     publicOrigin,
     observability,

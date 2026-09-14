@@ -33,8 +33,21 @@ export {
   redactValue,
   containsSecret,
   assertSecretsAreRedactable,
+  registerSecretValues,
   type SecretKind,
 } from './redact.js';
+
+export {
+  PRODUCTION_SECRET_MIN_LENGTH,
+  PLACEHOLDER_MARKERS,
+  SecretPolicyError,
+  assertProductionSecrets,
+  isProductionEnv,
+  secretWeakness,
+  type SecretRequirement,
+  type SecretWeakness,
+  type ProductionSecretOptions,
+} from './secret-policy.js';
 
 export {
   withContext,

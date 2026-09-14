@@ -11,13 +11,17 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_RUNTIME_OWNER, resolveRuntimeOwner } from '@jumptotech/lab-orchestrator';
 import { loadSandboxdConfig } from '../src/config.js';
 
-/** The minimum sandboxd needs to start, with no owner. Values are test-only. */
+/**
+ * The minimum sandboxd needs to start, with no owner. Values are test-only, and
+ * long and distinct enough for the BETA-P0-010 production secret gate, so the
+ * production cases below vary the owner and nothing else.
+ */
 const BASE = {
-  NAMESPACE_DERIVATION_SECRET: 'a-derivation-secret-for-tests',
-  SANDBOXD_ATTACH_SECRET: 'attach-secret-for-tests-0001',
-  SANDBOXD_RUNTIME_SECRET: 'runtime-secret-for-tests-0002',
-  SANDBOXD_DOCKER_SECRET: 'docker-secret-for-tests-00003',
-  OBSERVABILITY_SCRAPE_TOKEN: 'scrape-token-for-tests-000004',
+  NAMESPACE_DERIVATION_SECRET: '7b3e9d1f5a8c2e6b0d4f9a3c7e1b5d8f2a6c0e4b9d3f7a1c5e8b2d6f0a4c9e3b',
+  SANDBOXD_ATTACH_SECRET: 'c5a1e7b3d9f2a6c0e4b8d1f5a9c3e7b0d6f2a8c4e1b5d9f3',
+  SANDBOXD_RUNTIME_SECRET: '4d8b2f6a0c5e9b3d7f1a6c0e4b8d2f5a9c3e7b1d6f0a4c8e',
+  SANDBOXD_DOCKER_SECRET: 'a9f3c7e1b5d0f4a8c2e6b9d3f7a1c5e0b4d8f2a6c9e3b7d1',
+  OBSERVABILITY_SCRAPE_TOKEN: '8e2c6a0f4b7d1e5c9a3f6b0d4e8c2a7f1b5d9e3c6a0f4b8d2e7c1a5f9b3d6e0c',
 } as NodeJS.ProcessEnv;
 
 describe('sandboxd runtime owner', () => {

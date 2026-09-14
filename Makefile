@@ -15,19 +15,14 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell typecheck check reset clean
+.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 setup: ## First-time setup: .env + kind cluster
-	@test -f .env || (cp .env.example .env && \
-		sed -i.bak -e "s|^TERMINAL_SESSION_SECRET=.*|TERMINAL_SESSION_SECRET=$$(openssl rand -hex 32)|" \
-		           -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$$(openssl rand -hex 16)|" .env && \
-		rm -f .env.bak && echo "created .env with generated secrets")
-	@grep -q '^POSTGRES_PASSWORD=' .env || (echo "POSTGRES_PASSWORD=$$(openssl rand -hex 16)" >> .env && \
-		echo "added a generated POSTGRES_PASSWORD to your existing .env")
+	@$(MAKE) secrets
 	@# One runtime owner for the whole stack: the api and sandboxd read this same
 	@# value, and compose refuses to start without it. Not a secret. An existing
 	@# value is kept, so a worktree that chose its own owner keeps it.
@@ -36,29 +31,21 @@ setup: ## First-time setup: .env + kind cluster
 		echo "RUNTIME_OWNER_ID=jumptotech" >> .env; \
 		echo "added RUNTIME_OWNER_ID=jumptotech to your .env"; \
 	fi
-	@# One credential per sandboxd capability. Generated separately on purpose:
-	@# sandboxd refuses to start if any two are equal, because that collapses the
-	@# boundary between "open a shell" and "drive the container runtime".
-	@for v in SANDBOXD_ATTACH_SECRET SANDBOXD_RUNTIME_SECRET SANDBOXD_DOCKER_SECRET; do \
-		if ! grep -qE "^$$v=.+" .env; then \
-			sed -i.bak "/^$$v=$$/d" .env && rm -f .env.bak; \
-			echo "$$v=$$(openssl rand -hex 24)" >> .env; \
-			echo "generated $$v"; \
-		fi; \
-	done
-	@# Observability credentials (PLATFORM-003). The scrape token is generated
-	@# separately from every other secret because it is handed to a monitoring
-	@# system and each service refuses to start if it matches one of theirs.
-	@for v in OBSERVABILITY_SCRAPE_TOKEN GRAFANA_ADMIN_PASSWORD; do \
-		if ! grep -qE "^$$v=.+" .env; then \
-			sed -i.bak "/^$$v=$$/d" .env && rm -f .env.bak; \
-			echo "$$v=$$(openssl rand -hex 32)" >> .env; \
-			echo "generated $$v"; \
-		fi; \
-	done
 	@$(MAKE) observability-token
 	@$(MAKE) cluster-up
 	@$(MAKE) sandbox-build
+
+# BETA-P0-010. Every secret is generated separately, and a placeholder copied
+# from .env.example is replaced rather than kept — or, for a database password an
+# existing volume may depend on, kept with a warning. Never prints a value.
+secrets: ## Generate missing or placeholder secrets in .env (idempotent)
+	@bash scripts/ensure-dev-secrets.sh
+
+# Resolves the shipped compose files with sentinel values and proves each
+# service receives exactly the secrets infrastructure/secret-distribution.json
+# allows. Reads no .env and prints names only.
+secrets-check: ## Prove which service receives which secret, from `docker compose config`
+	@node scripts/check-secret-distribution.mjs
 
 observability-token: ## Write the scrape token where Prometheus reads it
 	@mkdir -p infrastructure/observability/secrets

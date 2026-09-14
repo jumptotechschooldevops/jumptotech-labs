@@ -1,8 +1,30 @@
 import {
   loadObservabilityConfig,
+  assertProductionSecrets,
   assertScrapeTokenIsDistinct,
+  isProductionEnv,
   type ObservabilityConfig,
 } from '@jumptotech/observability';
+
+/**
+ * Secrets the terminal must never be given — BETA-P0-010.
+ *
+ * This is the process a student types into. It verifies browser tokens, calls
+ * the API's `/internal` routes and opens broker shells, and it needs exactly
+ * the three secrets for that. The namespace derivation key, the broker's
+ * runtime and Docker capabilities, the identity provider's client secret and
+ * the database credential all belong to other services; a production terminal
+ * that finds one in its environment refuses to start.
+ */
+export const TERMINAL_FORBIDDEN_SECRETS: readonly string[] = [
+  'NAMESPACE_DERIVATION_SECRET',
+  'SANDBOXD_RUNTIME_SECRET',
+  'SANDBOXD_DOCKER_SECRET',
+  'OIDC_CLIENT_SECRET',
+  'POSTGRES_PASSWORD',
+  'DATABASE_URL',
+  'GRAFANA_ADMIN_PASSWORD',
+];
 
 export interface TerminalConfig {
   port: number;
@@ -18,8 +40,26 @@ export interface TerminalConfig {
    * namespace-scoped ServiceAccount kubeconfig fetched from here, per session.
    */
   apiInternalUrl: string;
-  /** Shared secret authenticating this service to the API and the broker. */
+  /** Shared secret authenticating API ⇄ terminal calls, in both directions. */
   internalServiceSecret: string;
+  /**
+   * Secrets filled from `TERMINAL_SESSION_SECRET` because they were not set.
+   * Development only — production refuses to start instead. See the API's
+   * field of the same name.
+   */
+  developmentSecretFallbacks?: readonly string[];
+  /**
+   * The unprivileged account this process drops to at startup — BETA-P0-010.
+   *
+   * Student shells run as this same account, so the drop has to happen *inside*
+   * this process: the kernel marks a process that changed its uid non-dumpable,
+   * and a non-dumpable process' `/proc/<pid>/environ` and memory are closed to
+   * other processes of that uid. Started directly as the account instead, every
+   * student could read this service's secrets. See `process-identity.ts`.
+   */
+  dropToUid?: number;
+  /** Group for `dropToUid`. Defaults to the same number. */
+  dropToGid?: number;
   /**
    * Base URL of the sandbox broker, used for Linux sessions.
    *
@@ -123,6 +163,15 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
   return parsed;
 }
 
+function optionalIdFromEnv(env: NodeJS.ProcessEnv, name: string): number | undefined {
+  const raw = env[name]?.trim();
+  if (!raw) return undefined;
+  if (!/^[0-9]+$/.test(raw) || Number.parseInt(raw, 10) <= 0) {
+    throw new Error(`Environment variable ${name} must name an unprivileged numeric id, got '${raw}'`);
+  }
+  return Number.parseInt(raw, 10);
+}
+
 export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): TerminalConfig {
   const sessionSecret = env.TERMINAL_SESSION_SECRET ?? '';
   if (sessionSecret.length < 8) {
@@ -151,6 +200,30 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     SANDBOXD_ATTACH_SECRET: env.SANDBOXD_ATTACH_SECRET,
   });
 
+  const explicitInternalSecret = env.INTERNAL_SERVICE_SECRET?.trim() ?? '';
+  const sandboxBrokerCredential = env.SANDBOXD_ATTACH_SECRET ?? '';
+  const sandboxBrokerEnabled = boolFromEnv(env, 'TERMINAL_SANDBOX_BROKER_ENABLED', false);
+
+  if (isProductionEnv(env)) {
+    assertProductionSecrets({
+      service: 'terminal',
+      env,
+      secrets: [
+        { name: 'TERMINAL_SESSION_SECRET', value: sessionSecret, required: true },
+        // Its own value, never the session secret: a terminal session key is
+        // not a licence to call `/internal`.
+        { name: 'INTERNAL_SERVICE_SECRET', value: explicitInternalSecret, required: true },
+        // `attach` is needed only when shells are brokered.
+        { name: 'SANDBOXD_ATTACH_SECRET', value: sandboxBrokerCredential, required: sandboxBrokerEnabled },
+        { name: 'OBSERVABILITY_SCRAPE_TOKEN', value: observability.scrapeToken, required: true },
+      ],
+      forbidden: TERMINAL_FORBIDDEN_SECRETS,
+    });
+  }
+
+  const dropToUid = optionalIdFromEnv(env, 'TERMINAL_DROP_TO_UID');
+  const dropToGid = optionalIdFromEnv(env, 'TERMINAL_DROP_TO_GID');
+
   return {
     port: intFromEnv(env, 'TERMINAL_PORT', 4001),
     observability,
@@ -160,9 +233,13 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
       .map((o) => o.trim())
       .filter(Boolean),
     apiInternalUrl: env.API_INTERNAL_URL ?? 'http://localhost:4000',
-    internalServiceSecret: env.INTERNAL_SERVICE_SECRET || sessionSecret,
+    // The fallback is development-only: production refused above.
+    internalServiceSecret: explicitInternalSecret || sessionSecret,
+    developmentSecretFallbacks: explicitInternalSecret ? [] : ['INTERNAL_SERVICE_SECRET'],
+    ...(dropToUid !== undefined ? { dropToUid } : {}),
+    ...(dropToGid !== undefined ? { dropToGid } : {}),
     sandboxBrokerUrl: env.SANDBOX_BROKER_URL ?? 'http://127.0.0.1:4002',
-    sandboxBrokerCredential: env.SANDBOXD_ATTACH_SECRET ?? '',
+    sandboxBrokerCredential,
     credentialsDir: env.TERMINAL_CREDENTIALS_DIR ?? '/tmp/jumptotech-credentials',
     workDir: env.TERMINAL_WORKDIR ?? '/home/student',
     workspaceRoot: env.TERMINAL_WORKSPACE_ROOT ?? '/home/student/workspaces',
@@ -175,6 +252,6 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     promptHost: env.TERMINAL_PROMPT_HOST ?? 'lab',
     containerBinary: env.SANDBOX_CONTAINER_BINARY ?? 'docker',
     containerExecEnabled: boolFromEnv(env, 'TERMINAL_CONTAINER_EXEC_ENABLED', true),
-    sandboxBrokerEnabled: boolFromEnv(env, 'TERMINAL_SANDBOX_BROKER_ENABLED', false),
+    sandboxBrokerEnabled,
   };
 }

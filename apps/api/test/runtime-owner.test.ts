@@ -27,7 +27,13 @@ const PRODUCTION_ENV = {
   OIDC_ISSUER: 'https://issuer.example.com',
   OIDC_CLIENT_ID: 'jumptotech-labs',
   OIDC_AUDIENCE: 'jumptotech-labs',
-  TERMINAL_SESSION_SECRET: 'a-terminal-session-secret-for-tests',
+  // BETA-P0-010: production also refuses a missing, short or shared secret, so
+  // every owner case below runs against an otherwise valid production secret set
+  // — the owner is the only thing that varies. Test-only values.
+  TERMINAL_SESSION_SECRET: '5d2a8f1c6e9b3d7a0f4c8e2b6d1a9f5c3e7b0d4a8f2c6e1b9d5a3f7c0e4b8d2a',
+  INTERNAL_SERVICE_SECRET: '9c4e7a2f5b8d1c6e3a0f9b4d7c2e5a8f1b6d3c0e9a4f7b2d5c8e1a6f3b0d9c4e',
+  NAMESPACE_DERIVATION_SECRET: 'e1b7d3f9a5c2e8b4d0f6a3c9e5b1d7f4a0c6e2b8d5f1a7c3e9b6d2f8a4c0e7b3',
+  OBSERVABILITY_SCRAPE_TOKEN: '2f8c4a0e6b3d9f5c1a7e4b0d6f2c8a5e1b7d3f9c6a2e8b4d0f7c3a9e5b1d8f4c',
   PUBLIC_ORIGIN: 'https://labs.example.com',
   ALLOWED_ORIGINS: 'https://labs.example.com',
 } as NodeJS.ProcessEnv;

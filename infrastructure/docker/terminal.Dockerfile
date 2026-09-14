@@ -86,18 +86,32 @@ COPY services/observability services/observability
 COPY services/lab-orchestrator services/lab-orchestrator
 COPY services/terminal        services/terminal
 
-# The service process and the PTYs it spawns share this user. It owns nothing
-# in /app, so a student cannot modify the service that is hosting them.
+# The service and the PTYs it spawns run as this account. The account owns
+# nothing in /app, so a student cannot modify the service that is hosting them.
 RUN chown -R root:root /app && chmod -R a-w /app
 
 ENV HOME=/home/student \
     NODE_ENV=production \
     TERMINAL_PORT=4001 \
     TERMINAL_WORKDIR=/home/student \
-    TERMINAL_WORKSPACE_ROOT=/home/student/workspaces
+    TERMINAL_WORKSPACE_ROOT=/home/student/workspaces \
+    TERMINAL_DROP_TO_UID=1001 \
+    TERMINAL_DROP_TO_GID=1001
 
-USER student
-WORKDIR /home/student
+# BETA-P0-010: deliberately no `USER student`.
+#
+# The process starts as root and drops to `student` itself before doing anything
+# else (services/terminal/src/process-identity.ts). Started directly as
+# `student`, every student shell — the same account — could read this service's
+# secrets from /proc/<pid>/environ. A uid change made *inside* the process is
+# what makes the kernel close that. Run it with `cap_drop: ALL` plus SETUID and
+# SETGID only; the drop clears both, and a production start as any uid other
+# than root is refused rather than run unprotected.
+#
+# WORKDIR is /app rather than the student's HOME: that HOME is a 0700 tmpfs
+# owned by `student`, and root without DAC capabilities cannot enter it.
+USER root
+WORKDIR /app
 EXPOSE 4001
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
