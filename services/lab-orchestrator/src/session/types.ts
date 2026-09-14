@@ -208,20 +208,42 @@ export interface LimitRangePolicy {
   max?: ComputeAmounts;
 }
 
+/**
+ * The session network contract's inputs — see `session/network-policy.ts` and
+ * docs/kubernetes-network-security.md.
+ */
 export interface NetworkPolicyConfig {
   name: string;
+  /** Whether session NetworkPolicies are created at all. Refused as false in production. */
   enabled: boolean;
-  /** Namespace running CoreDNS; egress to it on :53 is always allowed. */
+  /** Namespace running cluster DNS. */
   dnsNamespace: string;
   /**
-   * Cluster Pod/Service CIDRs. Egress to everything *except* these ranges is
-   * allowed, which keeps image-agnostic internet access working while cutting
-   * pod-to-pod traffic to other students.
+   * Labels selecting the DNS Pods inside `dnsNamespace`. Port 53 egress goes to
+   * these Pods only, not to everything that happens to run in that namespace.
+   */
+  dnsPodSelector: Record<string, string>;
+  /**
+   * Cluster Pod/Service CIDRs. Never reachable through the external-egress
+   * allowance; traffic between sessions is refused by the deny-by-default
+   * policies on both sides.
    */
   podCidr: string;
   serviceCidr: string;
-  /** When false, egress is restricted to the session namespace + DNS only. */
+  /**
+   * Whether the platform permits external egress at all. Off by default. Even
+   * when on, only a lab declaring `external_egress` receives it, and it reaches
+   * public IPv4 space only.
+   */
   allowExternalEgress: boolean;
+  /** Further ranges external egress must never reach, e.g. the node network or VPC. */
+  additionalDeniedEgressCidrs: string[];
+  /** The behavioural proof required before students are admitted. */
+  attestation: {
+    /** Forced on under NODE_ENV=production. */
+    required: boolean;
+    maxAgeSeconds: number;
+  };
 }
 
 /**
@@ -369,9 +391,15 @@ export const DEFAULT_SESSION_POLICY: SessionPolicy = {
     name: 'jumptotech-session-isolation',
     enabled: true,
     dnsNamespace: 'kube-system',
+    dnsPodSelector: { 'k8s-app': 'kube-dns' },
     podCidr: '10.244.0.0/16',
     serviceCidr: '10.96.0.0/16',
-    allowExternalEgress: true,
+    // No shipped lab needs the internet from a Pod: images are pulled by the
+    // kubelet, and K8S-012's in-cluster client reaches the API server through
+    // its own allowance. See docs/kubernetes-network-security.md.
+    allowExternalEgress: false,
+    additionalDeniedEgressCidrs: [],
+    attestation: { required: false, maxAgeSeconds: 7 * 24 * 3_600 },
   },
   serviceAccountName: 'student',
   credentialTtlSeconds: 3_600,

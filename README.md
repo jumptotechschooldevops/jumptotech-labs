@@ -2249,26 +2249,35 @@ CORS, and requires `INTERNAL_SERVICE_SECRET`.
 
 ### Network model
 
-Each namespace gets four NetworkPolicies:
+BETA-P0-015. The full contract, what was measured, and the production procedure
+are in [docs/kubernetes-network-security.md](docs/kubernetes-network-security.md).
 
 | Policy | Effect |
 |---|---|
 | `…-default-deny` | deny all ingress and egress |
 | `…-allow-same-namespace` | re-allow traffic between this session's own Pods |
-| `…-allow-dns` | re-allow egress to `kube-system` on TCP/UDP 53 |
-| `…-allow-external-egress` | re-allow egress to `0.0.0.0/0` *except* the cluster Pod and Service CIDRs |
+| `…-allow-dns` | re-allow egress to the DNS Pods (`k8s-app=kube-dns` in `kube-system`) on TCP/UDP 53 only |
+| `…-allow-kube-apiserver` | re-allow egress to the API server's own endpoints, on their port only |
+| `…-allow-external-egress` | **only** for a lab declaring `external_egress` on a platform with `ALLOW_EXTERNAL_EGRESS=true`: public IPv4 space, as plain CIDRs — never private ranges, instance metadata, or the cluster's ranges |
 
-So a student's Pods can talk to each other, resolve DNS, and reach the
-internet, but cannot open connections into another student's namespace. Image
-pulls are unaffected — the kubelet performs those, not the Pod.
+So a student's Pods can talk to each other, resolve DNS and call the API server,
+but cannot open connections into another student's namespace, and have **no
+internet access by default**. No shipped lab needs it; image pulls are performed
+by the kubelet, not the Pod.
 
-> **This is not tenant isolation.** NetworkPolicy is enforced by the CNI, and
-> enforcement varies: a cluster whose CNI does not implement NetworkPolicy will
-> accept these objects and ignore them. Verify enforcement on your own cluster
-> before treating it as a control, and see
-> [Security](#security) for what namespace isolation does and does not buy you.
-> `NETWORK_POLICY_ENABLED=false` skips creating them where they would be
-> decorative.
+External egress used to be on for every lab as `0.0.0.0/0` minus the Pod and
+Service CIDRs. On kind a session Pod reached the development api container on
+the kind Docker network that way. It is now off by default, per lab, and public-only.
+
+> **Objects are not enforcement.** A cluster whose CNI does not implement
+> NetworkPolicy accepts these objects and ignores them. Enforcement is proven by
+> `npm run verify:network-policy`, which measures real connections with a
+> negative control for every denial. In production (`NODE_ENV=production`) the
+> Kubernetes track admits no student until that probe has recorded a current PASS
+> for this cluster and this configuration, and `NETWORK_POLICY_ENABLED=false` is
+> refused. Pod-to-node traffic (kubelet, instance metadata) is **not** governed by
+> NetworkPolicy on any common CNI. See [Security](#security) for what namespace
+> isolation does and does not buy you.
 
 ---
 
@@ -3989,8 +3998,10 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 - *ResourceQuota and LimitRange per namespace*, so one student cannot exhaust
   the shared node. LoadBalancer and NodePort Services are quota'd to zero.
 - *NetworkPolicy per namespace*: deny-by-default, re-allowing only same-namespace
-  traffic, DNS, and non-cluster egress. (Enforcement depends on the CNI — see
-  the limitations below.)
+  traffic, DNS and the API server; public egress only for a lab that declares it
+  on a platform that permits it. Enforcement is measured, not assumed, and
+  production admits no student without a passing probe — see
+  [docs/kubernetes-network-security.md](docs/kubernetes-network-security.md).
 - *Cleanup cannot delete what it does not own.* Four gates — sandbox name shape,
   protected-namespace list, live `jumptotech.io/managed` label, and session-label
   match — are re-read from the API server immediately before every delete.
@@ -4173,10 +4184,15 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    the container tracks report unavailable there — see
    [Local development requirements](#local-development-requirements).
 3. **NetworkPolicy enforcement depends on the CNI.** The objects are always
-   created; whether they are *enforced* is a property of the cluster. Do not
-   claim tenant-level network isolation without verifying enforcement on the
-   cluster you actually run. `kind` is development infrastructure and is not a
-   supported production substrate.
+   created; whether they are *enforced* is a property of the cluster. kindnetd
+   enforces the session contract (measured, with negative controls, by
+   `npm run verify:network-policy` and the `kind-integration` CI job). The
+   production substrate and CNI are **DECISION REQUIRED**, and production admits
+   no student until the probe passes on that cluster. NetworkPolicy does not
+   govern pod-to-node traffic (kubelet, instance metadata), and a `hostNetwork`
+   Pod bypasses it; those need host firewalling and Pod Security admission. This
+   is namespace isolation on a shared kernel, not VM-grade isolation. `kind` is
+   development infrastructure and is not a supported production substrate.
 4. **The student shell is a normal shell.** On the Kubernetes track it runs as
    an unprivileged user in a container with no host mounts, but there is no
    sandbox layer beyond Docker's defaults, and outbound network access from that

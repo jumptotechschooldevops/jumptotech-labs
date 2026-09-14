@@ -1309,7 +1309,7 @@ Kubernetes service debugging — before any sandbox work starts.
 | **N7** | `ip` (read-only subcommands) added to `VERIFIER_COMMANDS` | NET-005, 030 | **S** — `ip` is not read-only as a binary; needs an argv-shape allow-list (`ip route show`, `ip -j addr show`, `ip neigh show`) rather than a bare command entry, or a dedicated `route_exists` requirement type |
 | **N10** | `file_content_matches` (anchored regex, bounded) | NET-014, and richer grading everywhere | **S** — today only literal `contains` exists, which forces every gradeable value to be seeded |
 | **N11** | `tls_certificate` requirement | NET-016 | **M** — assert subject/SAN/issuer/expiry and whether the endpoint validates against the sandbox trust store |
-| **N12** | Confirm or install a NetworkPolicy-enforcing CNI in `kind` | NET-026, NET-032 | **S/M** — verify `kindnet` enforcement on `kindest/node:v1.34.0`; if it does not enforce, install Calico in `cluster-up.sh`. **Until this is settled, NET-026 teaches a policy that is written but not enforced — which is worse than not teaching it**, so this must be resolved before NET-026 ships |
+| **N12** | Confirm or install a NetworkPolicy-enforcing CNI in `kind` | NET-026, NET-032 | **Confirmed for the platform contract (BETA-P0-015).** kindnetd `v20250512-df8de77b` on `kindest/node:v1.34.0` enforces deny-all, pod/namespace selectors, ports and plain `ipBlock` — measured with negative controls by `npm run verify:network-policy` and the `kind-integration` CI job (docs/kubernetes-network-security.md §3). Still open for NET-026: the lab's *own* behavioural verifier (a student-written policy must be judged by connections, not YAML), and `ipBlock.except`, whose kind measurements disagree |
 | **N13** | ingress-nginx + `extraPortMappings` in `infrastructure/kind/cluster.yaml` | NET-027, NET-032 end-to-end | **M** — plus a per-namespace ingress class or host-based isolation so sessions do not collide on one shared controller |
 | **N14** | AWS-real path: LocalStack service + AWS provider in the Terraform mirror | hands-on Phase 6 | **L** — needs egress or a vendored mirror, a LocalStack container per session, and cost/isolation review. The AWS provider stub stays untouched |
 
@@ -1340,8 +1340,9 @@ Kubernetes service debugging — before any sandbox work starts.
 3. **Egress.** Several designs assume **no** egress from any sandbox, which is
    the current posture. Confirmed as a hard constraint?
 4. **N12 before NET-026.** Does `kindnet` on `kindest/node:v1.34.0` enforce
-   NetworkPolicy in this cluster? This needs an empirical answer before the
-   NetworkPolicy lab is written.
+   NetworkPolicy in this cluster? **Answered empirically by BETA-P0-015: yes, for
+   the constructs the platform contract uses** (docs/kubernetes-network-security.md
+   §3). NET-026 still needs a behavioural verifier of its own before it ships.
 5. **Shared-cluster Ingress.** One controller for all sessions needs a per-
    session isolation story (host-based or class-based) before NET-027.
 

@@ -231,9 +231,16 @@ services:
       LIMITS_DEFAULT_REQUEST_MEMORY: ${LIMITS_DEFAULT_REQUEST_MEMORY:-64Mi}
       LIMITS_DEFAULT_CPU: ${LIMITS_DEFAULT_CPU:-500m}
       LIMITS_DEFAULT_MEMORY: ${LIMITS_DEFAULT_MEMORY:-512Mi}
+      # Session network contract (BETA-P0-015) — docs/kubernetes-network-security.md.
       NETWORK_POLICY_ENABLED: ${NETWORK_POLICY_ENABLED:-true}
       CLUSTER_POD_CIDR: ${CLUSTER_POD_CIDR:-10.244.0.0/16}
       CLUSTER_SERVICE_CIDR: ${CLUSTER_SERVICE_CIDR:-10.96.0.0/16}
+      CLUSTER_DNS_POD_SELECTOR: ${CLUSTER_DNS_POD_SELECTOR:-k8s-app=kube-dns}
+      ALLOW_EXTERNAL_EGRESS: ${ALLOW_EXTERNAL_EGRESS:-false}
+      CLUSTER_EGRESS_DENY_CIDRS: ${CLUSTER_EGRESS_DENY_CIDRS:-}
+      # Unset here, so it follows NODE_ENV: required (and not waivable) in
+      # production, off for a development stack.
+      NETWORK_POLICY_ATTESTATION_REQUIRED: ${NETWORK_POLICY_ATTESTATION_REQUIRED:-}
       STUDENT_CREDENTIAL_TTL_SECONDS: ${STUDENT_CREDENTIAL_TTL_SECONDS:-3600}
       # --- container-backed tracks (PLATFORM-004) ---
       # Off in compose by design, and PINNED rather than defaulted.

@@ -509,6 +509,14 @@ export interface NamespaceSnapshot {
   name: string;
   phase: string;
   labels: Record<string, string>;
+  /** Server-assigned; kube-system's identifies the cluster to an attestation. */
+  uid?: string;
+}
+
+/** One address the `default/kubernetes` Service routes to. */
+export interface ApiServerEndpoint {
+  ip: string;
+  port: number;
 }
 
 export interface ClusterVersion {
@@ -563,6 +571,11 @@ export interface KubernetesPort {
   listNodes(): Promise<NodeInfo[]>;
   /** Server address + CA, for minting namespace-scoped kubeconfigs. */
   clusterEndpoint(): ClusterEndpoint;
+  /**
+   * Ready endpoints behind `default/kubernetes` — where an in-cluster client's
+   * traffic actually goes once the Service address is translated.
+   */
+  listApiServerEndpoints(): Promise<ApiServerEndpoint[]>;
 
   // --- namespaces ---------------------------------------------------------
 

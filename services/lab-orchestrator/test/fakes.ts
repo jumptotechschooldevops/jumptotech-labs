@@ -13,6 +13,7 @@
  * every substrate's fake.
  */
 import type {
+  ApiServerEndpoint,
   AuthorizationResult,
   ClusterEndpoint,
   ClusterVersion,
@@ -82,12 +83,16 @@ export interface FakeK8sOptions {
   endpoint?: ClusterEndpoint;
   /** When set, every call rejects with this message. */
   unreachable?: string;
+  /** `default/kubernetes` endpoints; one kind-shaped address by default. */
+  apiServerEndpoints?: ApiServerEndpoint[];
 }
 
 interface FakeNamespace {
   name: string;
   phase: string;
   labels: Record<string, string>;
+  /** Defaults to `uid-<name>` when read. */
+  uid?: string;
 }
 
 export class FakeKubernetes implements KubernetesPort {
@@ -117,6 +122,7 @@ export class FakeKubernetes implements KubernetesPort {
   version_: ClusterVersion;
   endpoint: ClusterEndpoint;
   unreachable: string | undefined;
+  apiServerEndpoints: ApiServerEndpoint[];
 
   /** Observability for assertions. */
   deleted: string[] = [];
@@ -152,8 +158,9 @@ export class FakeKubernetes implements KubernetesPort {
     ];
     for (const entry of options.namespaces ?? ['default', 'kube-system']) {
       const [name, labels] = typeof entry === 'string' ? [entry, {}] : entry;
-      this.namespaces.set(name, { name, phase: 'Active', labels: { ...labels } });
+      this.namespaces.set(name, { name, phase: 'Active', labels: { ...labels }, uid: `uid-${name}` });
     }
+    this.apiServerEndpoints = options.apiServerEndpoints ?? [{ ip: '172.18.0.2', port: 6443 }];
     this.version_ = options.version ?? { gitVersion: 'v1.34.0', major: '1', minor: '34' };
     this.endpoint = options.endpoint ?? {
       server: 'https://127.0.0.1:16443',
@@ -186,6 +193,11 @@ export class FakeKubernetes implements KubernetesPort {
     return this.endpoint;
   }
 
+  async listApiServerEndpoints(): Promise<ApiServerEndpoint[]> {
+    this.#guard();
+    return this.apiServerEndpoints.map((e) => ({ ...e }));
+  }
+
   // --- namespaces -----------------------------------------------------------
 
   async namespaceExists(namespace: string): Promise<boolean> {
@@ -196,7 +208,9 @@ export class FakeKubernetes implements KubernetesPort {
   async getNamespace(namespace: string): Promise<NamespaceSnapshot | null> {
     this.#guard();
     const found = this.namespaces.get(namespace);
-    return found ? { name: found.name, phase: found.phase, labels: { ...found.labels } } : null;
+    return found
+      ? { name: found.name, phase: found.phase, labels: { ...found.labels }, uid: found.uid ?? `uid-${found.name}` }
+      : null;
   }
 
   async createNamespace(namespace: string, labels: Record<string, string>): Promise<void> {
