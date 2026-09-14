@@ -221,14 +221,18 @@ Cron example:
 
 ```cron
 # /etc/cron.d/jumptotech-db-backup — daily, 03:17 UTC
-17 3 * * *  jtt-ops  cd /opt/jumptotech-labs && BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_COPY_HOOK=/usr/local/sbin/jtt-copy-backup-offhost scripts/db-backup.sh >>/var/log/jumptotech/db-backup.log 2>&1
+17 3 * * *  jtt-ops  cd /opt/jumptotech-labs && BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status BACKUP_COPY_HOOK=/usr/local/sbin/jtt-copy-backup-offhost scripts/db-backup.sh >>/var/log/jumptotech/db-backup.log 2>&1
 ```
 
 - `jtt-ops` must be able to run `docker`. That is root-equivalent, so choose the
   account accordingly.
 - **Make failures visible.** Use `MAILTO`, a systemd `OnFailure=`, or the
-  scheduler's own alerting. Nothing in the platform yet exports a "last successful
-  backup" metric (§10), so an unnoticed failing job silently stretches the RPO.
+  scheduler's own alerting. With the production observability overlay the
+  platform alerts too (BETA-P0-018): each run records its outcome in
+  `BACKUP_STATUS_DIR` (default `backups/status`; set the same path in `.env`),
+  and `BackupStale`, `BackupMissedTwice`, `BackupLastRunFailed` and
+  `BackupVerifyFailed` read it — [RB-16](RB-16-backups.md). A run refused before
+  it starts (an invalid `BACKUP_DIR`, say) records nothing; freshness still catches it.
 
 ### 5.4 Retention
 
@@ -599,8 +603,10 @@ everything written since the archive. So prefer this:
 - **Secrets and certificate recovery.** Where `.env` and the TLS key are kept so
   that a replacement host can start. The database archive deliberately contains
   neither.
-- **Backup monitoring.** There is no "last successful backup" metric or alert.
-  Until there is, a failing job is visible only through the scheduler.
+- ~~**Backup monitoring.**~~ Done in BETA-P0-018: freshness and verification
+  metrics and alerts ([RB-16](RB-16-backups.md)). Where those alerts are
+  delivered is still DECISION REQUIRED
+  ([private-beta-operations.md §8](private-beta-operations.md)).
 - **Who may restore.** Docker access on the host is root-equivalent, and it is what
   both scripts need.
 - **Restore-test cadence on real data.** This runbook recommends a weekly `--into`

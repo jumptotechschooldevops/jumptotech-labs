@@ -9,8 +9,19 @@ are not being reclaimed
 
 ```promql
 jtt:sessions_utilization:ratio
-increase(jtt_session_capacity_rejections_total[5m])
+jtt:sessions_headroom:count                                          # free slots
+increase(jtt_lab_start_outcome_total{outcome="capacity_reached"}[10m])   # what the alert reads
+sum by (track) (increase(jtt_session_capacity_rejections_total[10m]))    # which track
 ```
+
+**Private beta (BETA-P0-018):** `MAX_ACTIVE_SESSIONS=5` and
+`MAX_ACTIVE_SESSIONS_PER_STUDENT=1`, so each session is 20% of the platform and
+five students each holding one lab is exactly full. A sixth start, or a sixth
+session that is really a stuck teardown or a DEGRADED session nobody ended, is a
+refusal. Check `max by (status) (jtt_sessions_oldest_status_age_seconds)` before
+anything else: a slot held by a stuck session is [RB-17](RB-17-session-lifecycle.md),
+not demand. On the production host every `docker compose` below is `prod`
+([private-beta-operations.md §1](private-beta-operations.md)).
 
 The alert is on **refusals**, not utilisation. 100% utilisation with nobody
 being turned away is a full platform working exactly as designed; a refusal is
@@ -73,7 +84,7 @@ RB-05. Capacity is a symptom.
 
 ## 6. Verify recovery
 
-- `increase(jtt_session_capacity_rejections_total[5m]) == 0`.
+- `increase(jtt_lab_start_outcome_total{outcome="capacity_reached"}[10m]) == 0`.
 - `jtt:sessions_utilization:ratio` below 0.85.
 - A lab starts.
 - `jtt_lab_end_total{reason="idle"}` is non-zero over the next half hour —

@@ -1,8 +1,9 @@
 /**
  * BETA-P0-009 — a per-student refusal is observable as itself.
  *
- * `CapacityExhausted` pages on `jtt_session_capacity_rejections_total`, and
- * `LabStartsFailingHard` reads the start outcomes. A student pressing Start
+ * `CapacityExhausted` pages on `jtt_lab_start_outcome_total{outcome="capacity_reached"}`
+ * (BETA-P0-018; it read `jtt_session_capacity_rejections_total` before), and
+ * `LabStartsFailingHard` reads the other start outcomes. A student pressing Start
  * past their own limit is neither the platform being full nor a failed start,
  * so this pins that it lands on its own outcome, its own counter and its own
  * log field — and that a genuine global refusal still lands on the old ones.

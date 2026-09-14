@@ -27,8 +27,11 @@ rule_files:
 
 alerting:
   alertmanagers:
+    # Loopback: Alertmanager shares this container's network namespace
+    # (BETA-P0-018) and, in production, listens on 127.0.0.1 only. The IPv4
+    # literal, because `localhost` resolves to ::1 first.
     - static_configs:
-        - targets: ['alertmanager:9093']
+        - targets: ['127.0.0.1:9093']
 
 scrape_configs:
   # Prometheus watching itself. Without this, "the alert never fired" and

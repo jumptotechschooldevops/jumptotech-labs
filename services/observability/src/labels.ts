@@ -79,6 +79,12 @@ export const PERMITTED_LABELS: ReadonlySet<string> = new Set([
   'lab_provider',
   'deny_reason',
   'end_reason',
+  // BETA-P0-018. `check` is one of the TLS edge checks (served, redirect);
+  // `filesystem` a fixed name (container_root, backup_status), never a path;
+  // `window` a load-average window (1m, 5m, 15m).
+  'check',
+  'filesystem',
+  'window',
   'le',
   'quantile',
 ]);

@@ -70,6 +70,16 @@ export {
   createRegistry,
   setCollector,
   LAB_START_OUTCOMES,
+  LAB_RESET_OUTCOMES,
+  LAB_END_OUTCOMES,
+  AUTH_CALLBACK_OUTCOMES,
+  REAPER_RECOVERY_REASONS,
+  REAPER_TEARDOWN_REASONS,
+  TLS_EDGE_CHECKS,
+  BACKUP_OPERATIONS,
+  NETWORK_ATTESTATION_RESULTS,
+  createOperationsMetrics,
+  type OperationsMetrics,
   createCommonMetrics,
   createSessionMetrics,
   createProviderMetrics,
@@ -123,6 +133,26 @@ export {
   routeTemplate,
   type HttpObservabilityOptions,
 } from './http-metrics.js';
+
+/*
+ * BETA-P0-017's certificate checks, re-exported for the API's periodic edge
+ * probe (BETA-P0-018) so that `npm run tls:check` and the Prometheus alert read
+ * one implementation and one set of expiry thresholds.
+ */
+export {
+  DEFAULT_EXPIRY_THRESHOLDS,
+  exitCodeFor,
+  probeHttpRedirect,
+  probeHttpsEndpoint,
+  publicHostname,
+  worstStatus,
+  type EndpointProbeOptions,
+  type ExpiryThresholds,
+  type HttpsProbeResult,
+  type TlsFinding,
+  type TlsHealthReport,
+  type TlsHealthStatus,
+} from './tls-certificate-health.js';
 
 /**
  * Correlation headers used between platform services.

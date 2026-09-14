@@ -4275,11 +4275,19 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
     authenticated listener, and answers `/livez` and `/readyz`; Prometheus,
     Alertmanager and Grafana ship as a compose profile with eight dashboards,
     31 alerts and a runbook per alert. See
-    [docs/observability.md](docs/observability.md). What is still missing is
+    [docs/observability.md](docs/observability.md). **BETA-P0-018** runs that
+    stack on the production host (`docker-compose.production-observability.yml`:
+    Prometheus and Alertmanager unreachable from other containers, Grafana on
+    host loopback only, public exposure still 443 and 80), adds TLS certificate,
+    backup freshness, host pressure, NetworkPolicy attestation, stuck-session and
+    reset/end signals, one private-beta dashboard and 57 alerts, and the operator
+    procedures in
+    [docs/runbooks/private-beta-operations.md](docs/runbooks/private-beta-operations.md).
+    Database backup and restore arrived in BETA-P0-013. What is still missing is
     **per-sandbox resource metrics** (they need a collector inside `sandboxd`,
     because cAdvisor would need the Docker socket), **distributed tracing**, and
-    **any database backup or restore procedure** — the last is stated plainly in
-    [RB-02](docs/runbooks/RB-02-database.md) rather than implied.
+    **a decided alert destination** — DECISION REQUIRED in the operations
+    runbook.
 
 ---
 

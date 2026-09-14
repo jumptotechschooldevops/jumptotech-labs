@@ -105,7 +105,10 @@ cleanup() {
   if [ -n "$partial" ]; then rm -f "$partial"; fi
   if [ -n "$sidecar" ]; then rm -f "$sidecar"; fi
   if [ -n "$lock_dir" ]; then rm -rf "$lock_dir"; fi
-  if [ "$status" -ne 0 ]; then jtt_log "backup FAILED (exit $status)"; fi
+  if [ "$status" -ne 0 ]; then
+    jtt_log "backup FAILED (exit $status)"
+    jtt_record_status backup failure
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -211,8 +214,10 @@ if [ -n "$copy_hook" ]; then
   jtt_log "running BACKUP_COPY_HOOK"
   "$copy_hook" "$final" "$final.sha256" \
     || jtt_die "BACKUP_COPY_HOOK failed: $name is kept in $backup_dir but was NOT copied off-host"
+  offhost_copy=copied
 else
   jtt_log "no BACKUP_COPY_HOOK: this archive exists on this host only"
+  offhost_copy=not_configured
 fi
 
 # --- retention -----------------------------------------------------------------
@@ -250,5 +255,9 @@ EOF
   jtt_log "retention: kept archives newer than $retention_days day(s) and at least the newest $min_keep; removed $removed"
 }
 apply_retention
+
+# BETA-P0-018. Recorded last, so a success on the dashboard means every step
+# above finished: dump, read-back, checksummed copy, off-host hook, retention.
+jtt_record_status backup success "$size" "$offhost_copy"
 
 printf '%s\n' "$final"

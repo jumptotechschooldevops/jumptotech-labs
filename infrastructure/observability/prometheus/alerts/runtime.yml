@@ -19,6 +19,21 @@ groups:
             self-resolve.
           runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
 
+      # Sweeps complete, but something inside them keeps failing — BETA-P0-018.
+      # ReaperStalled cannot see this: a sweep with per-session errors still
+      # counts as a success, so that one sick provider does not stop the rest.
+      - alert: ReaperSweepErrorsPersisting
+        expr: jtt_reaper_last_sweep_errors > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'every cleanup sweep for 15 minutes has recorded errors ({{ $value }} in the last)'
+          description: >-
+            A teardown or a sandbox listing is failing on every pass. The API
+            log's reaper lines name the session and the provider.
+          runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
+
       - alert: SandboxLeakSuspected
         expr: jtt:sandbox_leak:count > 5
         for: 15m

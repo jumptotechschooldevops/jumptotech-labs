@@ -129,10 +129,12 @@ jobs:
       # root-equivalent capability the runtime broker exists to remove.
       - name: Observability containers hold no container runtime
         run: |
-          if grep -q 'docker.sock' docker-compose.observability.yml; then
-            echo "docker-compose.observability.yml mounts a Docker socket" >&2
-            exit 1
-          fi
+          for file in docker-compose.observability.yml docker-compose.production-observability.yml; do
+            if grep -q 'docker.sock' "$file"; then
+              echo "$file mounts a Docker socket" >&2
+              exit 1
+            fi
+          done
           for net in sandboxes kind; do
             if awk '/^  (prometheus|grafana|alertmanager):/,/^  [a-z]/' \
                  docker-compose.observability.yml | grep -q "$net"; then
@@ -155,7 +157,8 @@ jobs:
         run: |
           set -euo pipefail
           for file in docker-compose.yml docker-compose.runtime.yml \
-                      docker-compose.observability.yml; do
+                      docker-compose.observability.yml docker-compose.production.yml \
+                      docker-compose.production-observability.yml; do
             # Comments are skipped deliberately: `docker-compose.yml` discusses
             # the socket at length under both `api` and `terminal`, explaining
             # why neither may have one. Prose about a mount is not a mount.

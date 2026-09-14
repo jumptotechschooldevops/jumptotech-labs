@@ -28,7 +28,7 @@ Companion documents: [incident troubleshooting](incident-troubleshooting.md),
                    │ Prometheus  :9090   │──► Alertmanager :9093
                    └──────────┬──────────┘
                    ┌──────────▼──────────┐
-                   │ Grafana     :3001   │  8 dashboards, provisioned as code
+                   │ Grafana     :3001   │  9 dashboards, provisioned as code
                    └─────────────────────┘
 ```
 
@@ -281,7 +281,129 @@ something personal or secret.
 - **No long-term metric storage**; 15-day local retention.
 - **Single-instance assumptions.** The terminal keeps its session map in process
   and its workspaces on local disk (PLATFORM-006).
-- **No database backup**, and therefore no restore procedure. RB-02 says so
-  rather than implying one.
+- ~~No database backup~~ — BETA-P0-013 added backup and restore scripts, and
+  BETA-P0-018 their freshness metrics and alerts (§9).
 - **`prom-client` is pinned to 14.2.0.** 15.x depends on `@opentelemetry/api`,
   and tracing is out of scope; 14.2.0's only dependency is `tdigest`.
+
+---
+
+## 9. Production and the private beta (BETA-P0-018)
+
+Everything above was a development profile. BETA-P0-018 puts it on the
+production host for the ~5-student private beta, and adds what the beta needs
+to be run: whether HTTPS, backups, isolation and the host are healthy, and
+whether sessions are moving. The operator's procedures are
+[private-beta-operations.md](runbooks/private-beta-operations.md).
+
+### 9.1 Deployment
+
+```text
+docker-compose.yml + runtime + observability + production + production-observability
+                                                  (--profile observability)
+
+Internet ──443/80──► web (nginx, TLS)            ── unchanged from P0-012/P0-017
+operator ──ssh -L──► 127.0.0.1:3001 ─► Grafana   ── loopback only
+
+┌──────────── one network namespace (network_mode: service:prometheus) ──────────┐
+│ Prometheus 127.0.0.1:9090   Alertmanager 127.0.0.1:9093   Grafana :3000 (login) │
+└───────────────────────────── joins `default` only ─────────────────────────────┘
+     │ scrapes api:9400, terminal:9401, sandboxd:9402 (Bearer, credentials_file)
+```
+
+Alertmanager and Grafana share Prometheus's network namespace, so Prometheus
+reaches Alertmanager, and Grafana reaches Prometheus, on localhost. In
+production both listen on loopback **inside** that namespace, which is what
+keeps them away from every other container on the default network — in
+particular the terminal, where Kubernetes-track students have a shell. Before
+this, on the dev profile, a shell there could reach Prometheus's lifecycle API
+and create Alertmanager silences without a credential.
+
+| Surface | Production |
+|---|---|
+| 443, 80 | web only, every interface — unchanged |
+| Grafana | `127.0.0.1:${GRAFANA_PORT:-3001}` on the host; a login page to containers on `default` |
+| Prometheus, Alertmanager | not published; unreachable from other containers |
+| 3000, 4000, 4001, 4002, 5432, 9400–9402 | not published |
+
+The contract is `infrastructure/secret-distribution.json` →
+`stacks.production-observability` and `publishedPorts.operatorLoopback`,
+enforced by `make secrets-check` and `compose-secret-distribution.test.ts`.
+
+### 9.2 What the API measures about its deployment
+
+`apps/api/src/operations.ts`, each on its own timer, never inside a scrape:
+
+| Reading | Source | Metrics |
+|---|---|---|
+| TLS edge | BETA-P0-017's `probeHttpsEndpoint` / `probeHttpRedirect` against `web:8443` / `web:8080`, every 5 min, verified against the public roots | `jtt_tls_check_status{check}` (0/1/2 = the `tls:check` exit code), `jtt_tls_check_findings{check,status,code}`, `jtt_tls_certificate_not_after_timestamp_seconds`, `jtt_tls_check_last_run_timestamp_seconds`, `jtt_tls_probe_enabled` |
+| Backups | `BACKUP_STATUS_DIR`, written by `db-backup.sh` and `db-restore.sh --verify-only`, mounted read-only | `jtt_backup_last_{success,failure}_timestamp_seconds{operation}`, `jtt_backup_last_success_size_bytes`, `jtt_backup_last_success_offhost`, `jtt_backup_status_readable` |
+| Host | `/proc/meminfo`, `/proc/loadavg`, statfs of `/` (Docker's storage) and the status directory | `jtt_host_memory_{total,available}_bytes`, `jtt_host_load_average{window}`, `jtt_host_cpus`, `jtt_host_filesystem_{size,available}_bytes{filesystem}` |
+| Network isolation | BETA-P0-015's `readNetworkEnforcementAttestation`, every 60 s, when required | `jtt_network_isolation_attestation_valid`, `…_verified_timestamp_seconds`, `…_max_age_seconds`, `…_checks_total{result}` |
+
+And, in the product: `jtt_lab_reset_outcome_total{outcome}` and
+`jtt_lab_end_outcome_total{outcome}` (`jtt_lab_reset_total` existed and was
+never incremented), `jtt_sessions_oldest_status_age_seconds{status}`,
+`jtt_sessions_per_student_limit`, `jtt_reaper_last_sweep_errors`,
+`jtt_reaper_recoveries_total{reason}`, `jtt_reaper_teardown_incomplete_total{reason}`,
+and `jtt_auth_callback_total{outcome}` (defined since PLATFORM-003, never
+incremented until now). Every alerting counter is zero-initialised.
+
+None of it has a label carrying a host name, path, fingerprint, finding message
+or attestation reason; `private-beta-operations.test.ts` and
+`operations-metrics.test.ts` hold that.
+
+### 9.3 Alert thresholds
+
+| Alert | Severity | Threshold | Why this number |
+|---|---|---|---|
+| `TlsCertificateRenewalDue` | warning | < 21 days, 1 h | P0-017 `DEFAULT_EXPIRY_THRESHOLDS.warnDays` (test-pinned) |
+| `TlsCertificateExpiresWithin7Days` | critical | < 7 days, 5 m | `criticalDays` (test-pinned) |
+| `TlsEdgeUnhealthy` | critical | served check = 2, 10 m | P0-017 CRITICAL |
+| `TlsHttpRedirectBroken` | warning | redirect check = 2, 30 m | ACME HTTP-01 and http:// links |
+| `TlsEdgeCheckNotRunning` | warning | no check for 20 m, 10 m | a silent check looks healthy |
+| `BackupStale` / `BackupMissedTwice` | warning / critical | 26 h / 50 h | RPO 24 h: one late run, two missed |
+| `BackupLastRunFailed`, `BackupVerifyFailed` | warning | newest run failed, 5 m | |
+| `BackupNeverSucceeded`, `BackupStatusUnreadable` | warning | 1 h / 30 m | |
+| `CapacityExhausted` | critical | any refusal in 10 m, 2 m | one student refused |
+| `CapacityNearExhausted` | warning | > 85% for 10 m | at a cap of 5: only 5 of 5 |
+| `LabStartsFailingHard` / `…Elevated` | critical / warning | ≥ 3 and > 30% / ≥ 2 and > 10% in 10 m | was 5 / 3, sized for a cap of 20 |
+| `LabResetsFailing` | warning | ≥ 3 failed in 30 m | |
+| `SessionStuckProvisioning` | warning | CREATING > 10 m | ready timeout 180 s + pull |
+| `SessionResetStuck` | warning | RESETTING > 15 m | the reaper recovers at 10 m |
+| `SessionTeardownStuck` | warning | ENDING/EXPIRING > 20 m | resumed at 5 m, retried each sweep |
+| `SessionDegradedNotReclaimed` | warning | DEGRADED > 40 m | idle expiry is 20 m |
+| `ReaperSweepErrorsPersisting` | warning | errors in every sweep for 15 m | sweeps with errors still count as ok |
+| `NetworkIsolationNotAttested` | critical | invalid for 2 m | Kubernetes labs are refused |
+| `NetworkIsolationAttestationAging` | warning | > 75% of max age, 10 m | re-probe before admission stops |
+| `AuthRejectionsAbnormal` | warning | ≥ 20 rejected credentials in 10 m | `AuthFailureSpike` needs > 1/s |
+| `OidcSignInFailures` | warning | ≥ 5 failed callbacks in 15 m | |
+| `HostMemoryPressure` / `…Critical` | warning / critical | < 10% / < 5% available | |
+| `HostDiskSpaceLow` / `…Critical` | warning / critical | < 15% / < 8% free | |
+| `HostCpuSaturated` | warning | load5 > 2 × CPUs, 15 m | |
+
+Two defects were fixed on the way, both of the IE-3 kind (a counting window no
+longer than its `for:`): `CapacityExhausted` never fired on a single refusal,
+and `JwksFetchFailing` needed twenty straight minutes of failed fetches.
+`private-beta-operations.test.ts` now refuses that shape in any alert.
+
+### 9.4 The dashboard
+
+**JTT — Private Beta Operations** (`00-private-beta-operations.json`), one
+screen in eight rows: usable now · HTTPS edge · capacity · lifecycle · cleanup
+and recovery · isolation, security and sign-in · backups · host.
+
+### 9.5 Not measured
+
+- **Reachability from the internet.** The edge check runs inside the host;
+  DNS, a firewall and the public route are seen only by an outside check
+  (`npm run tls:check` from another machine) — DECISION REQUIRED.
+- **Per-container CPU and memory**, and host pressure beyond the kernel's
+  memory, load and two filesystems. A node exporter needs the host's root
+  filesystem mounted into a container — DECISION REQUIRED, not done.
+- **Pod Security admission denials** (BETA-P0-016). They surface as failed
+  provisioning steps; the API server's audit log is not collected.
+- **PostgreSQL internals** (replication, bloat, slow queries). `jtt_db_up`,
+  pool saturation and query errors come from the API's side.
+- **Where alerts are sent** — DECISION REQUIRED; `alertmanager/secrets/webhook-url`
+  is the seam.

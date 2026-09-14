@@ -1,9 +1,14 @@
-# Alertmanager — PLATFORM-003.
+# Alertmanager — PLATFORM-003, BETA-P0-018.
 #
-# The receiver is a stub. Where alerts actually go — PagerDuty, Opsgenie, a
-# Slack webhook — is a deployment decision and deliberately not made here; this
-# story's job is to produce correct, actionable alerts, not to choose whose
-# phone rings. Point `webhook_configs.url` at something real to finish it.
+# Where alerts actually go — PagerDuty, Opsgenie, a chat webhook, a mail relay —
+# is a deployment decision and deliberately not made here (DECISION REQUIRED,
+# docs/runbooks/private-beta-operations.md §8). This file never holds the
+# destination: a webhook URL is usually a credential. It is read from
+# `secrets/webhook-url` (git-ignored, mounted read-only into this container
+# only), so an operator finishes the wiring without editing committed config.
+#
+# Until that file exists, notifications fail and are logged by Alertmanager,
+# and alerts are visible only in Grafana and in `amtool alert query`.
 
 global:
   resolve_timeout: 5m
@@ -26,7 +31,10 @@ route:
 receivers:
   - name: default
     webhook_configs:
-      - url: http://127.0.0.1:5001/alerts
+      # Alertmanager's generic webhook JSON. A receiver that needs another
+      # format (Slack, PagerDuty, email) is a different `*_configs` block, with
+      # its credential in the same secrets directory.
+      - url_file: /etc/alertmanager/secrets/webhook-url
         send_resolved: true
 
 # One root cause, one page.
@@ -45,6 +53,17 @@ inhibit_rules:
   - source_matchers: [alertname="DatabaseDown"]
     target_matchers:
       - alertname=~"ApiErrorRateHigh|LabStartsFailingHard|LabStartFailureRateElevated|AuthFailureSpike|DatabasePoolSaturated|VerificationErrorRate"
+
+  # BETA-P0-018. The session store, the reaper's listing and sign-in all live in
+  # the database; every one of these is DatabaseDown seen from another angle.
+  - source_matchers: [alertname="DatabaseDown"]
+    target_matchers:
+      - alertname=~"ReaperSweepErrorsPersisting|LabResetsFailing|SessionStuckProvisioning|SessionResetStuck|SessionTeardownStuck|SessionDegradedNotReclaimed|AuthRejectionsAbnormal|OidcSignInFailures"
+
+  # Stuck teardowns and unrecovered resets are what a stopped reaper looks like.
+  - source_matchers: [alertname="ReaperStalled"]
+    target_matchers:
+      - alertname=~"SessionResetStuck|SessionTeardownStuck|SessionDegradedNotReclaimed|ReaperSweepErrorsPersisting"
 
   # The broker's runtime being gone explains every provider that depends on it,
   # and the lab-start failures those providers cause.
@@ -70,6 +89,34 @@ inhibit_rules:
   - source_matchers: [alertname="ServiceDown", job="sandboxd"]
     target_matchers:
       - alertname=~"LabStartsFailingHard|LabStartFailureRateElevated|ProvisioningSlow|TerminalConnectionFailures|TerminalPtyDrift"
+
+  # BETA-P0-018. Resets rebuild sandboxes, and container teardowns go through
+  # the broker, so a missing runtime explains both.
+  - source_matchers: [alertname=~"SandboxdRuntimeDown|ServiceDown", job=~"sandboxd|"]
+    target_matchers:
+      - alertname=~"LabResetsFailing|SessionStuckProvisioning|SessionTeardownStuck|ReaperSweepErrorsPersisting"
+
+  # A missing or expired attestation is why the Kubernetes provider reports
+  # unavailable; the attestation alert is the one that names the fix.
+  # Only that provider's alert: start failures carry no provider label, and
+  # silencing them would hide every other track's failures too.
+  - source_matchers: [alertname="NetworkIsolationNotAttested"]
+    target_matchers: [alertname="ProviderUnavailable", provider="kubernetes"]
+
+  # One certificate, one page: the expiry alert explains the failed check and
+  # supersedes the renewal warning.
+  - source_matchers: [alertname="TlsCertificateExpiresWithin7Days"]
+    target_matchers: [alertname=~"TlsEdgeUnhealthy|TlsCertificateRenewalDue"]
+    equal: ['instance']
+  - source_matchers: [alertname="HostMemoryCritical"]
+    target_matchers: [alertname="HostMemoryPressure"]
+    equal: ['instance']
+  - source_matchers: [alertname="HostDiskSpaceCritical"]
+    target_matchers: [alertname="HostDiskSpaceLow"]
+    equal: ['instance', 'filesystem']
+  - source_matchers: [alertname="BackupMissedTwice"]
+    target_matchers: [alertname="BackupStale"]
+    equal: ['instance']
 
   # Critical beats warning for the same alert on the same target.
   - source_matchers: [severity="critical"]

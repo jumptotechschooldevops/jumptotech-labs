@@ -266,9 +266,10 @@ tests:
           - labels: 'jtt:lab_start_failures:increase10m'
             value: 8
     alert_rule_test:
-      # Still pending at 7m. The count crosses the floor of 5 at about 6m15s and
-      # `for: 2m` runs from there, so this pins that the alert is not twitchy —
-      # it waits out the two minutes rather than firing on the first sample.
+      # Still pending at 7m. The count crosses the floor of 3 (BETA-P0-018;
+      # it was 5) at about 5m30s and `for: 2m` runs from there, so this pins
+      # that the alert is not twitchy — it waits out the two minutes rather than
+      # firing on the first sample.
       - eval_time: 7m
         alertname: LabStartsFailingHard
         exp_alerts: []

@@ -22,6 +22,7 @@ import {
   createAuthMetrics,
   createCommonMetrics,
   createDatabaseMetrics,
+  createOperationsMetrics,
   createProviderMetrics,
   createReaperMetrics,
   createRegistry,
@@ -117,6 +118,7 @@ function knownSeries(): Set<string> {
   createReaperMetrics(registry);
   createTerminalMetrics(registry);
   createSandboxdMetrics(registry);
+  createOperationsMetrics(registry);
 
   const names = new Set<string>(['up']);
   for (const metric of registry.getMetricsAsArray()) {
@@ -190,6 +192,21 @@ describe('the alert set', () => {
       'AuthFailureSpike',
       'ScopeDenialDetected',
       'ProgressStoreIsMemory',
+      // BETA-P0-018 — the private-beta operational contract.
+      'TlsCertificateRenewalDue',
+      'TlsCertificateExpiresWithin7Days',
+      'TlsEdgeUnhealthy',
+      'BackupStale',
+      'BackupLastRunFailed',
+      'BackupVerifyFailed',
+      'NetworkIsolationNotAttested',
+      'LabResetsFailing',
+      'SessionTeardownStuck',
+      'SessionResetStuck',
+      'ReaperSweepErrorsPersisting',
+      'OidcSignInFailures',
+      'HostDiskSpaceCritical',
+      'HostMemoryCritical',
     ]) {
       expect(names, `no alert named ${required}`).toContain(required);
     }

@@ -17,12 +17,14 @@ groups:
       # recording rules, and `tests/lab-start-alerts.test.yml` for the six cases
       # this is pinned against.
       #
-      # Five failures in ten minutes is a real threshold for this platform:
-      # MAX_ACTIVE_SESSIONS defaults to 20, so five students being turned away
-      # inside ten minutes is a substantial fraction of a cohort.
+      # Three failures in ten minutes, for the private beta (BETA-P0-018). It
+      # was five, sized for MAX_ACTIVE_SESSIONS=20; the beta runs 5 sessions
+      # for about 5 students, so three turned away inside ten minutes is most
+      # of the cohort. The ratio half still stops a few failures among many
+      # starts from paging.
       - alert: LabStartsFailingHard
         expr: |
-          jtt:lab_start_failures:increase10m >= 5
+          jtt:lab_start_failures:increase10m >= 3
             and
           jtt:lab_start_failure:ratio10m > 0.30
         for: 2m
@@ -41,7 +43,7 @@ groups:
       # Still well under the 10-minute window.
       - alert: LabStartFailureRateElevated
         expr: |
-          jtt:lab_start_failures:increase10m >= 3
+          jtt:lab_start_failures:increase10m >= 2
             and
           jtt:lab_start_failure:ratio10m > 0.10
         for: 5m
@@ -54,9 +56,23 @@ groups:
       # Capacity exhausted is measured by refusals, not by utilisation.
       # Utilisation at 100% with nobody being turned away is a full platform
       # working exactly as designed; a refusal is a student who was told no.
+      #
+      # BETA-P0-018 fixed two defects here, both found by promtool against the
+      # beta's shape (one refusal, then none):
+      #
+      #   · `increase(...[5m])` with `for: 5m` is the pairing IE-3 removed from
+      #     the start alerts. A single refusal keeps a 5-minute increase above
+      #     zero for five minutes, so the condition never held long enough and
+      #     the alert never fired — for a bounded burst it could not.
+      #   · `jtt_session_capacity_rejections_total{track}` is not initialised,
+      #     so a track's first refusal has no visible increment at all.
+      #
+      # The same event is `jtt_lab_start_outcome_total{outcome="capacity_reached"}`,
+      # zero-initialised at startup; a 10-minute window with `for: 2m` leaves
+      # eight minutes in which to fire. The per-track counter stays for diagnosis.
       - alert: CapacityExhausted
-        expr: increase(jtt_session_capacity_rejections_total[5m]) > 0
-        for: 5m
+        expr: increase(jtt_lab_start_outcome_total{outcome="capacity_reached"}[10m]) > 0
+        for: 2m
         labels:
           severity: critical
         annotations:
@@ -66,14 +82,74 @@ groups:
             LAB_CAPACITY_REACHED. There is no queue past the cap.
           runbook_url: docs/runbooks/RB-04-capacity.md
 
+      # Relative to `jtt_sessions_capacity_limit`, so it follows whatever
+      # MAX_ACTIVE_SESSIONS is deployed. At the beta's 5, 4 sessions is 80% and
+      # quiet; only 5 of 5 held for ten minutes crosses 85%: the next student
+      # to press Start will be refused.
       - alert: CapacityNearExhausted
         expr: jtt:sessions_utilization:ratio > 0.85
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: 'sandbox capacity is above 85%'
+          summary: 'sandbox capacity is above 85% ({{ $value | humanizePercentage }})'
           runbook_url: docs/runbooks/RB-04-capacity.md
+
+      # --- lifecycle (BETA-P0-018) ------------------------------------------
+      #
+      # A reset that runs and does not finish leaves the session DEGRADED. One
+      # is a student retrying; three in half an hour on a five-student beta is
+      # a runtime that cannot rebuild sandboxes.
+      - alert: LabResetsFailing
+        expr: increase(jtt_lab_reset_outcome_total{outcome="failed"}[30m]) >= 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $value | printf "%.0f" }} lab resets failed in the last 30 minutes'
+          runbook_url: docs/runbooks/RB-17-session-lifecycle.md
+
+      # Stuck states, from the age of the oldest session in each status. The
+      # thresholds sit past the timers that should already have moved it:
+      #   CREATING   provisioning waits at most 180s plus an image pull   → 10m
+      #   RESETTING  the reaper recovers an abandoned reset at 10m        → 15m
+      #   ENDING/EXPIRING  resumed after 5m, retried every 60s sweep      → 20m
+      #   DEGRADED   idle expiry (20m) reclaims one nobody resets          → 40m
+      - alert: SessionStuckProvisioning
+        expr: jtt_sessions_oldest_status_age_seconds{status="CREATING"} > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'a session has been CREATING for {{ $value | humanizeDuration }}'
+          runbook_url: docs/runbooks/RB-17-session-lifecycle.md
+
+      - alert: SessionResetStuck
+        expr: jtt_sessions_oldest_status_age_seconds{status="RESETTING"} > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'a session has been RESETTING for {{ $value | humanizeDuration }}; recovery should have moved it at 10 minutes'
+          runbook_url: docs/runbooks/RB-17-session-lifecycle.md
+
+      - alert: SessionTeardownStuck
+        expr: max without(status) (jtt_sessions_oldest_status_age_seconds{status=~"ENDING|EXPIRING"}) > 1200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'a session teardown has been in flight for {{ $value | humanizeDuration }}; its slot is still held'
+          runbook_url: docs/runbooks/RB-17-session-lifecycle.md
+
+      - alert: SessionDegradedNotReclaimed
+        expr: jtt_sessions_oldest_status_age_seconds{status="DEGRADED"} > 2400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'a DEGRADED session has held a slot for {{ $value | humanizeDuration }}'
+          runbook_url: docs/runbooks/RB-17-session-lifecycle.md
 
       - alert: ProvisioningSlow
         expr: jtt:lab_provision_duration:p95_15m > 60

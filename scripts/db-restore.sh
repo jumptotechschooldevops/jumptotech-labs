@@ -95,6 +95,11 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$mode" ] || jtt_die "no mode given: choose --verify-only, --into NEW_DATABASE or --replace DATABASE (see --help). Nothing was changed."
+
+# BETA-P0-018. A verification's outcome is recorded for monitoring whichever
+# check refuses the archive; the checksum checks below run before `cleanup` is
+# installed, so this trap covers them until it is.
+if [ "$mode" = verify ]; then trap 'jtt_record_failure_on_exit verify' EXIT; fi
 [ -n "$file" ] || jtt_die "no backup file given"
 if [ -n "$confirm" ] && [ "$mode" != replace ]; then
   jtt_die "--confirm only applies to --replace"
@@ -144,6 +149,7 @@ cleanup() {
   local status=$?
   jtt_container_unstage
   if [ "$status" -ne 0 ]; then jtt_log "restore FAILED (exit $status)"; fi
+  if [ "$status" -ne 0 ] && [ "$mode" = verify ]; then jtt_record_status verify failure; fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -169,6 +175,7 @@ jtt_log "archive is readable: database '${source_db:-?}', created ${created:-?},
 
 if [ "$mode" = verify ]; then
   jtt_log "verify-only: nothing was changed"
+  jtt_record_status verify success
   exit 0
 fi
 

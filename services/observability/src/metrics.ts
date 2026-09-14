@@ -179,21 +179,60 @@ export const LAB_START_OUTCOMES = [
   'unauthorized',
 ] as const;
 
+/**
+ * Every outcome `POST /api/sessions/:sessionId/reset` can produce (BETA-P0-018).
+ *
+ *   success   the sandbox was rebuilt and the session is ACTIVE again;
+ *   failed    the reset ran and did not finish — the session is DEGRADED — or
+ *             threw something that is not a session-domain refusal;
+ *   rejected  a refusal before any runtime work: not found, not resettable, or
+ *             another reset holding the claim. Not a platform failure.
+ */
+export const LAB_RESET_OUTCOMES = ['success', 'failed', 'rejected'] as const;
+
+/**
+ * Every outcome `DELETE /api/sessions/:sessionId` (End Lab) can produce.
+ *
+ *   success   the sandbox is verifiably gone;
+ *   pending   the delete was not confirmed: the session stays ENDING and the
+ *             reaper resumes it. Briefly normal for a terminating namespace;
+ *   rejected  a session-domain refusal (not found, already ended);
+ *   failed    anything else that escaped as a 500.
+ */
+export const LAB_END_OUTCOMES = ['success', 'pending', 'rejected', 'failed'] as const;
+
 export interface SessionMetrics {
   labStarts: Counter;
   labStartOutcomes: Counter;
   provisionDuration: Histogram;
   provisionStepDuration: Histogram;
   labResets: Counter;
+  labResetOutcomes: Counter;
   labEnds: Counter;
+  labEndOutcomes: Counter;
   sessionsActive: Gauge;
+  oldestInStatus: Gauge;
   capacityLimit: Gauge;
+  perStudentLimit: Gauge;
   capacityRejections: Counter;
   studentLimitRejections: Counter;
   sessionLifetime: Histogram;
   stateTransitions: Counter;
   labsLoaded: Gauge;
   labLoadErrors: Gauge;
+}
+
+/** A counter with one label whose every value exists, at zero, from the first scrape. */
+function zeroInitialisedCounter(
+  registry: Registry,
+  name: string,
+  help: string,
+  label: string,
+  values: readonly string[],
+): Counter {
+  const counter = new client.Counter({ name, help, labelNames: [label], registers: [registry] });
+  for (const value of values) counter.inc({ [label]: value }, 0);
+  return counter;
 }
 
 export function createSessionMetrics(registry: Registry): SessionMetrics {
@@ -271,12 +310,33 @@ export function createSessionMetrics(registry: Registry): SessionMetrics {
       ...common,
     }),
 
+    /*
+     * The alerting twin of `jtt_lab_reset_total`, for the same reason
+     * `labStartOutcomes` exists: a `provider` series that appears at 1 has no
+     * visible first increment, so an alert on a quiet beta would read zero.
+     */
+    labResetOutcomes: zeroInitialisedCounter(
+      registry,
+      'jtt_lab_reset_outcome_total',
+      'Reset Lab requests by outcome only. Low cardinality — the alerting path.',
+      'outcome',
+      LAB_RESET_OUTCOMES,
+    ),
+
     labEnds: new client.Counter({
       name: 'jtt_lab_end_total',
       help: 'Sessions ended, by what ended them.',
       labelNames: ['provider', 'reason'],
       ...common,
     }),
+
+    labEndOutcomes: zeroInitialisedCounter(
+      registry,
+      'jtt_lab_end_outcome_total',
+      'End Lab requests by outcome. pending = the delete is not yet confirmed and the reaper will resume it.',
+      'outcome',
+      LAB_END_OUTCOMES,
+    ),
 
     /*
      * A gauge with a collector, not a counter the code keeps in step.
@@ -292,9 +352,31 @@ export function createSessionMetrics(registry: Registry): SessionMetrics {
       ...common,
     }),
 
+    /*
+     * How long the oldest session in each occupying status has been there
+     * (BETA-P0-018), read from `status_changed_at` at scrape time.
+     *
+     * A count cannot say "stuck": one session CREATING for ten seconds and one
+     * CREATING for an hour are both `1`. The age of the oldest can, and it is
+     * bounded — one series per status, never per session. Zero when no session
+     * is in that status.
+     */
+    oldestInStatus: new client.Gauge({
+      name: 'jtt_sessions_oldest_status_age_seconds',
+      help: 'Seconds the oldest session in each occupying status has held that status; 0 when none.',
+      labelNames: ['status'],
+      ...common,
+    }),
+
     capacityLimit: new client.Gauge({
       name: 'jtt_sessions_capacity_limit',
       help: 'MAX_ACTIVE_SESSIONS, the configured ceiling.',
+      ...common,
+    }),
+
+    perStudentLimit: new client.Gauge({
+      name: 'jtt_sessions_per_student_limit',
+      help: 'MAX_ACTIVE_SESSIONS_PER_STUDENT, the configured per-student ceiling.',
       ...common,
     }),
 
@@ -555,6 +637,20 @@ export function createDatabaseMetrics(registry: Registry): DatabaseMetrics {
   };
 }
 
+/**
+ * Every outcome `GET /auth/callback` can produce (BETA-P0-018). Codes, never
+ * the provider's `error_description`, which is text an attacker can influence.
+ */
+export const AUTH_CALLBACK_OUTCOMES = [
+  'success',
+  'not_configured',
+  'provider_refused',
+  'no_transaction',
+  'state_mismatch',
+  'no_code',
+  'verification_failed',
+] as const;
+
 export interface AuthMetrics {
   attempts: Counter;
   logins: Counter;
@@ -582,12 +678,15 @@ export function createAuthMetrics(registry: Registry): AuthMetrics {
       ...common,
     }),
 
-    callbacks: new client.Counter({
-      name: 'jtt_auth_callback_total',
-      help: 'OIDC callbacks by outcome. Non-success values are security-relevant.',
-      labelNames: ['outcome'],
-      ...common,
-    }),
+    // Zero-initialised: the sign-in failure alert reads it on a platform where a
+    // handful of students sign in a day.
+    callbacks: zeroInitialisedCounter(
+      registry,
+      'jtt_auth_callback_total',
+      'OIDC callbacks by outcome. Non-success values are security-relevant.',
+      'outcome',
+      AUTH_CALLBACK_OUTCOMES,
+    ),
 
     logouts: new client.Counter({
       name: 'jtt_auth_logout_total',
@@ -620,11 +719,20 @@ export function createAuthMetrics(registry: Registry): AuthMetrics {
   };
 }
 
+/** What the reaper recovered on a dead owner's behalf (BETA-P0-007, counted by BETA-P0-018). */
+export const REAPER_RECOVERY_REASONS = ['interrupted_reset', 'abandoned_end'] as const;
+
+/** Why a session teardown the reaper drove did not finish in that sweep. */
+export const REAPER_TEARDOWN_REASONS = ['expired', 'idle', 'abandoned'] as const;
+
 export interface ReaperMetrics {
   sweeps: Counter;
   sweepDuration: Histogram;
   lastSuccess: Gauge;
+  lastSweepErrors: Gauge;
   reclaimed: Counter;
+  recoveries: Counter;
+  teardownsIncomplete: Counter;
   orphansFound: Gauge;
   skipped: Counter;
   deleteFailures: Counter;
@@ -664,12 +772,42 @@ export function createReaperMetrics(registry: Registry): ReaperMetrics {
       ...common,
     }),
 
+    /*
+     * Problems inside a sweep that still completed (BETA-P0-018).
+     *
+     * The reaper counts a pass with per-session errors as `ok`, deliberately —
+     * one sick provider must not fire `ReaperStalled` while the others are being
+     * cleaned. The cost was that a teardown failing on every sweep was visible
+     * only in a log. This is that number, from the last sweep.
+     */
+    lastSweepErrors: new client.Gauge({
+      name: 'jtt_reaper_last_sweep_errors',
+      help: 'Errors recorded by the last completed cleanup sweep: listings or teardowns that failed.',
+      ...common,
+    }),
+
     reclaimed: new client.Counter({
       name: 'jtt_reaper_reclaimed_total',
       help: 'Sandboxes reclaimed, by why they were reclaimed.',
       labelNames: ['reason', 'provider'],
       ...common,
     }),
+
+    recoveries: zeroInitialisedCounter(
+      registry,
+      'jtt_reaper_recoveries_total',
+      'Operations whose owner was gone, finished or made safe by the reaper: interrupted_reset (now DEGRADED), abandoned_end.',
+      'reason',
+      REAPER_RECOVERY_REASONS,
+    ),
+
+    teardownsIncomplete: zeroInitialisedCounter(
+      registry,
+      'jtt_reaper_teardown_incomplete_total',
+      'Session teardowns the reaper drove that were not confirmed gone in that sweep.',
+      'reason',
+      REAPER_TEARDOWN_REASONS,
+    ),
 
     orphansFound: new client.Gauge({
       name: 'jtt_reaper_orphans_found',
@@ -856,6 +994,194 @@ export function createSandboxdMetrics(registry: Registry): SandboxdMetrics {
       labelNames: ['scope', 'endpoint'],
       ...common,
     }),
+  };
+}
+
+/** The TLS edge checks the API runs against the web tier (BETA-P0-018). */
+export const TLS_EDGE_CHECKS = ['served', 'redirect'] as const;
+
+/** The two operator scripts whose last outcome is recorded for monitoring. */
+export const BACKUP_OPERATIONS = ['backup', 'verify'] as const;
+
+export const NETWORK_ATTESTATION_RESULTS = ['valid', 'invalid', 'unreadable'] as const;
+
+export interface OperationsMetrics {
+  tlsProbeEnabled: Gauge;
+  tlsCheckStatus: Gauge;
+  tlsCheckFindings: Gauge;
+  tlsCertificateNotAfter: Gauge;
+  tlsCheckLastRun: Gauge;
+  backupStatusReadable: Gauge;
+  backupLastSuccess: Gauge;
+  backupLastFailure: Gauge;
+  backupLastSizeBytes: Gauge;
+  backupLastOffHost: Gauge;
+  hostMemoryTotal: Gauge;
+  hostMemoryAvailable: Gauge;
+  hostLoadAverage: Gauge;
+  hostCpus: Gauge;
+  hostFilesystemSize: Gauge;
+  hostFilesystemAvailable: Gauge;
+  networkAttestationValid: Gauge;
+  networkAttestationVerifiedAt: Gauge;
+  networkAttestationMaxAge: Gauge;
+  networkAttestationChecks: Counter;
+}
+
+/**
+ * Operational facts about the deployment rather than the product — BETA-P0-018.
+ *
+ * Published by the API only, which already has every input: the public origin
+ * (the TLS edge), a read-only view of the backup status directory, the
+ * cluster credential (the NetworkPolicy attestation), and a container whose
+ * `/proc` and root filesystem report the host's memory, load and Docker
+ * storage. None of these adds a capability to a monitoring container.
+ *
+ * Nothing here carries a host name, a fingerprint, a path or a message. A TLS
+ * finding is its `code`; the text stays in `npm run tls:check`.
+ */
+export function createOperationsMetrics(registry: Registry): OperationsMetrics {
+  const common = { registers: [registry] };
+
+  return {
+    tlsProbeEnabled: new client.Gauge({
+      name: 'jtt_tls_probe_enabled',
+      help: 'Whether this API probes the public TLS edge (1) or not (0). On in production.',
+      ...common,
+    }),
+
+    /*
+     * The P0-017 health status, as the number `npm run tls:check` exits with:
+     * 0 ok, 1 warning, 2 critical. One series per check.
+     */
+    tlsCheckStatus: new client.Gauge({
+      name: 'jtt_tls_check_status',
+      help: 'Last TLS edge check result: 0 ok, 1 warning, 2 critical — the tls:check exit status.',
+      labelNames: ['check'],
+      ...common,
+    }),
+
+    tlsCheckFindings: new client.Gauge({
+      name: 'jtt_tls_check_findings',
+      help: 'Findings of the last TLS edge check, by code. 1 while the finding stands.',
+      labelNames: ['check', 'status', 'code'],
+      ...common,
+    }),
+
+    tlsCertificateNotAfter: new client.Gauge({
+      name: 'jtt_tls_certificate_not_after_timestamp_seconds',
+      help: 'notAfter of the certificate the edge last served, as Unix time.',
+      ...common,
+    }),
+
+    tlsCheckLastRun: new client.Gauge({
+      name: 'jtt_tls_check_last_run_timestamp_seconds',
+      help: 'Unix time the TLS edge check last completed.',
+      ...common,
+    }),
+
+    backupStatusReadable: new client.Gauge({
+      name: 'jtt_backup_status_readable',
+      help: 'Whether the backup status directory could be read (1) or not (0). Absent when not configured.',
+      ...common,
+    }),
+
+    backupLastSuccess: new client.Gauge({
+      name: 'jtt_backup_last_success_timestamp_seconds',
+      help: 'Unix time scripts/db-backup.sh (operation=backup) or db-restore.sh --verify-only (operation=verify) last succeeded.',
+      labelNames: ['operation'],
+      ...common,
+    }),
+
+    backupLastFailure: new client.Gauge({
+      name: 'jtt_backup_last_failure_timestamp_seconds',
+      help: 'Unix time the backup or verification last failed.',
+      labelNames: ['operation'],
+      ...common,
+    }),
+
+    backupLastSizeBytes: new client.Gauge({
+      name: 'jtt_backup_last_success_size_bytes',
+      help: 'Size of the archive the last successful backup wrote.',
+      ...common,
+    }),
+
+    backupLastOffHost: new client.Gauge({
+      name: 'jtt_backup_last_success_offhost',
+      help: 'Whether the last successful backup was copied off the host by BACKUP_COPY_HOOK (1) or not (0).',
+      ...common,
+    }),
+
+    hostMemoryTotal: new client.Gauge({
+      name: 'jtt_host_memory_total_bytes',
+      help: 'MemTotal of the host kernel, from /proc/meminfo.',
+      ...common,
+    }),
+
+    hostMemoryAvailable: new client.Gauge({
+      name: 'jtt_host_memory_available_bytes',
+      help: 'MemAvailable of the host kernel, from /proc/meminfo.',
+      ...common,
+    }),
+
+    hostLoadAverage: new client.Gauge({
+      name: 'jtt_host_load_average',
+      help: 'Host load average, from /proc/loadavg.',
+      labelNames: ['window'],
+      ...common,
+    }),
+
+    hostCpus: new client.Gauge({
+      name: 'jtt_host_cpus',
+      help: 'CPUs the host kernel reports.',
+      ...common,
+    }),
+
+    /*
+     * `filesystem` is a fixed name, never a path: `container_root` is the
+     * filesystem Docker keeps images, containers and named volumes on (the
+     * PostgreSQL volume among them, by default); `backup_status` is the one
+     * the backup status directory lives on.
+     */
+    hostFilesystemSize: new client.Gauge({
+      name: 'jtt_host_filesystem_size_bytes',
+      help: 'Size of a host filesystem, by fixed name.',
+      labelNames: ['filesystem'],
+      ...common,
+    }),
+
+    hostFilesystemAvailable: new client.Gauge({
+      name: 'jtt_host_filesystem_available_bytes',
+      help: 'Bytes available to unprivileged users on a host filesystem, by fixed name.',
+      labelNames: ['filesystem'],
+      ...common,
+    }),
+
+    networkAttestationValid: new client.Gauge({
+      name: 'jtt_network_isolation_attestation_valid',
+      help: 'Whether the NetworkPolicy enforcement attestation admits students (1) or not (0). Absent when not required.',
+      ...common,
+    }),
+
+    networkAttestationVerifiedAt: new client.Gauge({
+      name: 'jtt_network_isolation_attestation_verified_timestamp_seconds',
+      help: 'Unix time the enforcement probe behind the current attestation ran.',
+      ...common,
+    }),
+
+    networkAttestationMaxAge: new client.Gauge({
+      name: 'jtt_network_isolation_attestation_max_age_seconds',
+      help: 'NETWORK_POLICY_ATTESTATION_MAX_AGE_SECONDS: past this age admission stops.',
+      ...common,
+    }),
+
+    networkAttestationChecks: zeroInitialisedCounter(
+      registry,
+      'jtt_network_isolation_attestation_checks_total',
+      'Attestation reads by result: valid, invalid (missing, stale, wrong cluster or contract), unreadable.',
+      'result',
+      NETWORK_ATTESTATION_RESULTS,
+    ),
   };
 }
 

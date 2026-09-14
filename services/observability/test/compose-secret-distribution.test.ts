@@ -27,12 +27,16 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 interface Contract {
   secrets: string[];
   optionalEmpty: string[];
-  stacks: Record<string, { files: string[]; exposure?: 'production'; services: Record<string, string[]> }>;
+  stacks: Record<
+    string,
+    { files: string[]; exposure?: 'production'; operatorLoopback?: boolean; services: Record<string, string[]> }
+  >;
   credentialMounts: Record<string, string[] | string>;
   publishedPorts: {
     never: number[];
     loopbackOnly: number[];
     production: Array<{ service: string; published: number; target: number; purpose: string }>;
+    operatorLoopback: Array<{ service: string; target: number; purpose: string }>;
   };
   privateNetworks: Record<string, { members: string[]; internalIn: string[] } | string[]>;
 }
@@ -46,6 +50,7 @@ const COMPOSE_FILES = [
   'docker-compose.runtime.yml',
   'docker-compose.observability.yml',
   'docker-compose.production.yml',
+  'docker-compose.production-observability.yml',
 ];
 
 function read(file: string): string {
@@ -315,12 +320,21 @@ describe('network exposure (BETA-P0-012)', () => {
       () => {
         const problems: string[] = [];
         const actual: string[] = [];
+        const operator: string[] = [];
         for (const [service, ports] of stackPorts(stack.files)) {
           for (const port of ports) {
             if (Number.isNaN(port.target)) {
               problems.push(`${service}: unreadable ports entry '${port.spec}'`);
             } else if (policy.never.includes(port.target)) {
               problems.push(`${service}: publishes ${port.target}`);
+            } else if (
+              production &&
+              stack.operatorLoopback === true &&
+              policy.operatorLoopback.some((entry) => entry.service === service && entry.target === port.target)
+            ) {
+              // BETA-P0-018: an operator port is loopback or it is a failure.
+              if (port.hostIp === '127.0.0.1') operator.push(`${service}:${port.target}`);
+              else problems.push(`${service}: operator port ${port.target} on ${port.hostIp ?? 'every interface'}`);
             } else if (production) {
               actual.push(`${service}:${port.published}:${port.target}`);
             } else if (!policy.loopbackOnly.includes(port.target)) {
@@ -333,6 +347,9 @@ describe('network exposure (BETA-P0-012)', () => {
         expect(problems).toEqual([]);
         if (production) {
           expect(actual.sort()).toEqual(policy.production.map((e) => `${e.service}:${e.published}:${e.target}`).sort());
+          expect(operator.sort()).toEqual(
+            stack.operatorLoopback === true ? policy.operatorLoopback.map((e) => `${e.service}:${e.target}`).sort() : [],
+          );
         }
       },
     );
@@ -355,6 +372,26 @@ describe('network exposure (BETA-P0-012)', () => {
       expect(publishedTargets, String(port)).not.toContain(port);
     }
     expect(publishedTargets.sort()).toEqual([8080, 8443]);
+  });
+
+  it('adds monitoring to production without publishing it (BETA-P0-018)', () => {
+    const stack = contract.stacks['production-observability']!;
+    expect(stack.exposure).toBe('production');
+    const ports = stackPorts(stack.files);
+    for (const service of ['postgres', 'api', 'terminal', 'sandboxd', 'alertmanager', 'grafana']) {
+      expect(ports.get(service) ?? [], service).toEqual([]);
+    }
+    const everyInterface = [...ports.values()].flat().filter((port) => port.hostIp !== '127.0.0.1');
+    expect(everyInterface.map((port) => port.target).sort()).toEqual([8080, 8443]);
+    // Prometheus (9090), Alertmanager (9093) and every metrics listener are
+    // unpublished; the one loopback entry is Grafana, for an SSH tunnel.
+    const loopback = [...ports.entries()].flatMap(([service, list]) =>
+      list.filter((port) => port.hostIp === '127.0.0.1').map((port) => `${service}:${port.target}`),
+    );
+    expect(loopback).toEqual(['prometheus:3000']);
+    for (const port of [3000, 4000, 4001, 4002, 5432, 9090, 9093, 9400, 9401, 9402]) {
+      expect(everyInterface.map((entry) => entry.target), String(port)).not.toContain(port);
+    }
   });
 
   it('points 443 at the TLS listener and 80 at the redirect-only listener', () => {

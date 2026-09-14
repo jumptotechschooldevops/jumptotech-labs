@@ -7,6 +7,11 @@ Before PLATFORM-003 the honest answer to most of these was "read the container
 logs and guess". This page exists so that during an incident nobody has to
 remember which metric is which.
 
+**Running the private beta?** Start with
+[runbooks/private-beta-operations.md](runbooks/private-beta-operations.md)
+(BETA-P0-018): the production command, the 23-question operator contract, and
+when to stop launches. This page is the diagnostic layer underneath it.
+
 ---
 
 ## The eleven questions

@@ -257,3 +257,76 @@ EOF
   JTT_MIGRATIONS_MODIFIED=$modified
   JTT_MIGRATIONS_UNKNOWN=$unknown
 }
+
+# BETA-P0-018 — record the outcome of a backup or a verification for monitoring.
+#
+#   jtt_record_status backup|verify success|failure [SIZE_BYTES] [copied|not_configured]
+#
+# Writes BACKUP_STATUS_DIR/db-<operation>.last-<outcome> (default
+# <repo>/backups/status, git-ignored): key=value lines holding a Unix timestamp
+# and, for a backup, the archive's size and whether BACKUP_COPY_HOOK copied it
+# off the host. No path, database name, host or credential. The api reads the
+# directory read-only and exports jtt_backup_last_{success,failure}_timestamp_seconds,
+# which the backup freshness alerts read (docs/runbooks/RB-16-backups.md).
+#
+# World-readable on purpose — a 0755 directory and 0644 files — because the api
+# container runs as a different user and nothing here is secret. Best effort: a
+# status that cannot be written is logged and never changes the script's own
+# exit status. Monitoring then sees a backup that did not happen, which is the
+# safe way round.
+jtt_record_status() {
+  local operation=$1 outcome=$2 size=${3-} offhost=${4-} dir file tmp
+  case "$operation:$outcome" in
+    backup:success | backup:failure | verify:success | verify:failure) ;;
+    *) return 0 ;;
+  esac
+  dir=${BACKUP_STATUS_DIR:-$JTT_REPO_ROOT/backups/status}
+  case $dir in
+    /*) ;;
+    *)
+      jtt_log "WARNING: BACKUP_STATUS_DIR must be an absolute path; this $operation $outcome was not recorded for monitoring"
+      return 0
+      ;;
+  esac
+  # The status directory is mounted into the api. It must never be, contain or
+  # sit inside the archive directory, or that mount would carry the archives.
+  local archives resolved_dir resolved_archives
+  archives=${BACKUP_DIR:-$JTT_REPO_ROOT/backups/postgres}
+  resolved_dir=$( (cd "$dir" 2>/dev/null && pwd -P) || printf '%s' "${dir%/}")
+  resolved_archives=$( (cd "$archives" 2>/dev/null && pwd -P) || printf '%s' "${archives%/}")
+  case "$resolved_dir/" in
+    "$resolved_archives/"*)
+      jtt_log "WARNING: BACKUP_STATUS_DIR is inside BACKUP_DIR; this $operation $outcome was not recorded for monitoring (the api mounts BACKUP_STATUS_DIR, and must never see the archives)"
+      return 0
+      ;;
+  esac
+  case "$resolved_archives/" in
+    "$resolved_dir/"*)
+      jtt_log "WARNING: BACKUP_DIR is inside BACKUP_STATUS_DIR; this $operation $outcome was not recorded for monitoring (the api mounts BACKUP_STATUS_DIR, and must never see the archives)"
+      return 0
+      ;;
+  esac
+  file="$dir/db-$operation.last-$outcome"
+  tmp="$dir/.db-$operation.last-$outcome.$$"
+  if ! (
+    umask 022
+    mkdir -p "$dir" &&
+      {
+        printf 'timestamp_seconds=%s\n' "$(date -u +%s)"
+        if [ -n "$size" ]; then printf 'size_bytes=%s\n' "$size"; fi
+        if [ -n "$offhost" ]; then printf 'offhost_copy=%s\n' "$offhost"; fi
+      } >"$tmp" &&
+      chmod 644 "$tmp" &&
+      mv -f "$tmp" "$file"
+  ) 2>/dev/null; then
+    jtt_log "WARNING: could not record this $operation $outcome in $dir for monitoring; check that the directory is writable by this user"
+  fi
+  return 0
+}
+
+# An EXIT trap body: record a failed OPERATION when the script is exiting non-zero.
+jtt_record_failure_on_exit() {
+  local status=$?
+  if [ "$status" -ne 0 ]; then jtt_record_status "$1" failure; fi
+  exit "$status"
+}

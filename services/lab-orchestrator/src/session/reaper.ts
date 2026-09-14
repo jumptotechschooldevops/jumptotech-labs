@@ -121,8 +121,21 @@ export interface ReaperMetricsHooks {
      * start is normal.
      */
     orphansByProvider: Record<string, number>;
+    /**
+     * Errors this pass recorded and survived: a listing or a teardown that
+     * failed. The pass still counts as `ok` (see `sweep`), so without this a
+     * teardown failing on every sweep is visible only in the log.
+     */
+    errors?: number;
   }): void;
   onReclaimed?(reason: string, provider: string): void;
+  /**
+   * An operation whose owner is gone, made safe or finished by the reaper:
+   * `interrupted_reset` (now DEGRADED) or `abandoned_end` (the End completed).
+   */
+  onRecovered?(reason: 'interrupted_reset' | 'abandoned_end', provider: string): void;
+  /** A session teardown this sweep drove that was not confirmed gone. */
+  onTeardownIncomplete?(reason: SweepReason, provider: string): void;
   /**
    * A refusal to delete. `foreign_owner` is also a security signal: something
    * the platform does not own is wearing its ownership labels.
@@ -269,6 +282,7 @@ export class SessionReaper {
           outcome: failed ? 'failed' : 'ok',
           durationMs: Math.max(0, this.#now() - startedAt),
           orphansByProvider: this.#orphansThisSweep,
+          errors: result.errors.length,
         }),
       );
     }
@@ -335,6 +349,7 @@ export class SessionReaper {
           const recovered = await this.options.sessions.recoverInterruptedReset(session);
           if (recovered) {
             result.recovered.push(session.sessionId);
+            this.#emit((m) => m.onRecovered?.('interrupted_reset', session.provider));
             this.#log(`recovered ${session.sessionId}: interrupted reset is now DEGRADED (lab=${session.labId})`);
           } else {
             result.retained += 1;
@@ -384,14 +399,17 @@ export class SessionReaper {
         result.removed.push(ref);
         result.reasons[ref] = reason;
         this.#emit((m) => m.onReclaimed?.(reason, session.provider));
+        if (reason === 'abandoned') this.#emit((m) => m.onRecovered?.('abandoned_end', session.provider));
         this.#log(`removed ${ref} (${reason}, provider=${session.provider}, lab=${session.labId})`);
       } else {
         result.pending.push(ref);
+        this.#emit((m) => m.onTeardownIncomplete?.(reason, session.provider));
         if (outcome.destroy.error) {
           result.errors.push(`${ref}: ${outcome.destroy.error.message}`);
         }
       }
     } catch (error) {
+      this.#emit((m) => m.onTeardownIncomplete?.(reason, session.provider));
       result.errors.push(`${ref}: ${describe(error)}`);
     }
   }

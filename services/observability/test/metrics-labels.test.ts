@@ -14,6 +14,7 @@ import {
   createAuthMetrics,
   createCommonMetrics,
   createDatabaseMetrics,
+  createOperationsMetrics,
   createProviderMetrics,
   createReaperMetrics,
   createRegistry,
@@ -37,6 +38,7 @@ function fullCatalogue() {
   createReaperMetrics(registry);
   createTerminalMetrics(registry);
   createSandboxdMetrics(registry);
+  createOperationsMetrics(registry);
   return registry;
 }
 
