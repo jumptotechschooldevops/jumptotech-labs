@@ -87,19 +87,24 @@ so once at startup, in a line nobody re-reads three weeks later. Set
 
 ## 5. Fix
 
-Per section 4. If the volume is corrupt, restore from backup.
+Per section 4. If the volume is corrupt or lost, or a migration or a manual
+statement damaged data, restore from backup:
+[postgres-backup-restore.md](postgres-backup-restore.md) (BETA-P0-013).
 
-> **There is no backup procedure yet.** PLATFORM-003 did not add one and this
-> runbook will not pretend otherwise. A corrupt volume today means losing
-> learning history. Backup and restore is PLATFORM-006 scope; until then, treat
-> the `postgres-data` volume as the only copy that exists.
+- **Corrupt volume:** preserve it first — §7.3 there. Never `down -v` a volume
+  that is evidence.
+- **Lost volume or host:** §7.1 or §7.2 there.
+- Restore into a disposable database (`scripts/db-restore.sh --into`) before
+  replacing anything, and read that runbook's §8 before telling students what
+  they have lost: everything written after the archive was taken.
 
 ## 6. Verify recovery
 
 - `jtt_db_up == 1` for two scrapes.
 - `/readyz` 200 with `database: ok`.
-- `jtt_migration_version_info` reports `004_auth_sessions` — the schema is
-  intact and this is not a fresh, empty volume.
+- `jtt_migration_version_info` reports the newest migration (`005_session_recovery`
+  at the time of writing) — the schema is intact and this is not a fresh, empty
+  volume.
 - `jtt_db_pool_connections{state="waiting"} == 0`.
 - One lab starts; `jtt_lab_start_total{outcome="success"}` increments.
 - One sign-in works; `jtt_auth_sessions_active > 0`.

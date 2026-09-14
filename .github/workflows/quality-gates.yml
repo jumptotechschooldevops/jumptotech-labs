@@ -189,6 +189,24 @@ jobs:
       - name: Each service receives exactly its allowed secrets, mounts, ports and networks
         run: node scripts/check-secret-distribution.mjs
 
+      # BETA-P0-013. The backup and restore scripts' refusals and failure paths,
+      # against a fake daemon: a failed dump leaves nothing that looks like a
+      # backup, retention touches only its own archives, and a restore refuses a
+      # bad checksum, an unreadable archive, a connected session or a missing
+      # confirmation before it changes anything. The real round trip is the
+      # restore drill in `postgres-integration`.
+      - name: Backup and restore scripts refuse unsafe states
+        run: bash scripts/test-db-backup-restore.sh
+
+      # An archive holds every student's data. .gitignore keeps the default names
+      # out; this catches one committed under any name or path.
+      - name: No database archive is committed
+        run: |
+          if git ls-files | grep -E '\.(dump|backup|bak)(\.sha256|\.partial)?$'; then
+            echo "a database archive is tracked by git" >&2
+            exit 1
+          fi
+
       - name: Build
         run: npm run build
 
@@ -230,6 +248,13 @@ jobs:
       - name: Persistence suites against a throwaway PostgreSQL
         run: make test-db
 
+      # BETA-P0-013. Backs up a seeded disposable server with scripts/db-backup.sh,
+      # destroys it, restores into a fresh one with scripts/db-restore.sh, and
+      # proves the result identical and usable by the migrator and the
+      # repository. Its containers are labelled with this job's JTT_TEST_RUN_ID.
+      - name: Restore drill (back up, lose the server, restore, verify)
+        run: make db-restore-drill
+
       - name: Diagnostics
         if: failure()
         run: |
@@ -240,7 +265,10 @@ jobs:
       # third, where the job was cancelled between the two.
       - name: Clean up
         if: always()
-        run: docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
+        run: |
+          docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
+          docker ps -aq --filter "label=jumptotech.io/restore-drill=${JTT_TEST_RUN_ID}" \
+            | xargs -r docker rm -f >/dev/null 2>&1 || true
 
   # --- Kubernetes -----------------------------------------------------------
   #

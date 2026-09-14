@@ -65,6 +65,16 @@ Correlation is the thing PLATFORM-003 added that changes how debugging feels:
 before it, "the API logged an error" and "sandboxd logged an error" were two
 observations. Now they are one story.
 
+## Procedures
+
+Not tied to one alert, and written as procedures rather than in the nine-section
+shape above:
+
+- [PostgreSQL backup, restore and disaster recovery](postgres-backup-restore.md)
+  — BETA-P0-013: manual and scheduled backups, retention, verification, restore
+  into a disposable database, production replacement and rollback, and recovery
+  from volume loss, host loss, corruption, a bad migration or an operator mistake.
+
 ## Related
 
 - [Incident troubleshooting](../incident-troubleshooting.md) — the eleven
