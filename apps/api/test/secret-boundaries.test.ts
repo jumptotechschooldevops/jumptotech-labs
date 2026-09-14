@@ -51,6 +51,8 @@ const PRODUCTION = {
   OIDC_ISSUER: 'https://issuer.example.com',
   OIDC_CLIENT_ID: 'jumptotech-labs',
   OIDC_AUDIENCE: 'jumptotech-labs',
+  // BETA-P0-014: required in production, like every secret the api uses.
+  OIDC_CLIENT_SECRET: hex('oidc-client').slice(0, 40),
   PUBLIC_ORIGIN: 'https://labs.example.com',
   ALLOWED_ORIGINS: 'https://labs.example.com',
   TERMINAL_SESSION_SECRET: hex('terminal-session'),
@@ -159,7 +161,10 @@ describe('API secrets under NODE_ENV=production', () => {
       ).not.toThrow();
     });
 
-    it('checks OIDC_CLIENT_SECRET only when set, and accepts a provider-issued shape', () => {
+    it('requires OIDC_CLIENT_SECRET in production, and accepts a provider-issued shape', () => {
+      // BETA-P0-014: it was optional here, which let a production API start
+      // that no student could sign in to.
+      expect(refusal({ ...PRODUCTION, OIDC_CLIENT_SECRET: undefined })).toContain('OIDC_CLIENT_SECRET is not set');
       expect(refusal({ ...PRODUCTION, OIDC_CLIENT_SECRET: 'your-client-secret' })).toContain(
         'OIDC_CLIENT_SECRET is a placeholder',
       );

@@ -16,7 +16,7 @@
  *     hosts, which is what you want unless a deployment genuinely spans
  *     subdomains — and then it is an explicit setting.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 
 export interface CookieAttributes {
   /** Off only for a plain-HTTP localhost deployment. */
@@ -42,6 +42,10 @@ export interface CookieAttributes {
  */
 const COOKIE_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/;
 const COOKIE_VALUE_PATTERN = /^[A-Za-z0-9!#$%&'()*+\-./:<=>?@[\]^_`{|}~]*$/;
+
+export function isValidCookieName(name: string): boolean {
+  return COOKIE_NAME_PATTERN.test(name);
+}
 
 export class CookieError extends Error {
   constructor(message: string) {
@@ -118,6 +122,24 @@ export interface AuthTransaction {
   returnTo: string;
   /** Epoch seconds. */
   exp: number;
+}
+
+/**
+ * The key that signs transaction cookies — BETA-P0-014.
+ *
+ * It used to be `TERMINAL_SESSION_SECRET` itself. That secret is also held by
+ * the terminal service (to verify terminal tokens), so the terminal — or
+ * anything that ever read its environment — could mint a sign-in transaction
+ * with a `returnTo` and PKCE verifier of its choosing. The key is now derived
+ * with HKDF from `OIDC_CLIENT_SECRET`, which only the api holds (the terminal and
+ * sandboxd refuse it at startup), under a label that cannot collide with any
+ * other use of that secret. Where no client secret exists there is no browser
+ * flow to protect, and the caller's fallback is equally domain-separated.
+ */
+export function deriveTransactionKey(material: string): string {
+  return Buffer.from(
+    hkdfSync('sha256', material, 'jumptotech-labs', 'auth-transaction-cookie/v1', 32),
+  ).toString('base64url');
 }
 
 function base64url(input: string): string {

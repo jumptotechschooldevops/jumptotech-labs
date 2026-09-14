@@ -16,7 +16,7 @@ import { buildIdentityResolver } from './auth/resolvers.js';
 import { buildSandboxComposition } from './composition.js';
 import { OidcTokenVerifier } from './auth/oidc.js';
 import { InMemoryUserRepository, PostgresUserRepository } from './auth/users.js';
-import { OidcBrowserClient } from './auth/oidc-client.js';
+import { buildBrowserSignIn } from './auth/browser-sign-in.js';
 import {
   InMemoryAuthSessionStore,
   PostgresAuthSessionStore,
@@ -213,40 +213,14 @@ async function main(): Promise<void> {
   );
 
   /*
-   * The confidential OIDC client, when one is configured.
+   * The confidential OIDC client and its ID-token verifier, when configured.
    *
-   * Null without `OIDC_CLIENT_SECRET`, and `/auth/config` then tells the
-   * frontend that signing in is not available here — which is better than a
-   * button that leads to a 503. The secret is read here and never leaves the
-   * process except in the token-endpoint POST body.
+   * Null without `OIDC_CLIENT_SECRET` (outside production — production refuses
+   * to start without it), and `/auth/config` then tells the frontend that
+   * signing in is not available here. Built by the same function the test
+   * suite uses, so the verifier options proven there are the ones that run.
    */
-  const browserClient =
-    config.auth.oidc && config.auth.browserFlow
-      ? new OidcBrowserClient({
-          issuer: config.auth.oidc.issuer,
-          clientId: config.auth.oidc.clientId,
-          clientSecret: config.auth.browserFlow.clientSecret,
-          redirectUri: config.auth.browserFlow.redirectUri,
-          scopes: config.auth.browserFlow.scopes,
-        })
-      : null;
-
-  /*
-   * A second verifier, for the ID token.
-   *
-   * An ID token's audience is always the *client id*; an API access token's is
-   * `OIDC_AUDIENCE`. Verifying one with the other's expectation fails, so the
-   * two are separate instances of the same class rather than one loosened to
-   * accept both.
-   */
-  const idTokenVerifier =
-    config.auth.oidc && browserClient
-      ? new OidcTokenVerifier({
-          issuer: config.auth.oidc.issuer,
-          audience: config.auth.oidc.clientId,
-          ...(config.auth.oidc.jwksUri ? { jwksUri: config.auth.oidc.jwksUri } : {}),
-        })
-      : null;
+  const { client: browserClient, idTokenVerifier } = buildBrowserSignIn(config.auth);
 
   if (browserClient) {
     logger.info(

@@ -27,6 +27,8 @@ const PRODUCTION_ENV = {
   OIDC_ISSUER: 'https://issuer.example.com',
   OIDC_CLIENT_ID: 'jumptotech-labs',
   OIDC_AUDIENCE: 'jumptotech-labs',
+  // BETA-P0-014: required in production.
+  OIDC_CLIENT_SECRET: 'a8c3e6b1d9f4a2c7e0b5d3f8a6c1e4b9d2f7a0c5',
   // BETA-P0-010: production also refuses a missing, short or shared secret, so
   // every owner case below runs against an otherwise valid production secret set
   // — the owner is the only thing that varies. Test-only values.

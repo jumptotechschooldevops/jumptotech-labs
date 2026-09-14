@@ -8,6 +8,8 @@ import { DevelopmentIdentityResolver } from './auth/resolvers.js';
 import { InMemoryUserRepository, type UserRepository } from './auth/users.js';
 import { BrowserSessionAuthenticator } from './auth/browser-authenticator.js';
 import { InMemoryAuthSessionStore, type AuthSessionStore } from './auth/browser-session.js';
+import { deriveTransactionKey } from './auth/cookies.js';
+import { requireTrustedOrigin } from './auth/origin-guard.js';
 import type { OidcBrowserClient } from './auth/oidc-client.js';
 import type { TokenVerifier } from './auth/oidc.js';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
@@ -201,6 +203,24 @@ export function createApp(deps: CreateAppDeps): Express {
     credentials: true,
   });
 
+  /*
+   * BETA-P0-014 — the same allow-list, enforced on state-changing requests.
+   *
+   * CORS stops a foreign page reading a response, not sending the request, and
+   * `SameSite=Lax` still attaches the cookie for a same-site sibling origin.
+   * `PUBLIC_ORIGIN` is trusted too: it is this deployment's own origin, and a
+   * same-origin POST through the proxy must not depend on ALLOWED_ORIGINS
+   * repeating it. See `auth/origin-guard.ts`.
+   */
+  const originGuard = requireTrustedOrigin(
+    [...deps.config.allowedOrigins, ...(deps.config.publicOrigin ? [deps.config.publicOrigin] : [])],
+    (reason) => {
+      observability.metrics.common.securityEvents.inc({ service: 'api', event: 'origin_rejected' });
+      // The origin itself is attacker-chosen and unbounded, so it is not a field.
+      observability.logger.warn('security.event', { securityEvent: 'origin_rejected', reason });
+    },
+  );
+
   app.get('/health', asyncRoute(async (_req, res) => {
     /*
      * Every dependency read here is individually guarded — PLATFORM-003.
@@ -302,6 +322,7 @@ export function createApp(deps: CreateAppDeps): Express {
   app.use(
     '/auth',
     browserCors,
+    originGuard,
     createAuthRoutes({
       client: deps.browserAuth?.client ?? null,
       idTokenVerifier: deps.browserAuth?.idTokenVerifier ?? null,
@@ -310,7 +331,14 @@ export function createApp(deps: CreateAppDeps): Express {
       browser,
       cookie: deps.config.auth.cookie,
       appUrl: deps.config.auth.browserFlow?.appUrl ?? deps.config.allowedOrigins[0] ?? '',
-      transactionSecret: deps.config.terminalSessionSecret,
+      /*
+       * Derived from the client secret, which only this service holds, rather
+       * than TERMINAL_SESSION_SECRET, which the terminal holds too
+       * (BETA-P0-014). Without a client secret there is no sign-in to protect.
+       */
+      transactionSecret: deriveTransactionKey(
+        deps.config.auth.browserFlow?.clientSecret ?? `no-browser-flow:${deps.config.terminalSessionSecret}`,
+      ),
       mode: deps.config.auth.mode,
     }),
   );
@@ -333,10 +361,10 @@ export function createApp(deps: CreateAppDeps): Express {
     obs: observability.logger,
     metrics: observability.metrics,
   };
-  app.use('/api/labs', browserCors, authenticated, createLabRoutes(routes));
-  app.use('/api/tracks', browserCors, authenticated, createTrackRoutes(routes));
-  app.use('/api/sessions', browserCors, authenticated, createSessionRoutes(routes));
-  app.use('/api/me', browserCors, authenticated, createMeRoutes(routes));
+  app.use('/api/labs', browserCors, originGuard, authenticated, createLabRoutes(routes));
+  app.use('/api/tracks', browserCors, originGuard, authenticated, createTrackRoutes(routes));
+  app.use('/api/sessions', browserCors, originGuard, authenticated, createSessionRoutes(routes));
+  app.use('/api/me', browserCors, originGuard, authenticated, createMeRoutes(routes));
   app.use('/internal', createInternalRoutes(deps));
 
   app.use((_req, res) => {

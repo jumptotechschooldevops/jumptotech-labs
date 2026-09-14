@@ -29,6 +29,7 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { AuthError, type VerifiedClaims } from './identity.js';
+import { assertProviderEndpoint, fetchDiscoveryDocument } from './discovery.js';
 
 /** The endpoints this client needs from an issuer. */
 export interface OidcProviderMetadata {
@@ -94,33 +95,6 @@ export function safeEquals(a: unknown, b: unknown): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function ensureTrailingSlash(value: string): string {
-  return value.endsWith('/') ? value : `${value}/`;
-}
-
-/**
- * An endpoint URL the provider handed us still has to be checked.
- *
- * Discovery output is data from the network. Accepting an arbitrary scheme here
- * would let a hostile or misconfigured discovery document turn a redirect into
- * something else entirely.
- */
-function assertHttpUrl(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new AuthError('AUTH_MISCONFIGURED', `The identity provider published no ${field}.`);
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new AuthError('AUTH_MISCONFIGURED', `The identity provider published an unusable ${field}.`);
-  }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new AuthError('AUTH_MISCONFIGURED', `The identity provider's ${field} is not an HTTP URL.`);
-  }
-  return url.href;
-}
-
 export class OidcBrowserClient {
   readonly #config: OidcClientConfig;
   readonly #fetch: typeof fetch;
@@ -166,18 +140,23 @@ export class OidcBrowserClient {
   async metadata(): Promise<OidcProviderMetadata> {
     if (this.#metadata) return this.#metadata;
 
-    const url = new URL('.well-known/openid-configuration', ensureTrailingSlash(this.#config.issuer)).href;
-    const document = await this.#json(url, { method: 'GET' }, 'discover the identity provider');
+    // OIDC Discovery §4.3: the document must name exactly the configured
+    // issuer, and no endpoint may be weaker than the issuer's own scheme.
+    const issuer = this.#config.issuer;
+    const document = await fetchDiscoveryDocument(issuer, {
+      fetchImpl: this.#fetch,
+      timeoutMs: this.#timeoutMs,
+    });
 
     const resolved: OidcProviderMetadata = {
-      issuer: typeof document.issuer === 'string' ? document.issuer : this.#config.issuer,
-      authorizationEndpoint: assertHttpUrl(document.authorization_endpoint, 'authorization endpoint'),
-      tokenEndpoint: assertHttpUrl(document.token_endpoint, 'token endpoint'),
+      issuer,
+      authorizationEndpoint: assertProviderEndpoint(document.authorization_endpoint, 'authorization endpoint', issuer),
+      tokenEndpoint: assertProviderEndpoint(document.token_endpoint, 'token endpoint', issuer),
       ...(typeof document.jwks_uri === 'string'
-        ? { jwksUri: assertHttpUrl(document.jwks_uri, 'JWKS URI') }
+        ? { jwksUri: assertProviderEndpoint(document.jwks_uri, 'JWKS URI', issuer) }
         : {}),
       ...(typeof document.end_session_endpoint === 'string'
-        ? { endSessionEndpoint: assertHttpUrl(document.end_session_endpoint, 'end session endpoint') }
+        ? { endSessionEndpoint: assertProviderEndpoint(document.end_session_endpoint, 'end session endpoint', issuer) }
         : {}),
     };
     this.#metadata = resolved;
@@ -231,6 +210,10 @@ export class OidcBrowserClient {
           accept: 'application/json',
         },
         body: body.toString(),
+        // The body carries the client secret. A 307/308 from the token
+        // endpoint would make fetch re-send it to wherever the redirect
+        // points, so a redirect here is a refusal, never followed.
+        redirect: 'error',
       },
       'exchange the authorization code',
     );

@@ -1,14 +1,16 @@
 # Authentication and session ownership
 
-**PLATFORM-009 established server-side identity. PLATFORM-010 (this document)
-closes the loop from the browser.**
+**PLATFORM-009 established server-side identity. PLATFORM-010 closed the loop
+from the browser. BETA-P0-014 made it fail closed in production.**
 
-This document has three parts:
+This document has four parts:
 
 1. **[The flow before this change](#1-the-flow-before-this-change)** — recorded
    from the code at `3a8211f`, before anything was modified.
 2. **[What was missing](#2-what-was-missing)** — the audit result.
 3. **[The flow now](#3-the-flow-now)** — what was built.
+4. **[Production readiness](#4-production-readiness--beta-p0-014)** — the
+   BETA-P0-014 audit, the startup refusals, and the decisions still open.
 
 ---
 
@@ -141,6 +143,7 @@ header, `OidcTokenVerifier` is reused verbatim to verify the ID token, and
      ├─ API: discover the issuer (.well-known/openid-configuration, cached)
      ├─ API: generate state + nonce + PKCE verifier (S256)
      ├─ API: store them in a signed, HttpOnly, 10-minute transaction cookie
+     │        (Path=/auth; key HKDF-derived from OIDC_CLIENT_SECRET — §4.4)
      └─ 302 → provider /authorize?...code_challenge=...&state=...
                  │
                  └─ user authenticates with the provider
@@ -149,9 +152,11 @@ header, `OidcTokenVerifier` is reused verbatim to verify the ID token, and
      │
      ├─ API: constant-time compare state with the transaction cookie
      ├─ API: POST provider /token   (client_id + client_secret + code_verifier)
-     ├─ API: OidcTokenVerifier.verify(id_token)   signature, iss, aud, exp
+     ├─ API: OidcTokenVerifier.verify(id_token)   signature (asymmetric alg,
+     │        keys from discovery jwks_uri), iss, aud, azp, exp, iat
      ├─ API: compare nonce
      ├─ API: users.upsert({issuer, subject, email, name})
+     ├─ API: destroy any session the browser already presented (§4.3)
      ├─ API: authSessions.create(userId)  →  opaque 256-bit id
      └─ 302 → app, Set-Cookie: jtt_session=<id>; HttpOnly; SameSite=Lax; Path=/
 ```
@@ -244,11 +249,12 @@ Nothing is written to `localStorage` or `sessionStorage` by the auth layer.
 | `AUTH_MODE` | `oidc` (default) or `development`. |
 | `OIDC_ISSUER` | Issuer URL, e.g. `https://example.eu.auth0.com/`. |
 | `OIDC_CLIENT_ID` | The API's client id. |
-| `OIDC_CLIENT_SECRET` | **Server-side only.** Required for the browser flow. |
+| `OIDC_CLIENT_SECRET` | **Server-side only.** Required for the browser flow, and required at startup under `NODE_ENV=production`. |
+| `OIDC_JWKS_URI` | Optional. Unset means the discovery document's `jwks_uri` (since BETA-P0-014). |
 | `OIDC_AUDIENCE` | Audience this API accepts. |
 | `OIDC_SCOPES` | Default `openid profile email`. No `offline_access`. |
-| `OIDC_REDIRECT_URI` | Absolute callback URL; derived from `PUBLIC_ORIGIN` when unset. |
-| `AUTH_SESSION_TTL_SECONDS` | Browser session lifetime. Default 43200 (12h). |
+| `OIDC_REDIRECT_URI` | Absolute callback URL; derived from `PUBLIC_ORIGIN` when unset. In production it must be exactly `PUBLIC_ORIGIN` + `/auth/callback`. |
+| `AUTH_SESSION_TTL_SECONDS` | Browser session lifetime. Default 43200 (12h); 300–604800 accepted. |
 | `AUTH_COOKIE_NAME` | Default `jtt_session`. |
 | `AUTH_COOKIE_SECURE` | Default: on unless the public origin is plain-HTTP localhost. |
 | `AUTH_COOKIE_DOMAIN` | Optional; unset means host-only, which is the safer default. |
@@ -263,4 +269,159 @@ Nothing is written to `localStorage` or `sessionStorage` by the auth layer.
   restart, exactly like lab sessions, and the API logs which one it is using.
 - **No role administration surface.** Roles change in the database only.
 - **Single logout is best-effort.** The API returns the provider's end-session
-  URL; whether the provider honours it is the provider's business.
+  URL; whether the provider honours it is the provider's business. See §4.7,
+  *FEDERATED LOGOUT — DECISION REQUIRED*.
+
+---
+
+## 4. Production readiness — BETA-P0-014
+
+Audited from the code at `488048b` before anything was changed. The architecture
+in §3 was sound; what was missing was the part that stops a *misconfigured*
+production deployment from starting, plus a handful of standards checks the
+token and session layers skipped.
+
+### 4.1 Implemented before, and missing
+
+| Area | Before `488048b` | Gap closed by P0-014 |
+|---|---|---|
+| Code flow + PKCE S256, state, nonce | Implemented, constant-time compares | — |
+| Signed transaction cookie | HMAC with `TERMINAL_SESSION_SECRET`, `Path=/` | Key shared with the terminal service; cookie sent on every API request |
+| ID token signature/iss/aud/exp | `jose` via JWKS | **`exp` not required** — a signed token without one never expired. No `alg` allowlist, no `iat`, no `azp` |
+| JWKS location | `<issuer>/.well-known/jwks.json` | One provider's convention, not the standard `jwks_uri` |
+| Discovery | Endpoints scheme-checked (http or https) | Published `issuer` not compared (Discovery §4.3); `https` issuer could publish `http` endpoints; token POST followed redirects with the secret in the body |
+| Opaque, hashed, durable sessions | Implemented (`auth_sessions`, SHA-256) | — |
+| Cookie `HttpOnly`/`SameSite=Lax`/`Path=/`/`Max-Age` | Implemented | Lifetime unbounded; name unchecked until first use |
+| `Secure` | Derived (off only on http localhost) | `AUTH_COOKIE_SECURE=false` accepted in production |
+| Session fixation | New id on every sign-in | Previously presented session **not destroyed** |
+| `returnTo` | Sanitised at `/auth/login` | Trusted at the callback once it came back out of the cookie |
+| Logout | POST, server-side destroy, cookie cleared | — (federated logout: §4.7) |
+| CSRF | `SameSite=Lax` + CORS allow-list | Nothing stopped a **same-site sibling origin** from *sending* a POST/DELETE with the cookie |
+| Caching | — | `/auth/*` responses (identity, `Set-Cookie`) had no `Cache-Control` |
+| `AUTH_MODE=development` in production | Refused | — |
+| Localhost public origin in production | Refused | — |
+| Missing `OIDC_CLIENT_SECRET` in production | **Started**, bearer-only, nobody could sign in | |
+| `http:` issuer / `http:` or derived `PUBLIC_ORIGIN` / foreign `OIDC_REDIRECT_URI` in production | **Started** | |
+| `DEV_STUDENT_HEADER_ENABLED=true` in production | **Started** | |
+| Browser storage of tokens | None (documented) | Not proven by a test |
+
+### 4.2 Production fail-closed rules
+
+Under `NODE_ENV=production`, `loadConfig` refuses to start — listing every
+problem in one message, naming variables and never the client secret — when any
+of these holds (`apps/api/src/auth/production-auth.ts`):
+
+| Rule | Refused |
+|---|---|
+| Mode | `AUTH_MODE` other than `oidc` (default stays `oidc`) |
+| Provider | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_AUDIENCE` blank; `OIDC_CLIENT_SECRET` blank (via the P0-010 secret gate, which also refuses placeholders and short values) |
+| Issuer | not an absolute `https:` URL; carries credentials, a query or a fragment |
+| JWKS override | `OIDC_JWKS_URI` not `https:` |
+| Public origin | `PUBLIC_ORIGIN` unset (no longer derived from `ALLOWED_ORIGINS`), not `https:`, or not a canonical bare origin |
+| Callback | `OIDC_REDIRECT_URI` not `https:`, not on `PUBLIC_ORIGIN`, path not `/auth/callback`, or with query/fragment/credentials |
+| CORS | an `ALLOWED_ORIGINS` entry not a bare `https:` origin (`*`, `null`, paths); `PUBLIC_ORIGIN` not among them |
+| Cookie | `AUTH_COOKIE_SECURE=false`; `AUTH_COOKIE_DOMAIN` that does not domain-match the public host |
+| Scopes | no `openid`; `offline_access` (refused wherever browser sign-in is configured) |
+| Dev identity | `DEV_STUDENT_HEADER_ENABLED=true` |
+| TLS | `NODE_TLS_REJECT_UNAUTHORIZED` set (existing, BETA-P0-011) |
+
+Ordering is preserved: runtime owner (P0-008), then secrets (P0-010), then TLS
+(P0-011), then authentication — so a weak secret is still reported as itself.
+`buildIdentityResolver` keeps its own refusal of development mode as a second
+line.
+
+### 4.3 Cookie and session security
+
+- **Session cookie** `jtt_session`: 256-bit random, base64url, only its SHA-256
+  stored; `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=<ttl>`, host-only.
+  `Secure` is mandatory in production. Lifetime 300 s – 7 days (default 12 h),
+  absolute; there is no refresh.
+- **Transaction cookie** `jtt_session_tx`: `HttpOnly; Secure; SameSite=Lax;
+  Path=/auth; Max-Age=600`, HMAC-signed. It is signed, not encrypted: the browser
+  that holds it can read its own state, nonce and PKCE verifier, which grants
+  nothing a holder of that browser's cookies does not already have.
+- **Fixation**: after the ID token is verified, any session id the browser
+  presented is destroyed before the new one is created. A failed callback
+  destroys nothing, so it cannot be used to sign somebody out.
+- **Logout**: `POST /auth/logout` deletes the row, then clears the cookie; the
+  old value is refused on every route afterwards.
+- `/auth/*` responses are `Cache-Control: no-store`.
+- No provider token reaches the browser: the ID token is verified and
+  discarded, the access token is dropped in the callback, no refresh token is
+  requested. `apps/web/test/token-storage.test.tsx` parses the web sources
+  (no Web Storage, IndexedDB, `document.cookie`, or token-named identifiers) and
+  runs sign-in/sign-out with storage writes spied on.
+
+### 4.4 PKCE, state, nonce and token validation
+
+- Authorization code flow, `code_challenge_method=S256`, verifier 48 random
+  bytes; `state` and `nonce` 32 random bytes, compared in constant time.
+- The transaction key is `HKDF-SHA256(OIDC_CLIENT_SECRET, "jumptotech-labs",
+  "auth-transaction-cookie/v1")`. The terminal holds `TERMINAL_SESSION_SECRET`
+  and so could previously mint transactions; it is refused `OIDC_CLIENT_SECRET`.
+- `returnTo` is sanitised at `/auth/login` **and** at the callback.
+- Discovery (`apps/api/src/auth/discovery.ts`): published `issuer` must equal
+  `OIDC_ISSUER` exactly; endpoints must parse, carry no credentials, and may not
+  be `http:` under an `https:` issuer. The token-endpoint POST uses
+  `redirect: 'error'`.
+- ID token (`buildBrowserSignIn` → `OidcTokenVerifier`): signature against the
+  discovered `jwks_uri` (or `OIDC_JWKS_URI`), algorithms `RS*/PS*/ES*/EdDSA`
+  only, `iss` exact, `aud` includes the client id, `azp` required when several
+  audiences and must equal the client id when present, `exp` and `iat` required,
+  `nbf` honoured, 5 s clock tolerance, `nonce` equal to the transaction's.
+- Bearer access tokens on `/api/*`: same verifier class with `OIDC_AUDIENCE`;
+  `exp` now required, same algorithm allowlist.
+- TLS: Node defaults everywhere; no agent, dispatcher or `rejectUnauthorized`
+  in the auth layer (asserted by test).
+
+### 4.5 CSRF and origin
+
+The existing mechanism is the `ALLOWED_ORIGINS` allow-list plus `SameSite=Lax`.
+P0-014 enforces that same list server-side for unsafe methods on `/auth` and
+`/api/*` (`apps/api/src/auth/origin-guard.ts`): an `Origin` must be allowed (or
+be `PUBLIC_ORIGIN`); without `Origin`, `Sec-Fetch-Site` must be `same-origin` or
+`none`; a request with neither header is not a browser and passes. Refusals are
+`403 ORIGIN_NOT_ALLOWED`, counted as `jtt_security_events_total{event="origin_rejected"}`
+— the event the terminal WebSocket already uses for its origin check. `/internal`
+is untouched. The OIDC callback and logout redirect are built only from
+configuration (`PUBLIC_ORIGIN`), never from `Host` or `X-Forwarded-*`.
+
+### 4.6 The development exception
+
+`AUTH_MODE=development` still works when `NODE_ENV` is not `production`, and the
+local compose stack still defaults to it. A test or laptop may use an `http:`
+loopback provider and plain-HTTP localhost cookies. Nothing in that path is
+reachable once `NODE_ENV=production`.
+
+### 4.7 Decisions required
+
+- **FEDERATED LOGOUT — DECISION REQUIRED.** Logout returns the provider's
+  `end_session_endpoint` with `client_id` and `post_logout_redirect_uri` only.
+  The ID token is discarded at the callback, so no `id_token_hint` is sent; some
+  providers require it, and all require the post-logout URI to be registered.
+  Keeping the ID token server-side for the hint, or choosing local-only logout,
+  is a provider-dependent decision.
+- **WHO MAY SIGN IN — DECISION REQUIRED.** Any account the configured issuer
+  authenticates is admitted and provisioned as `STUDENT`. For a private beta,
+  restricting admission (a group/role claim, an email-domain rule, or an
+  invitation table) has to be chosen; it is not provider-neutral to guess.
+- **DURABLE SESSIONS IN PRODUCTION — DECISION REQUIRED.** Without
+  `DATABASE_URL` the API still falls back to in-memory auth sessions (logged as a
+  warning), exactly as lab sessions and progress do. Making a database mandatory
+  in production is a platform-wide decision, not an auth one.
+- **IDLE TIMEOUT / REFRESH — DECISION REQUIRED.** Sessions have an absolute
+  lifetime only. An idle timeout, or refresh tokens, each change what is stored.
+
+### 4.8 What CI must still prove
+
+- The suites in §4.3–4.5 run in `npm test` (api: `production-oidc-config`,
+  `oidc-flow-hardening`; web: `token-storage`), alongside the P0-010 secret and
+  compose-distribution checks.
+- `npm run test:db` for `auth-persistence-integration` against real Postgres.
+- Against a **real** staging identity provider over TLS: discovery, the code
+  exchange, key rotation (a new `kid`), a rejected expired token, logout. The
+  in-process provider is loopback `http:`; nothing here proves a real TLS chain.
+- A production-shaped `docker compose config` with the production variables set,
+  and a container start that refuses each rule in §4.2.
+- A browser check that the built bundle holds no token, and that a real
+  cross-site form POST is refused.

@@ -42,6 +42,8 @@ const PRODUCTION = {
   OIDC_ISSUER: 'https://issuer.example.com',
   OIDC_CLIENT_ID: 'jumptotech-labs',
   OIDC_AUDIENCE: 'jumptotech-labs',
+  // BETA-P0-014: required in production.
+  OIDC_CLIENT_SECRET: hex('oidc-client').slice(0, 40),
   PUBLIC_ORIGIN: 'https://labs.example.com',
   ALLOWED_ORIGINS: 'https://labs.example.com',
   TERMINAL_SESSION_SECRET: hex('terminal-session'),
