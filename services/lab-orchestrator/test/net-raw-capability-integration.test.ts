@@ -55,6 +55,15 @@ const SESSIONS = [0, 1, 2, 3, 4].map((i) => ({
   marker: `JTTMARKER${RUN_HEX}${i}`,
 }));
 
+/** Every shape of traffic each session tags with its marker. */
+const MARKER_KINDS = [
+  'unicast',
+  'link-local-multicast',
+  'limited-broadcast',
+  'subnet-broadcast',
+  'igmp',
+] as const;
+
 /**
  * A sixth sandbox, for the lab that asks for *no* capability.
  *
@@ -168,17 +177,67 @@ async function shell(sandboxRef: string, script: string, user = 'root') {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** This sandbox's own prefix and the gateway that shares its segment. */
+/** This sandbox's own address, its segment's broadcast, and the gateway that shares it. */
 async function segmentOf(sandboxRef: string) {
   const routes = await exec(sandboxRef, ['ip', '-json', 'route', 'show']);
   const parsed = JSON.parse(routes.stdout) as Array<{ dst?: string; prefsrc?: string }>;
   const connected = parsed.find((r) => r.dst?.includes('/') && r.prefsrc)!;
-  const octets = String(connected.dst!.split('/')[0]).split('.');
+  const [base, bits] = connected.dst!.split('/') as [string, string];
+  const octets = base.split('.');
+  // The whole prefix, not its first two octets: once Docker's /16 pool is
+  // spent it hands out 192.168.x.0/20s, and two sessions would then share
+  // "192.168." while sitting on different segments.
+  const network = octets.reduce((acc, octet) => acc * 256 + Number(octet), 0);
+  const broadcast = network + 2 ** (32 - Number(bits)) - 1;
   return {
     own: connected.prefsrc!,
-    prefix: `${octets[0]}.${octets[1]}.`,
+    broadcast: [24, 16, 8, 0].map((shift) => Math.floor(broadcast / 2 ** shift) % 256).join('.'),
     gateway: [octets[0], octets[1], octets[2], '1'].join('.'),
   };
+}
+
+type Segment = Awaited<ReturnType<typeof segmentOf>>;
+
+/**
+ * A BPF filter matching every IPv4 or ARP packet that is *not* one of the
+ * exchanges a single-sandbox segment legitimately carries.
+ *
+ * The segment holds exactly two addresses — the sandbox and the host side of
+ * its own bridge — so anything naming a third address is foreign, whoever
+ * sent it. Each allowance below is a packet class this suite has observed
+ * and attributed, not a range waved through:
+ *
+ *   · sandbox → gateway, subnet broadcast, 255.255.255.255, or link-local
+ *     multicast (224.0.0.0/24): the sandbox's own emissions, which the matrix
+ *     below generates on purpose.
+ *   · gateway → sandbox: replies, e.g. ICMP port unreachable for the markers.
+ *   · gateway → 224.0.0.0/24, IGMP only: the bridge's own membership reports.
+ *     With multicast snooping on (the Linux default) a bridge joins the
+ *     all-snoopers group 224.0.0.106 (RFC 4286) when it comes up and announces
+ *     it — `172.x.0.1 > 224.0.0.22: igmp v3 report [gaddr 224.0.0.106]`, TTL 1.
+ *     Timing decides whether a capture catches it, which is why it failed
+ *     only intermittently. It is sourced from this session's own gateway and
+ *     is link-local, so it can carry nothing about any other session.
+ *
+ * Another session's bridge reporting the same group has another session's
+ * gateway as its source, and fails here.
+ */
+function foreignTrafficFilter({ own, gateway, broadcast }: Segment): string {
+  const fromSandbox = `src host ${own} and (dst host ${gateway} or dst host ${broadcast} or dst host 255.255.255.255 or dst net 224.0.0.0/24)`;
+  const fromGateway = `src host ${gateway} and (dst host ${own} or (ip proto 2 and dst net 224.0.0.0/24))`;
+  const arp = `(src host ${own} or src host ${gateway}) and (dst host ${own} or dst host ${gateway})`;
+  return `(ip and not ((${fromSandbox}) or (${fromGateway}))) or (arp and not (${arp}))`;
+}
+
+/** Every packet in `pcap` that `segment` does not account for, one tcpdump line each. */
+async function foreignPackets(sandboxRef: string, segment: Segment) {
+  const read = await shell(
+    sandboxRef,
+    `tcpdump -r /tmp/cap.pcap -nn -e -v '${foreignTrafficFilter(segment)}' 2>/tmp/foreign.err; echo "rc=$?"; cat /tmp/foreign.err >&2`,
+  );
+  // A filter tcpdump refused would match nothing and pass vacuously.
+  expect(read.stdout, `tcpdump rejected the filter: ${read.stderr}`).toMatch(/rc=0\s*$/);
+  return read.stdout.replace(/rc=0\s*$/, '').split('\n').filter((line) => line.trim() !== '');
 }
 
 async function teardown() {
@@ -269,12 +328,45 @@ describe.skipIf(!ENABLED)('CAP_NET_RAW, against a real daemon', () => {
       ),
     );
 
-    // Every session emits a marker only it knows, at the same time.
+    // Every session emits markers only it knows, at the same time, in every
+    // shape a link can flood: unicast to its gateway, and the three
+    // destinations a bridge delivers to all ports — link-local multicast,
+    // limited broadcast, subnet broadcast — plus a raw IGMP report to
+    // 224.0.0.22, the very packet class the bridges emit themselves. If any
+    // of those could cross a segment, the capture on the far side would carry
+    // the marker.
     await Promise.all(
       SESSIONS.map((session, index) =>
         shell(
           session.sandboxRef,
-          `for i in 1 2 3 4 5; do printf '%s' '${session.marker}' | socat -T1 - UDP-DATAGRAM:${segments[index]!.gateway}:9999 2>/dev/null || true; sleep 0.3; done; echo sent`,
+          `for i in 1 2 3 4 5; do printf '%s' '${session.marker}-unicast' | socat -T1 - UDP-DATAGRAM:${segments[index]!.gateway}:9999 2>/dev/null || true; sleep 0.3; done
+python3 - '${segments[index]!.broadcast}' '${session.marker}' <<'PY'
+import socket, sys, time
+subnet_broadcast, marker = sys.argv[1:3]
+SO_BINDTODEVICE = 25
+
+def udp(kind, destination):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, b'eth0')
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+    sock.sendto(f'{marker}-{kind}'.encode(), (destination, 9999))
+    sock.close()
+
+def igmp():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IGMP)
+    sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, b'eth0')
+    sock.sendto(bytes([0x22, 0, 0, 0, 0, 0, 0, 0]) + f'{marker}-igmp'.encode(), ('224.0.0.22', 0))
+    sock.close()
+
+for _ in range(5):
+    udp('link-local-multicast', '224.0.0.251')
+    udp('limited-broadcast', '255.255.255.255')
+    udp('subnet-broadcast', subnet_broadcast)
+    igmp()
+    time.sleep(0.3)
+PY
+echo sent`,
         ),
       ),
     );
@@ -295,30 +387,41 @@ describe.skipIf(!ENABLED)('CAP_NET_RAW, against a real daemon', () => {
       }),
     );
 
-    const matrix = captures.map((capture) =>
-      SESSIONS.map((session) => capture.includes(session.marker)),
-    );
+    for (const kind of MARKER_KINDS) {
+      const matrix = captures.map((capture) =>
+        SESSIONS.map((session) => capture.includes(`${session.marker}-${kind}`)),
+      );
 
-    // Diagonal: each session sees its own traffic.
-    for (const [index, row] of matrix.entries()) {
-      expect(row[index], `session ${index} could not capture its own marker`).toBe(true);
-    }
-    // Off-diagonal: no session sees any other's. Twenty cells.
-    for (const [i, row] of matrix.entries()) {
-      for (const [j, seen] of row.entries()) {
-        if (i === j) continue;
-        expect(seen, `session ${i} captured session ${j}'s marker`).toBe(false);
+      // Diagonal: each session sees its own traffic — which is also what
+      // proves the marker was really put on the wire, so its absence
+      // elsewhere means something.
+      for (const [index, row] of matrix.entries()) {
+        expect(row[index], `session ${index} could not capture its own ${kind} marker`).toBe(true);
+      }
+      // Off-diagonal: no session sees any other's. Twenty cells per kind.
+      for (const [i, row] of matrix.entries()) {
+        for (const [j, seen] of row.entries()) {
+          if (i === j) continue;
+          expect(seen, `session ${i} captured session ${j}'s ${kind} marker`).toBe(false);
+        }
       }
     }
 
-    // And nothing from outside the session's own segment appears at all — no
-    // platform API, terminal, kind or host traffic, because none of it
-    // traverses this link.
-    for (const [index, capture] of captures.entries()) {
-      const foreign = [...capture.matchAll(/\b(\d{1,3}\.\d{1,3})\.\d{1,3}\.\d{1,3}\b/g)]
-        .map((match) => `${match[1]}.`)
-        .filter((prefix) => prefix !== segments[index]!.prefix);
-      expect(foreign, `session ${index} saw addresses outside its own segment`).toEqual([]);
+    // And nothing else appears at all — no other session, no platform API,
+    // terminal, kind or host traffic — because none of it traverses this link.
+    // Classified by tcpdump from the packet headers, not by pattern-matching
+    // the text dump, and reported whole so a failure names the packet.
+    for (const [index, session] of SESSIONS.entries()) {
+      const foreign = await foreignPackets(session.sandboxRef, segments[index]!);
+      expect(foreign, `session ${index} captured traffic its own segment does not account for`).toEqual([]);
+    }
+
+    // The classifier is not vacuous: judged against a neighbour's segment,
+    // this session's own capture — its markers, its gateway — is all foreign.
+    for (const [index, session] of SESSIONS.entries()) {
+      const neighbour = segments[(index + 1) % SESSIONS.length]!;
+      const misjudged = await foreignPackets(session.sandboxRef, neighbour);
+      expect(misjudged.length, `session ${index}'s capture read as session ${(index + 1) % SESSIONS.length}'s`).toBeGreaterThan(0);
     }
   }, 1_800_000);
 
