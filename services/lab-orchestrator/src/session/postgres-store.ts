@@ -45,7 +45,7 @@ import {
   type LabSession,
   type SessionStatus,
 } from './types.js';
-import type { SessionStore } from './store.js';
+import type { SessionStore, TransitionGuard } from './store.js';
 
 /** Something that can run one parameterised statement: the pool, or one client. */
 export interface SessionSqlQuery {
@@ -84,6 +84,7 @@ interface SessionRow {
   owner_user_id: string | null;
   created_at: Date | string;
   last_activity_at: Date | string;
+  status_changed_at: Date | string;
   expires_at: Date | string;
   ended_at: Date | string | null;
   status_reason: string | null;
@@ -94,7 +95,8 @@ interface SessionRow {
 
 const COLUMNS = `session_id, lab_id, provider, sandbox_kind, sandbox_ref, namespace,
   service_account_name, status, environment_id, owner_user_id, created_at, last_activity_at,
-  expires_at, ended_at, status_reason, idle_timeout_seconds, idle_warning_seconds, revision`;
+  expires_at, ended_at, status_reason, idle_timeout_seconds, idle_warning_seconds, revision,
+  status_changed_at`;
 
 /** Timestamps come back as `Date`; the model is ISO-8601 strings throughout. */
 function iso(value: Date | string): string {
@@ -115,6 +117,7 @@ function toSession(row: SessionRow): LabSession {
     ...(row.owner_user_id ? { ownerUserId: row.owner_user_id } : {}),
     createdAt: iso(row.created_at),
     lastActivityAt: iso(row.last_activity_at),
+    statusChangedAt: iso(row.status_changed_at),
     expiresAt: iso(row.expires_at),
     ...(row.ended_at ? { endedAt: iso(row.ended_at) } : {}),
     ...(row.status_reason ? { statusReason: row.status_reason } : {}),
@@ -135,6 +138,7 @@ const PATCHABLE = {
   status: 'status',
   environmentId: 'environment_id',
   lastActivityAt: 'last_activity_at',
+  statusChangedAt: 'status_changed_at',
   expiresAt: 'expires_at',
   endedAt: 'ended_at',
   statusReason: 'status_reason',
@@ -203,14 +207,29 @@ export class PostgresSessionStore implements SessionStore {
     from: readonly SessionStatus[],
     to: SessionStatus,
     patch: Partial<LabSession> = {},
+    guard: TransitionGuard = {},
   ): Promise<LabSession | null> {
+    const { statusChangedAt, ...rest } = patch;
     const params: unknown[] = [];
-    const sets = assignments({ ...patch, status: to }, params);
+    const sets = assignments({ ...rest, status: to }, params);
+    if (statusChangedAt !== undefined) {
+      // `status` on the right of SET is the row as it was, so this stamps the
+      // time only when the status actually moves.
+      params.push(to, statusChangedAt);
+      sets.push(
+        `status_changed_at = CASE WHEN status = $${params.length - 1} THEN status_changed_at ELSE $${params.length}::timestamptz END`,
+      );
+    }
     params.push(sessionId, [...from]);
+    let where = `session_id = $${params.length - 1} AND status = ANY($${params.length})`;
+    if (guard.statusChangedAt !== undefined) {
+      params.push(guard.statusChangedAt);
+      where += ` AND status_changed_at = $${params.length}::timestamptz`;
+    }
 
     const { rows } = await this.db.query<SessionRow>(
       `UPDATE lab_sessions SET ${sets.join(', ')}, revision = revision + 1
-       WHERE session_id = $${params.length - 1} AND status = ANY($${params.length})
+       WHERE ${where}
        RETURNING ${COLUMNS}`,
       params,
     );
@@ -324,7 +343,7 @@ async function insertSession(db: SessionSqlQuery, session: LabSession): Promise<
   try {
     await db.query(
       `INSERT INTO lab_sessions (${COLUMNS})
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1,$18)`,
       [
         session.sessionId,
         session.labId,
@@ -343,6 +362,7 @@ async function insertSession(db: SessionSqlQuery, session: LabSession): Promise<
         session.statusReason ?? null,
         session.idleTimeoutSeconds,
         session.idleWarningSeconds,
+        session.statusChangedAt,
       ],
     );
   } catch (error) {

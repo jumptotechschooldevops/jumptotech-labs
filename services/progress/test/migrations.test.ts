@@ -15,16 +15,17 @@ describe('migration files', () => {
   it('ships the schema with the package', async () => {
     const migrations = await loadMigrations(MIGRATIONS_DIR);
 
-    // PLATFORM-008 added 002; PLATFORM-009 added 003; PLATFORM-010 added 004.
+    // PLATFORM-008 added 002; PLATFORM-009 added 003; PLATFORM-010 added 004;
+    // BETA-P0-007 added 005.
     // The list is asserted so a migration cannot be added without someone
     // noticing here, but the *safety* checks below apply to every file rather
-    // than to a numbered one — that is the invariant, and it should not need
-    // editing when 005 arrives.
+    // than to a numbered one — that is the invariant.
     expect(migrations.map((m) => m.version)).toEqual([
       '001_progress',
       '002_sessions',
       '003_users_and_ownership',
       '004_auth_sessions',
+      '005_session_recovery',
     ]);
     for (const migration of migrations) {
       expect(migration.checksum, migration.version).toMatch(/^[0-9a-f]{64}$/);
@@ -69,6 +70,18 @@ describe('migration files', () => {
     // and one sandbox belongs to at most one session.
     expect(sessions).toContain('session_id            TEXT        PRIMARY KEY');
     expect(sessions).toMatch(/sandbox_ref\s+TEXT\s+NOT NULL UNIQUE/);
+
+    /*
+     * Recovery (BETA-P0-007). The status timestamp is compared for equality to
+     * fence a reset's claim, so rows written without it — by an instance still
+     * on the previous release — must default to millisecond precision, the
+     * precision every JavaScript writer uses. And DEGRADED must be storable.
+     */
+    const recovery = migrations.find((m) => m.version === '005_session_recovery')!.sql;
+    expect(recovery).toContain('ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ');
+    expect(recovery).toContain("SET DEFAULT date_trunc('milliseconds', now())");
+    expect(recovery).toContain('SET NOT NULL');
+    expect(recovery).toMatch(/CHECK \(\s*status IN \([^)]*'DEGRADED'/);
 
     const users = migrations.find((m) => m.version === '003_users_and_ownership')!.sql;
     expect(users).toContain('CREATE TABLE IF NOT EXISTS users');

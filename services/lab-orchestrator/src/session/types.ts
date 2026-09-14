@@ -12,8 +12,9 @@ import type { LabProviderId, SandboxKind } from '../providers/catalog.js';
  * Session lifecycle.
  *
  * ```text
- *  CREATING ──► ACTIVE ◄──► RESETTING
- *      │           │
+ *  CREATING ──► ACTIVE ◄──► RESETTING ──► DEGRADED   (reset failed or was interrupted)
+ *      │           │  ▲                       │
+ *      │           │  └───────── RESETTING ◄──┘      (the student resets again)
  *      │           ├──► EXPIRING ──► EXPIRED     (reaper: max lifetime / idle)
  *      │           └──► ENDING   ──► ENDED       (student pressed End Lab)
  *      └──────────────► FAILED                   (provisioning failed)
@@ -21,11 +22,17 @@ import type { LabProviderId, SandboxKind } from '../providers/catalog.js';
  *
  * `EXPIRING` / `ENDING` are the states in which teardown is in flight. The
  * reaper re-enters them idempotently until the namespace is verifiably gone.
+ *
+ * `DEGRADED` is the safe state for a sandbox nobody can vouch for: a reset that
+ * failed, or one whose process died mid-way. It is never reported as usable —
+ * no check, terminal or activity — but it is not terminal either: Reset rebuilds
+ * it, End releases it, and idle/absolute expiry reclaim it if the student leaves.
  */
 export const SESSION_STATUSES = [
   'CREATING',
   'ACTIVE',
   'RESETTING',
+  'DEGRADED',
   'EXPIRING',
   'EXPIRED',
   'ENDING',
@@ -40,6 +47,8 @@ export const OCCUPYING_STATUSES: readonly SessionStatus[] = [
   'CREATING',
   'ACTIVE',
   'RESETTING',
+  // May still hold some or all of its runtime resources.
+  'DEGRADED',
   'EXPIRING',
   'ENDING',
 ];
@@ -49,6 +58,19 @@ export const TERMINAL_STATUSES: readonly SessionStatus[] = ['EXPIRED', 'ENDED', 
 
 export function isTerminalStatus(status: SessionStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
+}
+
+/** Statuses a reset may claim: a working sandbox, or one a failed reset left behind. */
+export const RESETTABLE_STATUSES: readonly SessionStatus[] = ['ACTIVE', 'DEGRADED'];
+
+/**
+ * Statuses in which a teardown owns the session, or has finished it.
+ *
+ * Once a session is here nothing but that teardown may act on its sandbox, and
+ * whatever a racing start or reset built must be discarded rather than kept.
+ */
+export function isTeardownOwned(status: SessionStatus): boolean {
+  return status === 'ENDING' || status === 'EXPIRING' || isTerminalStatus(status);
 }
 
 /**
@@ -106,6 +128,19 @@ export interface LabSession {
   environmentId: string;
   createdAt: string;
   lastActivityAt: string;
+  /**
+   * When `status` last actually changed.
+   *
+   * Two jobs. The reaper measures how long a RESETTING or ENDING operation has
+   * been in flight from it, which is the only way to tell a dead owner from a
+   * slow one. And it fences a status claim: a reset releases its claim only if
+   * the row still carries the timestamp its own claim wrote, so a claim that was
+   * recovered and then taken by a *second* reset cannot be released by the first.
+   *
+   * Written by `SessionStore.transition` only when the status really changes;
+   * resuming a teardown from its own in-flight state leaves it alone.
+   */
+  statusChangedAt: string;
   /** Absolute deadline. Activity never moves this. */
   expiresAt: string;
   /** Set once teardown finished. */

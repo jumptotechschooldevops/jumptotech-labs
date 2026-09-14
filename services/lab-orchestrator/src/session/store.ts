@@ -18,6 +18,20 @@ import {
   type SessionStatus,
 } from './types.js';
 
+/**
+ * Extra conditions a `transition` must also satisfy.
+ *
+ * `statusChangedAt` fences a claim: the write applies only if the row still
+ * carries the status timestamp the caller's own claim wrote. A status alone
+ * cannot tell two claims of the same state apart — RESETTING recovered to
+ * DEGRADED and then claimed by another reset is RESETTING again — and releasing
+ * somebody else's claim is exactly the resurrection the conditional write exists
+ * to prevent.
+ */
+export interface TransitionGuard {
+  statusChangedAt?: string;
+}
+
 export interface SessionStore {
   create(session: LabSession): Promise<void>;
   get(sessionId: string): Promise<LabSession | null>;
@@ -46,14 +60,19 @@ export interface SessionStore {
    * ACTIVE by an in-flight request, and what makes two reapers finding the same
    * expired session harmless.
    *
-   * Returns the new record, or `null` when the session is unknown or was in
-   * none of the `from` states.
+   * `patch.statusChangedAt` is written only when the status really changes, so
+   * a teardown resuming from its own in-flight state keeps the time it began —
+   * that is what the reaper measures an abandoned operation by.
+   *
+   * Returns the new record, or `null` when the session is unknown, was in none
+   * of the `from` states, or failed the `guard`.
    */
   transition(
     sessionId: string,
     from: readonly SessionStatus[],
     to: SessionStatus,
     patch?: Partial<LabSession>,
+    guard?: TransitionGuard,
   ): Promise<LabSession | null>;
 
   /**
@@ -197,10 +216,19 @@ export class InMemorySessionStore implements SessionStore {
     from: readonly SessionStatus[],
     to: SessionStatus,
     patch: Partial<LabSession> = {},
+    guard: TransitionGuard = {},
   ): Promise<LabSession | null> {
     const current = this.#bySessionId.get(sessionId);
     if (!current || !from.includes(current.status)) return null;
-    return this.update(sessionId, { ...patch, status: to });
+    if (guard.statusChangedAt !== undefined && current.statusChangedAt !== guard.statusChangedAt) {
+      return null;
+    }
+    const { statusChangedAt, ...rest } = patch;
+    return this.update(sessionId, {
+      ...rest,
+      status: to,
+      ...(statusChangedAt !== undefined && current.status !== to ? { statusChangedAt } : {}),
+    });
   }
 
   async touchActivity(sessionId: string, at: string): Promise<LabSession | null> {

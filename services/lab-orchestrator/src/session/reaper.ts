@@ -1,13 +1,23 @@
 /**
  * Automatic sandbox cleanup.
  *
- * Students are never responsible for cleanup. Three things get a namespace
+ * Students are never responsible for cleanup. Four things get a namespace
  * deleted:
  *
  *   expired   — the session passed its absolute deadline (`expires_at`)
  *   idle      — nobody has interacted with it for the idle budget
+ *   abandoned — a student's End is still `ENDING` after `abandonedEndGraceMs`:
+ *               its process died, or its destroy did not complete. It is
+ *               finished as the End it was, never relabelled EXPIRED.
  *   orphaned  — the cluster has a managed sandbox namespace the store has no
- *               record of (an API restart, or a start that failed midway)
+ *               record of (an API restart, or a start that failed midway), or
+ *               one whose session already finished (a start or reset that lost
+ *               its session to a teardown and could not discard what it built)
+ *
+ * And one interrupted operation is recovered without deleting anything: a
+ * session still `RESETTING` after `resetRecoveryGraceMs` becomes `DEGRADED`,
+ * which the student can reset again or end, and which idle and absolute expiry
+ * still reclaim.
  *
  * The orphan rule is what makes this safe across restarts: the in-memory store
  * is lost on restart, but the namespace labels are not, so each sandbox's
@@ -35,13 +45,13 @@
  * by an operator hand-labelling a system namespace, because the name check
  * would still refuse it.
  */
-import type { LabProvider, ManagedSandbox } from '../types.js';
+import type { DestroyResult, LabProvider, ManagedSandbox } from '../types.js';
 import { ProviderRegistry, singleProviderRegistry } from '../providers/registry.js';
-import type { SessionManager } from './manager.js';
+import type { SessionManager, TeardownResult } from './manager.js';
 import { isExpired, isIdle } from './store.js';
-import { isTerminalStatus } from './types.js';
+import { isTerminalStatus, type LabSession } from './types.js';
 
-export type SweepReason = 'expired' | 'idle' | 'orphaned';
+export type SweepReason = 'expired' | 'idle' | 'abandoned' | 'orphaned';
 
 export interface ReaperOptions {
   sessions: SessionManager;
@@ -63,6 +73,25 @@ export interface ReaperOptions {
    * mid-provisioning.
    */
   orphanGraceMs?: number;
+  /**
+   * How long a session may stay `RESETTING` before its reset is presumed dead
+   * and the session is moved to `DEGRADED`.
+   *
+   * Longer than any healthy reset: the Docker track waits up to three minutes
+   * for a sandbox daemon on its own. Presuming a live reset dead is safe — its
+   * fenced release fails and it leaves the sandbox alone — but it turns a slow
+   * success into a "reset again", so this errs long.
+   */
+  resetRecoveryGraceMs?: number;
+  /**
+   * How long a session may stay `ENDING` before the reaper finishes that End
+   * itself.
+   *
+   * Resuming a live End is harmless — destroy is idempotent and only one
+   * teardown records the ending — so this only avoids doubling the work of a
+   * normal End, which takes seconds, or of a namespace still terminating.
+   */
+  abandonedEndGraceMs?: number;
   /**
    * How long a finished session record is kept for the UI to read before it is
    * dropped from the store. Zero keeps them forever.
@@ -111,6 +140,8 @@ export interface SweepResult {
   errors: string[];
   /** Live sessions inspected and deliberately left alone. */
   retained: number;
+  /** Sessions whose abandoned reset was moved to DEGRADED during this sweep. */
+  recovered: string[];
   /** Finished session records dropped by the retention sweep. */
   forgotten: string[];
 }
@@ -121,6 +152,8 @@ export class SessionReaper {
   readonly #now: () => number;
   readonly #log: (message: string) => void;
   readonly #orphanGraceMs: number;
+  readonly #resetRecoveryGraceMs: number;
+  readonly #abandonedEndGraceMs: number;
   readonly #retentionMs: number;
   readonly #providers: ProviderRegistry;
   readonly #metrics: ReaperMetricsHooks;
@@ -135,6 +168,11 @@ export class SessionReaper {
      */
     this.#log = options.log ?? (() => undefined);
     this.#orphanGraceMs = options.orphanGraceMs ?? 60_000;
+    // Never zero: a reset's claim is fenced on its status timestamp, and a grace
+    // period is what guarantees a later claim of the same session carries a
+    // later one than the claim that was recovered.
+    this.#resetRecoveryGraceMs = Math.max(1, options.resetRecoveryGraceMs ?? 10 * 60_000);
+    this.#abandonedEndGraceMs = options.abandonedEndGraceMs ?? 5 * 60_000;
     this.#retentionMs = options.retentionMs ?? 15 * 60_000;
     this.#providers =
       options.providers ??
@@ -197,6 +235,7 @@ export class SessionReaper {
       pending: [],
       errors: [],
       retained: 0,
+      recovered: [],
       forgotten: [],
     };
 
@@ -254,11 +293,61 @@ export class SessionReaper {
     for (const session of sessions) {
       if (isTerminalStatus(session.status)) continue;
 
-      // A teardown already in flight is re-entered every pass until the
-      // namespace is verifiably gone — that is the idempotence guarantee.
-      const inFlight = session.status === 'EXPIRING' || session.status === 'ENDING';
       const expired = isExpired(session, now);
       const idle = isIdle(session, now);
+      const inStatusMs = now - Date.parse(session.statusChangedAt);
+      const ref = session.sandboxRef ?? session.namespace;
+
+      /*
+       * A student's End, still unfinished.
+       *
+       * Only an End claims `ENDING`, so only an End can finish one — and the
+       * student already pressed it. Within the grace period it is left to its
+       * owner; after it, the reaper resumes it as that End, whatever the
+       * absolute deadline says. Waiting for the deadline instead left the slot
+       * held and the sandbox standing for up to a whole session lifetime.
+       */
+      if (session.status === 'ENDING') {
+        if (inStatusMs < this.#abandonedEndGraceMs) {
+          result.pending.push(ref);
+          continue;
+        }
+        await this.#finish(result, session, 'abandoned', () =>
+          this.options.sessions.resumeAbandonedEnd(session.sessionId),
+        );
+        continue;
+      }
+
+      /*
+       * A reset nobody is running any more.
+       *
+       * Expiry still wins: a session past its deadline, or idle, is torn down
+       * from RESETTING exactly as before. Otherwise it is recovered to DEGRADED
+       * — never ACTIVE, because what the dead reset left behind is unknown.
+       */
+      if (
+        session.status === 'RESETTING' &&
+        !expired &&
+        !idle &&
+        inStatusMs >= this.#resetRecoveryGraceMs
+      ) {
+        try {
+          const recovered = await this.options.sessions.recoverInterruptedReset(session);
+          if (recovered) {
+            result.recovered.push(session.sessionId);
+            this.#log(`recovered ${session.sessionId}: interrupted reset is now DEGRADED (lab=${session.labId})`);
+          } else {
+            result.retained += 1;
+          }
+        } catch (error) {
+          result.errors.push(`${ref}: ${describe(error)}`);
+        }
+        continue;
+      }
+
+      // A teardown already in flight is re-entered every pass until the
+      // namespace is verifiably gone — that is the idempotence guarantee.
+      const inFlight = session.status === 'EXPIRING';
 
       if (!inFlight && !expired && !idle) {
         result.retained += 1;
@@ -275,39 +364,35 @@ export class SessionReaper {
       // Teardown runs through `SessionManager.expire`, which dispatches to the
       // provider recorded on the session — so a Kubernetes namespace and a
       // Linux container both reach EXPIRED through the same state machine.
-      const ref = session.sandboxRef ?? session.namespace;
-      /*
-       * Adopt a teardown whose owner is gone.
-       *
-       * `expire()` normally cannot claim a session left in `ENDING`, so that it
-       * never relabels a student's End that is still running. But if the
-       * process holding that `ENDING` died, nothing else ever will claim it:
-       * the row stays in `ENDING` for good, holds one of the
-       * `MAX_ACTIVE_SESSIONS` slots for good, and its sandbox is never
-       * destroyed.
-       *
-       * Past the absolute deadline there is no live End to protect — End takes
-       * seconds and the deadline is an hour out — so the sweep takes the
-       * teardown over. Before it, the refusal stands exactly as before.
-       */
-      try {
-        const outcome = await this.options.sessions.expire(session.sessionId, detail, {
-          adoptAbandoned: expired,
-        });
-        if (outcome.destroy.namespaceGone) {
-          result.removed.push(ref);
-          result.reasons[ref] = reason;
-          this.#emit((m) => m.onReclaimed?.(reason, session.provider));
-          this.#log(`removed ${ref} (${reason}, provider=${session.provider}, lab=${session.labId})`);
-        } else {
-          result.pending.push(ref);
-          if (outcome.destroy.error) {
-            result.errors.push(`${ref}: ${outcome.destroy.error.message}`);
-          }
+      await this.#finish(result, session, reason, () =>
+        this.options.sessions.expire(session.sessionId, detail),
+      );
+    }
+  }
+
+  /** Drive one session teardown and record what it achieved. */
+  async #finish(
+    result: SweepResult,
+    session: LabSession,
+    reason: SweepReason,
+    teardown: () => Promise<TeardownResult>,
+  ): Promise<void> {
+    const ref = session.sandboxRef ?? session.namespace;
+    try {
+      const outcome = await teardown();
+      if (outcome.destroy.namespaceGone) {
+        result.removed.push(ref);
+        result.reasons[ref] = reason;
+        this.#emit((m) => m.onReclaimed?.(reason, session.provider));
+        this.#log(`removed ${ref} (${reason}, provider=${session.provider}, lab=${session.labId})`);
+      } else {
+        result.pending.push(ref);
+        if (outcome.destroy.error) {
+          result.errors.push(`${ref}: ${outcome.destroy.error.message}`);
         }
-      } catch (error) {
-        result.errors.push(`${ref}: ${describe(error)}`);
       }
+    } catch (error) {
+      result.errors.push(`${ref}: ${describe(error)}`);
     }
   }
 
@@ -316,11 +401,27 @@ export class SessionReaper {
   async #sweepOrphans(result: SweepResult): Promise<void> {
     const now = this.#now();
 
-    let known: Set<string>;
+    /*
+     * Only a session that is still running shields its sandbox.
+     *
+     * A finished row is kept for `retentionMs` so the UI can read it, and it
+     * used to count as "known" all that time — with a retention of zero,
+     * forever. But a finished session owns no sandbox. One that exists anyway
+     * was built by a start or reset that lost its session to a teardown and
+     * could not discard it, or survived a failed start's cleanup.
+     */
+    let live: Set<string>;
+    const finished = new Map<string, LabSession>();
     try {
-      known = new Set(
-        (await this.options.sessions.list()).flatMap((s) => [s.sandboxRef ?? s.namespace, s.namespace]),
+      const sessions = await this.options.sessions.list();
+      live = new Set(
+        sessions
+          .filter((s) => !isTerminalStatus(s.status))
+          .flatMap((s) => [s.sandboxRef ?? s.namespace, s.namespace]),
       );
+      for (const session of sessions) {
+        if (isTerminalStatus(session.status)) finished.set(session.sandboxRef ?? session.namespace, session);
+      }
     } catch (error) {
       result.errors.push(`listing sessions: ${describe(error)}`);
       return;
@@ -344,11 +445,26 @@ export class SessionReaper {
       let orphans = 0;
 
       for (const sandbox of managed) {
-        if (known.has(sandbox.sandboxRef)) continue;
+        if (live.has(sandbox.sandboxRef)) continue;
         // Already going away on its own.
         if (sandbox.phase === 'Terminating' || sandbox.phase === 'removing') continue;
 
         orphans += 1;
+
+        /*
+         * The sandbox of a finished session needs neither an expiry label nor a
+         * grace period: the session is over, so nothing in flight can still be
+         * building it for a live student. It is removed through the session's
+         * own provider destroy, which names the session — so the live resource
+         * must carry that session id, as well as this provider and this runtime
+         * owner, or the delete is refused. Discovery is already owner-scoped.
+         */
+        const owner = finished.get(sandbox.sandboxRef);
+        if (owner) {
+          const outcome = await this.options.sessions.reclaimFinishedSandbox(owner.sessionId);
+          this.#recordOrphanOutcome(result, provider.id, sandbox, outcome);
+          continue;
+        }
 
         // An unlabelled expiry is left for an operator: the platform will not
         // guess a deadline for a sandbox it cannot date.
@@ -363,24 +479,31 @@ export class SessionReaper {
         }
 
         const outcome = await provider.destroySandbox(sandbox.sandboxRef);
-        if (outcome.namespaceGone) {
-          result.removed.push(sandbox.sandboxRef);
-          result.reasons[sandbox.sandboxRef] = 'orphaned';
-          this.#emit((m) => m.onReclaimed?.('orphaned', provider.id));
-          this.#log(
-            `removed ${sandbox.sandboxRef} (orphaned, provider=${provider.id}, lab=${sandbox.labId || 'unknown'})`,
-          );
-        } else if (outcome.ok) {
-          result.pending.push(sandbox.sandboxRef);
-        } else {
-          this.#emit((m) => m.onDeleteFailed?.(provider.id, outcome.error?.code ?? 'unknown'));
-          result.errors.push(
-            `${sandbox.sandboxRef}: ${outcome.error?.message ?? 'unknown error'}`,
-          );
-        }
+        this.#recordOrphanOutcome(result, provider.id, sandbox, outcome);
       }
 
       this.#orphansThisSweep[provider.id] = orphans;
+    }
+  }
+
+  #recordOrphanOutcome(
+    result: SweepResult,
+    providerId: string,
+    sandbox: ManagedSandbox,
+    outcome: DestroyResult,
+  ): void {
+    if (outcome.namespaceGone) {
+      result.removed.push(sandbox.sandboxRef);
+      result.reasons[sandbox.sandboxRef] = 'orphaned';
+      this.#emit((m) => m.onReclaimed?.('orphaned', providerId));
+      this.#log(
+        `removed ${sandbox.sandboxRef} (orphaned, provider=${providerId}, lab=${sandbox.labId || 'unknown'})`,
+      );
+    } else if (outcome.ok) {
+      result.pending.push(sandbox.sandboxRef);
+    } else {
+      this.#emit((m) => m.onDeleteFailed?.(providerId, outcome.error?.code ?? 'unknown'));
+      result.errors.push(`${sandbox.sandboxRef}: ${outcome.error?.message ?? 'unknown error'}`);
     }
   }
 

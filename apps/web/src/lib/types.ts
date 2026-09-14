@@ -175,6 +175,7 @@ export type SessionStatus =
   | 'CREATING'
   | 'ACTIVE'
   | 'RESETTING'
+  | 'DEGRADED'
   | 'EXPIRING'
   | 'EXPIRED'
   | 'ENDING'
