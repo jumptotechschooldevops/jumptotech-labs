@@ -8,7 +8,8 @@
     "./host-execution": "./host-execution.ts",
     "./run-id": "./test-run-id.ts",
     "./setup": "./vitest.setup.ts",
-    "./guard-contract": "./guard-contract.ts"
+    "./guard-contract": "./guard-contract.ts",
+    "./tls-pki": "./tls-pki.ts"
   },
   "devDependencies": {
     "vitest": "^3.2.6"

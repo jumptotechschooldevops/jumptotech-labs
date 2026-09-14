@@ -97,6 +97,8 @@ describe('the container runtime a deployment drives', () => {
     const config = loadConfig({
       ...PRODUCTION_ENV,
       SANDBOX_BROKER_URL: 'http://sandboxd:4002',
+      // Plaintext to a service name is refused in production unless declared (BETA-P0-011).
+      SANDBOX_BROKER_SAME_HOST_PLAINTEXT: 'true',
       SANDBOX_RUNTIME_HOST: 'tcp://some-daemon:2376',
       // A brokered production API needs both capabilities it uses (BETA-P0-010).
       SANDBOXD_RUNTIME_SECRET: '3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f',

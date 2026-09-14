@@ -124,6 +124,33 @@ try {
       if (extra.length === 0 && missing.length === 0) {
         console.log(`[${stackName}] ${service.padEnd(12)} ${received.length ? received.join(', ') : '(no secrets)'}`);
       }
+
+      /*
+       * BETA-P0-011 — the same resolved definition, asked where its credentials
+       * can be reached from. A port or a mount that arrives through a merge or
+       * an anchor is seen here the way the running stack would see it.
+       */
+      for (const port of definition.ports ?? []) {
+        const target = Number(port.target);
+        const hostIp = port.host_ip ?? '';
+        if (contract.publishedPorts.never.includes(target)) {
+          console.error(`[${stackName}] ${service} publishes port ${target}, which must never be published`);
+          failures += 1;
+        } else if (contract.publishedPorts.loopbackOnly.includes(target) && hostIp !== '127.0.0.1') {
+          console.error(`[${stackName}] ${service} publishes port ${target} on ${hostIp || 'every interface'}; it must bind 127.0.0.1`);
+          failures += 1;
+        }
+      }
+      for (const volume of definition.volumes ?? []) {
+        if (typeof volume.source !== 'string') continue;
+        for (const [source, owners] of Object.entries(contract.credentialMounts)) {
+          if (source === '$comment') continue;
+          if (path.resolve(repoRoot, source) === path.resolve(repoRoot, volume.source) && !owners.includes(service)) {
+            console.error(`[${stackName}] ${service} mounts ${source}, which only ${owners.join(', ')} may`);
+            failures += 1;
+          }
+        }
+      }
     }
   }
 } finally {
@@ -134,4 +161,6 @@ if (failures > 0) {
   console.error(`\nsecret distribution does not match infrastructure/secret-distribution.json (${failures} problem(s))`);
   process.exit(1);
 }
-console.log('\nevery service receives exactly the secrets infrastructure/secret-distribution.json allows');
+console.log(
+  '\nevery service receives exactly the secrets, credential mounts and published ports infrastructure/secret-distribution.json allows',
+);

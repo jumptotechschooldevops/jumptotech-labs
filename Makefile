@@ -43,8 +43,9 @@ secrets: ## Generate missing or placeholder secrets in .env (idempotent)
 
 # Resolves the shipped compose files with sentinel values and proves each
 # service receives exactly the secrets infrastructure/secret-distribution.json
-# allows. Reads no .env and prints names only.
-secrets-check: ## Prove which service receives which secret, from `docker compose config`
+# allows — and, since BETA-P0-011, which ports it publishes and which credential
+# files it mounts. Reads no .env and prints names only.
+secrets-check: ## Prove which service receives which secret, mount and published port, from `docker compose config`
 	@node scripts/check-secret-distribution.mjs
 
 observability-token: ## Write the scrape token where Prometheus reads it

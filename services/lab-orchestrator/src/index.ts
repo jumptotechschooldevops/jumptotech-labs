@@ -92,6 +92,25 @@ export {
 export { BrokerRuntime, type BrokerRuntimeOptions } from './providers/container/broker-runtime.js';
 export { BrokerDockerEngines, type BrokerDockerOptions } from './docker/broker-engines.js';
 export {
+  BROKER_CA_FILE_ENV,
+  BROKER_SAME_HOST_PLAINTEXT_ENV,
+  BROKER_TLS_CERT_FILE_ENV,
+  BROKER_TLS_KEY_FILE_ENV,
+  BROKER_TLS_MIN_VERSION,
+  BROKER_URL_ENV,
+  BrokerTransportError,
+  assertTlsVerificationEnabled,
+  brokerFetch,
+  brokerTlsOptions,
+  isLoopbackAddress,
+  resolveBrokerClientTransport,
+  resolveBrokerServerTransport,
+  type BrokerClientTlsOptions,
+  type BrokerClientTransport,
+  type BrokerServerTransport,
+  type BrokerTransportMode,
+} from './broker-transport.js';
+export {
   DockerCliRuntime,
   ContainerRuntimeError,
   GRANTABLE_CAPABILITIES,

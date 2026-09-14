@@ -63,6 +63,19 @@ async function main(): Promise<void> {
     );
   }
 
+  // BETA-P0-011. The mode only — never the URL, which is operator input.
+  const brokerTransport = config.sandbox.runtimeBrokerTransport;
+  if (brokerTransport) {
+    const plaintext = brokerTransport.mode !== 'tls';
+    logger[plaintext ? 'warn' : 'info'](
+      'config.loaded',
+      { reason: `broker_transport_${brokerTransport.mode.replace(/-/g, '_')}` },
+      plaintext
+        ? `runtime broker transport: ${brokerTransport.mode} — capability secrets are not encrypted in transit; acceptable only on loopback or one host's private bridge`
+        : `runtime broker transport: tls (${brokerTransport.ca ? 'private CA bundle' : 'system trust store'})`,
+    );
+  }
+
   const registry = new LabRegistry(config.labsDir);
   await registry.load();
   metrics.sessions.labsLoaded.set(registry.size);

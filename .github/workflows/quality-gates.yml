@@ -178,7 +178,11 @@ jobs:
       # instead, so overlays, merges and interpolation are resolved the way the
       # running stack resolves them. Sentinel values only, from a temporary env
       # file and a scrubbed environment; it prints variable and service names.
-      - name: Each service receives exactly its allowed secrets
+      #
+      # BETA-P0-011 extends the same resolved definitions to published ports
+      # (4002 never; 4000/4001/9400-9402 loopback only) and credential mounts,
+      # the Docker socket among them.
+      - name: Each service receives exactly its allowed secrets, mounts and ports
         run: node scripts/check-secret-distribution.mjs
 
       - name: Build

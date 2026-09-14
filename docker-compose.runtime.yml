@@ -47,8 +47,16 @@
 # On a single-host compose stack, `sandboxd` and the web tier share a kernel, so
 # what this buys is a much smaller and much better-audited attack surface rather
 # than a hard partition. A real deployment puts `sandboxd` on a runtime node
-# that is not the machine serving the web tier — the wiring is identical, only
-# `SANDBOX_BROKER_URL` changes. See docs/runtime-architecture.md.
+# that is not the machine serving the web tier.
+#
+# That is not just a different `SANDBOX_BROKER_URL` (BETA-P0-011). Every broker
+# request carries a capability secret, so across hosts the URL must be
+# `https://`, sandboxd must hold `SANDBOXD_TLS_CERT_FILE`/`_KEY_FILE`, and the
+# callers verify it (`SANDBOX_BROKER_CA_FILE` for a private CA). Under
+# NODE_ENV=production all three services refuse plaintext to anything but
+# loopback — except where `SANDBOX_BROKER_SAME_HOST_PLAINTEXT=true` declares the
+# arrangement in this file: one host, one private bridge, no wire. That
+# declaration is wrong anywhere else. See docs/runtime-architecture.md §8.
 # ---------------------------------------------------------------------------
 
 services:
@@ -72,6 +80,11 @@ services:
       # Bound to every interface *on this network only*: there is no `ports:`
       # stanza below, so nothing outside the compose network can reach it.
       SANDBOXD_BIND: 0.0.0.0
+      # BETA-P0-011. Plaintext on a non-loopback bind is refused in production
+      # unless declared. True here and only here: the api and terminal reach
+      # this service across one host's private Docker bridge, never a wire. A
+      # runtime host of its own sets SANDBOXD_TLS_CERT_FILE/_KEY_FILE instead.
+      SANDBOX_BROKER_SAME_HOST_PLAINTEXT: "true"
       # One secret per capability, and never one secret for all of them.
       #
       # These used to be a single INTERNAL_SERVICE_SECRET — the same value the
@@ -149,6 +162,8 @@ services:
       # Create, read and destroy sandboxes through the broker. Set, and this
       # service holds no container runtime at all — see apps/api/src/providers.ts.
       SANDBOX_BROKER_URL: http://sandboxd:4002
+      # BETA-P0-011: plaintext to a service name, declared single-host. See sandboxd.
+      SANDBOX_BROKER_SAME_HOST_PLAINTEXT: "true"
       # Two capabilities, and deliberately not the third: opening a student's
       # shell is the terminal's job, and a credential this service never holds
       # is one a bug here cannot use.
@@ -185,6 +200,8 @@ services:
   terminal:
     environment:
       SANDBOX_BROKER_URL: http://sandboxd:4002
+      # BETA-P0-011: plaintext to a service name, declared single-host. See sandboxd.
+      SANDBOX_BROKER_SAME_HOST_PLAINTEXT: "true"
       # `attach`, and nothing else. This is the one process a student types
       # into; it holds no credential for the broker's runtime or Docker
       # capabilities, so it cannot reach them even if it tried.

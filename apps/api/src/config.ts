@@ -20,6 +20,9 @@ import {
   type SessionPolicy,
   resolveRuntimeOwner,
   type RuntimeOwnerSource,
+  assertTlsVerificationEnabled,
+  resolveBrokerClientTransport,
+  type BrokerClientTransport,
 } from '@jumptotech/lab-orchestrator';
 import {
   DEFAULT_DEV_STUDENT_ID,
@@ -237,6 +240,13 @@ export interface SandboxProviderConfig {
    * never quietly fall back to driving a daemon itself.
    */
   runtimeBrokerUrl: string;
+  /**
+   * How `runtimeBrokerUrl` is reached, and why that was allowed — BETA-P0-011.
+   *
+   * `null` without a broker. Carries the CA bundle trusted for this one
+   * connection when the broker is `https://`. See `broker-transport.ts`.
+   */
+  runtimeBrokerTransport?: BrokerClientTransport | null;
   /**
    * This service's credentials for the broker, one per capability it uses.
    *
@@ -632,6 +642,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     });
   }
 
+  /*
+   * BETA-P0-011 — the runtime and Docker capabilities travel to sandboxd, which
+   * may be on another host. After the secret gate, so a missing secret is still
+   * reported as one. Production refuses plaintext to anything but loopback or a
+   * declared single-host bridge; see `broker-transport.ts`.
+   */
+  assertTlsVerificationEnabled(env, 'api');
+  const runtimeBrokerTransport = runtimeBrokerUrl
+    ? resolveBrokerClientTransport(env, { service: 'api', url: runtimeBrokerUrl })
+    : null;
+
   return {
     /*
      * `oidc` is the default on purpose.
@@ -711,6 +732,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       runtimeHost: strFromEnv(env, 'SANDBOX_RUNTIME_HOST', ''),
       runtimeCertPath: strFromEnv(env, 'SANDBOX_RUNTIME_CERT_PATH', ''),
       runtimeBrokerUrl,
+      runtimeBrokerTransport,
       runtimeBrokerCredential,
       dockerBrokerCredential,
       linuxEnabled: boolFromEnv(env, 'LINUX_PROVIDER_ENABLED', true),

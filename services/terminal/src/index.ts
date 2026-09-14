@@ -71,6 +71,17 @@ function main(): void {
         'production refuses to start this way (`make secrets` generates a separate value)',
     );
   }
+  // BETA-P0-011. The mode only — never the URL, which is operator input.
+  if (config.sandboxBrokerTransport) {
+    const { mode, ca } = config.sandboxBrokerTransport;
+    logger[mode === 'tls' ? 'info' : 'warn'](
+      'config.loaded',
+      { reason: `broker_transport_${mode.replace(/-/g, '_')}` },
+      mode === 'tls'
+        ? `runtime broker transport: tls (${ca ? 'private CA bundle' : 'system trust store'})`
+        : `runtime broker transport: ${mode} — the attach secret is not encrypted in transit; acceptable only on loopback or one host's private bridge`,
+    );
+  }
 
   const registry = createRegistry({ service: 'terminal' });
   const common = createCommonMetrics(registry, 'terminal');

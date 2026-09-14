@@ -29,6 +29,7 @@ interface Contract {
   optionalEmpty: string[];
   stacks: Record<string, { files: string[]; services: Record<string, string[]> }>;
   credentialMounts: Record<string, string[] | string>;
+  publishedPorts: { never: number[]; loopbackOnly: number[] };
 }
 
 const contract = JSON.parse(
@@ -173,4 +174,68 @@ describe('credentials delivered as files', () => {
       expect([...holders].sort()).toEqual([...(owners as string[])].sort());
     });
   }
+});
+
+/**
+ * Each short-syntax `ports:` entry in a block: its host interface, if one is
+ * named, and the container port. `${VAR:-9402}` is collapsed first, because
+ * its `:-` would otherwise read as a separator. An entry this cannot read is
+ * returned with a NaN target, and fails the policy rather than passing it.
+ */
+function publishedPorts(lines: readonly string[]): Array<{ spec: string; hostIp: string | null; target: number }> {
+  const found: Array<{ spec: string; hostIp: string | null; target: number }> = [];
+  let inPorts = false;
+  for (const line of lines) {
+    if (/^ {4}ports:\s*$/.test(line)) {
+      inPorts = true;
+      continue;
+    }
+    if (!inPorts) continue;
+    if (!/^ {6}/.test(line)) {
+      inPorts = false;
+      continue;
+    }
+    const item = /^ {6}-\s*(.+?)\s*$/.exec(line);
+    const spec = (item?.[1] ?? line.trim()).replace(/^["']|["']$/g, '');
+    const parts = spec.replace(/\$\{[^}]*\}/g, 'VAR').split(':');
+    const target = /^\d+(\/(tcp|udp))?$/.test(parts[parts.length - 1]!)
+      ? Number.parseInt(parts[parts.length - 1]!, 10)
+      : Number.NaN;
+    found.push({ spec, hostIp: parts.length === 3 ? parts[0]! : null, target });
+  }
+  return found;
+}
+
+describe('ports that carry a credential (BETA-P0-011)', () => {
+  const policy = contract.publishedPorts;
+
+  for (const file of COMPOSE_FILES) {
+    it(`${file} publishes ${policy.never.join(', ')} nowhere, and ${policy.loopbackOnly.join(', ')} only on 127.0.0.1`, () => {
+      const problems: string[] = [];
+      for (const [service, lines] of serviceBlocks(file)) {
+        for (const port of publishedPorts(lines)) {
+          if (Number.isNaN(port.target)) {
+            problems.push(`${service}: unreadable ports entry '${port.spec}'`);
+          } else if (policy.never.includes(port.target)) {
+            problems.push(`${service}: publishes ${port.target}`);
+          } else if (policy.loopbackOnly.includes(port.target) && port.hostIp !== '127.0.0.1') {
+            problems.push(`${service}: publishes ${port.target} on ${port.hostIp ?? 'every interface'}`);
+          }
+        }
+      }
+      expect(problems).toEqual([]);
+    });
+  }
+
+  it('publishes nothing from sandboxd but its loopback metrics listener', () => {
+    const published = COMPOSE_FILES.flatMap((file) =>
+      publishedPorts(serviceBlocks(file).get('sandboxd') ?? []).map((port) => `${port.hostIp}:${port.target}`),
+    );
+    expect(published).toEqual(['127.0.0.1:9402']);
+  });
+
+  it('reads the entries it polices, so a passing check is not an empty one', () => {
+    const web = publishedPorts(serviceBlocks('docker-compose.yml').get('web') ?? []);
+    expect(web).toEqual([{ spec: '${WEB_PORT:-3000}:3000', hostIp: null, target: 3000 }]);
+  });
 });

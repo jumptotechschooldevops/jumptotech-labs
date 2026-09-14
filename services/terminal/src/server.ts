@@ -448,6 +448,7 @@ export function createTerminalServer(
       if (config.sandboxBrokerEnabled) {
         const attachment = await brokerShell({
           brokerUrl: config.sandboxBrokerUrl,
+          ...(config.sandboxBrokerTransport?.ca ? { ca: config.sandboxBrokerTransport.ca } : {}),
           secret: config.sandboxBrokerCredential,
           sessionId: session.claims.sid,
           cols: session.cols,
@@ -822,6 +823,7 @@ export function createTerminalServer(
       if (viaBroker) {
         const attachment = await brokerShell({
           brokerUrl: config.sandboxBrokerUrl,
+          ...(config.sandboxBrokerTransport?.ca ? { ca: config.sandboxBrokerTransport.ca } : {}),
           // The attach credential, not the API secret: this process holds no
           // authority over the broker's runtime or Docker capabilities.
           secret: config.sandboxBrokerCredential,

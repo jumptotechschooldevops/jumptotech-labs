@@ -101,7 +101,12 @@ describe('API secrets under NODE_ENV=production', () => {
   }
 
   describe('broker capabilities', () => {
-    const BROKERED = { ...PRODUCTION, SANDBOX_BROKER_URL: 'http://sandboxd:4002' } as NodeJS.ProcessEnv;
+    // The compose arrangement: one host, one private bridge, declared (BETA-P0-011).
+    const BROKERED = {
+      ...PRODUCTION,
+      SANDBOX_BROKER_URL: 'http://sandboxd:4002',
+      SANDBOX_BROKER_SAME_HOST_PLAINTEXT: 'true',
+    } as NodeJS.ProcessEnv;
 
     it('requires runtime and docker when both are brokered', () => {
       const message = refusal(BROKERED);

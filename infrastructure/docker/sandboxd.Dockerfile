@@ -85,7 +85,12 @@ ENV HOME=/tmp \
 USER node
 EXPOSE 4002
 
+# With SANDBOXD_TLS_CERT_FILE set (BETA-P0-011) the port speaks only TLS, and
+# its certificate names the runtime host rather than 127.0.0.1. The probe then
+# checks that the listener accepts a connection instead of performing a
+# handshake, so it never needs to skip certificate verification. It sends no
+# credential either way.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.SANDBOXD_PORT||4002)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const p=+(process.env.SANDBOXD_PORT||4002);if(process.env.SANDBOXD_TLS_CERT_FILE){require('node:net').connect(p,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))}else{fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))}"
 
 CMD ["node", "/app/node_modules/.bin/tsx", "/app/services/sandboxd/src/index.ts"]
