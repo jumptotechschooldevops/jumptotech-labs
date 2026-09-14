@@ -18,7 +18,8 @@ import {
   type DockerSandboxPolicy,
   type SessionLifetimeConfig,
   type SessionPolicy,
-  DEFAULT_RUNTIME_OWNER,
+  resolveRuntimeOwner,
+  type RuntimeOwnerSource,
 } from '@jumptotech/lab-orchestrator';
 import {
   DEFAULT_DEV_STUDENT_ID,
@@ -187,13 +188,15 @@ export interface SandboxProviderConfig {
   /** Container CLI to drive. Never taken from a request. */
   containerBinary: string;
   /**
-   * Which runtime owns the sandboxes this deployment creates.
+   * Which runtime owns the sandboxes and namespaces this deployment creates.
    *
-   * One production deployment is one runtime and never sets this. It exists for
-   * the case where several run against one Docker daemon — seven curriculum
-   * worktrees on a laptop — so that each reaps only what it created.
+   * Resolved by `resolveRuntimeOwner` from `RUNTIME_OWNER_ID` — the same
+   * function sandboxd uses — and handed to every provider, Kubernetes included.
+   * Required under `NODE_ENV=production`; see docs/runtime-ownership.md.
    */
   runtimeOwner: string;
+  /** Whether `runtimeOwner` was configured or is the development default. */
+  runtimeOwnerSource: RuntimeOwnerSource;
   /**
    * The container runtime the per-session sandboxes live on.
    *
@@ -507,6 +510,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
 
   assertPublicOriginConfigured({ nodeEnv: env.NODE_ENV ?? 'development', appUrl, looksLocal });
 
+  // Fails closed in production: a missing owner is a refusal to start, not a
+  // default the API could disagree with sandboxd about.
+  const runtimeOwner = resolveRuntimeOwner(env);
+
   return {
     /*
      * `oidc` is the default on purpose.
@@ -578,7 +585,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     policy: loadSessionPolicy(env),
     sandbox: {
       containerBinary: strFromEnv(env, 'SANDBOX_CONTAINER_BINARY', 'docker'),
-      runtimeOwner: strFromEnv(env, 'RUNTIME_OWNER_ID', DEFAULT_RUNTIME_OWNER),
+      runtimeOwner: runtimeOwner.owner,
+      runtimeOwnerSource: runtimeOwner.source,
       runtimeHost: strFromEnv(env, 'SANDBOX_RUNTIME_HOST', ''),
       runtimeCertPath: strFromEnv(env, 'SANDBOX_RUNTIME_CERT_PATH', ''),
       runtimeBrokerUrl: strFromEnv(env, 'SANDBOX_BROKER_URL', ''),

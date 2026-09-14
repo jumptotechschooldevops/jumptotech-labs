@@ -33,6 +33,8 @@ import {
   RUNTIME_OWNER_LABEL,
   SessionManager,
   SessionReaper,
+  networkRefForSandbox,
+  peerRefForSandbox,
 } from '../src/index.js';
 import { FakeContainerRuntime } from './container-fakes.js';
 import { realCatalog } from './real-catalog.js';
@@ -133,16 +135,49 @@ describe('a reaper reclaims only its own runtime owner’s sandboxes', () => {
     expect(survivors(runtime)).toEqual([SANDBOX_B]);
   });
 
-  it('still reclaims a sandbox from before the label existed', async () => {
-    // Backward compatibility: an unlabelled sandbox belongs to whoever finds
-    // it, exactly as before. Upgrading must not strand running sandboxes.
+  it('does not adopt an expired sandbox that carries no owner at all', async () => {
+    // An unlabelled orphan is not provably anyone's. On a shared daemon it is
+    // as likely a neighbour's sandbox from an older build as one of ours, so
+    // the reaper leaves it for an operator — the same rule it applies to a
+    // sandbox with no expiry label.
     const runtime = new FakeContainerRuntime();
     runtime.addForeignContainer(LEGACY, expiredSandbox(undefined));
 
-    const { reaper } = await reaperFor(OWNER_A, runtime);
+    const { reaper, provider } = await reaperFor(OWNER_A, runtime);
     const sweep = await reaper.sweep();
 
-    expect(sweep.removed).toEqual([LEGACY]);
+    expect(sweep.removed).toEqual([]);
+    expect(survivors(runtime)).toEqual([LEGACY]);
+    expect((await provider.listManagedSandboxes()).map((s) => s.sandboxRef)).toEqual([]);
+    expect((await provider.destroySandbox(LEGACY)).ok).toBe(false);
+    expect(survivors(runtime)).toEqual([LEGACY]);
+  });
+
+  it('still tears down a pre-label sandbox when its own session is named', async () => {
+    // Upgrade safety without adoption: a live session created before the label
+    // existed is still this deployment's by its own store record, and its
+    // session label must match — so End Lab and expiry keep working for it.
+    const runtime = new FakeContainerRuntime();
+    runtime.addForeignContainer(LEGACY, expiredSandbox(undefined));
+
+    const { provider } = await reaperFor(OWNER_A, runtime);
+
+    expect((await provider.destroySandbox(LEGACY, 'sess-0000000000000002')).ok).toBe(false);
+    expect(survivors(runtime)).toEqual([LEGACY]);
+    expect((await provider.destroySandbox(LEGACY, 'sess-0000000000000001')).ok).toBe(true);
+    expect(survivors(runtime)).toEqual([]);
+  });
+
+  it('refuses another owner’s sandbox even when its session is named', async () => {
+    const runtime = new FakeContainerRuntime();
+    runtime.addForeignContainer(SANDBOX_B, expiredSandbox(OWNER_B));
+
+    const { provider } = await reaperFor(OWNER_A, runtime);
+    const result = await provider.destroySandbox(SANDBOX_B, 'sess-0000000000000001');
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.message ?? '').toContain(`'${OWNER_B}'`);
+    expect(survivors(runtime)).toEqual([SANDBOX_B]);
   });
 
   it('stamps its owner on every sandbox it creates', async () => {
@@ -275,5 +310,79 @@ describe('two runtime owners with two sessions each never touch one another', ()
     expect(first.errors).toEqual([]);
     expect(second.removed).toEqual([]);
     expect(survivors(runtime)).toEqual([A1, B1, B2, UNMANAGED].sort());
+  });
+});
+
+// ------------------------------------------ what a sandbox leaves behind
+
+describe('an orphaned lab network or peer is owner-scoped too', () => {
+  /*
+   * A sandbox whose container is already gone can still leave its private lab
+   * network and its peer host. Both are reclaimed with no session named, so the
+   * owner label is the only proof they are this runtime's. Neither used to be
+   * checked — and lab networks were created without the label at all.
+   */
+  it('reclaims its own orphaned network and leaves another owner’s', async () => {
+    const runtime = new FakeContainerRuntime();
+    const netA = networkRefForSandbox(SANDBOX_A);
+    const netB = networkRefForSandbox(SANDBOX_B);
+    runtime.addNetwork(netA, expiredSandbox(OWNER_A));
+    runtime.addNetwork(netB, expiredSandbox(OWNER_B));
+
+    const { reaper } = await reaperFor(OWNER_A, runtime);
+    const sweep = await reaper.sweep();
+
+    expect(sweep.removed).toEqual([SANDBOX_A]);
+    expect([...runtime.networks.keys()]).toEqual([netB]);
+  });
+
+  it('leaves an unowned orphaned network for an operator', async () => {
+    const runtime = new FakeContainerRuntime();
+    const netLegacy = networkRefForSandbox(LEGACY);
+    runtime.addNetwork(netLegacy, expiredSandbox(undefined));
+
+    const { reaper } = await reaperFor(OWNER_A, runtime);
+
+    expect((await reaper.sweep()).removed).toEqual([]);
+    expect([...runtime.networks.keys()]).toEqual([netLegacy]);
+  });
+
+  it('a session-less destroy does not take a foreign peer or network', async () => {
+    const runtime = new FakeContainerRuntime();
+    const peer = peerRefForSandbox(SANDBOX_A);
+    const net = networkRefForSandbox(SANDBOX_A);
+    runtime.addForeignContainer(peer, expiredSandbox(OWNER_B));
+    runtime.addNetwork(net, expiredSandbox(OWNER_B));
+
+    const { provider } = await reaperFor(OWNER_A, runtime);
+    await provider.destroySandbox(SANDBOX_A);
+
+    expect(survivors(runtime)).toEqual([peer]);
+    expect([...runtime.networks.keys()]).toEqual([net]);
+  });
+
+  it('labels the lab network and the peer it creates with its owner', async () => {
+    const runtime = new FakeContainerRuntime();
+    const { provider } = await reaperFor(OWNER_A, runtime);
+    const registry = await realCatalog();
+    const lab = registry
+      .all()
+      .find((l) => l.environment.provider === 'linux' && l.environment.peer && l.environment.network === 'link');
+    expect(lab, 'the catalog has a linux lab with a peer on a link network').toBeDefined();
+
+    await provider.create({
+      sessionId: 'sess-000000000000000a',
+      labId: lab!.id,
+      sandboxRef: SANDBOX_A,
+      namespace: SANDBOX_A,
+      serviceAccountName: 'student',
+      lab: lab!,
+      expiresAtMs: NOW + HOUR,
+      policy: DEFAULT_SESSION_POLICY,
+    } as never);
+
+    expect(runtime.networks.get(networkRefForSandbox(SANDBOX_A))?.labels[RUNTIME_OWNER_LABEL]).toBe(OWNER_A);
+    const peer = runtime.created.find((spec) => spec.name === peerRefForSandbox(SANDBOX_A));
+    expect(peer?.labels?.[RUNTIME_OWNER_LABEL]).toBe(OWNER_A);
   });
 });

@@ -50,6 +50,10 @@ import {
   assertDeletable,
   expiryFromLabels,
   ownershipLabels,
+  ownedByRuntime,
+  runtimeOwnerPermits,
+  runtimeOwnerRefusal,
+  DEFAULT_RUNTIME_OWNER,
 } from '../k8s/labels.js';
 import { assertValidLabNamespace, isLabNamespace } from '../session/identifiers.js';
 import { buildStudentKubeconfig } from '../k8s/student-kubeconfig.js';
@@ -144,6 +148,13 @@ export interface KindProviderOptions {
    * Production leaves this unset and gets `execFileExecRunner`.
    */
   exec?: ProviderExecRunner;
+  /**
+   * Which runtime owns the namespaces this provider creates; see
+   * `RUNTIME_OWNER_LABEL`. Several worktrees share one kind cluster, so this is
+   * what keeps one's reaper out of another's namespaces. The composition root
+   * always passes the resolved `RUNTIME_OWNER_ID`; the default is for tests.
+   */
+  runtimeOwner?: string;
   /** Injectable for tests. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -164,8 +175,10 @@ export class KindLabProvider implements LabProvider {
   readonly #now: () => number;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #exec: ProviderExecRunner;
+  readonly #runtimeOwner: string;
 
   constructor(options: KindProviderOptions) {
+    this.#runtimeOwner = options.runtimeOwner ?? DEFAULT_RUNTIME_OWNER;
     this.#k8s = options.k8s;
     this.#clusterName = options.clusterName;
     this.#kubeconfigPath = options.kubeconfigPath;
@@ -175,6 +188,10 @@ export class KindLabProvider implements LabProvider {
     this.#now = options.now ?? (() => Date.now());
     this.#sleep = options.sleep ?? sleep;
     this.#exec = options.exec ?? execFileExecRunner;
+  }
+
+  get runtimeOwner(): string {
+    return this.#runtimeOwner;
   }
 
   environmentId(context: LabSessionContext): string {
@@ -238,6 +255,7 @@ export class KindLabProvider implements LabProvider {
             sessionId: context.sessionId,
             labId: context.labId,
             expiresAtMs: context.expiresAtMs,
+            runtimeOwner: this.#runtimeOwner,
           }),
         );
         await this.#applyGuardrails(context);
@@ -546,6 +564,13 @@ export class KindLabProvider implements LabProvider {
     if (!check.managed) {
       return this.#refuseDestroy(steps, namespace, check.reason ?? 'not managed by JumpToTech');
     }
+    if (!runtimeOwnerPermits(snapshot.labels, this.#runtimeOwner, expectedSessionId)) {
+      return this.#refuseDestroy(
+        steps,
+        namespace,
+        runtimeOwnerRefusal(`namespace '${namespace}'`, snapshot.labels, this.#runtimeOwner),
+      );
+    }
     steps.push({ id: 'verify-managed', label: 'Namespace ownership verified', status: 'ok' });
 
     try {
@@ -677,12 +702,15 @@ export class KindLabProvider implements LabProvider {
    * Every sandbox this platform owns, as recorded in namespace labels.
    *
    * Filtered by the managed label *and* by the sandbox name shape, so a
-   * hand-labelled system namespace never enters the reaper's work list.
+   * hand-labelled system namespace never enters the reaper's work list — and by
+   * the runtime owner, because one kind cluster is shared by every worktree and
+   * CI job on the machine, and what discovery cannot see the reaper cannot take.
    */
   async listManagedNamespaces(): Promise<ManagedNamespace[]> {
     const namespaces = await this.#k8s.listNamespaces(MANAGED_SELECTOR);
     return namespaces
       .filter((ns) => isLabNamespace(ns.name))
+      .filter((ns) => ownedByRuntime(ns.labels, this.#runtimeOwner))
       .map((ns) => ({
         namespace: ns.name,
         sessionId: ns.labels[SESSION_LABEL] ?? '',

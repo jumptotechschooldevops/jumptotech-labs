@@ -156,6 +156,12 @@ services:
       TERMINAL_CONTROL_URL: http://terminal:4001
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-${TERMINAL_SESSION_SECRET}}
       NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:-${TERMINAL_SESSION_SECRET}}
+      # Which runtime owns what this stack creates: stamped on every Kubernetes
+      # namespace and sandbox container, and required on everything cleanup
+      # touches. MUST be the same value sandboxd gets (docker-compose.runtime.yml)
+      # — both read this one variable, with no default in either place, so they
+      # cannot silently disagree. Not a secret. `make setup` writes one.
+      RUNTIME_OWNER_ID: ${RUNTIME_OWNER_ID:?set RUNTIME_OWNER_ID in .env (make setup writes one)}
       # Every service that serves /metrics refuses to start without a scrape
       # token (services/observability/src/listener.ts). It is required here, in
       # the *base* stack, and not only in docker-compose.observability.yml:

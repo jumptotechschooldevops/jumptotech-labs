@@ -18,10 +18,12 @@ import {
   CONTAINER_LAB_LABEL,
   CONTAINER_PROVIDER_LABEL,
   CONTAINER_SESSION_LABEL,
+  DEFAULT_RUNTIME_OWNER,
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
   LinuxLabProvider,
   MANAGED_CONTAINER_LABEL,
+  RUNTIME_OWNER_LABEL,
   SessionManager,
   SessionReaper,
 } from '../src/index.js';
@@ -46,6 +48,8 @@ function labels(over: Record<string, string> = {}): Record<string, string> {
     [CONTAINER_LAB_LABEL]: 'LINUX-001',
     [CONTAINER_PROVIDER_LABEL]: 'linux',
     [CONTAINER_EXPIRES_LABEL]: String(NOW + HOUR),
+    // The owner the provider under test stamps (it is built with no override).
+    [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
     ...over,
   };
 }
@@ -89,6 +93,7 @@ async function harness() {
     [MANAGED_CONTAINER_LABEL]: 'true',
     [CONTAINER_PROVIDER_LABEL]: 'linux',
     [CONTAINER_SESSION_LABEL]: 'sess-0000000000000002',
+    [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
   });
   runtime.addForeignContainer(
     MALFORMED_EXPIRY,

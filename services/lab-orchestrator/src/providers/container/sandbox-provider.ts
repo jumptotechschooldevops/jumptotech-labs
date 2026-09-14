@@ -90,6 +90,8 @@ import {
   DEFAULT_RUNTIME_OWNER,
   RUNTIME_OWNER_LABEL,
   ownedByRuntime,
+  runtimeOwnerPermits,
+  runtimeOwnerRefusal,
 } from '../../k8s/labels.js';
 
 /** Binaries the provider itself may run inside a sandbox, for reads and setup. */
@@ -296,6 +298,10 @@ export class ContainerLabProvider implements LabProvider {
     this.#now = options.now ?? (() => Date.now());
   }
 
+  get runtimeOwner(): string {
+    return this.#runtimeOwner;
+  }
+
   get image(): string {
     return this.#image;
   }
@@ -343,13 +349,10 @@ export class ContainerLabProvider implements LabProvider {
     // One session, one private bridge. Created before the container that joins
     // it, so the sandbox never briefly exists on the wrong network.
     const labNetwork = this.#labNetwork(context);
-    const ownership = {
-      [MANAGED_CONTAINER_LABEL]: 'true',
-      [CONTAINER_SESSION_LABEL]: context.sessionId,
-      [CONTAINER_LAB_LABEL]: context.labId,
-      [CONTAINER_EXPIRES_LABEL]: String(context.expiresAtMs),
-      [CONTAINER_PROVIDER_LABEL]: this.id,
-    };
+    // The lab network and the peer carry the full set, owner included: an
+    // orphaned network is reclaimed with no session named, so the owner label
+    // is the only thing that can prove it is this runtime's.
+    const ownership = this.ownershipLabels(context);
 
     if (labNetwork) {
       const networkStep = await this.#runStep(
@@ -754,6 +757,7 @@ export class ContainerLabProvider implements LabProvider {
     if (info.labels[MANAGED_CONTAINER_LABEL] !== 'true') return false;
     const owner = info.labels[CONTAINER_SESSION_LABEL];
     if (expectedSessionId && owner && owner !== expectedSessionId) return false;
+    if (!runtimeOwnerPermits(info.labels, this.#runtimeOwner, expectedSessionId)) return false;
     try {
       await this.#runtime.remove(ref);
       return true;
@@ -848,6 +852,15 @@ export class ContainerLabProvider implements LabProvider {
         label: 'Peer host deleted',
         status: 'failed',
         detail: `${peerRef} belongs to another session — left alone`,
+      });
+      return;
+    }
+    if (!runtimeOwnerPermits(info.labels, this.#runtimeOwner, expectedSessionId)) {
+      steps.push({
+        id: 'delete-peer',
+        label: 'Peer host deleted',
+        status: 'failed',
+        detail: `${runtimeOwnerRefusal(peerRef, info.labels, this.#runtimeOwner)} — left alone`,
       });
       return;
     }
@@ -1012,6 +1025,15 @@ export class ContainerLabProvider implements LabProvider {
       });
       return;
     }
+    if (!runtimeOwnerPermits(info.labels, this.#runtimeOwner, expectedSessionId)) {
+      steps.push({
+        id: 'delete-network',
+        label: 'Lab network deleted',
+        status: 'failed',
+        detail: `${runtimeOwnerRefusal(networkRef, info.labels, this.#runtimeOwner)} — left alone`,
+      });
+      return;
+    }
 
     try {
       await this.#runtime.networkRemove(networkRef);
@@ -1068,6 +1090,7 @@ export class ContainerLabProvider implements LabProvider {
     for (const network of networks) {
       if (!isContainerNetworkRef(network.name)) continue;
       if ((network.labels[CONTAINER_PROVIDER_LABEL] ?? this.id) !== this.id) continue;
+      if (!ownedByRuntime(network.labels, this.#runtimeOwner)) continue;
       const sandboxRef = sandboxRefForNetwork(network.name);
       if (known.has(sandboxRef)) continue;
       sandboxes.push({
@@ -1623,12 +1646,8 @@ export class ContainerLabProvider implements LabProvider {
         `container '${ref}' belongs to the '${owningProvider}' provider, not '${this.id}'`,
       );
     }
-    if (!ownedByRuntime(info.labels, this.#runtimeOwner)) {
-      throw new Error(
-        `container '${ref}' belongs to runtime owner '${
-          info.labels[RUNTIME_OWNER_LABEL] ?? '<unset>'
-        }', not '${this.#runtimeOwner}'`,
-      );
+    if (!runtimeOwnerPermits(info.labels, this.#runtimeOwner, expectedSessionId)) {
+      throw new Error(runtimeOwnerRefusal(`container '${ref}'`, info.labels, this.#runtimeOwner));
     }
     if (expectedSessionId !== undefined) {
       const owner = info.labels[CONTAINER_SESSION_LABEL];

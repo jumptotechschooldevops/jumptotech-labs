@@ -27,6 +27,11 @@ export type SupportedProvider = (typeof SUPPORTED_PROVIDERS)[number];
 export interface ProviderFactoryOptions {
   provider: string;
   clusterName: string;
+  /**
+   * The deployment's resolved runtime owner. Required, with no default here:
+   * the composition root must hand every provider the same value.
+   */
+  runtimeOwner: string;
   kubeconfigPath?: string;
   /** Injected in tests to avoid touching a real cluster. */
   k8s?: KubernetesPort;
@@ -56,6 +61,7 @@ export function createLabProvider(options: ProviderFactoryOptions): LabProvider 
       return new KindLabProvider({
         k8s,
         clusterName: options.clusterName,
+        runtimeOwner: options.runtimeOwner,
         ...(options.kubeconfigPath ? { kubeconfigPath: options.kubeconfigPath } : {}),
         ...(options.waitForRequirements ? { waitForRequirements: options.waitForRequirements } : {}),
       });

@@ -364,6 +364,13 @@ export interface LabProvider {
   readonly sandboxKind: SandboxKind;
 
   /**
+   * The runtime owner this provider stamps on what it creates and requires on
+   * what it discovers or deletes. Absent only for a provider that manages no
+   * resources (AWS today). See `RUNTIME_OWNER_LABEL`.
+   */
+  readonly runtimeOwner?: string;
+
+  /**
    * Can this provider actually run a lab right now?
    *
    * Cheap and cached by the registry. A provider that is architecture-only

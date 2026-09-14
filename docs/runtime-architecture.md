@@ -296,7 +296,7 @@ and fell back to port 22.
 | `TERMINAL_CONTAINER_EXEC_ENABLED` | terminal | The local `docker exec` path. Must be `false` in any deployment. |
 | `NAMESPACE_DERIVATION_SECRET` | api, sandboxd | **Must be identical.** Sandbox references are HMACs of the session id. A mismatch fails closed. |
 | `INTERNAL_SERVICE_SECRET` | api, terminal, sandboxd | One internal trust domain, one secret. |
-| `RUNTIME_OWNER_ID` | api, sandboxd | Which deployment's sandboxes this broker will touch. See [runtime-ownership.md](runtime-ownership.md). |
+| `RUNTIME_OWNER_ID` | api, sandboxd | **Must be identical.** The deployment's one runtime owner: stamped on every namespace and sandbox, required on everything cleanup touches. Required under `NODE_ENV=production`; a mismatch leaks brokered sandboxes. See [runtime-ownership.md](runtime-ownership.md). |
 | `SANDBOX_RUNTIME_HOST` | api | A dedicated runtime node over TLS, when there is no broker. The broker wins if both are set. |
 
 ## 9. What proves it

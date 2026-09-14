@@ -201,6 +201,13 @@ server.listen(config.port, config.bindAddress, () => {
     { port: config.port, version: config.observability.version, commit: config.observability.commit },
     `runtime broker listening on ${config.bindAddress}:${config.port} (owner=${config.runtimeOwner})`,
   );
+  if (config.runtimeOwnerSource === 'development-default') {
+    logger.warn(
+      'process.started',
+      { reason: 'runtime_owner_development_default' },
+      `RUNTIME_OWNER_ID is unset; using the development owner '${config.runtimeOwner}'. Set it explicitly, to the same value as the api, for any shared runtime.`,
+    );
+  }
 });
 
 /*

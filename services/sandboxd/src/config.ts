@@ -7,7 +7,11 @@
  * session id from the network.
  */
 
-import type { DockerSandboxPolicy } from '@jumptotech/lab-orchestrator';
+import {
+  resolveRuntimeOwner,
+  type DockerSandboxPolicy,
+  type RuntimeOwnerSource,
+} from '@jumptotech/lab-orchestrator';
 import { SANDBOXD_SCOPES, type SandboxdScope, type ScopeSecrets } from './scopes.js';
 
 /** The environment variable carrying each scope's secret. */
@@ -101,8 +105,14 @@ export interface SandboxdConfig {
    * derived name simply will not exist.
    */
   derivationSecret: string;
-  /** Which runtime owner's sandboxes this broker will touch. See `RUNTIME_OWNER_LABEL`. */
+  /**
+   * Which runtime owner's sandboxes this broker will touch. See
+   * `RUNTIME_OWNER_LABEL`. Resolved by the same `resolveRuntimeOwner` the API
+   * uses, so the two cannot default to different owners.
+   */
   runtimeOwner: string;
+  /** Whether `runtimeOwner` was configured or is the development default. */
+  runtimeOwnerSource?: RuntimeOwnerSource;
   /** Container CLI. Configuration, never a value from the network. */
   containerBinary: string;
   /** Shell opened inside a sandbox. Configuration, never a value from the network. */
@@ -221,6 +231,10 @@ export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): Sandbo
     );
   }
 
+  // sandboxd is always NODE_ENV=production in compose, so a missing owner stops
+  // it here rather than letting it guard a different owner than the API stamps.
+  const runtimeOwner = resolveRuntimeOwner(env);
+
   const observability = loadObservabilityConfig({
     service: 'sandboxd',
     defaultPort: 9402,
@@ -248,7 +262,8 @@ export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): Sandbo
     bindAddress: env.SANDBOXD_BIND ?? '127.0.0.1',
     scopeSecrets,
     derivationSecret,
-    runtimeOwner: env.RUNTIME_OWNER_ID ?? 'jumptotech',
+    runtimeOwner: runtimeOwner.owner,
+    runtimeOwnerSource: runtimeOwner.source,
     containerBinary: env.SANDBOX_CONTAINER_BINARY ?? 'docker',
     shell: env.SANDBOXD_SHELL ?? '/bin/bash',
     // Must match the API's SANDBOX_USER / SANDBOX_HOME: the API tells the

@@ -94,7 +94,13 @@ services:
       NAMESPACE_DERIVATION_SECRET: ${NAMESPACE_DERIVATION_SECRET:-${TERMINAL_SESSION_SECRET}}
       # Which sandboxes this broker will touch at all. Two stacks on one daemon
       # get two owners and neither can see the other's containers.
-      RUNTIME_OWNER_ID: ${RUNTIME_OWNER_ID:-jumptotech}
+      #
+      # MUST equal the api's, and is read from the same variable with no default
+      # here or there: this service stamps its own owner on everything it
+      # creates, so an api holding a different owner could never find those
+      # sandboxes again and every one would leak. This service runs
+      # NODE_ENV=production and refuses to start without it.
+      RUNTIME_OWNER_ID: ${RUNTIME_OWNER_ID:?set RUNTIME_OWNER_ID in .env (make setup writes one)}
       SANDBOXD_MAX_SESSIONS: ${SANDBOXD_MAX_SESSIONS:-32}
       # --- the Docker track ---
       #

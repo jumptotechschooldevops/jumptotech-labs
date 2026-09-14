@@ -12,7 +12,9 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   KindLabProvider,
+  DEFAULT_RUNTIME_OWNER,
   MANAGED_LABEL,
+  RUNTIME_OWNER_LABEL,
   SESSION_LABEL,
   STUDENT_ROLE,
   type LabSessionContext,
@@ -450,8 +452,16 @@ describe('listManagedNamespaces()', () => {
             [SESSION_LABEL]: 'sess-000000000000000b',
             'jumptotech.io/lab-id': 'K8S-001',
             'jumptotech.io/expires-at': '1700000000000',
+            [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
           },
         ],
+        // Managed and lab-shaped, but another runtime's: excluded.
+        [
+          'lab-000000000003',
+          { [MANAGED_LABEL]: 'true', [RUNTIME_OWNER_LABEL]: 'another-worktree' },
+        ],
+        // Managed and lab-shaped, with no owner at all: excluded, not adopted.
+        ['lab-000000000004', { [MANAGED_LABEL]: 'true' }],
       ],
     });
 

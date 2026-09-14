@@ -86,6 +86,24 @@ stopped it:
 | `foreign_owner` | **Security signal.** Something wearing this platform's labels that this deployment does not own. RB-08. |
 | `name_shape` | A container whose name is not `jtt-lab-*` / `lab-*`. Never deleted, by design. |
 
+**Unowned sandboxes are not counted at all.** Discovery returns only resources
+whose `jumptotech.io/runtime-owner` label equals this deployment's
+`RUNTIME_OWNER_ID` exactly, so a managed sandbox, lab network or `lab-*`
+namespace with *no* owner label — typically one created before BETA-P0-008 — is
+invisible to the reaper and never adopted (docs/runtime-ownership.md). A session
+still in the store is torn down normally; only an unlabelled orphan remains.
+Find them, confirm nobody else on the host created them, then delete by hand:
+
+```bash
+docker ps -a --filter label=jumptotech.io/managed=true \
+  --format '{{.Names}}\t{{.Label "jumptotech.io/runtime-owner"}}' | awk -F'\t' '$2 == ""'
+kubectl get ns -l 'jumptotech.io/managed=true,!jumptotech.io/runtime-owner'
+```
+
+If sweeps reclaim nothing and the host holds many sandboxes that *do* carry an
+owner, compare that owner with `RUNTIME_OWNER_ID` on the api and on sandboxd:
+the two must be identical, and a mismatch leaks every brokered sandbox.
+
 ## 4c. Diagnose — deletes are failing
 
 ```promql

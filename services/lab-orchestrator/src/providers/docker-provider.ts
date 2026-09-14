@@ -103,8 +103,9 @@ import {
   ownershipLabels,
   PROVIDER_LABEL,
   DEFAULT_RUNTIME_OWNER,
-  RUNTIME_OWNER_LABEL,
   ownedByRuntime,
+  runtimeOwnerPermits,
+  runtimeOwnerRefusal,
 } from '../k8s/labels.js';
 import {
   assertValidContainerSandboxRef,
@@ -207,6 +208,10 @@ export class DockerLabProvider implements LabProvider {
   readonly #destroyTimeoutMs: number;
   readonly #now: () => number;
   readonly #sleep: (ms: number) => Promise<void>;
+
+  get runtimeOwner(): string {
+    return this.#runtimeOwner;
+  }
 
   constructor(options: DockerProviderOptions) {
     this.#engines = options.engines;
@@ -745,15 +750,6 @@ export class DockerLabProvider implements LabProvider {
     if (!check.managed) {
       return this.#refuseDestroy(steps, sandbox, check.reason ?? 'not managed by JumpToTech');
     }
-    if (!ownedByRuntime(snapshot.labels, this.#runtimeOwner)) {
-      return this.#refuseDestroy(
-        steps,
-        sandbox,
-        `container '${sandbox}' belongs to runtime owner '${
-          snapshot.labels[RUNTIME_OWNER_LABEL] ?? '<unset>'
-        }', not '${this.#runtimeOwner}'`,
-      );
-    }
     if (!isSandboxComponent(snapshot.labels)) {
       return this.#refuseDestroy(
         steps,
@@ -761,6 +757,13 @@ export class DockerLabProvider implements LabProvider {
         `container '${sandbox}' is labelled ${COMPONENT_LABEL}='${
           snapshot.labels[COMPONENT_LABEL] ?? '<unset>'
         }', not '${SANDBOX_COMPONENT}'`,
+      );
+    }
+    if (!runtimeOwnerPermits(snapshot.labels, this.#runtimeOwner, expectedSessionId)) {
+      return this.#refuseDestroy(
+        steps,
+        sandbox,
+        runtimeOwnerRefusal(`container '${sandbox}'`, snapshot.labels, this.#runtimeOwner),
       );
     }
     steps.push({ id: 'verify-managed', label: 'Sandbox ownership verified', status: 'ok' });
