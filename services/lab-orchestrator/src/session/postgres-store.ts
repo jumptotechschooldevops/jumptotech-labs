@@ -46,16 +46,27 @@ import {
 } from './types.js';
 import type { SessionStore } from './store.js';
 
+/** Something that can run one parameterised statement: the pool, or one client. */
+export interface SessionSqlQuery {
+  query<R>(text: string, params?: readonly unknown[]): Promise<{ rows: R[] }>;
+}
+
 /**
  * The database seam.
  *
- * Structurally identical to `@jumptotech/progress`'s `SqlExecutor`, declared
- * here so the orchestrator gains no dependency on the progress service to talk
- * to a database. The composition root passes the one pooled connection both
- * already share.
+ * Structurally identical to `@jumptotech/progress`'s `PostgresDatabase`,
+ * declared here so the orchestrator gains no dependency on the progress service
+ * to talk to a database. The composition root passes the one pool both already
+ * share.
+ *
+ * `transaction` is required rather than optional because `query` on a pool
+ * promises nothing about *which* connection runs a statement: a `BEGIN` sent
+ * through it can open a transaction on one connection while the next statement
+ * runs on another. Anything that must happen inside one transaction goes
+ * through `transaction`, which holds a single client for the whole unit.
  */
-export interface SessionSqlExecutor {
-  query<R>(text: string, params?: readonly unknown[]): Promise<{ rows: R[] }>;
+export interface SessionSqlExecutor extends SessionSqlQuery {
+  transaction<T>(work: (tx: SessionSqlQuery) => Promise<T>): Promise<T>;
 }
 
 /** One row of `lab_sessions`, as PostgreSQL returns it. */
@@ -153,39 +164,7 @@ export class PostgresSessionStore implements SessionStore {
   constructor(private readonly db: SessionSqlExecutor) {}
 
   async create(session: LabSession): Promise<void> {
-    try {
-      await this.db.query(
-        `INSERT INTO lab_sessions (${COLUMNS})
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1)`,
-        [
-          session.sessionId,
-          session.labId,
-          session.provider,
-          session.sandboxKind,
-          session.sandboxRef,
-          session.namespace,
-          session.serviceAccountName,
-          session.status,
-          session.environmentId,
-          session.ownerUserId ?? null,
-          session.createdAt,
-          session.lastActivityAt,
-          session.expiresAt,
-          session.endedAt ?? null,
-          session.statusReason ?? null,
-          session.idleTimeoutSeconds,
-          session.idleWarningSeconds,
-        ],
-      );
-    } catch (error) {
-      // A duplicate id or a duplicate sandbox handle is a conflict, not a
-      // database failure, and the message must say which without echoing the
-      // driver's text back to a caller.
-      if (isUniqueViolation(error)) {
-        throw new Error(`session ${session.sessionId} already exists`);
-      }
-      throw error;
-    }
+    await insertSession(this.db, session);
   }
 
   async get(sessionId: string): Promise<LabSession | null> {
@@ -292,11 +271,7 @@ export class PostgresSessionStore implements SessionStore {
   }
 
   async countOccupying(): Promise<number> {
-    const { rows } = await this.db.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM lab_sessions WHERE status = ANY($1)`,
-      [[...OCCUPYING_STATUSES]],
-    );
-    return Number(rows[0]?.count ?? 0);
+    return countOccupying(this.db);
   }
 
   async findBySandboxRef(sandboxRef: string): Promise<LabSession | null> {
@@ -320,26 +295,71 @@ export class PostgresSessionStore implements SessionStore {
    * serialises exactly this check and is released when the transaction ends —
    * including when it aborts.
    *
+   * All three statements — lock, count, insert — run on the one client that
+   * `transaction` holds. Sent through the pool instead, they can each land on
+   * a different connection: the lock is then taken in some other transaction
+   * (or none, and released at once), and because an advisory lock is
+   * re-entrant within a connection, two starts sharing one both "hold" it.
+   * Both count four of five and both insert.
+   *
    * Returns `false` when the deployment is at capacity, so the caller can
-   * refuse the start without a sandbox ever being created.
+   * refuse the start without a sandbox ever being created. That path writes
+   * nothing, so its commit is as good as a rollback; an insert that fails
+   * rolls the transaction back and the error reaches the caller.
    */
   async createWithinCapacity(session: LabSession, maxOccupying: number): Promise<boolean> {
-    await this.db.query('BEGIN');
-    try {
-      await this.db.query('SELECT pg_advisory_xact_lock($1)', [CAPACITY_LOCK_KEY]);
-      const occupied = await this.countOccupying();
-      if (occupiesCapacity(session.status) && occupied >= maxOccupying) {
-        await this.db.query('ROLLBACK');
-        return false;
-      }
-      await this.create(session);
-      await this.db.query('COMMIT');
+    return this.db.transaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock($1)', [CAPACITY_LOCK_KEY]);
+      const occupied = await countOccupying(tx);
+      if (occupiesCapacity(session.status) && occupied >= maxOccupying) return false;
+      await insertSession(tx, session);
       return true;
-    } catch (error) {
-      await this.db.query('ROLLBACK').catch(() => undefined);
-      throw error;
-    }
+    });
   }
+}
+
+async function insertSession(db: SessionSqlQuery, session: LabSession): Promise<void> {
+  try {
+    await db.query(
+      `INSERT INTO lab_sessions (${COLUMNS})
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1)`,
+      [
+        session.sessionId,
+        session.labId,
+        session.provider,
+        session.sandboxKind,
+        session.sandboxRef,
+        session.namespace,
+        session.serviceAccountName,
+        session.status,
+        session.environmentId,
+        session.ownerUserId ?? null,
+        session.createdAt,
+        session.lastActivityAt,
+        session.expiresAt,
+        session.endedAt ?? null,
+        session.statusReason ?? null,
+        session.idleTimeoutSeconds,
+        session.idleWarningSeconds,
+      ],
+    );
+  } catch (error) {
+    // A duplicate id or a duplicate sandbox handle is a conflict, not a
+    // database failure, and the message must say which without echoing the
+    // driver's text back to a caller.
+    if (isUniqueViolation(error)) {
+      throw new Error(`session ${session.sessionId} already exists`);
+    }
+    throw error;
+  }
+}
+
+async function countOccupying(db: SessionSqlQuery): Promise<number> {
+  const { rows } = await db.query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM lab_sessions WHERE status = ANY($1)`,
+    [[...OCCUPYING_STATUSES]],
+  );
+  return Number(rows[0]?.count ?? 0);
 }
 
 /** A PostgreSQL unique-violation, without depending on the driver's types. */
