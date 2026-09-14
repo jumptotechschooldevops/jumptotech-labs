@@ -13,11 +13,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMPONENT_LABEL,
+  DEFAULT_RUNTIME_OWNER,
   DockerLabProvider,
   EXPIRES_AT_LABEL,
   LAB_LABEL,
   MANAGED_LABEL,
   PROVIDER_LABEL,
+  RUNTIME_OWNER_LABEL,
   SESSION_LABEL,
 } from '../src/index.js';
 import { FakeDockerEngines } from './docker-fakes.js';
@@ -54,6 +56,8 @@ function dockerSandboxLabels(sessionId: string, expiresAtMs: number) {
     [EXPIRES_AT_LABEL]: String(expiresAtMs),
     [COMPONENT_LABEL]: 'docker-sandbox',
     [PROVIDER_LABEL]: 'docker',
+    // What the provider under test stamps: it is built with no explicit owner.
+    [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
   };
 }
 
@@ -101,6 +105,7 @@ describe('Docker sandbox discovery is proof-based', () => {
       [COMPONENT_LABEL]: 'docker-sandbox',
       [PROVIDER_LABEL]: 'docker',
       [EXPIRES_AT_LABEL]: String(Date.now() + HOUR),
+      [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
     };
     await place(e, OURS, labels);
 
@@ -138,6 +143,9 @@ describe('Docker sandbox discovery is proof-based', () => {
       [SESSION_LABEL]: 'sess-0000000000000old',
       [COMPONENT_LABEL]: 'docker-sandbox',
       [EXPIRES_AT_LABEL]: String(Date.now() + HOUR),
+      // Only the *provider* label is legacy here. A missing runtime owner is
+      // a separate rule, proved in runtime-owner.test.ts: discovery refuses it.
+      [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
     });
 
     const refs = (await provider(e).listManagedSandboxes()).map((s) => s.sandboxRef);

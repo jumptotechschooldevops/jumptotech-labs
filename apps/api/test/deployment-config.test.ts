@@ -26,6 +26,7 @@ const PRODUCTION_ENV = {
   TERMINAL_SESSION_SECRET: 'a-terminal-session-secret-for-tests',
   PUBLIC_ORIGIN: 'https://labs.example.com',
   ALLOWED_ORIGINS: 'https://labs.example.com',
+  RUNTIME_OWNER_ID: 'labs-prod',
 } as NodeJS.ProcessEnv;
 
 describe('a production deployment cannot serve itself from localhost', () => {

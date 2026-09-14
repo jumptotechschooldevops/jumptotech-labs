@@ -38,17 +38,71 @@ That leaves `managed` and `provider` to authorise the delete, and two worktrees
 running the same provider match on both. `runtime-owner` is the discriminator
 that survives when the session is unknown.
 
-Production is a single runtime and never sets `RUNTIME_OWNER_ID`; every resource
-it creates and finds carries the same default, so the check is invisible there.
+### Configuration: one owner per deployment (BETA-P0-008)
 
-### Fail-closed, with one deliberate exception
+A deployment has **one** runtime owner, set once in `RUNTIME_OWNER_ID` and read
+by every service that creates, discovers or deletes sandboxes:
 
-A resource whose owner is **present and different** is always refused. A
-resource with **no owner label** is treated as this runtime's — that is exactly
-the behaviour before the label existed, and it keeps an upgrade from stranding
-running sandboxes as undeletable. Malformed metadata is never guessed at: an
-unparseable `expires-at` reads as `0`, which the reaper refuses to act on rather
-than treating as "long expired".
+| Service | Uses the owner to |
+|---|---|
+| `api` | stamp and filter **Kubernetes namespaces** (kind provider) and, when no broker is configured, sandbox containers (Linux, Terraform, Ansible, CI/CD, Docker providers) |
+| `sandboxd` | stamp every container and network it creates, and refuse any operation on one carrying another owner |
+| `terminal` | nothing — it attaches through `sandboxd`, which checks ownership itself |
+
+Both services resolve it with the same function,
+`resolveRuntimeOwner` (`services/lab-orchestrator/src/k8s/labels.ts`):
+
+| `RUNTIME_OWNER_ID` | `NODE_ENV=production` | anything else |
+|---|---|---|
+| set, valid | that value | that value |
+| set, invalid | **refuses to start** | **refuses to start** |
+| unset or empty | **refuses to start** | `jumptotech`, with a startup warning |
+
+A valid owner is 1–63 letters, digits, `-`, `_` or `.`, starting and ending with
+a letter or digit — valid as a Kubernetes label value and a Docker label. It is
+compared byte for byte and never trimmed. It is not a secret, but a rejected
+value is never echoed in the error, in case a secret was pasted there by
+mistake.
+
+**The api and sandboxd must agree.** sandboxd stamps *its* owner on everything
+it creates, whatever the api asked for. An api holding a different owner then
+cannot discover or destroy any of those sandboxes: nothing is deleted wrongly,
+but every one leaks. So the compose files pass the variable to both as
+`${RUNTIME_OWNER_ID:?…}` with no default in either place — `docker compose`
+refuses to start without it — and `make setup` writes `RUNTIME_OWNER_ID=jumptotech`
+into `.env` when it is missing. `apps/api/test/runtime-owner.test.ts` pins that
+contract against the files as shipped.
+
+A production deployment picks its own value (for example `labs-prod`) and sets
+it identically on the api and sandboxd, wherever they run. The development
+default exists only so `npm run dev:*` and the hermetic suites need no setup.
+
+### Fail-closed, with one narrow exception
+
+A resource whose owner is **present and different** is always refused.
+
+A resource with **no owner label** is not provably anyone's. On a shared daemon
+or cluster it is as likely a neighbour's sandbox from an older build as one of
+ours, so:
+
+- **discovery** (`listManagedSandboxes`, and therefore the reaper's orphan
+  sweep) does not return it, and
+- a delete that **names no session** refuses it.
+
+The one exception is a teardown that **names the session** the live resource is
+labelled with — End Lab, or the reaper expiring a session that is in this
+deployment's store. There the store record is the authority, so a session
+created before the label existed can still be torn down. An unlabelled *orphan*
+is left for an operator (RB-05), exactly like a sandbox with no expiry label.
+
+Before BETA-P0-008 a missing owner was treated as "ours", and the kind provider
+never stamped or checked an owner at all, so one worktree's reaper reclaimed
+another's expired namespaces on the shared cluster. Lab networks and peer
+containers were likewise created without the label and removed without checking
+it.
+
+Malformed metadata is never guessed at: an unparseable `expires-at` reads as
+`0`, which the reaper refuses to act on rather than treating as "long expired".
 
 ### Ownership metadata is platform-controlled
 
@@ -65,7 +119,8 @@ select a resource for deletion.
 |---|---|---|
 | **Reset** | this session's sandbox; destroys and recreates it | yes |
 | **End / destroy** | this session's sandbox | yes |
-| **Reaper** | expired or orphaned sandboxes of this provider **and this runtime owner** | no — hence `runtime-owner` |
+| **Reaper** | expired or orphaned sandboxes and namespaces of this provider **and this runtime owner** (an exact label match) | no — hence `runtime-owner` |
+| **`make sandbox-clean`** | containers and networks labelled with **this** `RUNTIME_OWNER_ID` (from the environment or `.env`); refuses to run without one | no |
 
 Global enumeration exists for diagnostics. Destructive operations are always
 ownership-scoped. There is no prefix sweep anywhere in the platform: nothing
@@ -103,6 +158,10 @@ RUNTIME_OWNER_ID=wt-docker RUN_INTEGRATION_TESTS=1 npm run test:integration
 | Property | Level |
 |---|---|
 | Ownership gate refuses unmanaged / lookalike / other provider / other owner / other session | **UNIT** |
+| Missing or invalid owner refuses to start in production (api, sandboxd); both resolve identically | **UNIT** |
+| kind namespaces: owner stamped, foreign and unowned orphans never reaped, two owners on one cluster | **UNIT** |
+| Lab networks and peers: owner stamped, foreign and unowned orphans left alone | **UNIT** |
+| Compose passes one required `RUNTIME_OWNER_ID` to api and sandboxd | **UNIT** (reads the shipped files) |
 | Reaper preserves active, unmanaged, foreign-owner, no-expiry, malformed-expiry | **UNIT** |
 | Idempotent sweep; vanished-container recovery; discovery/delete race | **UNIT** |
 | Two owners x two sessions coexist; no cross-owner mutation | **UNIT** |

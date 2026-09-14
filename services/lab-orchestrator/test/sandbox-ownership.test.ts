@@ -32,6 +32,8 @@ import {
   CONTAINER_LAB_LABEL,
   CONTAINER_EXPIRES_LABEL,
   CONTAINER_PROVIDER_LABEL,
+  DEFAULT_RUNTIME_OWNER,
+  RUNTIME_OWNER_LABEL,
 } from '../src/index.js';
 import { FakeContainerRuntime } from './container-fakes.js';
 import { loadK8s001, sessionContext } from './helpers.js';
@@ -59,6 +61,7 @@ function ownedLabels(sessionId: string, expiresAtMs: number, providerId = 'linux
     [CONTAINER_LAB_LABEL]: 'K8S-001',
     [CONTAINER_EXPIRES_LABEL]: String(expiresAtMs),
     [CONTAINER_PROVIDER_LABEL]: providerId,
+    [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
   };
 }
 
@@ -205,6 +208,7 @@ describe('listManagedSandboxes returns only what the platform can prove it owns'
       [MANAGED_CONTAINER_LABEL]: 'true',
       [CONTAINER_SESSION_LABEL]: SESSION_B,
       [CONTAINER_PROVIDER_LABEL]: 'linux',
+      [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
     });
 
     const [entry] = await provider.listManagedSandboxes();
@@ -220,6 +224,7 @@ describe('listManagedSandboxes returns only what the platform can prove it owns'
         [CONTAINER_SESSION_LABEL]: SESSION_B,
         [CONTAINER_PROVIDER_LABEL]: 'linux',
         [CONTAINER_EXPIRES_LABEL]: malformed,
+        [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
       });
 
       const [entry] = await p.listManagedSandboxes();

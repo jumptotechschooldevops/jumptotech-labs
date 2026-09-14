@@ -12,6 +12,8 @@
  *                                   ∧  the name is not a protected namespace
  *                                   ∧  the live object carries jumptotech.io/managed=true
  *                                   ∧  its session-id label matches the caller's session
+ *                                   ∧  its runtime-owner label is this deployment's
+ *                                      (see `runtimeOwnerPermits`)
  * ```
  *
  * All four are checked against the object *as it currently exists in the
@@ -51,19 +53,76 @@ export const PROVIDER_LABEL = 'jumptotech.io/provider';
  * `provider` left to authorise the delete, one worktree's reaper would reclaim
  * another's expired sandbox. This label is the missing discriminator.
  *
- * A resource carrying no owner belongs to whoever finds it, which is what the
- * behaviour was before the label existed and keeps an upgrade from stranding
- * running sandboxes.
+ * A resource carrying no owner belongs to nobody provably. Discovery and every
+ * session-less delete refuse it; only a teardown naming the session the live
+ * object is labelled with may still remove it (see `runtimeOwnerPermits`).
  */
 export const RUNTIME_OWNER_LABEL = 'jumptotech.io/runtime-owner';
 
 /**
- * The owner a deployment uses when nothing overrides it.
+ * The owner a *development* process uses when `RUNTIME_OWNER_ID` is unset.
  *
- * Production is a single runtime and never sets one, so every resource it
- * creates carries this and every resource it finds matches.
+ * Never a production value: `resolveRuntimeOwner` refuses to fall back to it
+ * under `NODE_ENV=production`. It exists so `npm run dev:*` and the hermetic
+ * suites work without configuration, and it is one constant so the API and
+ * sandboxd cannot drift onto two different development defaults.
  */
 export const DEFAULT_RUNTIME_OWNER = 'jumptotech';
+
+/**
+ * What a runtime owner may look like.
+ *
+ * The value is written as a Kubernetes label value and a Docker label, and
+ * compared byte for byte, so it must be valid as the stricter of the two: at
+ * most 63 characters, alphanumeric at both ends, `-`, `_` and `.` inside. No
+ * trimming — a value with stray whitespace is a different owner, and silently
+ * normalising it would make two services agree only by accident.
+ */
+const RUNTIME_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$/;
+
+export function isValidRuntimeOwner(value: string): boolean {
+  return RUNTIME_OWNER_PATTERN.test(value);
+}
+
+export type RuntimeOwnerSource = 'configured' | 'development-default';
+
+export interface ResolvedRuntimeOwner {
+  owner: string;
+  source: RuntimeOwnerSource;
+}
+
+/**
+ * The one place a process decides which runtime owner it is.
+ *
+ * Every service that creates, discovers or deletes sandboxes — the API and
+ * sandboxd today — resolves its owner here, from the same variable, so a
+ * deployment has one identity rather than one per service.
+ *
+ *   · set and valid          → that value, in every environment
+ *   · set and invalid        → refuse to start, in every environment
+ *   · unset, production      → refuse to start
+ *   · unset, anything else   → `DEFAULT_RUNTIME_OWNER`, reported as a default
+ *
+ * The error never echoes the rejected value: an operator who pasted a secret
+ * into the wrong variable should not find it in a crash log.
+ */
+export function resolveRuntimeOwner(env: NodeJS.ProcessEnv): ResolvedRuntimeOwner {
+  const raw = env.RUNTIME_OWNER_ID ?? '';
+  if (raw !== '') {
+    if (!isValidRuntimeOwner(raw)) {
+      throw new Error(
+        `RUNTIME_OWNER_ID is not a valid runtime owner (${raw.length} characters). It must be 1-63 characters of letters, digits, '-', '_' or '.', starting and ending with a letter or digit.`,
+      );
+    }
+    return { owner: raw, source: 'configured' };
+  }
+  if (env.NODE_ENV === 'production') {
+    throw new Error(
+      'RUNTIME_OWNER_ID must be set when NODE_ENV=production. Every service that manages sandboxes for this deployment (api, sandboxd) must be given the same value; cleanup refuses resources labelled with any other owner.',
+    );
+  }
+  return { owner: DEFAULT_RUNTIME_OWNER, source: 'development-default' };
+}
 
 /** Label selector matching every namespace this platform owns. */
 export const MANAGED_SELECTOR = `${MANAGED_LABEL}=true`;
@@ -100,19 +159,51 @@ export function ownershipLabels(input: OwnershipLabelInput): Record<string, stri
 }
 
 /**
- * Whether a resource may be acted on by the runtime asking.
+ * Whether a resource provably belongs to the runtime asking.
  *
- * Fail-open on a *missing* owner is deliberate and narrow: it preserves the
- * pre-label behaviour for sandboxes created by an older build. A *present* owner
- * that does not match is always refused — a malformed or unexpected value is
- * somebody else's, not an invitation to guess.
+ * Exact match only. This is the rule for discovery and for any delete that
+ * names no session — the reaper's orphan sweep above all — because there the
+ * label is the *only* evidence of ownership. A missing owner is not evidence:
+ * on a shared daemon or cluster it is just as likely a neighbour's resource
+ * from an older build as one of ours.
  */
 export function ownedByRuntime(
   labels: Record<string, string>,
   runtimeOwner: string,
 ): boolean {
+  return labels[RUNTIME_OWNER_LABEL] === runtimeOwner;
+}
+
+/**
+ * Whether a delete may proceed as far as the runtime owner is concerned.
+ *
+ * A present owner must match, always. A *missing* owner is accepted only when
+ * the caller named a session (`expectedSessionId`), because then the session
+ * store is the authority — this deployment's own record says the session is
+ * its — and the caller's session-label check must still pass as well. That
+ * keeps an upgrade from stranding a live session created before the label
+ * existed, without letting an unlabelled orphan be adopted by whoever finds it.
+ */
+export function runtimeOwnerPermits(
+  labels: Record<string, string>,
+  runtimeOwner: string,
+  expectedSessionId: string | undefined,
+): boolean {
   const stamped = labels[RUNTIME_OWNER_LABEL];
-  return stamped === undefined || stamped === runtimeOwner;
+  if (stamped === undefined) return expectedSessionId !== undefined;
+  return stamped === runtimeOwner;
+}
+
+/** Why `runtimeOwnerPermits` said no, for a refusal message. */
+export function runtimeOwnerRefusal(
+  resource: string,
+  labels: Record<string, string>,
+  runtimeOwner: string,
+): string {
+  const stamped = labels[RUNTIME_OWNER_LABEL];
+  return stamped === undefined
+    ? `${resource} carries no ${RUNTIME_OWNER_LABEL} label, and no session was named to vouch for it`
+    : `${resource} belongs to runtime owner '${stamped}', not '${runtimeOwner}'`;
 }
 
 /** Labels stamped onto platform-owned objects *inside* a session namespace. */

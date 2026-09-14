@@ -179,6 +179,22 @@ describe('buildSandboxComposition — provider routing', () => {
     return buildSandboxComposition({ config, k8s, engines, containerRuntime: runtime });
   }
 
+  it('hands every sandbox-managing provider the one configured runtime owner', () => {
+    // The kind provider used to be built with no owner at all, so its orphan
+    // sweep reached every runtime's namespaces on a shared cluster.
+    for (const RUNTIME_OWNER_ID of [undefined, 'wt-composition']) {
+      const { providers, kubernetes } = composition(RUNTIME_OWNER_ID ? { RUNTIME_OWNER_ID } : {});
+      const expected = RUNTIME_OWNER_ID ?? 'jumptotech';
+      expect(kubernetes.runtimeOwner).toBe(expected);
+      const owners = providers
+        .all()
+        .filter((p) => p.id !== 'aws')
+        .map((p) => [p.id, p.runtimeOwner]);
+      expect(owners.length).toBeGreaterThanOrEqual(6);
+      for (const [id, owner] of owners) expect(owner, String(id)).toBe(expected);
+    }
+  });
+
   it('routes kubernetes labs through the kind provider', async () => {
     const { providers } = composition();
     const provider = await providers.resolve('kubernetes');

@@ -121,6 +121,7 @@ export function buildSandboxComposition(options: BuildSandboxCompositionOptions)
   const kubernetes = createLabProvider({
     provider: options.config.provider,
     clusterName: options.config.clusterName,
+    runtimeOwner: options.config.sandbox.runtimeOwner,
     ...(options.config.kubeconfigPath ? { kubeconfigPath: options.config.kubeconfigPath } : {}),
     k8s,
     waitForRequirements: waitFor,

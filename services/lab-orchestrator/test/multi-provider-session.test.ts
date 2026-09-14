@@ -260,6 +260,7 @@ describe('cleanup dispatches through the owning provider (test requirements 16, 
       'jumptotech.io/lab-id': 'LINUX-001',
       'jumptotech.io/provider': 'linux',
       'jumptotech.io/expires-at': String(now - 10_000),
+      'jumptotech.io/runtime-owner': 'jumptotech',
     });
 
     const reaper = new SessionReaper({

@@ -10,7 +10,9 @@ import {
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
   KindLabProvider,
+  DEFAULT_RUNTIME_OWNER,
   MANAGED_LABEL,
+  RUNTIME_OWNER_LABEL,
   SESSION_LABEL,
   SessionManager,
   SessionReaper,
@@ -258,6 +260,7 @@ describe('orphan reclamation', () => {
       [SESSION_LABEL]: 'sess-00000000000000ab',
       'jumptotech.io/lab-id': 'K8S-001',
       'jumptotech.io/expires-at': String(clock.now - 10 * MINUTE),
+      [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
     });
 
     const result = await reaper.sweep();
@@ -271,6 +274,7 @@ describe('orphan reclamation', () => {
     await k8s.createNamespace('lab-deadbeef0004', {
       [MANAGED_LABEL]: 'true',
       'jumptotech.io/expires-at': String(clock.now - 30_000),
+      [RUNTIME_OWNER_LABEL]: DEFAULT_RUNTIME_OWNER,
     });
 
     expect((await reaper.sweep()).removed).toEqual([]);

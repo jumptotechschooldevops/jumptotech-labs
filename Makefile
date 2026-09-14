@@ -28,6 +28,14 @@ setup: ## First-time setup: .env + kind cluster
 		rm -f .env.bak && echo "created .env with generated secrets")
 	@grep -q '^POSTGRES_PASSWORD=' .env || (echo "POSTGRES_PASSWORD=$$(openssl rand -hex 16)" >> .env && \
 		echo "added a generated POSTGRES_PASSWORD to your existing .env")
+	@# One runtime owner for the whole stack: the api and sandboxd read this same
+	@# value, and compose refuses to start without it. Not a secret. An existing
+	@# value is kept, so a worktree that chose its own owner keeps it.
+	@if ! grep -qE "^RUNTIME_OWNER_ID=.+" .env; then \
+		sed -i.bak "/^RUNTIME_OWNER_ID=$$/d" .env && rm -f .env.bak; \
+		echo "RUNTIME_OWNER_ID=jumptotech" >> .env; \
+		echo "added RUNTIME_OWNER_ID=jumptotech to your .env"; \
+	fi
 	@# One credential per sandboxd capability. Generated separately on purpose:
 	@# sandboxd refuses to start if any two are equal, because that collapses the
 	@# boundary between "open a shell" and "drive the container runtime".
@@ -85,8 +93,8 @@ cluster-down: ## Delete the local kind cluster
 sandbox-build: ## Build the Linux/Terraform sandbox images
 	@bash scripts/sandbox-build.sh
 
-sandbox-clean: ## Remove every sandbox container this platform owns
-	@docker ps -aq --filter label=jumptotech.io/managed=true | xargs -r docker rm -f
+sandbox-clean: ## Remove this runtime owner's sandbox containers and networks (RUNTIME_OWNER_ID)
+	@bash scripts/sandbox-clean.sh
 
 status: ## Health report for cluster + services
 	@bash scripts/cluster-status.sh

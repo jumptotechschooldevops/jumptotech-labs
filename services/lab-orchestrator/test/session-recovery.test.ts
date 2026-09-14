@@ -484,6 +484,98 @@ export function sessionRecovery(
       }
     });
 
+    // ------------------- 8. recovery combined with runtime ownership (P0-008)
+    //
+    // BETA-P0-008 made discovery an exact owner match and let an unlabelled
+    // resource be deleted only by a teardown that names its session. These pin
+    // how that composes with P0-007's adoption and recovery paths.
+
+    it('adopts a stuck End on a sandbox from before the owner label existed, because its own session vouches for it', async () => {
+      const w = await world();
+      const { session } = await w.a.manager.start('LINUX-001');
+      const id = session.sessionId;
+      // A sandbox created by a build that did not stamp runtime owners.
+      delete w.runtime.containers.get(session.sandboxRef)!.info.labels[RUNTIME_OWNER_LABEL];
+
+      const remove = w.runtime.remove.bind(w.runtime);
+      w.runtime.remove = async () => {
+        throw new Error('simulated: daemon busy');
+      };
+      expect((await w.a.manager.end(id)).session.status).toBe('ENDING');
+      w.runtime.remove = remove;
+
+      w.clock.now += 6 * MINUTE;
+      const sweep = await w.reaper.sweep();
+      expect(sweep.removed).toEqual([session.sandboxRef]);
+      expect(sweep.reasons[session.sandboxRef]).toBe('abandoned');
+      expect(await w.read(id)).toMatchObject({ status: 'ENDED', statusReason: 'ended by student' });
+      expect(w.runtime.containers.has(session.sandboxRef)).toBe(false);
+
+      const again = await w.reaper.sweep();
+      expect(again).toMatchObject({ removed: [], errors: [], pending: [] });
+      expect(w.closed).toHaveLength(1);
+    });
+
+    it('recovers an interrupted reset without destroying anything, and never destroys a foreign owner’s sandbox under it', async () => {
+      const w = await world();
+      const { session } = await w.a.manager.start('LINUX-001');
+      const id = session.sessionId;
+      const ownerOf = () => w.runtime.containers.get(session.sandboxRef)?.info.labels[RUNTIME_OWNER_LABEL];
+      w.runtime.containers.get(session.sandboxRef)!.info.labels[RUNTIME_OWNER_LABEL] = FOREIGN_OWNER;
+
+      // The reset's process "dies" after claiming RESETTING.
+      const dead = w.provider.holdNextReset();
+      const resetting = w.a.manager.reset(id);
+      resetting.catch(() => undefined);
+      await dead.entered;
+      const destroysBefore = w.provider.destroys.calls;
+
+      w.clock.now += 11 * MINUTE;
+      const sweep = await w.reaper.sweep();
+      expect(sweep.recovered).toEqual([id]);
+      expect(sweep.removed).toEqual([]);
+      expect((await w.read(id)).status).toBe('DEGRADED');
+      // Recovery is a status change only: no teardown was attempted.
+      expect(w.provider.destroys.calls).toBe(destroysBefore);
+      expect(ownerOf()).toBe(FOREIGN_OWNER);
+
+      const again = await w.reaper.sweep();
+      expect(again).toMatchObject({ removed: [], recovered: [], errors: [] });
+      expect((await w.read(id)).status).toBe('DEGRADED');
+
+      // Ending the DEGRADED session goes through the provider's owner gate.
+      const end = await w.b.manager.end(id);
+      expect(end.destroy.ok).toBe(false);
+      expect(ownerOf()).toBe(FOREIGN_OWNER);
+
+      // And the dead reset waking late cannot remove it either.
+      dead.release();
+      await resetting.catch(() => undefined);
+      expect(ownerOf()).toBe(FOREIGN_OWNER);
+    });
+
+    it('leaves a finished session’s unowned sandbox to an operator, while a reclaim naming that session still works', async () => {
+      const w = await world();
+      const { session } = await w.a.manager.start('LINUX-001');
+      const unowned = { ...w.runtime.containers.get(session.sandboxRef)!.info.labels };
+      delete unowned[RUNTIME_OWNER_LABEL];
+      await w.a.manager.end(session.sessionId);
+      w.runtime.addForeignContainer(session.sandboxRef, unowned);
+
+      // Discovery is owner-exact, so the orphan sweep cannot adopt it — on
+      // every pass.
+      for (let pass = 0; pass < 2; pass += 1) {
+        const sweep = await w.reaper.sweep();
+        expect(sweep).toMatchObject({ removed: [], errors: [] });
+        expect(w.runtime.containers.has(session.sandboxRef)).toBe(true);
+      }
+
+      // A delete that names the session its label carries is the one exception.
+      const named = await w.b.manager.reclaimFinishedSandbox(session.sessionId);
+      expect(named.ok).toBe(true);
+      expect(w.runtime.containers.has(session.sandboxRef)).toBe(false);
+    });
+
     it('refuses to reclaim anything for a session that is not finished', async () => {
       const w = await world();
       const { session } = await w.a.manager.start('LINUX-001');

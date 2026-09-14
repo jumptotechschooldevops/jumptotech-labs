@@ -53,6 +53,16 @@ async function main(): Promise<void> {
     );
   }
 
+  // Production cannot reach this: `resolveRuntimeOwner` refuses a missing owner
+  // there. Anywhere else, say plainly that nobody chose this identity.
+  if (config.sandbox.runtimeOwnerSource === 'development-default') {
+    logger.warn(
+      'config.loaded',
+      { reason: 'runtime_owner_development_default' },
+      `RUNTIME_OWNER_ID is unset; using the development owner '${config.sandbox.runtimeOwner}'. Set it explicitly, to the same value as sandboxd, for any shared runtime.`,
+    );
+  }
+
   const registry = new LabRegistry(config.labsDir);
   await registry.load();
   metrics.sessions.labsLoaded.set(registry.size);
