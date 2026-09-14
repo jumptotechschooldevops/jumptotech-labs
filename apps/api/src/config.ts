@@ -12,6 +12,9 @@ import {
   DEFAULT_LINUX_SANDBOX_IMAGE,
   DEFAULT_DOCKER_SANDBOX_IMAGE,
   DEFAULT_SESSION_POLICY,
+  DEFAULT_POD_SECURITY,
+  assertPodSecurityConfig,
+  type PodSecurityConfig,
   DEFAULT_ANSIBLE_SANDBOX_IMAGE,
   DEFAULT_CICD_SANDBOX_IMAGE,
   DEFAULT_TERRAFORM_SANDBOX_IMAGE,
@@ -454,6 +457,31 @@ export function loadNetworkPolicyConfig(env: NodeJS.ProcessEnv = process.env): N
   return network;
 }
 
+/**
+ * Pod Security Admission levels for Kubernetes session namespaces (BETA-P0-016).
+ *
+ *   POD_SECURITY_ENFORCE   baseline | restricted   default baseline
+ *   POD_SECURITY_WARN      baseline | restricted   default: the enforce level
+ *   POD_SECURITY_AUDIT     baseline | restricted   default restricted
+ *   POD_SECURITY_VERSION   v1.<minor> | latest     default v1.34
+ *
+ * `privileged` is not accepted anywhere, a warn or audit level weaker than the
+ * enforce level is refused, and `latest` is refused under NODE_ENV=production —
+ * see `assertPodSecurityConfig` and docs/pod-security.md.
+ */
+export function loadPodSecurityConfig(env: NodeJS.ProcessEnv = process.env): PodSecurityConfig {
+  const base = DEFAULT_POD_SECURITY;
+  const enforce = strFromEnv(env, 'POD_SECURITY_ENFORCE', base.enforce);
+  const config = {
+    enforce,
+    warn: strFromEnv(env, 'POD_SECURITY_WARN', enforce),
+    audit: strFromEnv(env, 'POD_SECURITY_AUDIT', base.audit),
+    version: strFromEnv(env, 'POD_SECURITY_VERSION', base.version),
+  } as PodSecurityConfig;
+  assertPodSecurityConfig(config, { production: isProductionEnv(env) });
+  return config;
+}
+
 /** Build the per-session guardrail policy from the environment. */
 export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): SessionPolicy {
   const base = DEFAULT_SESSION_POLICY;
@@ -501,6 +529,7 @@ export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): Session
     },
     network: loadNetworkPolicyConfig(env),
     serviceAccountName: strFromEnv(env, 'SESSION_SERVICE_ACCOUNT', base.serviceAccountName),
+    podSecurity: loadPodSecurityConfig(env),
     credentialTtlSeconds: intFromEnv(
       env,
       'STUDENT_CREDENTIAL_TTL_SECONDS',

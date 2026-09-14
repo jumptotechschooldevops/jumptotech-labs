@@ -50,16 +50,16 @@ function documents(): Doc[] {
 const policies = () => documents().filter((d) => d.kind === 'ValidatingAdmissionPolicy');
 const bindings = () => documents().filter((d) => d.kind === 'ValidatingAdmissionPolicyBinding');
 
+/** The two policies that act only on what a student's ServiceAccount does. */
+const STUDENT_SCOPED = ['jumptotech-deny-clusterrole-bindings', 'jumptotech-protect-managed-resources'];
+/** BETA-P0-016: applies to every caller, so the platform cannot unfence a namespace either. */
+const REQUIRE_POD_SECURITY = 'jumptotech-require-pod-security';
+
 describe('lab admission policies — the manifest is structurally valid', () => {
-  it('ships both policies and both bindings', () => {
-    expect(policies().map((p) => p.metadata?.name).sort()).toEqual([
-      'jumptotech-deny-clusterrole-bindings',
-      'jumptotech-protect-managed-resources',
-    ]);
-    expect(bindings().map((b) => b.metadata?.name).sort()).toEqual([
-      'jumptotech-deny-clusterrole-bindings',
-      'jumptotech-protect-managed-resources',
-    ]);
+  it('ships all three policies and their bindings', () => {
+    const expected = [...STUDENT_SCOPED, REQUIRE_POD_SECURITY].sort();
+    expect(policies().map((p) => p.metadata?.name).sort()).toEqual(expected);
+    expect(bindings().map((b) => b.metadata?.name).sort()).toEqual(expected);
   });
 
   it('every binding names a policy that exists in the same manifest', () => {
@@ -118,11 +118,15 @@ describe('lab admission policies — the manifest is structurally valid', () => 
   });
 });
 
-describe('lab admission policies — neither policy is weakened', () => {
-  it('fails closed and scopes itself to lab service accounts', () => {
+describe('lab admission policies — no policy is weakened', () => {
+  it('every policy fails closed', () => {
     for (const policy of policies()) {
       expect(policy.spec?.failurePolicy, policy.metadata?.name).toBe('Fail');
+    }
+  });
 
+  it('the student-facing policies scope themselves to lab service accounts', () => {
+    for (const policy of policies().filter((p) => STUDENT_SCOPED.includes(p.metadata?.name ?? ''))) {
       const conditions = (policy.spec?.matchConditions ?? []) as Array<{ expression?: string }>;
       const expressions = conditions.map((c) => c.expression ?? '').join(' ');
       expect(expressions, policy.metadata?.name).toContain('system:serviceaccount:lab-');
@@ -154,15 +158,52 @@ describe('lab admission policies — neither policy is weakened', () => {
     expect(validations.some((v) => (v.expression ?? '').includes('jumptotech.io/managed'))).toBe(true);
   });
 
-  it('binds with Deny, only in managed namespaces', () => {
+  it('binds every policy with Deny', () => {
     for (const binding of bindings()) {
       expect(binding.spec?.validationActions, binding.metadata?.name).toEqual(['Deny']);
+    }
+  });
 
+  it('binds the student-facing policies only in managed namespaces', () => {
+    for (const binding of bindings().filter((b) => STUDENT_SCOPED.includes(b.metadata?.name ?? ''))) {
       const matchResources = (binding.spec?.matchResources ?? {}) as {
         namespaceSelector?: { matchLabels?: Record<string, string> };
       };
       expect(matchResources.namespaceSelector?.matchLabels).toEqual({ 'jumptotech.io/managed': 'true' });
     }
+  });
+});
+
+describe('lab admission policies — every managed namespace enforces Pod Security (BETA-P0-016)', () => {
+  const policy = () => policies().find((p) => p.metadata?.name === REQUIRE_POD_SECURITY)!;
+  const expressions = (field: 'matchConditions' | 'validations') =>
+    ((policy().spec?.[field] ?? []) as Array<{ expression?: string }>).map((e) => e.expression ?? '');
+
+  it('checks Namespace creates and updates', () => {
+    const rules = (policy().spec?.matchConstraints as { resourceRules: Array<Record<string, string[]>> }).resourceRules;
+    expect(rules).toEqual([
+      { apiGroups: [''], apiVersions: ['v1'], operations: ['CREATE', 'UPDATE'], resources: ['namespaces'] },
+    ]);
+  });
+
+  it('is not limited to students — the platform credential is held to it too', () => {
+    expect(expressions('matchConditions').join(' ')).not.toContain('system:serviceaccount');
+  });
+
+  it('cannot be escaped by removing the managed label in the same update', () => {
+    // A namespaceSelector on a Namespace reads the *new* labels; the policy
+    // must look at the old object itself, and must forbid dropping the label.
+    const binding = bindings().find((b) => b.metadata?.name === REQUIRE_POD_SECURITY);
+    expect(binding?.spec?.matchResources).toBeUndefined();
+    expect(expressions('matchConditions').join(' ')).toContain('oldObject');
+    expect(expressions('validations').some((e) => e.includes("object.metadata.labels['jumptotech.io/managed'] == 'true'"))).toBe(true);
+  });
+
+  it('requires an enforce label of baseline or restricted, never privileged', () => {
+    const enforce = expressions('validations').find((e) => e.includes('pod-security.kubernetes.io/enforce'));
+    expect(enforce).toBeDefined();
+    expect(enforce).toContain("in ['baseline', 'restricted']");
+    expect(enforce).not.toContain('privileged');
   });
 });
 

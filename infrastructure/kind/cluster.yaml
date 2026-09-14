@@ -17,6 +17,18 @@ nodes:
     image: kindest/node:v1.34.0
     labels:
       jumptotech.io/role: control-plane
+    # Every container the kubelet starts without a seccomp profile gets the
+    # runtime's default filter instead of none. Kubernetes' own default is
+    # Unconfined — unlike Docker's — so without this a student Pod could make
+    # every syscall the kernel offers (unshare, keyctl, bpf, …). Pod Security
+    # `baseline` refuses an explicit `Unconfined`; this covers the Pods that say
+    # nothing, which is nearly all of them. Only takes effect on a newly created
+    # cluster: `scripts/cluster-up.sh` warns when a reused cluster lacks it.
+    # See docs/pod-security.md.
+    kubeadmConfigPatches:
+      - |
+        kind: KubeletConfiguration
+        seccompDefault: true
 
 networking:
   # Deterministic host port so the developer's kubeconfig is stable across

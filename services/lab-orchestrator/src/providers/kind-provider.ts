@@ -48,6 +48,7 @@ import {
   NETWORK_ATTESTATION_REMEDIATION,
   readNetworkEnforcementAttestation,
 } from '../k8s/network-attestation.js';
+import { podSecurityLabels } from '../session/pod-security.js';
 import {
   LAB_LABEL,
   MANAGED_SELECTOR,
@@ -322,15 +323,18 @@ export class KindLabProvider implements LabProvider {
       'environment-created',
       'Environment created',
       async () => {
-        await this.#k8s.createNamespace(
-          context.namespace,
-          ownershipLabels({
+        // Pod Security labels go on in the same request that creates the
+        // namespace, so there is no moment at which it exists unfenced — and
+        // `jumptotech-require-pod-security` refuses the create without them.
+        await this.#k8s.createNamespace(context.namespace, {
+          ...ownershipLabels({
             sessionId: context.sessionId,
             labId: context.labId,
             expiresAtMs: context.expiresAtMs,
             runtimeOwner: this.#runtimeOwner,
           }),
-        );
+          ...podSecurityLabels(context.policy.podSecurity),
+        });
         await this.#applyGuardrails(context);
         return `namespace ${context.namespace} created with quota, limits, network policy and namespace-scoped RBAC`;
       },
@@ -854,6 +858,13 @@ export class KindLabProvider implements LabProvider {
    * cluster-scoped residue to garbage-collect separately).
    */
   async #applyGuardrails(context: LabSessionContext): Promise<void> {
+    // Labels first. On a fresh create they are already there and this is one
+    // read; it matters for a namespace whose create returned 409 because it
+    // already existed, and for one created by a build that predates the labels.
+    await this.#k8s.mergeNamespaceLabels(
+      context.namespace,
+      podSecurityLabels(context.policy.podSecurity),
+    );
     // Resolved each time rather than configured: the API server's address is a
     // property of the cluster, and a reset re-applies it if it moved.
     const apiServerEndpoints = context.policy.network.enabled

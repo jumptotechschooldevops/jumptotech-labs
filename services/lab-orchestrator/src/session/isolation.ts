@@ -12,6 +12,10 @@
  *   NetworkPolicy   — deny-by-default, with intra-namespace traffic, DNS and
  *                     the API server explicitly re-allowed
  *                     (`network-policy.ts`)
+ *   Pod Security    — namespace labels enforcing the `baseline` standard, so no
+ *                     Pod is privileged or reaches a host namespace or path
+ *                     (see `pod-security.ts`), and no ServiceAccount token is
+ *                     mounted into a Pod that did not ask for one
  *
  * Cost rule: this is the *whole* per-session footprint. No cluster, no node,
  * no load balancer, no public IP, and no database is created for a lab.
@@ -157,6 +161,10 @@ export function studentRbacManifests(policy: SessionPolicy): KubernetesManifestO
       apiVersion: 'v1',
       kind: 'ServiceAccount',
       metadata: { name: policy.serviceAccountName, labels },
+      // The student's credential is minted through TokenRequest and handed to
+      // the terminal; it is never read from a mount. Without this, any Pod
+      // naming `serviceAccountName: student` would carry a copy on disk.
+      automountServiceAccountToken: false,
     },
     {
       apiVersion: 'rbac.authorization.k8s.io/v1',
@@ -257,6 +265,32 @@ export function rbacPracticeOverlayManifests(policy: SessionPolicy): KubernetesM
   ];
 }
 
+/** The ServiceAccount Kubernetes creates in every namespace. */
+export const DEFAULT_SERVICE_ACCOUNT = 'default';
+
+/**
+ * The namespace's `default` ServiceAccount, with token automounting off.
+ *
+ * Every Pod that names no ServiceAccount runs as `default`, and Kubernetes
+ * mounts a live API token for it unless told otherwise. No lab Pod needs one:
+ * K8S-012, the only lab whose workload calls the API, runs under its own
+ * `inventory-sync` ServiceAccount, which this does not touch. A Pod can still
+ * opt in with `automountServiceAccountToken: true` — this changes the default,
+ * not what a student is allowed to ask for.
+ *
+ * Labelled managed, so `jumptotech-protect-managed-resources` refuses a student
+ * edit or delete that would put the default back (a deleted `default` is
+ * recreated by the controller without this field).
+ */
+export function defaultServiceAccountManifest(): KubernetesManifestObject {
+  return {
+    apiVersion: 'v1',
+    kind: 'ServiceAccount',
+    metadata: { name: DEFAULT_SERVICE_ACCOUNT, labels: componentLabels('rbac') },
+    automountServiceAccountToken: false,
+  };
+}
+
 /**
  * Everything applied into a fresh session namespace, in dependency order.
  *
@@ -266,6 +300,10 @@ export function rbacPracticeOverlayManifests(policy: SessionPolicy): KubernetesM
  * `apiServerEndpoints` is resolved from the cluster by the provider; without it
  * no API server allowance is generated and in-cluster API clients depend on
  * the CNI leaving node-local traffic ungoverned.
+ *
+ * Pod Security Admission is not in this list: it is a set of labels on the
+ * namespace itself, stamped when the namespace is created and reconciled by the
+ * provider before these objects are applied (see `session/pod-security.ts`).
  */
 export function sessionGuardrailManifests(
   policy: SessionPolicy,
@@ -279,6 +317,7 @@ export function sessionGuardrailManifests(
       ? networkPolicyManifests(policy, { capabilities, ...options })
       : []),
     ...studentRbacManifests(policy),
+    defaultServiceAccountManifest(),
     ...(capabilities.includes('rbac_authoring') ? rbacPracticeOverlayManifests(policy) : []),
   ];
 }

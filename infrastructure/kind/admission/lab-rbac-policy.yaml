@@ -79,3 +79,62 @@ spec:
     namespaceSelector:
       matchLabels:
         jumptotech.io/managed: "true"
+---
+# BETA-P0-016. A managed namespace always carries a Pod Security Admission
+# enforce label of `baseline` or `restricted`, and cannot lose it.
+#
+# The orchestrator stamps the labels (session/pod-security.ts). This policy is
+# what makes a regression there fail closed: without it, a code path that
+# created a namespace without the labels would produce a sandbox in which
+# `privileged: true`, `hostPID` and `hostPath: /` are all admitted, and nothing
+# would say so. It applies to every caller — student, platform, operator — so
+# the platform's own credential cannot weaken a namespace either.
+#
+# Unlike the two policies above it is not scoped to lab service accounts, and
+# its binding has no namespaceSelector: for a Namespace object that selector
+# reads the *new* labels, so an update removing `jumptotech.io/managed` would
+# stop matching at the moment it mattered. The CEL condition checks the old
+# object as well.
+#
+# A namespace created before this policy existed can still be labelled: the
+# validation reads the new object, and adding the labels makes it pass.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: jumptotech-require-pod-security
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["namespaces"]
+  matchConditions:
+    - name: managed-namespace
+      expression: >-
+        (has(object.metadata.labels) &&
+          'jumptotech.io/managed' in object.metadata.labels &&
+          object.metadata.labels['jumptotech.io/managed'] == 'true') ||
+        (oldObject != null && has(oldObject.metadata.labels) &&
+          'jumptotech.io/managed' in oldObject.metadata.labels &&
+          oldObject.metadata.labels['jumptotech.io/managed'] == 'true')
+  validations:
+    - expression: >-
+        has(object.metadata.labels) &&
+        'jumptotech.io/managed' in object.metadata.labels &&
+        object.metadata.labels['jumptotech.io/managed'] == 'true'
+      message: "A platform-managed namespace cannot stop being managed"
+    - expression: >-
+        has(object.metadata.labels) &&
+        'pod-security.kubernetes.io/enforce' in object.metadata.labels &&
+        object.metadata.labels['pod-security.kubernetes.io/enforce'] in ['baseline', 'restricted']
+      message: "A platform-managed namespace must enforce Pod Security 'baseline' or 'restricted' (pod-security.kubernetes.io/enforce)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: jumptotech-require-pod-security
+spec:
+  policyName: jumptotech-require-pod-security
+  validationActions: [Deny]

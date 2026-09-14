@@ -86,6 +86,22 @@ if [[ -f "${ADMISSION_MANIFEST}" ]]; then
   ok "Admission policies applied."
 fi
 
+# BETA-P0-016. `seccompDefault` is a kubelet setting from cluster.yaml, so it
+# exists only on a cluster *created* from that file. A cluster reused from an
+# older checkout still runs every Pod that names no profile as seccomp
+# Unconfined. Say so rather than report a healthy cluster; the fix is to
+# recreate it, which this script will not do behind a developer's back.
+SECCOMP_DEFAULT="$(KUBECONFIG="${HOST_KUBECONFIG}" kubectl get --raw \
+  "/api/v1/nodes/${CLUSTER_NAME}-control-plane/proxy/configz" 2>/dev/null \
+  | grep -o '"seccompDefault":[a-z]*' | cut -d: -f2 || true)"
+if [[ "${SECCOMP_DEFAULT}" == "true" ]]; then
+  ok "Kubelet seccompDefault is on: Pods without a profile get RuntimeDefault."
+else
+  printf '\033[33m!\033[0m %s\n' \
+    "Kubelet seccompDefault is not on (this cluster predates infrastructure/kind/cluster.yaml's setting)." \
+    "  Pods that name no seccomp profile run Unconfined. Recreate: npm run cluster:down && npm run cluster:up" >&2
+fi
+
 # A *default* StorageClass, whatever it is called.
 #
 # This asked for one named `local-path`, which kind never provides: kind ships
