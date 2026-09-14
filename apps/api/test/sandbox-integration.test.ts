@@ -59,6 +59,19 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const SECRET = 'sandbox-integration-test-secret';
 const HOME = '/home/student';
 
+/**
+ * Who a request comes from.
+ *
+ * With no identity provider configured, `createApp` authenticates through the
+ * development resolver, which reads `Authorization: Developer <name>` — the
+ * same credential `api.test.ts` and `student-session-limit.test.ts` use. A
+ * request without it is the resolver's one default student, so every test that
+ * needs two live sandboxes at once must name two students: the private beta
+ * allows one live lab per student.
+ */
+const STUDENT = 'sandbox-student';
+const as = (student: string) => ({ Authorization: `Developer ${student}` });
+
 /** The commands a student would type to solve LINUX-001. */
 const LINUX_SOLUTION = `
 set -e
@@ -119,6 +132,10 @@ async function harness(options: { now?: () => number } = {}): Promise<Harness> {
   const config = loadConfig({
     TERMINAL_SESSION_SECRET: SECRET,
     LABS_DIR: path.join(repoRoot, 'labs'),
+    // The private-beta capacity policy, pinned rather than inherited from the
+    // defaults, so these real sandboxes run under the limits a beta host sets.
+    MAX_ACTIVE_SESSIONS: '5',
+    MAX_ACTIVE_SESSIONS_PER_STUDENT: '1',
   } as NodeJS.ProcessEnv);
 
   const providers = new ProviderRegistry({ availabilityTtlMs: 0 });
@@ -144,12 +161,17 @@ async function harness(options: { now?: () => number } = {}): Promise<Harness> {
 /** Track every sandbox this suite creates, so nothing is left behind. */
 const created = new Set<string>();
 
-async function startLab(app: Express, labId: string) {
-  const response = await request(app).post(`/api/labs/${labId}/start`);
+async function startLab(app: Express, labId: string, student = STUDENT) {
+  const response = await request(app).post(`/api/labs/${labId}/start`).set(as(student));
   expect(response.status, JSON.stringify(response.body)).toBe(200);
   const session = response.body.data.session as LabSession & { sandboxRef: string };
   created.add(session.sandboxRef);
   return session;
+}
+
+/** End Lab, as the student who owns the session. */
+function endLab(app: Express, sessionId: string, student = STUDENT) {
+  return request(app).delete(`/api/sessions/${sessionId}`).set(as(student));
 }
 
 /** Run a shell script inside a sandbox, as the student would. */
@@ -164,8 +186,8 @@ async function asStudent(sandboxRef: string, script: string) {
   return result;
 }
 
-async function check(app: Express, sessionId: string) {
-  const response = await request(app).post(`/api/sessions/${sessionId}/check`);
+async function check(app: Express, sessionId: string, student = STUDENT) {
+  const response = await request(app).post(`/api/sessions/${sessionId}/check`).set(as(student));
   expect(response.status, JSON.stringify(response.body)).toBe(200);
   return response.body.data as {
     passed: boolean;
@@ -237,7 +259,7 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     expect(user).toBe('root');
     expect(hostname).toBe(LINUX_SANDBOX_HOSTNAME);
 
-    await request(app).delete(`/api/sessions/${session.sessionId}`);
+    await endLab(app, session.sessionId);
   }, 180_000);
 
   it('runs real Linux commands as an unprivileged user with no daemon access', async () => {
@@ -296,7 +318,7 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     expect(useradd.exitCode, useradd.stderr).toBe(0);
     expect(useradd.stdout).toContain('ci-runner');
 
-    await request(app).delete(`/api/sessions/${session.sessionId}`);
+    await endLab(app, session.sessionId);
   }, 180_000);
 
   it('fails LINUX-001 before the work and passes it after, on real state', async () => {
@@ -320,7 +342,7 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     expect(after.passed, JSON.stringify(after.checks, null, 2)).toBe(true);
     expect(after.summary).toBe('LAB PASSED');
 
-    await request(app).delete(`/api/sessions/${session.sessionId}`);
+    await endLab(app, session.sessionId);
   }, 180_000);
 
   it('restores the baseline on Reset and destroys the sandbox on End', async () => {
@@ -331,7 +353,7 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     await asStudent(session.sandboxRef, LINUX_SOLUTION);
     expect((await check(app, session.sessionId)).passed).toBe(true);
 
-    const reset = await request(app).post(`/api/sessions/${session.sessionId}/reset`);
+    const reset = await request(app).post(`/api/sessions/${session.sessionId}/reset`).set(as(STUDENT));
     expect(reset.status, JSON.stringify(reset.body)).toBe(200);
     expect(reset.body.data.reconnectTerminal).toBe(true);
 
@@ -351,7 +373,7 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     await asStudent(session.sandboxRef, LINUX_SOLUTION);
     expect((await check(app, session.sessionId)).passed).toBe(true);
 
-    const ended = await request(app).delete(`/api/sessions/${session.sessionId}`);
+    const ended = await endLab(app, session.sessionId);
     expect(ended.status).toBe(200);
     expect(await runtime.inspect(session.sandboxRef)).toBeNull();
   }, 240_000);
@@ -359,15 +381,19 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
   it('keeps two students in two sandboxes', async () => {
     if (!enabled) return;
     const { app } = await harness();
-    const a = await startLab(app, 'LINUX-001');
-    const b = await startLab(app, 'LINUX-001');
+    const a = await startLab(app, 'LINUX-001', 'student-a');
+    const b = await startLab(app, 'LINUX-001', 'student-b');
 
     expect(a.sandboxRef).not.toBe(b.sandboxRef);
     await asStudent(a.sandboxRef, LINUX_SOLUTION);
 
     // A passes; B is untouched and still fails.
-    expect((await check(app, a.sessionId)).passed).toBe(true);
-    expect((await check(app, b.sessionId)).passed).toBe(false);
+    expect((await check(app, a.sessionId, 'student-a')).passed).toBe(true);
+    expect((await check(app, b.sessionId, 'student-b')).passed).toBe(false);
+
+    // A cannot reach B's session through the API either.
+    const probe = await request(app).post(`/api/sessions/${b.sessionId}/check`).set(as('student-a'));
+    expect(probe.status).toBe(404);
 
     // B's sandbox genuinely does not contain A's work.
     const listing = await runtime.exec(b.sandboxRef, {
@@ -378,11 +404,11 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     expect(listing.stdout).not.toContain('deploy');
 
     // Ending A leaves B alone.
-    await request(app).delete(`/api/sessions/${a.sessionId}`);
+    expect((await endLab(app, a.sessionId, 'student-a')).status).toBe(200);
     expect(await runtime.inspect(a.sandboxRef)).toBeNull();
     expect(await runtime.inspect(b.sandboxRef)).not.toBeNull();
 
-    await request(app).delete(`/api/sessions/${b.sessionId}`);
+    await endLab(app, b.sessionId, 'student-b');
   }, 240_000);
 
   it('reclaims an expired sandbox without anyone asking', async () => {
@@ -468,7 +494,7 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
     expect(starter.stdout).toContain('required_providers');
     expect(starter.stdout).toContain('hashicorp/local');
 
-    await request(app).delete(`/api/sessions/${session.sessionId}`);
+    await endLab(app, session.sessionId);
   }, 240_000);
 
   it('runs init, plan and apply offline, and passes TF-001 on real state', async () => {
@@ -493,7 +519,7 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
     expect(state.stdout).toContain('local_file');
     expect(state.stdout).toContain('manifest_path');
 
-    await request(app).delete(`/api/sessions/${session.sessionId}`);
+    await endLab(app, session.sessionId);
   }, 300_000);
 
   it('restores the starter configuration on Reset and removes the sandbox on End', async () => {
@@ -504,7 +530,7 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
     await asStudent(session.sandboxRef, TERRAFORM_SOLUTION);
     expect((await check(app, session.sessionId)).passed).toBe(true);
 
-    const reset = await request(app).post(`/api/sessions/${session.sessionId}/reset`);
+    const reset = await request(app).post(`/api/sessions/${session.sessionId}/reset`).set(as(STUDENT));
     expect(reset.status, JSON.stringify(reset.body)).toBe(200);
     expect(reset.body.data.restored).toEqual(['terraform/versions.tf']);
 
@@ -513,21 +539,23 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
     expect(listing.stdout.trim()).toBe('versions.tf');
     expect((await check(app, session.sessionId)).passed).toBe(false);
 
-    await request(app).delete(`/api/sessions/${session.sessionId}`);
+    await endLab(app, session.sessionId);
     expect(await runtime.inspect(session.sandboxRef)).toBeNull();
   }, 300_000);
 
   it('runs a Linux and a Terraform sandbox side by side, isolated', async () => {
     if (!enabled) return;
     const { app } = await harness();
-    const linux = await startLab(app, 'LINUX-001');
-    const terraform = await startLab(app, 'TF-001');
+    // Two students: one student may hold only one live lab (see the capacity
+    // suite below), so side by side means side by side for different people.
+    const linux = await startLab(app, 'LINUX-001', 'linux-student');
+    const terraform = await startLab(app, 'TF-001', 'terraform-student');
 
     await asStudent(linux.sandboxRef, LINUX_SOLUTION);
     await asStudent(terraform.sandboxRef, TERRAFORM_SOLUTION);
 
-    expect((await check(app, linux.sessionId)).passed).toBe(true);
-    expect((await check(app, terraform.sessionId)).passed).toBe(true);
+    expect((await check(app, linux.sessionId, 'linux-student')).passed).toBe(true);
+    expect((await check(app, terraform.sessionId, 'terraform-student')).passed).toBe(true);
 
     // Neither sandbox can see the other's work.
     const linuxListing = await asStudent(linux.sandboxRef, 'ls -A');
@@ -535,7 +563,69 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
     const terraformListing = await asStudent(terraform.sandboxRef, 'ls -A');
     expect(terraformListing.stdout).not.toContain('deploy');
 
-    await request(app).delete(`/api/sessions/${linux.sessionId}`);
-    await request(app).delete(`/api/sessions/${terraform.sessionId}`);
+    await endLab(app, linux.sessionId, 'linux-student');
+    await endLab(app, terraform.sessionId, 'terraform-student');
+  }, 420_000);
+});
+
+/*
+ * BETA-P0-009 against real sandboxes: one live lab per student, five in all.
+ *
+ * The fakes in `api.test.ts` and the orchestrator's capacity suite prove the
+ * accounting. What only a real daemon shows is that a refusal creates nothing
+ * and that the containers counted are the containers running.
+ */
+describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('beta session capacity on real sandboxes', () => {
+  it('refuses the same student a second live lab with 429, and lets them start again after End', async () => {
+    if (!enabled) return;
+    const { app, sessions } = await harness();
+    expect(sessions.lifetimes).toMatchObject({ maxActiveSessions: 5, maxActiveSessionsPerStudent: 1 });
+
+    const first = await startLab(app, 'LINUX-001', 'alice');
+    expect(await runtime.inspect(first.sandboxRef)).not.toBeNull();
+
+    const second = await request(app).post('/api/labs/TF-001/start').set(as('alice'));
+    expect(second.status, JSON.stringify(second.body)).toBe(429);
+    expect(second.body.error.code).toBe('STUDENT_SESSION_LIMIT_REACHED');
+    expect(second.body.error.details).toEqual({ activeSessions: 1, maxActiveSessionsPerStudent: 1 });
+    expect(second.body.data).toBeUndefined();
+    expect(await sessions.activeCount()).toBe(1);
+
+    // The limit is on live labs, not a quota: End frees the student's slot.
+    expect((await endLab(app, first.sessionId, 'alice')).status).toBe(200);
+    const next = await startLab(app, 'TF-001', 'alice');
+    expect(await runtime.inspect(next.sandboxRef)).not.toBeNull();
+
+    await endLab(app, next.sessionId, 'alice');
+  }, 300_000);
+
+  it('runs five students at MAX_ACTIVE_SESSIONS=5 and refuses a sixth with 503', async () => {
+    if (!enabled) return;
+    const { app, sessions } = await harness();
+    const students = ['student-1', 'student-2', 'student-3', 'student-4', 'student-5'];
+
+    const running: Array<{ student: string; session: LabSession & { sandboxRef: string } }> = [];
+    try {
+      for (const student of students) {
+        running.push({ student, session: await startLab(app, 'LINUX-001', student) });
+      }
+      expect(new Set(running.map((r) => r.session.sandboxRef)).size).toBe(5);
+      for (const { session } of running) {
+        expect(await runtime.inspect(session.sandboxRef)).not.toBeNull();
+      }
+      expect(await sessions.activeCount()).toBe(5);
+
+      // A sixth student holds nothing, so this is the platform being full —
+      // not their own limit.
+      const sixth = await request(app).post('/api/labs/LINUX-001/start').set(as('student-6'));
+      expect(sixth.status, JSON.stringify(sixth.body)).toBe(503);
+      expect(sixth.body.error.code).toBe('LAB_CAPACITY_REACHED');
+      expect(sixth.body.error.details).toMatchObject({ activeSessions: 5, maxActiveSessions: 5 });
+      expect(await sessions.activeCount()).toBe(5);
+    } finally {
+      for (const { student, session } of running) {
+        await endLab(app, session.sessionId, student);
+      }
+    }
   }, 420_000);
 });
