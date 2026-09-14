@@ -56,6 +56,8 @@ import {
   type VerificationMetrics,
 } from '@jumptotech/observability';
 
+import type { SessionMetricsHooks } from '@jumptotech/lab-orchestrator';
+
 import type { ApiConfig } from './config.js';
 
 export interface ApiMetrics {
@@ -198,6 +200,47 @@ export function buildApiObservability(config: ApiConfig): ApiObservability {
         readyzGauge: metrics.common.readyzOk,
         onScrapeDenied: () => metrics.common.scrapeDenied.inc({ service: 'api' }),
       });
+    },
+  };
+}
+
+/**
+ * The session manager's observability hooks, mapped onto this service's metrics.
+ *
+ * A function rather than an object literal inside `index.ts`, so the mapping a
+ * test exercises is the one production runs. It decides which counter each
+ * refusal lands on, and `CapacityExhausted` pages on one of them: a student at
+ * their own session limit must never be counted as the platform being full.
+ */
+export function sessionMetricsHooks(sessions: SessionMetrics): SessionMetricsHooks {
+  return {
+    onProvision: (event) => {
+      sessions.provisionDuration.observe(
+        { provider: event.provider, sandbox_kind: event.sandboxKind, outcome: event.outcome },
+        event.durationMs / 1000,
+      );
+      for (const step of event.steps) {
+        sessions.provisionStepDuration.observe(
+          { provider: event.provider, step: step.name, outcome: step.outcome },
+          step.durationMs / 1000,
+        );
+      }
+    },
+    onTransition: (from, to) => {
+      sessions.stateTransitions.inc({ from, to });
+    },
+    onCapacityRejected: (track) => {
+      sessions.capacityRejections.inc({ track });
+    },
+    onStudentLimitRejected: (track) => {
+      sessions.studentLimitRejections.inc({ track });
+    },
+    onSessionEnded: (event) => {
+      sessions.labEnds.inc({ provider: event.provider, reason: event.reason });
+      sessions.sessionLifetime.observe(
+        { provider: event.provider, end_reason: event.reason },
+        event.lifetimeSeconds,
+      );
     },
   };
 }

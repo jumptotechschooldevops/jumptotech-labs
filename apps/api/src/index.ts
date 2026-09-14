@@ -30,7 +30,7 @@ import {
   buildProgressRuntime,
 } from './progress.js';
 import { HttpTerminalControl, noopTerminalControl } from './terminal-control.js';
-import { buildApiObservability } from './observability.js';
+import { buildApiObservability, sessionMetricsHooks } from './observability.js';
 import { installRuntimeCollectors } from './observability-collectors.js';
 
 async function main(): Promise<void> {
@@ -274,33 +274,7 @@ async function main(): Promise<void> {
       logger.legacy('progress.write_failed', 'warn'),
     ),
     logger: logger.legacy('session.transition'),
-    metrics: {
-      onProvision: (event) => {
-        metrics.sessions.provisionDuration.observe(
-          { provider: event.provider, sandbox_kind: event.sandboxKind, outcome: event.outcome },
-          event.durationMs / 1000,
-        );
-        for (const step of event.steps) {
-          metrics.sessions.provisionStepDuration.observe(
-            { provider: event.provider, step: step.name, outcome: step.outcome },
-            step.durationMs / 1000,
-          );
-        }
-      },
-      onTransition: (from, to) => {
-        metrics.sessions.stateTransitions.inc({ from, to });
-      },
-      onCapacityRejected: (track) => {
-        metrics.sessions.capacityRejections.inc({ track });
-      },
-      onSessionEnded: (event) => {
-        metrics.sessions.labEnds.inc({ provider: event.provider, reason: event.reason });
-        metrics.sessions.sessionLifetime.observe(
-          { provider: event.provider, end_reason: event.reason },
-          event.lifetimeSeconds,
-        );
-      },
-    },
+    metrics: sessionMetricsHooks(metrics.sessions),
   });
 
   // Students are never responsible for cleanup. The reaper reclaims expired,
@@ -469,7 +443,8 @@ async function main(): Promise<void> {
     logger.info(
       'config.loaded',
       { reason: 'session_lifetimes' },
-      `sessions: max=${config.lifetimes.maxActiveSessions} lifetime=${config.lifetimes.maxSessionSeconds / 60}m ` +
+      `sessions: max=${config.lifetimes.maxActiveSessions} ` +
+        `per_student=${config.lifetimes.maxActiveSessionsPerStudent ?? 'unlimited'} lifetime=${config.lifetimes.maxSessionSeconds / 60}m ` +
         `idle=${config.lifetimes.idleTimeoutSeconds / 60}m warn=${config.lifetimes.warningSeconds / 60}m`,
     );
 

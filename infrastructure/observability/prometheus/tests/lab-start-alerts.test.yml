@@ -293,3 +293,36 @@ tests:
               summary: '8 lab starts failed in the last 10 minutes (>30% of attempts)'
               description: "Students cannot reliably start labs. Scope it by lab_id, track and provider before touching anything — one lab, one track, one provider and everything are four different incidents."
               runbook_url: docs/runbooks/RB-03-lab-start-failures.md
+
+  # ------------------------------------ 9. one student at their session limit
+  # BETA-P0-009. The same burst as case 2, but every refusal is a student who
+  # already holds MAX_ACTIVE_SESSIONS_PER_STUDENT sessions pressing Start again.
+  # That is the limit working, not the platform failing: nothing may page. The
+  # refusals are still attempts, so they appear in the denominator.
+  - interval: 15s
+    name: a student repeatedly hitting their own session limit does not page
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+0x130'
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+0x130'
+      - series: 'jtt_lab_start_outcome_total{outcome="student_limit_reached"}'
+        values: '0+0x24 2+2x7 16+0x100'
+    promql_expr_test:
+      - expr: jtt:lab_start_failures:increase10m
+        eval_time: 13m
+        exp_samples:
+          - labels: 'jtt:lab_start_failures:increase10m'
+            value: 0
+      - expr: jtt:lab_start_attempts:increase10m
+        eval_time: 13m
+        exp_samples:
+          - labels: 'jtt:lab_start_attempts:increase10m'
+            value: 16
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: LabStartFailureRateElevated
+        exp_alerts: []

@@ -32,6 +32,40 @@ export interface TransitionGuard {
   statusChangedAt?: string;
 }
 
+/**
+ * The ceilings a new session is admitted against.
+ *
+ * Two independent limits over the same resource. `maxOccupying` is the
+ * deployment's ceiling and always applies. `maxOccupyingPerOwner` is a share
+ * of it per authenticated user, so one student cannot hold every sandbox;
+ * `undefined` means no per-owner limit. A session with no owner is counted
+ * towards the global ceiling only, because there is nobody to count it against.
+ */
+export interface CapacityLimits {
+  maxOccupying: number;
+  maxOccupyingPerOwner?: number;
+}
+
+/**
+ * The outcome of one admission, decided inside the store's critical section.
+ *
+ * The counts are the ones the decision was made on, not a later re-read, so a
+ * refusal can explain itself without a second query that could disagree.
+ * `refusedBy` says which limit refused: `owner` wins when both would, because
+ * that is the one the caller can do something about — and a student at their
+ * own limit would be refused even on an empty platform.
+ */
+export type CapacityDecision =
+  | { admitted: true }
+  | {
+      admitted: false;
+      refusedBy: 'global' | 'owner';
+      /** Sessions holding a sandbox across the deployment. */
+      occupying: number;
+      /** Sessions holding a sandbox for this session's owner. */
+      ownerOccupying: number;
+    };
+
 export interface SessionStore {
   create(session: LabSession): Promise<void>;
   get(sessionId: string): Promise<LabSession | null>;
@@ -108,6 +142,18 @@ export interface SessionStore {
    * so no sandbox is ever created for a session that will not be admitted.
    */
   createWithinCapacity(session: LabSession, maxOccupying: number): Promise<boolean>;
+
+  /**
+   * Insert a session only if it fits under the global *and* the per-owner
+   * ceiling — BETA-P0-009.
+   *
+   * The same indivisible check-and-insert as `createWithinCapacity`, with the
+   * owner's count taken inside the same critical section. A per-owner count read
+   * separately would reopen the gap the global check closed: two starts from one
+   * student could each see a free slot of theirs and both be admitted. Refusal
+   * writes nothing and says which limit refused.
+   */
+  createWithinLimits(session: LabSession, limits: CapacityLimits): Promise<CapacityDecision>;
 
   /**
    * How many sessions currently hold a sandbox.
@@ -260,15 +306,51 @@ export class InMemorySessionStore implements SessionStore {
    * the same guarantee with a transaction and an advisory lock.
    */
   async createWithinCapacity(session: LabSession, maxOccupying: number): Promise<boolean> {
+    return (await this.createWithinLimits(session, { maxOccupying })).admitted;
+  }
+
+  /** Atomic for the same reason: both counts and the insert share one tick. */
+  async createWithinLimits(session: LabSession, limits: CapacityLimits): Promise<CapacityDecision> {
     let occupied = 0;
+    let ownerOccupied = 0;
     for (const existing of this.#bySessionId.values()) {
-      if (occupiesCapacity(existing.status)) occupied += 1;
+      if (!occupiesCapacity(existing.status)) continue;
+      occupied += 1;
+      if (session.ownerUserId !== undefined && existing.ownerUserId === session.ownerUserId) {
+        ownerOccupied += 1;
+      }
     }
-    if (occupiesCapacity(session.status) && occupied >= maxOccupying) return false;
+    const decision = decideCapacity(session, limits, occupied, ownerOccupied);
+    if (!decision.admitted) return decision;
     this.#assertInsertable(session);
     this.#bySessionId.set(session.sessionId, { ...session });
-    return true;
+    return decision;
   }
+}
+
+/**
+ * The admission rule both stores apply to the counts they took.
+ *
+ * Shared so the double and the durable store cannot disagree about precedence
+ * or about which sessions a limit applies to. Only a session that would itself
+ * occupy capacity is ever refused, and the per-owner limit applies only when
+ * there is an owner to count against.
+ */
+export function decideCapacity(
+  session: LabSession,
+  limits: CapacityLimits,
+  occupying: number,
+  ownerOccupying: number,
+): CapacityDecision {
+  if (!occupiesCapacity(session.status)) return { admitted: true };
+  const perOwner = limits.maxOccupyingPerOwner;
+  if (session.ownerUserId !== undefined && perOwner !== undefined && ownerOccupying >= perOwner) {
+    return { admitted: false, refusedBy: 'owner', occupying, ownerOccupying };
+  }
+  if (occupying >= limits.maxOccupying) {
+    return { admitted: false, refusedBy: 'global', occupying, ownerOccupying };
+  }
+  return { admitted: true };
 }
 
 /** Has this session passed its hard, absolute deadline? */

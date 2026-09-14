@@ -256,6 +256,7 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
   return parsed;
 }
 
+
 /**
  * Refuse to serve a production deployment from a localhost origin.
  *
@@ -581,6 +582,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       idleTimeoutSeconds,
       warningSeconds,
       maxActiveSessions: intFromEnv(env, 'MAX_ACTIVE_SESSIONS', 20),
+      // Private beta policy: one live lab per student. Independent of
+      // MAX_ACTIVE_SESSIONS, which still binds on its own — see README → Capacity.
+      maxActiveSessionsPerStudent: intFromEnv(env, 'MAX_ACTIVE_SESSIONS_PER_STUDENT', 1),
     },
     policy: loadSessionPolicy(env),
     sandbox: {

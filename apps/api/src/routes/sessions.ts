@@ -109,6 +109,8 @@ export interface SessionRoutesDeps {
 const STATUS_BY_CODE: Record<string, number> = {
   PROVIDER_UNAVAILABLE: 503,
   LAB_CAPACITY_REACHED: 503,
+  // The caller's own quota, not the platform being unavailable.
+  STUDENT_SESSION_LIMIT_REACHED: 429,
   SESSION_NOT_FOUND: 404,
   SESSION_NOT_ACTIVE: 409,
   INVALID_SESSION_ID: 400,

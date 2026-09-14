@@ -2983,6 +2983,45 @@ The check and the reservation happen synchronously before the first `await`, so
 simultaneous Start Lab requests cannot both slip past the limit. There is no
 queue — that is a later story.
 
+#### Per-student limit (BETA-P0-009)
+
+`MAX_ACTIVE_SESSIONS_PER_STUDENT` caps how many sessions **one authenticated
+student** may hold at once, so a single account cannot take every sandbox.
+Past it, Start Lab returns `429 STUDENT_SESSION_LIMIT_REACHED` and creates no
+sandbox. `details` carries only that student's own count and limit, never the
+platform's.
+
+- **Independent of `MAX_ACTIVE_SESSIONS`.** Both apply; the global ceiling
+  still binds when every student is under their own limit. When both would
+  refuse, the per-student refusal is reported, because it is the one the
+  student can act on.
+- **Counted over the same statuses** as the global ceiling: `CREATING`,
+  `ACTIVE`, `RESETTING`, `DEGRADED`, `ENDING`, `EXPIRING`. Each of those may
+  still hold a sandbox. `ENDED`, `EXPIRED` and `FAILED` hold nothing and give
+  the slot back.
+- **Recovery keeps the count honest** (BETA-P0-007). A failed or interrupted
+  reset is `DEGRADED` and keeps its slot until Reset rebuilds it or End/expiry
+  releases it. A stuck End keeps its slot until the reaper finishes it. A start
+  whose session End claimed during provisioning holds nothing once End records
+  `ENDED`; what it built afterwards is discarded, never made `ACTIVE`.
+- **Concurrency-safe across API instances.** The owner's count is taken in the
+  same PostgreSQL transaction, under the same advisory lock, as the global
+  count and the insert. Two simultaneous starts from one student cannot both
+  see a free slot of theirs, and there is no second lock to order.
+- **Observable separately.** It increments
+  `jtt_session_student_limit_rejections_total`, not
+  `jtt_session_capacity_rejections_total`, so `CapacityExhausted` does not page
+  for it. The start outcome is `student_limit_reached`, which
+  `jtt:lab_start_failures:increase10m` does not count as a failure.
+- A session with no owner (created before authentication existed) counts
+  towards the global ceiling only.
+
+> **Private beta policy:** `MAX_ACTIVE_SESSIONS_PER_STUDENT=1` — the default in
+> `config.ts`, `docker-compose.yml` and `.env.example` alike, so a
+> deployment that sets nothing gets one live lab per student. The beta host
+> also runs `MAX_ACTIVE_SESSIONS=5`; that is set in its deployment `.env`,
+> and the general default stays 20. The value must be a positive integer.
+
 ---
 
 ## Lab definitions

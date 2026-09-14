@@ -33,6 +33,7 @@ the defect incident exercise 3 found in this very alert.
 | outcome | Meaning | Go to |
 |---|---|---|
 | `capacity_reached` | The platform is full | RB-04 |
+| `student_limit_reached` | A student already holds `MAX_ACTIVE_SESSIONS_PER_STUDENT` sessions. Not a failure; not counted by the alert | nowhere — RB-04 §9 if one account dominates |
 | `provider_unavailable` | The substrate is down | RB-09 / RB-06 |
 | `provision_failed` | The substrate is up and creation failed | **stay here** |
 | `unauthorized` | Callers are not authenticated | RB-14 |

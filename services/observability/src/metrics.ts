@@ -171,6 +171,9 @@ export function createCommonMetrics(registry: Registry, service: string): Common
 export const LAB_START_OUTCOMES = [
   'success',
   'capacity_reached',
+  // A student at their own session limit. Not a platform failure, and kept out
+  // of `jtt:lab_start_failures:increase10m` so one student cannot page anyone.
+  'student_limit_reached',
   'provider_unavailable',
   'provision_failed',
   'unauthorized',
@@ -186,6 +189,7 @@ export interface SessionMetrics {
   sessionsActive: Gauge;
   capacityLimit: Gauge;
   capacityRejections: Counter;
+  studentLimitRejections: Counter;
   sessionLifetime: Histogram;
   stateTransitions: Counter;
   labsLoaded: Gauge;
@@ -297,6 +301,18 @@ export function createSessionMetrics(registry: Registry): SessionMetrics {
     capacityRejections: new client.Counter({
       name: 'jtt_session_capacity_rejections_total',
       help: 'Start Lab requests refused because the platform was at capacity.',
+      labelNames: ['track'],
+      ...common,
+    }),
+
+    /*
+     * Kept apart from `capacityRejections` on purpose: `CapacityExhausted`
+     * pages on that counter, and a student already holding their own share of
+     * sessions says nothing about whether the platform is full.
+     */
+    studentLimitRejections: new client.Counter({
+      name: 'jtt_session_student_limit_rejections_total',
+      help: 'Start Lab requests refused because the student already held MAX_ACTIVE_SESSIONS_PER_STUDENT sessions.',
       labelNames: ['track'],
       ...common,
     }),

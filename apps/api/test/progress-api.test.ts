@@ -96,6 +96,12 @@ interface Harness {
 
 function buildApp(options: { repository?: InMemoryProgressRepository | BrokenProgressRepository } = {}): Harness {
   const config = loadConfig({
+    // This suite starts several labs as one development student to prove
+    // sessions stay isolated from each other. The private-beta limit of one live
+    // lab per student has its own tests (session-capacity-config,
+    // student-session-limit), so it is lifted here, explicitly, rather than
+    // re-issuing every request under a second identity.
+    MAX_ACTIVE_SESSIONS_PER_STUDENT: '20',
     TERMINAL_SESSION_SECRET: SECRET,
     LABS_DIR: path.join(repoRoot, 'labs'),
     ALLOWED_ORIGINS: 'http://localhost:3000',
