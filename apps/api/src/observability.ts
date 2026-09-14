@@ -58,6 +58,7 @@ import {
 } from '@jumptotech/observability';
 
 import type { SessionMetricsHooks } from '@jumptotech/lab-orchestrator';
+import type { JwksFetchOutcome } from './auth/oidc.js';
 
 import { databasePasswordOf, type ApiConfig } from './config.js';
 
@@ -235,6 +236,16 @@ export function buildApiObservability(config: ApiConfig): ApiObservability {
  * refusal lands on, and `CapacityExhausted` pages on one of them: a student at
  * their own session limit must never be counted as the platform being full.
  */
+/**
+ * `jtt_oidc_jwks_fetch_total`, fed by every `OidcTokenVerifier` the API builds.
+ *
+ * The one label is the verifier's closed outcome set, so neither the JWKS URL
+ * nor anything the provider returned can become a series.
+ */
+export function jwksFetchMetricHook(auth: AuthMetrics): (outcome: JwksFetchOutcome) => void {
+  return (outcome) => auth.jwksFetches.inc({ outcome });
+}
+
 export function sessionMetricsHooks(sessions: SessionMetrics): SessionMetricsHooks {
   return {
     onProvision: (event) => {

@@ -34,7 +34,9 @@ On the callback: `state_mismatch`, `open_redirect_blocked` and
 If `unknown_session` dominates right after a deploy on a stack with no
 `DATABASE_URL`, browser sessions were in memory and the restart signed everyone
 out. Users signing in again is the whole fix — and `ProgressStoreIsMemory`
-should also be firing, which is the more important alert.
+should also be firing, which is the more important alert. This can only happen
+outside `NODE_ENV=production`: a production API with no database refuses to
+start (BETA-P0-014).
 
 ## 4. Diagnose
 
@@ -45,12 +47,27 @@ should also be firing, which is the more important alert.
    ```promql
    sum by (outcome) (increase(jtt_oidc_jwks_fetch_total[30m]))
    ```
+   One count per real retrieval, never per token. `http_error`: the key
+   endpoint answered non-200 (or redirected). `network_error`: DNS, connection,
+   TLS or timeout. `invalid_response`: 200 but not a JWK Set.
+   `discovery_failed`: `jwks_uri` could not be learned — see step 6. A healthy
+   API shows a few `success` per hour at most, since keys are cached.
 3. **Clock skew.** `exp`/`nbf` are checked; a host minutes out of step rejects
    every valid token.
 4. **Configuration.** `OIDC_ISSUER`, `OIDC_AUDIENCE` and `OIDC_CLIENT_ID` must
    match the provider. `jtt_config_info` shows the live `auth_mode`.
 5. **Redirect URI.** A `callback` outcome of `state_mismatch` in volume usually
    means `OIDC_REDIRECT_URI` no longer matches what is registered.
+6. **Discovery (BETA-P0-014).** A `503 AUTH_MISCONFIGURED` from `/auth/login` or
+   the callback saying the published issuer does not match means `OIDC_ISSUER`
+   differs from the discovery document's `issuer` — often only a trailing
+   slash. Keys come from that document's `jwks_uri`.
+7. **`403 ORIGIN_NOT_ALLOWED` on sign-out or lab start** with
+   `jtt_security_events_total{service="api",event="origin_rejected"}` rising:
+   the page is served from an origin missing from `ALLOWED_ORIGINS` /
+   `PUBLIC_ORIGIN`, or a cross-site page is posting (RB-08).
+8. **The API will not start at all** under `NODE_ENV=production`: the refusal
+   lists every authentication rule that failed (docs/authentication.md §4.2).
 
 ## 5. Fix
 

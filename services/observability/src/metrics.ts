@@ -598,7 +598,7 @@ export function createAuthMetrics(registry: Registry): AuthMetrics {
 
     jwksFetches: new client.Counter({
       name: 'jtt_oidc_jwks_fetch_total',
-      help: 'JWKS retrievals from the identity provider.',
+      help: 'JWKS retrievals from the identity provider, by outcome; cached key lookups are not counted.',
       labelNames: ['outcome'],
       ...common,
     }),

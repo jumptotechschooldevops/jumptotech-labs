@@ -52,6 +52,12 @@ import { asyncRoute, sendError, sendOk } from '../http.js';
 /** How long a half-finished sign-in may sit before it must be restarted. */
 const TRANSACTION_TTL_SECONDS = 10 * 60;
 const TRANSACTION_COOKIE_SUFFIX = '_tx';
+/**
+ * The transaction cookie is only ever read by `/auth/callback`, so it is only
+ * ever sent under `/auth` (BETA-P0-014). It used to ride along on every API
+ * request for ten minutes after each sign-in attempt.
+ */
+const TRANSACTION_COOKIE_PATH = '/auth';
 
 export interface AuthRoutesDeps {
   /** Null when this deployment has no browser sign-in configured. */
@@ -79,6 +85,10 @@ function cookieAttributes(cookie: AuthCookieConfig, maxAgeSeconds?: number): Coo
     domain: cookie.domain,
     ...(maxAgeSeconds === undefined ? {} : { maxAgeSeconds }),
   };
+}
+
+function transactionCookieAttributes(cookie: AuthCookieConfig, maxAgeSeconds?: number): CookieAttributes {
+  return { ...cookieAttributes(cookie, maxAgeSeconds), path: TRANSACTION_COOKIE_PATH };
 }
 
 /**
@@ -130,6 +140,19 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
   const router = Router();
   const log = deps.logger ?? (() => undefined);
   const txCookieName = `${deps.cookie.name}${TRANSACTION_COOKIE_SUFFIX}`;
+
+  /*
+   * Nothing under /auth may be cached (BETA-P0-014).
+   *
+   * `/auth/session` answers "who is this browser" and `/auth/callback` carries
+   * a `Set-Cookie` with a fresh session id. A shared cache or a CDN in front of
+   * the deployment that stored either would hand one student's answer — or
+   * session — to the next request for the same URL.
+   */
+  router.use((_req, res, next) => {
+    res.setHeader('cache-control', 'no-store');
+    next();
+  });
 
   /** True when this deployment can actually complete a sign-in. */
   const signInAvailable = (): boolean => deps.client !== null && deps.idTokenVerifier !== null;
@@ -203,7 +226,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
       serializeCookie(
         txCookieName,
         sealTransaction(transaction, deps.transactionSecret),
-        cookieAttributes(deps.cookie, TRANSACTION_TTL_SECONDS),
+        transactionCookieAttributes(deps.cookie, TRANSACTION_TTL_SECONDS),
       ),
     );
     // 302 rather than a JSON body with a URL: the browser must *navigate*, and
@@ -222,7 +245,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
       return;
     }
 
-    const clearTx = clearCookie(txCookieName, cookieAttributes(deps.cookie));
+    const clearTx = clearCookie(txCookieName, transactionCookieAttributes(deps.cookie));
 
     /*
      * The provider reporting a failure is not our failure to hide.
@@ -289,6 +312,18 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
       return;
     }
 
+    /*
+     * Never reuse, always replace (BETA-P0-014).
+     *
+     * A browser arriving at the callback with a session cookie already set gets
+     * that session destroyed and a brand-new id. Without this, a session id
+     * planted before sign-in — or the previous user's, on a shared lab machine —
+     * stayed live alongside the new one. Done only after the new identity is
+     * verified, so a failed callback cannot be used to sign somebody out.
+     */
+    const previous = deps.browser.cookieFrom(req.get('cookie'));
+    if (previous) await deps.authSessions.destroy(previous);
+
     const created = await deps.authSessions.create(user.userId, deps.cookie.ttlSeconds);
 
     res.setHeader('set-cookie', [
@@ -302,7 +337,9 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
 
     // The identity is never in the redirect URL. The browser learns who it is
     // by calling /auth/session with the cookie it just received.
-    res.redirect(302, `${deps.appUrl}${transaction.returnTo === '/' ? '/' : transaction.returnTo}`);
+    // Re-sanitised here, not only at /auth/login: the value came back out of a
+    // cookie, and the redirect must not depend on the signing key never leaking.
+    res.redirect(302, `${deps.appUrl}${safeReturnTo(transaction.returnTo)}`);
   }));
 
   // POST /auth/logout ------------------------------------------------------

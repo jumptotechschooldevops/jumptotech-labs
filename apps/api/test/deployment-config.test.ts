@@ -23,6 +23,8 @@ const PRODUCTION_ENV = {
   OIDC_ISSUER: 'https://issuer.example.com',
   OIDC_CLIENT_ID: 'jumptotech-labs',
   OIDC_AUDIENCE: 'jumptotech-labs',
+  // BETA-P0-014: the confidential client's credential is required in production.
+  OIDC_CLIENT_SECRET: 'd3f8a1c6e9b2d5f0a7c4e1b8d6f3a9c2e5b0d7f4',
   // BETA-P0-010: production requires each secret, separately generated.
   TERMINAL_SESSION_SECRET: '6c1f0a9e3b7d4c2a8e5f1b9d3a7c6e0f2b8d4a1c9e7f3b5d0a2c8e6f4b1d9a3c',
   INTERNAL_SERVICE_SECRET: '1e8b3d6f0a4c9e2b7d5f1a8c3e6b0d4f9a2c7e5b1d8f3a6c0e4b9d2f7a5c1e8b',
@@ -31,6 +33,9 @@ const PRODUCTION_ENV = {
   PUBLIC_ORIGIN: 'https://labs.example.com',
   ALLOWED_ORIGINS: 'https://labs.example.com',
   RUNTIME_OWNER_ID: 'labs-prod',
+  // BETA-P0-014: production sign-in requires durable sessions, so a database.
+  // Loopback, which the BETA-P0-012 transport gate accepts without TLS.
+  DATABASE_URL: 'postgresql://jumptotech:8e3b6d1f9a4c7e2b5d0f8a3c6e1b9d4f@127.0.0.1:5432/jumptotech_labs',
 } as NodeJS.ProcessEnv;
 
 describe('a production deployment cannot serve itself from localhost', () => {

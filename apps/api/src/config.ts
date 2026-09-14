@@ -33,6 +33,13 @@ import {
 } from '@jumptotech/progress';
 import { DEFAULT_AUTH_SESSION_TTL_SECONDS } from './auth/browser-session.js';
 import {
+  MAX_AUTH_SESSION_TTL_SECONDS,
+  MIN_AUTH_SESSION_TTL_SECONDS,
+  assertProductionAuthConfig,
+  scopeProblems,
+} from './auth/production-auth.js';
+import { isValidCookieName } from './auth/cookies.js';
+import {
   loadObservabilityConfig,
   assertProductionSecrets,
   assertScrapeTokenIsDistinct,
@@ -578,6 +585,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const looksLocal = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(appUrl);
   const cookieSecure = boolFromEnv(env, 'AUTH_COOKIE_SECURE', !looksLocal);
 
+  /*
+   * BETA-P0-014 — rules on the browser session that hold in every environment.
+   *
+   * A lifetime is a security bound only if it is bounded: an operator who sets
+   * a year has built a remember-me token without meaning to. A cookie name is
+   * checked here, at startup, rather than at the first sign-in that would throw.
+   */
+  const cookieName = strFromEnv(env, 'AUTH_COOKIE_NAME', 'jtt_session');
+  if (!isValidCookieName(cookieName)) {
+    throw new Error(`AUTH_COOKIE_NAME '${cookieName}' is not a valid cookie name.`);
+  }
+  const authSessionTtlSeconds = intFromEnv(env, 'AUTH_SESSION_TTL_SECONDS', DEFAULT_AUTH_SESSION_TTL_SECONDS);
+  if (authSessionTtlSeconds < MIN_AUTH_SESSION_TTL_SECONDS || authSessionTtlSeconds > MAX_AUTH_SESSION_TTL_SECONDS) {
+    throw new Error(
+      `AUTH_SESSION_TTL_SECONDS must be between ${MIN_AUTH_SESSION_TTL_SECONDS} and ${MAX_AUTH_SESSION_TTL_SECONDS}, got ${authSessionTtlSeconds}.`,
+    );
+  }
+  const scopes = strFromEnv(env, 'OIDC_SCOPES', 'openid profile email')
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (authMode === 'oidc' && clientSecret) {
+    const problems = scopeProblems(scopes);
+    if (problems.length > 0) throw new Error(problems.join(' '));
+  }
+
   assertPublicOriginConfigured({ nodeEnv: env.NODE_ENV ?? 'development', appUrl, looksLocal });
 
   // Fails closed in production: a missing owner is a refusal to start, not a
@@ -630,11 +663,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
           required: runtimeBrokerUrl !== '' && dockerEnabled,
         },
         { name: 'OBSERVABILITY_SCRAPE_TOKEN', value: observability.scrapeToken, required: true },
-        // Optional: without it the browser sign-in flow is simply off.
+        // BETA-P0-014: required in production. The API is the confidential
+        // client and the browser flow is the only way a student signs in, so a
+        // production API without it is one nobody can use. Outside production
+        // it stays optional, and browser sign-in is simply off.
         {
           name: 'OIDC_CLIENT_SECRET',
           value: clientSecret,
-          required: false,
+          required: authMode === 'oidc',
           minLength: EXTERNAL_SECRET_MIN_LENGTH,
         },
         {
@@ -655,6 +691,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
    * declared single-host bridge; see `broker-transport.ts`.
    */
   assertTlsVerificationEnabled(env, 'api');
+
+  /*
+   * BETA-P0-014 — production sign-in fails closed. After the secret and TLS
+   * gates, so a weak secret or disabled verification is still reported as
+   * itself. See `auth/production-auth.ts` for every rule and why.
+   */
+  if (isProductionEnv(env)) {
+    assertProductionAuthConfig({
+      mode: authMode,
+      issuer,
+      clientId: strFromEnv(env, 'OIDC_CLIENT_ID', ''),
+      clientSecretPresent: clientSecret !== '',
+      audience,
+      jwksUri,
+      publicOrigin: publicOrigin ?? '',
+      redirectUri,
+      allowedOrigins,
+      cookieSecure,
+      cookieDomain: env.AUTH_COOKIE_DOMAIN?.trim() || undefined,
+      scopes,
+      devStudentHeaderEnabled: progress.allowStudentHeader,
+      // Presence only. Whether it is reached safely is the database transport
+      // gate's decision, below (BETA-P0-012).
+      databaseConfigured: progress.database !== null,
+    });
+  }
+
   const runtimeBrokerTransport = runtimeBrokerUrl
     ? resolveBrokerClientTransport(env, { service: 'api', url: runtimeBrokerUrl })
     : null;
@@ -704,17 +767,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
               clientSecret,
               redirectUri,
               appUrl,
-              scopes: strFromEnv(env, 'OIDC_SCOPES', 'openid profile email')
-                .split(/[\s,]+/)
-                .map((s) => s.trim())
-                .filter(Boolean),
+              scopes,
             }
           : null,
       cookie: {
-        name: strFromEnv(env, 'AUTH_COOKIE_NAME', 'jtt_session'),
+        name: cookieName,
         secure: cookieSecure,
         domain: env.AUTH_COOKIE_DOMAIN?.trim() || undefined,
-        ttlSeconds: intFromEnv(env, 'AUTH_SESSION_TTL_SECONDS', DEFAULT_AUTH_SESSION_TTL_SECONDS),
+        ttlSeconds: authSessionTtlSeconds,
       },
       nodeEnv: env.NODE_ENV,
     },

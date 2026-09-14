@@ -27,6 +27,8 @@ const PRODUCTION_ENV = {
   OIDC_ISSUER: 'https://issuer.example.com',
   OIDC_CLIENT_ID: 'jumptotech-labs',
   OIDC_AUDIENCE: 'jumptotech-labs',
+  // BETA-P0-014: required in production.
+  OIDC_CLIENT_SECRET: 'a8c3e6b1d9f4a2c7e0b5d3f8a6c1e4b9d2f7a0c5',
   // BETA-P0-010: production also refuses a missing, short or shared secret, so
   // every owner case below runs against an otherwise valid production secret set
   // — the owner is the only thing that varies. Test-only values.
@@ -36,6 +38,9 @@ const PRODUCTION_ENV = {
   OBSERVABILITY_SCRAPE_TOKEN: '2f8c4a0e6b3d9f5c1a7e4b0d6f2c8a5e1b7d3f9c6a2e8b4d0f7c3a9e5b1d8f4c',
   PUBLIC_ORIGIN: 'https://labs.example.com',
   ALLOWED_ORIGINS: 'https://labs.example.com',
+  // BETA-P0-014: production sign-in requires durable sessions, so a database.
+  // Loopback, which the BETA-P0-012 transport gate accepts without TLS.
+  DATABASE_URL: 'postgresql://jumptotech:4b9e2d7a1f6c3e8b5d0a7f2c9e4b1d6a@127.0.0.1:5432/jumptotech_labs',
 } as NodeJS.ProcessEnv;
 
 describe('the api runtime owner', () => {

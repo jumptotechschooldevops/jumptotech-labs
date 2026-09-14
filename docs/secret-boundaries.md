@@ -40,7 +40,7 @@ and refuses to start, naming variables and never values, when any of these holds
 
 | Rule | Detail |
 |---|---|
-| **Missing** | A secret the service needs is empty. "Needs" is conditional where the capability is: the api needs `SANDBOXD_RUNTIME_SECRET` only with `SANDBOX_BROKER_URL`, and `SANDBOXD_DOCKER_SECRET` only when the Docker track is brokered too; the terminal needs `SANDBOXD_ATTACH_SECRET` only with `TERMINAL_SANDBOX_BROKER_ENABLED`; sandboxd needs `SANDBOXD_DOCKER_SECRET` only with `DOCKER_TRACK_ENABLED`. The api needs a database password whenever a database is configured. |
+| **Missing** | A secret the service needs is empty. "Needs" is conditional where the capability is: the api needs `SANDBOXD_RUNTIME_SECRET` only with `SANDBOX_BROKER_URL`, and `SANDBOXD_DOCKER_SECRET` only when the Docker track is brokered too; the terminal needs `SANDBOXD_ATTACH_SECRET` only with `TERMINAL_SANDBOX_BROKER_ENABLED`; sandboxd needs `SANDBOXD_DOCKER_SECRET` only with `DOCKER_TRACK_ENABLED`. The api needs a database password whenever a database is configured, and `OIDC_CLIENT_SECRET` whenever `AUTH_MODE=oidc` (BETA-P0-014: a production API nobody could sign in to used to start). |
 | **Placeholder** | The value contains `change-me`, `changeme`, `dev-only`, `insecure`, `placeholder`, `example`, `replace-me`, `your-`, `not-a-secret`, `default`… — so every value `.env.example` ships is refused however long it is. |
 | **Too short** | Under 32 characters for generated secrets; under 16 for the two the platform is issued (`OIDC_CLIENT_SECRET`, the database password). |
 | **Low entropy** | Fewer than 8 distinct characters. |
@@ -83,7 +83,8 @@ start as root and so could not drop.
   initialised with it.
 - The compose files require every secret with `${NAME:?…}`. None is defaulted,
   and none is defaulted to another secret; only `OIDC_CLIENT_SECRET` may be
-  empty, which switches browser sign-in off.
+  empty, which switches browser sign-in off outside production (the api refuses
+  to start that way under `NODE_ENV=production`).
 - A service run directly (`npm run dev:api`) without `INTERNAL_SERVICE_SECRET` or
   `NAMESPACE_DERIVATION_SECRET` falls back to `TERMINAL_SESSION_SECRET` and logs
   `development_secret_fallback`. Production refuses that.

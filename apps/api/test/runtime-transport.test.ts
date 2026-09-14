@@ -42,6 +42,8 @@ const PRODUCTION = {
   OIDC_ISSUER: 'https://issuer.example.com',
   OIDC_CLIENT_ID: 'jumptotech-labs',
   OIDC_AUDIENCE: 'jumptotech-labs',
+  // BETA-P0-014: required in production.
+  OIDC_CLIENT_SECRET: hex('oidc-client').slice(0, 40),
   PUBLIC_ORIGIN: 'https://labs.example.com',
   ALLOWED_ORIGINS: 'https://labs.example.com',
   TERMINAL_SESSION_SECRET: hex('terminal-session'),
@@ -51,6 +53,9 @@ const PRODUCTION = {
   SANDBOXD_RUNTIME_SECRET: hex('runtime').slice(0, 48),
   SANDBOXD_DOCKER_SECRET: hex('docker').slice(0, 48),
   RUNTIME_OWNER_ID: 'labs-prod',
+  // BETA-P0-014: production sign-in requires durable sessions, so a database.
+  // Loopback, which the BETA-P0-012 transport gate accepts without TLS.
+  DATABASE_URL: `postgresql://jumptotech:${hex('database-password').slice(0, 32)}@127.0.0.1:5432/jumptotech_labs`,
 } as NodeJS.ProcessEnv;
 
 const ca = createTestCa();

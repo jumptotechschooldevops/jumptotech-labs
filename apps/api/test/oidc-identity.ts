@@ -43,12 +43,37 @@ interface PendingCode {
   redirectUri: string;
 }
 
+/**
+ * Tamper with the next ID token only — BETA-P0-014.
+ *
+ * A real provider never issues these; a compromised, misconfigured or
+ * impersonated one might. Each field is one way an ID token can be wrong, so the
+ * callback's refusal of each can be proven end to end.
+ */
+export interface IdTokenOverrides {
+  /** `null` omits the claim. */
+  nonce?: string | null;
+  audience?: string | string[];
+  azp?: string;
+  issuer?: string;
+  /** Epoch seconds; `null` omits `exp`. */
+  expiresAt?: number | null;
+  /** Epoch seconds; `null` omits `iat`. */
+  issuedAt?: number | null;
+  /** Sign with a key the provider never published. */
+  foreignKey?: boolean;
+}
+
 export interface FakeIdentityProvider {
   issuer: string;
   clientId: string;
   clientSecret: string;
   /** Who `/authorize` signs in next. Set before driving the flow. */
   signInAs(user: FakeIdpUser): void;
+  /** Applies to the next token exchange only, then resets. */
+  nextIdToken(overrides: IdTokenOverrides): void;
+  /** Sign arbitrary claims with the provider's real, published key. No defaults added. */
+  sign(claims: Record<string, unknown>): Promise<string>;
   /** Counts token exchanges, so a test can prove a code is single-use. */
   readonly tokenExchanges: number;
   close(): Promise<void>;
@@ -71,6 +96,7 @@ export async function startFakeIdentityProvider(): Promise<FakeIdentityProvider>
 
   const codes = new Map<string, PendingCode>();
   let nextUser: FakeIdpUser = { subject: 'default-user' };
+  let overrides: IdTokenOverrides = {};
   let exchanges = 0;
   let issuer = '';
 
@@ -155,21 +181,28 @@ export async function startFakeIdentityProvider(): Promise<FakeIdentityProvider>
           }
 
           exchanges += 1;
+          const o = overrides;
+          overrides = {};
+          const now = Math.floor(Date.now() / 1000);
+          const nonce = o.nonce === undefined ? pending.nonce : o.nonce;
+          const iat = o.issuedAt === undefined ? now : o.issuedAt;
+          const exp = o.expiresAt === undefined ? now + 600 : o.expiresAt;
 
           const idToken = await new SignJWT({
             ...(pending.user.email ? { email: pending.user.email } : {}),
             ...(pending.user.name ? { name: pending.user.name } : {}),
-            ...(pending.nonce ? { nonce: pending.nonce } : {}),
+            ...(nonce ? { nonce } : {}),
+            ...(o.azp ? { azp: o.azp } : {}),
+            ...(iat === null ? {} : { iat }),
+            ...(exp === null ? {} : { exp }),
           })
             .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
-            .setIssuer(issuer)
+            .setIssuer(o.issuer ?? issuer)
             // An ID token's audience is the *client id*, which is why the API
             // verifies it with a different verifier from the bearer path.
-            .setAudience(CLIENT_ID)
+            .setAudience(o.audience ?? CLIENT_ID)
             .setSubject(pending.user.subject)
-            .setIssuedAt()
-            .setExpirationTime('10m')
-            .sign(privateKey);
+            .sign(o.foreignKey ? (await generateKeyPair('RS256')).privateKey : privateKey);
 
           json(200, { token_type: 'Bearer', expires_in: 600, id_token: idToken, access_token: 'test-access-token' });
         })();
@@ -195,6 +228,12 @@ export async function startFakeIdentityProvider(): Promise<FakeIdentityProvider>
     clientSecret: CLIENT_SECRET,
     signInAs(user: FakeIdpUser) {
       nextUser = user;
+    },
+    nextIdToken(next: IdTokenOverrides) {
+      overrides = next;
+    },
+    sign(claims: Record<string, unknown>) {
+      return new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'test-key' }).sign(privateKey);
     },
     get tokenExchanges() {
       return exchanges;
