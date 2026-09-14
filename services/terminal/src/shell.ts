@@ -28,6 +28,7 @@
  * to the live session.
  */
 import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
+import { brokerTlsOptions } from '@jumptotech/lab-orchestrator';
 import * as pty from 'node-pty';
 import WebSocket from 'ws';
 
@@ -90,10 +91,12 @@ export function localShell(
 }
 
 export interface BrokerShellOptions {
-  /** `http://sandboxd:4002` — configuration, never a value from a request. */
+  /** `https://sandboxd.runtime:4002` — configuration, never a value from a request. */
   brokerUrl: string;
-  /** Authenticates this service to the broker. */
+  /** Authenticates this service to the broker. Sent only in a header, never the URL. */
   secret: string;
+  /** Trust anchors for a `wss://` broker (BETA-P0-011). Absent ⇒ the system store. */
+  ca?: string;
   /** From the token this service verified. The socket never supplied it. */
   sessionId: string;
   cols: number;
@@ -130,6 +133,9 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
     let onExit: (event: ShellExit) => void = () => undefined;
 
     const ws = new WebSocket(url, {
+      // Over wss, certificate and hostname verification are always on, whatever
+      // NODE_TLS_REJECT_UNAUTHORIZED says; the CA, when given, is this socket's only.
+      ...(url.startsWith('wss:') ? brokerTlsOptions(options.ca ? { ca: options.ca } : {}) : {}),
       headers: {
         'x-internal-secret': options.secret,
         // Correlation only. The broker's attach authorization is the `attach`

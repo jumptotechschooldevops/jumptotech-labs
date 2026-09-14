@@ -48,6 +48,7 @@
  * privilege is bounded by that node.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer as createTlsServer } from 'node:https';
 import {
   normaliseRequestId,
   silentLogger,
@@ -59,7 +60,7 @@ import {
 } from '@jumptotech/observability';
 import * as pty from 'node-pty';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { ContainerRuntimePort } from '@jumptotech/lab-orchestrator';
+import { BROKER_TLS_MIN_VERSION, type ContainerRuntimePort } from '@jumptotech/lab-orchestrator';
 import { AttachDeniedError, attachArgv, resolveAttachTarget, type SandboxInspectorPort } from './attach.js';
 import type { SandboxdConfig } from './config.js';
 import { authorizeScope, scopeForEndpoint, type SandboxdScope } from './scopes.js';
@@ -222,7 +223,7 @@ export function createSandboxd(deps: SandboxdDeps): Server {
   /** One shell per session. A second attach replaces the first. */
   const bySessionId = new Map<string, WebSocket>();
 
-  const httpServer = createServer((req, res) => {
+  const handleRequest = (req: IncomingMessage, res: ServerResponse): void => {
     /*
      * Re-enter the caller's correlation id — PLATFORM-003.
      *
@@ -372,7 +373,17 @@ export function createSandboxd(deps: SandboxdDeps): Server {
       // nothing that could grow into a control API by accident.
       sendJson(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'not found' } });
     });
-  });
+  };
+
+  /*
+   * BETA-P0-011. With a certificate configured, every endpoint — `/health`, both
+   * control planes and the attach upgrade — is served over TLS on the same port,
+   * and nothing on that port speaks plaintext. `loadSandboxdConfig` decided
+   * whether serving without one is allowed at all.
+   */
+  const httpServer: Server = config.tls
+    ? createTlsServer({ ...config.tls, minVersion: BROKER_TLS_MIN_VERSION }, handleRequest)
+    : createServer(handleRequest);
 
   /**
    * The two gates every HTTP endpoint passes, in order.

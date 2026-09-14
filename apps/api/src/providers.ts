@@ -101,6 +101,8 @@ export function buildContainerRuntime(config: ApiConfig): ContainerRuntimePort {
     return new BrokerRuntime({
       baseUrl: config.sandbox.runtimeBrokerUrl,
       secret: config.sandbox.runtimeBrokerCredential,
+      // BETA-P0-011: the CA bundle config validated, trusted by this client only.
+      ...(config.sandbox.runtimeBrokerTransport?.ca ? { ca: config.sandbox.runtimeBrokerTransport.ca } : {}),
     });
   }
   return new DockerCliRuntime({
@@ -129,6 +131,7 @@ export function buildDockerEngines(config: ApiConfig): DockerEngineFactory {
     return new BrokerDockerEngines({
       baseUrl: config.sandbox.runtimeBrokerUrl,
       secret: config.sandbox.dockerBrokerCredential,
+      ...(config.sandbox.runtimeBrokerTransport?.ca ? { ca: config.sandbox.runtimeBrokerTransport.ca } : {}),
     });
   }
   return new DockerCliFactory(config.dockerHost ? { dockerHost: config.dockerHost } : {});

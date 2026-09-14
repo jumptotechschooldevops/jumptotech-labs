@@ -39,6 +39,7 @@
  * it.
  */
 import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
+import { brokerFetch } from '../broker-transport.js';
 import {
   DockerUnreachableError,
   type CreateNetworkSpec,
@@ -61,9 +62,12 @@ import { SESSION_LABEL, LAB_LABEL, EXPIRES_AT_LABEL } from '../k8s/labels.js';
 import { isContainerSandboxRef } from '../session/identifiers.js';
 
 export interface BrokerDockerOptions {
-  /** `http://sandboxd:4002`. Configuration, never a value from a request. */
+  /** `https://sandboxd.runtime:4002`. Configuration, never a value from a request. */
   baseUrl: string;
+  /** The `docker` capability. Sent only in a header. */
   secret: string;
+  /** Trust anchors for an `https://` broker — see `BrokerRuntimeOptions.ca`. */
+  ca?: string;
   timeoutMs?: number;
   /** Injected in tests. */
   fetchImpl?: typeof fetch;
@@ -116,7 +120,7 @@ class BrokerCall {
     this.#baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.#secret = options.secret;
     this.#timeoutMs = options.timeoutMs ?? 180_000;
-    this.#fetch = options.fetchImpl ?? fetch;
+    this.#fetch = options.fetchImpl ?? brokerFetch({ url: this.#baseUrl, ...(options.ca ? { ca: options.ca } : {}) });
   }
 
   async call<T>(op: string, payload: Record<string, unknown>): Promise<T> {

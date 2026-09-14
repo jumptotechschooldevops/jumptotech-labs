@@ -199,8 +199,16 @@ server.listen(config.port, config.bindAddress, () => {
   logger.info(
     'process.started',
     { port: config.port, version: config.observability.version, commit: config.observability.commit },
-    `runtime broker listening on ${config.bindAddress}:${config.port} (owner=${config.runtimeOwner})`,
+    `runtime broker listening on ${config.bindAddress}:${config.port} (owner=${config.runtimeOwner}, transport=${config.transportMode ?? 'unknown'})`,
   );
+  // BETA-P0-011. Plaintext is only ever accepted for a reason; say which.
+  if (config.transportMode && config.transportMode !== 'tls') {
+    logger.warn(
+      'process.started',
+      { reason: `broker_transport_${config.transportMode.replace(/-/g, '_')}` },
+      `capability endpoints are served without TLS (${config.transportMode}); acceptable only on loopback or one host's private bridge`,
+    );
+  }
   if (config.runtimeOwnerSource === 'development-default') {
     logger.warn(
       'process.started',

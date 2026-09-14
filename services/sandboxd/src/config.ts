@@ -8,7 +8,10 @@
  */
 
 import {
+  assertTlsVerificationEnabled,
+  resolveBrokerServerTransport,
   resolveRuntimeOwner,
+  type BrokerTransportMode,
   type DockerSandboxPolicy,
   type RuntimeOwnerSource,
 } from '@jumptotech/lab-orchestrator';
@@ -104,6 +107,14 @@ export interface SandboxdConfig {
   observability: ObservabilityConfig;
   /** Loopback in development; `0.0.0.0` when the callers are other containers. */
   bindAddress: string;
+  /**
+   * The certificate and key this broker serves every endpoint with —
+   * BETA-P0-011. `null` (or absent) serves plaintext, which production allows
+   * only on a loopback bind or a declared single-host bridge.
+   */
+  tls?: { cert: string; key: string } | null;
+  /** Why the transport above was accepted. Logged at startup; never a secret. */
+  transportMode?: BrokerTransportMode;
   /**
    * One secret per capability, and never one secret for all of them.
    *
@@ -315,10 +326,22 @@ export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): Sandbo
     });
   }
 
+  /*
+   * BETA-P0-011 — the scope secrets arrive over this listener. Production serves
+   * them over TLS, on loopback behind a TLS proxy, or on a declared single-host
+   * bridge, and refuses anything else. After the owner and secret gates, so
+   * their refusals keep their precedence. See `broker-transport.ts`.
+   */
+  assertTlsVerificationEnabled(env, 'sandboxd');
+  const bindAddress = env.SANDBOXD_BIND ?? '127.0.0.1';
+  const transport = resolveBrokerServerTransport(env, { bindAddress });
+
   return {
     port: intFromEnv(env, 'SANDBOXD_PORT', 4002),
     observability,
-    bindAddress: env.SANDBOXD_BIND ?? '127.0.0.1',
+    bindAddress,
+    tls: transport.tls,
+    transportMode: transport.mode,
     scopeSecrets,
     derivationSecret,
     runtimeOwner: runtimeOwner.owner,

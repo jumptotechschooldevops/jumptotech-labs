@@ -1,4 +1,9 @@
 import {
+  assertTlsVerificationEnabled,
+  resolveBrokerClientTransport,
+  type BrokerClientTransport,
+} from '@jumptotech/lab-orchestrator';
+import {
   loadObservabilityConfig,
   assertProductionSecrets,
   assertScrapeTokenIsDistinct,
@@ -80,6 +85,13 @@ export interface TerminalConfig {
    * turns "the terminal does not do that" into "the terminal cannot".
    */
   sandboxBrokerCredential: string;
+  /**
+   * How `sandboxBrokerUrl` is reached, and why that was allowed — BETA-P0-011.
+   *
+   * Resolved only when the broker is enabled. Carries the CA bundle trusted for
+   * this one connection when the broker is `https://`.
+   */
+  sandboxBrokerTransport?: BrokerClientTransport | null;
   /**
    * Where per-session credentials are written (0600, deleted on disconnect).
    *
@@ -221,6 +233,17 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     });
   }
 
+  /*
+   * BETA-P0-011 — the attach secret travels to sandboxd, which may be on another
+   * host. After the secret gate, so a missing secret is still reported as one.
+   * An empty URL means the local development broker, as it always has.
+   */
+  assertTlsVerificationEnabled(env, 'terminal');
+  const sandboxBrokerUrl = env.SANDBOX_BROKER_URL?.trim() || 'http://127.0.0.1:4002';
+  const sandboxBrokerTransport = sandboxBrokerEnabled
+    ? resolveBrokerClientTransport(env, { service: 'terminal', url: sandboxBrokerUrl })
+    : null;
+
   const dropToUid = optionalIdFromEnv(env, 'TERMINAL_DROP_TO_UID');
   const dropToGid = optionalIdFromEnv(env, 'TERMINAL_DROP_TO_GID');
 
@@ -238,8 +261,9 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     developmentSecretFallbacks: explicitInternalSecret ? [] : ['INTERNAL_SERVICE_SECRET'],
     ...(dropToUid !== undefined ? { dropToUid } : {}),
     ...(dropToGid !== undefined ? { dropToGid } : {}),
-    sandboxBrokerUrl: env.SANDBOX_BROKER_URL ?? 'http://127.0.0.1:4002',
+    sandboxBrokerUrl,
     sandboxBrokerCredential,
+    sandboxBrokerTransport,
     credentialsDir: env.TERMINAL_CREDENTIALS_DIR ?? '/tmp/jumptotech-credentials',
     workDir: env.TERMINAL_WORKDIR ?? '/home/student',
     workspaceRoot: env.TERMINAL_WORKSPACE_ROOT ?? '/home/student/workspaces',

@@ -26,6 +26,7 @@
  * the two to drift and would suggest the remote check is optional.
  */
 import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
+import { brokerFetch } from '../../broker-transport.js';
 import type {
   ContainerExecRequest,
   ContainerExecResult,
@@ -44,10 +45,15 @@ function requestIdHeader(): Record<string, string> {
 }
 
 export interface BrokerRuntimeOptions {
-  /** `http://sandboxd:4002`. Configuration, never a value from a request. */
+  /** `https://sandboxd.runtime:4002`. Configuration, never a value from a request. */
   baseUrl: string;
-  /** Authenticates this service to the broker. */
+  /** Authenticates this service to the broker. Sent only in a header. */
   secret: string;
+  /**
+   * Trust anchors for an `https://` broker — BETA-P0-011. Scoped to this
+   * client; absent means the system store. Verification is always on.
+   */
+  ca?: string;
   timeoutMs?: number;
   /** Injected in tests. */
   fetchImpl?: typeof fetch;
@@ -70,7 +76,7 @@ export class BrokerRuntime implements ContainerRuntimePort {
     this.#baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.#secret = options.secret;
     this.#timeoutMs = options.timeoutMs ?? 120_000;
-    this.#fetch = options.fetchImpl ?? fetch;
+    this.#fetch = options.fetchImpl ?? brokerFetch({ url: this.#baseUrl, ...(options.ca ? { ca: options.ca } : {}) });
   }
 
   async ping(): Promise<string> {

@@ -84,7 +84,8 @@ has one at all.
                     └───────┬───────┘        └───────┬───────┘
                             │                        │
               POST /v1/runtime          ws /v1/attach
-              (internal secret)         (internal secret)
+              (runtime/docker scope)    (attach scope)
+              https across hosts — §8   wss across hosts — §8
                             │                        │
                             └───────────┬────────────┘
                                         ▼
@@ -275,8 +276,10 @@ and fell back to port 22.
 - **On one host, `sandboxd` and the web tier share that kernel.** What the
   broker buys on a single-host compose stack is a much smaller and much
   better-audited attack surface, not a hard partition. A real deployment puts
-  `sandboxd` on a runtime node that is not the machine serving the web tier —
-  the wiring is identical, only `SANDBOX_BROKER_URL` changes.
+  `sandboxd` on a runtime node that is not the machine serving the web tier.
+  That takes more than a new `SANDBOX_BROKER_URL`: the URL must be `https://`
+  and sandboxd must hold a certificate, and production refuses to start
+  otherwise. See §8.
 - **`sandboxd` holds real privilege over its runtime.** That is the point: the
   privilege is concentrated in one internal service with two endpoints and no
   student input path, instead of spread across the services a browser can reach.
@@ -287,11 +290,177 @@ and fell back to port 22.
   who can *create* such a container — only `sandboxd`, only from a session id —
   not what one is.
 
-## 8. Configuration
+## 8. The application tier and the runtime tier (BETA-P0-011)
+
+### 8.1 The request path before this change
+
+Audited from the code and compose files on `main` at `07c21e6`:
+
+| Hop | Transport | Credential on the wire |
+|---|---|---|
+| browser → web (nginx) `:3000` | whatever fronts it (a tunnel, a TLS terminator) | browser session cookie |
+| web → api `:4000` (`/api`, `/auth`), web → terminal `:4001` (`/terminal`) | `http://`, `ws://` on the compose bridge | cookie, terminal token |
+| terminal → api `:4000/internal`, api → terminal `:4001/internal` | `http://` on the compose bridge | `INTERNAL_SERVICE_SECRET` |
+| api → sandboxd `:4002/v1/runtime`, `/v1/docker` | `http://sandboxd:4002` | `SANDBOXD_RUNTIME_SECRET`, `SANDBOXD_DOCKER_SECRET` in `x-internal-secret` |
+| terminal → sandboxd `:4002/v1/attach` | `ws://sandboxd:4002` | `SANDBOXD_ATTACH_SECRET` in `x-internal-secret` |
+| Docker health check → sandboxd `:4002/health` | `http://127.0.0.1` inside the container | none; shell count and two booleans |
+| Prometheus → `:9400` / `:9401` / `:9402` `/metrics` | `http://` on the compose bridge | `OBSERVABILITY_SCRAPE_TOKEN` as a bearer token |
+
+Every hop was plaintext, which was acceptable only because every hop stayed on
+one host's Docker bridge. Nothing enforced that. Pointing `SANDBOX_BROKER_URL`
+at `http://runtime-host:4002` was accepted silently and would have put all three
+capability secrets on the network in cleartext.
+
+### 8.2 The arrangement this supports
+
+```text
+  APPLICATION TIER                                   RUNTIME TIER
+  ┌──────────────────────────────────┐              ┌───────────────────────────────┐
+  │ web (nginx) :3000   public entry │              │ sandboxd :4002  capabilities  │
+  │ api       :4000   127.0.0.1 only │  https /     │          :9402  metrics       │
+  │ terminal  :4001   127.0.0.1 only ├──wss, TLS ──►│ Docker socket  (sandboxd only)│
+  │ postgres                         │  verified    │ sandbox containers            │
+  │ metrics :9400 :9401  (bearer)    │  x-internal- │                               │
+  └──────────────────────────────────┘  secret      └───────────────────────────────┘
+```
+
+sandboxd is the only component that controls the container runtime, on either
+arrangement. The capability model is unchanged: TLS protects the secrets in
+transit, and the scope secrets still authorize each endpoint.
+
+**Decision: native TLS in sandboxd, not a TLS proxy.** It is the smaller of the
+two. There is no second process to deploy, monitor and keep in step, and one
+listener serves `/health`, both control planes and the attach upgrade. The
+certificate and key are loaded, and checked to match, before the process
+starts. A proxy remains possible: bind sandboxd to loopback and put the proxy in
+front of it.
+
+### 8.3 Production rules (`NODE_ENV=production`)
+
+Callers are the api when `SANDBOX_BROKER_URL` is set, and the terminal when
+`TERMINAL_SANDBOX_BROKER_ENABLED=true`. Each refuses to start unless its broker
+URL is one of these:
+
+| URL | Accepted as | Why |
+|---|---|---|
+| `https://<host>:<port>` | `tls` | certificate chain and hostname verified, TLS ≥ 1.2 |
+| `http://127.x.x.x:<port>`, `http://[::1]:<port>` | `loopback-plaintext` | never leaves the network namespace; also how a local TLS proxy is fronted |
+| `http://<one-label-name>:<port>` **and** `SANDBOX_BROKER_SAME_HOST_PLAINTEXT=true` | `same-host-plaintext` | the compose runtime overlay: one host, one private bridge |
+| anything else, e.g. `http://sandboxd.runtime.example:4002`, `http://10.0.0.5:4002`, or an undeclared `http://sandboxd:4002` / `http://localhost:4002` | **refused** | a name is never trusted to be local |
+
+sandboxd refuses to start unless it holds `SANDBOXD_TLS_CERT_FILE` and
+`SANDBOXD_TLS_KEY_FILE`, binds a loopback address, or carries the same
+declaration.
+
+Always refused, in production:
+
+- `SANDBOX_BROKER_SAME_HOST_PLAINTEXT=true` beside `https://` or a certificate,
+  or with any value other than `true`;
+- `NODE_TLS_REJECT_UNAUTHORIZED` set to anything but `1`, in the api, the
+  terminal and sandboxd, with or without a broker.
+
+The declaration is an operator's statement about the host, not something the
+code can observe. The single-label check only stops it from covering an FQDN or
+an IP. It is set in `docker-compose.runtime.yml` and nowhere else, and a test
+fails if it appears in another compose file.
+
+Refused in every environment:
+
+- a broker URL carrying userinfo, a query, a fragment or a path, or a scheme
+  other than `http`/`https`. Refusals never repeat the URL's credentials;
+- `SANDBOX_BROKER_CA_FILE` beside an `http://` URL (TLS was intended);
+- a CA bundle that cannot be read, contains no certificate, fails to parse, or
+  contains a private key;
+- only one of `SANDBOXD_TLS_CERT_FILE` and `SANDBOXD_TLS_KEY_FILE`, or a pair
+  that does not match.
+
+The gates run in a fixed order: the P0-008 owner gate first, then the P0-010
+secret gate, then this one. A missing owner or secret is still reported as
+such.
+
+### 8.4 Local development only
+
+Outside `NODE_ENV=production`, plaintext to any host is accepted and reported as
+`development-plaintext`. `npm run dev:*` against `http://127.0.0.1:4002` works
+as before. The terminal still defaults to that URL when `SANDBOX_BROKER_URL` is
+empty. The compose runtime overlay runs its services with
+`NODE_ENV=production`, so it relies on the declaration rather than on this
+exception.
+
+Nothing, in any environment, disables certificate verification. The clients pass
+`rejectUnauthorized: true` on every TLS connection, so even a stray
+`NODE_TLS_REJECT_UNAUTHORIZED=0` in development does not weaken the broker path.
+
+### 8.5 Certificate and CA requirements
+
+- **sandboxd's certificate** must name, in its subjectAltName, exactly the DNS
+  name or IP address the api and terminal dial. Its key is a file readable only
+  by the sandboxd process (the image runs as `node`), mounted read-only, never
+  baked into an image and never committed.
+- **`SANDBOX_BROKER_CA_FILE`** on the api and the terminal holds public
+  certificates only. It is trusted for broker connections and nothing else: it
+  is not added to the process-wide store, so it cannot vouch for the identity
+  provider or any other host. Unset, the system trust store is used.
+- **Rotation.** All three files are read once at startup, so a new certificate
+  takes a sandboxd restart and a new CA takes an api and terminal restart. To
+  rotate a CA, first ship a bundle containing both the old and new CA
+  certificates.
+- **Health check.** With TLS on, the image health check tests that the listener
+  accepts a TCP connection. It does not perform a handshake, so it never needs to
+  skip verification.
+
+### 8.6 Ports
+
+| Port | Service | Contract |
+|---|---|---|
+| 4002 | sandboxd capabilities | never published by any compose file; on a runtime host, reachable from the application tier only |
+| 9402 | sandboxd metrics | published on 127.0.0.1 only; bearer token; plaintext HTTP |
+| 4000, 4001 | api, terminal | 127.0.0.1 only |
+| 9400, 9401 | api, terminal metrics | 127.0.0.1 only; bearer token |
+
+These rules live in `publishedPorts` in `infrastructure/secret-distribution.json`,
+next to the rule that only sandboxd may mount the Docker socket. They are
+enforced by `compose-secret-distribution.test.ts` (`npm test`) and
+`scripts/check-secret-distribution.mjs` (`make secrets-check`, CI `gates`).
+
+### 8.7 DECISION REQUIRED
+
+This story makes a split deployment safe to configure. It does not deploy one.
+No runtime host, certificate, CA or private network exists yet, and the shipped
+compose stack is still single-host with declared plaintext.
+
+- **DECISION REQUIRED: certificate issuance.** Who operates the CA, how the key
+  reaches the runtime host, how rotation happens, and what alerts before a
+  certificate expires. Nothing monitors expiry today.
+- **DECISION REQUIRED: network placement.** The private network between the
+  tiers, and the firewall rule that limits 4002 to the application tier's
+  addresses. TLS protects the secrets; it does not stop the capability port from
+  being reachable.
+- **DECISION REQUIRED: metrics across tiers.** `:9402` serves plaintext HTTP
+  with a bearer token. Scraping it from another host needs Prometheus on the
+  runtime tier, a TLS proxy in front of it, or TLS on the observability
+  listener. Until then it must be scraped from the runtime host only.
+- **DECISION REQUIRED: mutual TLS.** Client certificates would add a second
+  factor alongside the capability secrets. Not required for the private beta and
+  not implemented.
+- **DECISION REQUIRED: the Docker track across hosts.** The terminal joins the
+  `sandboxes` network to reach each session's own daemon at
+  `tcp://lab-<hash>:2376` (mutual TLS). On a separate runtime host that network
+  is not reachable from the application tier, so Docker-track shells need a
+  routing decision before that track can run split.
+- **DECISION REQUIRED: the Kubernetes track across hosts.** The api and the
+  terminal reach the cluster API server on the local `kind` network.
+- **Same-tier assumption.** The api ⇄ terminal `/internal` calls stay plaintext.
+  Both services must remain on one application host or private bridge.
+
+## 9. Configuration
 
 | Variable | Service | Meaning |
 |---|---|---|
-| `SANDBOX_BROKER_URL` | api, terminal | The broker's base URL. Empty ⇒ drive a local daemon. |
+| `SANDBOX_BROKER_URL` | api, terminal | The broker's base URL: an origin only, `https://` across hosts (§8). Empty ⇒ the api drives a local daemon; the terminal uses `http://127.0.0.1:4002`. |
+| `SANDBOX_BROKER_CA_FILE` | api, terminal | PEM CA bundle trusted for broker connections only. Refused beside `http://` or when it contains a private key. |
+| `SANDBOX_BROKER_SAME_HOST_PLAINTEXT` | api, terminal, sandboxd | `true` declares the single-host arrangement that production plaintext to a service name or a non-loopback bind requires. Set in `docker-compose.runtime.yml` only. |
+| `SANDBOXD_TLS_CERT_FILE` / `SANDBOXD_TLS_KEY_FILE` | sandboxd | Serve every endpoint on the port over TLS (≥ 1.2). Both or neither; checked to match at startup. |
 | `TERMINAL_SANDBOX_BROKER_ENABLED` | terminal | Attach shells through the broker rather than locally. |
 | `TERMINAL_CONTAINER_EXEC_ENABLED` | terminal | The local `docker exec` path. Must be `false` in any deployment. |
 | `NAMESPACE_DERIVATION_SECRET` | api, sandboxd | **Must be identical.** Sandbox references are HMACs of the session id. A mismatch fails closed. |
@@ -300,7 +469,7 @@ and fell back to port 22.
 | `RUNTIME_OWNER_ID` | api, sandboxd | **Must be identical.** The deployment's one runtime owner: stamped on every namespace and sandbox, required on everything cleanup touches. Required under `NODE_ENV=production`; a mismatch leaks brokered sandboxes. See [runtime-ownership.md](runtime-ownership.md). |
 | `SANDBOX_RUNTIME_HOST` | api | A dedicated runtime node over TLS, when there is no broker. The broker wins if both are set. |
 
-## 9. What proves it
+## 10. What proves it
 
 | Suite | Runs against | Proves |
 |---|---|---|
@@ -313,6 +482,11 @@ and fell back to port 22.
 | `services/sandboxd/test/docker-ops.test.ts` | fakes | the Docker gate: the closed operation list, the spec built from configuration, the session-label loop-closer, and the file-read wire encoding |
 | `services/sandboxd/test/broker-docker.test.ts` | real HTTP | the brokered `DockerEngineFactory`: it cannot name a container, cannot express an un-brokered operation, and fails closed when the broker is down |
 | `services/lab-orchestrator/test/docker-integration.test.ts` | **a real Docker daemon** | the Docker provider end to end — build, Compose, grade, reset, destroy — 31 tests |
+| `services/lab-orchestrator/test/broker-transport.test.ts` | real TLS handshakes, an in-memory CA | the §8 rules; no credential in a URL or a refusal; no verification bypass on the path; an untrusted CA or wrong host is refused before a request byte is sent |
+| `services/sandboxd/test/transport.test.ts` | a real TLS listener | `loadSandboxdConfig` rules and gate order; the runtime plane, `/health` and the attach upgrade over TLS; no plaintext on the port; the image health check |
+| `services/terminal/test/broker-transport.test.ts` | real `wss` to a real sandboxd | terminal rules; `brokerShell` attaches only to a broker whose certificate it trusts |
+| `apps/api/test/runtime-transport.test.ts` | a real TLS broker | api rules and gate order; both broker clients carry the validated CA; the compose declaration; no web-proxy route, browser reference or API route to the broker |
+| `services/observability/test/compose-secret-distribution.test.ts`, `scripts/check-secret-distribution.mjs` | compose text; `docker compose config` | 4002 never published; 4000, 4001, 9400–9402 on loopback only; the Docker socket mounted into sandboxd only |
 
 The last one needs both a container runtime and a working `node-pty`, and macOS
 hosts do not have the second. `make test-sandboxd-container` runs it inside the
