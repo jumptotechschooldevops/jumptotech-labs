@@ -46,6 +46,7 @@ import {
   writeSessionDockerCerts,
   writeSessionKubeconfig,
 } from './credentials.js';
+import { reportSessionActivity } from './activity.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
 import { brokerShell, localShell, ShellStartError, type Shell } from './shell.js';
 import {
@@ -81,6 +82,8 @@ interface Session {
   rows: number;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
+  /** When this socket last reported lab-session activity; unset until it types. */
+  activityReportedAt: number | undefined;
 }
 
 /**
@@ -657,6 +660,11 @@ export function createTerminalServer(
       switch (message.type) {
         case 'input':
           touch(session);
+          // Only input is the student working. `resize` follows the window and
+          // `ping` is the browser's keep-alive: counting either would let an
+          // open tab keep an abandoned sandbox alive, the thing status polling
+          // is kept out of activity to prevent.
+          reportActivity(session);
           session.term.write(message.data);
           break;
         case 'resize':
@@ -882,6 +890,7 @@ export function createTerminalServer(
         () => closeFor(ws, 'SESSION_EXPIRED', 'Terminal session reached its maximum duration.'),
         config.maxSessionMs,
       ),
+      activityReportedAt: undefined,
     };
     sessions.set(ws, session);
     bySessionId.set(claims.sid, ws);
@@ -914,6 +923,41 @@ export function createTerminalServer(
 
   function touch(session: Session): void {
     session.idleTimer.refresh();
+  }
+
+  /**
+   * Report lab-session activity for a socket's input — BETA-P0-005.
+   *
+   * A leading-edge throttle on the socket's own `Session`: the first input is
+   * reported immediately, and later input at most once per
+   * `activityReportIntervalMs`. The stamp is taken when a report is *sent*, so
+   * a failing API is retried once per window rather than once per keystroke.
+   * No timer is involved, so there is nothing to clear on disconnect — the
+   * state is dropped with the `Session`.
+   *
+   * Fire-and-forget. A missed report costs at most one window of idle budget;
+   * failing the keystroke would cost the student their shell.
+   */
+  function reportActivity(session: Session): void {
+    const now = Date.now();
+    if (
+      session.activityReportedAt !== undefined &&
+      now - session.activityReportedAt < config.activityReportIntervalMs
+    ) {
+      return;
+    }
+    session.activityReportedAt = now;
+
+    const sessionId = session.claims.sid;
+    void reportSessionActivity({
+      apiInternalUrl: config.apiInternalUrl,
+      secret: config.internalServiceSecret,
+      // Both from the token verified at `auth`; the frame supplies neither.
+      sessionId,
+      ownerUserId: session.claims.uid,
+    }).catch((error: unknown) => {
+      log(`session ${sessionId}: activity report failed — ${describeError(error)}`);
+    });
   }
 
   function closeFor(ws: WebSocket, code: string, message: string): void {

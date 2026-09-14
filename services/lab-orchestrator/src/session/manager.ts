@@ -768,6 +768,25 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Record activity through the store's conditional write.
+   *
+   * `touch` reads and then writes, so an End landing between the two still has
+   * `lastActivityAt` stamped onto its row. Button-driven reasons arrive once per
+   * click; terminal input arrives continuously and races End as a matter of
+   * course, so it goes through `SessionStore.touchActivity`, which writes only
+   * while the session still occupies a sandbox. Same deadline rules as `touch`:
+   * the absolute deadline is never moved.
+   *
+   * Returns `null` when nothing was recorded.
+   */
+  async touchActivity(sessionId: string, reason: ActivityReason): Promise<LabSession | null> {
+    const session = await this.#store.get(sessionId);
+    if (!session || (session.status !== 'ACTIVE' && session.status !== 'RESETTING')) return null;
+    void reason;
+    return this.#store.touchActivity(sessionId, new Date(this.#now()).toISOString());
+  }
+
   // ----------------------------------------------------------------- reset
 
   /** Reset only the requesting session's namespace. */

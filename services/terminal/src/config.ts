@@ -62,6 +62,15 @@ export interface TerminalConfig {
   idleTimeoutMs: number;
   /** Kill any PTY after this long, regardless of activity. */
   maxSessionMs: number;
+  /**
+   * At most one lab-session activity report per socket in this window.
+   *
+   * Typing is reported to the API so the session is not reaped as idle, but a
+   * write per keystroke would be a write per keystroke. The first input is
+   * reported at once; after that, sustained typing refreshes the session once
+   * per window. 30 seconds against a 20-minute idle budget is invisible.
+   */
+  activityReportIntervalMs: number;
   shell: string;
   promptUser: string;
   promptHost: string;
@@ -160,6 +169,7 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     maxSessions: intFromEnv(env, 'TERMINAL_MAX_SESSIONS', 16),
     idleTimeoutMs: intFromEnv(env, 'TERMINAL_IDLE_TIMEOUT_SECONDS', 1800) * 1000,
     maxSessionMs: intFromEnv(env, 'TERMINAL_MAX_SESSION_SECONDS', 7200) * 1000,
+    activityReportIntervalMs: 30_000,
     shell: env.TERMINAL_SHELL ?? '/bin/bash',
     promptUser: env.TERMINAL_PROMPT_USER ?? 'student',
     promptHost: env.TERMINAL_PROMPT_HOST ?? 'lab',

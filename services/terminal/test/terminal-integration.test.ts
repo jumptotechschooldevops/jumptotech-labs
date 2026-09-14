@@ -197,6 +197,7 @@ suite('integration: student terminal against real kind', () => {
   let terminalServer: Server;
   let terminalPort: number;
   let manager: SessionManager;
+  let store: InMemorySessionStore;
   let credentialsDir: string;
   let sessionA: LabSession;
   let sessionB: LabSession;
@@ -251,7 +252,7 @@ suite('integration: student terminal against real kind', () => {
     manager = new SessionManager({
       registry,
       provider,
-      store: new InMemorySessionStore(),
+      store: (store = new InMemorySessionStore()),
       policy: DEFAULT_SESSION_POLICY,
       lifetimes: config.lifetimes,
       namespaceSecret: 'terminal-integration-namespace-secret',
@@ -635,6 +636,42 @@ suite('integration: student terminal against real kind', () => {
       client.dispose();
     }
   }, 180_000);
+
+  it('advances the lab session’s activity clock from typing alone — BETA-P0-005', async () => {
+    /*
+     * The whole chain, real end to end: a real PTY, the real terminal service,
+     * the real internal route, the real session manager. Before BETA-P0-005 a
+     * student could type here all day and `lastActivityAt` never moved.
+     */
+    const past = new Date(Date.now() - 10 * 60_000).toISOString();
+    await store.update(sessionA.sessionId, { lastActivityAt: past });
+    await store.update(sessionB.sessionId, { lastActivityAt: past });
+
+    const client = await TerminalClient.connect(terminalPort, tokenFor(sessionA));
+    try {
+      await client.waitForFrame('ready');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Attaching is not activity.
+      expect((await manager.get(sessionA.sessionId))?.lastActivityAt).toBe(past);
+
+      client.clearOutput();
+      client.run('echo ACTIVITY-PROBE-$((6*7))');
+      await client.waitForOutput(/ACTIVITY-PROBE-42/);
+
+      const deadline = Date.now() + 10_000;
+      let current = await manager.get(sessionA.sessionId);
+      while (current?.lastActivityAt === past && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        current = await manager.get(sessionA.sessionId);
+      }
+      expect(Date.parse(current!.lastActivityAt)).toBeGreaterThan(Date.parse(past));
+      expect(current!.expiresAt).toBe(sessionA.expiresAt);
+      // The other student's session is untouched.
+      expect((await manager.get(sessionB.sessionId))?.lastActivityAt).toBe(past);
+    } finally {
+      client.dispose();
+    }
+  }, 120_000);
 
   it('refuses an unauthenticated terminate request', async () => {
     const response = await fetch(`http://127.0.0.1:${terminalPort}/internal/terminate`, {
