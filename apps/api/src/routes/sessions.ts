@@ -418,10 +418,18 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     try {
       const { session, result } = await sessions.reset(String(req.params.sessionId));
       if (!result.ok) {
+        // The session is DEGRADED now: never reported as a working lab, and
+        // recoverable by the two things the student can actually do.
         sendError(res, 503, {
           code: result.error?.code ?? 'RESET_FAILED',
           message: result.error?.message ?? 'Failed to reset the lab environment',
-          details: { steps: result.steps, removed: result.removed },
+          remediation:
+            'The environment could not be rebuilt and cannot be used as it is. Reset the lab to try again, or End Lab to release it.',
+          details: {
+            steps: result.steps,
+            removed: result.removed,
+            session: toSessionPayload(sessions, session),
+          },
         });
         return;
       }
@@ -476,7 +484,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         sendError(res, 503, {
           code: destroy.error?.code ?? 'DESTROY_FAILED',
           message: destroy.error?.message ?? 'The lab environment is still shutting down.',
-          remediation: 'Cleanup will retry automatically within a minute.',
+          // No time is promised: the reaper finishes an unfinished End after a
+          // grace period and then retries every sweep until the provider
+          // confirms the sandbox is gone, which it cannot bound.
+          remediation:
+            'Cleanup keeps retrying automatically in the background. You do not need to press End Lab again.',
           details: { steps: destroy.steps, session: toSessionPayload(sessions, session) },
         });
         return;

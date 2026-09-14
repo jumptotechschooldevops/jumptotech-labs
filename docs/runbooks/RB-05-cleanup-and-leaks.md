@@ -35,10 +35,15 @@ Briefly negative is normal: a session in `ENDING` or `EXPIRING` still counts as
 occupying capacity until its delete is *confirmed*, which is what makes teardown
 re-entrant, so for a few seconds the session exists and the container does not.
 
-**Persistently** negative means teardown removed the container and never
-finished the state transition — a stuck `ENDING`. Those sessions hold capacity
-forever and no sweep will reclaim the slot, because from the reaper's point of
-view the teardown is still in progress. Section 4d.
+A `DEGRADED` session (a reset that failed or was interrupted) also counts while
+its container may already be gone, until the student resets or ends it, or idle
+expiry reclaims it.
+
+**Persistently** negative means a teardown is not finishing. The reaper resumes
+an `ENDING` End once it has been in that state for the abandoned-End grace
+period (5 minutes by default) and then on every sweep, so a stuck `ENDING` that
+outlives several sweeps after that means the provider keeps refusing or failing
+the delete. Section 4d.
 
 ## 3. Immediate mitigation
 
@@ -97,9 +102,22 @@ sum by (provider, status) (jtt_sessions_active)
 ```
 
 `status="ENDING"` or `"EXPIRING"` that does not clear across several sweeps is
-the signature. The reaper re-enters those teardowns every pass — that is the
-idempotence guarantee — so a session stuck there means the provider keeps
-reporting the sandbox as not-yet-gone.
+the signature. The reaper re-enters `EXPIRING` teardowns every pass, and resumes
+an `ENDING` End every pass once it is past the abandoned-End grace period
+(recorded `ENDED`, reason `abandoned` in `jtt_reaper_reclaimed_total`) — that is
+the idempotence guarantee — so a session stuck there means the provider keeps
+reporting the sandbox as not-yet-gone, or refuses it (a `foreign_owner` refusal
+is never overridden).
+
+Related recoveries that need no operator:
+
+- A session left `RESETTING` by a process that died is moved to `DEGRADED` after
+  the reset-recovery grace period (10 minutes by default). It is never reported
+  `ACTIVE`; the student resets again or ends it.
+- A sandbox whose session row is already `ENDED`, `EXPIRED` or `FAILED` — built
+  by a start or reset that lost its session to a teardown — is removed on the
+  next sweep as `orphaned`, through the session's own provider destroy, so the
+  managed, provider, runtime-owner and session labels are all re-checked.
 
 1. Confirm the container really is gone:
    ```bash

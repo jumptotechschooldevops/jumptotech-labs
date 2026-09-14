@@ -32,6 +32,7 @@ export function session(overrides: Partial<LabSession> = {}): LabSession {
     environmentId: '',
     createdAt: NOW,
     lastActivityAt: NOW,
+    statusChangedAt: NOW,
     expiresAt: HOUR_LATER,
     idleTimeoutSeconds: 1_200,
     idleWarningSeconds: 300,
@@ -140,6 +141,78 @@ export function sessionStoreContract(
       expect(await store.transition(created.sessionId, ['ACTIVE'], 'ACTIVE')).toBeNull();
       expect(await store.touchActivity(created.sessionId, HOUR_LATER)).toBeNull();
       expect((await store.get(created.sessionId))?.status).toBe('ENDED');
+    });
+
+    // ------------------------------------------- BETA-P0-007: recovery
+
+    it('stamps statusChangedAt only when the status really changes', async () => {
+      const store = await makeStore();
+      const created = session({ status: 'ACTIVE' });
+      await store.create(created);
+
+      const ending = await store.transition(created.sessionId, ['ACTIVE'], 'ENDING', {
+        statusChangedAt: '2026-08-25T12:10:00.000Z',
+      });
+      expect(ending?.statusChangedAt).toBe('2026-08-25T12:10:00.000Z');
+
+      // Resuming a teardown from its own state keeps the time it began, which
+      // is what an abandoned teardown is measured by.
+      const resumed = await store.transition(created.sessionId, ['ENDING'], 'ENDING', {
+        statusChangedAt: '2026-08-25T12:20:00.000Z',
+      });
+      expect(resumed?.status).toBe('ENDING');
+      expect(resumed?.statusChangedAt).toBe('2026-08-25T12:10:00.000Z');
+      expect((await store.get(created.sessionId))?.statusChangedAt).toBe('2026-08-25T12:10:00.000Z');
+
+      // Activity is not a status change either.
+      const active = session({ sessionId: 'sess-00000000000000h1', sandboxRef: 'jtt-lab-0000000000h1', status: 'ACTIVE' });
+      await store.create(active);
+      expect((await store.touchActivity(active.sessionId, HOUR_LATER))?.statusChangedAt).toBe(NOW);
+    });
+
+    it('refuses a transition whose status timestamp guard no longer matches', async () => {
+      const store = await makeStore();
+      const created = session({ status: 'ACTIVE' });
+      await store.create(created);
+
+      const first = await store.transition(created.sessionId, ['ACTIVE'], 'RESETTING', {
+        statusChangedAt: '2026-08-25T12:01:00.000Z',
+      });
+      // The first claim is recovered and a second reset claims the same state.
+      await store.transition(created.sessionId, ['RESETTING'], 'DEGRADED', {
+        statusChangedAt: '2026-08-25T12:11:00.000Z',
+      });
+      await store.transition(created.sessionId, ['DEGRADED'], 'RESETTING', {
+        statusChangedAt: '2026-08-25T12:12:00.000Z',
+      });
+
+      // Same status, different claim: the first reset cannot release it.
+      expect(
+        await store.transition(created.sessionId, ['RESETTING'], 'ACTIVE', {}, {
+          statusChangedAt: first!.statusChangedAt,
+        }),
+      ).toBeNull();
+      expect((await store.get(created.sessionId))?.status).toBe('RESETTING');
+
+      // The current claim can.
+      expect(
+        (
+          await store.transition(created.sessionId, ['RESETTING'], 'ACTIVE', {}, {
+            statusChangedAt: '2026-08-25T12:12:00.000Z',
+          })
+        )?.status,
+      ).toBe('ACTIVE');
+    });
+
+    it('stores DEGRADED as occupying, expirable, and closed to activity', async () => {
+      const store = await makeStore();
+      const created = session({ status: 'DEGRADED', lastActivityAt: '2026-08-25T11:00:00.000Z', idleTimeoutSeconds: 600 });
+      await store.create(created);
+
+      expect(await store.get(created.sessionId)).toEqual(created);
+      expect(await store.countOccupying()).toBe(1);
+      expect(await store.touchActivity(created.sessionId, HOUR_LATER)).toBeNull();
+      expect((await store.listExpirable(NOW)).map((s) => s.sessionId)).toEqual([created.sessionId]);
     });
 
     /*

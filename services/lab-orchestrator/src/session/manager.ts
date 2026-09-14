@@ -8,11 +8,18 @@
  *
  * ```text
  *  start()   CREATING ──► ACTIVE ◄──► RESETTING   reset()
- *                            │
+ *                            │  ▲           │
+ *                            │  └─ DEGRADED ◄┘       (reset failed / interrupted)
  *              expire() ─────┼──► EXPIRING ──► EXPIRED
  *                 end() ─────┴──► ENDING   ──► ENDED
  *                            └──► FAILED                (provisioning failed)
  * ```
+ *
+ * Every status change is one conditional write (`SessionStore.transition`),
+ * made through `#transition` so it is stamped with when it happened. No
+ * operation assumes the row is still where it left it: start, reset and
+ * teardown each check that their own claim still stands before they report
+ * success, and discard what they built when a teardown took the session.
  */
 import type { LabRegistry } from '../lab-registry.js';
 import type { LoadedLabDefinition } from '../lab-definition.js';
@@ -44,15 +51,45 @@ import {
   type SandboxKind,
 } from '../providers/catalog.js';
 import { ProviderRegistry, singleProviderRegistry } from '../providers/registry.js';
-import type { SessionStore } from './store.js';
+import type { SessionStore, TransitionGuard } from './store.js';
 import {
   OCCUPYING_STATUSES,
+  RESETTABLE_STATUSES,
   SessionError,
+  isTeardownOwned,
   isTerminalStatus,
   type LabSession,
   type SessionPolicy,
   type SessionStatus,
 } from './types.js';
+
+/** What a teardown may claim besides its own in-flight state. */
+const LIVE_STATUSES: readonly SessionStatus[] = ['CREATING', 'ACTIVE', 'RESETTING', 'DEGRADED'];
+
+const RESET_RETRY_REMEDIATION =
+  'The last reset did not finish, so this environment cannot be used as it is. ' +
+  'Reset the lab to rebuild it, or End Lab to release it.';
+
+/** What a student can do about a session that is not ACTIVE. */
+function remediationFor(status: SessionStatus): string {
+  if (isTerminalStatus(status)) return 'Start the lab again to get a fresh environment.';
+  if (status === 'DEGRADED') return RESET_RETRY_REMEDIATION;
+  return 'The environment is busy; try again in a moment.';
+}
+
+/** The refusal for acting on a session that is not ACTIVE. */
+function notActive(status: SessionStatus): SessionError {
+  return new SessionError(
+    'SESSION_NOT_ACTIVE',
+    `This lab session is ${status}.`,
+    remediationFor(status),
+    { status },
+  );
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** Reasons that flow into `last_activity_at`. Polling is deliberately absent. */
 export type ActivityReason = 'terminal' | 'check' | 'reset' | 'continue' | 'start';
@@ -454,12 +491,24 @@ export class SessionManager {
 
     this.#recordProvision(session, provisionStartedAt, 'success', result.steps);
 
-    const nowIso = new Date(this.#now()).toISOString();
-    const active = await this.#store.update(session.sessionId, {
-      status: 'ACTIVE',
+    /*
+     * Conditional, like every other status change.
+     *
+     * A teardown — End, or the reaper — can claim a session while the provider
+     * is still building it, and can even record ENDED: its destroy found
+     * nothing yet to destroy. This used to be an unconditional update, which
+     * moved that ENDED row back to ACTIVE over a sandbox the provider went on to
+     * create regardless. Now a start that lost its session says so, and removes
+     * what it built.
+     */
+    const active = await this.#transition(session.sessionId, ['CREATING'], 'ACTIVE', {
       environmentId: result.environment.environmentId,
-      lastActivityAt: nowIso,
+      lastActivityAt: new Date(this.#now()).toISOString(),
     });
+    if (!active) {
+      await this.#discardLostWork(session, context, 'start');
+      throw await this.#closedDuringStart(session.sessionId);
+    }
     this.#emit((m) => m.onTransition?.('CREATING', 'ACTIVE'));
 
     this.#log(
@@ -470,7 +519,7 @@ export class SessionManager {
     );
 
     return {
-      session: active ?? session,
+      session: active,
       lab,
       environment: result.environment,
       steps: result.steps,
@@ -522,6 +571,7 @@ export class SessionManager {
         ...(ownerUserId ? { ownerUserId } : {}),
         createdAt,
         lastActivityAt: createdAt,
+        statusChangedAt: createdAt,
         expiresAt,
         idleTimeoutSeconds: this.#lifetimes.idleTimeoutSeconds,
         idleWarningSeconds: this.#lifetimes.warningSeconds,
@@ -555,13 +605,37 @@ export class SessionManager {
     context: LabSessionContext,
     reason: string,
   ): Promise<void> {
-    // Best-effort teardown so a failed start does not leak a namespace.
-    await this.#providerFor(session).destroy(context).catch(() => undefined);
-    await this.#store.update(session.sessionId, {
-      status: 'FAILED',
+    /*
+     * Best-effort teardown so a failed start does not leak a sandbox.
+     *
+     * Best-effort is enough because it is not the last line: once the row is
+     * finished, the reaper reclaims any sandbox still carrying its session id
+     * (`SessionReaper`, "sandboxes of finished sessions").
+     */
+    try {
+      const destroy = await this.#providerFor(session).destroy(context);
+      if (!destroy.ok || !destroy.namespaceGone) {
+        this.#log(
+          `session ${session.sessionId}: failed start not yet cleaned up — ${destroy.error?.message ?? 'still present'}`,
+        );
+      }
+    } catch (error) {
+      this.#log(`session ${session.sessionId}: could not clean up failed start — ${describeError(error)}`);
+    }
+
+    // A teardown that claimed the session during provisioning owns how it
+    // ends. FAILED must not overwrite its ENDING/ENDED.
+    const failed = await this.#transition(session.sessionId, ['CREATING'], 'FAILED', {
       statusReason: reason,
       endedAt: new Date(this.#now()).toISOString(),
     });
+    if (!failed) {
+      const current = await this.#store.get(session.sessionId);
+      this.#log(
+        `session ${session.sessionId}: provisioning failed after a teardown claimed it; left ${current?.status ?? 'removed'} — ${reason}`,
+      );
+      return;
+    }
     this.#release(session.sessionId);
     this.#emit((m) => m.onTransition?.(session.status, 'FAILED'));
     this.#emit((m) =>
@@ -624,16 +698,7 @@ export class SessionManager {
   /** A session that can still be acted on. Throws otherwise. */
   async requireActive(sessionId: unknown): Promise<{ session: LabSession; lab: LoadedLabDefinition }> {
     const session = await this.require(sessionId);
-    if (session.status !== 'ACTIVE') {
-      throw new SessionError(
-        'SESSION_NOT_ACTIVE',
-        `This lab session is ${session.status}.`,
-        isTerminalStatus(session.status)
-          ? 'Start the lab again to get a fresh environment.'
-          : 'The environment is busy; try again in a moment.',
-        { status: session.status },
-      );
-    }
+    if (session.status !== 'ACTIVE') throw notActive(session.status);
     return { session, lab: this.#registry.get(session.labId) };
   }
 
@@ -793,45 +858,70 @@ export class SessionManager {
    *
    * Every status change here is a `transition`, never an `update`.
    *
-   * The claim (ACTIVE → RESETTING) comes before any runtime work, so of two
-   * simultaneous resets exactly one replaces the sandbox; the other is refused
-   * with `SESSION_NOT_ACTIVE`, the same conflict a reset of a busy session has
-   * always received.
+   * The claim (ACTIVE or DEGRADED → RESETTING) comes before any runtime work,
+   * so of two simultaneous resets exactly one replaces the sandbox; the other is
+   * refused with `SESSION_NOT_ACTIVE`.
    *
-   * The release (RESETTING → ACTIVE) is conditional too. A teardown — End, or
-   * the reaper — may claim a RESETTING session, and once it has, nothing may
-   * move the session back. A reset that loses its claim that way removes
-   * whatever it rebuilt and reports the conflict rather than success.
+   * Every release is conditional and fenced on that claim's own timestamp. A
+   * teardown may claim a RESETTING session, and the reaper may declare an
+   * abandoned one DEGRADED — after which a *second* reset can hold RESETTING
+   * again. Status alone cannot tell those claims apart, so a release matching
+   * status alone could hand the second reset's session back as ACTIVE.
+   *
+   * A reset that does not succeed never reports ACTIVE. A container reset
+   * destroys the sandbox before rebuilding it, and a Kubernetes one purges
+   * before it re-applies, so after a failure nobody can vouch for what is left:
+   * the session becomes DEGRADED, which refuses checks, terminals and activity
+   * but can be reset again or ended.
    */
   async reset(sessionId: string): Promise<{ session: LabSession; result: ResetResult }> {
-    const { session, lab } = await this.requireActive(sessionId);
-    const context = this.#contextFor(lab, session);
+    const session = await this.require(sessionId);
+    if (!RESETTABLE_STATUSES.includes(session.status)) throw notActive(session.status);
+    const context = this.#contextFor(this.#registry.get(session.labId), session);
 
-    const claimed = await this.#store.transition(sessionId, ['ACTIVE'], 'RESETTING');
+    const claimed = await this.#transition(sessionId, RESETTABLE_STATUSES, 'RESETTING');
     if (!claimed) throw await this.#resetConflict(sessionId);
+    const fence: TransitionGuard = { statusChangedAt: claimed.statusChangedAt };
 
     let result: ResetResult;
     try {
       result = await this.#providerFor(session).reset(context);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const released = await this.#store.transition(sessionId, ['RESETTING'], 'ACTIVE', {
-        statusReason: message,
-      });
-      if (!released) {
-        this.#log(`session ${sessionId}: reset failed after a teardown claimed it — ${message}`);
-        await this.#discardLostReset(session, context);
+      const message = describeError(error);
+      const degraded = await this.#degrade(sessionId, `The last reset did not finish: ${message}`, fence, true);
+      if (!degraded) {
+        this.#log(`session ${sessionId}: reset failed after losing its claim — ${message}`);
+        await this.#discardLostWork(session, context, 'reset');
         throw await this.#resetConflict(sessionId);
       }
-      throw new SessionError('SESSION_RESET_FAILED', message);
+      throw new SessionError('SESSION_RESET_FAILED', message, RESET_RETRY_REMEDIATION, {
+        status: degraded.status,
+      });
     }
 
-    const updated = await this.#store.transition(sessionId, ['RESETTING'], 'ACTIVE', {
-      lastActivityAt: new Date(this.#now()).toISOString(),
-      ...(result.ok ? {} : { statusReason: result.error?.message ?? 'reset failed' }),
-    });
+    if (!result.ok) {
+      const degraded = await this.#degrade(
+        sessionId,
+        `The last reset did not finish: ${result.error?.message ?? 'reset failed'}`,
+        fence,
+        true,
+      );
+      if (!degraded) {
+        await this.#discardLostWork(session, context, 'reset');
+        throw await this.#resetConflict(sessionId);
+      }
+      return { session: degraded, result };
+    }
+
+    const updated = await this.#transition(
+      sessionId,
+      ['RESETTING'],
+      'ACTIVE',
+      { lastActivityAt: new Date(this.#now()).toISOString() },
+      fence,
+    );
     if (!updated) {
-      await this.#discardLostReset(session, context);
+      await this.#discardLostWork(session, context, 'reset');
       throw await this.#resetConflict(sessionId);
     }
 
@@ -849,14 +939,67 @@ export class SessionManager {
      * could not be reconnected is a worse terminal, not a failed reset. The
      * student can reload the page.
      */
-    if (result.ok && session.sandboxKind === 'container' && this.#terminal?.reattach) {
+    if (session.sandboxKind === 'container' && this.#terminal?.reattach) {
       await this.#terminal.reattach(session.sessionId).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.#log(`session ${session.sessionId}: terminal did not reconnect after reset — ${message}`);
+        this.#log(`session ${session.sessionId}: terminal did not reconnect after reset — ${describeError(error)}`);
       });
     }
 
     return { session: updated, result };
+  }
+
+  /**
+   * Declare a reset's sandbox unusable: RESETTING → DEGRADED.
+   *
+   * `studentAction` records activity, so a student who just pressed Reset gets
+   * a full idle window to press it again; recovery on the reaper's behalf does
+   * not, so an abandoned session is still reclaimed on time.
+   */
+  async #degrade(
+    sessionId: string,
+    reason: string,
+    guard: TransitionGuard,
+    studentAction: boolean,
+  ): Promise<LabSession | null> {
+    const degraded = await this.#transition(
+      sessionId,
+      ['RESETTING'],
+      'DEGRADED',
+      {
+        statusReason: reason,
+        ...(studentAction ? { lastActivityAt: new Date(this.#now()).toISOString() } : {}),
+      },
+      guard,
+    );
+    if (degraded) {
+      this.#emit((m) => m.onTransition?.('RESETTING', 'DEGRADED'));
+      this.#log(`session ${sessionId} DEGRADED: ${reason}`);
+    }
+    return degraded;
+  }
+
+  /**
+   * Recover a reset whose owner is gone — the reaper's half of `reset`.
+   *
+   * A process that dies mid-reset leaves RESETTING behind, and nothing else
+   * would ever move it: only the dead reset could release it. What state its
+   * sandbox is in is unknowable — removed, half rebuilt, or fine — so it is
+   * not reported as ACTIVE. DEGRADED lets the student reset again or end, and
+   * leaves the session to idle and absolute expiry if they have gone.
+   *
+   * Fenced on the claim the reaper observed. If that reset finished, or
+   * another reset has since claimed the session, the row no longer matches and
+   * this does nothing. If the "dead" reset is in fact alive and merely slow,
+   * its own fenced release fails afterwards and it leaves the sandbox alone.
+   */
+  async recoverInterruptedReset(observed: LabSession): Promise<LabSession | null> {
+    if (observed.status !== 'RESETTING') return null;
+    return this.#degrade(
+      observed.sessionId,
+      'The last reset was interrupted before it finished.',
+      { statusChangedAt: observed.statusChangedAt },
+      false,
+    );
   }
 
   /**
@@ -882,42 +1025,64 @@ export class SessionManager {
       current.status === 'ACTIVE'
         ? 'This lab session was changed by another request.'
         : `This lab session is ${current.status}.`,
-      isTerminalStatus(current.status)
-        ? 'Start the lab again to get a fresh environment.'
-        : 'The environment is busy; try again in a moment.',
+      remediationFor(current.status),
       { status: current.status },
     );
   }
 
+  /** The refusal for a start whose session a teardown claimed while it was provisioning. */
+  async #closedDuringStart(sessionId: string): Promise<SessionError> {
+    const current = await this.#store.get(sessionId);
+    return new SessionError(
+      'SESSION_NOT_ACTIVE',
+      `This lab session was closed while it was starting${current ? ` (${current.status})` : ''}.`,
+      'Start the lab again to get a fresh environment.',
+      current ? { status: current.status } : undefined,
+    );
+  }
+
   /**
-   * Remove what a reset rebuilt after a teardown took the session from it.
+   * Remove what a start or reset built after it lost its claim.
    *
-   * A teardown is the only thing besides this reset that can move a session
-   * out of RESETTING. It may have destroyed the sandbox, and even recorded
-   * ENDED, while the provider was still recreating it. The recreated sandbox
-   * would then outlive its session — and the orphan sweep would not reclaim it,
-   * because the session row still exists. Destroy is idempotent, so running it
-   * after or alongside the teardown's own destroy is safe.
+   * Only when a teardown owns the session. A teardown may have destroyed the
+   * sandbox, and even recorded ENDED, while the provider was still building
+   * it; the rebuilt sandbox would then outlive its session. Destroy is
+   * idempotent, so running it alongside the teardown's own destroy is safe.
    *
-   * A failure here is logged, not thrown: the student's End already stands,
-   * and the reply to the reset is a conflict either way.
+   * When the claim went anywhere else — the reaper recovered an abandoned reset
+   * and a second reset now holds the session, or has already made it ACTIVE —
+   * the sandbox is that session's current one, and destroying it would break a
+   * reset that is about to report success.
+   *
+   * A failure here is logged, not thrown: the caller's reply is a conflict
+   * either way, and a sandbox left behind by a finished session is reclaimed by
+   * the reaper.
    */
-  async #discardLostReset(session: LabSession, context: LabSessionContext): Promise<void> {
-    this.#log(`session ${session.sessionId}: reset lost its claim to a teardown; discarding its sandbox`);
+  async #discardLostWork(
+    session: LabSession,
+    context: LabSessionContext,
+    operation: 'start' | 'reset',
+  ): Promise<void> {
+    const current = await this.#store.get(session.sessionId);
+    if (current && !isTeardownOwned(current.status)) {
+      this.#log(
+        `session ${session.sessionId}: ${operation} lost its claim, session is now ${current.status}; leaving its sandbox`,
+      );
+      return;
+    }
+    this.#log(`session ${session.sessionId}: ${operation} lost its claim to a teardown; discarding its sandbox`);
     try {
       const destroy = await this.#providerFor(session).destroy(context);
       if (!destroy.ok || !destroy.namespaceGone) {
         this.#log(
-          `session ${session.sessionId}: sandbox rebuilt by a lost reset not yet removed — ${
+          `session ${session.sessionId}: sandbox built by a lost ${operation} not yet removed — ${
             destroy.error?.message ?? 'still present'
           }`,
         );
       }
     } catch (error) {
       this.#log(
-        `session ${session.sessionId}: could not discard sandbox rebuilt by a lost reset — ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `session ${session.sessionId}: could not discard sandbox built by a lost ${operation} — ${describeError(error)}`,
       );
     }
   }
@@ -927,24 +1092,77 @@ export class SessionManager {
   /** Student pressed End Lab. */
   async end(sessionId: string): Promise<TeardownResult> {
     const session = await this.require(sessionId);
-    return this.#teardown(session, 'ENDING', 'ENDED', 'ended by student');
+    return this.#teardown(session, [...LIVE_STATUSES, 'ENDING'], 'ENDING', 'ENDED', 'ended by student');
+  }
+
+  /** Reaper collected the session. */
+  async expire(sessionId: string, reason: string): Promise<TeardownResult> {
+    const session = await this.require(sessionId);
+    return this.#teardown(session, [...LIVE_STATUSES, 'EXPIRING'], 'EXPIRING', 'EXPIRED', reason);
   }
 
   /**
-   * Reaper collected the session.
+   * Finish an End whose owner is gone — the reaper's half of `end`.
    *
-   * `adoptAbandoned` lets this claim a teardown left in the *opposite*
-   * in-flight state (`ENDING`) by a process that is no longer running. See
-   * `#teardown` for why that is normally refused, and why it must not be
-   * refused forever.
+   * If the process holding an `ENDING` teardown died, or its destroy did not
+   * complete, nothing else would ever resume it: only `end()` claims `ENDING`,
+   * and `end()` runs when a student presses End, which they already did. The
+   * row stayed `ENDING`, held a capacity slot, and kept its sandbox.
+   *
+   * It is resumed *as an End*: the student asked for it, so it is recorded
+   * ENDED with the student's reason rather than relabelled EXPIRED. It claims
+   * nothing but `ENDING`, so it cannot end a session that is anything else.
+   * Racing a live End is the End+End race `#teardown` already settles: destroy
+   * is idempotent and only one of them records the ending.
    */
-  async expire(
-    sessionId: string,
-    reason: string,
-    options: { adoptAbandoned?: boolean } = {},
-  ): Promise<TeardownResult> {
+  async resumeAbandonedEnd(sessionId: string): Promise<TeardownResult> {
     const session = await this.require(sessionId);
-    return this.#teardown(session, 'EXPIRING', 'EXPIRED', reason, options.adoptAbandoned ?? false);
+    return this.#teardown(
+      session,
+      ['ENDING'],
+      'ENDING',
+      'ENDED',
+      session.statusReason ?? 'ended by student',
+    );
+  }
+
+  /**
+   * Remove a sandbox that outlived its finished session.
+   *
+   * A start or reset that lost its session to a teardown discards what it
+   * built, but that discard is best-effort, and so is the cleanup after a
+   * failed start. Anything left carries the id of a session that is already
+   * ENDED, EXPIRED or FAILED — and the orphan sweep alone would never take it
+   * while the row is retained, because the store still "knows" that sandbox.
+   *
+   * Only for a finished session, re-read here rather than trusted from the
+   * caller. It goes through the provider's own session-scoped destroy, so the
+   * managed, provider, runtime-owner and session-label gates are all re-checked
+   * against the live resource immediately before anything is deleted.
+   */
+  async reclaimFinishedSandbox(sessionId: string): Promise<DestroyResult> {
+    const session = await this.#store.get(sessionId);
+    if (!session || !isTerminalStatus(session.status)) {
+      return {
+        ok: false,
+        namespaceGone: false,
+        steps: [],
+        error: {
+          code: 'DESTROY_FAILED',
+          message: `session ${sessionId} is ${session?.status ?? 'unknown'}, not finished`,
+        },
+      };
+    }
+    try {
+      return await this.#providerFor(session).destroy(this.contextFor(session));
+    } catch (error) {
+      return {
+        ok: false,
+        namespaceGone: false,
+        steps: [],
+        error: { code: 'DESTROY_FAILED', message: describeError(error) },
+      };
+    }
   }
 
   /**
@@ -956,10 +1174,10 @@ export class SessionManager {
    */
   async #teardown(
     session: LabSession,
+    claimable: readonly SessionStatus[],
     inProgress: Extract<SessionStatus, 'ENDING' | 'EXPIRING'>,
     done: Extract<SessionStatus, 'ENDED' | 'EXPIRED'>,
     reason: string,
-    adoptAbandoned = false,
   ): Promise<TeardownResult> {
     if (isTerminalStatus(session.status)) {
       return {
@@ -976,35 +1194,15 @@ export class SessionManager {
      * proceed, and the second would finish the session under the *other* one's
      * label, so a student-ended session could be recorded EXPIRED.
      *
-     * The `from` list deliberately excludes the opposite in-flight state:
-     * End cannot claim a session already EXPIRING, and expiry cannot claim one
+     * The `claimable` list never includes the opposite in-flight state: End
+     * cannot claim a session already EXPIRING, and expiry cannot claim one
      * already ENDING. `inProgress` itself *is* included, because an interrupted
-     * teardown must be resumable — the reaper re-enters this path every pass
-     * until the sandbox is verifiably gone, and that is the idempotence the
-     * whole cleanup design rests on.
-     *
-     * That rule protects a teardown with a *live* owner, and it used to apply
-     * even when there was no owner left at all. If the process holding an
-     * `ENDING` teardown died between the claim and the destroy, nothing could
-     * ever resume it: only `end()` claims `ENDING`, and `end()` only runs when
-     * a student presses End — which will never happen again for that session.
-     * The reaper retried every 60 seconds forever, was refused every time, and
-     * the row sat in `ENDING` permanently. Since `ENDING` is in
-     * `OCCUPYING_STATUSES`, each one also held a `MAX_ACTIVE_SESSIONS` slot for
-     * good, so enough of them stop the platform starting any lab at all — and
-     * the sandbox itself was never destroyed.
-     *
-     * `adoptAbandoned` closes that off. The reaper sets it only for a session
-     * already past its absolute deadline, at which point no live teardown can
-     * still be running: End takes seconds, and the deadline is an hour away.
-     * Live contention is refused exactly as before.
+     * teardown must be resumable — the reaper re-enters this path until the
+     * sandbox is verifiably gone, and that is the idempotence the whole cleanup
+     * design rests on. An ENDING teardown whose owner is gone is resumed as an
+     * End by `resumeAbandonedEnd`, never relabelled.
      */
-    const claimable: SessionStatus[] = ['CREATING', 'ACTIVE', 'RESETTING', inProgress];
-    if (adoptAbandoned) {
-      claimable.push(inProgress === 'EXPIRING' ? 'ENDING' : 'EXPIRING');
-    }
-
-    const marked = await this.#store.transition(session.sessionId, claimable, inProgress, {
+    const marked = await this.#transition(session.sessionId, claimable, inProgress, {
       statusReason: reason,
     });
 
@@ -1035,8 +1233,19 @@ export class SessionManager {
       });
     }
 
-    const context = this.contextFor(marked);
-    const destroy = await this.#providerFor(marked).destroy(context);
+    let destroy: DestroyResult;
+    try {
+      destroy = await this.#providerFor(marked).destroy(this.contextFor(marked));
+    } catch (error) {
+      // A throw is a failed delete like any other: the teardown stays in flight
+      // for the reaper to resume, rather than escaping as a 500 mid-teardown.
+      destroy = {
+        ok: false,
+        namespaceGone: false,
+        steps: [],
+        error: { code: 'DESTROY_FAILED', message: describeError(error) },
+      };
+    }
 
     // `ok` means the delete call was accepted; `namespaceGone` means the
     // namespace is verifiably absent. Only the latter finishes the teardown.
@@ -1059,7 +1268,7 @@ export class SessionManager {
      * attempt twice. Only the first to move the row from `inProgress` records
      * the ending; the other reports the state it finds.
      */
-    const ended = await this.#store.transition(session.sessionId, [inProgress], done, {
+    const ended = await this.#transition(session.sessionId, [inProgress], done, {
       statusReason: reason,
       endedAt: new Date(this.#now()).toISOString(),
     });
@@ -1092,6 +1301,28 @@ export class SessionManager {
     });
 
     return { session: ended, destroy };
+  }
+
+  /**
+   * Every status change goes through here, stamped with when it happened.
+   *
+   * The stamp is applied by the store only when the status really moves; see
+   * `LabSession.statusChangedAt` for what reads it.
+   */
+  #transition(
+    sessionId: string,
+    from: readonly SessionStatus[],
+    to: SessionStatus,
+    patch: Partial<LabSession> = {},
+    guard?: TransitionGuard,
+  ): Promise<LabSession | null> {
+    return this.#store.transition(
+      sessionId,
+      from,
+      to,
+      { ...patch, statusChangedAt: new Date(this.#now()).toISOString() },
+      guard,
+    );
   }
 
   /** Never lets a listener failure escape into the teardown path. */

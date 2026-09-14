@@ -68,6 +68,7 @@ export function labSession(overrides: Partial<LabSession> = {}): LabSession {
     environmentId: 'kind:jumptotech-labs/lab-0000000000aa#K8S-001',
     createdAt,
     lastActivityAt: createdAt,
+    statusChangedAt: createdAt,
     expiresAt: new Date(Date.parse(createdAt) + 60 * 60_000).toISOString(),
     idleTimeoutSeconds: 20 * 60,
     idleWarningSeconds: 5 * 60,

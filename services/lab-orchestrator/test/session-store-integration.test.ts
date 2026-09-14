@@ -22,6 +22,7 @@ import { PostgresDatabase, migrate } from '@jumptotech/progress';
 import { PostgresSessionStore, type LabSession } from '../src/index.js';
 import { sessionStoreContract, session } from './session-store-contract.test.js';
 import { sessionLifecycleRaces } from './session-lifecycle-races.test.js';
+import { sessionRecovery } from './session-recovery.test.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const enabled = process.env.RUN_DB_TESTS === '1' && typeof url === 'string' && url.length > 0;
@@ -65,6 +66,10 @@ if (!enabled) {
   // BETA-P0-006: the manager's lifecycle races, decided by PostgreSQL. Each
   // "instance" reaches the row through its own pooled connections.
   sessionLifecycleRaces('PostgresSessionStore', fresh);
+
+  // BETA-P0-007: interrupted operations recovered, with the claims and their
+  // status timestamps decided by PostgreSQL.
+  sessionRecovery('PostgresSessionStore', fresh);
 
   describe('durable session store — persistence and recovery', () => {
     beforeEach(async () => {

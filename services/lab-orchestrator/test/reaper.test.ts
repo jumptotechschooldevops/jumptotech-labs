@@ -314,8 +314,10 @@ describe('a teardown whose owner died', () => {
    *
    * The rule that caused it is still right for its actual purpose — a reaper
    * must not relabel an End a student is in the middle of — so the fix does not
-   * remove it. It only stops applying it once no live End can possibly still be
-   * running, which the absolute deadline settles.
+   * remove it. BETA-P0-007: an End still unfinished after the grace period is
+   * resumed *as an End* instead, so it no longer waits for the absolute deadline
+   * and is never recorded EXPIRED. (`session-recovery.test.ts` covers the same
+   * adoption well inside the lifetime.)
    */
   /** Claim the teardown, then lose the process before the sandbox is destroyed. */
   async function abandonEnd(
@@ -335,18 +337,23 @@ describe('a teardown whose owner died', () => {
     expect((await manager.get(session.sessionId))?.status).toBe('ENDING');
     expect(await k8s.getNamespace(session.namespace), 'the sandbox is still there').not.toBeNull();
 
-    // Before the deadline the refusal stands: a live End must not be relabelled.
+    // Within the grace period the End is left to its owner.
     const early = await reaper.sweep();
     expect(early.removed).toEqual([]);
     expect((await manager.get(session.sessionId))?.status).toBe('ENDING');
 
-    // Past it, there is no live End left to protect.
+    // Past the grace period there is no live End left to protect.
     clock.now += 11 * MINUTE;
     const late = await reaper.sweep();
 
     expect(late.removed).toEqual([session.namespace]);
+    expect(late.reasons[session.namespace]).toBe('abandoned');
     expect(await k8s.getNamespace(session.namespace)).toBeNull();
-    expect((await manager.get(session.sessionId))?.status).toBe('EXPIRED');
+    // Finished as the End the student asked for, not relabelled EXPIRED.
+    expect(await manager.get(session.sessionId)).toMatchObject({
+      status: 'ENDED',
+      statusReason: 'ended by student',
+    });
   });
 
   it('gives back the MAX_ACTIVE_SESSIONS slot it was holding', async () => {

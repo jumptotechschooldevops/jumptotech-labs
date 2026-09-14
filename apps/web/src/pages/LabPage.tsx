@@ -141,7 +141,7 @@ export function LabPage({
   // open must not keep an abandoned environment alive.
   useEffect(() => {
     if (!session) return;
-    if (session.status !== 'ACTIVE' && session.status !== 'RESETTING') return;
+    if (session.status !== 'ACTIVE' && session.status !== 'RESETTING' && session.status !== 'DEGRADED') return;
 
     let cancelled = false;
     const poll = () => {
@@ -264,6 +264,14 @@ export function LabPage({
     }
   }, [session]);
 
+  /** Re-read the session after a failed action. A failure here changes nothing. */
+  const refreshSession = useCallback((sessionId: string) => {
+    api
+      .getSession(sessionId)
+      .then((response) => setSession(response.session))
+      .catch(() => undefined);
+  }, []);
+
   const handleReset = useCallback(async () => {
     if (!session) return;
     setResetting(true);
@@ -297,10 +305,13 @@ export function LabPage({
       adoptSession(response.session);
     } catch (error) {
       setCheckError(toApiError(error));
+      // A failed reset leaves the session DEGRADED; show what it is now rather
+      // than the ACTIVE copy this page started with.
+      refreshSession(session.sessionId);
     } finally {
       setResetting(false);
     }
-  }, [session, adoptSession]);
+  }, [session, adoptSession, refreshSession]);
 
   const handleContinue = useCallback(async () => {
     if (!session) return;
@@ -332,10 +343,12 @@ export function LabPage({
     } catch (error) {
       setEndDialogOpen(false);
       setCheckError(toApiError(error));
+      // An End whose cleanup is still running leaves the session ENDING.
+      refreshSession(session.sessionId);
     } finally {
       setEnding(false);
     }
-  }, [session]);
+  }, [session, refreshSession]);
 
   /**
    * Report a revealed hint.
@@ -358,6 +371,9 @@ export function LabPage({
 
   const labReady = startPhase === 'ready' || startPhase === 'active';
   const sessionLive = session?.status === 'ACTIVE' || session?.status === 'RESETTING';
+  // A failed or interrupted reset: not usable, but Reset and End still apply.
+  const sessionDegraded = session?.status === 'DEGRADED';
+  const sessionReleasing = session?.status === 'ENDING' || session?.status === 'EXPIRING';
   const busy = checking || resetting || ending;
 
   // --- render -------------------------------------------------------------
@@ -439,7 +455,21 @@ export function LabPage({
         </div>
       )}
 
-      {session && !sessionLive && session.status !== 'CREATING' && (
+      {sessionDegraded && (
+        <div className="banner banner--warning" role="alert">
+          <strong>This environment is not usable.</strong> The last reset did not finish. Reset the
+          lab to rebuild it, or End Lab to release it.
+        </div>
+      )}
+
+      {session && sessionReleasing && (
+        <div className="banner banner--info" role="status">
+          <strong>Session {session.status}.</strong> This environment is being released; cleanup
+          continues automatically.
+        </div>
+      )}
+
+      {session && !sessionLive && !sessionDegraded && !sessionReleasing && session.status !== 'CREATING' && (
         <div className="banner banner--info" role="status">
           <strong>Session {session.status}.</strong>{' '}
           {session.statusReason ?? 'This environment has been released.'}
@@ -509,7 +539,7 @@ export function LabPage({
           type="button"
           className="btn btn--ghost"
           onClick={handleReset}
-          disabled={!labReady || !sessionLive || busy}
+          disabled={!labReady || !(sessionLive || sessionDegraded) || busy}
           title="Remove your resources and start this lab over. Keeps your environment."
         >
           {resetting ? 'Resetting…' : 'Reset Lab'}
@@ -519,7 +549,7 @@ export function LabPage({
           type="button"
           className="btn btn--danger-ghost"
           onClick={() => setEndDialogOpen(true)}
-          disabled={!labReady || !sessionLive || busy}
+          disabled={!labReady || !(sessionLive || sessionDegraded) || busy}
           title="Delete this environment and release it. Cannot be undone."
         >
           End Lab
