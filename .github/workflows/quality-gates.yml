@@ -320,6 +320,16 @@ jobs:
           npx vitest run test/integration.test.ts \
             --root services/lab-orchestrator
 
+      # BETA-P0-016: PodSecurity admission, the namespace admission policy and
+      # kubelet seccompDefault, proved against the cluster cluster-up.sh built.
+      - name: Pod security suite
+        env:
+          RUN_INTEGRATION_TESTS: '1'
+          KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
+        run: |
+          npx vitest run test/pod-security-integration.test.ts \
+            --root services/lab-orchestrator
+
       - name: Whole-catalog Kubernetes suite
         env:
           RUN_INTEGRATION_TESTS: '1'

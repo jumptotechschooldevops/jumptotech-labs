@@ -582,6 +582,11 @@ export interface KubernetesPort {
   namespaceExists(namespace: string): Promise<boolean>;
   getNamespace(namespace: string): Promise<NamespaceSnapshot | null>;
   createNamespace(namespace: string, labels: Record<string, string>): Promise<void>;
+  /**
+   * Set these labels on an existing namespace, leaving every other label as it
+   * is. A no-op when they already match. Throws when the namespace is absent.
+   */
+  mergeNamespaceLabels(namespace: string, labels: Record<string, string>): Promise<void>;
   deleteNamespace(namespace: string): Promise<void>;
   /** Namespaces carrying a label selector, e.g. the platform's ownership label. */
   listNamespaces(labelSelector?: string): Promise<NamespaceSnapshot[]>;

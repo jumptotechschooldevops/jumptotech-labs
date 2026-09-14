@@ -255,7 +255,8 @@ proves the external-egress variant.
     cluster on the laptop sit on it. External egress now excludes it (it is RFC
     1918), but a Pod's node is on it by construction.
   - **`hostNetwork` Pods bypass NetworkPolicy entirely.** Preventing students from
-    creating them is Pod Security admission, which is outside this story.
+    creating them is Pod Security admission: BETA-P0-016 enforces `baseline` on
+    every session namespace, which refuses them (docs/pod-security.md).
   - kind is development infrastructure, not a production substrate.
 
 ---
@@ -361,7 +362,7 @@ which is the job of §9.
 | D1 | **Production Kubernetes substrate** (managed service, self-hosted, or other) | Not selected. Nothing here assumes one. |
 | D2 | **Production CNI** and its NetworkPolicy implementation | Enforcement, `ipBlock` semantics, host-traffic handling and multi-node behavior all differ by CNI. Only a probe PASS on the chosen one counts. |
 | D3 | **Node-local traffic control** (host firewall, security groups, CNI host policy, IMDS hardening) | NetworkPolicy cannot do it (§8). |
-| D4 | **Pod Security admission level** for session namespaces (at least forbidding `hostNetwork`, `hostPort`, privileged) | Without it, a student Pod can step outside NetworkPolicy. It belongs to the Pod Security story. |
+| D4 | **Pod Security admission level** for session namespaces (at least forbidding `hostNetwork`, `hostPort`, privileged) | Settled by BETA-P0-016 for the platform: `enforce=baseline`, `audit=restricted`, required by admission policy (docs/pod-security.md). It must still be proved on the production cluster (docs/pod-security.md §12). |
 | D5 | **Who may run the probe and write the attestation**, and how often it re-runs (CronJob, deployment pipeline, manual) | Needs cluster-admin-equivalent rights; the cadence is an operational decision. |
 | D6 | **Multi-node probe placement** (anti-affinity or explicit nodes for A, B and C) | Single-node kind cannot exercise it. |
 | D7 | **Whether any lab should get external egress**, and through what (direct, egress proxy, allow-listed FQDNs) | None needs it today. FQDN policy is CNI-specific. |

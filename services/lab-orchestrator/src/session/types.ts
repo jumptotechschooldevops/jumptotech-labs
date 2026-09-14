@@ -7,6 +7,7 @@
  */
 export type { StudentCredentials } from '../types.js';
 import type { LabProviderId, SandboxKind } from '../providers/catalog.js';
+import { DEFAULT_POD_SECURITY, type PodSecurityConfig } from './pod-security.js';
 
 /**
  * Session lifecycle.
@@ -354,6 +355,12 @@ export interface SessionPolicy {
   serviceAccountName: string;
   /** Lifetime of a minted student ServiceAccount token, in seconds. */
   credentialTtlSeconds: number;
+  /**
+   * Pod Security Admission labels stamped on every Kubernetes session
+   * namespace. See `session/pod-security.ts` for why the default enforces
+   * `baseline` rather than `restricted`.
+   */
+  podSecurity: PodSecurityConfig;
   /** Bounds applied to container-exec sandboxes (Linux, Terraform). */
   sandbox: SandboxContainerPolicy;
   /** Resource controls for Docker-track sandboxes. */
@@ -403,6 +410,7 @@ export const DEFAULT_SESSION_POLICY: SessionPolicy = {
   },
   serviceAccountName: 'student',
   credentialTtlSeconds: 3_600,
+  podSecurity: DEFAULT_POD_SECURITY,
   sandbox: {
     cpus: '0.5',
     memory: '512m',

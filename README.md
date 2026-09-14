@@ -4002,6 +4002,18 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
   on a platform that permits it. Enforcement is measured, not assumed, and
   production admits no student without a passing probe — see
   [docs/kubernetes-network-security.md](docs/kubernetes-network-security.md).
+- *Pod Security per namespace* (BETA-P0-016). Every session namespace enforces
+  the Kubernetes Pod Security `baseline` standard, pinned to `v1.34` and audited
+  at `restricted`. No Pod in it can be privileged, join the host's network, PID
+  or IPC namespace, mount a `hostPath`, bind a `hostPort`, add a non-default
+  capability or run seccomp-Unconfined — whoever creates it, including a
+  Deployment's ReplicaSet. A cluster-wide admission policy refuses any managed
+  namespace without that label, platform credential included; the kind kubelet
+  gives every Pod that names no profile `RuntimeDefault` seccomp; and no
+  ServiceAccount token is mounted into a Pod that did not ask for one. `baseline`
+  rather than `restricted` because `restricted` refuses K8S-001's own
+  `kubectl run nginx --image=nginx:stable`. All of it is asserted against a real
+  API server — see [docs/pod-security.md](docs/pod-security.md).
 - *Cleanup cannot delete what it does not own.* Four gates — sandbox name shape,
   protected-namespace list, live `jumptotech.io/managed` label, and session-label
   match — are re-read from the API server immediately before every delete.
@@ -4190,9 +4202,18 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    production substrate and CNI are **DECISION REQUIRED**, and production admits
    no student until the probe passes on that cluster. NetworkPolicy does not
    govern pod-to-node traffic (kubelet, instance metadata), and a `hostNetwork`
-   Pod bypasses it; those need host firewalling and Pod Security admission. This
+   Pod bypasses it; those need host firewalling and Pod Security admission
+   (session namespaces enforce `baseline`, which refuses `hostNetwork` — 3b). This
    is namespace isolation on a shared kernel, not VM-grade isolation. `kind` is
    development infrastructure and is not a supported production substrate.
+3b. **Pod Security Admission narrows what a Pod may ask for; it is not a
+   sandbox.** `baseline` refuses privileged Pods, host namespaces, `hostPath`,
+   `hostPort` and non-default capabilities. It does not stop a container running
+   as root, does not require `allowPrivilegeEscalation: false`, and leaves the
+   runtime's default capability set (which includes `NET_RAW`) in place — and
+   every Pod still shares the node's kernel. Claims about it hold only on a
+   cluster where the labels, the admission manifest and kubelet `seccompDefault`
+   have been verified. See [docs/pod-security.md](docs/pod-security.md).
 4. **The student shell is a normal shell.** On the Kubernetes track it runs as
    an unprivileged user in a container with no host mounts, but there is no
    sandbox layer beyond Docker's defaults, and outbound network access from that

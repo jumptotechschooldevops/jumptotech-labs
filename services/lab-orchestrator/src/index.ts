@@ -186,6 +186,7 @@ export {
 export * from './session/types.js';
 export * from './session/identifiers.js';
 export * from './session/isolation.js';
+export * from './session/pod-security.js';
 export * from './session/store.js';
 export {
   PostgresSessionStore,

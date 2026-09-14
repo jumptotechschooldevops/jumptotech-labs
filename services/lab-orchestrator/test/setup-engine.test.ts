@@ -208,9 +208,11 @@ describe('setup engine — reset restores the lab initial state (test requiremen
   it('restores a troubleshooting lab to its broken starting condition', async () => {
     const registry = await realCatalog();
     const lab = registry.get('K8S-010');
-    const k8s = new FakeKubernetes();
+    // The namespace must exist: reset relabels it before re-applying anything.
+    const k8s = new FakeKubernetes({ namespaces: [NS_A] });
 
-    await provider(k8s).reset(sessionContext(lab, { namespace: NS_A }));
+    const result = await provider(k8s).reset(sessionContext(lab, { namespace: NS_A }));
+    expect(result.ok).toBe(true);
 
     // Reset re-applies the fault: the point of Reset on K8S-010 is to replay
     // the scenario, not to leave the student with a healthy workload.
@@ -227,13 +229,15 @@ describe('setup engine — reset restores the lab initial state (test requiremen
   it('only ever touches the resetting session namespace', async () => {
     const lab = await fixtureLab({ 'setup/app.yaml': DEPLOYMENT_YAML });
     const k8s = new FakeKubernetes({
+      namespaces: [NS_A, NS_B],
       resources: {
         [`${NS_A}/deployments`]: [{ resource: 'deployments', name: 'a-work' }],
         [`${NS_B}/deployments`]: [{ resource: 'deployments', name: 'b-work' }],
       },
     });
 
-    await provider(k8s).reset(sessionContext(lab, { namespace: NS_A }));
+    expect((await provider(k8s).reset(sessionContext(lab, { namespace: NS_A }))).ok).toBe(true);
+    expect((await k8s.getNamespace(NS_B))?.labels).toEqual({});
 
     expect(k8s.deleted).toEqual([`${NS_A}/deployments/a-work`]);
     expect(await k8s.listNamespacedResources(NS_B, 'deployments')).toEqual([

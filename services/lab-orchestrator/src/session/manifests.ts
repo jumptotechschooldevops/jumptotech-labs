@@ -11,6 +11,11 @@
  * namespaced kinds. A lab cannot ship a manifest that creates a Namespace,
  * grants RBAC, or edits the session's own quota — that would let lab content
  * dismantle the guardrails the platform put around it.
+ *
+ * Nor can it ship a workload that asks for host access or privilege
+ * (`podSecurityViolations`). The namespace's Pod Security labels would refuse
+ * those Pods anyway, but only once a Deployment had been accepted and its
+ * ReplicaSet had failed out of sight; here it is an error at load.
  */
 import { readFile } from 'node:fs/promises';
 import { parseAllDocuments } from 'yaml';
@@ -20,6 +25,7 @@ import {
   type LoadedLabDefinition,
 } from '../lab-definition.js';
 import type { KubernetesManifestObject } from '../k8s/port.js';
+import { podSecurityViolations } from './pod-security.js';
 
 /**
  * Kinds a lab's initial state may contain.
@@ -86,7 +92,15 @@ function assertManifestObject(
     );
   }
 
-  return doc as unknown as KubernetesManifestObject;
+  const object = doc as unknown as KubernetesManifestObject;
+  const violations = podSecurityViolations(object);
+  if (violations.length > 0) {
+    return fail(
+      `${doc.kind}/${metadata.name} asks for host access or privilege a session namespace refuses — ${violations.join('; ')} (see docs/pod-security.md)`,
+    );
+  }
+
+  return object;
 }
 
 /**

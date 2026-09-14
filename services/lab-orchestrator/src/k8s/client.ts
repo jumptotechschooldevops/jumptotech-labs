@@ -486,6 +486,35 @@ export class KubernetesClient implements KubernetesPort {
     }
   }
 
+  async mergeNamespaceLabels(namespace: string, labels: Record<string, string>): Promise<void> {
+    for (let attempt = 1; ; attempt += 1) {
+      let current: k8s.V1Namespace;
+      try {
+        current = await this.#core.readNamespace({ name: namespace });
+      } catch (error) {
+        if (statusCodeOf(error) === 404) throw new Error(`namespace ${namespace} does not exist`);
+        asUnreachable(`reading namespace ${namespace}`, error);
+      }
+
+      const existing = current.metadata?.labels ?? {};
+      if (Object.entries(labels).every(([key, value]) => existing[key] === value)) return;
+
+      try {
+        // A replace carrying the resourceVersion just read, not a patch: if
+        // anything changed the namespace in between, this 409s and re-reads
+        // rather than overwriting labels it never saw.
+        await this.#core.replaceNamespace({
+          name: namespace,
+          body: { ...current, metadata: { ...current.metadata, labels: { ...existing, ...labels } } },
+        });
+        return;
+      } catch (error) {
+        if (statusCodeOf(error) === 409 && attempt < APPLY_CONFLICT_ATTEMPTS) continue;
+        asUnreachable(`labelling namespace ${namespace}`, error);
+      }
+    }
+  }
+
   async deleteNamespace(namespace: string): Promise<void> {
     try {
       await this.#core.deleteNamespace({ name: namespace });

@@ -219,6 +219,13 @@ export class FakeKubernetes implements KubernetesPort {
     this.namespaces.set(namespace, { name: namespace, phase: 'Active', labels: { ...labels } });
   }
 
+  async mergeNamespaceLabels(namespace: string, labels: Record<string, string>): Promise<void> {
+    this.#guard();
+    const found = this.namespaces.get(namespace);
+    if (!found) throw new Error(`namespace ${namespace} does not exist`);
+    found.labels = { ...found.labels, ...labels };
+  }
+
   async deleteNamespace(namespace: string): Promise<void> {
     this.#guard();
     if (!this.namespaces.has(namespace)) return;
