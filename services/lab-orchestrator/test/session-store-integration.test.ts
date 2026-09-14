@@ -172,6 +172,256 @@ if (!enabled) {
       expect(await new PostgresSessionStore(database).countOccupying()).toBe(3);
     });
 
+    /*
+     * BETA-P0-004. The test above leaves the interleaving to the pool's
+     * scheduling, so it never establishes that two starts overlapped between
+     * count and insert — it passed against the store this story fixed. The two
+     * tests below each force one half of the race.
+     *
+     * This one proves the lock serialises the decision across separate
+     * backends. The gate is a table lock that admits reads and blocks inserts. Every
+     * start can therefore get as far as its INSERT and no further, and the test
+     * waits — on PostgreSQL's own lock table, not on a timer — until every start
+     * is blocked. At that point the invariant is observable directly: a start
+     * that has counted must still hold the capacity lock, so at most one can be
+     * waiting on the table while the rest wait on the advisory lock. Opening the
+     * gate then shows the consequence: one slot, one admission.
+     */
+    it('admits exactly one start into the last slot when every start reaches its insert', async () => {
+      const LIMIT = 5;
+      const STARTS = 6;
+      const RACERS = 'jtt-capacity-race';
+
+      const store = new PostgresSessionStore(database);
+      for (let i = 0; i < LIMIT - 1; i += 1) {
+        await store.create(
+          session({ sessionId: `sess-00000000000ee${i}`, sandboxRef: `jtt-lab-000000ee000${i}`, status: 'ACTIVE' }),
+        );
+      }
+
+      // Its own pool, big enough that no start waits for a client, and named so
+      // its backends can be picked out of pg_stat_activity.
+      const racers = PostgresDatabase.fromConfig({
+        url: url!,
+        ssl: false,
+        maxConnections: STARTS + 4,
+        connectionTimeoutMs: 10_000,
+        idleTimeoutMs: 10_000,
+        statementTimeoutMs: 30_000,
+        applicationName: RACERS,
+      });
+
+      let openGate!: () => void;
+      const gateReleased = new Promise<void>((resolve) => (openGate = resolve));
+      let gateHeld!: () => void;
+      const gateReady = new Promise<void>((resolve) => (gateHeld = resolve));
+      const gate = database.transaction(async (tx) => {
+        await tx.query('LOCK TABLE lab_sessions IN SHARE ROW EXCLUSIVE MODE');
+        gateHeld();
+        await gateReleased;
+      });
+
+      try {
+        await gateReady;
+
+        const attempts = Array.from({ length: STARTS }, (_, i) =>
+          new PostgresSessionStore(racers).createWithinCapacity(
+            session({ sessionId: `sess-00000000000ff${i}`, sandboxRef: `jtt-lab-000000ff000${i}` }),
+            LIMIT,
+          ),
+        );
+
+        const blocked = async (): Promise<Record<string, number>> => {
+          const { rows } = await database.query<{ locktype: string; waiting: number }>(
+            `SELECT l.locktype, count(DISTINCT l.pid)::int AS waiting
+               FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+              WHERE NOT l.granted AND a.application_name = $1
+              GROUP BY l.locktype`,
+            [RACERS],
+          );
+          return Object.fromEntries(rows.map((r) => [r.locktype, r.waiting]));
+        };
+
+        let waiting: Record<string, number> = {};
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+          waiting = await blocked();
+          const total = Object.values(waiting).reduce((sum, n) => sum + n, 0);
+          if (total >= STARTS) break;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+
+        // Every start is parked in PostgreSQL, so the race is fully set up.
+        expect(Object.values(waiting).reduce((sum, n) => sum + n, 0)).toBe(STARTS);
+        // Only the start holding the capacity lock may have counted and gone on
+        // to insert; everyone else is still waiting to count.
+        expect(waiting).toEqual({ relation: 1, advisory: STARTS - 1 });
+
+        openGate();
+        let timer: NodeJS.Timeout | undefined;
+        const settled = await Promise.race([
+          Promise.allSettled(attempts),
+          new Promise<'hung'>((resolve) => {
+            timer = setTimeout(() => resolve('hung'), 15_000);
+          }),
+        ]);
+        clearTimeout(timer);
+        expect(settled, 'starts still blocked 15s after the gate opened').not.toBe('hung');
+
+        const outcomes = settled as PromiseSettledResult<boolean>[];
+        // Refusals are the ordinary `false`, not errors.
+        expect(outcomes.every((o) => o.status === 'fulfilled')).toBe(true);
+        expect(outcomes.filter((o) => o.status === 'fulfilled' && o.value)).toHaveLength(1);
+
+        // Committed rows, read from a connection that took no part in the race.
+        expect(await store.countOccupying()).toBe(LIMIT);
+        expect((await store.list()).length).toBe(LIMIT);
+
+        // Nothing left behind: no connection parked mid-transaction, no lock.
+        const { rows: leftovers } = await database.query<{ open: number; locks: number }>(
+          `SELECT
+             (SELECT count(*)::int FROM pg_stat_activity
+               WHERE application_name = $1 AND state LIKE 'idle in transaction%') AS open,
+             (SELECT count(*)::int FROM pg_locks WHERE locktype = 'advisory') AS locks`,
+          [RACERS],
+        );
+        expect(leftovers[0]).toEqual({ open: 0, locks: 0 });
+      } finally {
+        openGate();
+        await gate.catch(() => undefined);
+        // A broken store can leave a backend waiting forever; closing the pool
+        // would then wait with it.
+        await database.query(
+          'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1',
+          [RACERS],
+        );
+        await racers.close().catch(() => undefined);
+      }
+    }, 60_000);
+
+    /*
+     * The test above cannot catch a store that sends its statements through the
+     * pool one at a time, because it keeps every other start parked on its own
+     * connection: the lock holder's client is then the only idle one, and every
+     * statement it sends lands back on it by accident.
+     *
+     * Production does not look like that. The pool is shared with every other
+     * query the API makes, and once it is contended a released client goes to
+     * whoever is queued next — so start A's BEGIN, start B's lock and start A's
+     * count can all travel on one connection, where the advisory lock is
+     * re-entrant and admits both. A pool smaller than the number of starts makes
+     * that hand-off happen on every statement, deterministically: pg-pool
+     * serves its queue in order.
+     */
+    it.each([1, 2, 3])(
+      'admits exactly one start into the last slot when %i pooled connection(s) serve every start',
+      async (connections) => {
+        const LIMIT = 5;
+        const STARTS = 6;
+        const CONTENDED = `jtt-capacity-contended-${connections}`;
+
+        const store = new PostgresSessionStore(database);
+        for (let i = 0; i < LIMIT - 1; i += 1) {
+          await store.create(
+            session({ sessionId: `sess-00000000000hh${i}`, sandboxRef: `jtt-lab-000000hh000${i}`, status: 'ACTIVE' }),
+          );
+        }
+
+        const pool = PostgresDatabase.fromConfig({
+          url: url!,
+          ssl: false,
+          maxConnections: connections,
+          connectionTimeoutMs: 10_000,
+          idleTimeoutMs: 10_000,
+          statementTimeoutMs: 30_000,
+          applicationName: CONTENDED,
+        });
+        try {
+          let timer: NodeJS.Timeout | undefined;
+          const settled = await Promise.race([
+            Promise.allSettled(
+              Array.from({ length: STARTS }, (_, i) =>
+                new PostgresSessionStore(pool).createWithinCapacity(
+                  session({ sessionId: `sess-00000000000ii${i}`, sandboxRef: `jtt-lab-000000ii000${i}` }),
+                  LIMIT,
+                ),
+              ),
+            ),
+            new Promise<'hung'>((resolve) => {
+              timer = setTimeout(() => resolve('hung'), 15_000);
+            }),
+          ]);
+          clearTimeout(timer);
+          expect(settled, 'starts still blocked after 15s').not.toBe('hung');
+
+          const outcomes = settled as PromiseSettledResult<boolean>[];
+          expect(outcomes.every((o) => o.status === 'fulfilled')).toBe(true);
+          expect(outcomes.filter((o) => o.status === 'fulfilled' && o.value)).toHaveLength(1);
+          expect(await store.countOccupying()).toBe(LIMIT);
+          expect((await store.list()).length).toBe(LIMIT);
+
+          const { rows } = await database.query<{ open: number; locks: number }>(
+            `SELECT
+               (SELECT count(*)::int FROM pg_stat_activity
+                 WHERE application_name = $1 AND state LIKE 'idle in transaction%') AS open,
+               (SELECT count(*)::int FROM pg_locks WHERE locktype = 'advisory') AS locks`,
+            [CONTENDED],
+          );
+          expect(rows[0]).toEqual({ open: 0, locks: 0 });
+        } finally {
+          await database.query(
+            'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1',
+            [CONTENDED],
+          );
+          await pool.close().catch(() => undefined);
+        }
+      },
+      60_000,
+    );
+
+    it('gives the slot back when the insert fails, and leaves no transaction open', async () => {
+      const INSERTERS = 'jtt-capacity-insert-failure';
+      const pool = PostgresDatabase.fromConfig({
+        url: url!,
+        ssl: false,
+        maxConnections: 2,
+        connectionTimeoutMs: 10_000,
+        idleTimeoutMs: 10_000,
+        statementTimeoutMs: 30_000,
+        applicationName: INSERTERS,
+      });
+      try {
+        const store = new PostgresSessionStore(pool);
+        const first = session({ sessionId: 'sess-00000000000gg1', sandboxRef: 'jtt-lab-0000000gg001' });
+        const clash = session({ sessionId: 'sess-00000000000gg2', sandboxRef: first.sandboxRef });
+        const next = session({ sessionId: 'sess-00000000000gg3', sandboxRef: 'jtt-lab-0000000gg003' });
+
+        expect(await store.createWithinCapacity(first, 2)).toBe(true);
+        // Admitted by the count, then refused by the unique sandbox handle.
+        await expect(store.createWithinCapacity(clash, 2)).rejects.toThrow(/already exists/);
+        expect(await store.get(clash.sessionId)).toBeNull();
+
+        // The failed insert consumed nothing and released the lock: the last
+        // slot is still there for the next start.
+        expect(await store.createWithinCapacity(next, 2)).toBe(true);
+        expect(await store.countOccupying()).toBe(2);
+
+        const { rows } = await database.query<{ open: number; locks: number }>(
+          `SELECT
+             (SELECT count(*)::int FROM pg_stat_activity
+               WHERE application_name = $1 AND state LIKE 'idle in transaction%') AS open,
+             (SELECT count(*)::int FROM pg_locks WHERE locktype = 'advisory') AS locks`,
+          [INSERTERS],
+        );
+        expect(rows[0]).toEqual({ open: 0, locks: 0 });
+        // Every client went back to the pool.
+        expect(pool.poolStats()).toMatchObject({ waiting: 0 });
+        expect(pool.poolStats().idle).toBe(pool.poolStats().total);
+      } finally {
+        await pool.close().catch(() => undefined);
+      }
+    });
+
     it('refuses two sessions claiming one sandbox, even from separate connections', async () => {
       const a = session({ sessionId: 'sess-000000000000dd1', sandboxRef: 'jtt-lab-00000000dd11' });
       const b = session({ sessionId: 'sess-000000000000dd2', sandboxRef: 'jtt-lab-00000000dd11' });
