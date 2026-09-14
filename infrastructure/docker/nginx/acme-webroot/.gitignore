@@ -1,0 +1,7 @@
+# ACME HTTP-01 challenge tokens (BETA-P0-017). Written here by an ACME client
+# during issuance or renewal, served read-only on port 80 under
+# /.well-known/acme-challenge/, and never committed. The directory itself is
+# tracked so docker-compose.production.yml's bind mount has something to attach to.
+*
+!.gitignore
+!README.md

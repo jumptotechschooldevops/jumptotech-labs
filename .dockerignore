@@ -1,0 +1,11 @@
+# Paths that never enter a Docker build context (BETA-P0-017).
+#
+# Every image builds with the repository root as its context. No Dockerfile
+# copies these today; excluding them means none can by accident, and the files
+# are not even sent to the builder.
+#
+# The web tier's TLS certificate, private key, and the staged and previous
+# copies scripts/tls-install.sh writes beside them.
+infrastructure/docker/nginx/tls/
+# ACME challenge tokens: not secret, but host state, not source.
+infrastructure/docker/nginx/acme-webroot/

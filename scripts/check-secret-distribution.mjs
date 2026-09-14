@@ -45,9 +45,14 @@ const sentinels = Object.fromEntries(
  * Non-secret variables the compose files require with `${NAME:?}` and no
  * default. Without them `docker compose config` refuses to resolve at all.
  * `RUNTIME_OWNER_ID` (BETA-P0-008) is deliberately never defaulted in compose.
- * These are not secrets and are not checked for distribution here.
+ * `PUBLIC_ORIGIN` (BETA-P0-017) is required by the production overlay, for the
+ * api and the TLS edge. These are not secrets and are not checked for
+ * distribution here.
  */
-const requiredSettings = { RUNTIME_OWNER_ID: 'secret-distribution-check' };
+const requiredSettings = {
+  RUNTIME_OWNER_ID: 'secret-distribution-check',
+  PUBLIC_ORIGIN: 'https://labs.secret-distribution.invalid',
+};
 
 const workDir = mkdtempSync(path.join(tmpdir(), 'jtt-secret-distribution-'));
 const envFile = path.join(workDir, 'sentinel.env');

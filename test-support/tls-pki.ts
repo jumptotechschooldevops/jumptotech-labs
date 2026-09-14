@@ -71,22 +71,31 @@ function pem(der: Buffer): string {
   return `-----BEGIN CERTIFICATE-----\n${lines.join('\n')}\n-----END CERTIFICATE-----\n`;
 }
 
+/** When a certificate is valid. Defaults: from an hour ago until a day from now. */
+export interface Validity {
+  notBefore?: Date;
+  notAfter?: Date;
+}
+
 function certificate(options: {
   subject: string;
   issuer: string;
   publicKey: KeyObject;
   signingKey: KeyObject;
   extensions: Buffer[];
+  validity?: Validity;
 }): string {
   const serial = randomBytes(8);
   serial[0]! &= 0x7f;
   const now = Date.now();
+  const notBefore = options.validity?.notBefore ?? new Date(now - 3_600_000);
+  const notAfter = options.validity?.notAfter ?? new Date(now + 86_400_000);
   const tbs = sequence(
     tlv(0xa0, integer(Buffer.from([2]))),
     integer(serial),
     ECDSA_WITH_SHA256,
     commonName(options.issuer),
-    sequence(utcTime(new Date(now - 3_600_000)), utcTime(new Date(now + 86_400_000))),
+    sequence(utcTime(notBefore), utcTime(notAfter)),
     commonName(options.subject),
     options.publicKey.export({ type: 'spki', format: 'der' }),
     tlv(0xa3, sequence(...options.extensions)),
@@ -102,48 +111,99 @@ export interface TestIdentity {
   key: string;
 }
 
-export interface TestCa {
-  /** The CA's own certificate — what a client trusts. */
-  cert: string;
-  /** A server certificate for these names, signed by this CA. */
-  issue(names: { dns?: string[]; ips?: string[] }): TestIdentity;
+/** A server certificate request. Every field but the names is for negative tests. */
+export interface IssueOptions extends Validity {
+  dns?: string[];
+  ips?: string[];
+  /** EC P-256 by default; `rsa` uses `rsaBits` (default 2048). */
+  keyType?: 'ec' | 'rsa';
+  rsaBits?: number;
+  /** Mark it a CA certificate (basicConstraints CA:TRUE): a misissued "server" certificate. */
+  isCa?: boolean;
 }
 
-export function createTestCa(name = 'jumptotech test CA'): TestCa {
+export interface TestCa {
+  /** The CA's own certificate — what a client trusts, or, for an intermediate, what a chain carries. */
+  cert: string;
+  /** A server certificate for these names, signed by this CA. */
+  issue(options: IssueOptions): TestIdentity;
+  /** A subordinate CA signed by this one (BETA-P0-017: fullchain ordering). */
+  intermediate(name: string, validity?: Validity): TestCa;
+}
+
+const CA_EXTENSIONS = [
+  extension('2.5.29.19', true, sequence(boolTrue())),
+  // keyCertSign | cRLSign
+  extension('2.5.29.15', true, tlv(0x03, Buffer.from([0x01, 0x06]))),
+];
+
+function serverKeys(options: IssueOptions) {
+  return options.keyType === 'rsa'
+    ? generateKeyPairSync('rsa', { modulusLength: options.rsaBits ?? 2048 })
+    : generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+}
+
+function serverExtensions({ dns = [], ips = [], isCa = false }: IssueOptions): Buffer[] {
+  return [
+    extension(
+      '2.5.29.17',
+      false,
+      sequence(...dns.map((d) => tlv(0x82, Buffer.from(d))), ...ips.map((ip) => tlv(0x87, ipBytes(ip)))),
+    ),
+    ...(isCa ? [extension('2.5.29.19', true, sequence(boolTrue()))] : []),
+  ];
+}
+
+function exportKey(key: KeyObject): string {
+  return key.export({ type: 'pkcs8', format: 'pem' }).toString();
+}
+
+function buildCa(name: string, parent: { name: string; key: KeyObject } | null, validity: Validity): TestCa {
   const ca = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const caCert = certificate({
     subject: name,
-    issuer: name,
+    issuer: parent?.name ?? name,
     publicKey: ca.publicKey,
-    signingKey: ca.privateKey,
-    extensions: [
-      extension('2.5.29.19', true, sequence(boolTrue())),
-      // keyCertSign | cRLSign
-      extension('2.5.29.15', true, tlv(0x03, Buffer.from([0x01, 0x06]))),
-    ],
+    signingKey: parent?.key ?? ca.privateKey,
+    extensions: CA_EXTENSIONS,
+    validity,
   });
 
   return {
     cert: caCert,
-    issue({ dns = [], ips = [] }) {
-      const leaf = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    issue(options) {
+      const leaf = serverKeys(options);
       const cert = certificate({
-        subject: dns[0] ?? ips[0] ?? 'server',
+        subject: options.dns?.[0] ?? options.ips?.[0] ?? 'server',
         issuer: name,
         publicKey: leaf.publicKey,
         signingKey: ca.privateKey,
-        extensions: [
-          extension(
-            '2.5.29.17',
-            false,
-            sequence(
-              ...dns.map((d) => tlv(0x82, Buffer.from(d))),
-              ...ips.map((ip) => tlv(0x87, ipBytes(ip))),
-            ),
-          ),
-        ],
+        extensions: serverExtensions(options),
+        validity: options,
       });
-      return { cert, key: leaf.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() };
+      return { cert, key: exportKey(leaf.privateKey) };
+    },
+    intermediate(childName, childValidity = {}) {
+      return buildCa(childName, { name, key: ca.privateKey }, childValidity);
     },
   };
+}
+
+export function createTestCa(name = 'jumptotech test CA', validity: Validity = {}): TestCa {
+  return buildCa(name, null, validity);
+}
+
+/** A server certificate that signed itself: no CA, no chain. */
+export function createSelfSignedServer(options: IssueOptions): TestIdentity {
+  const leaf = serverKeys(options);
+  const subject = options.dns?.[0] ?? options.ips?.[0] ?? 'server';
+  const cert = certificate({
+    subject,
+    issuer: subject,
+    publicKey: leaf.publicKey,
+    signingKey: leaf.privateKey,
+    extensions: serverExtensions(options),
+    validity: options,
+  });
+  return { cert, key: exportKey(leaf.privateKey) };
 }

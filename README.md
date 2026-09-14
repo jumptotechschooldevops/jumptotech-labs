@@ -4254,7 +4254,17 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    cluster; treat them as credentials anyway.
 11. ~~**The web container runs the Vite dev server.**~~ It serves a production
    Vite build from nginx — see `infrastructure/docker/web.Dockerfile`.
-12. **TLS is not configured.** Still true. Everything is plain HTTP/WS on
+12. ~~**TLS is not configured.**~~ **Fixed for the public edge in BETA-P0-012 and
+    BETA-P0-017.** `docker-compose.production.yml` serves students over HTTPS on
+    443 from nginx and redirects 80. The web container refuses to start on a
+    missing, expired, mismatched or wrong-host certificate.
+    `scripts/tls-install.sh` renews and hot-reloads, and `npm run tls:check`
+    reports expiry. See
+    [docs/runbooks/production-tls.md](docs/runbooks/production-tls.md). **Still
+    true:** which CA issues the certificate is undecided. The development stack
+    is plain HTTP/WS on loopback. The api ⇄ terminal and broker calls stay
+    plaintext on the compose bridge (docs/runtime-architecture.md §8.7, §11.7).
+    The original text follows for context: Everything is plain HTTP/WS on
     localhost, which also means the terminal token and the internal service
     secret travel in clear text on the local network. Termination is expected
     from a proxy in front (Cloudflare Tunnel, an ALB); the platform ships none.
