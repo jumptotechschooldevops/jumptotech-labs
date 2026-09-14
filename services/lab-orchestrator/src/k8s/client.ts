@@ -12,6 +12,7 @@ import type { NodeInfo } from '../types.js';
 import {
   KubernetesUnreachableError,
   ManifestApplyError,
+  type ApiServerEndpoint,
   type ClusterEndpoint,
   type ClusterVersion,
   type AuthorizationResult,
@@ -216,6 +217,27 @@ export class KubernetesClient implements KubernetesPort {
 
   clusterEndpoint(): ClusterEndpoint {
     return this.#endpoint;
+  }
+
+  async listApiServerEndpoints(): Promise<ApiServerEndpoint[]> {
+    try {
+      const slices = await this.#discovery.listNamespacedEndpointSlice({
+        namespace: 'default',
+        labelSelector: 'kubernetes.io/service-name=kubernetes',
+      });
+      const endpoints: ApiServerEndpoint[] = [];
+      for (const slice of slices.items) {
+        const port = slice.ports?.find((p) => p.name === 'https')?.port ?? slice.ports?.[0]?.port;
+        if (typeof port !== 'number') continue;
+        for (const endpoint of slice.endpoints ?? []) {
+          if (endpoint.conditions?.ready === false) continue;
+          for (const ip of endpoint.addresses ?? []) endpoints.push({ ip, port });
+        }
+      }
+      return endpoints;
+    } catch (error) {
+      asUnreachable('reading the API server endpoints (default/kubernetes)', error);
+    }
   }
 
   #buildHandlers(): Map<string, ResourceHandlers> {
@@ -443,6 +465,7 @@ export class KubernetesClient implements KubernetesPort {
         name: ns.metadata?.name ?? namespace,
         phase: ns.status?.phase ?? 'Unknown',
         labels: ns.metadata?.labels ?? {},
+        ...(ns.metadata?.uid ? { uid: ns.metadata.uid } : {}),
       };
     } catch (error) {
       if (statusCodeOf(error) === 404) return null;

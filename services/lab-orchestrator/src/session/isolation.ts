@@ -9,8 +9,9 @@
  *   ResourceQuota   — a hard ceiling on what the session may consume
  *   LimitRange      — per-container defaults, so an unqualified `kubectl run`
  *                     still satisfies the quota, plus min/max bounds
- *   NetworkPolicy   — deny-by-default, with intra-namespace traffic and DNS
- *                     explicitly re-allowed
+ *   NetworkPolicy   — deny-by-default, with intra-namespace traffic, DNS and
+ *                     the API server explicitly re-allowed
+ *                     (`network-policy.ts`)
  *
  * Cost rule: this is the *whole* per-session footprint. No cluster, no node,
  * no load balancer, no public IP, and no database is created for a lab.
@@ -25,9 +26,12 @@
  * objects, which makes the entire guardrail set assertable in a unit test
  * without a cluster.
  */
-import type { KubernetesManifestObject } from '../k8s/port.js';
+import type { ApiServerEndpoint, KubernetesManifestObject } from '../k8s/port.js';
 import { componentLabels } from '../k8s/labels.js';
+import { allNetworkPolicyNames, networkPolicyManifests } from './network-policy.js';
 import type { SessionPolicy } from './types.js';
+
+export * from './network-policy.js';
 
 /** ServiceAccount the student's shell authenticates as. */
 export const STUDENT_SERVICE_ACCOUNT = 'student';
@@ -52,8 +56,13 @@ export const RBAC_PRACTICE_ROLE_BINDING = 'jumptotech-rbac-practice';
  * alternative was to make sudo opt-in, which would mean editing every Linux
  * lab to ask for the privilege it has always had. Labs that say nothing keep
  * exactly the environment they have today.
+ *
+ * `external_egress` is a Kubernetes lab asking for the public internet from its
+ * Pods. It is granted only when the platform also permits it
+ * (`ALLOW_EXTERNAL_EGRESS=true`); otherwise the lab refuses to start rather than
+ * starting without the access it declared. No shipped lab declares it.
  */
-export const LAB_CAPABILITIES = ['rbac_authoring', 'unprivileged_shell'] as const;
+export const LAB_CAPABILITIES = ['rbac_authoring', 'unprivileged_shell', 'external_egress'] as const;
 export type LabCapability = (typeof LAB_CAPABILITIES)[number];
 
 export function labHasCapability(
@@ -66,13 +75,6 @@ export function labHasCapability(
 export const DEFAULT_RESOURCE_QUOTA_NAME = 'jumptotech-session-quota';
 export const DEFAULT_LIMIT_RANGE_NAME = 'jumptotech-session-limits';
 export const DEFAULT_NETWORK_POLICY_NAME = 'jumptotech-session-isolation';
-
-/** Suffixes appended to the configured NetworkPolicy base name. */
-export const NETWORK_POLICY_SUFFIXES = ['default-deny', 'allow-same-namespace', 'allow-dns'] as const;
-
-export function networkPolicyNames(base: string): string[] {
-  return NETWORK_POLICY_SUFFIXES.map((suffix) => `${base}-${suffix}`);
-}
 
 /**
  * Platform-owned objects inside a session namespace.
@@ -91,7 +93,7 @@ export function protectedResources(
     'serviceaccounts/default',
     `roles/${STUDENT_ROLE}`,
     `rolebindings/${STUDENT_ROLE_BINDING}`,
-    ...networkPolicyNames(policy.network.name).map((name) => `networkpolicies/${name}`),
+    ...allNetworkPolicyNames(policy.network.name).map((name) => `networkpolicies/${name}`),
     'configmaps/kube-root-ca.crt',
     'services/kubernetes',
   ];
@@ -134,100 +136,6 @@ export function limitRangeManifest(policy: SessionPolicy): KubernetesManifestObj
     metadata: { name: policy.limitRange.name, labels: componentLabels('limits') },
     spec: { limits: [limit] },
   };
-}
-
-/**
- * Deny-by-default, then re-allow exactly what a lab genuinely needs: traffic
- * between the session's own Pods, and DNS.
- *
- * Three policies rather than one, because NetworkPolicies are additive and
- * splitting them keeps each one readable — and lets a lab-facing test assert
- * "the deny-all exists" independently of the allow rules.
- *
- * What this does NOT do: image pulls are performed by the kubelet, not by the
- * Pod, so they are unaffected. Enforcement depends on the CNI — see
- * README → Known limitations.
- */
-export function networkPolicyManifests(policy: SessionPolicy): KubernetesManifestObject[] {
-  const [denyName, sameNsName, dnsName] = networkPolicyNames(policy.network.name) as [
-    string,
-    string,
-    string,
-  ];
-  const labels = componentLabels('network');
-
-  const policies: KubernetesManifestObject[] = [
-    {
-      apiVersion: 'networking.k8s.io/v1',
-      kind: 'NetworkPolicy',
-      metadata: { name: denyName, labels },
-      spec: { podSelector: {}, policyTypes: ['Ingress', 'Egress'] },
-    },
-    {
-      apiVersion: 'networking.k8s.io/v1',
-      kind: 'NetworkPolicy',
-      metadata: { name: sameNsName, labels },
-      spec: {
-        podSelector: {},
-        policyTypes: ['Ingress', 'Egress'],
-        ingress: [{ from: [{ podSelector: {} }] }],
-        egress: [{ to: [{ podSelector: {} }] }],
-      },
-    },
-    {
-      apiVersion: 'networking.k8s.io/v1',
-      kind: 'NetworkPolicy',
-      metadata: { name: dnsName, labels },
-      spec: {
-        podSelector: {},
-        policyTypes: ['Egress'],
-        egress: [
-          {
-            to: [
-              {
-                namespaceSelector: {
-                  matchLabels: { 'kubernetes.io/metadata.name': policy.network.dnsNamespace },
-                },
-              },
-            ],
-            ports: [
-              { protocol: 'UDP', port: 53 },
-              { protocol: 'TCP', port: 53 },
-            ],
-          },
-        ],
-      },
-    },
-  ];
-
-  if (policy.network.allowExternalEgress) {
-    // Everything outside the cluster's own Pod/Service ranges. This keeps
-    // `curl https://…` working from a lab Pod while still cutting pod-to-pod
-    // traffic to other students' namespaces.
-    policies.push({
-      apiVersion: 'networking.k8s.io/v1',
-      kind: 'NetworkPolicy',
-      metadata: { name: `${policy.network.name}-allow-external-egress`, labels },
-      spec: {
-        podSelector: {},
-        policyTypes: ['Egress'],
-        egress: [
-          {
-            to: [
-              {
-                ipBlock: {
-                  cidr: '0.0.0.0/0',
-                  except: [policy.network.podCidr, policy.network.serviceCidr],
-                },
-              },
-            ],
-          },
-        ],
-      },
-    });
-  }
-
-  return policies;
 }
 
 /**
@@ -354,15 +262,22 @@ export function rbacPracticeOverlayManifests(policy: SessionPolicy): KubernetesM
  *
  * LimitRange before ResourceQuota, so that the first Pod created after the
  * quota lands already has defaulted requests to satisfy it.
+ *
+ * `apiServerEndpoints` is resolved from the cluster by the provider; without it
+ * no API server allowance is generated and in-cluster API clients depend on
+ * the CNI leaving node-local traffic ungoverned.
  */
 export function sessionGuardrailManifests(
   policy: SessionPolicy,
   capabilities: readonly LabCapability[] = [],
+  options: { apiServerEndpoints?: readonly ApiServerEndpoint[] } = {},
 ): KubernetesManifestObject[] {
   return [
     limitRangeManifest(policy),
     resourceQuotaManifest(policy),
-    ...(policy.network.enabled ? networkPolicyManifests(policy) : []),
+    ...(policy.network.enabled
+      ? networkPolicyManifests(policy, { capabilities, ...options })
+      : []),
     ...studentRbacManifests(policy),
     ...(capabilities.includes('rbac_authoring') ? rbacPracticeOverlayManifests(policy) : []),
   ];

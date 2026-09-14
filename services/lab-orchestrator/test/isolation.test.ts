@@ -105,18 +105,15 @@ describe('NetworkPolicy (story test 13)', () => {
     expect(dnsPorts?.map((p) => p.port)).toEqual([53, 53]);
   });
 
-  it('does not cut a student off from the internet by default', () => {
-    // Egress to everything except the cluster's own Pod/Service CIDRs, so
-    // `curl https://…` works from a lab Pod while pod-to-pod traffic to other
-    // students stays blocked.
+  it('grants no external egress by default (BETA-P0-015; details in network-policy.test.ts)', () => {
+    // This used to allow 0.0.0.0/0 except the Pod and Service CIDRs, for every
+    // lab. That left all other private space reachable — measured on kind: the
+    // development api container on the kind Docker network.
     const external = networkPolicyManifests(POLICY).find((p) =>
       p.metadata.name.endsWith('allow-external-egress'),
     );
-    const rule = (external?.spec as { egress: Array<{ to: Array<{ ipBlock: { cidr: string; except: string[] } }> }> })
-      .egress[0]?.to[0]?.ipBlock;
 
-    expect(rule?.cidr).toBe('0.0.0.0/0');
-    expect(rule?.except).toEqual([POLICY.network.podCidr, POLICY.network.serviceCidr]);
+    expect(external).toBeUndefined();
   });
 
   it('can be switched off entirely for a cluster whose CNI cannot enforce it', () => {

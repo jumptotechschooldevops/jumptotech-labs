@@ -23,6 +23,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:integration": "RUN_INTEGRATION_TESTS=1 vitest run test/integration.test.ts --root services/lab-orchestrator",
+    "test:integration:network-policy": "RUN_INTEGRATION_TESTS=1 vitest run test/network-policy-enforcement-integration.test.ts --root services/lab-orchestrator --testTimeout=900000 --hookTimeout=900000",
+    "verify:network-policy": "tsx scripts/verify-network-policy.ts",
     "test:integration:docker": "RUN_DOCKER_INTEGRATION_TESTS=1 vitest run test/docker-integration.test.ts --root services/lab-orchestrator --testTimeout=900000 --hookTimeout=900000",
     "db:migrate": "npm run migrate --workspace @jumptotech/progress",
     "db:status": "npm run migrate --workspace @jumptotech/progress -- --status",

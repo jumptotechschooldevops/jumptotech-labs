@@ -458,6 +458,10 @@ compose stack is still single-host with declared plaintext.
   routing decision before that track can run split.
 - **DECISION REQUIRED: the Kubernetes track across hosts.** The api and the
   terminal reach the cluster API server on the local `kind` network.
+- **DECISION REQUIRED: the production Kubernetes substrate and CNI**, and with
+  them node-local traffic control and Pod Security level. Production admits no
+  Kubernetes-track student until the NetworkPolicy enforcement probe has passed on
+  that cluster. See docs/kubernetes-network-security.md §9 and §11.
 - **Same-tier assumption.** The api ⇄ terminal `/internal` calls stay plaintext.
   Both services must remain on one application host or private bridge.
 

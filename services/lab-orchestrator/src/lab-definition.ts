@@ -758,6 +758,15 @@ function checkProviderCapabilities(def: LabDefinition, issues: string[]): void {
     }
   }
 
+  // External egress is a NetworkPolicy allowance, so only the namespace
+  // provider can grant it. A container provider accepting the declaration and
+  // ignoring it would be worse than refusing it here.
+  if (def.environment.capabilities.includes('external_egress') && provider !== 'kubernetes') {
+    issues.push(
+      `environment.capabilities 'external_egress' is only available to the 'kubernetes' provider, not '${provider}'`,
+    );
+  }
+
   // A peer is a second container on the session's own segment. Same two
   // conditions as the capture capability, for the same reason: it needs a
   // segment to sit on, and that segment must belong to one session.

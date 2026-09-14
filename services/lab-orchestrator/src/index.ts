@@ -6,6 +6,11 @@ export * from './lab-registry.js';
 export * from './track-definition.js';
 export * from './k8s/port.js';
 export * from './k8s/labels.js';
+// BETA-P0-015 — the session network contract and its enforcement proof.
+export * from './k8s/cidr.js';
+export * from './k8s/network-attestation.js';
+export * from './k8s/network-enforcement-probe.js';
+export { spawnKubectl } from './k8s/kubectl-runner.js';
 /**
  * Terraform configuration inspection.
  *

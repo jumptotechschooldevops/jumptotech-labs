@@ -18,7 +18,7 @@
 import { KubernetesClient } from '../k8s/client.js';
 import type { KubernetesPort } from '../k8s/port.js';
 import type { LabProvider } from '../types.js';
-import { KindLabProvider, type RequirementWaiter } from './kind-provider.js';
+import { KindLabProvider, type KindProviderOptions, type RequirementWaiter } from './kind-provider.js';
 
 /** Kubernetes substrates this build can drive. */
 export const SUPPORTED_PROVIDERS = ['kind'] as const;
@@ -37,6 +37,8 @@ export interface ProviderFactoryOptions {
   k8s?: KubernetesPort;
   /** Confirms a lab's declared initial state actually materialised. */
   waitForRequirements?: RequirementWaiter;
+  /** BETA-P0-015 — admit no student without a NetworkPolicy enforcement proof. */
+  networkPolicyAttestation?: KindProviderOptions['networkPolicyAttestation'];
 }
 
 export function isSupportedProvider(value: string): value is SupportedProvider {
@@ -64,6 +66,9 @@ export function createLabProvider(options: ProviderFactoryOptions): LabProvider 
         runtimeOwner: options.runtimeOwner,
         ...(options.kubeconfigPath ? { kubeconfigPath: options.kubeconfigPath } : {}),
         ...(options.waitForRequirements ? { waitForRequirements: options.waitForRequirements } : {}),
+        ...(options.networkPolicyAttestation
+          ? { networkPolicyAttestation: options.networkPolicyAttestation }
+          : {}),
       });
     default: {
       const exhaustive: never = options.provider;

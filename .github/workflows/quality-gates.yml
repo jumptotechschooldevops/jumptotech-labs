@@ -278,7 +278,7 @@ jobs:
   kind-integration:
     needs: gates
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 110
 
     env:
       RUNTIME_OWNER_ID: ci-${{ github.run_id }}-kind
@@ -328,6 +328,28 @@ jobs:
           npx vitest run test/labs-integration.test.ts \
             --root services/lab-orchestrator
 
+      # BETA-P0-015. The steps above prove the NetworkPolicy objects exist; a
+      # cluster accepts those whether or not anything enforces them. This proves
+      # enforcement by connection attempts, each denial paired with a negative
+      # control (the same connection, without the policy, succeeding), through
+      # the probe, through real sessions, and through the admission gate.
+      # docs/kubernetes-network-security.md §10.
+      - name: NetworkPolicy enforcement, with negative controls
+        env:
+          RUN_INTEGRATION_TESTS: '1'
+          KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
+        run: |
+          npx vitest run test/network-policy-enforcement-integration.test.ts \
+            --root services/lab-orchestrator \
+            --testTimeout=900000 --hookTimeout=900000
+
+      # The operator command production acceptance runs, run the same way here.
+      # Exit 0 only on PASS; FAIL and INCONCLUSIVE fail the job.
+      - name: Operator enforcement probe
+        env:
+          KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
+        run: npm run verify:network-policy -- --write-attestation --run-id "ci${{ github.run_id }}"
+
       - name: Diagnostics
         if: failure()
         env:
@@ -353,7 +375,7 @@ jobs:
         if: always()
         run: |
           KUBECONFIG=infrastructure/kind/generated/kubeconfig-host.yaml \
-            kubectl get namespaces -o name | grep -E 'lab-' || echo "no lab namespaces left"
+            kubectl get namespaces -o name | grep -E 'lab-|jtt-netprobe-' || echo "no lab namespaces left"
 
       - name: Delete the cluster
         if: always()

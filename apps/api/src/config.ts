@@ -15,6 +15,8 @@ import {
   DEFAULT_ANSIBLE_SANDBOX_IMAGE,
   DEFAULT_CICD_SANDBOX_IMAGE,
   DEFAULT_TERRAFORM_SANDBOX_IMAGE,
+  assertValidNetworkPolicyConfig,
+  type NetworkPolicyConfig,
   type DockerSandboxPolicy,
   type SessionLifetimeConfig,
   type SessionPolicy,
@@ -379,6 +381,79 @@ function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): b
   return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
 
+/** `k=v,k2=v2` → labels. Refuses anything else rather than guessing. */
+function labelsFromEnv(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: Record<string, string>,
+): Record<string, string> {
+  const raw = env[name]?.trim();
+  if (!raw) return { ...fallback };
+  const labels: Record<string, string> = {};
+  for (const pair of raw.split(',')) {
+    const match = /^\s*([A-Za-z0-9./_-]+)=([A-Za-z0-9._-]*)\s*$/.exec(pair);
+    if (!match) throw new Error(`${name}: '${pair}' is not a label=value pair`);
+    labels[match[1]!] = match[2]!;
+  }
+  return labels;
+}
+
+function listFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: string[]): string[] {
+  const raw = env[name]?.trim();
+  if (!raw) return [...fallback];
+  return raw
+    .split(/[\s,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+/**
+ * BETA-P0-015 — the session network contract.
+ *
+ * Validated here, so a mistyped CIDR or an empty DNS selector stops the API at
+ * startup instead of quietly widening what a student's Pods can reach.
+ *
+ * Under NODE_ENV=production two things are not negotiable:
+ *   - NetworkPolicy is created (`NETWORK_POLICY_ENABLED=false` is refused), and
+ *   - no student is admitted until the cluster carries a current PASS from the
+ *     behavioural enforcement probe (`NETWORK_POLICY_ATTESTATION_REQUIRED`
+ *     defaults on and `false` is refused). A cluster accepting NetworkPolicy
+ *     objects is not evidence that anything enforces them.
+ */
+export function loadNetworkPolicyConfig(env: NodeJS.ProcessEnv = process.env): NetworkPolicyConfig {
+  const base = DEFAULT_SESSION_POLICY.network;
+  const production = isProductionEnv(env);
+  const network: NetworkPolicyConfig = {
+    name: strFromEnv(env, 'SESSION_NETWORKPOLICY_NAME', base.name),
+    enabled: boolFromEnv(env, 'NETWORK_POLICY_ENABLED', base.enabled),
+    dnsNamespace: strFromEnv(env, 'CLUSTER_DNS_NAMESPACE', base.dnsNamespace),
+    dnsPodSelector: labelsFromEnv(env, 'CLUSTER_DNS_POD_SELECTOR', base.dnsPodSelector),
+    podCidr: strFromEnv(env, 'CLUSTER_POD_CIDR', base.podCidr),
+    serviceCidr: strFromEnv(env, 'CLUSTER_SERVICE_CIDR', base.serviceCidr),
+    allowExternalEgress: boolFromEnv(env, 'ALLOW_EXTERNAL_EGRESS', base.allowExternalEgress),
+    additionalDeniedEgressCidrs: listFromEnv(env, 'CLUSTER_EGRESS_DENY_CIDRS', base.additionalDeniedEgressCidrs),
+    attestation: {
+      required: boolFromEnv(env, 'NETWORK_POLICY_ATTESTATION_REQUIRED', production || base.attestation.required),
+      maxAgeSeconds: intFromEnv(env, 'NETWORK_POLICY_ATTESTATION_MAX_AGE_SECONDS', base.attestation.maxAgeSeconds),
+    },
+  };
+  assertValidNetworkPolicyConfig(network);
+
+  if (production && !network.enabled) {
+    throw new Error(
+      'NODE_ENV=production refuses NETWORK_POLICY_ENABLED=false: every session namespace must be deny-by-default. ' +
+        'If this cluster cannot enforce NetworkPolicy it cannot host students — see docs/kubernetes-network-security.md.',
+    );
+  }
+  if (production && !network.attestation.required) {
+    throw new Error(
+      'NODE_ENV=production refuses NETWORK_POLICY_ATTESTATION_REQUIRED=false: students are admitted only after the ' +
+        'enforcement probe has passed on this cluster (npm run verify:network-policy -- --write-attestation).',
+    );
+  }
+  return network;
+}
+
 /** Build the per-session guardrail policy from the environment. */
 export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): SessionPolicy {
   const base = DEFAULT_SESSION_POLICY;
@@ -424,18 +499,7 @@ export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): Session
         memory: strFromEnv(env, 'LIMITS_MAX_MEMORY', base.limitRange.max?.memory ?? '1Gi'),
       },
     },
-    network: {
-      name: strFromEnv(env, 'SESSION_NETWORKPOLICY_NAME', base.network.name),
-      enabled: boolFromEnv(env, 'NETWORK_POLICY_ENABLED', base.network.enabled),
-      dnsNamespace: strFromEnv(env, 'CLUSTER_DNS_NAMESPACE', base.network.dnsNamespace),
-      podCidr: strFromEnv(env, 'CLUSTER_POD_CIDR', base.network.podCidr),
-      serviceCidr: strFromEnv(env, 'CLUSTER_SERVICE_CIDR', base.network.serviceCidr),
-      allowExternalEgress: boolFromEnv(
-        env,
-        'ALLOW_EXTERNAL_EGRESS',
-        base.network.allowExternalEgress,
-      ),
-    },
+    network: loadNetworkPolicyConfig(env),
     serviceAccountName: strFromEnv(env, 'SESSION_SERVICE_ACCOUNT', base.serviceAccountName),
     credentialTtlSeconds: intFromEnv(
       env,

@@ -125,6 +125,11 @@ export function buildSandboxComposition(options: BuildSandboxCompositionOptions)
     ...(options.config.kubeconfigPath ? { kubeconfigPath: options.config.kubeconfigPath } : {}),
     k8s,
     waitForRequirements: waitFor,
+    // BETA-P0-015: forced on in production by `loadNetworkPolicyConfig`.
+    networkPolicyAttestation: {
+      required: options.config.policy.network.attestation.required,
+      network: options.config.policy.network,
+    },
   });
 
   /*

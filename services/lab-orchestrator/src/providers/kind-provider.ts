@@ -43,6 +43,11 @@ import {
 } from '../k8s/port.js';
 import { loadSetupManifests } from '../session/manifests.js';
 import { protectedResources, sessionGuardrailManifests } from '../session/isolation.js';
+import type { NetworkPolicyConfig } from '../session/types.js';
+import {
+  NETWORK_ATTESTATION_REMEDIATION,
+  readNetworkEnforcementAttestation,
+} from '../k8s/network-attestation.js';
 import {
   LAB_LABEL,
   MANAGED_SELECTOR,
@@ -155,6 +160,14 @@ export interface KindProviderOptions {
    * always passes the resolved `RUNTIME_OWNER_ID`; the default is for tests.
    */
   runtimeOwner?: string;
+  /**
+   * BETA-P0-015. When `required`, no student is admitted until the cluster
+   * carries a current PASS from the NetworkPolicy enforcement probe for this
+   * contract (`k8s/network-attestation.ts`): the catalog reports the track
+   * unavailable, and `create()` refuses before any namespace exists. The API
+   * forces it on under NODE_ENV=production.
+   */
+  networkPolicyAttestation?: { required: boolean; network: NetworkPolicyConfig };
   /** Injectable for tests. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -176,9 +189,13 @@ export class KindLabProvider implements LabProvider {
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #exec: ProviderExecRunner;
   readonly #runtimeOwner: string;
+  readonly #attestation: { required: boolean; network: NetworkPolicyConfig } | undefined;
 
   constructor(options: KindProviderOptions) {
     this.#runtimeOwner = options.runtimeOwner ?? DEFAULT_RUNTIME_OWNER;
+    this.#attestation = options.networkPolicyAttestation?.required
+      ? options.networkPolicyAttestation
+      : undefined;
     this.#k8s = options.k8s;
     this.#clusterName = options.clusterName;
     this.#kubeconfigPath = options.kubeconfigPath;
@@ -224,17 +241,41 @@ export class KindLabProvider implements LabProvider {
    * The kind cluster is provisioned on the host, so "available" here means the
    * API server answers. A cluster that is down makes the whole Kubernetes track
    * report unavailable in the catalog rather than failing at Start Lab.
+   *
+   * Where an enforcement attestation is required, a reachable cluster without
+   * one is unavailable too: it would accept every NetworkPolicy and might
+   * enforce none of them.
    */
   async availability(): Promise<ProviderAvailability> {
     try {
       await this.#k8s.ping();
-      return AVAILABLE;
     } catch (error) {
       return unavailable(
         `the Kubernetes cluster is not reachable (${describe(error)})`,
         'Start the substrate with: npm run cluster:up',
       );
     }
+    if (this.#attestation) {
+      try {
+        const decision = await readNetworkEnforcementAttestation(
+          this.#k8s,
+          this.#attestation.network,
+          this.#now(),
+        );
+        if (!decision.ok) {
+          return unavailable(
+            `network isolation is not proven on this cluster: ${decision.reason}`,
+            NETWORK_ATTESTATION_REMEDIATION,
+          );
+        }
+      } catch (error) {
+        return unavailable(
+          `the NetworkPolicy enforcement attestation could not be read (${describe(error)})`,
+          NETWORK_ATTESTATION_REMEDIATION,
+        );
+      }
+    }
+    return AVAILABLE;
   }
 
   // ---------------------------------------------------------------- create
@@ -242,6 +283,38 @@ export class KindLabProvider implements LabProvider {
   async create(context: LabSessionContext): Promise<CreateResult> {
     const steps: ProvisionStep[] = [];
     assertValidLabNamespace(context.namespace);
+
+    // Step 0 — BETA-P0-015. Checked against the policy this session will
+    // actually receive, and before a namespace exists, so a cluster that has
+    // not proven enforcement never holds a student's workload.
+    if (this.#attestation) {
+      const gate = await this.#runStep(
+        steps,
+        'network-isolation-verified',
+        'Network isolation verified',
+        async () => {
+          const decision = await readNetworkEnforcementAttestation(
+            this.#k8s,
+            context.policy.network,
+            this.#now(),
+          );
+          if (!decision.ok) {
+            throw new Error(`network isolation is not proven on this cluster: ${decision.reason}`);
+          }
+          return `NetworkPolicy enforcement attested at ${decision.attestation.verifiedAt}`;
+        },
+      );
+      if (!gate.ok) {
+        return {
+          ok: false,
+          environment: this.#environment(context, 'error', { message: gate.detail }),
+          steps,
+          error: this.#toLabError(gate.error, 'PROVIDER_UNAVAILABLE', {
+            remediation: NETWORK_ATTESTATION_REMEDIATION,
+          }),
+        };
+      }
+    }
 
     // Step 1 — the private sandbox exists and is fenced in.
     const createStep = await this.#runStep(
@@ -781,9 +854,16 @@ export class KindLabProvider implements LabProvider {
    * cluster-scoped residue to garbage-collect separately).
    */
   async #applyGuardrails(context: LabSessionContext): Promise<void> {
+    // Resolved each time rather than configured: the API server's address is a
+    // property of the cluster, and a reset re-applies it if it moved.
+    const apiServerEndpoints = context.policy.network.enabled
+      ? await this.#k8s.listApiServerEndpoints()
+      : [];
     await this.#k8s.applyObjects(
       context.namespace,
-      sessionGuardrailManifests(context.policy, context.lab.environment.capabilities),
+      sessionGuardrailManifests(context.policy, context.lab.environment.capabilities, {
+        apiServerEndpoints,
+      }),
     );
   }
 
