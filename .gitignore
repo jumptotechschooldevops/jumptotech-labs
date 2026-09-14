@@ -20,3 +20,10 @@ infrastructure/kind/generated/
 .vscode/
 *.log
 npm-debug.log*
+
+# Database backups (BETA-P0-013). They hold every student's data: never commit
+# one, wherever it was written. scripts/db-backup.sh defaults to backups/postgres.
+/backups/
+*.dump
+*.dump.sha256
+*.dump.partial

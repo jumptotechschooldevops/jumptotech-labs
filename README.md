@@ -2087,6 +2087,13 @@ make db-shell       # psql inside the container
 - Data lives in the named volume `jumptotech-labs-postgres-data`.
   `docker compose down` keeps it; `docker compose down -v` and `make clean`
   delete it, and `make clean` says so before it does.
+- **The volume is not a backup.** `make db-backup` writes a verified
+  `pg_dump --format=custom` archive and checksum to `backups/postgres`
+  (git-ignored); `scripts/db-restore.sh` restores one, deliberately, into a new
+  database or in place of an existing one, never dropping anything; and
+  `make db-restore-drill` proves the round trip against disposable servers. See
+  [docs/runbooks/postgres-backup-restore.md](docs/runbooks/postgres-backup-restore.md),
+  which also states the private-beta RPO/RTO targets and what is still to decide.
 - There is **no default password anywhere in source**. `POSTGRES_PASSWORD` is
   required, and compose fails with that message if it is missing.
 

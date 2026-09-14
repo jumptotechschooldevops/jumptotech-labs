@@ -15,7 +15,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell typecheck check reset clean
+.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -135,6 +135,26 @@ db-status: ## Show which migrations are applied and which are pending
 db-shell: ## Open psql against the development database
 	@docker compose exec postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
+# --- backup and restore (BETA-P0-013) ----------------------------------------
+#
+# docs/runbooks/postgres-backup-restore.md. Every client command runs inside the
+# postgres container over its local socket, so no password is read or passed.
+# There is deliberately no `db-restore` target: a restore is typed out, with its
+# mode and its confirmation (scripts/db-restore.sh --help).
+
+db-backup: ## Back up the database: custom-format archive + checksum in BACKUP_DIR (default backups/postgres)
+	@bash scripts/db-backup.sh
+
+db-backup-verify: ## Check a backup's checksum and readability, changing nothing (FILE=path)
+	@test -n "$(FILE)" || { echo "usage: make db-backup-verify FILE=backups/postgres/<archive>.dump" >&2; exit 2; }
+	@bash scripts/db-restore.sh --verify-only "$(FILE)"
+
+test-db-backup: ## Prove the backup/restore scripts' refusals and failure paths (no daemon needed)
+	@bash scripts/test-db-backup-restore.sh
+
+db-restore-drill: ## Back up, destroy, restore and verify against disposable PostgreSQL servers (needs Docker)
+	@bash scripts/db-restore-drill.sh
+
 test-terminal-container: ## Run the terminal integration suite inside a container (real PTY)
 	@echo "==> building the terminal test image (same base + native build as the shipped image)"
 	@docker build -q -f infrastructure/docker/terminal-test.Dockerfile -t jumptotech/terminal-test . >/dev/null
@@ -212,5 +232,6 @@ reset: ## Reset the K8S-001 lab environment
 
 clean: ## Tear down everything (containers + cluster + STUDENT PROGRESS)
 	@echo "This removes the postgres volume: every student's saved progress goes with it."
+	@echo "Back it up first if it matters: make db-backup. backups/ is not removed."
 	@docker compose down -v --remove-orphans
 	@bash scripts/cluster-down.sh
