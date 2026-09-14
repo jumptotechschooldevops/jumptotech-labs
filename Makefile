@@ -157,13 +157,23 @@ test-terminal-container: ## Run the terminal integration suite inside a containe
 		-v "$(PWD)/infrastructure:/app/infrastructure" \
 		jumptotech/terminal-test
 
+# The Linux sandbox image the suite creates its containers from. Built here from
+# the canonical Dockerfile rather than assumed: a fresh runner has no
+# `jumptotech/lab-linux:latest`, and the registry has none to pull. A private
+# tag, because `:latest` is an operator-controlled artifact that tests must not
+# overwrite (docs/runtime-ownership.md → Image-tag policy).
+SANDBOXD_TEST_LINUX_IMAGE := jumptotech/lab-linux:sandboxd-test
+
 test-sandboxd-container: ## Run the sandboxd suite against a real daemon and real PTYs (in a container)
 	@echo "==> building the test image (same base + native build as the shipped images)"
 	@docker build -q -f infrastructure/docker/terminal-test.Dockerfile -t jumptotech/terminal-test . >/dev/null
+	@echo "==> building the Linux sandbox image $(SANDBOXD_TEST_LINUX_IMAGE)"
+	@docker build -q -f infrastructure/docker/sandbox-linux.Dockerfile -t $(SANDBOXD_TEST_LINUX_IMAGE) . >/dev/null
 	@echo "==> running sandboxd against the host daemon (real containers, real shells)"
 	@docker run --rm \
 		-e RUN_INTEGRATION_TESTS=1 \
 		-e JTT_TEST_RUN_ID="$${JTT_TEST_RUN_ID:-sbx$$$$}" \
+		-e LINUX_SANDBOX_IMAGE=$(SANDBOXD_TEST_LINUX_IMAGE) \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v "$(PWD)/services:/app/services" \
 		-v "$(PWD)/apps:/app/apps" \
