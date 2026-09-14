@@ -142,6 +142,38 @@ export function sessionStoreContract(
       expect((await store.get(created.sessionId))?.status).toBe('ENDED');
     });
 
+    /*
+     * BETA-P0-006. Activity is accepted where a student can be working — ACTIVE,
+     * and RESETTING, which they asked for — and nowhere else. "Occupying" was
+     * the old rule, and it included ENDING and EXPIRING: an activity write
+     * racing End landed on a row End had already claimed.
+     */
+    it('records no activity on a session that is being created or torn down', async () => {
+      const store = await makeStore();
+      const statuses = ['CREATING', 'ENDING', 'EXPIRING'] as const;
+      for (const [i, status] of statuses.entries()) {
+        await store.create(
+          session({ sessionId: `sess-00000000000000g${i}`, sandboxRef: `jtt-lab-0000000000g${i}`, status }),
+        );
+      }
+
+      for (const [i, status] of statuses.entries()) {
+        const id = `sess-00000000000000g${i}`;
+        expect(await store.touchActivity(id, HOUR_LATER)).toBeNull();
+        expect(await store.get(id)).toMatchObject({ status, lastActivityAt: NOW });
+      }
+    });
+
+    it('records activity during a reset', async () => {
+      const store = await makeStore();
+      const created = session({ status: 'RESETTING' });
+      await store.create(created);
+
+      expect((await store.touchActivity(created.sessionId, HOUR_LATER))?.lastActivityAt).toBe(
+        HOUR_LATER,
+      );
+    });
+
     it('records activity without moving the absolute deadline', async () => {
       const store = await makeStore();
       const created = session({ status: 'ACTIVE' });
