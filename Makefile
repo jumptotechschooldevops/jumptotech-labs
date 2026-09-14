@@ -44,8 +44,10 @@ secrets: ## Generate missing or placeholder secrets in .env (idempotent)
 # Resolves the shipped compose files with sentinel values and proves each
 # service receives exactly the secrets infrastructure/secret-distribution.json
 # allows — and, since BETA-P0-011, which ports it publishes and which credential
-# files it mounts. Reads no .env and prints names only.
-secrets-check: ## Prove which service receives which secret, mount and published port, from `docker compose config`
+# files it mounts. BETA-P0-012 adds the production stack (exactly 443 and 80),
+# loopback-only publication everywhere else, and the private database network.
+# Reads no .env and prints names only.
+secrets-check: ## Prove secrets, mounts, published ports and private networks per stack, from `docker compose config`
 	@node scripts/check-secret-distribution.mjs
 
 observability-token: ## Write the scrape token where Prometheus reads it
@@ -184,7 +186,7 @@ test-db: ## Run the persistence suites against a throwaway PostgreSQL
 	@docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
 	@docker run --rm -d --name jumptotech-labs-test-db \
 		-e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=jumptotech_labs_test \
-		-p $${TEST_DB_PORT:-55432}:5432 postgres:16-alpine >/dev/null
+		-p 127.0.0.1:$${TEST_DB_PORT:-55432}:5432 postgres:16-alpine >/dev/null
 	@# Not `pg_isready`: that probes the server's unix socket from inside the
 	@# container and is satisfied by the temporary postmaster the official image
 	@# runs `initdb` against, while a query from the host still gets

@@ -1,0 +1,7 @@
+# The web tier's TLS certificate and private key never belong in git (BETA-P0-012).
+# The directory itself is tracked so docker-compose.production.yml's read-only
+# bind mount has something to attach to; nginx still refuses to start until the
+# two files below exist.
+*
+!.gitignore
+!README.md

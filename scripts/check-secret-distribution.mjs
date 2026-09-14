@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Which service receives which secret, as Docker Compose actually resolves it —
- * BETA-P0-010.
+ * BETA-P0-010. Extended to published ports and credential mounts by BETA-P0-011,
+ * and by BETA-P0-012 to every published port in every stack (loopback-only in
+ * development, exactly 443 and 80 in production) and to private networks.
  *
  *   make secrets-check
  *   node scripts/check-secret-distribution.mjs
@@ -93,6 +95,19 @@ try {
     const resolvedServices = Object.keys(config.services ?? {}).sort();
     const expectedServices = Object.keys(stack.services).sort();
 
+    // BETA-P0-012 — a private network exists in every stack, and is internal
+    // where the contract says so. Membership is checked per service below.
+    for (const [network, rule] of Object.entries(contract.privateNetworks)) {
+      if (network === '$comment') continue;
+      if (!config.networks?.[network]) {
+        console.error(`[${stackName}] the ${network} network is not defined`);
+        failures += 1;
+      } else if (rule.internalIn.includes(stackName) && config.networks[network].internal !== true) {
+        console.error(`[${stackName}] the ${network} network must be internal: true`);
+        failures += 1;
+      }
+    }
+
     for (const service of resolvedServices) {
       if (!expectedServices.includes(service)) {
         console.error(`[${stackName}] ${service} is not in the distribution contract; add it with the secrets it may hold`);
@@ -129,15 +144,56 @@ try {
        * BETA-P0-011 — the same resolved definition, asked where its credentials
        * can be reached from. A port or a mount that arrives through a merge or
        * an anchor is seen here the way the running stack would see it.
+       *
+       * BETA-P0-012 — every publication, not only the credential ports. Only
+       * `ports:` is read: `expose:` is metadata and publishes nothing.
        */
+      const production = stack.exposure === 'production';
       for (const port of definition.ports ?? []) {
         const target = Number(port.target);
+        const published = Number(port.published);
         const hostIp = port.host_ip ?? '';
         if (contract.publishedPorts.never.includes(target)) {
           console.error(`[${stackName}] ${service} publishes port ${target}, which must never be published`);
           failures += 1;
-        } else if (contract.publishedPorts.loopbackOnly.includes(target) && hostIp !== '127.0.0.1') {
+        } else if (production) {
+          const allowed = contract.publishedPorts.production.some(
+            (entry) => entry.service === service && entry.published === published && entry.target === target,
+          );
+          if (!allowed) {
+            console.error(
+              `[${stackName}] ${service} publishes ${hostIp || 'every interface'}:${port.published} -> ${target}; ` +
+                'a production stack publishes only the entries in publishedPorts.production',
+            );
+            failures += 1;
+          }
+        } else if (!contract.publishedPorts.loopbackOnly.includes(target)) {
+          console.error(`[${stackName}] ${service} publishes port ${target}, which is not in publishedPorts.loopbackOnly`);
+          failures += 1;
+        } else if (hostIp !== '127.0.0.1') {
           console.error(`[${stackName}] ${service} publishes port ${target} on ${hostIp || 'every interface'}; it must bind 127.0.0.1`);
+          failures += 1;
+        }
+      }
+      if (production) {
+        for (const entry of contract.publishedPorts.production.filter((e) => e.service === service)) {
+          const present = (definition.ports ?? []).some(
+            (port) => Number(port.published) === entry.published && Number(port.target) === entry.target,
+          );
+          if (!present) {
+            console.error(`[${stackName}] ${service} should publish ${entry.published} -> ${entry.target} (${entry.purpose}), but does not`);
+            failures += 1;
+          }
+        }
+      }
+
+      for (const [network, rule] of Object.entries(contract.privateNetworks)) {
+        if (network === '$comment') continue;
+        const joined = Object.keys(definition.networks ?? {}).includes(network);
+        if (joined !== rule.members.includes(service)) {
+          console.error(
+            `[${stackName}] ${service} ${joined ? 'joins' : 'does not join'} the ${network} network; its members are ${rule.members.join(', ')}`,
+          );
           failures += 1;
         }
       }
@@ -162,5 +218,5 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(
-  '\nevery service receives exactly the secrets, credential mounts and published ports infrastructure/secret-distribution.json allows',
+  '\nevery service receives exactly the secrets, credential mounts, published ports and private networks infrastructure/secret-distribution.json allows',
 );

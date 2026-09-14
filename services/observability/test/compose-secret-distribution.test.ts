@@ -18,7 +18,7 @@
  * runs. Comment lines are ignored — the files discuss secrets at length.
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,16 +27,26 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 interface Contract {
   secrets: string[];
   optionalEmpty: string[];
-  stacks: Record<string, { files: string[]; services: Record<string, string[]> }>;
+  stacks: Record<string, { files: string[]; exposure?: 'production'; services: Record<string, string[]> }>;
   credentialMounts: Record<string, string[] | string>;
-  publishedPorts: { never: number[]; loopbackOnly: number[] };
+  publishedPorts: {
+    never: number[];
+    loopbackOnly: number[];
+    production: Array<{ service: string; published: number; target: number; purpose: string }>;
+  };
+  privateNetworks: Record<string, { members: string[]; internalIn: string[] } | string[]>;
 }
 
 const contract = JSON.parse(
   readFileSync(path.join(REPO_ROOT, 'infrastructure/secret-distribution.json'), 'utf8'),
 ) as Contract;
 
-const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.runtime.yml', 'docker-compose.observability.yml'];
+const COMPOSE_FILES = [
+  'docker-compose.yml',
+  'docker-compose.runtime.yml',
+  'docker-compose.observability.yml',
+  'docker-compose.production.yml',
+];
 
 function read(file: string): string {
   return readFileSync(path.join(REPO_ROOT, file), 'utf8');
@@ -176,18 +186,31 @@ describe('credentials delivered as files', () => {
   }
 });
 
+/** One short-syntax `ports:` entry: its host interface and ports, if readable. */
+interface PortEntry {
+  spec: string;
+  hostIp: string | null;
+  published: number;
+  target: number;
+}
+
 /**
- * Each short-syntax `ports:` entry in a block: its host interface, if one is
- * named, and the container port. `${VAR:-9402}` is collapsed first, because
- * its `:-` would otherwise read as a separator. An entry this cannot read is
- * returned with a NaN target, and fails the policy rather than passing it.
+ * Each short-syntax `ports:` entry in a block, and how the block merges with the
+ * files before it: `ports:` appends, `ports: !override` replaces, and
+ * `ports: !reset []` clears. `${VAR:-9402}` is collapsed first, because its
+ * `:-` would otherwise read as a separator; the default is kept as the host
+ * port. An entry this cannot read is returned with a NaN target, and fails the
+ * policy rather than passing it. `expose:` is not read: it publishes nothing.
  */
-function publishedPorts(lines: readonly string[]): Array<{ spec: string; hostIp: string | null; target: number }> {
-  const found: Array<{ spec: string; hostIp: string | null; target: number }> = [];
+function portsDirective(lines: readonly string[]): { merge: 'append' | 'override' | 'reset' | null; entries: PortEntry[] } {
+  const entries: PortEntry[] = [];
+  let merge: 'append' | 'override' | 'reset' | null = null;
   let inPorts = false;
   for (const line of lines) {
-    if (/^ {4}ports:\s*$/.test(line)) {
-      inPorts = true;
+    const header = /^ {4}ports:\s*(!reset\s*\[\]|!override)?\s*$/.exec(line);
+    if (header) {
+      merge = header[1]?.startsWith('!reset') ? 'reset' : header[1] ? 'override' : 'append';
+      inPorts = merge !== 'reset';
       continue;
     }
     if (!inPorts) continue;
@@ -197,30 +220,70 @@ function publishedPorts(lines: readonly string[]): Array<{ spec: string; hostIp:
     }
     const item = /^ {6}-\s*(.+?)\s*$/.exec(line);
     const spec = (item?.[1] ?? line.trim()).replace(/^["']|["']$/g, '');
-    const parts = spec.replace(/\$\{[^}]*\}/g, 'VAR').split(':');
-    const target = /^\d+(\/(tcp|udp))?$/.test(parts[parts.length - 1]!)
-      ? Number.parseInt(parts[parts.length - 1]!, 10)
-      : Number.NaN;
-    found.push({ spec, hostIp: parts.length === 3 ? parts[0]! : null, target });
+    const parts = spec.replace(/\$\{[A-Z0-9_]+:-(\d+)\}/g, '$1').replace(/\$\{[^}]*\}/g, 'VAR').split(':');
+    const last = parts[parts.length - 1]!;
+    const target = /^\d+(\/(tcp|udp))?$/.test(last) ? Number.parseInt(last, 10) : Number.NaN;
+    const published = parts.length >= 2 ? Number.parseInt(parts[parts.length - 2]!, 10) : target;
+    entries.push({ spec, hostIp: parts.length === 3 ? parts[0]! : null, published, target });
+  }
+  return { merge, entries };
+}
+
+function publishedPorts(lines: readonly string[]): PortEntry[] {
+  return portsDirective(lines).entries;
+}
+
+/** A service's ports after every file in a stack is merged in order. */
+function stackPorts(files: readonly string[]): Map<string, PortEntry[]> {
+  const merged = new Map<string, PortEntry[]>();
+  for (const file of files) {
+    for (const [service, lines] of serviceBlocks(file)) {
+      const { merge, entries } = portsDirective(lines);
+      if (merge === null) continue;
+      const before = merge === 'append' ? (merged.get(service) ?? []) : [];
+      merged.set(service, [...before, ...entries]);
+    }
+  }
+  return merged;
+}
+
+/** The networks a service block lists, in list syntax. */
+function serviceNetworks(lines: readonly string[]): string[] {
+  const found: string[] = [];
+  let inNetworks = false;
+  for (const line of lines) {
+    if (/^ {4}networks:\s*$/.test(line)) {
+      inNetworks = true;
+      continue;
+    }
+    if (!inNetworks) continue;
+    const item = /^ {6}-\s*([a-z][a-z0-9_-]*)\s*$/.exec(line);
+    if (item) found.push(item[1]!);
+    else if (!/^ {6}/.test(line)) inNetworks = false;
   }
   return found;
+}
+
+/** Whether a file's top-level `networks:` marks a network `internal: true`. */
+function declaresInternal(file: string, network: string): boolean {
+  const code = read(file)
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  const top = /^networks:\n((?:[ \t].*\n?|\n)*)/m.exec(code)?.[1] ?? '';
+  return new RegExp(`^ {2}${network}:\\n(?: {4}.*\\n)*? {4}internal:\\s*true\\s*$`, 'm').test(top);
 }
 
 describe('ports that carry a credential (BETA-P0-011)', () => {
   const policy = contract.publishedPorts;
 
   for (const file of COMPOSE_FILES) {
-    it(`${file} publishes ${policy.never.join(', ')} nowhere, and ${policy.loopbackOnly.join(', ')} only on 127.0.0.1`, () => {
+    it(`${file} publishes ${policy.never.join(', ')} nowhere`, () => {
       const problems: string[] = [];
       for (const [service, lines] of serviceBlocks(file)) {
         for (const port of publishedPorts(lines)) {
-          if (Number.isNaN(port.target)) {
-            problems.push(`${service}: unreadable ports entry '${port.spec}'`);
-          } else if (policy.never.includes(port.target)) {
-            problems.push(`${service}: publishes ${port.target}`);
-          } else if (policy.loopbackOnly.includes(port.target) && port.hostIp !== '127.0.0.1') {
-            problems.push(`${service}: publishes ${port.target} on ${port.hostIp ?? 'every interface'}`);
-          }
+          if (Number.isNaN(port.target)) problems.push(`${service}: unreadable ports entry '${port.spec}'`);
+          else if (policy.never.includes(port.target)) problems.push(`${service}: publishes ${port.target}`);
         }
       }
       expect(problems).toEqual([]);
@@ -236,6 +299,173 @@ describe('ports that carry a credential (BETA-P0-011)', () => {
 
   it('reads the entries it polices, so a passing check is not an empty one', () => {
     const web = publishedPorts(serviceBlocks('docker-compose.yml').get('web') ?? []);
-    expect(web).toEqual([{ spec: '${WEB_PORT:-3000}:3000', hostIp: null, target: 3000 }]);
+    expect(web).toEqual([{ spec: '127.0.0.1:${WEB_PORT:-3000}:3000', hostIp: '127.0.0.1', published: 3000, target: 3000 }]);
+  });
+});
+
+describe('network exposure (BETA-P0-012)', () => {
+  const policy = contract.publishedPorts;
+
+  for (const [stackName, stack] of Object.entries(contract.stacks)) {
+    const production = stack.exposure === 'production';
+    it(
+      production
+        ? `the ${stackName} stack publishes exactly ${policy.production.map((e) => `${e.published}→${e.service}:${e.target}`).join(', ')}`
+        : `the ${stackName} stack publishes only listed ports, and only on 127.0.0.1`,
+      () => {
+        const problems: string[] = [];
+        const actual: string[] = [];
+        for (const [service, ports] of stackPorts(stack.files)) {
+          for (const port of ports) {
+            if (Number.isNaN(port.target)) {
+              problems.push(`${service}: unreadable ports entry '${port.spec}'`);
+            } else if (policy.never.includes(port.target)) {
+              problems.push(`${service}: publishes ${port.target}`);
+            } else if (production) {
+              actual.push(`${service}:${port.published}:${port.target}`);
+            } else if (!policy.loopbackOnly.includes(port.target)) {
+              problems.push(`${service}: publishes ${port.target}, which is not in loopbackOnly`);
+            } else if (port.hostIp !== '127.0.0.1') {
+              problems.push(`${service}: publishes ${port.target} on ${port.hostIp ?? 'every interface'}`);
+            }
+          }
+        }
+        expect(problems).toEqual([]);
+        if (production) {
+          expect(actual.sort()).toEqual(policy.production.map((e) => `${e.service}:${e.published}:${e.target}`).sort());
+        }
+      },
+    );
+  }
+
+  it('keeps the development PostgreSQL port, on loopback only', () => {
+    const postgres = stackPorts(contract.stacks.runtime!.files).get('postgres') ?? [];
+    expect(postgres.map((port) => `${port.hostIp}:${port.target}`)).toEqual(['127.0.0.1:5432']);
+  });
+
+  it('publishes nothing from postgres, api, terminal or sandboxd in production', () => {
+    const production = stackPorts(contract.stacks.production!.files);
+    for (const service of ['postgres', 'api', 'terminal', 'sandboxd']) {
+      expect(production.get(service) ?? [], service).toEqual([]);
+    }
+    // The internal ports are named once more, so a policy edit that dropped one
+    // from the contract still cannot let it through here.
+    const publishedTargets = [...production.values()].flat().map((port) => port.target);
+    for (const port of [3000, 4000, 4001, 4002, 5432, 9400, 9401, 9402]) {
+      expect(publishedTargets, String(port)).not.toContain(port);
+    }
+    expect(publishedTargets.sort()).toEqual([8080, 8443]);
+  });
+
+  it('points 443 at the TLS listener and 80 at the redirect-only listener', () => {
+    const tls = read('infrastructure/docker/nginx/web-tls.conf')
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+    const servers = tls.split(/^server\s*\{/m).slice(1);
+    const redirect = servers.find((block) => /listen\s+8080\b/.test(block)) ?? '';
+    const https = servers.find((block) => /listen\s+8443\s+ssl\b/.test(block)) ?? '';
+
+    expect(redirect).toMatch(/return\s+301\s+https:\/\/\$host\$request_uri;/);
+    expect(redirect).not.toMatch(/proxy_pass|include|root\s/);
+    expect(https).toMatch(/ssl_certificate\s+\/etc\/nginx\/tls\/fullchain\.pem;/);
+    expect(https).toMatch(/ssl_certificate_key\s+\/etc\/nginx\/tls\/privkey\.pem;/);
+    expect(https).toMatch(/ssl_protocols\s+TLSv1\.2 TLSv1\.3;/);
+    expect(https).toMatch(/include\s+\/etc\/nginx\/jumptotech\/locations\.conf;/);
+    expect(servers).toHaveLength(2);
+    expect(read('docker-compose.production.yml')).toMatch(
+      /source: \.\/infrastructure\/docker\/nginx\/web-tls\.conf\n\s+target: \/etc\/nginx\/conf\.d\/default\.conf/,
+    );
+  });
+
+  it('does not mistake EXPOSE or expose: for publication', () => {
+    const lines = ['    expose:', '      - "5432"', '    ports:', '      - "127.0.0.1:5432:5432"'];
+    expect(publishedPorts(lines).map((port) => port.target)).toEqual([5432]);
+    expect(publishedPorts(['    expose:', '      - "4002"'])).toEqual([]);
+    expect(portsDirective(['    ports: !reset []']).merge).toBe('reset');
+    // The images declare listeners (EXPOSE) that the production stack does not publish.
+    expect(read('infrastructure/docker/web.Dockerfile')).toMatch(/^EXPOSE 3000 8080 8443$/m);
+  });
+
+  for (const [network, rule] of Object.entries(contract.privateNetworks)) {
+    if (network === '$comment' || Array.isArray(rule)) continue;
+    for (const [stackName, stack] of Object.entries(contract.stacks)) {
+      it(`the ${stackName} stack puts only ${rule.members.join(' and ')} on the ${network} network`, () => {
+        const members = new Map<string, string[]>();
+        for (const file of stack.files) {
+          for (const [service, lines] of serviceBlocks(file)) {
+            const listed = serviceNetworks(lines);
+            if (listed.length > 0) members.set(service, listed);
+          }
+        }
+        const joined = [...members].filter(([, networks]) => networks.includes(network)).map(([service]) => service);
+        expect(joined.sort()).toEqual([...rule.members].sort());
+        expect(members.get('postgres')).toEqual([network]);
+        expect(
+          stack.files.some((file) => declaresInternal(file, network)),
+          `${network} is internal: true`,
+        ).toBe(rule.internalIn.includes(stackName));
+      });
+    }
+  }
+});
+
+describe('no TLS verification bypass in shipped configuration or source (BETA-P0-012)', () => {
+  const BYPASSES: Array<[string, RegExp]> = [
+    ['rejectUnauthorized: false', /rejectUnauthorized\s*:\s*false/],
+    ['NODE_TLS_REJECT_UNAUTHORIZED=0', /NODE_TLS_REJECT_UNAUTHORIZED\s*[:=]\s*["']?0/],
+    ['a weak sslmode', /sslmode=(disable|allow|prefer|require|no-verify)\b/i],
+    ['uselibpqcompat', /uselibpqcompat\s*=\s*true/i],
+    ['PGSSLMODE assignment', /PGSSLMODE\s*[:=]\s*\S/],
+    ['nginx proxy_ssl_verify off', /proxy_ssl_verify\s+off/],
+  ];
+
+  function shippedFiles(): string[] {
+    const files = [...COMPOSE_FILES, '.env.example', 'Makefile'];
+    const walk = (dir: string, accept: RegExp): void => {
+      for (const name of readdirSync(path.join(REPO_ROOT, dir))) {
+        const rel = path.join(dir, name);
+        if (['node_modules', 'dist', 'test', 'generated'].includes(name)) continue;
+        if (statSync(path.join(REPO_ROOT, rel)).isDirectory()) walk(rel, accept);
+        else if (accept.test(name) && !/\.test\.ts$/.test(name)) files.push(rel);
+      }
+    };
+    walk('infrastructure/docker', /(\.Dockerfile|\.conf)$/);
+    walk('.github/workflows', /\.ya?ml$/);
+    walk('scripts', /\.(mjs|sh|ts)$/);
+    for (const root of ['apps', 'services']) {
+      for (const pkg of readdirSync(path.join(REPO_ROOT, root))) {
+        for (const sub of ['src', 'bin']) {
+          const dir = path.join(root, pkg, sub);
+          try {
+            if (statSync(path.join(REPO_ROOT, dir)).isDirectory()) walk(dir, /\.(ts|tsx|mjs|js)$/);
+          } catch {
+            // no such directory in this package
+          }
+        }
+      }
+    }
+    return files;
+  }
+
+  it('sets none of them anywhere', () => {
+    const files = shippedFiles();
+    expect(files).toContain('services/progress/src/postgres/database.ts');
+    expect(files.length).toBeGreaterThan(50);
+    const found = files.flatMap((file) => {
+      const code = read(file)
+        .split('\n')
+        // Comments may explain a bypass; only code and configuration may not use one.
+        .filter((line) => !/^\s*(#|\/\/|\*|\/\*)/.test(line))
+        .join('\n');
+      return BYPASSES.filter(([, pattern]) => pattern.test(code)).map(([name]) => `${file}: ${name}`);
+    });
+    expect(found).toEqual([]);
+  });
+
+  it('builds the database pool with verified TLS or none', () => {
+    const database = read('services/progress/src/postgres/database.ts');
+    expect(database).toMatch(/ssl: databaseTlsOptions\(config\)/);
+    expect(read('services/progress/src/postgres/tls.ts')).toMatch(/rejectUnauthorized: true,/);
   });
 });

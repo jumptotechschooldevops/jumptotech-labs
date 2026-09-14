@@ -16,6 +16,12 @@
 #       Terraform, Ansible, CI/CD and Docker. All 114 labs. The socket is
 #       mounted into `sandboxd` and nothing else.   (`make up`)
 #
+#   ... -f docker-compose.production.yml
+#       The deployment boundary (BETA-P0-012). On their own these files publish
+#       every port on 127.0.0.1 only; the production overlay publishes HTTPS on
+#       443 and a redirect on 80, and nothing else. See the ports policy in
+#       docs/runtime-architecture.md §11.
+#
 # ## Prerequisites, created on the host
 #
 #   npm run cluster:up      # Kubernetes track: kind cluster + kubeconfigs
@@ -58,9 +64,10 @@
 # not disposable — students, attempts, progress and hint usage. Two rules follow
 # from that:
 #
-#   · only the `api` service can reach it. It is not on the `kind` network, the
-#     web and terminal services have no credential for it, and a student's shell
-#     could not resolve it even if it had one.
+#   · only the `api` service can reach it. It sits alone with the api on the
+#     `database` network (BETA-P0-012) — not on `default`, where the web and
+#     terminal services live, and not on `kind` — so a student's shell in the
+#     terminal container cannot even open a connection to it, let alone log in.
 #   · its data lives in a named volume, so `docker compose down` keeps the
 #     history. `docker compose down -v` is what deletes it, and `make clean`
 #     says so.
@@ -98,9 +105,13 @@ services:
       # Named volume: the whole point of this story is that it survives.
       - postgres-data:/var/lib/postgresql/data
     ports:
-      # Published so `npm run db:migrate` and psql work from the host. Change
-      # POSTGRES_PORT if 5432 is already taken on your machine.
-      - "${POSTGRES_PORT:-5432}:5432"
+      # DEVELOPMENT ONLY, and loopback only (BETA-P0-012). Published so
+      # `npm run db:migrate` and psql work from this machine; it used to bind
+      # every interface, which put the database on the LAN. The api never uses
+      # it — it reaches `postgres:5432` on the `database` network — and
+      # docker-compose.production.yml removes it. Change POSTGRES_PORT if 5432
+      # is already taken on your machine.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       # The api waits for this: migrations run at startup, and racing initdb
       # would fail the first boot for no reason.
@@ -112,7 +123,8 @@ services:
       retries: 12
       start_period: 10s
     networks:
-      - default
+      # The api's network and nothing else. See the header.
+      - database
 
   api:
     build:
@@ -266,6 +278,13 @@ services:
       # --- persistent progress (PLATFORM-005) ---
       # The api is the only service given a database credential.
       DATABASE_URL: postgresql://${POSTGRES_USER:-jumptotech}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-jumptotech_labs}
+      # BETA-P0-012. Plaintext to a database is refused under NODE_ENV=production
+      # unless it is verified TLS (DATABASE_SSL=true), loopback, or declared. It
+      # is declared here and only here: the api and postgres share this one
+      # host's private `database` bridge, never a wire. A database on another
+      # host sets DATABASE_SSL=true (and DATABASE_SSL_CA_FILE for a private CA)
+      # instead. See docs/runtime-architecture.md §11.
+      DATABASE_SAME_HOST_PLAINTEXT: "true"
       # Forward-only migrations, applied at startup. Never destructive: it runs
       # the migration files this database has not seen and nothing else. Set to
       # false if you would rather run `npm run db:migrate` from a pipeline.
@@ -318,6 +337,8 @@ services:
       # never holds a session's TLS key.
       - default
       - kind
+      # The only service on PostgreSQL's network (BETA-P0-012).
+      - database
 
   terminal:
     build:
@@ -407,8 +428,11 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      # The only port students need. Point Cloudflare Tunnel here.
-      - "${WEB_PORT:-3000}:3000"
+      # The only port students need, on loopback (BETA-P0-012): a browser on this
+      # machine, or a tunnel running on it, reaches http://127.0.0.1:3000.
+      # Nothing here is public. A deployment serves students over HTTPS on 443
+      # through docker-compose.production.yml, which replaces this entry.
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
     depends_on:
       api:
         condition: service_healthy
@@ -439,3 +463,9 @@ networks:
   # so a deployment that runs the API outside Compose still works.
   sandboxes:
     name: ${DOCKER_SANDBOX_NETWORK:-jumptotech-sandboxes}
+  # PostgreSQL and the api, and nothing else (BETA-P0-012). An ordinary bridge
+  # here so the loopback development port above can reach it;
+  # docker-compose.production.yml makes it `internal`, which also takes away
+  # the database container's route off the host.
+  database:
+    name: ${COMPOSE_PROJECT_NAME:-jumptotech-labs}-database

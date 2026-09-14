@@ -232,7 +232,11 @@ describe('the shipped configuration', () => {
   });
 
   it('gives the web proxy no route to sandboxd or to any metrics port', () => {
-    const conf = read('infrastructure/docker/nginx/web.conf');
+    // BETA-P0-012 moved the routes into locations.conf, shared by the
+    // development listener and the production TLS listener; read all three.
+    const conf = ['web.conf', 'locations.conf', 'web-tls.conf']
+      .map((name) => read(`infrastructure/docker/nginx/${name}`))
+      .join('\n');
     const code = conf
       .split('\n')
       .filter((line) => !/^\s*#/.test(line))

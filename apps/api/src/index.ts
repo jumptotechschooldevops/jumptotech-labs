@@ -76,6 +76,16 @@ async function main(): Promise<void> {
     );
   }
 
+  // BETA-P0-012. The mode only — never the host or the connection string.
+  const databaseTransport = config.progress.databaseTransport;
+  if (databaseTransport && databaseTransport !== 'tls' && databaseTransport !== 'development-plaintext') {
+    logger.warn(
+      'config.loaded',
+      { reason: `database_transport_${databaseTransport.replace(/-/g, '_')}` },
+      `database transport: ${databaseTransport} — the database password is not encrypted in transit; acceptable only on a local socket, loopback or one host's private bridge`,
+    );
+  }
+
   const registry = new LabRegistry(config.labsDir);
   await registry.load();
   metrics.sessions.labsLoaded.set(registry.size);

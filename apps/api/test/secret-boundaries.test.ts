@@ -145,11 +145,17 @@ describe('API secrets under NODE_ENV=production', () => {
 
     it('accepts a real database password in either form', () => {
       const password = hex('db').slice(0, 32);
+      // Each over a transport production accepts (BETA-P0-012): the declared
+      // compose bridge, and verified TLS to a host of its own.
       expect(() =>
-        loadConfig({ ...PRODUCTION, DATABASE_URL: `postgresql://jumptotech:${password}@postgres:5432/db` }),
+        loadConfig({
+          ...PRODUCTION,
+          DATABASE_URL: `postgresql://jumptotech:${password}@postgres:5432/db`,
+          DATABASE_SAME_HOST_PLAINTEXT: 'true',
+        }),
       ).not.toThrow();
       expect(() =>
-        loadConfig({ ...PRODUCTION, POSTGRES_HOST: 'db.internal', POSTGRES_PASSWORD: password }),
+        loadConfig({ ...PRODUCTION, POSTGRES_HOST: 'db.internal', POSTGRES_PASSWORD: password, DATABASE_SSL: 'true' }),
       ).not.toThrow();
     });
 

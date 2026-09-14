@@ -95,7 +95,7 @@ start as root and so could not drop.
 
 | Proof | Runs | Shows |
 |---|---|---|
-| `services/observability/test/compose-secret-distribution.test.ts` | `npm test` | each compose service references exactly its allowlist; no secret defaulted or chained; no `env_file`; the kubeconfig, scrape-token and Docker socket mounts go only to their owners; credential-carrying ports are never published beyond loopback (BETA-P0-011) |
+| `services/observability/test/compose-secret-distribution.test.ts` | `npm test` | each compose service references exactly its allowlist; no secret defaulted or chained; no `env_file`; the kubeconfig, scrape-token, Docker socket and web TLS key mounts go only to their owners; credential-carrying ports are never published beyond loopback (BETA-P0-011); every development port on loopback, production exactly 443 and 80, and PostgreSQL alone with the api on its network (BETA-P0-012, [runtime-architecture.md §11](runtime-architecture.md)) |
 | `node scripts/check-secret-distribution.mjs` (`make secrets-check`) | CI `gates`, laptop | the same, through `docker compose config` with sentinel values and a scrubbed environment; prints names only |
 | `services/observability/test/secret-policy.test.ts` | `npm test` | the rules above; refusals never contain values; the setup script uses the same placeholder list |
 | `apps/api/test/secret-boundaries.test.ts` | `npm test` | api gates; provider-shaped secrets pass the self-test and are redacted; no sentinel secret in `/health`, `/auth/*`, a refused `/internal` call, a 404, metrics or logs |

@@ -9,6 +9,7 @@
  */
 import pg from 'pg';
 import { describeDatabase, type DatabaseConfig } from './config.js';
+import { assertNoConnectionStringTls, databaseTlsOptions } from './tls.js';
 
 /**
  * Postgres returns `bigint` as a string to avoid silent precision loss, which
@@ -72,6 +73,9 @@ export class PostgresDatabase implements SqlExecutor {
   }
 
   static fromConfig(config: DatabaseConfig): PostgresDatabase {
+    // BETA-P0-012. A hand-built config gets the same refusal the loader applies:
+    // `pg` merges URL TLS parameters over `ssl`, so one could undo it.
+    if (config.url) assertNoConnectionStringTls(config.url);
     const pool = new pg.Pool({
       ...(config.url ? { connectionString: config.url } : {}),
       ...(config.host ? { host: config.host } : {}),
@@ -79,7 +83,9 @@ export class PostgresDatabase implements SqlExecutor {
       ...(config.database ? { database: config.database } : {}),
       ...(config.user ? { user: config.user } : {}),
       ...(config.password ? { password: config.password } : {}),
-      ...(config.ssl ? { ssl: { rejectUnauthorized: false } } : {}),
+      // Always explicit: verified TLS or none. Leaving it undefined would let
+      // `pg` read PGSSLMODE, whose `no-verify` turns verification off.
+      ssl: databaseTlsOptions(config),
       max: config.maxConnections,
       connectionTimeoutMillis: config.connectionTimeoutMs,
       idleTimeoutMillis: config.idleTimeoutMs,

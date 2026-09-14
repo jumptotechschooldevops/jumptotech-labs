@@ -234,6 +234,11 @@ command rather than buried in a default.
 | `make up-kubernetes-only` | Kubernetes. 19 labs. | nowhere |
 | `make up` | every track. **114 labs.** | `sandboxd` only |
 
+Both publish every port on `127.0.0.1` only. Adding
+`-f docker-compose.production.yml` to either changes exposure and nothing else:
+HTTPS on 443, a redirect on 80, no other published port (§11). The track and
+lab count do not change.
+
 There is no third arrangement any more. The Docker track used to need one — an
 overlay that put the host socket back into the browser-reachable `api` service —
 because its `DockerEnginePort` was not brokered. It is now, so that overlay is
@@ -418,6 +423,9 @@ Nothing, in any environment, disables certificate verification. The clients pass
 | 4000, 4001 | api, terminal | 127.0.0.1 only |
 | 9400, 9401 | api, terminal metrics | 127.0.0.1 only; bearer token |
 
+BETA-P0-012 widened this to every port in every stack, and added the production
+stack, which publishes none of the ports above. See §11.
+
 These rules live in `publishedPorts` in `infrastructure/secret-distribution.json`,
 next to the rule that only sandboxd may mount the Docker socket. They are
 enforced by `compose-secret-distribution.test.ts` (`npm test`) and
@@ -468,6 +476,9 @@ compose stack is still single-host with declared plaintext.
 | `SANDBOXD_ATTACH_SECRET` / `_RUNTIME_SECRET` / `_DOCKER_SECRET` | terminal / api / api — and sandboxd | One capability each. The api is refused `attach`; the terminal is refused the other two. |
 | `RUNTIME_OWNER_ID` | api, sandboxd | **Must be identical.** The deployment's one runtime owner: stamped on every namespace and sandbox, required on everything cleanup touches. Required under `NODE_ENV=production`; a mismatch leaks brokered sandboxes. See [runtime-ownership.md](runtime-ownership.md). |
 | `SANDBOX_RUNTIME_HOST` | api | A dedicated runtime node over TLS, when there is no broker. The broker wins if both are set. |
+| `DATABASE_SSL` | api, `db:migrate` | `true` = verified TLS to PostgreSQL (chain + host name, TLS ≥ 1.2). Strictly `true`/`false`. There is no unverified mode (§11.5). |
+| `DATABASE_SSL_CA_FILE` | api, `db:migrate` | PEM CA bundle trusted for the database connection only. Refused without `DATABASE_SSL=true` or when it holds a private key. |
+| `DATABASE_SAME_HOST_PLAINTEXT` | api | `true` declares the one-host private bridge that production plaintext to a service name requires. Pinned in `docker-compose.yml` for the api only. |
 
 ## 10. What proves it
 
@@ -486,8 +497,199 @@ compose stack is still single-host with declared plaintext.
 | `services/sandboxd/test/transport.test.ts` | a real TLS listener | `loadSandboxdConfig` rules and gate order; the runtime plane, `/health` and the attach upgrade over TLS; no plaintext on the port; the image health check |
 | `services/terminal/test/broker-transport.test.ts` | real `wss` to a real sandboxd | terminal rules; `brokerShell` attaches only to a broker whose certificate it trusts |
 | `apps/api/test/runtime-transport.test.ts` | a real TLS broker | api rules and gate order; both broker clients carry the validated CA; the compose declaration; no web-proxy route, browser reference or API route to the broker |
-| `services/observability/test/compose-secret-distribution.test.ts`, `scripts/check-secret-distribution.mjs` | compose text; `docker compose config` | 4002 never published; 4000, 4001, 9400–9402 on loopback only; the Docker socket mounted into sandboxd only |
+| `services/observability/test/compose-secret-distribution.test.ts`, `scripts/check-secret-distribution.mjs` | compose text; `docker compose config` | 4002 never published; 4000, 4001, 9400–9402 on loopback only; the Docker socket mounted into sandboxd only. Since BETA-P0-012 also the §11 port and network policy |
 
 The last one needs both a container runtime and a working `node-pty`, and macOS
 hosts do not have the second. `make test-sandboxd-container` runs it inside the
 test image, which does.
+
+
+## 11. Network exposure and PostgreSQL (BETA-P0-012)
+
+This section is the port policy. Like §8, it makes a deployment *safe to
+configure* and deploys nothing: no firewall, security group, private subnet,
+certificate or DNS record exists because of it, and none is assumed.
+
+### 11.1 Before
+
+Resolved with `docker compose config` on `main` at `488048b`:
+
+| Container port | base | runtime | observability | Reachable from, inside compose |
+|---|---|---|---|---|
+| postgres 5432 | **0.0.0.0:5432** | **0.0.0.0:5432** | **0.0.0.0:5432** | `default` network: api, **terminal, web** |
+| web 3000 | **0.0.0.0:3000** | **0.0.0.0:3000** | **0.0.0.0:3000** | `default` |
+| api 4000 | 127.0.0.1 | 127.0.0.1 | 127.0.0.1 | `default`, `kind` |
+| terminal 4001 | 127.0.0.1 | 127.0.0.1 | 127.0.0.1 | `default`, `kind`, `sandboxes` |
+| sandboxd 4002 | — | not published | not published | `default` |
+| 9400 / 9401 / 9402 | — | — | 127.0.0.1 | `default` |
+| prometheus 9090, alertmanager 9093, grafana 3001→3000 | — | — | 127.0.0.1 | `default` |
+
+There was no production arrangement: the only way to serve students was to put
+something in front of `0.0.0.0:3000`. PostgreSQL was published on every host
+interface, and it shared the `default` network with the terminal container, where
+student shells run. The shells had no password, but they did have a route.
+
+The pool was built with `ssl: { rejectUnauthorized: false }` whenever
+`DATABASE_SSL` was truthy. That encrypted the password to whoever answered, and
+any unrecognised `DATABASE_SSL` value, such as `verify`, meant plaintext.
+
+### 11.2 The boundary
+
+```text
+            Internet
+               │
+      443 ─────┼───── 80 (redirect only)
+               ▼
+  ┌──────────────────────── one host ─────────────────────────┐
+  │ web (nginx)  :8443 TLS · :8080 → https                    │
+  │   │ default network                                       │
+  │   ├─► api       :4000 ──── database network (internal) ──► postgres :5432
+  │   └─► terminal  :4001                                     │
+  │         api, terminal ──► sandboxd :4002  (§8, declared bridge)
+  │ metrics :9400 :9401 :9402 — compose network only          │
+  └───────────────────────────────────────────────────────────┘
+```
+
+| | Ports | Rule |
+|---|---|---|
+| **Public** | 443 | HTTPS, terminated by nginx (`infrastructure/docker/nginx/web-tls.conf`) on container port 8443. |
+| **Conditionally public** | 80 | Container port 8080. A `301` to `https://` and nothing else: no `proxy_pass`, no files. |
+| **Never public** | 3000, 4000, 4001, 4002, 5432, 9400, 9401, 9402 | Not published by the production stack on any interface, loopback included. Reached across compose networks by the services that need them. |
+
+The contract counts `ports:` only. `EXPOSE` in a Dockerfile and `expose:` in
+compose are metadata and publish nothing. The web image declares
+`EXPOSE 3000 8080 8443`, and none of those ports is public by that fact.
+
+### 11.3 After
+
+| Container port | base / runtime / observability (development) | production (`base + runtime + production`) |
+|---|---|---|
+| web 8443 | — | **0.0.0.0:443** |
+| web 8080 | — | **0.0.0.0:80** (redirect) |
+| web 3000 | 127.0.0.1:3000 | not published |
+| postgres 5432 | 127.0.0.1:5432 | not published; `database` network is `internal` |
+| api 4000 / terminal 4001 | 127.0.0.1 | not published |
+| sandboxd 4002 | not published | not published |
+| 9400 / 9401 / 9402 | 127.0.0.1 (observability only) | not published |
+| 9090 / 9093 / grafana 3001→3000 | 127.0.0.1 (observability only) | not part of the production contract (§11.7) |
+
+`infrastructure/secret-distribution.json` holds the policy:
+
+- `publishedPorts.loopbackOnly` lists every container port a development stack
+  may publish. Each one must bind `127.0.0.1`, and an unlisted port fails.
+- `publishedPorts.production` is the exact list for a stack marked
+  `exposure: production`. `443:3000`, which would serve plaintext on the HTTPS
+  port, fails.
+- `privateNetworks.database` fixes the members as exactly `api` and `postgres`,
+  and requires the network to be `internal` in production.
+
+### 11.4 PostgreSQL connectivity
+
+- PostgreSQL joins only the `database` network. The api is the only other member,
+  and reaches it as `postgres:5432`. The web and terminal containers, and so
+  student shells, have no route to it.
+- In development the network is an ordinary bridge. That is what lets the
+  loopback port work for `make db-migrate`, `make db-status` and host-run
+  services. `make db-shell` uses `docker compose exec` and needs no port.
+- In production the port is removed and the network is `internal: true`, so the
+  database container has no route off the host at all.
+- `make test-db`'s throwaway database binds `127.0.0.1` as well.
+
+### 11.5 PostgreSQL TLS
+
+`services/progress/src/postgres/tls.ts`, used by the pool, the api and `db:migrate`:
+
+| Configuration | Accepted as | Production |
+|---|---|---|
+| `DATABASE_SSL=true` (+ optional `DATABASE_SSL_CA_FILE`) | `tls` — chain and host name verified, TLS ≥ 1.2 | ✓ any host |
+| Unix socket (`POSTGRES_HOST=/run/postgresql`, `?host=/…`) | `local-socket` | ✓ |
+| `127.x.x.x`, `[::1]` | `loopback-plaintext` | ✓ |
+| single-label host + `DATABASE_SAME_HOST_PLAINTEXT=true` | `same-host-plaintext` | ✓ — `docker-compose.yml` |
+| anything else in plaintext: `db.internal`, `10.0.0.5`, undeclared `postgres` or `localhost` | refused | ✗ |
+| any plaintext | `development-plaintext` | outside production only |
+
+Always refused, in every environment:
+
+- a TLS parameter in `DATABASE_URL` (`sslmode`, `ssl`, `sslrootcert`, `sslcert`,
+  `sslkey`, `uselibpqcompat`, or anything else starting `ssl`). `pg` merges URL
+  parameters over the `ssl` option it is given, so `?sslmode=no-verify` would
+  otherwise replace verified TLS with unverified TLS. The refusal names the
+  parameters and never the URL.
+- `DATABASE_SSL` values other than true/false spellings;
+- `DATABASE_SSL_CA_FILE` without `DATABASE_SSL=true`, unreadable, holding no
+  certificate, or holding a private key.
+
+Refused in production:
+
+- `PGSSLMODE`. `pg` reads it only when `ssl` is undefined, and the pool always
+  passes `ssl` explicitly, as `false` or verified options. Setting it would be a
+  TLS setting that does nothing.
+- `DATABASE_SAME_HOST_PLAINTEXT=true` beside `DATABASE_SSL=true`;
+- `NODE_TLS_REJECT_UNAUTHORIZED` (already, §8.3). The database connection passes
+  `rejectUnauthorized: true` explicitly, so the variable could not weaken it.
+  A real-handshake test proves that.
+
+There is no downgrade path: verified TLS fails closed and never retries in
+plaintext or unverified. The CA is used for the database connection only and is
+never added to the process-wide store. Gate order in the api: owner (P0-008),
+secrets (P0-010), broker transport (P0-011), database transport. Malformed TLS
+settings are refused earlier, while the configuration is parsed.
+
+The compose stack keeps plaintext on one private bridge, declared. That is the
+same trade as §8's broker declaration, and it rests on the same fact: api and
+PostgreSQL share a kernel, not a wire. A database on another host must use
+`DATABASE_SSL=true`.
+
+### 11.6 Development exceptions
+
+- Every development port stays published, on `127.0.0.1`. `localhost:3000`, psql
+  on `localhost:5432`, and a tunnel running on the same host all work as before.
+  Reaching the stack from another machine on the LAN no longer does, on purpose.
+- Plaintext to PostgreSQL anywhere, outside `NODE_ENV=production`
+  (`development-plaintext`).
+- `npm run dev:web` (Vite) still listens on `0.0.0.0` on the developer's
+  machine. It is not part of any compose stack or of this contract.
+
+### 11.7 Production requirements, and what is still open
+
+To run the production stack:
+
+- `infrastructure/docker/nginx/tls/fullchain.pem` and `privkey.pem`, for the host
+  in `PUBLIC_ORIGIN`. The directory is mounted read-only into `web` only, and its
+  contents are git-ignored. nginx refuses to start without them.
+- `PUBLIC_ORIGIN`, `ALLOWED_ORIGINS` and the OIDC settings. The overlay pins
+  `NODE_ENV=production` and `AUTH_MODE=oidc` for the api, so every production
+  gate runs.
+
+**DECISION REQUIRED:**
+
+- **Certificate issuance and renewal.** No ACME client is configured, and port 80
+  carries a redirect, not `/.well-known/acme-challenge/`. HTTP-01 would need
+  that route added; DNS-01 or an operator-supplied certificate would not.
+  Nothing monitors expiry.
+- **Host firewall / security groups.** The overlay limits what Docker publishes.
+  It does not stop another process on the host from listening publicly, or
+  replace a firewall that allows only 443/80 inbound. Docker inserts its own
+  iptables rules for published ports, which a host `ufw` policy does not
+  filter by default, so the rule belongs in front of the host or in the
+  `DOCKER-USER` chain.
+- **Operator access** to the api, terminal, Grafana and Prometheus in production.
+  None is published. Today that means `docker compose exec`, or an SSH tunnel to
+  a port an operator publishes deliberately. The observability overlay is not
+  part of the production contract.
+- **Managed PostgreSQL.** When the database leaves this host, its provider's CA
+  goes in `DATABASE_SSL_CA_FILE`, and the `postgres` service and the declaration
+  are dropped. That is not a compose overlay this story ships.
+- **IPv6.** `443:8443` and `80:8080` publish on every address family Docker is
+  configured for.
+- Unchanged from §8.7: api ⇄ terminal `/internal` calls, Prometheus scrapes and
+  broker calls are plaintext on the compose bridge.
+
+### 11.8 What proves it
+
+| Suite | Runs against | Proves |
+|---|---|---|
+| `services/progress/test/database-tls.test.ts` | config; a real TLS handshake with a PostgreSQL-speaking listener and an in-memory CA | strict `DATABASE_SSL`; URL TLS parameters and bad CA files refused without echoing the password; the §11.5 modes; a trusted certificate connects; an untrusted CA or wrong host name is refused before the startup message; `NODE_TLS_REJECT_UNAUTHORIZED=0` and `PGSSLMODE=no-verify` change neither |
+| `apps/api/test/database-transport.test.ts` | `loadConfig`, compose text | api production rules and gate order; runtime owner, beta capacity and broker transport intact; the declaration made once, for the api; the overlay pins `NODE_ENV=production`; no other service holds a `DATABASE_*`/`PG*` setting |
+| `services/observability/test/compose-secret-distribution.test.ts` | compose text, merged per stack (`!reset`, `!override`) | loopback-only development publication; production publishes exactly 443→8443 and 80→8080; nothing from postgres, api, terminal or sandboxd; `expose:` is not publication; 443 reaches the TLS server and 80 only redirects; `database` membership and `internal`; no TLS-verification bypass in compose, `.env.example`, Makefile, Dockerfiles, nginx, workflows, scripts or any `src`/`bin` |
+| `scripts/check-secret-distribution.mjs` (`make secrets-check`, CI `gates`) | `docker compose config` for base, runtime, observability and production | the same policy on the resolved configuration |

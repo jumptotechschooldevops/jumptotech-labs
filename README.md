@@ -2076,9 +2076,14 @@ make db-status      # applied / pending
 make db-shell       # psql inside the container
 ```
 
-- Only the `api` service holds a database credential. The web and terminal
-  services have none, and PostgreSQL is not on the `kind` network, so no
-  student sandbox can reach it.
+- Only the `api` service holds a database credential, and only the `api` can
+  reach PostgreSQL at all: the two share the private `database` network and
+  nothing else joins it, so neither the web container nor a student shell in
+  the terminal container has a route to port 5432 (BETA-P0-012).
+- The host port is **development only and loopback only**:
+  `127.0.0.1:${POSTGRES_PORT:-5432}`. It is not reachable from the LAN, and
+  `docker-compose.production.yml` removes it. See
+  [docs/runtime-architecture.md §11](docs/runtime-architecture.md).
 - Data lives in the named volume `jumptotech-labs-postgres-data`.
   `docker compose down` keeps it; `docker compose down -v` and `make clean`
   delete it, and `make clean` says so before it does.
@@ -2086,7 +2091,7 @@ make db-shell       # psql inside the container
   required, and compose fails with that message if it is missing.
 
 Running the services on your host instead (needed for the Linux and Terraform
-tracks) means pointing `DATABASE_URL` at the published port:
+tracks) means pointing `DATABASE_URL` at the loopback port:
 
 ```bash
 make db-up
@@ -4051,8 +4056,11 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
 - *WebSocket origin checking* and a CORS allow-list, both from
   `ALLOWED_ORIGINS`. `/internal` is outside CORS and needs a shared secret.
 - *Database credentials stay server-side.* Only the `api` service is given
-  `DATABASE_URL`; the web and terminal services have none, PostgreSQL is not on
-  the `kind` network, and no student sandbox can route to it. There is no
+  `DATABASE_URL`, and only the `api` shares PostgreSQL's private `database`
+  network; the web and terminal services have no credential and no route, and
+  no student sandbox can reach it. Database TLS is always verified
+  (`DATABASE_SSL=true`), and production refuses plaintext beyond loopback or the
+  declared compose bridge — docs/runtime-architecture.md §11. There is no
   default password in application source — an unset one fails loudly rather
   than connecting somewhere. Nothing logs a connection string: the log-safe
   form is host/port/database only.

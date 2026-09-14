@@ -67,7 +67,13 @@ describe('the browser bundle', () => {
   });
 
   it('never spells a secret with the prefix that would publish it', () => {
-    for (const file of ['.env.example', 'docker-compose.yml', 'docker-compose.runtime.yml', 'docker-compose.observability.yml']) {
+    for (const file of [
+      '.env.example',
+      'docker-compose.yml',
+      'docker-compose.runtime.yml',
+      'docker-compose.observability.yml',
+      'docker-compose.production.yml',
+    ]) {
       const text = readFileSync(path.join(REPO_ROOT, file), 'utf8');
       expect(text.match(/\bVITE_[A-Z0-9_]*(SECRET|PASSWORD|TOKEN|KEY)\b/g) ?? [], file).toEqual([]);
     }
