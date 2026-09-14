@@ -660,17 +660,20 @@ To run the production stack:
 
 - `infrastructure/docker/nginx/tls/fullchain.pem` and `privkey.pem`, for the host
   in `PUBLIC_ORIGIN`. The directory is mounted read-only into `web` only, and its
-  contents are git-ignored. nginx refuses to start without them.
+  contents are git-ignored. Since BETA-P0-017 the web image's certificate gate
+  refuses to start without a valid pair (§12.3).
 - `PUBLIC_ORIGIN`, `ALLOWED_ORIGINS` and the OIDC settings. The overlay pins
   `NODE_ENV=production` and `AUTH_MODE=oidc` for the api, so every production
   gate runs.
 
 **DECISION REQUIRED:**
 
-- **Certificate issuance and renewal.** No ACME client is configured, and port 80
-  carries a redirect, not `/.well-known/acme-challenge/`. HTTP-01 would need
-  that route added; DNS-01 or an operator-supplied certificate would not.
-  Nothing monitors expiry.
+- **Certificate issuance and renewal.** *Partly closed by BETA-P0-017 (§12).*
+  Port 80 now serves `/.well-known/acme-challenge/`. `scripts/tls-install.sh`
+  validates, installs and hot-reloads a certificate. A startup gate refuses an
+  invalid one, and `npm run tls:check` reports expiry. Still open: which CA,
+  which ACME client, what schedules renewal and the check, and where alerts go
+  (§12.7).
 - **Host firewall / security groups.** The overlay limits what Docker publishes.
   It does not stop another process on the host from listening publicly, or
   replace a firewall that allows only 443/80 inbound. Docker inserts its own
@@ -697,3 +700,196 @@ To run the production stack:
 | `apps/api/test/database-transport.test.ts` | `loadConfig`, compose text | api production rules and gate order; runtime owner, beta capacity and broker transport intact; the declaration made once, for the api; the overlay pins `NODE_ENV=production`; no other service holds a `DATABASE_*`/`PG*` setting |
 | `services/observability/test/compose-secret-distribution.test.ts` | compose text, merged per stack (`!reset`, `!override`) | loopback-only development publication; production publishes exactly 443→8443 and 80→8080; nothing from postgres, api, terminal or sandboxd; `expose:` is not publication; 443 reaches the TLS server and 80 only redirects; `database` membership and `internal`; no TLS-verification bypass in compose, `.env.example`, Makefile, Dockerfiles, nginx, workflows, scripts or any `src`/`bin` |
 | `scripts/check-secret-distribution.mjs` (`make secrets-check`, CI `gates`) | `docker compose config` for base, runtime, observability and production | the same policy on the resolved configuration |
+
+
+## 12. Public TLS edge and certificate lifecycle (BETA-P0-017)
+
+Like §8 and §11, this section makes a deployment *safe to operate*. It deploys
+nothing and issues nothing. No CA, ACME client, DNS provider, cloud load
+balancer or Kubernetes ingress is chosen here, and none is assumed. The
+operator procedure is [runbooks/production-tls.md](runbooks/production-tls.md).
+
+### 12.1 Before
+
+What `main` at `7597092` did, read from the files and confirmed by running the
+web image with the production configuration:
+
+| | Behaviour |
+|---|---|
+| 443 | nginx TLS on 8443, TLS 1.2 and 1.3, `http2`, HSTS one year, session tickets off |
+| TLS 1.2 suites | nginx's default `HIGH:!aNULL:!MD5`, which includes CBC suites and RSA key exchange without forward secrecy |
+| Server name | `server_name _`: the certificate was served to any SNI name, or none |
+| 80 | `return 301 https://$host$request_uri`: the redirect target came from the request's own `Host` header |
+| ACME | none. Port 80 redirected `/.well-known/acme-challenge/` like everything else |
+| Missing `fullchain.pem`/`privkey.pem` | nginx exited: fail closed |
+| Key not matching the certificate | nginx exited: fail closed |
+| Expired, not yet valid, wrong host, no intermediate, a CA certificate, a 1024-bit key, a world-readable key, a key inside `fullchain.pem` | **nginx started and served it** |
+| `PUBLIC_ORIGIN` | not given to the web container; not required by the production overlay |
+| Renewal | one README line: `docker compose exec web nginx -s reload` |
+| Expiry | nothing checked or reported it |
+| Build context | no `.dockerignore`. No Dockerfile copied the key, but it was sent to the builder with the rest of the repository |
+| Version banner | `server: nginx/1.27.5` |
+
+### 12.2 The shape
+
+The existing nginx edge is extended. There is no second proxy, and the stack
+ships no ACME client.
+
+```text
+ operator / ACME client (host)                       web container (nginx)
+ ─────────────────────────────                       ──────────────────────────────────────────
+ fullchain.pem + privkey.pem ─► scripts/tls-install.sh
+                                 1 stage   tls/*.next        ┌─ /etc/nginx/tls        (ro bind)
+                                 2 check   ── exec ────────► │  jtt-tls-preflight check
+                                 3 swap    *.previous, mv    │
+                                 4 reload  ── exec ────────► │  nginx -t; nginx -s reload
+                                 5 prove   ── exec ────────► │  jtt-tls-preflight served
+ ACME HTTP-01 tokens ─► acme-webroot/ ─────────────────────► └─ /var/www/acme         (ro bind) ─► :8080
+
+ container start ─► /docker-entrypoint.d/05-…  jtt-tls-preflight startup
+                    └─ pass ─► writes runtime/public-host.conf ─► nginx loads web-tls.conf
+                    └─ fail ─► exit 1; nginx never starts
+
+ npm run tls:check (anywhere; on a schedule) ─► files, verified HTTPS, :80 redirect, ACME route ─► exit 0/1/2
+ compose health check (every 60s)            ─► served certificate == installed, not expired
+```
+
+### 12.3 The startup gate
+
+`infrastructure/docker/nginx/tls-preflight.sh`, installed in the web image as
+`jtt-tls-preflight`. It runs as the first `/docker-entrypoint.d` hook, and only
+when `WEB_TLS=required`, which the production overlay pins. It refuses (exit 1,
+container stops) on:
+
+- `PUBLIC_ORIGIN` unset, not `https://`, carrying a port, path or credentials,
+  or naming an IP address. The value is not echoed back;
+- either file missing, empty, unreadable or not a regular file, or the whole
+  directory not mounted;
+- a key readable by group or others, a key inside `fullchain.pem`, or a
+  certificate inside `privkey.pem`;
+- a certificate that cannot be parsed, or a key that is unparseable or encrypted;
+- a key that does not match the certificate. The gate compares the key's public
+  half with the certificate's public key;
+- RSA under 2048 bits, EC under 256 bits, or any other key type;
+- a CA certificate first in the file;
+- not yet valid, expired, or not naming the host;
+- no certificate after the server certificate, or a chain that
+  `openssl verify -partial_chain -purpose sslserver -verify_hostname` rejects:
+  out of order, an unrelated certificate, an expired intermediate.
+
+Skipping the gate is also a refusal. `web-tls.conf` includes
+`/etc/nginx/jumptotech/runtime/public-host.conf`, and only a passing gate writes
+that file. The gate deletes any copy left from an earlier start first. With the
+TLS configuration mounted and `WEB_TLS` unset, nginx exits on the missing
+include. An unknown `WEB_TLS` value is refused.
+
+The gate runs on every container start. A certificate that expires while the
+container runs keeps being served; the health check and `tls:check` report it.
+A *restart* after expiry then fails closed, and the web container stays down
+until a valid certificate is installed (runbook §7).
+
+The gate does not check that a *public* root anchors the chain. The chain file
+is its only trust anchor. `tls:check` verifies the public chain from outside.
+
+### 12.4 The listener
+
+- **Protocols and suites.** TLS 1.2 and 1.3 only. For 1.2, only the six
+  ECDHE-ECDSA/RSA AES-GCM and ChaCha20-Poly1305 suites (Mozilla
+  *intermediate*, less DHE). TLS 1.3 uses OpenSSL's defaults, all of them AEAD.
+  X25519, P-256 and P-384. Session tickets off, a shared session cache,
+  `server_tokens off`.
+- **One host.** The named server's `server_name` comes from the gate. The
+  `default_server` on 8443 has `ssl_reject_handshake on`, so a client that does
+  not send that SNI name gets no certificate. A request whose `Host` differs
+  from its SNI name reaches that server and gets `421`.
+- **Port 80.** `301 https://$server_name$request_uri`, so the target is the
+  configured host whatever `Host` the request names. The one exception is
+  `^~ /.well-known/acme-challenge/`, served read-only from the webroot, 404 for
+  an absent token. No `proxy_pass`, no application files.
+- **Headers and routes.** HSTS (`max-age=31536000`, no `includeSubDomains`, no
+  preload) is unchanged. The routes are still the shared `locations.conf`, with
+  `X-Forwarded-Proto $scheme` (now always `https` on the application path).
+- **WebSocket.** `/terminal` is upgraded exactly as before. `http2 on` does not
+  affect it: nginx does not offer RFC 8441 WebSockets over HTTP/2, so browsers
+  open the terminal over HTTP/1.1, and the integration suite does the same
+  through TLS.
+- **Reload.** `nginx -s reload` is graceful. New connections get the new
+  certificate. Open terminal WebSockets stay on the old workers until they close,
+  and the integration suite proves one survives a renewal.
+
+### 12.5 The lifecycle
+
+| Stage | Mechanism | Runbook |
+|---|---|---|
+| DNS | an A/AAAA record for `PUBLIC_ORIGIN`'s host pointing at the host. No provider is assumed | §2 |
+| Initial provisioning | any CA's certificate, or ACME HTTP-01 (standalone before the stack first starts, or through the webroot), installed with `scripts/tls-install.sh` | §3 |
+| Renewal | the ACME client's own schedule with `tls-install.sh` as its deploy hook; or by hand, driven by `tls:check` warnings | §4 |
+| Reload | `tls-install.sh`: `nginx -t`, graceful reload, served fingerprint proven, automatic rollback to `*.previous` | §4.3 |
+| Health | compose health check `jtt-tls-preflight served`: the served certificate is the installed one and has not expired | §5.2 |
+| Expiry | `npm run tls:check`: WARNING under 21 days, CRITICAL under 7, or on any verification failure; exit 0/1/2 | §5.1 |
+| Staging | `tls:check --connect <address> --ca-file <staging root>`; an ACME CA's staging directory | §6 |
+| Failure | refusal messages, ACME failures, an expired certificate, rollback | §7 |
+| Compromise | new key, revoke, install, delete `*.previous`, find every other copy | §8 |
+
+### 12.6 The private key
+
+It lives in `infrastructure/docker/nginx/tls/privkey.pem` (mode 600) on the host,
+in `privkey.pem.previous` after a renewal, and wherever the issuing client keeps
+its own copy. It is bind-mounted read-only into `web` and nowhere else
+(`credentialMounts`). It never enters:
+
+- **git.** The directory's `.gitignore` admits only `README.md` and itself;
+- **an image or build context.** `/.dockerignore` excludes the directory, and
+  the contract test fails any Dockerfile `COPY` of it or of a parent;
+- **the browser bundle or any service's source.** No `apps/*/src` or
+  `services/*/src` names it, apart from the operator check, which is a command
+  and not a served surface;
+- **logs, check output or install output.** The gate uses the key only through
+  `openssl pkey -noout` and `-pubout`. The check reads it only through
+  `X509Certificate.checkPrivateKey` and never repeats an error derived from it.
+  Tests search every refusal log for key fragments;
+- **metrics and health responses.** Nothing exports TLS metrics. The api's
+  `/health` and the listeners' `/livez`/`/readyz` know nothing about the edge.
+
+### 12.7 DECISION REQUIRED
+
+- **The certificate authority and issuance method.** An ACME CA with HTTP-01
+  through the shipped webroot, an ACME CA with DNS-01 (which needs a DNS
+  provider's API credentials, and so a DNS provider decision), or a commercial
+  CA installed by hand. Maximum certificate lifetimes are shrinking
+  (CA/Browser Forum ballot SC-081: 200 days from March 2026, 100 from March
+  2027, 47 from March 2029), which makes manual renewal steadily less viable.
+- **The ACME client** and where it runs: host package, container, systemd timer.
+- **The final public hostname.** Every hostname in this repository is an
+  `example.com` or `.test` placeholder. None is approved.
+- **Who schedules `tls:check`, and where its alerts go.** The exit code is the
+  signal. The observability overlay is not part of the production contract
+  (§11.7), so no Prometheus alert exists for certificate expiry.
+- **HSTS `includeSubDomains` and preload, CAA records, IPv6 (AAAA).** These are
+  decisions about the whole domain.
+- **Key custody.** Where the key and its backups live beyond the host, and who
+  can read them (see the backup runbook's list of things no database backup
+  holds).
+- **More than one edge host, or a managed edge** (a cloud load balancer, a CDN, a
+  Kubernetes ingress with cert-manager). That is part of the production
+  substrate decision. This edge is one host's nginx.
+
+### 12.8 Development
+
+Unchanged. The base, runtime and observability stacks publish plain HTTP on
+`127.0.0.1:3000` from `web.conf`. The gate logs that `WEB_TLS` is not
+`required` and exits 0. No certificate is needed, `PUBLIC_ORIGIN` stays
+optional outside production, and a tunnel on the same host still works.
+
+### 12.9 What proves it
+
+| Suite | Runs against | Proves |
+|---|---|---|
+| `services/observability/test/tls-edge-contract.test.ts` | the files, hermetically (`npm test`) | the overlay pins the gate, requires `PUBLIC_ORIGIN`, mounts three things read-only and health-checks the served certificate; development stacks untouched; the three nginx servers, suites, SNI refusal, canonical redirect, ACME location; the terminal upgrade; the Dockerfile edge stage and hook order; the gate writes its include only after validation and never prints the key; the install script's order and rollback; key material excluded from git, build contexts, `COPY`, bundle and services; make targets, npm scripts, CI job and this documentation |
+| `services/observability/test/tls-certificate-health.test.ts` | in-memory CA; real HTTPS and HTTP listeners on loopback (`npm test`) | origin rules; every file refusal; warning and critical expiry windows; verified probes for expired, not-yet-valid, wrong-host, missing-intermediate, self-signed and untrusted chains; HSTS; the 80 redirect and ACME route; served-versus-installed drift; the command line's exit codes, JSON and usage errors; no key material in any output |
+| `services/observability/test/tls-edge-integration.test.ts` (`make test-tls-edge`, CI `tls-edge-integration`) | the web image's `edge` stage, configured from `docker compose config` for the production stack; test-only certificates for `labs.jtt.test` | HTTPS with a verified chain, HSTS and no banner; API proxying with `X-Forwarded-Proto: https`; TLS 1.3, TLS 1.2 with AEAD only; TLS 1.1 and a CBC suite refused where a permissive control server accepts them; unknown SNI and mismatched `Host` refused; the terminal WebSocket through TLS; the canonical redirect and ACME tokens; 21 fail-closed refusals with no worker started and no key in the logs; `tls:check` against the running edge; a renewal that keeps an open WebSocket; refused renewals that change nothing; drift caught by the health check and `tls:check` |
+| `scripts/check-secret-distribution.mjs` | `docker compose config` | the production stack still resolves (with `PUBLIC_ORIGIN`), publishes exactly 443 and 80, and mounts the TLS directory into `web` only |
+
+**Not proven:** issuance by any public CA, renewal on a schedule, a real DNS
+record, or a real production host. None exists. No test contacts a CA, and none
+may.

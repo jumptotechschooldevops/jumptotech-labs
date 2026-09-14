@@ -362,17 +362,22 @@ describe('network exposure (BETA-P0-012)', () => {
       .split('\n')
       .filter((line) => !/^\s*#/.test(line))
       .join('\n');
-    const servers = tls.split(/^server\s*\{/m).slice(1);
+    const [httpLevel = '', ...servers] = tls.split(/^server\s*\{/m);
     const redirect = servers.find((block) => /listen\s+8080\b/.test(block)) ?? '';
-    const https = servers.find((block) => /listen\s+8443\s+ssl\b/.test(block)) ?? '';
+    // The server that holds the certificate; the 8443 default_server holds none (BETA-P0-017).
+    const https = servers.find((block) => /listen\s+8443\s+ssl;/.test(block)) ?? '';
 
-    expect(redirect).toMatch(/return\s+301\s+https:\/\/\$host\$request_uri;/);
-    expect(redirect).not.toMatch(/proxy_pass|include|root\s/);
+    // BETA-P0-017: the redirect goes to the configured host rather than the
+    // request's Host header, and port 80 also answers ACME HTTP-01 tokens from
+    // one read-only directory. Still no proxy_pass and no application route.
+    expect(redirect).toMatch(/return\s+301\s+https:\/\/\$server_name\$request_uri;/);
+    expect(redirect).not.toMatch(/proxy_pass|locations\.conf|\/usr\/share\/nginx\/html|ssl_certificate/);
+    expect([...redirect.matchAll(/\broot\s+([^;]+);/g)].map((match) => match[1])).toEqual(['/var/www/acme']);
     expect(https).toMatch(/ssl_certificate\s+\/etc\/nginx\/tls\/fullchain\.pem;/);
     expect(https).toMatch(/ssl_certificate_key\s+\/etc\/nginx\/tls\/privkey\.pem;/);
-    expect(https).toMatch(/ssl_protocols\s+TLSv1\.2 TLSv1\.3;/);
+    expect(httpLevel).toMatch(/ssl_protocols\s+TLSv1\.2 TLSv1\.3;/);
     expect(https).toMatch(/include\s+\/etc\/nginx\/jumptotech\/locations\.conf;/);
-    expect(servers).toHaveLength(2);
+    expect(servers).toHaveLength(3);
     expect(read('docker-compose.production.yml')).toMatch(
       /source: \.\/infrastructure\/docker\/nginx\/web-tls\.conf\n\s+target: \/etc\/nginx\/conf\.d\/default\.conf/,
     );

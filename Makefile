@@ -15,7 +15,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill typecheck check reset clean
+.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -151,6 +151,23 @@ db-backup-verify: ## Check a backup's checksum and readability, changing nothing
 
 test-db-backup: ## Prove the backup/restore scripts' refusals and failure paths (no daemon needed)
 	@bash scripts/test-db-backup-restore.sh
+
+# --- public TLS edge (BETA-P0-017) --------------------------------------------
+#
+# docs/runbooks/production-tls.md. No target issues a certificate: which CA and
+# which ACME client are still open decisions. These install one, check one, and
+# prove the edge's behaviour with test-only certificates.
+
+tls-install: ## Validate, install and hot-reload the production edge's certificate (CERT=fullchain.pem KEY=privkey.pem)
+	@test -n "$(CERT)" && test -n "$(KEY)" || { echo "usage: make tls-install CERT=/path/fullchain.pem KEY=/path/privkey.pem" >&2; exit 2; }
+	@bash scripts/tls-install.sh --cert "$(CERT)" --key "$(KEY)"
+
+tls-check: ## Check the TLS edge and certificate expiry; exit 0/1/2 (ARGS="--origin https://host --cert-dir infrastructure/docker/nginx/tls")
+	@npm run --silent tls:check -- $(ARGS)
+
+test-tls-edge: ## Prove the TLS edge in the real web image: gate, redirect, WebSocket, renewal (needs Docker)
+	@RUN_INTEGRATION_TESTS=1 npx vitest run test/tls-edge-integration.test.ts --root services/observability \
+		--testTimeout=300000 --hookTimeout=900000
 
 db-restore-drill: ## Back up, destroy, restore and verify against disposable PostgreSQL servers (needs Docker)
 	@bash scripts/db-restore-drill.sh

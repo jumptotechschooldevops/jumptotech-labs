@@ -704,3 +704,54 @@ jobs:
       - name: Clean up
         if: always()
         run: docker ps -aq --filter label=jumptotech.io/managed=true | xargs -r docker rm -f || true
+
+  # --- Public TLS edge (BETA-P0-017) ------------------------------------------
+  #
+  # The web image's `edge` stage, configured from `docker compose config` for
+  # the production stack, against real TLS clients. The certificates are
+  # TEST-ONLY: minted in memory for labs.jtt.test (a reserved .test name) by
+  # test-support/tls-pki.ts. The job contacts no CA and issues nothing. It
+  # proves the certificate gate's refusals, TLS versions and suites (with
+  # negative controls), the redirect and ACME route, the terminal WebSocket
+  # through TLS, and renewal through scripts/tls-install.sh.
+  tls-edge-integration:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-tls
+      JTT_TEST_RUN_ID: citls${{ github.run_id }}
+      RUN_INTEGRATION_TESTS: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: TLS edge suite, in the real web image
+        run: |
+          npx vitest run test/tls-edge-integration.test.ts \
+            --root services/observability \
+            --testTimeout=300000 --hookTimeout=900000
+
+      # The edge's own logs are safe to print: the suite asserts they never
+      # contain key material, refusals included.
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker ps -a --filter label=jumptotech.io/tls-edge-test
+          for c in $(docker ps -aq --filter label=jumptotech.io/tls-edge-test); do
+            docker logs --tail 50 "$c" 2>&1 || true
+          done
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/tls-edge-test | xargs -r docker rm -f || true
+          docker network ls -q --filter label=jumptotech.io/tls-edge-test | xargs -r docker network rm || true
