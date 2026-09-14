@@ -13,7 +13,12 @@
  * processes and a mutex in one of them cannot protect the other.
  */
 import { describe, expect, it } from 'vitest';
-import { InMemorySessionStore, type LabSession, type SessionStore } from '../src/index.js';
+import {
+  InMemorySessionStore,
+  OCCUPYING_STATUSES,
+  type LabSession,
+  type SessionStore,
+} from '../src/index.js';
 
 const NOW = '2026-08-25T12:00:00.000Z';
 const HOUR_LATER = '2026-08-25T13:00:00.000Z';
@@ -361,7 +366,204 @@ export function sessionStoreContract(
       expect(admitted.filter(Boolean)).toHaveLength(2);
       expect(await store.countOccupying()).toBe(2);
     });
+
+    // -------------------------------------------- per-student capacity (P0-009)
+
+    const [ALICE, BOB, CAROL, DAVE] = CONTRACT_OWNERS as [string, string, string, string];
+
+    it('refuses a student at their own limit, says which limit refused, and inserts nothing', async () => {
+      const store = await makeStore();
+      await store.create(seat('a1a1a1a1', 0, { ownerUserId: ALICE, status: 'ACTIVE' }));
+      await store.create(seat('a1a1a1a1', 1, { ownerUserId: ALICE, status: 'ACTIVE' }));
+
+      const third = seat('a1a1a1a1', 2, { ownerUserId: ALICE });
+      expect(
+        await store.createWithinLimits(third, { maxOccupying: 10, maxOccupyingPerOwner: 2 }),
+      ).toEqual({ admitted: false, refusedBy: 'owner', occupying: 2, ownerOccupying: 2 });
+      expect(await store.get(third.sessionId)).toBeNull();
+      expect(await store.countOccupying()).toBe(2);
+    });
+
+    it('admits another student while one is at their limit', async () => {
+      const store = await makeStore();
+      await store.create(seat('b2b2b2b2', 0, { ownerUserId: ALICE, status: 'ACTIVE' }));
+
+      const limits = { maxOccupying: 10, maxOccupyingPerOwner: 1 };
+      expect((await store.createWithinLimits(seat('b2b2b2b2', 1, { ownerUserId: ALICE }), limits)).admitted).toBe(false);
+      const bobs = seat('b2b2b2b2', 2, { ownerUserId: BOB });
+      expect(await store.createWithinLimits(bobs, limits)).toEqual({ admitted: true });
+      expect((await store.get(bobs.sessionId))?.ownerUserId).toBe(BOB);
+    });
+
+    it('admits exactly up to the per-student boundary', async () => {
+      const store = await makeStore();
+      const limits = { maxOccupying: 10, maxOccupyingPerOwner: 3 };
+      const outcomes = [];
+      for (let i = 0; i < 4; i += 1) {
+        outcomes.push((await store.createWithinLimits(seat('c3c3c3c3', i, { ownerUserId: ALICE }), limits)).admitted);
+      }
+      expect(outcomes).toEqual([true, true, true, false]);
+    });
+
+    it('reports the global ceiling when the student still has room of their own', async () => {
+      const store = await makeStore();
+      await store.create(seat('d4d4d4d4', 0, { ownerUserId: ALICE, status: 'ACTIVE' }));
+      await store.create(seat('d4d4d4d4', 1, { ownerUserId: BOB, status: 'ACTIVE' }));
+
+      const candidate = seat('d4d4d4d4', 2, { ownerUserId: ALICE });
+      expect(
+        await store.createWithinLimits(candidate, { maxOccupying: 2, maxOccupyingPerOwner: 2 }),
+      ).toEqual({ admitted: false, refusedBy: 'global', occupying: 2, ownerOccupying: 1 });
+      expect(await store.get(candidate.sessionId)).toBeNull();
+    });
+
+    it('reports the per-student limit when both limits would refuse', async () => {
+      const store = await makeStore();
+      await store.create(seat('e5e5e5e5', 0, { ownerUserId: ALICE, status: 'ACTIVE' }));
+
+      expect(
+        await store.createWithinLimits(seat('e5e5e5e5', 1, { ownerUserId: ALICE }), {
+          maxOccupying: 1,
+          maxOccupyingPerOwner: 1,
+        }),
+      ).toMatchObject({ admitted: false, refusedBy: 'owner' });
+    });
+
+    it('counts every status that holds a sandbox against the student, and none that does not', async () => {
+      const store = await makeStore();
+      // DEGRADED (BETA-P0-007) may still hold some or all of its sandbox.
+      const holding = ['CREATING', 'ACTIVE', 'RESETTING', 'DEGRADED', 'ENDING', 'EXPIRING'] as const;
+      const released = ['ENDED', 'EXPIRED', 'FAILED'] as const;
+      // Written out rather than imported, so a status silently joining or
+      // leaving the occupying set fails here instead of passing with it.
+      expect([...OCCUPYING_STATUSES].sort()).toEqual([...holding].sort());
+      let i = 0;
+      for (const status of [...holding, ...released]) {
+        await store.create(seat('f6f6f6f6', i++, { ownerUserId: ALICE, status }));
+      }
+
+      // Six held, three released: a limit of seven leaves exactly one slot.
+      const limits = { maxOccupying: 50, maxOccupyingPerOwner: holding.length + 1 };
+      expect((await store.createWithinLimits(seat('f6f6f6f6', i++, { ownerUserId: ALICE }), limits)).admitted).toBe(true);
+      expect(
+        await store.createWithinLimits(seat('f6f6f6f6', i++, { ownerUserId: ALICE }), limits),
+      ).toEqual({ admitted: false, refusedBy: 'owner', occupying: 7, ownerOccupying: 7 });
+    });
+
+    it('gives the student their slot back only once the session stops holding a sandbox', async () => {
+      const store = await makeStore();
+      const held = seat('a7a7a7a7', 0, { ownerUserId: ALICE, status: 'ACTIVE' });
+      await store.create(held);
+      const limits = { maxOccupying: 10, maxOccupyingPerOwner: 1 };
+
+      // Teardown in flight: the sandbox still exists, so the slot is still taken.
+      await store.transition(held.sessionId, ['ACTIVE'], 'ENDING');
+      expect((await store.createWithinLimits(seat('a7a7a7a7', 1, { ownerUserId: ALICE }), limits)).admitted).toBe(false);
+
+      await store.transition(held.sessionId, ['ENDING'], 'ENDED');
+      expect((await store.createWithinLimits(seat('a7a7a7a7', 2, { ownerUserId: ALICE }), limits)).admitted).toBe(true);
+    });
+
+    it('applies no per-student limit to a session without an owner, but still the global one', async () => {
+      const store = await makeStore();
+      const limits = { maxOccupying: 3, maxOccupyingPerOwner: 1 };
+      const outcomes = [];
+      for (let i = 0; i < 4; i += 1) {
+        outcomes.push(await store.createWithinLimits(seat('b8b8b8b8', i), limits));
+      }
+      expect(outcomes.map((o) => o.admitted)).toEqual([true, true, true, false]);
+      expect(outcomes[3]).toMatchObject({ refusedBy: 'global', ownerOccupying: 0 });
+    });
+
+    it('treats an unset per-student limit as no limit', async () => {
+      const store = await makeStore();
+      for (let i = 0; i < 5; i += 1) {
+        expect((await store.createWithinLimits(seat('c9c9c9c9', i, { ownerUserId: ALICE }), { maxOccupying: 5 })).admitted).toBe(true);
+      }
+      expect(
+        await store.createWithinLimits(seat('c9c9c9c9', 5, { ownerUserId: ALICE }), { maxOccupying: 5 }),
+      ).toMatchObject({ admitted: false, refusedBy: 'global' });
+    });
+
+    it("holds one student's limit when their starts arrive together", async () => {
+      const store = await makeStore();
+      const decisions = await Promise.all(
+        Array.from({ length: 8 }, (_, i) =>
+          store.createWithinLimits(seat('dadadada', i, { ownerUserId: ALICE }), {
+            maxOccupying: 20,
+            maxOccupyingPerOwner: 3,
+          }),
+        ),
+      );
+
+      expect(decisions.filter((d) => d.admitted)).toHaveLength(3);
+      expect(decisions.filter((d) => !d.admitted && d.refusedBy === 'owner')).toHaveLength(5);
+      expect(await store.countOccupying()).toBe(3);
+    });
+
+    it('admits different students together up to the global ceiling', async () => {
+      const store = await makeStore();
+      const owners = [ALICE, BOB, CAROL, DAVE];
+      // Four students, three starts each, two each allowed: exactly eight fit
+      // and the global ceiling of eight never has to refuse anyone.
+      const candidates = owners.flatMap((owner, o) =>
+        Array.from({ length: 3 }, (_, i) => seat('ebebebeb', o * 10 + i, { ownerUserId: owner })),
+      );
+      const decisions = await Promise.all(
+        candidates.map((c) => store.createWithinLimits(c, { maxOccupying: 8, maxOccupyingPerOwner: 2 })),
+      );
+
+      expect(decisions.filter((d) => d.admitted)).toHaveLength(8);
+      expect(decisions.filter((d) => !d.admitted).every((d) => !d.admitted && d.refusedBy === 'owner')).toBe(true);
+      const occupying = await store.listOccupying();
+      for (const owner of owners) {
+        expect(occupying.filter((s) => s.ownerUserId === owner)).toHaveLength(2);
+      }
+    });
+
+    it('holds the global ceiling when students under their own limits arrive together', async () => {
+      const store = await makeStore();
+      const owners = [ALICE, BOB, CAROL, DAVE];
+      const candidates = owners.flatMap((owner, o) =>
+        Array.from({ length: 3 }, (_, i) => seat('fcfcfcfc', o * 10 + i, { ownerUserId: owner })),
+      );
+      const decisions = await Promise.all(
+        candidates.map((c) => store.createWithinLimits(c, { maxOccupying: 5, maxOccupyingPerOwner: 2 })),
+      );
+
+      expect(decisions.filter((d) => d.admitted)).toHaveLength(5);
+      expect(await store.countOccupying()).toBe(5);
+      const occupying = await store.listOccupying();
+      for (const owner of owners) {
+        expect(occupying.filter((s) => s.ownerUserId === owner).length).toBeLessThanOrEqual(2);
+      }
+    });
   });
+}
+
+/**
+ * Owners the per-student tests start sessions for.
+ *
+ * UUIDs because `owner_user_id` is a UUID with a foreign key to `users`; the
+ * PostgreSQL run inserts these rows before the contract runs.
+ */
+export const CONTRACT_OWNERS: readonly string[] = [
+  '00000000-0000-4000-8000-00000000a11c',
+  '00000000-0000-4000-8000-000000000b0b',
+  '00000000-0000-4000-8000-0000000ca201',
+  '00000000-0000-4000-8000-0000000da7e0',
+  '00000000-0000-4000-8000-0000000e7e00',
+];
+
+/**
+ * A session with an id and sandbox handle unique to `(tag, index)`.
+ *
+ * `tag` is eight hex characters, so the last twelve characters — which
+ * `session()` derives the sandbox handle from — never repeat.
+ */
+export function seat(tag: string, index: number, overrides: Partial<LabSession> = {}): LabSession {
+  const sessionId = `sess-0000${tag}${String(index).padStart(4, '0')}`;
+  return session({ sessionId, ...overrides });
 }
 
 sessionStoreContract('InMemorySessionStore', () => new InMemorySessionStore());

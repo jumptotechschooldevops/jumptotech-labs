@@ -41,11 +41,16 @@
 import {
   ACTIVITY_STATUSES,
   OCCUPYING_STATUSES,
-  occupiesCapacity,
   type LabSession,
   type SessionStatus,
 } from './types.js';
-import type { SessionStore, TransitionGuard } from './store.js';
+import {
+  decideCapacity,
+  type CapacityDecision,
+  type CapacityLimits,
+  type SessionStore,
+  type TransitionGuard,
+} from './store.js';
 
 /** Something that can run one parameterised statement: the pool, or one client. */
 export interface SessionSqlQuery {
@@ -329,12 +334,41 @@ export class PostgresSessionStore implements SessionStore {
    * rolls the transaction back and the error reaches the caller.
    */
   async createWithinCapacity(session: LabSession, maxOccupying: number): Promise<boolean> {
+    return (await this.createWithinLimits(session, { maxOccupying })).admitted;
+  }
+
+  /**
+   * Reserve a slot against the global and the per-owner ceiling, atomically.
+   *
+   * The per-owner count is taken under the *same* capacity lock, in the same
+   * transaction, as the global one. No second lock: every admission already
+   * serialises on this one, so a per-owner key would add a lock-ordering
+   * question and no safety. Two starts for one student therefore cannot both
+   * count one-below-the-limit, and starts for different students still queue
+   * only for the few milliseconds of one count and one insert.
+   *
+   * Both counts are one statement, so they come from one snapshot — taken after
+   * the lock is granted, and so after every earlier holder has committed.
+   */
+  async createWithinLimits(session: LabSession, limits: CapacityLimits): Promise<CapacityDecision> {
     return this.db.transaction(async (tx) => {
       await tx.query('SELECT pg_advisory_xact_lock($1)', [CAPACITY_LOCK_KEY]);
-      const occupied = await countOccupying(tx);
-      if (occupiesCapacity(session.status) && occupied >= maxOccupying) return false;
+      const { rows } = await tx.query<{ occupying: number; owner_occupying: number }>(
+        `SELECT count(*)::int AS occupying,
+                count(*) FILTER (WHERE owner_user_id = $2)::int AS owner_occupying
+           FROM lab_sessions
+          WHERE status = ANY($1)`,
+        [[...OCCUPYING_STATUSES], session.ownerUserId ?? null],
+      );
+      const decision = decideCapacity(
+        session,
+        limits,
+        Number(rows[0]?.occupying ?? 0),
+        Number(rows[0]?.owner_occupying ?? 0),
+      );
+      if (!decision.admitted) return decision;
       await insertSession(tx, session);
-      return true;
+      return decision;
     });
   }
 }

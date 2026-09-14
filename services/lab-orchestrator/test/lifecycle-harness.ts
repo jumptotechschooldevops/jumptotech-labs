@@ -7,6 +7,7 @@
  */
 import {
   LinuxLabProvider,
+  type CapacityLimits,
   type CreateResult,
   type DestroyResult,
   type LabSession,
@@ -109,6 +110,7 @@ export class PausableStore implements SessionStore {
   touchActivity(sessionId: string, at: string) { return this.inner.touchActivity(sessionId, at); }
   listExpirable(nowIso: string) { return this.inner.listExpirable(nowIso); }
   createWithinCapacity(session: LabSession, max: number) { return this.inner.createWithinCapacity(session, max); }
+  createWithinLimits(session: LabSession, limits: CapacityLimits) { return this.inner.createWithinLimits(session, limits); }
   countOccupying() { return this.inner.countOccupying(); }
 }
 

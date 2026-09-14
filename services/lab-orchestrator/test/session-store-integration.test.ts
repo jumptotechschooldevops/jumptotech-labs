@@ -19,10 +19,21 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PostgresDatabase, migrate } from '@jumptotech/progress';
-import { PostgresSessionStore, type LabSession } from '../src/index.js';
-import { sessionStoreContract, session } from './session-store-contract.test.js';
+import {
+  OCCUPYING_STATUSES,
+  PostgresSessionStore,
+  type CapacityDecision,
+  type LabSession,
+} from '../src/index.js';
+import {
+  CONTRACT_OWNERS,
+  seat,
+  session,
+  sessionStoreContract,
+} from './session-store-contract.test.js';
 import { sessionLifecycleRaces } from './session-lifecycle-races.test.js';
 import { sessionRecovery } from './session-recovery.test.js';
+import { perStudentCapacity } from './session-per-student-capacity.test.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const enabled = process.env.RUN_DB_TESTS === '1' && typeof url === 'string' && url.length > 0;
@@ -49,6 +60,15 @@ if (!enabled) {
       applicationName: 'jtt-session-store-tests',
     });
     await migrate(database);
+    // `owner_user_id` references `users`, so the owners the per-student tests
+    // start sessions for have to exist first.
+    for (const [i, userId] of CONTRACT_OWNERS.entries()) {
+      await database.query(
+        `INSERT INTO users (user_id, issuer, subject) VALUES ($1, 'urn:jumptotech:test', $2)
+         ON CONFLICT (user_id) DO NOTHING`,
+        [userId, `session-store-owner-${i}`],
+      );
+    }
   }, 120_000);
 
   afterAll(async () => {
@@ -70,6 +90,39 @@ if (!enabled) {
   // BETA-P0-007: interrupted operations recovered, with the claims and their
   // status timestamps decided by PostgreSQL.
   sessionRecovery('PostgresSessionStore', fresh);
+
+  // BETA-P0-009: the per-student limit through two managers, each standing for
+  // an API instance with a pool of its own — so no two starts share a backend
+  // by construction, and every admission is decided by PostgreSQL.
+  const instancePools: PostgresDatabase[] = [];
+  const instancePool = (name: string): PostgresDatabase => {
+    const pool = PostgresDatabase.fromConfig({
+      url: url!,
+      ssl: false,
+      maxConnections: 3,
+      connectionTimeoutMs: 10_000,
+      idleTimeoutMs: 10_000,
+      statementTimeoutMs: 30_000,
+      applicationName: name,
+    });
+    instancePools.push(pool);
+    return pool;
+  };
+  afterAll(async () => {
+    await Promise.all(instancePools.map((pool) => pool.close().catch(() => undefined)));
+  });
+  let apiA: PostgresDatabase | undefined;
+  let apiB: PostgresDatabase | undefined;
+  perStudentCapacity(
+    'PostgresSessionStore, two API instances',
+    async () => {
+      apiA ??= instancePool('jtt-per-student-api-a');
+      apiB ??= instancePool('jtt-per-student-api-b');
+      await database.query('TRUNCATE lab_sessions');
+      return { a: new PostgresSessionStore(apiA), b: new PostgresSessionStore(apiB) };
+    },
+    CONTRACT_OWNERS,
+  );
 
   describe('durable session store — persistence and recovery', () => {
     beforeEach(async () => {
@@ -444,6 +497,303 @@ if (!enabled) {
       // The database decides, not the application: one insert, one rejection.
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
       expect(await new PostgresSessionStore(database).countOccupying()).toBe(1);
+    });
+  });
+
+  /*
+   * BETA-P0-009 — the per-student limit against real connections.
+   *
+   * The same two proofs the global ceiling has above, for the owner's count:
+   * one that parks every start inside PostgreSQL before releasing them, so the
+   * overlap is established rather than hoped for, and one that forces pooled
+   * connections to be handed between starts statement by statement. Then the
+   * shape production actually has — two API instances, each with its own pool,
+   * one student or many.
+   */
+  describe('durable session store — per-student capacity under real concurrency', () => {
+    const [ALICE, BOB, CAROL, DAVE, ERIN] = CONTRACT_OWNERS as [string, string, string, string, string];
+
+    beforeEach(async () => {
+      await database.query('TRUNCATE lab_sessions');
+    });
+
+    const poolFor = (applicationName: string, maxConnections: number) =>
+      PostgresDatabase.fromConfig({
+        url: url!,
+        ssl: false,
+        maxConnections,
+        connectionTimeoutMs: 10_000,
+        idleTimeoutMs: 10_000,
+        statementTimeoutMs: 30_000,
+        applicationName,
+      });
+
+    /** Settle every start, failing the test rather than hanging if one never returns. */
+    const settleAll = async (
+      attempts: Promise<CapacityDecision>[],
+    ): Promise<CapacityDecision[]> => {
+      let timer: NodeJS.Timeout | undefined;
+      const settled = await Promise.race([
+        Promise.allSettled(attempts),
+        new Promise<'hung'>((resolve) => {
+          timer = setTimeout(() => resolve('hung'), 15_000);
+        }),
+      ]);
+      clearTimeout(timer);
+      expect(settled, 'starts still blocked after 15s').not.toBe('hung');
+      const outcomes = settled as PromiseSettledResult<CapacityDecision>[];
+      // A refusal is an ordinary decision, never an error.
+      expect(outcomes.filter((o) => o.status === 'rejected')).toEqual([]);
+      return outcomes.map((o) => (o as PromiseFulfilledResult<CapacityDecision>).value);
+    };
+
+    /** Occupying sessions per owner, read from a connection that took no part. */
+    const heldPerOwner = async (): Promise<Record<string, number>> => {
+      const { rows } = await database.query<{ owner: string | null; held: number }>(
+        `SELECT owner_user_id::text AS owner, count(*)::int AS held
+           FROM lab_sessions WHERE status = ANY($1) GROUP BY owner_user_id`,
+        [[...OCCUPYING_STATUSES]],
+      );
+      return Object.fromEntries(rows.map((r) => [r.owner ?? 'none', r.held]));
+    };
+
+    /** Nothing left behind by `applicationName`: no open transaction, no advisory lock. */
+    const expectNothingLeftOpen = async (applicationName: string) => {
+      const { rows } = await database.query<{ open: number; locks: number }>(
+        `SELECT
+           (SELECT count(*)::int FROM pg_stat_activity
+             WHERE application_name = $1 AND state LIKE 'idle in transaction%') AS open,
+           (SELECT count(*)::int FROM pg_locks WHERE locktype = 'advisory') AS locks`,
+        [applicationName],
+      );
+      expect(rows[0]).toEqual({ open: 0, locks: 0 });
+    };
+
+    it("admits exactly one start into a student's last slot when every start reaches its insert", async () => {
+      const STARTS = 6;
+      const RACERS = 'jtt-per-student-race';
+      const store = new PostgresSessionStore(database);
+      // Alice holds one of her two; Bob's sessions show the global count is not
+      // what decides this.
+      await store.create(seat('11111111', 0, { ownerUserId: ALICE, status: 'ACTIVE' }));
+      for (let i = 0; i < 3; i += 1) {
+        await store.create(seat('22222222', i, { ownerUserId: BOB, status: 'ACTIVE' }));
+      }
+
+      const racers = poolFor(RACERS, STARTS + 4);
+      let openGate!: () => void;
+      const gateReleased = new Promise<void>((resolve) => (openGate = resolve));
+      let gateHeld!: () => void;
+      const gateReady = new Promise<void>((resolve) => (gateHeld = resolve));
+      // Admits reads, blocks inserts: every start can count and get no further.
+      const gate = database.transaction(async (tx) => {
+        await tx.query('LOCK TABLE lab_sessions IN SHARE ROW EXCLUSIVE MODE');
+        gateHeld();
+        await gateReleased;
+      });
+
+      try {
+        await gateReady;
+        const attempts = Array.from({ length: STARTS }, (_, i) =>
+          new PostgresSessionStore(racers).createWithinLimits(
+            seat('33333333', i, { ownerUserId: ALICE }),
+            { maxOccupying: 50, maxOccupyingPerOwner: 2 },
+          ),
+        );
+
+        let waiting: Record<string, number> = {};
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+          const { rows } = await database.query<{ locktype: string; waiting: number }>(
+            `SELECT l.locktype, count(DISTINCT l.pid)::int AS waiting
+               FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+              WHERE NOT l.granted AND a.application_name = $1
+              GROUP BY l.locktype`,
+            [RACERS],
+          );
+          waiting = Object.fromEntries(rows.map((r) => [r.locktype, r.waiting]));
+          if (Object.values(waiting).reduce((sum, n) => sum + n, 0) >= STARTS) break;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+
+        // Every start is parked in PostgreSQL. Only the one holding the capacity
+        // lock has counted Alice's sessions; the rest have not counted yet.
+        expect(waiting).toEqual({ relation: 1, advisory: STARTS - 1 });
+
+        openGate();
+        const decisions = await settleAll(attempts);
+        expect(decisions.filter((d) => d.admitted)).toHaveLength(1);
+        expect(decisions.filter((d) => !d.admitted)).toEqual(
+          Array.from({ length: STARTS - 1 }, () => ({
+            admitted: false,
+            refusedBy: 'owner',
+            occupying: 5,
+            ownerOccupying: 2,
+          })),
+        );
+        expect(await heldPerOwner()).toEqual({ [ALICE]: 2, [BOB]: 3 });
+        await expectNothingLeftOpen(RACERS);
+      } finally {
+        openGate();
+        await gate.catch(() => undefined);
+        await database.query(
+          'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1',
+          [RACERS],
+        );
+        await racers.close().catch(() => undefined);
+      }
+    }, 60_000);
+
+    it.each([1, 2, 3])(
+      "admits exactly one start into a student's last slot when %i pooled connection(s) serve every start",
+      async (connections) => {
+        const STARTS = 6;
+        const CONTENDED = `jtt-per-student-contended-${connections}`;
+        await new PostgresSessionStore(database).create(
+          seat('44444444', 0, { ownerUserId: ALICE, status: 'ACTIVE' }),
+        );
+
+        const pool = poolFor(CONTENDED, connections);
+        try {
+          const decisions = await settleAll(
+            Array.from({ length: STARTS }, (_, i) =>
+              new PostgresSessionStore(pool).createWithinLimits(
+                seat('55555555', i, { ownerUserId: ALICE }),
+                { maxOccupying: 50, maxOccupyingPerOwner: 2 },
+              ),
+            ),
+          );
+
+          expect(decisions.filter((d) => d.admitted)).toHaveLength(1);
+          expect(decisions.filter((d) => !d.admitted && d.refusedBy === 'owner')).toHaveLength(STARTS - 1);
+          expect(await heldPerOwner()).toEqual({ [ALICE]: 2 });
+          await expectNothingLeftOpen(CONTENDED);
+        } finally {
+          await database.query(
+            'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1',
+            [CONTENDED],
+          );
+          await pool.close().catch(() => undefined);
+        }
+      },
+      60_000,
+    );
+
+    it('holds one student to their limit across two API instances with separate pools', async () => {
+      const apiA = poolFor('jtt-per-student-instance-a', 3);
+      const apiB = poolFor('jtt-per-student-instance-b', 3);
+      try {
+        const decisions = await settleAll(
+          Array.from({ length: 12 }, (_, i) =>
+            new PostgresSessionStore(i % 2 === 0 ? apiA : apiB).createWithinLimits(
+              seat('66666666', i, { ownerUserId: ALICE }),
+              { maxOccupying: 50, maxOccupyingPerOwner: 3 },
+            ),
+          ),
+        );
+
+        expect(decisions.filter((d) => d.admitted)).toHaveLength(3);
+        expect(decisions.filter((d) => !d.admitted && d.refusedBy === 'owner')).toHaveLength(9);
+        expect(await heldPerOwner()).toEqual({ [ALICE]: 3 });
+        await expectNothingLeftOpen('jtt-per-student-instance-a');
+        await expectNothingLeftOpen('jtt-per-student-instance-b');
+      } finally {
+        await Promise.all([apiA.close(), apiB.close()].map((p) => p.catch(() => undefined)));
+      }
+    }, 60_000);
+
+    it('admits many students together across two instances, each to their own limit, when the platform has room', async () => {
+      const owners = [ALICE, BOB, CAROL, DAVE, ERIN];
+      const apiA = poolFor('jtt-per-student-many-a', 3);
+      const apiB = poolFor('jtt-per-student-many-b', 3);
+      try {
+        // Five students, four starts each, two allowed each: ten fit exactly
+        // under a ceiling of ten, so no refusal may be the platform's.
+        const decisions = await settleAll(
+          Array.from({ length: 20 }, (_, i) =>
+            new PostgresSessionStore(i % 2 === 0 ? apiA : apiB).createWithinLimits(
+              seat('77777777', i, { ownerUserId: owners[i % owners.length]! }),
+              { maxOccupying: 10, maxOccupyingPerOwner: 2 },
+            ),
+          ),
+        );
+
+        expect(decisions.filter((d) => d.admitted)).toHaveLength(10);
+        expect(decisions.filter((d) => !d.admitted && d.refusedBy === 'owner')).toHaveLength(10);
+        expect(await heldPerOwner()).toEqual(Object.fromEntries(owners.map((o) => [o, 2])));
+      } finally {
+        await Promise.all([apiA.close(), apiB.close()].map((p) => p.catch(() => undefined)));
+      }
+    }, 60_000);
+
+    it('keeps the global ceiling authoritative when students under their own limits start together', async () => {
+      const owners = [ALICE, BOB, CAROL, DAVE, ERIN];
+      const apiA = poolFor('jtt-per-student-global-a', 3);
+      const apiB = poolFor('jtt-per-student-global-b', 3);
+      try {
+        const decisions = await settleAll(
+          Array.from({ length: 20 }, (_, i) =>
+            new PostgresSessionStore(i % 2 === 0 ? apiA : apiB).createWithinLimits(
+              seat('88888888', i, { ownerUserId: owners[i % owners.length]! }),
+              { maxOccupying: 7, maxOccupyingPerOwner: 2 },
+            ),
+          ),
+        );
+
+        expect(decisions.filter((d) => d.admitted)).toHaveLength(7);
+        expect(await new PostgresSessionStore(database).countOccupying()).toBe(7);
+        const held = await heldPerOwner();
+        expect(Object.values(held).reduce((sum, n) => sum + n, 0)).toBe(7);
+        for (const count of Object.values(held)) expect(count).toBeLessThanOrEqual(2);
+        // Once seven are in, every later start is refused by the ceiling unless
+        // its student was already full.
+        expect(decisions.some((d) => !d.admitted && d.refusedBy === 'global')).toBe(true);
+      } finally {
+        await Promise.all([apiA.close(), apiB.close()].map((p) => p.catch(() => undefined)));
+      }
+    }, 60_000);
+
+    it('releases a student slot for the session that ended, and not for the one still tearing down', async () => {
+      const store = new PostgresSessionStore(database);
+      const ending = seat('99999999', 0, { ownerUserId: ALICE, status: 'ACTIVE' });
+      const ended = seat('99999999', 1, { ownerUserId: ALICE, status: 'ACTIVE' });
+      await store.create(ending);
+      await store.create(ended);
+      await store.create(seat('99999999', 2, { ownerUserId: ALICE, status: 'FAILED' }));
+      const limits = { maxOccupying: 50, maxOccupyingPerOwner: 2 };
+
+      // Read through a second instance: nothing about the answer is process-local.
+      const other = new PostgresSessionStore(database);
+      expect(await other.createWithinLimits(seat('99999999', 3, { ownerUserId: ALICE }), limits)).toMatchObject({
+        admitted: false,
+        refusedBy: 'owner',
+        ownerOccupying: 2,
+      });
+
+      await store.transition(ending.sessionId, ['ACTIVE'], 'ENDING');
+      await store.transition(ended.sessionId, ['ACTIVE'], 'ENDING');
+      await store.transition(ended.sessionId, ['ENDING'], 'ENDED');
+
+      expect(await other.createWithinLimits(seat('99999999', 4, { ownerUserId: ALICE }), limits)).toEqual({
+        admitted: true,
+      });
+      expect(await other.createWithinLimits(seat('99999999', 5, { ownerUserId: ALICE }), limits)).toMatchObject({
+        admitted: false,
+        refusedBy: 'owner',
+      });
+      expect(await heldPerOwner()).toEqual({ [ALICE]: 2 });
+    });
+
+    it('still counts a session without an owner towards the global ceiling', async () => {
+      const store = new PostgresSessionStore(database);
+      await store.create(session({ sessionId: 'sess-0000aaaa00000000', status: 'ACTIVE' }));
+
+      expect(
+        await store.createWithinLimits(seat('aaaaaaaa', 1, { ownerUserId: ALICE }), {
+          maxOccupying: 1,
+          maxOccupyingPerOwner: 5,
+        }),
+      ).toEqual({ admitted: false, refusedBy: 'global', occupying: 1, ownerOccupying: 0 });
     });
   });
 }

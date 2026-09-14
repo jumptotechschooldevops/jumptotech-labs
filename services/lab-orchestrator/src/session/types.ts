@@ -166,6 +166,7 @@ export interface LabSession {
 export type SessionErrorCode =
   | 'PROVIDER_UNAVAILABLE'
   | 'LAB_CAPACITY_REACHED'
+  | 'STUDENT_SESSION_LIMIT_REACHED'
   | 'SESSION_NOT_FOUND'
   | 'SESSION_NOT_ACTIVE'
   | 'INVALID_SESSION_ID'

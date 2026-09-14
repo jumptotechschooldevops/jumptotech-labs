@@ -347,9 +347,11 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       const outcome =
         code === 'LAB_CAPACITY_REACHED'
           ? 'capacity_reached'
-          : code === 'PROVIDER_UNAVAILABLE'
-            ? 'provider_unavailable'
-            : 'provision_failed';
+          : code === 'STUDENT_SESSION_LIMIT_REACHED'
+            ? 'student_limit_reached'
+            : code === 'PROVIDER_UNAVAILABLE'
+              ? 'provider_unavailable'
+              : 'provision_failed';
       recordStart(def, outcome, { durationMs: Date.now() - startedAt, code });
       // The sandbox never came up. Close the attempt honestly rather than
       // leaving a row that says the student is still working on it.

@@ -36,6 +36,12 @@ function buildApp(
   env: Partial<NodeJS.ProcessEnv> = {},
 ): Harness {
   const config = loadConfig({
+    // This suite starts several labs as one development student to prove
+    // sessions stay isolated from each other. The private-beta limit of one live
+    // lab per student has its own tests (session-capacity-config,
+    // student-session-limit), so it is lifted here, explicitly, rather than
+    // re-issuing every request under a second identity.
+    MAX_ACTIVE_SESSIONS_PER_STUDENT: '20',
     TERMINAL_SESSION_SECRET: SECRET,
     LABS_DIR: path.join(repoRoot, 'labs'),
     ALLOWED_ORIGINS: 'http://localhost:3000',
@@ -205,6 +211,44 @@ describe('POST /api/labs/:id/start', () => {
     expect(res.status).toBe(503);
     expect(res.body.error.code).toBe('LAB_CAPACITY_REACHED');
     expect(res.body.error.details).toMatchObject({ activeSessions: 1, maxActiveSessions: 1 });
+  });
+
+  it('refuses a student past MAX_ACTIVE_SESSIONS_PER_STUDENT with 429, while another student still starts', async () => {
+    const harness = buildApp(new FakeKubernetes(), registry, { MAX_ACTIVE_SESSIONS_PER_STUDENT: '1' });
+    const as = (student: string) => ({ Authorization: `Developer ${student}` });
+
+    const first = await request(harness.app).post('/api/labs/K8S-001/start').set(as('alice'));
+    expect(first.status).toBe(200);
+
+    const again = await request(harness.app).post('/api/labs/K8S-001/start').set(as('alice'));
+    expect(again.status).toBe(429);
+    expect(again.body.error.code).toBe('STUDENT_SESSION_LIMIT_REACHED');
+    expect(again.body.error.message).toBe('You already have a practice environment running.');
+    expect(again.body.error.remediation).toMatch(/End a lab/);
+    // Only the caller's own numbers: nothing about how busy the platform is.
+    expect(again.body.error.details).toEqual({ activeSessions: 1, maxActiveSessionsPerStudent: 1 });
+    expect(await harness.sessions.activeCount()).toBe(1);
+
+    const other = await request(harness.app).post('/api/labs/K8S-001/start').set(as('bob'));
+    expect(other.status).toBe(200);
+  });
+
+  it('defaults MAX_ACTIVE_SESSIONS_PER_STUDENT to the beta policy of 1, and refuses a value that is not a positive integer', () => {
+    const base = {
+      TERMINAL_SESSION_SECRET: SECRET,
+      LABS_DIR: path.join(repoRoot, 'labs'),
+      ALLOWED_ORIGINS: 'http://localhost:3000',
+    };
+    const load = (value?: string) =>
+      loadConfig({ ...base, MAX_ACTIVE_SESSIONS_PER_STUDENT: value } as NodeJS.ProcessEnv).lifetimes;
+
+    expect(load().maxActiveSessionsPerStudent).toBe(1);
+    // docker compose passes an unset variable through as an empty string.
+    expect(load('').maxActiveSessionsPerStudent).toBe(1);
+    expect(load('2')).toMatchObject({ maxActiveSessions: 20, maxActiveSessionsPerStudent: 2 });
+    for (const bad of ['0', '-1', 'two']) {
+      expect(() => load(bad)).toThrow(/MAX_ACTIVE_SESSIONS_PER_STUDENT must be a positive integer/);
+    }
   });
 
   it('reports the real failure instead of pretending the lab is ready', async () => {

@@ -93,6 +93,9 @@ not a misconfiguration.
 
 ## 9. Follow-up
 
-Per-user session limits do not exist yet: one student can hold many sessions and
-there is no rate limit on Start Lab. That is PLATFORM-004 scope and this
-incident is evidence for it — record the numbers.
+A per-student session limit exists (`MAX_ACTIVE_SESSIONS_PER_STUDENT`,
+BETA-P0-009, default 1 for the private beta), so one account cannot hold the
+platform. If this incident still looks like a few accounts holding many
+sessions, check the deployed value — record the numbers. Its refusals are
+`jtt_session_student_limit_rejections_total`, not the counter this runbook's
+alert reads. There is still no rate limit on Start Lab.

@@ -162,6 +162,7 @@ describe('the metrics an operator most needs are present', () => {
     'jtt_sessions_active',
     'jtt_sessions_capacity_limit',
     'jtt_session_capacity_rejections_total',
+    'jtt_session_student_limit_rejections_total',
     'jtt_provider_available',
     'jtt_provider_labs_total',
     'jtt_sandboxd_runtime_ops_total',

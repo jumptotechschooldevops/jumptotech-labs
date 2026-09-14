@@ -45,8 +45,13 @@ groups:
       # or a scrape gap. Without it the expression goes empty, the alert
       # silently stops existing, and "no data" is indistinguishable from
       # "healthy" at exactly the moment that distinction matters.
+      #
+      # `student_limit_reached` is not a failure (BETA-P0-009). It is one student
+      # already holding their MAX_ACTIVE_SESSIONS_PER_STUDENT sessions, and that
+      # student pressing Start ten times must not page anyone. It still counts
+      # as an attempt below, so it dilutes the ratio rather than hiding.
       - record: jtt:lab_start_failures:increase10m
-        expr: sum(increase(jtt_lab_start_outcome_total{outcome!="success"}[10m])) or vector(0)
+        expr: sum(increase(jtt_lab_start_outcome_total{outcome!~"success|student_limit_reached"}[10m])) or vector(0)
 
       - record: jtt:lab_start_attempts:increase10m
         expr: sum(increase(jtt_lab_start_outcome_total[10m])) or vector(0)

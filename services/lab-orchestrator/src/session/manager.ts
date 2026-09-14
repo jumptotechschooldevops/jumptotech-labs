@@ -103,6 +103,16 @@ export interface SessionLifetimeConfig {
   warningSeconds: number;
   /** Refuse to start a new session beyond this many concurrent ones. */
   maxActiveSessions: number;
+  /**
+   * Refuse a student's start once *they* hold this many sessions.
+   *
+   * Independent of `maxActiveSessions`, which still binds on its own. Absent
+   * means no per-student limit — the documented default until a beta value is
+   * decided (`MAX_ACTIVE_SESSIONS_PER_STUDENT`). Counted over the same
+   * occupying statuses as the global ceiling, and applied only to a start with
+   * an owner.
+   */
+  maxActiveSessionsPerStudent?: number;
 }
 
 /**
@@ -252,7 +262,10 @@ export interface SessionMetricsHooks {
     steps: Array<{ name: string; outcome: string; durationMs: number }>;
   }): void;
   onTransition?(from: string, to: string): void;
+  /** The platform was full. */
   onCapacityRejected?(track: string): void;
+  /** The student already held their share; the platform may have had room. */
+  onStudentLimitRejected?(track: string): void;
   onSessionEnded?(event: {
     provider: string;
     /** `student`, `idle`, `expired`, `orphaned`, `failed`. */
@@ -576,23 +589,54 @@ export class SessionManager {
         idleTimeoutSeconds: this.#lifetimes.idleTimeoutSeconds,
         idleWarningSeconds: this.#lifetimes.warningSeconds,
       };
-      const admitted = await this.#store.createWithinCapacity(
-        candidate,
-        this.#lifetimes.maxActiveSessions,
-      );
-      if (!admitted) {
-        this.#emit((m) => m.onCapacityRejected?.(lab.track));
+      const decision = await this.#store.createWithinLimits(candidate, {
+        maxOccupying: this.#lifetimes.maxActiveSessions,
+        ...(this.#lifetimes.maxActiveSessionsPerStudent !== undefined
+          ? { maxOccupyingPerOwner: this.#lifetimes.maxActiveSessionsPerStudent }
+          : {}),
+      });
+      if (decision.admitted) return candidate;
+
+      /*
+       * Two refusals, kept apart all the way out.
+       *
+       * A student at their own limit is not the platform being full: the alert
+       * on capacity refusals pages someone, and one student pressing Start
+       * repeatedly must not. The per-student refusal also reports only that
+       * student's own numbers — nothing about how busy anyone else is.
+       */
+      if (decision.refusedBy === 'owner') {
+        const limit = this.#lifetimes.maxActiveSessionsPerStudent ?? decision.ownerOccupying;
+        this.#emit((m) => m.onStudentLimitRejected?.(lab.track));
+        this.#log(
+          `start refused for lab=${lab.id}: per-student limit reached (${decision.ownerOccupying}/${limit})`,
+        );
         throw new SessionError(
-          'LAB_CAPACITY_REACHED',
-          `All ${this.#lifetimes.maxActiveSessions} practice environments are currently in use.`,
-          'Try again shortly — environments are released automatically when students finish or go idle.',
+          'STUDENT_SESSION_LIMIT_REACHED',
+          limit === 1
+            ? 'You already have a practice environment running.'
+            : `You already have ${decision.ownerOccupying} practice environments running, the most one student can hold at once.`,
+          'End a lab you have finished before starting another. Idle environments are also released automatically.',
           {
-            activeSessions: await this.#store.countOccupying(),
-            maxActiveSessions: this.#lifetimes.maxActiveSessions,
+            activeSessions: decision.ownerOccupying,
+            maxActiveSessionsPerStudent: limit,
           },
         );
       }
-      return candidate;
+
+      this.#emit((m) => m.onCapacityRejected?.(lab.track));
+      this.#log(
+        `start refused for lab=${lab.id}: global capacity reached (${decision.occupying}/${this.#lifetimes.maxActiveSessions})`,
+      );
+      throw new SessionError(
+        'LAB_CAPACITY_REACHED',
+        `All ${this.#lifetimes.maxActiveSessions} practice environments are currently in use.`,
+        'Try again shortly — environments are released automatically when students finish or go idle.',
+        {
+          activeSessions: decision.occupying,
+          maxActiveSessions: this.#lifetimes.maxActiveSessions,
+        },
+      );
     }
     throw new SessionError(
       'SESSION_PROVISION_FAILED',
