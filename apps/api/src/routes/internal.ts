@@ -1,8 +1,9 @@
 /**
  * Internal service-to-service routes.
  *
- * One endpoint: the terminal service exchanges a session id for the student's
- * namespace-scoped kubeconfig.
+ * Two endpoints, both called by the terminal service: it exchanges a session id
+ * for the student's namespace-scoped kubeconfig, and it reports that the
+ * student is typing (BETA-P0-005).
  *
  * ```text
  *   browser ──token──► terminal svc ──sid + service secret──► api
@@ -26,9 +27,9 @@
  *      the terminal token was minted for, and that name must still match the
  *      live session record. See below.
  */
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
-import type { SessionManager } from '@jumptotech/lab-orchestrator';
+import type { LabSession, SessionManager } from '@jumptotech/lab-orchestrator';
 import type { ApiConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { sessionErrorResponse } from './sessions.js';
@@ -97,40 +98,76 @@ export function createInternalRoutes(deps: InternalRoutesDeps): Router {
    * where they have always been, so nothing that already reads this changes.
    */
   router.post('/sessions/:sessionId/credentials', asyncRoute(async (req, res) => {
-    const sessionId = String(req.params.sessionId);
-    const claimedOwner = (req.body as { ownerUserId?: unknown } | undefined)?.ownerUserId;
-
-    if (typeof claimedOwner !== 'string' || claimedOwner.length === 0) {
-      sendError(res, 400, {
-        code: 'OWNER_REQUIRED',
-        message: 'A terminal credential request must name the session owner it was issued for.',
-        remediation:
-          'Re-issue the terminal session token: tokens minted before ownership binding are not accepted.',
-      });
-      return;
-    }
-
     try {
-      const session = await sessions.require(sessionId);
+      const session = await requireOwnedSession(req, res);
+      if (!session) return;
 
-      /*
-       * An unowned session is reachable by nobody, exactly as `policy.ts` says
-       * for the HTTP path — including by a service holding a valid token.
-       */
-      if (!session.ownerUserId || session.ownerUserId !== claimedOwner) {
-        sendError(res, 403, {
-          code: 'SESSION_NOT_OWNED',
-          message: 'That terminal token is not valid for this session.',
-        });
-        return;
-      }
-
-      const context = await sessions.getTerminalContext(sessionId);
+      const context = await sessions.getTerminalContext(session.sessionId);
       sendOk(res, context);
     } catch (error) {
       sessionErrorResponse(res, error);
     }
   }));
+
+  /*
+   * POST /internal/sessions/:sessionId/activity — BETA-P0-005
+   *
+   * The terminal service reports that a student typed. Without it a student
+   * working only in the shell never moved `lastActivityAt`, and the reaper
+   * collected an environment that was in active use.
+   *
+   * Same trust as the credential exchange, and deliberately the same check:
+   * the service secret, then the owner claim from the verified token compared
+   * with the live record. A token for session A therefore cannot move session
+   * B's clock. The body carries nothing else — the time is the server's.
+   */
+  router.post('/sessions/:sessionId/activity', asyncRoute(async (req, res) => {
+    try {
+      const session = await requireOwnedSession(req, res);
+      if (!session) return;
+
+      const touched = await sessions.touchActivity(session.sessionId, 'terminal');
+      sendOk(res, { recorded: touched !== null });
+    } catch (error) {
+      sessionErrorResponse(res, error);
+    }
+  }));
+
+  /**
+   * The session a terminal request names, if the owner it claims still owns it.
+   *
+   * Replies and returns `null` when the request names no owner or the wrong
+   * one. An unknown or malformed session id throws a `SessionError`, which the
+   * caller maps.
+   */
+  async function requireOwnedSession(req: Request, res: Response): Promise<LabSession | null> {
+    const claimedOwner = (req.body as { ownerUserId?: unknown } | undefined)?.ownerUserId;
+
+    if (typeof claimedOwner !== 'string' || claimedOwner.length === 0) {
+      sendError(res, 400, {
+        code: 'OWNER_REQUIRED',
+        message: 'A terminal request must name the session owner it was issued for.',
+        remediation:
+          'Re-issue the terminal session token: tokens minted before ownership binding are not accepted.',
+      });
+      return null;
+    }
+
+    const session = await sessions.require(String(req.params.sessionId));
+
+    /*
+     * An unowned session is reachable by nobody, exactly as `policy.ts` says
+     * for the HTTP path — including by a service holding a valid token.
+     */
+    if (!session.ownerUserId || session.ownerUserId !== claimedOwner) {
+      sendError(res, 403, {
+        code: 'SESSION_NOT_OWNED',
+        message: 'That terminal token is not valid for this session.',
+      });
+      return null;
+    }
+    return session;
+  }
 
   return router;
 }
