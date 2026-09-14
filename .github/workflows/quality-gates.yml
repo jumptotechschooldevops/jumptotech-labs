@@ -182,7 +182,11 @@ jobs:
       # BETA-P0-011 extends the same resolved definitions to published ports
       # (4002 never; 4000/4001/9400-9402 loopback only) and credential mounts,
       # the Docker socket among them.
-      - name: Each service receives exactly its allowed secrets, mounts and ports
+      #
+      # BETA-P0-012: every development publication on 127.0.0.1 (3000 and 5432
+      # included); the production stack publishing exactly 443→web:8443 and
+      # 80→web:8080; PostgreSQL alone with the api on an internal network.
+      - name: Each service receives exactly its allowed secrets, mounts, ports and networks
         run: node scripts/check-secret-distribution.mjs
 
       - name: Build

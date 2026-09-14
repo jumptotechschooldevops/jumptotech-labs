@@ -16,6 +16,7 @@ import {
   loadDatabaseConfig,
   loadMigrations,
   migrate,
+  resolveDatabaseTransport,
 } from '../src/postgres/index.js';
 
 async function main(): Promise<void> {
@@ -31,9 +32,11 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  // BETA-P0-012: the same transport rules the api applies, before connecting.
+  const transport = resolveDatabaseTransport(config, process.env, 'db:migrate');
   const db = PostgresDatabase.fromConfig(config);
   try {
-    console.log(`[migrate] target ${describeDatabase(config)}`);
+    console.log(`[migrate] target ${describeDatabase(config)} (${transport.mode})`);
 
     if (statusOnly) {
       const migrations = await loadMigrations();

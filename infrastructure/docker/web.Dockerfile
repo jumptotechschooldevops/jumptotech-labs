@@ -36,8 +36,14 @@ RUN npm run build --workspace @jumptotech/web
 FROM nginx:1.27-alpine
 
 COPY infrastructure/docker/nginx/web.conf /etc/nginx/conf.d/default.conf
+# The routes, shared by the development listener above and the production TLS
+# listener (web-tls.conf, mounted over default.conf by
+# docker-compose.production.yml), so the two cannot drift apart.
+COPY infrastructure/docker/nginx/locations.conf /etc/nginx/jumptotech/locations.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 
-EXPOSE 3000
+# Metadata only: nothing is published by EXPOSE. 3000 is the development
+# listener; 8443 (TLS) and 8080 (redirect only) exist under the production conf.
+EXPOSE 3000 8080 8443
 
 CMD ["nginx", "-g", "daemon off;"]

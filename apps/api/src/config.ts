@@ -27,7 +27,9 @@ import {
 import {
   DEFAULT_DEV_STUDENT_ID,
   loadDatabaseConfig,
+  resolveDatabaseTransport,
   type DatabaseConfig,
+  type DatabaseTransportMode,
 } from '@jumptotech/progress';
 import { DEFAULT_AUTH_SESSION_TTL_SECONDS } from './auth/browser-session.js';
 import {
@@ -134,7 +136,11 @@ export interface ApiConfig {
   /** Container-backed sandbox providers (PLATFORM-004). */
   sandbox: SandboxProviderConfig;
   /** Persistent learning state (PLATFORM-005). */
-  progress: ProgressConfig;
+  /**
+   * `databaseTransport` is resolved by `loadConfig` after the secret gate
+   * (BETA-P0-012): null exactly when no database is configured.
+   */
+  progress: ProgressConfig & { databaseTransport: DatabaseTransportMode | null };
   reaperIntervalSeconds: number;
   sessionRetentionMinutes: number;
   nodeEnv: string;
@@ -653,6 +659,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     ? resolveBrokerClientTransport(env, { service: 'api', url: runtimeBrokerUrl })
     : null;
 
+  /*
+   * BETA-P0-012 — the database password and every student's history travel to
+   * PostgreSQL. Last, so the owner, secret and broker refusals keep their
+   * precedence. Production refuses plaintext to anything but a Unix socket,
+   * loopback, or a declared single-host bridge, and TLS is always verified; see
+   * services/progress/src/postgres/tls.ts.
+   */
+  const databaseTransport = progress.database
+    ? resolveDatabaseTransport(progress.database, env, 'api').mode
+    : null;
+
   return {
     /*
      * `oidc` is the default on purpose.
@@ -745,7 +762,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       cicdImage: strFromEnv(env, 'CICD_SANDBOX_IMAGE', DEFAULT_CICD_SANDBOX_IMAGE),
       dockerImage: strFromEnv(env, 'DOCKER_SANDBOX_IMAGE', DEFAULT_DOCKER_SANDBOX_IMAGE),
     },
-    progress,
+    progress: { ...progress, databaseTransport },
     reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',

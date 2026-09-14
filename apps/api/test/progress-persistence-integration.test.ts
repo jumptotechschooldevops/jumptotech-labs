@@ -15,7 +15,7 @@
  *
  *   docker run --rm -d --name jtt-test-pg -e POSTGRES_PASSWORD=test \
  *     -e POSTGRES_USER=test -e POSTGRES_DB=jumptotech_labs_test \
- *     -p 55432:5432 postgres:16-alpine
+ *     -p 127.0.0.1:55432:5432 postgres:16-alpine
  *
  * Named `*-integration` since PLATFORM-006: this suite talks to a real
  * PostgreSQL. It was always gated on RUN_DB_TESTS, but the old name hid the

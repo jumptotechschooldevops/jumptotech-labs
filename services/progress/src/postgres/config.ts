@@ -11,6 +11,14 @@
  *      into an API response; `describe()` exists so logs and `/health` can name
  *      the host and database without the password.
  */
+import {
+  DATABASE_SSL_CA_FILE_ENV,
+  DATABASE_SSL_ENV,
+  DatabaseTransportError,
+  assertNoConnectionStringTls,
+  readDatabaseCaBundle,
+  readDatabaseSsl,
+} from './tls.js';
 
 export interface DatabaseConfig {
   /** Full connection string, when the deployment supplies one. */
@@ -20,7 +28,13 @@ export interface DatabaseConfig {
   database?: string;
   user?: string;
   password?: string;
+  /**
+   * Verified TLS — BETA-P0-012. There is no unverified mode: `true` means the
+   * server's certificate chain and host name are checked. See `tls.ts`.
+   */
   ssl: boolean;
+  /** PEM CA bundle trusted for this connection only. Absent ⇒ the system store. */
+  sslCa?: string;
   /** Pool ceiling. One API instance should not exhaust the server's slots. */
   maxConnections: number;
   connectionTimeoutMs: number;
@@ -40,12 +54,6 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
   return parsed;
 }
 
-function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
-  const raw = env[name];
-  if (raw === undefined || raw.trim() === '') return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
-}
-
 /**
  * Build the database configuration, or `null` when none is configured.
  *
@@ -59,8 +67,24 @@ export function loadDatabaseConfig(env: NodeJS.ProcessEnv = process.env): Databa
   const host = env.POSTGRES_HOST?.trim();
   if (!url && !host) return null;
 
+  /*
+   * BETA-P0-012. Malformed TLS configuration is refused here, in every
+   * environment; whether plaintext is acceptable is `resolveDatabaseTransport`'s
+   * decision, made after the startup secret gate.
+   */
+  if (url) assertNoConnectionStringTls(url);
+  const ssl = readDatabaseSsl(env);
+  const caFile = env[DATABASE_SSL_CA_FILE_ENV]?.trim() ?? '';
+  if (caFile && !ssl) {
+    throw new DatabaseTransportError(
+      `${DATABASE_SSL_CA_FILE_ENV} is set but ${DATABASE_SSL_ENV} is not true. A CA file means TLS was ` +
+        'intended; refusing rather than connecting in plaintext.',
+    );
+  }
+
   const shared = {
-    ssl: boolFromEnv(env, 'DATABASE_SSL', false),
+    ssl,
+    ...(caFile ? { sslCa: readDatabaseCaBundle(caFile) } : {}),
     maxConnections: intFromEnv(env, 'DATABASE_POOL_MAX', 10),
     connectionTimeoutMs: intFromEnv(env, 'DATABASE_CONNECT_TIMEOUT_MS', 5_000),
     idleTimeoutMs: intFromEnv(env, 'DATABASE_IDLE_TIMEOUT_MS', 30_000),
