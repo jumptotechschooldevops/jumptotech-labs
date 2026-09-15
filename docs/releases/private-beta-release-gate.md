@@ -177,7 +177,10 @@ No platform security, capacity, isolation or runtime behaviour was changed.
   launches today means telling the cohort and/or `prod stop web`. A launch gate
   is a documented post-P0-018 follow-up.
 - **No API/edge rate limiting** beyond a 16 KB body cap, the per-socket
-  terminal-activity throttle and Grafana brute-force protection.
+  terminal-activity throttle and Grafana brute-force protection. *(Update, V1
+  EPIC-02: the learning-path routes `/api/learning-paths` and
+  `/api/me/learning-paths` are now limited per client address — see
+  `apps/api/src/rate-limit.ts`. Every other route is still unlimited.)*
 - **Production DB traffic is plaintext** on the `internal: true` database
   network (postgres + api only); verified TLS is available and required off that
   bridge.

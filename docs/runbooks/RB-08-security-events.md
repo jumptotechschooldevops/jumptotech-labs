@@ -114,6 +114,13 @@ operational ones.
 
 ## 9. Follow-up
 
-There is **no rate limiting on any endpoint** — a caller can probe as fast as
-they like and only these counters will show it. That is PLATFORM-004 scope, and
-an incident here is the evidence for prioritising it.
+Rate limiting covers **only the learning-path routes** (`/api/learning-paths`,
+`/api/me/learning-paths`: 600 requests a minute per client address, answered with
+`429 RATE_LIMITED` and counted as `security.event` `rate_limited`). Every other
+endpoint is unlimited — a caller can probe as fast as they like and only these
+counters will show it. That is PLATFORM-004 scope, and an incident here is the
+evidence for prioritising it.
+
+A burst of `rate_limited` is one client exceeding that budget. It raises
+`SecurityEventBurst`; check whether it is one address (a script, or a classroom
+behind one NAT address reloading together) before treating it as an attack.

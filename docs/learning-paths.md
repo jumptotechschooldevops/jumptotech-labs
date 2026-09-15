@@ -342,7 +342,10 @@ path page show the path-wide recommendation above.
 ## API
 
 All three routes sit behind the same `authenticate`, CORS allow-list and origin
-guard as `/api/labs`. None takes a body or a student parameter.
+guard as `/api/labs`. None takes a body or a student parameter. They also share
+one **rate limit** of 600 requests a minute per client address
+(`apps/api/src/rate-limit.ts`), counted before authentication; beyond it the API
+answers `429 RATE_LIMITED` with `Retry-After`.
 
 ### `GET /api/learning-paths`
 
@@ -445,6 +448,13 @@ stage, progress, catalog and lab pages.
 - **No browser access to internal services.** The browser calls only the three
   API routes above. Nothing new reaches `sandboxd`, the terminal service,
   `/internal`, Docker, Kubernetes or the database.
+- **Rate limited before authentication.** A flood of learning-path requests —
+  including forged credentials — is refused with `429 RATE_LIMITED` before any
+  token is verified or progress read. The budget is per client address: the API
+  trusts exactly one proxy hop (the web tier's nginx), so a student's address, not
+  nginx's, is the key, and an address a client prepends to `X-Forwarded-For` is
+  ignored. It is an in-memory, per-process budget, which is the whole budget for
+  the single-instance private beta.
 - **No secrets.** Path files are curriculum text; the loader reads only
   `labs/learning-paths/*.yaml`, through the existing read-only mount.
 - Capacity, session limits, authentication, NetworkPolicy, Pod Security, TLS,

@@ -30,7 +30,16 @@ import { FakeContainerRuntime } from '@jumptotech/lab-orchestrator/testing/conta
 import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 import { DevStudentIdentity, InMemoryProgressRepository, ProgressService } from '@jumptotech/progress';
 import { BrokenProgressRepository } from '@jumptotech/progress/testing';
-import { createApp } from '../src/app.js';
+import {
+  createAuthMetrics,
+  createCommonMetrics,
+  createRegistry,
+  createSessionMetrics,
+  createVerificationMetrics,
+  silentLogger,
+} from '@jumptotech/observability';
+import { createApp, type CreateAppDeps } from '../src/app.js';
+import type { RateLimitPolicy } from '../src/rate-limit.js';
 import { loadConfig } from '../src/config.js';
 import { AttemptClosingListener } from '../src/progress.js';
 import { DevelopmentIdentityResolver } from '../src/auth/resolvers.js';
@@ -64,6 +73,8 @@ function harness(
     repository?: InMemoryProgressRepository | BrokenProgressRepository;
     withPaths?: boolean;
     catalog?: LearningPathCatalog;
+    rateLimit?: RateLimitPolicy;
+    observability?: CreateAppDeps['observability'];
   } = {},
 ) {
   const config = loadConfig({
@@ -108,6 +119,8 @@ function harness(
       durable: false,
     },
     ...(options.withPaths === false ? {} : { learningPaths: options.catalog ?? learningPaths }),
+    ...(options.rateLimit ? { learningPathRateLimit: options.rateLimit } : {}),
+    ...(options.observability ? { observability: options.observability } : {}),
   });
   return { app, sessions, runtime };
 }
@@ -379,5 +392,108 @@ describe('/health', () => {
     const { app } = harness();
     const res = await request(app).get('/health');
     expect(res.body.data).toMatchObject({ learningPathsLoaded: 1, learningPathLoadErrors: [] });
+  });
+});
+
+// --- rate limiting (CodeQL js/missing-rate-limiting) --------------------------
+
+function testObservability(): NonNullable<CreateAppDeps['observability']> {
+  const registry = createRegistry({ service: 'api', defaultMetrics: false });
+  return {
+    logger: silentLogger(),
+    metrics: {
+      common: createCommonMetrics(registry, 'api'),
+      sessions: createSessionMetrics(registry),
+      verification: createVerificationMetrics(registry),
+      auth: createAuthMetrics(registry),
+    },
+  };
+}
+
+async function rateLimitedEvents(obs: NonNullable<CreateAppDeps['observability']>): Promise<number> {
+  const { values } = await obs.metrics.common.securityEvents.get();
+  return values.filter((v) => v.labels.event === 'rate_limited').reduce((sum, v) => sum + v.value, 0);
+}
+
+/** A student reaching the API through nginx, which appends their address. */
+const via = (address: string, who = ALICE) => ({ ...as(who), 'X-Forwarded-For': address });
+
+describe('rate limiting of the learning-path routes', () => {
+  it('lets normal use through under the default budget, and says what the budget is', async () => {
+    const { app } = harness();
+    for (let i = 0; i < 30; i += 1) {
+      const url = i % 2 === 0 ? '/api/learning-paths/devops-engineer' : '/api/me/learning-paths/devops-engineer';
+      const res = await request(app).get(url).set(via('203.0.113.10'));
+      expect(res.status, `${url} #${i}`).toBe(200);
+    }
+    const res = await request(app).get('/api/learning-paths').set(via('203.0.113.10'));
+    expect(res.headers['ratelimit-policy']).toMatch(/q=600;\s*w=60/);
+    expect(res.headers.ratelimit).toBeDefined();
+  });
+
+  it('refuses excess requests with 429 in the API envelope, one budget across catalog and progress', async () => {
+    const obs = testObservability();
+    const { app } = harness({ rateLimit: { limit: 3, windowMs: 60_000 }, observability: obs });
+    const client = { ...via('203.0.113.20'), Origin: 'http://localhost:3000' };
+
+    expect((await request(app).get('/api/learning-paths').set(client)).status).toBe(200);
+    expect((await request(app).get('/api/learning-paths/devops-engineer').set(client)).status).toBe(200);
+    expect((await request(app).get('/api/me/learning-paths/devops-engineer').set(client)).status).toBe(200);
+
+    for (const url of ['/api/learning-paths/devops-engineer', '/api/me/learning-paths/devops-engineer']) {
+      const res = await request(app).get(url).set(client);
+      expect(res.status, url).toBe(429);
+      expect(res.body).toEqual({
+        ok: false,
+        error: { code: 'RATE_LIMITED', message: expect.any(String), remediation: expect.any(String) },
+      });
+      expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
+      // Readable by the browser: CORS ran before the limiter.
+      expect(res.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+      expect(JSON.stringify(res.body)).not.toMatch(/203\.0\.113|studentId|sessionId|devops-engineer/);
+    }
+    expect(await rateLimitedEvents(obs)).toBe(2);
+  });
+
+  it('counts before authentication, so a flood of forged credentials is refused unverified', async () => {
+    const { app } = harness({ rateLimit: { limit: 2, windowMs: 60_000 } });
+    const forged = { Authorization: 'Bearer x.y.z', 'X-Forwarded-For': '203.0.113.25' };
+
+    expect((await request(app).get('/api/learning-paths').set(forged)).status).toBe(401);
+    expect((await request(app).get('/api/me/learning-paths/devops-engineer').set(forged)).status).toBe(401);
+    const third = await request(app).get('/api/learning-paths').set(forged);
+    expect(third.status).toBe(429);
+    expect(third.body.error.code).toBe('RATE_LIMITED');
+  });
+
+  it('keys the budget on the address nginx appended, not on one the client prepends', async () => {
+    const { app } = harness({ rateLimit: { limit: 1, windowMs: 60_000 } });
+
+    expect((await request(app).get('/api/learning-paths').set(via('203.0.113.30'))).status).toBe(200);
+    expect((await request(app).get('/api/learning-paths').set(via('203.0.113.30'))).status).toBe(429);
+    // A spoofed address in front of the real one does not buy a fresh budget.
+    expect((await request(app).get('/api/learning-paths').set(via('198.51.100.7, 203.0.113.30'))).status).toBe(429);
+    // Another student has their own budget.
+    expect((await request(app).get('/api/learning-paths').set(via('203.0.113.31', BOB))).status).toBe(200);
+  });
+
+  it('leaves every other route unlimited, and identity server-derived, while the budget is spent', async () => {
+    const { app } = harness({ rateLimit: { limit: 1, windowMs: 60_000 } });
+    const alice = via('203.0.113.40');
+    const bobId = (await request(app).get('/api/me/learning-paths/devops-engineer').set(via('203.0.113.41', BOB))).body
+      .data.student.studentId as string;
+
+    const own = await request(app)
+      .get(`/api/me/learning-paths/devops-engineer?studentId=${encodeURIComponent(bobId)}`)
+      .set(alice)
+      .set('x-dev-student-id', bobId);
+    expect(own.status).toBe(200);
+    expect(own.body.data.student.studentId).not.toBe(bobId);
+
+    expect((await request(app).get('/api/learning-paths').set(alice)).status).toBe(429);
+    for (const url of ['/api/labs', '/api/tracks', '/api/me', '/api/me/progress', '/api/me/attempts', '/api/sessions']) {
+      expect((await request(app).get(url).set(alice)).status, url).toBe(200);
+    }
+    expect((await request(app).get('/health')).status).toBe(200);
   });
 });

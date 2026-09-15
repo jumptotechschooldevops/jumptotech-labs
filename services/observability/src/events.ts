@@ -147,6 +147,8 @@ export const SECURITY_EVENTS = [
   'cross_session_reference_ignored',
   'scrape_unauthorized',
   'dev_identity_in_use',
+  // A client exceeded a route's request budget (apps/api/src/rate-limit.ts).
+  'rate_limited',
 ] as const;
 
 export type SecurityEventKind = (typeof SECURITY_EVENTS)[number];

@@ -50,6 +50,7 @@ import { createSessionRoutes } from './routes/sessions.js';
 import { createInternalRoutes } from './routes/internal.js';
 import { createTrackRoutes } from './routes/tracks.js';
 import { createLearningPathRoutes } from './routes/learning-paths.js';
+import { LEARNING_PATH_RATE_LIMIT, createRateLimiter, type RateLimitPolicy } from './rate-limit.js';
 import { createMeRoutes } from './routes/me.js';
 import { createAuthRoutes } from './routes/auth.js';
 
@@ -87,6 +88,8 @@ export interface CreateAppDeps {
    * a deployment with no paths, which lists none and 404s every path id.
    */
   learningPaths?: LearningPathCatalog;
+  /** Per-client request budget for the learning-path routes. Defaults to `LEARNING_PATH_RATE_LIMIT`. */
+  learningPathRateLimit?: RateLimitPolicy;
   /**
    * How a request's caller is identified (PLATFORM-009).
    *
@@ -177,6 +180,17 @@ export function createApp(deps: CreateAppDeps): Express {
   app.disable('x-powered-by');
 
   /*
+   * Exactly one trusted proxy hop: the web tier's nginx, which appends the client
+   * address to X-Forwarded-For (infrastructure/docker/nginx/locations.conf).
+   * Without it `req.ip` is nginx itself, and a per-client rate limit would put
+   * every student in one bucket. One hop, never `true`: an address a client
+   * prepends to the header is ignored. Nothing else in the API reads
+   * proxy-derived request properties, and the API is not published except
+   * through that proxy (BETA-P0-012).
+   */
+  app.set('trust proxy', 1);
+
+  /*
    * Correlation and HTTP metrics, before everything.
    *
    * Registered first so `req` is inside an AsyncLocalStorage context for the
@@ -230,6 +244,18 @@ export function createApp(deps: CreateAppDeps): Express {
       observability.logger.warn('security.event', { securityEvent: 'origin_rejected', reason });
     },
   );
+
+  /*
+   * Rate limiting for the learning-path routes (CodeQL js/missing-rate-limiting).
+   *
+   * Placed after CORS, so a browser can read the 429, and before `authenticated`,
+   * so a flood is refused before any credential is verified or session row read.
+   * One budget per client address, shared by the catalog and progress reads.
+   */
+  const learningPathLimiter = createRateLimiter(deps.learningPathRateLimit ?? LEARNING_PATH_RATE_LIMIT, () => {
+    observability.metrics.common.securityEvents.inc({ service: 'api', event: 'rate_limited' });
+    observability.logger.warn('security.event', { securityEvent: 'rate_limited', reason: 'learning_paths' });
+  });
 
   app.get('/health', asyncRoute(async (_req, res) => {
     /*
@@ -377,8 +403,21 @@ export function createApp(deps: CreateAppDeps): Express {
   };
   app.use('/api/labs', browserCors, originGuard, authenticated, createLabRoutes(routes));
   app.use('/api/tracks', browserCors, originGuard, authenticated, createTrackRoutes(routes));
-  app.use('/api/learning-paths', browserCors, originGuard, authenticated, createLearningPathRoutes(routes));
+  app.use(
+    '/api/learning-paths',
+    browserCors,
+    originGuard,
+    learningPathLimiter,
+    authenticated,
+    createLearningPathRoutes(routes),
+  );
   app.use('/api/sessions', browserCors, originGuard, authenticated, createSessionRoutes(routes));
+  /*
+   * The student's own learning-path progress shares that budget, counted before
+   * `/api/me` authenticates. This prefix only: every other `/api/me` route is
+   * unchanged.
+   */
+  app.use('/api/me/learning-paths', browserCors, learningPathLimiter);
   app.use('/api/me', browserCors, originGuard, authenticated, createMeRoutes(routes));
   app.use('/internal', createInternalRoutes(deps));
 
