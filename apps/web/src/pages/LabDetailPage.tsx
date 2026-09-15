@@ -180,6 +180,7 @@ export function LabDetailPage({ labId }: { labId: string }) {
     return (
       <div className="page">
         <ErrorNotice
+          headingLevel={1}
           error={described}
           live={false}
           actions={

@@ -162,7 +162,8 @@ simulates output.
 | Disconnected after a period of inactivity. | the terminal service's idle timer | **Reconnect** |
 | Connection to the terminal was lost. | abnormal close (e.g. network) | up to three automatic reconnects (1 s, 3 s, 6 s), then **Reconnect** |
 | The terminal’s access expired. | token refused | one new token is minted automatically |
-| Disconnected — this lab has ended. | close 4410 | no reconnect; the session is re-read and the ended summary shown |
+| Disconnected — this terminal was opened in another tab or window. | close 4410 while the session is still running: the terminal service keeps one shell per session, so opening the workspace elsewhere takes the terminal over | **Reconnect** takes it back |
+| (ended summary) | close 4410 because the lab ended | the session is re-read and the ended summary replaces the terminal; no reconnect |
 
 Reconnect always asks `POST /api/sessions/:id/terminal` for a fresh token first.
 A container-backed Reset replaces the container, so the workspace reconnects the
@@ -254,8 +255,9 @@ Operators still see both as distinct metric outcomes and log fields
 
 ## Progress
 
-`#/progress` reads saved history only. A lab is **In progress** once it has been
-launched and **Completed** only when Verify has passed every check; ending,
+`#/progress` reads saved history only. A lab is **In progress** once a launch has
+been attempted — including one the platform refused (capacity or the per-student
+limit), which the attempt history shows as *Could not start* — and **Completed** only when Verify has passed every check; ending,
 resetting or losing an environment never removes a completion. Percentages are
 the API's own (`completed ÷ catalog total`). When the identity is a development
 one, or the deployment has no database, the page says so.
@@ -336,7 +338,13 @@ not have. Rather than add Playwright for a suite CI cannot run, the routed-app
 flow above runs in jsdom on every `npm test`, and the real-browser check is this
 release smoke against the stack `make beta-validate` already brings up:
 
-1. `make up`, open http://localhost:3000, sign in (development mode: the dev identity).
+1. `make up`, open http://localhost:3000 and sign in. **Development mode has no
+   browser sign-in:** `/auth/session` answers signed-out and the gate reads *no
+   identity provider configured* (true on main before this work too), while every
+   `/api` request without a credential resolves to the development student. Run
+   the smoke against an OIDC-configured stack, or — as the pre-merge validation
+   did — have the *test browser only* answer `GET /auth/session` with that
+   development identity. Nothing else is intercepted.
 2. Dashboard shows *How a lab works* and *Next up*. Open **Labs**, search `files`.
 3. Open LINUX-001, **Launch lab**. Provisioning shows, then *Terminal: Connected*.
 4. **Reload the page.** The workspace comes back connected (a new token is minted).
@@ -363,3 +371,10 @@ release smoke against the stack `make beta-validate` already brings up:
 - **Hint reveals are per page view.** Revealed hints are recorded server-side,
   but the panel starts collapsed again after a reload.
 - **Next up is a fixed rule**, not personalised guidance.
+- **An API outage is slow to show.** When the API is unreachable, the web proxy
+  answers only after its upstream timeout (about a minute in the pre-merge run),
+  so a page shows *Loading…* until then, and then the error with Try again.
+- **One terminal per lab.** Opening the workspace in a second tab or window takes
+  the terminal over; the first tab says so and offers Reconnect.
+- **Development mode cannot sign in from a browser** (see the smoke checklist).
+  This predates the student-experience work and is unchanged by it.

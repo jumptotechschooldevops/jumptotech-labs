@@ -105,7 +105,7 @@ export function HelpPage() {
         <h2 id="help-progress">Your progress</h2>
         <p>
           Progress is saved to your account, separately from the environment. A lab is marked{' '}
-          <strong>In progress</strong> once you launch it and <strong>Completed</strong> only when Verify passes every
+          <strong>In progress</strong> once you have tried to launch it (even if the platform was too busy to start it) and <strong>Completed</strong> only when Verify passes every
           check. Ending, resetting or losing an environment never removes a completion.
         </p>
       </section>

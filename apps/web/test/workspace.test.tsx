@@ -55,6 +55,7 @@ vi.mock('../src/components/LabTerminal', async () => {
     return React.createElement('div', {
       'data-testid': 'terminal',
       'data-token': grant?.token ?? '',
+      'data-url': grant?.url ?? '',
       'data-connect-key': String(connectKey),
     });
   });
@@ -77,7 +78,10 @@ beforeEach(() => {
     sessionsResponse([{ session: sessionInfo(), labTitle: 'Files and Directories', attempt: attemptSummary() }]),
   );
   apiMock.issueTerminal.mockResolvedValue({ session: sessionInfo(), terminal: { url: 'ws://terminal', token: 'fresh-token' } });
-  apiMock.getSession.mockResolvedValue({ session: sessionInfo(), environment: null });
+  // The real API answers for the session that was asked about.
+  apiMock.getSession.mockImplementation((id: string) =>
+    Promise.resolve({ session: sessionInfo({ sessionId: id }), environment: null }),
+  );
   window.history.replaceState(null, '', '/#/labs/LINUX-001/workspace');
 });
 
@@ -101,6 +105,9 @@ describe('finding the running lab', () => {
     expect(apiMock.issueTerminal).toHaveBeenCalledTimes(1);
     expect(apiMock.issueTerminal).toHaveBeenCalledWith(SESSION_ID);
     expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('fresh-token');
+    // The socket goes to this page's own origin (proxied /terminal), never to the
+    // API's configured fallback — which on a shared laptop is another stack's terminal.
+    expect(screen.getByTestId('terminal').getAttribute('data-url')).toBe(`ws://${window.location.host}`);
     expect(screen.getByRole('heading', { level: 1, name: 'Files and Directories' })).toBeTruthy();
     expect(button('Verify').disabled).toBe(false);
     expect(setItem).not.toHaveBeenCalled();
@@ -110,7 +117,7 @@ describe('finding the running lab', () => {
     apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
 
-    expect(await screen.findByRole('heading', { name: 'LINUX-001 is not running' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Go to the lab page' }).getAttribute('href')).toBe('#/labs/LINUX-001');
     expect(screen.queryByTestId('terminal')).toBeNull();
   });
@@ -120,10 +127,13 @@ describe('finding the running lab', () => {
     apiMock.listMySessions.mockResolvedValue(
       sessionsResponse([{ session: sessionInfo({ status: 'CREATING' }), labTitle: 'Files and Directories' }]),
     );
-    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ status: 'ACTIVE' }), environment: null });
+    apiMock.getSession
+      .mockResolvedValueOnce({ session: sessionInfo({ status: 'CREATING' }), environment: null })
+      .mockResolvedValue({ session: sessionInfo({ status: 'ACTIVE' }), environment: null });
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
 
     expect(await screen.findByText('Preparing your lab environment…')).toBeTruthy();
+    await waitFor(() => expect(apiMock.getSession).toHaveBeenCalledTimes(1));
     expect(button('Verify').disabled).toBe(true);
     expect(button('Reset').disabled).toBe(true);
     expect(apiMock.issueTerminal).not.toHaveBeenCalled();
@@ -179,6 +189,20 @@ describe('Verify', () => {
     expect(await screen.findByText('Verification could not run')).toBeTruthy();
     expect(screen.queryByText(/Not complete yet/)).toBeNull();
     expect(screen.queryByText(/passing$/)).toBeNull();
+  });
+
+  it('treats a 200 that is not a verification result as a platform fault — never a verdict, never a blank page', async () => {
+    // Seen in the pre-merge browser run: `{ ok: true, data: {} }` blanked the app.
+    apiMock.checkSolution.mockResolvedValue({});
+    await renderConnected();
+
+    fireEvent.click(button('Verify'));
+
+    expect(await screen.findByText('The platform sent an unexpected response')).toBeTruthy();
+    expect(screen.getByText('BAD_RESPONSE')).toBeTruthy();
+    expect(screen.queryByText(/Not complete yet|Lab passed/)).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'Files and Directories' })).toBeTruthy();
+    expect(button('Verify').disabled).toBe(false);
   });
 
   it('sends one check for a double click', async () => {
@@ -355,7 +379,7 @@ describe('when the session list cannot be read', () => {
     apiMock.listMySessions.mockRejectedValueOnce(new ApiRequestError(0, { code: 'API_UNREACHABLE', message: 'x' }));
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
 
-    expect(await screen.findByText('We could not check whether this lab is running')).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: 'We could not check whether this lab is running' })).toBeTruthy();
     expect(screen.queryByText(/is not running/)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
@@ -388,6 +412,61 @@ describe('the terminal connection', () => {
     expect(apiMock.issueTerminal).toHaveBeenCalledTimes(1);
   });
 
+  it('offers Reconnect when another tab takes the terminal over, instead of claiming the lab ended', async () => {
+    await renderConnected();
+    const reads = apiMock.getSession.mock.calls.length;
+
+    // What the terminal service sends the older socket when a second one attaches.
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'SESSION_ENDED' }));
+
+    await waitFor(() => expect(apiMock.getSession.mock.calls.length).toBeGreaterThan(reads));
+    expect(await screen.findByText('Terminal: Disconnected — this terminal was opened in another tab or window.')).toBeTruthy();
+    expect(screen.queryByText(/this lab has ended/)).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Lab ended' })).toBeNull();
+    expect(button('Verify').disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    await waitFor(() => expect(apiMock.issueTerminal).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Terminal: Connected')).toBeTruthy();
+  });
+
+  it('forgets a session that no longer exists, app-wide, so nothing keeps pointing at it', async () => {
+    await renderConnected();
+    const listReads = apiMock.listMySessions.mock.calls.length;
+    apiMock.getSession.mockRejectedValue(new ApiRequestError(404, { code: 'SESSION_NOT_FOUND', message: 'No such lab session.' }));
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'SESSION_ENDED' }));
+
+    expect(await screen.findByRole('heading', { name: 'This lab environment no longer exists' })).toBeTruthy();
+    await waitFor(() => expect(apiMock.listMySessions.mock.calls.length).toBeGreaterThan(listReads));
+  });
+
+  it('re-reads the session as soon as it is adopted, so a stale list cannot show a stale countdown or hide the idle warning', async () => {
+    apiMock.listMySessions.mockResolvedValue(
+      sessionsResponse([{ session: sessionInfo({ secondsRemaining: 3600 }), labTitle: 'Files and Directories' }]),
+    );
+    apiMock.getSession.mockResolvedValue({
+      session: sessionInfo({ secondsRemaining: 600, idleWarning: true, secondsUntilIdle: 100 }),
+      environment: null,
+    });
+    await renderConnected();
+
+    expect(await screen.findByText(/Are you still working/)).toBeTruthy();
+    expect(screen.getByRole('timer').textContent).toMatch(/^(10:00|09:5\d)$/);
+  });
+
+  it('leaves no automatic reconnect pending when the page goes away', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { unmount } = renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByText('Terminal: Connected');
+
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+    unmount();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('mints one new token when the old one is refused', async () => {
     await renderConnected();
     apiMock.issueTerminal.mockResolvedValue({ session: sessionInfo(), terminal: { url: 'ws://terminal', token: 'renewed' } });
@@ -413,9 +492,9 @@ describe('the terminal connection', () => {
 
 describe('inactivity', () => {
   it('warns before an idle environment is removed, and Stay active records activity', async () => {
-    apiMock.listMySessions.mockResolvedValue(
-      sessionsResponse([{ session: sessionInfo({ idleWarning: true, secondsUntilIdle: 150 }), labTitle: 'Files and Directories' }]),
-    );
+    const idle = sessionInfo({ idleWarning: true, secondsUntilIdle: 150 });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session: idle, labTitle: 'Files and Directories' }]));
+    apiMock.getSession.mockResolvedValue({ session: idle, environment: null });
     apiMock.recordActivity.mockResolvedValue({ session: sessionInfo({ idleWarning: false }) });
     await renderConnected();
 

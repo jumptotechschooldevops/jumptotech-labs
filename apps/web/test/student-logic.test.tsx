@@ -146,7 +146,8 @@ describe('the "next up" rule', () => {
       recentLabIds: ['LINUX-002', 'K8S-001'],
     });
     expect(suggestion?.lab.id).toBe('LINUX-002');
-    expect(suggestion?.reason).toMatch(/started this lab/);
+    // Not "started": a refused launch also leaves a lab IN_PROGRESS (seen live).
+    expect(suggestion?.reason).toBe('You have attempted this lab and not completed it yet.');
   });
 
   it('continues in the track the student last worked in', () => {

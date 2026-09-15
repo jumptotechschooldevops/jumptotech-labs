@@ -161,7 +161,7 @@ describe('before launch', () => {
   it('explains a lab that does not exist', async () => {
     apiMock.getLab.mockRejectedValue(new ApiRequestError(404, { code: 'LAB_NOT_FOUND', message: 'Lab NOPE-001 not found' }));
     renderWithProviders(<LabDetailPage labId="NOPE-001" />);
-    expect(await screen.findByRole('heading', { name: 'Lab not found' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Lab not found' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Browse labs' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });

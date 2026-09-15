@@ -48,6 +48,7 @@ export function TrackPage({ trackId }: { trackId: string }) {
     return (
       <div className="page">
         <ErrorNotice
+          headingLevel={1}
           error={describeError(catalog.error, 'load')}
           actions={
             <button type="button" className="btn btn--secondary" onClick={catalog.reload}>
@@ -62,6 +63,7 @@ export function TrackPage({ trackId }: { trackId: string }) {
     return (
       <div className="page">
         <EmptyState
+          headingLevel={1}
           title="Track not found"
           action={
             <a className="btn btn--secondary" href={hrefFor({ name: 'tracks' })}>

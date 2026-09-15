@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useActiveSession } from '../lib/ActiveSessionContext';
 import { useCatalog } from '../lib/CatalogContext';
-import { api } from '../lib/api';
+import { ApiRequestError, api } from '../lib/api';
 import { describeError, toApiError } from '../lib/errors';
 import { RESET_KEEPS, describeProvider, describeReset } from '../lib/environmentInfo';
 import { SESSION_STATUS_TEXT, formatMinutes, isLiveStatus, isTransitionalStatus } from '../lib/format';
@@ -60,7 +60,9 @@ export const TRANSITION_POLL_MS = 3_000;
 const AUTO_RECONNECTS = [1_000, 3_000, 6_000];
 
 const TERMINAL_TEXT: Record<string, string> = {
-  SESSION_ENDED: 'Disconnected — this lab has ended.',
+  // Shown only while the session is still ACTIVE: a lab that really ended moves
+  // to the ended summary as soon as the session is re-read.
+  SESSION_ENDED: 'Disconnected — this terminal was opened in another tab or window.',
   IDLE_TIMEOUT: 'Disconnected after a period of inactivity.',
   SESSION_EXPIRED: 'Disconnected — the terminal reached its time limit.',
   SHELL_EXITED: 'The shell exited.',
@@ -135,7 +137,7 @@ function Elapsed({ since }: { since: number }) {
 export function WorkspacePage({ labId }: { labId: string }) {
   const catalog = useCatalog();
   const active = useActiveSession();
-  const { adoptSession, obtainGrant, grantFor, launch } = active;
+  const { adoptSession, obtainGrant, grantFor, launch, refresh: refreshSessionList } = active;
 
   // --- the lab definition -------------------------------------------------
   const [lab, setLab] = useState<LabDetail | null>(null);
@@ -186,8 +188,16 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const [grantError, setGrantError] = useState<ApiError | null>(null);
   const terminalRef = useRef<LabTerminalHandle | null>(null);
   const autoReconnects = useRef(0);
+  /** The pending automatic reconnect, so it cannot fire into a later session or an unmounted page. */
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshedToken = useRef(false);
   const verifying = useRef(false);
+
+  const cancelAutoReconnect = useCallback(() => {
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    reconnectTimer.current = null;
+  }, []);
+  useEffect(() => cancelAutoReconnect, [cancelAutoReconnect]);
 
   /** Take a newer copy of the session, and share it with the rest of the app. */
   const updateSession = useCallback(
@@ -217,6 +227,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     setEverConnected(false);
     setGrantError(null);
     autoReconnects.current = 0;
+    cancelAutoReconnect();
     refreshedToken.current = false;
     // Only a *different* session is adopted here; updates to the same one flow
     // through `updateSession`.
@@ -233,9 +244,22 @@ export function WorkspacePage({ labId }: { labId: string }) {
       .then((response) => updateSession(response.session))
       .catch((cause: unknown) => {
         const error = toApiError(cause);
-        if (error.code === 'SESSION_NOT_FOUND') setGone(true);
+        if (error.code === 'SESSION_NOT_FOUND') {
+          setGone(true);
+          // The app-wide list still names it; left there it keeps an Active lab
+          // link alive and blocks Launch on every other lab page.
+          void refreshSessionList();
+        }
       });
-  }, [sessionId, updateSession]);
+  }, [sessionId, updateSession, refreshSessionList]);
+
+  // The copy this page starts from may be minutes old (the session list is read
+  // when the app loads), so read the session once as soon as it is adopted: the
+  // countdown and the idle warning must not show stale numbers until the first poll.
+  useEffect(() => {
+    if (sessionId) refreshSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   // --- polling -------------------------------------------------------------
   const [pollNonce, setPollNonce] = useState(0);
@@ -256,6 +280,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
           const error = toApiError(cause);
           if (error.code === 'SESSION_NOT_FOUND') {
             setGone(true);
+            void refreshSessionList();
             return;
           }
           // One missed poll is noise; a run of them is worth a quiet line.
@@ -267,7 +292,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
       cancelled = true;
       clearTimeout(timeout);
     };
-  }, [sessionId, status, session, gone, resetting, ending, pollNonce, updateSession]);
+  }, [sessionId, status, session, gone, resetting, ending, pollNonce, updateSession, refreshSessionList]);
 
   // --- terminal grant --------------------------------------------------------
   const grant = sessionId ? grantFor(sessionId) : null;
@@ -329,7 +354,11 @@ export function WorkspacePage({ labId }: { labId: string }) {
           const delay = AUTO_RECONNECTS[autoReconnects.current];
           if (delay !== undefined) {
             autoReconnects.current += 1;
-            setTimeout(() => reconnect(false), delay);
+            cancelAutoReconnect();
+            reconnectTimer.current = setTimeout(() => {
+              reconnectTimer.current = null;
+              reconnect(false);
+            }, delay);
           }
           refreshSession();
           break;
@@ -338,7 +367,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
           break;
       }
     },
-    [reconnect, refreshSession],
+    [reconnect, refreshSession, cancelAutoReconnect],
   );
 
   // --- actions ---------------------------------------------------------------
@@ -349,6 +378,15 @@ export function WorkspacePage({ labId }: { labId: string }) {
     setNotice(null);
     try {
       const result = await api.checkSolution(sessionId);
+      if (!result || !Array.isArray(result.checks) || typeof result.passed !== 'boolean') {
+        // A 200 that is not a verification result — an intermediary's body, a
+        // half-deployed API — is a platform fault. It is never a verdict, and it
+        // must not reach the render path, where it would blank the whole app.
+        throw new ApiRequestError(200, {
+          code: 'BAD_RESPONSE',
+          message: 'The platform returned something that is not a verification result.',
+        });
+      }
       setVerify({ kind: 'result', result, newlyCompleted: result.newlyCompleted === true });
       setLastChecks(result.checks);
       if (result.session) updateSession(result.session, result.attempt ?? null);
@@ -455,6 +493,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     return (
       <div className="page">
         <ErrorNotice
+          headingLevel={1}
           error={describeError(labError, 'load')}
           live={false}
           actions={
@@ -512,6 +551,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
       return (
         <div className="page page--narrow">
           <ErrorNotice
+            headingLevel={1}
             error={{ ...describeError(active.error, 'load'), title: 'We could not check whether this lab is running' }}
             live={false}
             actions={
@@ -527,6 +567,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     return (
       <div className="page page--narrow">
         <EmptyState
+          headingLevel={1}
           title={`${lab.id} is not running`}
           action={
             other ? (
@@ -630,7 +671,9 @@ export function WorkspacePage({ labId }: { labId: string }) {
           ? (TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST)
           : 'Not connected';
   const showReconnect =
-    status === 'ACTIVE' && everConnected && terminal.status === 'disconnected' && terminal.code !== 'SESSION_ENDED';
+    // Including SESSION_ENDED: while the session is still ACTIVE that means another
+    // tab took the terminal over, and Reconnect is how this tab takes it back.
+    status === 'ACTIVE' && everConnected && terminal.status === 'disconnected';
 
   return (
     <div className="workspace">

@@ -237,7 +237,14 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
           case 'error': {
             serverCode = typeof msg.code === 'string' ? msg.code : serverCode;
             serverMessage = String(msg.message ?? 'Terminal error');
-            term.writeln(`\r\n\x1b[31m${serverMessage}\x1b[0m`);
+            // SESSION_ENDED is also what the terminal service sends this socket
+            // when the same session's terminal is opened in another tab — one
+            // shell per session. Its "the lab has ended" text would be false
+            // then, so the workspace works out which case it is from the
+            // session state and says so in the terminal bar.
+            term.writeln(
+              `\r\n\x1b[31m${serverCode === 'SESSION_ENDED' ? 'The terminal was disconnected.' : serverMessage}\x1b[0m`,
+            );
             break;
           }
 

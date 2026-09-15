@@ -57,7 +57,9 @@ export function suggestNextLab({ labs, tracks, progressFor, recentLabIds = [] }:
       .map((id) => byId.get(id))
       .find((lab): lab is LabSummary => lab !== undefined && progressFor(lab.id)?.status === 'IN_PROGRESS');
     const lab = recent ?? inProgress[0]!;
-    return { lab, reason: 'You started this lab and have not completed it yet.' };
+    // "Attempted", not "started": the progress store marks a lab IN_PROGRESS when a
+    // launch is attempted, including one the platform refused (capacity, limit).
+    return { lab, reason: 'You have attempted this lab and not completed it yet.' };
   }
 
   // 2. Carry on in the track they were last working in.

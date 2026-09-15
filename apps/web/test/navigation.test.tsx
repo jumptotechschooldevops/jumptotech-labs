@@ -82,7 +82,8 @@ describe('navigation', () => {
 
   it('says an unknown address is not a page, instead of quietly showing another one', async () => {
     renderApp('#/definitely-not-a-page');
-    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();
+    // Level 1: the empty state is the page, and a page keeps its h1 (axe page-has-heading-one).
+    expect(await screen.findByRole('heading', { level: 1, name: 'Page not found' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Go to your dashboard' })).toBeTruthy();
   });
 

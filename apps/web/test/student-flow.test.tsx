@@ -40,7 +40,11 @@ vi.mock('../src/components/LabTerminal', async () => {
       onEvent({ status: 'connected' });
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [grant?.token, connectKey]);
-    return React.createElement('div', { 'data-testid': 'terminal', 'data-token': grant?.token ?? '' });
+    return React.createElement('div', {
+      'data-testid': 'terminal',
+      'data-token': grant?.token ?? '',
+      'data-url': grant?.url ?? '',
+    });
   });
   return { LabTerminal };
 });
@@ -84,6 +88,8 @@ describe('a student’s first lab', () => {
     // Workspace: the terminal is attached with the token Start returned.
     await screen.findByText('Terminal: Connected');
     expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('start-token');
+    // Start Lab answered `ws://terminal`; the browser still connects to its own origin.
+    expect(screen.getByTestId('terminal').getAttribute('data-url')).toBe(`ws://${window.location.host}`);
     expect(apiMock.issueTerminal).not.toHaveBeenCalled();
     expect(screen.getByRole('link', { name: /Active lab\s*LINUX-001/ })).toBeTruthy();
     const actions = () => within(screen.getByRole('group', { name: 'Lab actions' }));

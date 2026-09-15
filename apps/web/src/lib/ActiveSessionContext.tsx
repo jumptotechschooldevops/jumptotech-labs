@@ -36,6 +36,7 @@ import {
 import { api } from './api';
 import { toApiError } from './errors';
 import { isLiveStatus } from './format';
+import { resolveTerminalWsBase } from './urls';
 import type {
   ActiveSessionEntry,
   ApiError,
@@ -85,6 +86,20 @@ export interface ActiveSessionState {
 }
 
 const ActiveSessionContext = createContext<ActiveSessionState | null>(null);
+
+/**
+ * Where this browser should open the terminal socket.
+ *
+ * The API's `terminal.url` is only a fallback: without PUBLIC_ORIGIN or a
+ * forwarded origin it is the configured default (`ws://localhost:4001`), which
+ * behind the web proxy — or on a laptop running more than one stack — is not
+ * this deployment's terminal at all, and the token would be presented to the
+ * wrong service. `resolveTerminalWsBase` prefers VITE_TERMINAL_WS_URL, then this
+ * page's own origin (proxied `/terminal`), exactly as the lab page always did.
+ */
+function browserGrant(grant: TerminalGrant): TerminalGrant {
+  return { url: resolveTerminalWsBase(grant.url), token: grant.token };
+}
 
 export function ActiveSessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -162,7 +177,7 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
       const promise = Promise.resolve()
         .then(() => api.startLab(labId))
         .then((response) => {
-          grants.current.set(response.session.sessionId, response.terminal);
+          grants.current.set(response.session.sessionId, browserGrant(response.terminal));
           setGrantVersion((v) => v + 1);
           setEntries((current) => [
             {
@@ -209,9 +224,10 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
     const promise = Promise.resolve()
       .then(() => api.issueTerminal(sessionId))
       .then((response) => {
-        grants.current.set(sessionId, response.terminal);
+        const grant = browserGrant(response.terminal);
+        grants.current.set(sessionId, grant);
         setGrantVersion((v) => v + 1);
-        return response.terminal;
+        return grant;
       })
       .finally(() => {
         inFlightGrant.current.delete(sessionId);

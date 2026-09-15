@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { useState } from 'react';
 import { ConfirmDialog } from '../src/components/ConfirmDialog';
+import { PageErrorBoundary } from '../src/components/PageErrorBoundary';
 import { VerificationPanel } from '../src/components/VerificationPanel';
 import { verification } from './api-mock';
 
@@ -88,6 +89,38 @@ describe('ConfirmDialog', () => {
     expect(onConfirm).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm end' }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PageErrorBoundary', () => {
+  function Boom(): never {
+    throw new TypeError("Cannot read properties of undefined (reading 'filter')");
+  }
+
+  it('turns a page that fails to render into a message with a way out, instead of a blank app', () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    render(
+      <PageErrorBoundary>
+        <Boom />
+      </PageErrorBoundary>,
+    );
+    quiet.mockRestore();
+
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByRole('heading', { level: 1, name: 'This page could not be shown' })).toBeTruthy();
+    expect(within(alert).getByRole('button', { name: 'Reload the page' })).toBeTruthy();
+    expect(within(alert).getByRole('link', { name: 'Go to your dashboard' }).getAttribute('href')).toBe('#/');
+    expect(alert.textContent).not.toMatch(/filter|TypeError/);
+  });
+
+  it('renders its page untouched when nothing fails', () => {
+    render(
+      <PageErrorBoundary>
+        <p>fine</p>
+      </PageErrorBoundary>,
+    );
+    expect(screen.getByText('fine')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 

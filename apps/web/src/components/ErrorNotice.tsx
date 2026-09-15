@@ -30,14 +30,15 @@ export function ErrorNotice({
 }: {
   error: StudentError;
   actions?: ReactNode;
-  headingLevel?: 2 | 3;
+  /** 1 when the notice *is* the page (a page that could not load), so it keeps an h1. */
+  headingLevel?: 1 | 2 | 3;
   /**
    * Announce it. True for an error that appears in response to something the
    * student did; false for one that is simply part of a page as it loads.
    */
   live?: boolean;
 }) {
-  const Heading = headingLevel === 2 ? 'h2' : 'h3';
+  const Heading = headingLevel === 1 ? 'h1' : headingLevel === 2 ? 'h2' : 'h3';
   return (
     <div className={`notice notice--${TONE[error.kind]}`} role={live ? 'alert' : undefined}>
       <Heading className="notice__title">{error.title}</Heading>

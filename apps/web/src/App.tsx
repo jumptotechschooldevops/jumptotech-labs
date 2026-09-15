@@ -15,6 +15,7 @@
 import { lazy, Suspense } from 'react';
 import { AppShell } from './components/AppShell';
 import { AuthGate } from './components/AuthGate';
+import { PageErrorBoundary } from './components/PageErrorBoundary';
 import { EmptyState, LoadingState } from './components/ui';
 import { ActiveSessionProvider } from './lib/ActiveSessionContext';
 import { AuthProvider } from './lib/AuthContext';
@@ -39,6 +40,7 @@ function NotFoundPage() {
   return (
     <div className="page page--narrow">
       <EmptyState
+        headingLevel={1}
         title="Page not found"
         action={
           <a className="btn btn--primary" href={hrefFor({ name: 'dashboard' })}>
@@ -88,7 +90,10 @@ export function StudentApp() {
     <CatalogProvider>
       <ActiveSessionProvider>
         <AppShell route={route} hash={hash} variant={route.name === 'workspace' ? 'workspace' : 'page'}>
-          <Page route={route} navigation={navigation} />
+          {/* Keyed by path, so navigating away from a page that failed clears the failure. */}
+          <PageErrorBoundary key={hash.split('?')[0]}>
+            <Page route={route} navigation={navigation} />
+          </PageErrorBoundary>
         </AppShell>
       </ActiveSessionProvider>
     </CatalogProvider>

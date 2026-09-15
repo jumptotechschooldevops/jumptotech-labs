@@ -137,14 +137,18 @@ export function EmptyState({
   title,
   children,
   action,
+  headingLevel = 2,
 }: {
   title: string;
   children?: ReactNode;
   action?: ReactNode;
+  /** 1 when the empty state *is* the page, so the page still has its h1. */
+  headingLevel?: 1 | 2;
 }) {
+  const Heading = headingLevel === 1 ? 'h1' : 'h2';
   return (
     <div className="state state--empty">
-      <h2 className="state__title">{title}</h2>
+      <Heading className="state__title">{title}</Heading>
       {children ? <div className="state__body">{children}</div> : null}
       {action ? <div className="state__action">{action}</div> : null}
     </div>
