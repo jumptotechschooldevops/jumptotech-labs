@@ -196,6 +196,8 @@ new_case() {
   export FAKE_LOG="$case_dir/fake.log"
   : >"$FAKE_LOG"
   export BACKUP_DIR="$case_dir/backups" JTT_CONTAINER_TMPDIR="$case_dir/container"
+  # BETA-P0-018: the monitoring status, kept out of the repository's backups/.
+  export BACKUP_STATUS_DIR="$case_dir/status"
   export JTT_DB_CONTAINER=fake-postgres FAKE_DATABASES="postgres jumptotech_labs"
   unset FAKE_PS_IDS FAKE_RUNNING FAKE_MOUNT_SOURCE FAKE_SERVER_DOWN FAKE_SESSIONS \
     FAKE_CREATE_FAIL FAKE_SWAP_FAIL FAKE_PG_DUMP_FAIL FAKE_PG_DUMP_GARBAGE \
@@ -574,6 +576,95 @@ given_archive
 export FAKE_SWAP_FAIL=1
 restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
 expect '--replace when the rename fails: reports the rollback' says 'rolled back'
+
+# --- monitoring status (BETA-P0-018) ---------------------------------------------------
+#
+# What apps/api/src/operations.ts reads to export backup freshness. The format is
+# pinned on both sides: parseBackupStatusRecord refuses anything else.
+
+echo '# monitoring status'
+status_file() { printf '%s/%s' "$BACKUP_STATUS_DIR" "$1"; }
+only_status_keys() { ! grep -vqE '^(timestamp_seconds=[0-9]{9,11}|size_bytes=[0-9]+|offhost_copy=(copied|not_configured))$' "$(status_file "$1")"; }
+recent_timestamp() {
+  local stamp now
+  stamp=$(sed -n 's/^timestamp_seconds=//p' "$(status_file "$1")")
+  now=$(date -u +%s)
+  [ -n "$stamp" ] && [ $((now - stamp)) -ge 0 ] && [ $((now - stamp)) -lt 120 ]
+}
+
+new_case
+backup
+archive=$(cat "$case_dir/out")
+expect 'a successful backup records db-backup.last-success' test -f "$(status_file db-backup.last-success)"
+expect 'the success record holds a current Unix timestamp' recent_timestamp db-backup.last-success
+size_recorded() { grep -qx "size_bytes=$(wc -c <"$archive" | tr -d ' ')" "$(status_file db-backup.last-success)"; }
+expect 'the success record holds the archive size' size_recorded
+expect 'without BACKUP_COPY_HOOK the record says the archive was not copied off-host' grep -qx 'offhost_copy=not_configured' "$(status_file db-backup.last-success)"
+expect 'the record holds only timestamp, size and off-host keys: no path, name or credential' only_status_keys db-backup.last-success
+expect 'the record is world-readable (0644) for the api container user' test "$(mode_of "$(status_file db-backup.last-success)")" = -rw-r--r--
+expect 'the status directory is 0755' test "$(mode_of "$BACKUP_STATUS_DIR")" = drwxr-xr-x
+expect 'a successful backup records no failure' test ! -e "$(status_file db-backup.last-failure)"
+expect 'no status file is written into BACKUP_DIR' bash -c "! ls -A '$BACKUP_DIR' | grep -q 'last-'"
+
+new_case
+printf '#!/usr/bin/env bash\nexit 0\n' >"$case_dir/hook.sh"
+chmod 700 "$case_dir/hook.sh"
+BACKUP_COPY_HOOK="$case_dir/hook.sh" backup
+expect 'with a successful BACKUP_COPY_HOOK the record says the archive was copied off-host' grep -qx 'offhost_copy=copied' "$(status_file db-backup.last-success)"
+
+new_case
+export FAKE_PG_DUMP_FAIL=1
+backup
+expect 'a failed backup records db-backup.last-failure' recent_timestamp db-backup.last-failure
+expect 'a failed backup records no success' test ! -e "$(status_file db-backup.last-success)"
+expect 'a failed backup still leaves nothing in BACKUP_DIR' nothing_written
+expect 'a failed backup keeps its own non-zero exit status' failed
+
+new_case
+export BACKUP_STATUS_DIR=relative/status
+backup
+expect 'a relative BACKUP_STATUS_DIR does not fail the backup' succeeded
+expect 'a relative BACKUP_STATUS_DIR is reported, not written' says 'BACKUP_STATUS_DIR must be an absolute path'
+
+new_case
+export BACKUP_STATUS_DIR="$BACKUP_DIR"
+backup
+expect 'BACKUP_STATUS_DIR equal to BACKUP_DIR: the backup still succeeds' succeeded
+expect 'BACKUP_STATUS_DIR equal to BACKUP_DIR: refused, so the api mount never carries archives' says 'BACKUP_STATUS_DIR is inside BACKUP_DIR'
+expect 'BACKUP_STATUS_DIR equal to BACKUP_DIR: no status file written beside the archives' bash -c "! ls -A '$BACKUP_DIR' | grep -q 'last-'"
+
+new_case
+export BACKUP_STATUS_DIR="$case_dir"
+backup
+expect 'BACKUP_DIR inside BACKUP_STATUS_DIR: refused' says 'BACKUP_DIR is inside BACKUP_STATUS_DIR'
+expect 'BACKUP_DIR inside BACKUP_STATUS_DIR: no status file written' test ! -e "$case_dir/db-backup.last-success"
+
+new_case
+mkdir -p "$BACKUP_STATUS_DIR"
+chmod 555 "$BACKUP_STATUS_DIR"
+backup
+expect 'an unwritable status directory does not fail the backup' succeeded
+expect 'an unwritable status directory is reported' says 'could not record this backup success'
+chmod 755 "$BACKUP_STATUS_DIR"
+
+new_case
+given_archive
+restore --verify-only "$case_dir/a.dump"
+expect '--verify-only success records db-verify.last-success' recent_timestamp db-verify.last-success
+expect '--verify-only success records no backup outcome' test ! -e "$(status_file db-backup.last-success)"
+
+new_case
+given_archive
+printf '%064d  a.dump\n' 1 >"$case_dir/a.dump.sha256"
+restore --verify-only "$case_dir/a.dump"
+expect '--verify-only on a corrupt archive: refused' says 'does not match its .sha256 sidecar'
+expect '--verify-only on a corrupt archive records db-verify.last-failure, before the server is touched' recent_timestamp db-verify.last-failure
+expect '--verify-only on a corrupt archive: the server was not contacted' server_untouched
+
+new_case
+given_archive
+restore --into restored_copy "$case_dir/a.dump"
+expect 'a restore records no verification outcome' test ! -e "$(status_file db-verify.last-success)"
 
 # --- secrets ---------------------------------------------------------------------------
 

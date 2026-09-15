@@ -47,7 +47,14 @@ diagnosis, and the alerts that look alike are known in advance.
 | [RB-11 API errors and latency](RB-11-api-errors-and-latency.md) | `ApiErrorRateHigh`, `ApiLatencyHigh`, `EventLoopLagHigh` |
 | [RB-12 Terminal](RB-12-terminal.md) | `TerminalConnectionFailures`, `TerminalPtyDrift` |
 | [RB-13 Verification](RB-13-verification.md) | `VerificationErrorRate` |
-| [RB-14 Auth](RB-14-auth.md) | `AuthFailureSpike`, `JwksFetchFailing` |
+| [RB-14 Auth](RB-14-auth.md) | `AuthFailureSpike`, `JwksFetchFailing`, `AuthRejectionsAbnormal`, `OidcSignInFailures` |
+| [RB-15 TLS edge](RB-15-tls-edge.md) | `TlsCertificateRenewalDue`, `TlsCertificateExpiresWithin7Days`, `TlsEdgeUnhealthy`, `TlsHttpRedirectBroken`, `TlsEdgeCheckNotRunning` |
+| [RB-16 Backups](RB-16-backups.md) | `BackupStale`, `BackupMissedTwice`, `BackupLastRunFailed`, `BackupNeverSucceeded`, `BackupStatusUnreadable`, `BackupVerifyFailed` |
+| [RB-17 Session lifecycle](RB-17-session-lifecycle.md) | `LabResetsFailing`, `SessionStuckProvisioning`, `SessionResetStuck`, `SessionTeardownStuck`, `SessionDegradedNotReclaimed` |
+| [RB-18 Network isolation](RB-18-network-isolation.md) | `NetworkIsolationNotAttested`, `NetworkIsolationAttestationAging` |
+| [RB-19 Host pressure](RB-19-host-pressure.md) | `HostMemoryPressure`, `HostMemoryCritical`, `HostDiskSpaceLow`, `HostDiskSpaceCritical`, `HostCpuSaturated` |
+
+`ReaperSweepErrorsPersisting` is in RB-05.
 
 ## Before any of them
 
@@ -70,6 +77,11 @@ observations. Now they are one story.
 Not tied to one alert, and written as procedures rather than in the nine-section
 shape above:
 
+- [Private beta operations](private-beta-operations.md)
+  — BETA-P0-018, **start here when running the beta**: the production command,
+  the daily health check, the operator contract (23 questions and where each is
+  answered), whether students should stop launching labs, a student who cannot
+  start a lab, safe restarts, and what is still DECISION REQUIRED.
 - [PostgreSQL backup, restore and disaster recovery](postgres-backup-restore.md)
   — BETA-P0-013: manual and scheduled backups, retention, verification, restore
   into a disposable database, production replacement and rollback, and recovery

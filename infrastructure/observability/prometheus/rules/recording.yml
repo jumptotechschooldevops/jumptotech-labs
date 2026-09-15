@@ -79,6 +79,11 @@ groups:
       - record: jtt:sessions_utilization:ratio
         expr: sum(jtt_sessions_active) / clamp_min(max(jtt_sessions_capacity_limit), 1)
 
+      # Free slots under MAX_ACTIVE_SESSIONS — BETA-P0-018. A count reads better
+      # than a ratio at the beta's cap of 5, where each session is 20%.
+      - record: jtt:sessions_headroom:count
+        expr: max(jtt_sessions_capacity_limit) - (sum(jtt_sessions_active) or vector(0))
+
       - record: jtt:lab_provision_duration:p95_15m
         expr: |
           histogram_quantile(
@@ -177,3 +182,37 @@ groups:
         expr: |
           sum(rate(jtt_terminal_connections_total{outcome!="established"}[10m]))
             / clamp_min(sum(rate(jtt_terminal_connections_total[10m])), 0.001)
+
+      # BETA-P0-018. Counts, not rates: `AuthFailureSpike` asks for more than one
+      # failure a second, which five students can never produce.
+      #
+      # `AUTH_REQUIRED` is excluded — no credential at all is a signed-out or
+      # expired browser, the most ordinary thing on the platform. What is left
+      # is a credential presented and rejected.
+      - record: jtt:auth_rejected:increase10m
+        expr: sum(increase(jtt_auth_attempts_total{outcome!~"success|AUTH_REQUIRED"}[10m])) or vector(0)
+
+      - record: jtt:auth_callback_failures:increase15m
+        expr: sum(increase(jtt_auth_callback_total{outcome!="success"}[15m])) or vector(0)
+
+  # --- deployment operations (BETA-P0-018) -------------------------------------
+  #
+  # Each keeps the source series' labels, so an alert on it still names the
+  # instance, and the filesystem or backup operation it is about.
+  - name: jtt-operations
+    interval: 15s
+    rules:
+      - record: jtt:tls_certificate_expiry:seconds
+        expr: jtt_tls_certificate_not_after_timestamp_seconds - time()
+
+      - record: jtt:backup_age:seconds
+        expr: time() - jtt_backup_last_success_timestamp_seconds
+
+      - record: jtt:host_memory_available:ratio
+        expr: jtt_host_memory_available_bytes / clamp_min(jtt_host_memory_total_bytes, 1)
+
+      - record: jtt:host_filesystem_available:ratio
+        expr: jtt_host_filesystem_available_bytes / clamp_min(jtt_host_filesystem_size_bytes, 1)
+
+      - record: jtt:host_load5_per_cpu:ratio
+        expr: jtt_host_load_average{window="5m"} / ignoring(window) clamp_min(jtt_host_cpus, 1)

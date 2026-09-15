@@ -21,8 +21,20 @@
 # `/metrics` endpoints on the default network and nothing else. They have no
 # route to a student sandbox and no route to the cluster.
 #
+# **One network namespace (BETA-P0-018).** Alertmanager and Grafana run inside
+# Prometheus's namespace (`network_mode: service:prometheus`) and reach it, and
+# each other, on localhost; only Prometheus joins a network, so it is the only
+# one of the three that holds an address a peer container can dial. That is
+# what lets the production overlay (docker-compose.production-observability.yml)
+# bind Prometheus and Alertmanager to 127.0.0.1 *inside* the namespace, out of
+# reach of every other container on the default network — the terminal, where
+# Kubernetes-track students have a shell, among them. Here, in development, they
+# still listen on every interface, so the loopback host ports below work.
+# Restarting prometheus means restarting the other two: they share its namespace.
+#
 # **No published port beyond loopback.** Everything below binds 127.0.0.1, so
 # reaching Grafana means being on the host or forwarding a port deliberately.
+# All three ports are published on `prometheus`, the namespace's owner.
 # ---------------------------------------------------------------------------
 
 services:
@@ -117,6 +129,9 @@ services:
       - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+      # Alertmanager and Grafana listen inside this service's namespace.
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
     networks:
       - default
 
@@ -134,16 +149,24 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
       - --web.listen-address=0.0.0.0:9093
+      # Gossip for an HA pair. There is one instance, and an unused listener on
+      # 9094 is one more thing reachable from the network.
+      - --cluster.listen-address=
     volumes:
       - type: bind
         source: ./infrastructure/observability/alertmanager/alertmanager.yml
         target: /etc/alertmanager/alertmanager.yml
         read_only: true
+      # The notification destination, as a file (BETA-P0-018). Git-ignored; see
+      # its README. Nothing else mounts it.
+      - type: bind
+        source: ./infrastructure/observability/alertmanager/secrets
+        target: /etc/alertmanager/secrets
+        read_only: true
       - alertmanager-data:/alertmanager
-    ports:
-      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
-    networks:
-      - default
+    network_mode: service:prometheus
+    depends_on:
+      - prometheus
 
   grafana:
     image: grafana/grafana:11.2.0
@@ -172,12 +195,9 @@ services:
         target: /var/lib/grafana/dashboards
         read_only: true
       - grafana-data:/var/lib/grafana
-    ports:
-      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+    network_mode: service:prometheus
     depends_on:
       - prometheus
-    networks:
-      - default
 
 volumes:
   prometheus-data:

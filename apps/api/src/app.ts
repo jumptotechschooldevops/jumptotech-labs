@@ -340,6 +340,7 @@ export function createApp(deps: CreateAppDeps): Express {
         deps.config.auth.browserFlow?.clientSecret ?? `no-browser-flow:${deps.config.terminalSessionSecret}`,
       ),
       mode: deps.config.auth.mode,
+      onCallback: (outcome) => observability.metrics.auth.callbacks.inc({ outcome }),
     }),
   );
 

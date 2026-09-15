@@ -46,6 +46,7 @@ import {
   type AuthTransaction,
   type CookieAttributes,
 } from '../auth/cookies.js';
+import type { AUTH_CALLBACK_OUTCOMES } from '@jumptotech/observability';
 import type { AuthCookieConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 
@@ -75,6 +76,11 @@ export interface AuthRoutesDeps {
   /** `development` deployments report themselves as such rather than pretending. */
   mode: 'oidc' | 'development';
   logger?: (message: string) => void;
+  /**
+   * Counts each callback's outcome — BETA-P0-018. A closed code from
+   * `AUTH_CALLBACK_OUTCOMES`, never the provider's error text.
+   */
+  onCallback?: (outcome: (typeof AUTH_CALLBACK_OUTCOMES)[number]) => void;
 }
 
 function cookieAttributes(cookie: AuthCookieConfig, maxAgeSeconds?: number): CookieAttributes {
@@ -237,7 +243,16 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
 
   // GET /auth/callback -----------------------------------------------------
   router.get('/callback', asyncRoute(async (req, res) => {
+    const outcome = (value: (typeof AUTH_CALLBACK_OUTCOMES)[number]): void => {
+      try {
+        deps.onCallback?.(value);
+      } catch {
+        /* counting a sign-in must never break one */
+      }
+    };
+
     if (!deps.client || !deps.idTokenVerifier) {
+      outcome('not_configured');
       sendError(res, 503, {
         code: 'AUTH_NOT_CONFIGURED',
         message: 'This deployment has no identity provider configured.',
@@ -256,6 +271,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
      */
     if (typeof req.query.error === 'string') {
       log(`sign-in refused by the identity provider: ${String(req.query.error).slice(0, 200)}`);
+      outcome('provider_refused');
       res.setHeader('set-cookie', clearTx);
       sendError(res, 401, {
         code: 'AUTH_REFUSED',
@@ -267,6 +283,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
 
     const transaction = openTransaction(parseCookies(req.get('cookie'))[txCookieName], deps.transactionSecret);
     if (!transaction) {
+      outcome('no_transaction');
       res.setHeader('set-cookie', clearTx);
       sendError(res, 400, {
         code: 'AUTH_NO_TRANSACTION',
@@ -278,6 +295,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
 
     // CSRF defence: the state we minted must come back exactly.
     if (!safeEquals(req.query.state, transaction.state)) {
+      outcome('state_mismatch');
       res.setHeader('set-cookie', clearTx);
       sendError(res, 400, {
         code: 'AUTH_STATE_MISMATCH',
@@ -289,6 +307,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
 
     const code = req.query.code;
     if (typeof code !== 'string' || code.length === 0 || code.length > 4096) {
+      outcome('no_code');
       res.setHeader('set-cookie', clearTx);
       sendError(res, 400, {
         code: 'AUTH_NO_CODE',
@@ -307,6 +326,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
       // and only as a user row.
       user = await deps.users.upsert(claims);
     } catch (error) {
+      outcome('verification_failed');
       res.setHeader('set-cookie', clearTx);
       authErrorResponse(res, error, 'complete sign-in');
       return;
@@ -334,6 +354,8 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
         cookieAttributes(deps.cookie, deps.cookie.ttlSeconds),
       ),
     ]);
+
+    outcome('success');
 
     // The identity is never in the redirect URL. The browser learns who it is
     // by calling /auth/session with the cookie it just received.

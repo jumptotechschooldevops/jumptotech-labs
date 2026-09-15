@@ -40,6 +40,8 @@ import { verifyLab } from '@jumptotech/verifier';
 import type { ProgressService, StudentIdentityResolver } from '@jumptotech/progress';
 import {
   silentLogger,
+  type LAB_END_OUTCOMES,
+  type LAB_RESET_OUTCOMES,
   type AuthMetrics,
   type CommonMetrics,
   type Logger,
@@ -179,6 +181,36 @@ export function toSessionPayload(manager: SessionManager, session: LabSession) {
 
 export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   const obs = deps.obs ?? silentLogger();
+
+  /*
+   * One Reset Lab or End Lab outcome, counted and logged the same way every
+   * time — BETA-P0-018, mirroring `recordStart` in labs.ts. The provider-labelled
+   * counter is for diagnosis; the outcome-only twin, zero-initialised, is what
+   * the alerts read.
+   */
+  function recordReset(
+    outcome: (typeof LAB_RESET_OUTCOMES)[number],
+    fields: { provider?: string; labId?: string; sessionId?: string; code?: string },
+  ): void {
+    if (fields.provider) deps.metrics?.sessions.labResets.inc({ provider: fields.provider, outcome });
+    deps.metrics?.sessions.labResetOutcomes.inc({ outcome });
+    obs[outcome === 'success' ? 'info' : 'warn'](
+      outcome === 'success' ? 'lab.reset.succeeded' : 'lab.reset.failed',
+      { ...fields, outcome },
+    );
+  }
+
+  function recordEnd(
+    outcome: (typeof LAB_END_OUTCOMES)[number],
+    fields: { provider?: string; labId?: string; sessionId?: string; code?: string },
+  ): void {
+    deps.metrics?.sessions.labEndOutcomes.inc({ outcome });
+    obs[outcome === 'success' ? 'info' : 'warn'](
+      outcome === 'success' ? 'lab.end.succeeded' : 'lab.end.failed',
+      { ...fields, outcome },
+    );
+  }
+
   const { registry, sessions, k8s, engines, ansible, workspace, progress } = deps;
   const log = deps.logger ?? (() => undefined);
   const router = Router();
@@ -419,6 +451,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     if (!(await guard(req, res, 'session:reset'))) return;
     try {
       const { session, result } = await sessions.reset(String(req.params.sessionId));
+      recordReset(result.ok ? 'success' : 'failed', {
+        provider: session.provider,
+        labId: session.labId,
+        sessionId: session.sessionId,
+        ...(result.error?.code ? { code: result.error.code } : {}),
+      });
       if (!result.ok) {
         // The session is DEGRADED now: never reported as a working lab, and
         // recoverable by the two things the student can actually do.
@@ -467,6 +505,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         reconnectTerminal: session.sandboxKind === 'container',
       });
     } catch (error) {
+      // SESSION_RESET_FAILED is a reset that ran and did not finish; every other
+      // session-domain error refused it before any runtime work.
+      const code = error instanceof SessionError ? error.code : undefined;
+      recordReset(code === undefined || code === 'SESSION_RESET_FAILED' ? 'failed' : 'rejected', {
+        ...(code ? { code } : {}),
+      });
       sessionErrorResponse(res, error);
     }
   }));
@@ -482,6 +526,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     if (!(await guard(req, res, 'session:end'))) return;
     try {
       const { session, destroy } = await sessions.end(String(req.params.sessionId));
+      recordEnd(destroy.namespaceGone ? 'success' : 'pending', {
+        provider: session.provider,
+        labId: session.labId,
+        sessionId: session.sessionId,
+        ...(destroy.error?.code ? { code: destroy.error.code } : {}),
+      });
       if (!destroy.namespaceGone) {
         sendError(res, 503, {
           code: destroy.error?.code ?? 'DESTROY_FAILED',
@@ -509,6 +559,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         steps: destroy.steps,
       });
     } catch (error) {
+      const code = error instanceof SessionError ? error.code : undefined;
+      recordEnd(code === undefined ? 'failed' : 'rejected', { ...(code ? { code } : {}) });
       sessionErrorResponse(res, error);
     }
   }));

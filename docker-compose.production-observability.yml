@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — production observability (BETA-P0-018).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.runtime.yml \
+#                  -f docker-compose.observability.yml \
+#                  -f docker-compose.production.yml \
+#                  -f docker-compose.production-observability.yml \
+#                  --profile observability up -d
+#
+# The order matters: the production overlay's `ports: !reset []` must come after
+# the observability overlay's loopback metrics ports, and this file after both.
+# docs/runbooks/private-beta-operations.md §1 names the command once as $PROD.
+#
+# ## What it adds to the P0-012/P0-017 production stack
+#
+#   Prometheus, Alertmanager and Grafana (the observability overlay), with the
+#   BETA-P0-018 alert set, the private-beta dashboard, and the API's deployment
+#   gauges: the TLS edge, backup freshness, host pressure, network attestation.
+#
+# ## What it does not change
+#
+#   published   443 → web:8443   HTTPS
+#                80 → web:8080   redirect and ACME HTTP-01 only
+#   operator    127.0.0.1:${GRAFANA_PORT:-3001} → Grafana :3000, loopback only,
+#               for an SSH tunnel. Not reachable from any other machine.
+#   published   nothing else, on any interface: not 3000 (web), 4000, 4001,
+#               4002, 5432, 9090, 9093, 9400, 9401 or 9402.
+#
+# Enforced by infrastructure/secret-distribution.json (`production-observability`
+# stack, `publishedPorts.operatorLoopback`), which both
+# scripts/check-secret-distribution.mjs and compose-secret-distribution.test.ts
+# read.
+#
+# ## Who can reach the monitoring components
+#
+#   Prometheus    127.0.0.1:9090 inside its own network namespace. Grafana and
+#                 Alertmanager share that namespace; no other container can
+#                 connect, because nothing listens on the namespace's network
+#                 address. Its lifecycle API (--web.enable-lifecycle) is off.
+#   Alertmanager  127.0.0.1:9093 in the same namespace, gossip off. No other
+#                 container can create a silence.
+#   Grafana       :3000 in the namespace, reachable from containers on the
+#                 default network (api, terminal, sandboxd, web) as a login page
+#                 only: anonymous access, sign-up and basic-auth API access are
+#                 off, and brute-force login protection is on. The operator port
+#                 above is loopback. Recorded as a limitation in the runbook.
+#
+# No monitoring container gets a Docker socket, the `sandboxes` or `kind`
+# networks, or the `database` network. sandboxd remains the only holder of the
+# host container runtime.
+# ---------------------------------------------------------------------------
+
+services:
+  # The observability overlay published sandboxd's metrics listener on loopback
+  # for development. Prometheus reaches it by service name; the host does not.
+  sandboxd:
+    ports: !reset []
+
+  api:
+    environment:
+      # Where scripts/db-backup.sh records its outcome, as seen from inside this
+      # container. Not a secret: timestamps and a size.
+      BACKUP_STATUS_DIR: /var/lib/jumptotech/backup-status
+    volumes:
+      # The host directory the backup cron job writes to — the same
+      # BACKUP_STATUS_DIR set for the job. Read-only here. `create_host_path`
+      # keeps a host that has not run a backup yet from failing to start the api;
+      # the runbook creates it owned by the backup account first. It must never be,
+      # contain or sit inside BACKUP_DIR: db-lib.sh refuses to record there, and
+      # the api treats a status directory holding archives as unreadable.
+      - type: bind
+        source: ${BACKUP_STATUS_DIR:-./backups/status}
+        target: /var/lib/jumptotech/backup-status
+        read_only: true
+        bind:
+          create_host_path: true
+
+  prometheus:
+    # The whole command, replaced: loopback inside the namespace, and no
+    # --web.enable-lifecycle. Reload rules with `kill -s HUP` (runbook §6).
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.listen-address=127.0.0.1:9090
+    # Only Grafana, and only on the host's loopback interface.
+    ports: !override
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+
+  alertmanager:
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=127.0.0.1:9093
+      - --cluster.listen-address=
+
+  grafana:
+    environment:
+      # The HTTP API with a password is not needed by an operator using the UI,
+      # and is the easier surface to guess against.
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_SECURITY_DISABLE_BRUTE_FORCE_LOGIN_PROTECTION: "false"

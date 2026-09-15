@@ -1,7 +1,9 @@
 # RB-03 — Lab start failures
 
-**Alerts:** `LabStartsFailingHard` (critical — ≥5 failures in 10m **and** >30% of attempts),
-`LabStartFailureRateElevated` (warning — ≥3 in 10m **and** >10%)
+**Alerts:** `LabStartsFailingHard` (critical — ≥3 failures in 10m **and** >30% of attempts),
+`LabStartFailureRateElevated` (warning — ≥2 in 10m **and** >10%). The floors were
+5 and 3, sized for `MAX_ACTIVE_SESSIONS=20`; BETA-P0-018 lowered them for the
+private beta's cap of 5.
 **Typical cause:** a missing sandbox image, a resource ceiling, a full disk, a
 provider outage
 **Blast radius:** whichever labs share the failing dimension — read section 2

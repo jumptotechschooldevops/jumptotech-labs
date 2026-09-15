@@ -49,6 +49,7 @@ import {
   assertProductionSecrets,
   assertScrapeTokenIsDistinct,
   isProductionEnv,
+  publicHostname,
   type ObservabilityConfig,
 } from '@jumptotech/observability';
 
@@ -175,6 +176,75 @@ export interface ApiConfig {
    */
   publicOrigin: string | undefined;
   auth: AuthConfig;
+  /** Deployment health the API reports for operators (BETA-P0-018). */
+  operations: OperationsConfig;
+}
+
+/**
+ * What the API measures about the deployment around it — BETA-P0-018.
+ * See `apps/api/src/operations.ts` and docs/runbooks/private-beta-operations.md.
+ */
+export interface OperationsConfig {
+  /**
+   * The BETA-P0-017 TLS edge check, run from inside the compose network against
+   * the web tier, on a timer. On by default exactly when `NODE_ENV=production`
+   * and `PUBLIC_ORIGIN` is an https origin — the production overlay pins both.
+   */
+  edgeProbe: {
+    enabled: boolean;
+    /** The public host: SNI, certificate identity and Host header. Empty when disabled. */
+    hostname: string;
+    /** Where the edge is reached. The compose service name by default, not DNS. */
+    connectHost: string;
+    httpsPort: number;
+    httpPort: number;
+    intervalSeconds: number;
+  };
+  /**
+   * The directory scripts/db-backup.sh and db-restore.sh --verify-only record
+   * their last outcome in, as mounted into this container. Unset: no backup
+   * metrics at all, which is right for development.
+   */
+  backupStatusDir: string | undefined;
+  /** Host memory, load and filesystem gauges, read from /proc and statfs. */
+  hostMetrics: boolean;
+}
+
+export function loadOperationsConfig(env: NodeJS.ProcessEnv, publicOrigin: string | undefined): OperationsConfig {
+  const production = isProductionEnv(env);
+  let hostname = '';
+  let originUsable = false;
+  if (publicOrigin) {
+    try {
+      hostname = publicHostname(publicOrigin);
+      originUsable = true;
+    } catch {
+      hostname = '';
+    }
+  }
+  const explicit = env.EDGE_PROBE_ENABLED;
+  const enabled = boolFromEnv(env, 'EDGE_PROBE_ENABLED', production && originUsable);
+  if (enabled && !originUsable) {
+    throw new Error(
+      `EDGE_PROBE_ENABLED${explicit === undefined ? ' (on by default in production)' : ''} needs PUBLIC_ORIGIN to be the https origin students use, with a DNS host name and no port.`,
+    );
+  }
+  const backupStatusDir = env.BACKUP_STATUS_DIR?.trim() || undefined;
+  if (backupStatusDir && !path.isAbsolute(backupStatusDir)) {
+    throw new Error('BACKUP_STATUS_DIR must be an absolute path inside this container.');
+  }
+  return {
+    edgeProbe: {
+      enabled,
+      hostname: enabled ? hostname : '',
+      connectHost: strFromEnv(env, 'EDGE_PROBE_CONNECT_HOST', 'web'),
+      httpsPort: intFromEnv(env, 'EDGE_PROBE_HTTPS_PORT', 8443),
+      httpPort: intFromEnv(env, 'EDGE_PROBE_HTTP_PORT', 8080),
+      intervalSeconds: intFromEnv(env, 'EDGE_PROBE_INTERVAL_SECONDS', 300),
+    },
+    backupStatusDir,
+    hostMetrics: boolFromEnv(env, 'HOST_METRICS_ENABLED', true),
+  };
 }
 
 /**
@@ -923,5 +993,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     dockerHost: env.DOCKER_HOST || undefined,
     publicOrigin,
     observability,
+    operations: loadOperationsConfig(env, publicOrigin),
   };
 }

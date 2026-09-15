@@ -1,0 +1,214 @@
+# Deployment operations alerts — BETA-P0-018.
+#
+# What the private beta needs to know about the deployment around the product:
+# the public TLS edge, the backups, and the host. Every series here is published
+# by the API (apps/api/src/operations.ts) and none exists in development unless
+# its input is configured, so nothing fires on a laptop.
+#
+# Thresholds are the private beta's, and each is written down where an operator
+# will look for it: here, in the runbook, and in docs/observability.md §9.
+
+groups:
+  - name: tls-edge
+    rules:
+      # BETA-P0-017's own windows. The API runs P0-017's `probeHttpsEndpoint`
+      # against the edge, and these two numbers are DEFAULT_EXPIRY_THRESHOLDS
+      # (warn 21 days, critical 7): `private-beta-operations.test.ts` fails the
+      # build if they drift apart, so `npm run tls:check` and this alert always
+      # agree about when renewal is due.
+      - alert: TlsCertificateRenewalDue
+        expr: jtt:tls_certificate_expiry:seconds < 21 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: 'the public certificate expires in {{ $value | humanizeDuration }}; renew it this week'
+          description: >-
+            Under 21 days is the P0-017 renewal window. An automated renewal
+            should already have replaced it; if one is configured, it is failing.
+          runbook_url: docs/runbooks/RB-15-tls-edge.md
+
+      - alert: TlsCertificateExpiresWithin7Days
+        expr: jtt:tls_certificate_expiry:seconds < 7 * 86400
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'the public certificate expires in {{ $value | humanizeDuration }}'
+          description: >-
+            Renewal has failed or never ran. When it expires every browser
+            refuses the site and every student is locked out.
+          runbook_url: docs/runbooks/RB-15-tls-edge.md
+
+      # The P0-017 served check reporting CRITICAL: expired, untrusted chain,
+      # wrong host name, a handshake failure, or nothing answering on 8443.
+      - alert: TlsEdgeUnhealthy
+        expr: jtt_tls_check_status{check="served"} == 2
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'the HTTPS edge fails a browser-equivalent TLS check'
+          description: >-
+            jtt_tls_check_findings{check="served"} names the finding code. Run
+            npm run tls:check on the host for the full message.
+          runbook_url: docs/runbooks/RB-15-tls-edge.md
+
+      - alert: TlsHttpRedirectBroken
+        expr: jtt_tls_check_status{check="redirect"} == 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'port 80 does not redirect to the https origin'
+          description: >-
+            http:// links fail, and an ACME HTTP-01 renewal cannot validate.
+          runbook_url: docs/runbooks/RB-15-tls-edge.md
+
+      # A check that has stopped reporting is indistinguishable from a healthy
+      # edge on every panel above, so its silence is an alert of its own.
+      - alert: TlsEdgeCheckNotRunning
+        expr: |
+          jtt_tls_probe_enabled == 1
+            unless on(instance)
+          (time() - jtt_tls_check_last_run_timestamp_seconds < 1200)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'the TLS edge check has not completed for 20 minutes'
+          runbook_url: docs/runbooks/RB-15-tls-edge.md
+
+  - name: backups
+    rules:
+      # RPO is 24 hours (docs/runbooks/postgres-backup-restore.md §3). 26 hours
+      # allows one daily run to be late; 50 hours means two have been missed.
+      - alert: BackupStale
+        expr: jtt:backup_age:seconds{operation="backup"} > 26 * 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'the last successful database backup is {{ $value | humanizeDuration }} old'
+          runbook_url: docs/runbooks/RB-16-backups.md
+
+      - alert: BackupMissedTwice
+        expr: jtt:backup_age:seconds{operation="backup"} > 50 * 3600
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'no successful database backup for {{ $value | humanizeDuration }}: the 24h RPO is breached'
+          runbook_url: docs/runbooks/RB-16-backups.md
+
+      # The most recent run failed, whether or not an older one succeeded.
+      - alert: BackupLastRunFailed
+        expr: |
+          jtt_backup_last_failure_timestamp_seconds{operation="backup"}
+            > on(instance, operation)
+          jtt_backup_last_success_timestamp_seconds{operation="backup"}
+          or
+          (jtt_backup_last_failure_timestamp_seconds{operation="backup"}
+            unless on(instance, operation)
+          jtt_backup_last_success_timestamp_seconds{operation="backup"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'the most recent database backup failed'
+          description: >-
+            The scheduler's log names the step. A failed run leaves no archive
+            behind, so the previous backup is still the newest.
+          runbook_url: docs/runbooks/RB-16-backups.md
+
+      - alert: BackupNeverSucceeded
+        expr: |
+          jtt_backup_status_readable == 1
+            unless on(instance)
+          jtt_backup_last_success_timestamp_seconds{operation="backup"}
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: 'no successful database backup has ever been recorded on this host'
+          runbook_url: docs/runbooks/RB-16-backups.md
+
+      - alert: BackupStatusUnreadable
+        expr: jtt_backup_status_readable == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'the API cannot read the backup status directory, so backup freshness is unknown'
+          runbook_url: docs/runbooks/RB-16-backups.md
+
+      - alert: BackupVerifyFailed
+        expr: |
+          jtt_backup_last_failure_timestamp_seconds{operation="verify"}
+            > on(instance, operation)
+          jtt_backup_last_success_timestamp_seconds{operation="verify"}
+          or
+          (jtt_backup_last_failure_timestamp_seconds{operation="verify"}
+            unless on(instance, operation)
+          jtt_backup_last_success_timestamp_seconds{operation="verify"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'the most recent backup verification (db-restore.sh --verify-only) failed'
+          description: >-
+            An archive failed its checksum or could not be read back. Treat the
+            backups it covers as unproven until a verification passes.
+          runbook_url: docs/runbooks/RB-16-backups.md
+
+  - name: host
+    rules:
+      # Read by the API from /proc and statfs: the host kernel's view, not a
+      # container limit. `container_root` is the filesystem Docker keeps images,
+      # containers and named volumes on — PostgreSQL's data included, by default.
+      - alert: HostMemoryPressure
+        expr: jtt:host_memory_available:ratio < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'under 10% of host memory is available'
+          runbook_url: docs/runbooks/RB-19-host-pressure.md
+
+      - alert: HostMemoryCritical
+        expr: jtt:host_memory_available:ratio < 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'under 5% of host memory is available; the kernel will start killing processes'
+          runbook_url: docs/runbooks/RB-19-host-pressure.md
+
+      - alert: HostDiskSpaceLow
+        expr: jtt:host_filesystem_available:ratio < 0.15
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'filesystem {{ $labels.filesystem }} has under 15% free'
+          runbook_url: docs/runbooks/RB-19-host-pressure.md
+
+      - alert: HostDiskSpaceCritical
+        expr: jtt:host_filesystem_available:ratio < 0.08
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'filesystem {{ $labels.filesystem }} has under 8% free'
+          description: >-
+            A full container_root stops sandbox creation and PostgreSQL writes.
+          runbook_url: docs/runbooks/RB-19-host-pressure.md
+
+      - alert: HostCpuSaturated
+        expr: jtt:host_load5_per_cpu:ratio > 2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'host 5-minute load is {{ $value | printf "%.1f" }}x its CPU count'
+          runbook_url: docs/runbooks/RB-19-host-pressure.md

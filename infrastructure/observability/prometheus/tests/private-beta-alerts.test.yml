@@ -1,0 +1,610 @@
+# ---------------------------------------------------------------------------
+# The private-beta alert set — BETA-P0-018.
+#
+# `promtool test rules` against the shipped recording and alert rules, with the
+# beta's own numbers: MAX_ACTIVE_SESSIONS=5, P0-017's 21/7-day certificate
+# windows, a 24-hour backup RPO. Each alert is driven to fire and, beside it,
+# the nearest case that must stay quiet — an alert pinned only by its firing
+# case can widen until it pages on ordinary behaviour.
+#
+# promtool's clock starts at Unix time 0, so a timestamp series valued 0 is "at
+# the start of the test" and ages with `time()`.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../rules/recording.yml
+  - ../alerts/operations.yml
+  - ../alerts/sessions.yml
+  - ../alerts/security.yml
+  - ../alerts/runtime.yml
+
+evaluation_interval: 15s
+
+# Every group, recording groups first, so an alert at time t reads the recorded
+# value for t. Left to itself promtool may evaluate an alert group before the
+# recording group it reads, and an annotation that renders `$value` is then
+# fifteen seconds off — differently from one run to the next.
+group_eval_order:
+  - jtt-sessions
+  - jtt-runtime
+  - jtt-http
+  - jtt-verification
+  - jtt-auth
+  - jtt-operations
+  - tls-edge
+  - backups
+  - host
+  - sessions
+  - security
+  - runtime
+
+tests:
+  # ------------------------------------------- 1. certificate: renewal window
+  - interval: 15s
+    name: a certificate 20 days from expiry warns after an hour and does not page
+    input_series:
+      # notAfter = 20 days after the test starts.
+      - series: 'jtt_tls_certificate_not_after_timestamp_seconds{instance="api:9400"}'
+        values: '1728000+0x300'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TlsCertificateRenewalDue
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: TlsCertificateRenewalDue
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+            exp_annotations:
+              summary: 'the public certificate expires in 19d 22h 50m 0s; renew it this week'
+              description: 'Under 21 days is the P0-017 renewal window. An automated renewal should already have replaced it; if one is configured, it is failing.'
+              runbook_url: docs/runbooks/RB-15-tls-edge.md
+      - eval_time: 70m
+        alertname: TlsCertificateExpiresWithin7Days
+        exp_alerts: []
+
+  # ---------------------------------------------- 2. certificate: 7-day page
+  - interval: 15s
+    name: a certificate 6 days from expiry pages
+    input_series:
+      - series: 'jtt_tls_certificate_not_after_timestamp_seconds{instance="api:9400"}'
+        values: '518400+0x40'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: TlsCertificateExpiresWithin7Days
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: api:9400
+            exp_annotations:
+              summary: 'the public certificate expires in 5d 23h 54m 0s'
+              description: 'Renewal has failed or never ran. When it expires every browser refuses the site and every student is locked out.'
+              runbook_url: docs/runbooks/RB-15-tls-edge.md
+
+  # ------------------------------------------ 3. certificate: comfortably valid
+  - interval: 15s
+    name: a certificate 30 days from expiry raises nothing
+    input_series:
+      - series: 'jtt_tls_certificate_not_after_timestamp_seconds{instance="api:9400"}'
+        values: '2592000+0x300'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: TlsCertificateRenewalDue
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: TlsCertificateExpiresWithin7Days
+        exp_alerts: []
+
+  # ------------------------------------------------ 4. the edge check itself
+  - interval: 15s
+    name: a critical served check pages, a warning does not, and a silent check is noticed
+    input_series:
+      - series: 'jtt_tls_check_status{check="served",instance="api:9400"}'
+        values: '2+0x80'
+      - series: 'jtt_tls_check_status{check="redirect",instance="api:9400"}'
+        values: '1+0x80'
+      - series: 'jtt_tls_probe_enabled{instance="api:9400"}'
+        values: '1+0x80'
+      # The check stopped reporting: no last-run series at all.
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TlsEdgeUnhealthy
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: TlsEdgeUnhealthy
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              check: served
+              instance: api:9400
+            exp_annotations:
+              summary: 'the HTTPS edge fails a browser-equivalent TLS check'
+              description: 'jtt_tls_check_findings{check="served"} names the finding code. Run npm run tls:check on the host for the full message.'
+              runbook_url: docs/runbooks/RB-15-tls-edge.md
+      - eval_time: 19m
+        alertname: TlsHttpRedirectBroken
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: TlsEdgeCheckNotRunning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+            exp_annotations:
+              summary: 'the TLS edge check has not completed for 20 minutes'
+              runbook_url: docs/runbooks/RB-15-tls-edge.md
+
+  - interval: 15s
+    name: a TLS check that keeps reporting is not reported as silent
+    input_series:
+      - series: 'jtt_tls_probe_enabled{instance="api:9400"}'
+        values: '1+0x80'
+      # Completed every 15 seconds: always "now".
+      - series: 'jtt_tls_check_last_run_timestamp_seconds{instance="api:9400"}'
+        values: '0+15x80'
+      - series: 'jtt_tls_check_status{check="served",instance="api:9400"}'
+        values: '0+0x80'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: TlsEdgeCheckNotRunning
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: TlsEdgeUnhealthy
+        exp_alerts: []
+
+  # ------------------------------------------------------ 5. backup freshness
+  - interval: 5m
+    name: a backup that stops running warns at 26 hours and pages at 50
+    input_series:
+      # One successful backup, at the start, and never again.
+      - series: 'jtt_backup_last_success_timestamp_seconds{instance="api:9400",operation="backup"}'
+        values: '0+0x660'
+      - series: 'jtt_backup_status_readable{instance="api:9400"}'
+        values: '1+0x660'
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: BackupStale
+        exp_alerts: []
+      - eval_time: 26h20m
+        alertname: BackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+              operation: backup
+            exp_annotations:
+              summary: 'the last successful database backup is 1d 2h 20m 0s old'
+              runbook_url: docs/runbooks/RB-16-backups.md
+      - eval_time: 26h20m
+        alertname: BackupMissedTwice
+        exp_alerts: []
+      - eval_time: 50h20m
+        alertname: BackupMissedTwice
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: api:9400
+              operation: backup
+            exp_annotations:
+              summary: 'no successful database backup for 2d 2h 20m 0s: the 24h RPO is breached'
+              runbook_url: docs/runbooks/RB-16-backups.md
+      - eval_time: 50h20m
+        alertname: BackupNeverSucceeded
+        exp_alerts: []
+
+  - interval: 15s
+    name: a daily backup that keeps succeeding raises nothing
+    input_series:
+      # Recorded "now" on every sample: the backup is always fresh.
+      - series: 'jtt_backup_last_success_timestamp_seconds{instance="api:9400",operation="backup"}'
+        values: '0+15x200'
+      - series: 'jtt_backup_last_failure_timestamp_seconds{instance="api:9400",operation="backup"}'
+        values: '-100+0x200'
+      - series: 'jtt_backup_status_readable{instance="api:9400"}'
+        values: '1+0x200'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: BackupStale
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: BackupLastRunFailed
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: BackupNeverSucceeded
+        exp_alerts: []
+
+  - interval: 15s
+    name: the newest backup run failing warns, with or without an earlier success
+    input_series:
+      - series: 'jtt_backup_last_success_timestamp_seconds{instance="api:9400",operation="backup"}'
+        values: '1000+0x60'
+      - series: 'jtt_backup_last_failure_timestamp_seconds{instance="api:9400",operation="backup"}'
+        values: '2000+0x60'
+      # A verification that has failed and never passed.
+      - series: 'jtt_backup_last_failure_timestamp_seconds{instance="api:9400",operation="verify"}'
+        values: '3000+0x60'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BackupLastRunFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+              operation: backup
+            exp_annotations:
+              summary: 'the most recent database backup failed'
+              description: "The scheduler's log names the step. A failed run leaves no archive behind, so the previous backup is still the newest."
+              runbook_url: docs/runbooks/RB-16-backups.md
+      - eval_time: 6m
+        alertname: BackupVerifyFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+              operation: verify
+            exp_annotations:
+              summary: 'the most recent backup verification (db-restore.sh --verify-only) failed'
+              description: 'An archive failed its checksum or could not be read back. Treat the backups it covers as unproven until a verification passes.'
+              runbook_url: docs/runbooks/RB-16-backups.md
+
+  - interval: 15s
+    name: a host with no backup ever recorded, or no readable status, is noticed
+    input_series:
+      - series: 'jtt_backup_status_readable{instance="api:9400"}'
+        values: '1+0x300'
+      - series: 'jtt_backup_status_readable{instance="other:9400"}'
+        values: '0+0x300'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BackupNeverSucceeded
+        exp_alerts: []
+      - eval_time: 62m
+        alertname: BackupNeverSucceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+            exp_annotations:
+              summary: 'no successful database backup has ever been recorded on this host'
+              runbook_url: docs/runbooks/RB-16-backups.md
+      - eval_time: 32m
+        alertname: BackupStatusUnreadable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: other:9400
+            exp_annotations:
+              summary: 'the API cannot read the backup status directory, so backup freshness is unknown'
+              runbook_url: docs/runbooks/RB-16-backups.md
+
+  # ------------------------------------------------------------ 6. the host
+  - interval: 15s
+    name: host memory, disk and load pressure
+    input_series:
+      - series: 'jtt_host_memory_total_bytes{instance="api:9400"}'
+        values: '1000+0x80'
+      # 8% available: a warning, not yet a page.
+      - series: 'jtt_host_memory_available_bytes{instance="api:9400"}'
+        values: '80+0x80'
+      - series: 'jtt_host_filesystem_size_bytes{instance="api:9400",filesystem="container_root"}'
+        values: '1000+0x80'
+      # 5% free: both disk alerts.
+      - series: 'jtt_host_filesystem_available_bytes{instance="api:9400",filesystem="container_root"}'
+        values: '50+0x80'
+      - series: 'jtt_host_filesystem_size_bytes{instance="api:9400",filesystem="backup_status"}'
+        values: '1000+0x80'
+      # 40% free: nothing.
+      - series: 'jtt_host_filesystem_available_bytes{instance="api:9400",filesystem="backup_status"}'
+        values: '400+0x80'
+      - series: 'jtt_host_load_average{instance="api:9400",window="5m"}'
+        values: '10+0x80'
+      - series: 'jtt_host_cpus{instance="api:9400"}'
+        values: '4+0x80'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostMemoryPressure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+            exp_annotations:
+              summary: 'under 10% of host memory is available'
+              runbook_url: docs/runbooks/RB-19-host-pressure.md
+      - eval_time: 16m
+        alertname: HostMemoryCritical
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: HostDiskSpaceCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: api:9400
+              filesystem: container_root
+            exp_annotations:
+              summary: 'filesystem container_root has under 8% free'
+              description: 'A full container_root stops sandbox creation and PostgreSQL writes.'
+              runbook_url: docs/runbooks/RB-19-host-pressure.md
+      - eval_time: 16m
+        alertname: HostDiskSpaceLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+              filesystem: container_root
+            exp_annotations:
+              summary: 'filesystem container_root has under 15% free'
+              runbook_url: docs/runbooks/RB-19-host-pressure.md
+      - eval_time: 16m
+        alertname: HostCpuSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+            exp_annotations:
+              summary: 'host 5-minute load is 2.5x its CPU count'
+              runbook_url: docs/runbooks/RB-19-host-pressure.md
+
+  # ------------------------------------------------ 7. capacity at the beta's 5
+  - interval: 15s
+    name: four of five sessions is quiet, five of five for ten minutes warns
+    input_series:
+      - series: 'jtt_sessions_capacity_limit{instance="api:9400"}'
+        values: '5+0x120'
+      - series: 'jtt_sessions_active{instance="api:9400",provider="kubernetes",status="ACTIVE"}'
+        values: '4+0x40 5+0x80'
+    promql_expr_test:
+      - expr: jtt:sessions_headroom:count
+        eval_time: 5m
+        exp_samples:
+          - labels: 'jtt:sessions_headroom:count'
+            value: 1
+      - expr: jtt:sessions_headroom:count
+        eval_time: 25m
+        exp_samples:
+          - labels: 'jtt:sessions_headroom:count'
+            value: 0
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CapacityNearExhausted
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: CapacityNearExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'sandbox capacity is above 85% (100%)'
+              runbook_url: docs/runbooks/RB-04-capacity.md
+
+  # The defect this pins: the previous `increase(...[5m])` + `for: 5m` never
+  # fired on this series, and read a counter with no zero-initialised series.
+  - interval: 15s
+    name: one refusal at the cap pages
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{instance="api:9400",outcome="capacity_reached"}'
+        values: '0+0x20 1+0x60'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CapacityExhausted
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: CapacityExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: api:9400
+              outcome: capacity_reached
+            exp_annotations:
+              summary: 'students are being refused for lack of capacity'
+              description: 'MAX_ACTIVE_SESSIONS has been reached and Start Lab is returning LAB_CAPACITY_REACHED. There is no queue past the cap.'
+              runbook_url: docs/runbooks/RB-04-capacity.md
+
+  # ------------------------------------------ 8. lab starts at beta volume
+  - interval: 15s
+    name: three failed starts out of five pages; two out of five only warns
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+0x20 2+0x100'
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+0x20 1+1x2 3+0x100'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LabStartsFailingHard
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: '3 lab starts failed in the last 10 minutes (>30% of attempts)'
+              description: "Students cannot reliably start labs. Scope it by lab_id, track and provider before touching anything — one lab, one track, one provider and everything are four different incidents."
+              runbook_url: docs/runbooks/RB-03-lab-start-failures.md
+
+  - interval: 15s
+    name: two failed starts on a quiet beta warn but do not page
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+0x20 3+0x100'
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+0x20 1+1x1 2+0x100'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: LabStartFailureRateElevated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: '2 lab starts failed in the last 10 minutes (>10% of attempts)'
+              runbook_url: docs/runbooks/RB-03-lab-start-failures.md
+
+  # ------------------------------------------------- 9. resets and stuck states
+  - interval: 15s
+    name: repeated failed resets warn; two do not
+    input_series:
+      # Zero-initialised at startup, so the first failure is a visible step.
+      - series: 'jtt_lab_reset_outcome_total{instance="api:9400",outcome="failed"}'
+        values: '0+0x20 1+1x3 4+0x80'
+      - series: 'jtt_lab_reset_outcome_total{instance="other:9400",outcome="failed"}'
+        values: '0+0x20 1+1x1 2+0x80'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LabResetsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+              outcome: failed
+            exp_annotations:
+              summary: '4 lab resets failed in the last 30 minutes'
+              runbook_url: docs/runbooks/RB-17-session-lifecycle.md
+
+  - interval: 15s
+    name: sessions stuck past their own timers warn; sessions within them do not
+    input_series:
+      # CREATING since the start of the test: 10 minutes at t=10m.
+      - series: 'jtt_sessions_oldest_status_age_seconds{instance="api:9400",status="CREATING"}'
+        values: '0+15x100'
+      # RESETTING, but recovered (back to 0) at 12 minutes, as the reaper does at 10.
+      - series: 'jtt_sessions_oldest_status_age_seconds{instance="api:9400",status="RESETTING"}'
+        values: '0+15x48 0+0x52'
+      - series: 'jtt_sessions_oldest_status_age_seconds{instance="api:9400",status="ENDING"}'
+        values: '600+15x100'
+      - series: 'jtt_sessions_oldest_status_age_seconds{instance="api:9400",status="EXPIRING"}'
+        values: '0+0x100'
+      - series: 'jtt_sessions_oldest_status_age_seconds{instance="api:9400",status="DEGRADED"}'
+        values: '1800+15x100'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: SessionStuckProvisioning
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: SessionStuckProvisioning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+              status: CREATING
+            exp_annotations:
+              summary: 'a session has been CREATING for 16m 0s'
+              runbook_url: docs/runbooks/RB-17-session-lifecycle.md
+      - eval_time: 24m
+        alertname: SessionResetStuck
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: SessionTeardownStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+            exp_annotations:
+              summary: 'a session teardown has been in flight for 26m 0s; its slot is still held'
+              runbook_url: docs/runbooks/RB-17-session-lifecycle.md
+      - eval_time: 20m
+        alertname: SessionDegradedNotReclaimed
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: SessionDegradedNotReclaimed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+              status: DEGRADED
+            exp_annotations:
+              summary: 'a DEGRADED session has held a slot for 51m 0s'
+              runbook_url: docs/runbooks/RB-17-session-lifecycle.md
+
+  - interval: 15s
+    name: a reaper that completes sweeps but keeps failing inside them warns
+    input_series:
+      - series: 'jtt_reaper_last_sweep_errors{instance="api:9400"}'
+        values: '0+0x8 2+0x80'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ReaperSweepErrorsPersisting
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: ReaperSweepErrorsPersisting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: api:9400
+            exp_annotations:
+              summary: 'every cleanup sweep for 15 minutes has recorded errors (2 in the last)'
+              description: "A teardown or a sandbox listing is failing on every pass. The API log's reaper lines name the session and the provider."
+              runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
+
+  # ---------------------------------------------- 10. network isolation (P0-015)
+  - interval: 15s
+    name: an invalid attestation pages; an ageing one warns before admission stops
+    input_series:
+      - series: 'jtt_network_isolation_attestation_valid{instance="api:9400"}'
+        values: '1+0x8 0+0x40'
+      # Verified at the start; a one-hour maximum age.
+      - series: 'jtt_network_isolation_attestation_verified_timestamp_seconds{instance="other:9400"}'
+        values: '0+0x300'
+      - series: 'jtt_network_isolation_attestation_max_age_seconds{instance="other:9400"}'
+        values: '3600+0x300'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: NetworkIsolationNotAttested
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: NetworkIsolationNotAttested
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: api:9400
+            exp_annotations:
+              summary: 'NetworkPolicy enforcement is not proven on the cluster; Kubernetes labs are refused'
+              runbook_url: docs/runbooks/RB-18-network-isolation.md
+      # 75% of an hour is 45 minutes, and then ten more.
+      - eval_time: 50m
+        alertname: NetworkIsolationAttestationAging
+        exp_alerts: []
+      - eval_time: 56m
+        alertname: NetworkIsolationAttestationAging
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: other:9400
+            exp_annotations:
+              summary: 'the enforcement attestation is past 75% of its maximum age; re-run the probe before admission stops'
+              runbook_url: docs/runbooks/RB-18-network-isolation.md
+
+  # ------------------------------------------------------ 11. authentication
+  - interval: 15s
+    name: rejected credentials and failed sign-ins warn; signed-out browsers do not
+    input_series:
+      # A signed-out browser polling: 300 AUTH_REQUIRED in ten minutes. Ordinary.
+      - series: 'jtt_auth_attempts_total{mode="oidc",source="none",outcome="AUTH_REQUIRED"}'
+        values: '0+10x80'
+      - series: 'jtt_auth_attempts_total{mode="oidc",source="header",outcome="AUTH_INVALID_TOKEN"}'
+        values: '0+0x20 0+5x6 30+0x60'
+      - series: 'jtt_auth_callback_total{outcome="verification_failed"}'
+        values: '0+0x20 0+1x6 6+0x60'
+      - series: 'jtt_auth_callback_total{outcome="success"}'
+        values: '0+1x80'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AuthRejectionsAbnormal
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: AuthRejectionsAbnormal
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: '30 presented credentials were rejected in 10 minutes'
+              description: 'Invalid or expired tokens, not signed-out browsers (AUTH_REQUIRED is excluded). Break it down by outcome and source.'
+              runbook_url: docs/runbooks/RB-14-auth.md
+      - eval_time: 12m
+        alertname: OidcSignInFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: '6 OIDC sign-in callbacks failed in 15 minutes'
+              description: 'verification_failed is the token exchange or ID-token check; state_mismatch and no_transaction are the browser round trip.'
+              runbook_url: docs/runbooks/RB-14-auth.md

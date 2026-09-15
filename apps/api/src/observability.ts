@@ -39,6 +39,7 @@ import {
   createDatabaseMetrics,
   createLogger,
   createObservabilityListener,
+  createOperationsMetrics,
   createProviderMetrics,
   createRegistry,
   createReaperMetrics,
@@ -50,6 +51,7 @@ import {
   type DatabaseMetrics,
   type HealthCheck,
   type Logger,
+  type OperationsMetrics,
   type ProviderMetrics,
   type ReaperMetrics,
   type Registry,
@@ -70,6 +72,7 @@ export interface ApiMetrics {
   database: DatabaseMetrics;
   auth: AuthMetrics;
   reaper: ReaperMetrics;
+  operations: OperationsMetrics;
 }
 
 export interface ApiObservability {
@@ -142,6 +145,7 @@ export function buildApiObservability(config: ApiConfig): ApiObservability {
     database: createDatabaseMetrics(registry),
     auth: createAuthMetrics(registry),
     reaper: createReaperMetrics(registry),
+    operations: createOperationsMetrics(registry),
   };
 
   /*

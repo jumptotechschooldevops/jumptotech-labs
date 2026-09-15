@@ -177,6 +177,21 @@ It never prints key material.
 :8443 is the installed one and in date. It cannot see DNS, the firewall or the
 public chain; §5.1 can.
 
+### 5.3 The Prometheus alert (BETA-P0-018)
+
+With the production observability overlay
+([private-beta-operations.md](private-beta-operations.md)), the API runs this
+module's `probeHttpsEndpoint` and `probeHttpRedirect` against `web:8443` and
+`web:8080` every five minutes, verified against the public roots, and exports
+the result. `TlsCertificateRenewalDue` fires under 21 days and
+`TlsCertificateExpiresWithin7Days` under 7 — `DEFAULT_EXPIRY_THRESHOLDS`, which
+a test pins to the alert rules. `TlsEdgeUnhealthy` fires on a CRITICAL served
+check. Runbook: [RB-15](RB-15-tls-edge.md).
+
+It does not replace §5.1 from outside the host: it connects to the web
+container directly, so it cannot see DNS, a firewall or the public route, and
+it does not compare the served certificate with the installed files.
+
 ## 6. Staging and pre-production validation
 
 - **Before DNS points at the host**, check the host by address:

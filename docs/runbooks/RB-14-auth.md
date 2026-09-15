@@ -1,6 +1,24 @@
 # RB-14 — Authentication failing
 
-**Alerts:** `AuthFailureSpike` (warning), `JwksFetchFailing` (warning)
+**Alerts:** `AuthFailureSpike` (warning), `JwksFetchFailing` (warning),
+`AuthRejectionsAbnormal` (warning), `OidcSignInFailures` (warning)
+
+**At private-beta volume (BETA-P0-018)** `AuthFailureSpike` cannot fire: it needs
+more than one failure a second. The two beta alerts count instead —
+`AuthRejectionsAbnormal` at 20 presented-and-rejected credentials in 10 minutes
+(`AUTH_REQUIRED`, a signed-out browser, excluded), and `OidcSignInFailures` at 5
+failed `/auth/callback` requests in 15 minutes:
+
+```promql
+jtt:auth_rejected:increase10m
+sum by (outcome) (increase(jtt_auth_callback_total{outcome!="success"}[15m]))
+```
+
+Callback outcomes: `verification_failed` (code exchange, ID-token signature,
+audience, nonce), `state_mismatch` and `no_transaction` (the browser round trip,
+often a cookie blocked or `OIDC_REDIRECT_URI` wrong), `provider_refused` (the
+user cancelled, or the provider refused), `no_code`, `not_configured`.
+`JwksFetchFailing` now counts 3 failed key retrievals in 30 minutes.
 **Blast radius:** nobody can sign in. Existing browser sessions keep working
 until they expire (`AUTH_SESSION_TTL_SECONDS`, default 12h), so this often
 starts quietly.

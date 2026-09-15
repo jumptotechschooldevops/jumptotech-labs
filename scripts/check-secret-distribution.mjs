@@ -158,9 +158,23 @@ try {
         const target = Number(port.target);
         const published = Number(port.published);
         const hostIp = port.host_ip ?? '';
+        const operatorPort =
+          production &&
+          stack.operatorLoopback === true &&
+          (contract.publishedPorts.operatorLoopback ?? []).some(
+            (entry) => entry.service === service && entry.target === target,
+          );
         if (contract.publishedPorts.never.includes(target)) {
           console.error(`[${stackName}] ${service} publishes port ${target}, which must never be published`);
           failures += 1;
+        } else if (operatorPort) {
+          // BETA-P0-018: an operator port on a production host is loopback only.
+          if (hostIp !== '127.0.0.1') {
+            console.error(
+              `[${stackName}] ${service} publishes operator port ${target} on ${hostIp || 'every interface'}; it must bind 127.0.0.1`,
+            );
+            failures += 1;
+          }
         } else if (production) {
           const allowed = contract.publishedPorts.production.some(
             (entry) => entry.service === service && entry.published === published && entry.target === target,
@@ -178,6 +192,17 @@ try {
         } else if (hostIp !== '127.0.0.1') {
           console.error(`[${stackName}] ${service} publishes port ${target} on ${hostIp || 'every interface'}; it must bind 127.0.0.1`);
           failures += 1;
+        }
+      }
+      if (production && stack.operatorLoopback === true) {
+        for (const entry of (contract.publishedPorts.operatorLoopback ?? []).filter((e) => e.service === service)) {
+          const present = (definition.ports ?? []).some(
+            (port) => Number(port.target) === entry.target && port.host_ip === '127.0.0.1',
+          );
+          if (!present) {
+            console.error(`[${stackName}] ${service} should publish the operator port ${entry.target} on 127.0.0.1 (${entry.purpose}), but does not`);
+            failures += 1;
+          }
         }
       }
       if (production) {

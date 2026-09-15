@@ -12,7 +12,10 @@ datasources:
     uid: jtt-prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    # Loopback: Grafana runs inside Prometheus's network namespace (BETA-P0-018),
+    # and in production Prometheus listens on nothing else. The IPv4 literal, not
+    # `localhost`, which resolves to ::1 first — where nothing listens.
+    url: http://127.0.0.1:9090
     isDefault: true
     editable: false
     jsonData:

@@ -44,9 +44,64 @@ groups:
             working fine.
           runbook_url: docs/runbooks/RB-14-auth.md
 
-      - alert: JwksFetchFailing
-        expr: increase(jtt_oidc_jwks_fetch_total{outcome!="success"}[10m]) > 3
+      # BETA-P0-018: the same question at private-beta volume, where
+      # AuthFailureSpike's one-failure-a-second floor can never be reached.
+      - alert: AuthRejectionsAbnormal
+        expr: jtt:auth_rejected:increase10m >= 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $value | printf "%.0f" }} presented credentials were rejected in 10 minutes'
+          description: >-
+            Invalid or expired tokens, not signed-out browsers (AUTH_REQUIRED is
+            excluded). Break it down by outcome and source.
+          runbook_url: docs/runbooks/RB-14-auth.md
+
+      - alert: OidcSignInFailures
+        expr: jtt:auth_callback_failures:increase15m >= 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $value | printf "%.0f" }} OIDC sign-in callbacks failed in 15 minutes'
+          description: >-
+            verification_failed is the token exchange or ID-token check;
+            state_mismatch and no_transaction are the browser round trip.
+          runbook_url: docs/runbooks/RB-14-auth.md
+
+      # BETA-P0-015's admission gate, as a signal. Without it, a missing or
+      # expired attestation looks exactly like the cluster being down
+      # (ProviderUnavailable). Critical: the Kubernetes track admits no student,
+      # and the fix is a probe run, not a restart.
+      - alert: NetworkIsolationNotAttested
+        expr: jtt_network_isolation_attestation_valid == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'NetworkPolicy enforcement is not proven on the cluster; Kubernetes labs are refused'
+          runbook_url: docs/runbooks/RB-18-network-isolation.md
+
+      - alert: NetworkIsolationAttestationAging
+        expr: |
+          (time() - jtt_network_isolation_attestation_verified_timestamp_seconds)
+            > 0.75 * jtt_network_isolation_attestation_max_age_seconds
         for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'the enforcement attestation is past 75% of its maximum age; re-run the probe before admission stops'
+          runbook_url: docs/runbooks/RB-18-network-isolation.md
+
+      # BETA-P0-018: was `increase(...[10m]) > 3` with `for: 10m`. A window no
+      # longer than its `for` holds a bounded run of failures true for less time
+      # than it must stay true, so it fired only if fetches kept failing for
+      # twenty minutes straight — and keys are fetched only on a cache miss.
+      # `private-beta-operations.test.ts` now refuses that shape in any alert.
+      - alert: JwksFetchFailing
+        expr: increase(jtt_oidc_jwks_fetch_total{outcome!="success"}[30m]) >= 3
+        for: 5m
         labels:
           severity: warning
         annotations:

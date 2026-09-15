@@ -1,7 +1,8 @@
 # RB-05 — Cleanup stalled, or sandboxes leaking
 
 **Alerts:** `ReaperStalled` (critical), `SandboxLeakSuspected` (warning),
-`OrphansPersisting` (warning), `ReaperDeleteFailures` (warning)
+`OrphansPersisting` (warning), `ReaperDeleteFailures` (warning),
+`ReaperSweepErrorsPersisting` (warning, BETA-P0-018)
 **Blast radius:** grows quietly. Capacity fills, then the host's disk fills.
 
 Cleanup is the one subsystem that is completely invisible when it works. It is
@@ -145,6 +146,28 @@ Related recoveries that need no operator:
    line says what the provider reported.
 3. For a Kubernetes session, a namespace stuck `Terminating` on a finalizer
    produces exactly this and is a cluster problem, not a platform one.
+
+## 4e. Diagnose — sweeps complete, but keep recording errors
+
+`ReaperSweepErrorsPersisting`. A sweep whose listing or teardown fails still
+counts as a success, deliberately — one sick provider must not fire
+`ReaperStalled` while the others are cleaned — so this is the only alert that
+sees a teardown failing on every pass.
+
+```promql
+jtt_reaper_last_sweep_errors
+sum by (reason) (increase(jtt_reaper_teardown_incomplete_total[30m]))
+sum by (reason) (increase(jtt_reaper_recoveries_total[1h]))
+```
+
+```bash
+docker compose logs --since 30m api | grep -E '"event":"reaper' | tail -40
+```
+
+`listing sessions` in the errors is the database (RB-02). `listing <provider>
+sandboxes` is that provider's backend (RB-06, RB-09). A session reference is a
+teardown the provider will not confirm: 4d, and
+[RB-17](RB-17-session-lifecycle.md) for the session's own state.
 
 ## 5. Fix
 

@@ -116,6 +116,11 @@ export const LOG_EVENTS = [
   // --- observability itself --------------------------------------------------
   'observability.listener.started',
   'observability.scrape.denied',
+
+  // --- operations (BETA-P0-018) ----------------------------------------------
+  'ops.tls_edge.checked',
+  'ops.backup_status.unreadable',
+  'ops.network_attestation.checked',
 ] as const;
 
 export type LogEvent = (typeof LOG_EVENTS)[number];

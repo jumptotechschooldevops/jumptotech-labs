@@ -205,9 +205,25 @@ describe('backups stay out of git and out of the database container', () => {
   it('adds no backup service, mount or published port to any compose file', () => {
     const composeFiles = readdirSync(REPO_ROOT).filter((name) => /^docker-compose.*\.ya?ml$/.test(name));
     expect(composeFiles.length).toBeGreaterThanOrEqual(4);
+    /*
+     * BETA-P0-018 — one exception, written out line by line. The production
+     * observability overlay mounts the backup *status* directory (timestamps and
+     * a size, which scripts/db-lib.sh writes) read-only into the api, for the
+     * freshness alerts. Nothing else may mention backups: no archive directory,
+     * no BACKUP_DIR, no backup service, no pg_dump or pg_restore, anywhere.
+     */
+    const STATUS_MOUNT: Record<string, string[]> = {
+      'docker-compose.production-observability.yml': [
+        '      BACKUP_STATUS_DIR: /var/lib/jumptotech/backup-status',
+        '        source: ${BACKUP_STATUS_DIR:-./backups/status}',
+        '        target: /var/lib/jumptotech/backup-status',
+      ],
+    };
     for (const file of composeFiles) {
-      const text = code(file).join('\n');
-      expect(text, file).not.toMatch(/backup|pg_dump|pg_restore/i);
+      const lines = code(file);
+      const mentions = lines.filter((line) => /backup|pg_dump|pg_restore/i.test(line));
+      expect(mentions, file).toEqual(STATUS_MOUNT[file] ?? []);
+      expect(lines.join('\n'), file).not.toMatch(/\bBACKUP_DIR\b|backups\/postgres|\.dump\b|pg_dump|pg_restore/);
     }
     // PostgreSQL's only volume is its data directory: the backup destination is
     // never mounted into the container whose storage it must outlive.

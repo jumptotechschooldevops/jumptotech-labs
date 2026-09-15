@@ -25,6 +25,7 @@ import {
   createAuthMetrics,
   createCommonMetrics,
   createDatabaseMetrics,
+  createOperationsMetrics,
   createProviderMetrics,
   createReaperMetrics,
   createRegistry,
@@ -50,6 +51,7 @@ function knownMetricNames(): Set<string> {
   createReaperMetrics(registry);
   createTerminalMetrics(registry);
   createSandboxdMetrics(registry);
+  createOperationsMetrics(registry);
 
   const names = new Set<string>();
   for (const metric of registry.getMetricsAsArray()) {
@@ -139,11 +141,12 @@ function flatten(panels: Panel[] = []): Panel[] {
 const files = readdirSync(DASHBOARD_DIR).filter((f) => f.endsWith('.json')).sort();
 const known = knownMetricNames();
 const recorded = recordedSeriesNames();
-const resolvable = new Set([...known, ...recorded, 'up']);
+// `up` and `ALERTS` are Prometheus's own series, not this platform's.
+const resolvable = new Set([...known, ...recorded, 'up', 'ALERTS']);
 
 describe('the dashboard set is complete', () => {
-  it('ships the eight dashboards the story requires', () => {
-    expect(files).toHaveLength(8);
+  it('ships the eight PLATFORM-003 dashboards and the one private-beta overview (BETA-P0-018)', () => {
+    expect(files).toHaveLength(9);
   });
 
   it('covers every required subject', () => {
@@ -159,6 +162,7 @@ describe('the dashboard set is complete', () => {
       'Terminal',
       'Database',
       'Auth / Security',
+      'Private Beta Operations',
     ]) {
       expect(titles.some((t) => t.includes(subject)), `no dashboard for ${subject}`).toBe(true);
     }

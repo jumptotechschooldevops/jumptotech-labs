@@ -33,6 +33,7 @@ import {
 import { HttpTerminalControl, noopTerminalControl } from './terminal-control.js';
 import { buildApiObservability, jwksFetchMetricHook, sessionMetricsHooks } from './observability.js';
 import { installRuntimeCollectors } from './observability-collectors.js';
+import { installOperationsCollectors } from './operations.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -301,6 +302,8 @@ async function main(): Promise<void> {
         }
         metrics.reaper.sweeps.inc({ outcome: event.outcome });
         metrics.reaper.sweepDuration.observe(event.durationMs / 1000);
+        // BETA-P0-018: a completed sweep can still be failing on some sessions.
+        metrics.reaper.lastSweepErrors.set(event.errors ?? 0);
         if (event.outcome === 'ok') {
           // A timestamp, not a counter: a counter that stops rising looks
           // exactly like a quiet period, and "cleanup stopped" has to be
@@ -319,6 +322,12 @@ async function main(): Promise<void> {
       },
       onDeleteFailed: (provider, reason) => {
         metrics.reaper.deleteFailures.inc({ provider, reason });
+      },
+      onRecovered: (reason) => {
+        metrics.reaper.recoveries.inc({ reason });
+      },
+      onTeardownIncomplete: (reason) => {
+        metrics.reaper.teardownsIncomplete.inc({ reason });
       },
     },
   });
@@ -408,6 +417,21 @@ async function main(): Promise<void> {
     recordDatabaseProbe: observability.recordDatabaseProbe,
   });
 
+  /*
+   * BETA-P0-018 — the TLS edge, backup freshness, host pressure and the
+   * NetworkPolicy attestation, each on its own timer and never inside a scrape.
+   * The attestation is read with the same cluster client and the same network
+   * contract the Kubernetes provider gates admission on.
+   */
+  installOperationsCollectors({
+    metrics: metrics.operations,
+    config: config.operations,
+    logger,
+    ...(config.policy.network.attestation.required
+      ? { attestation: { k8s, network: config.policy.network } }
+      : {}),
+  });
+
   const observabilityServer = observability.start({
     databaseConfigured: learning.database !== null,
     labsLoaded: () => registry.size,
@@ -423,6 +447,10 @@ async function main(): Promise<void> {
     1,
   );
   metrics.sessions.capacityLimit.set(config.lifetimes.maxActiveSessions);
+  // Absent, not zero, when no per-student limit is configured.
+  if (config.lifetimes.maxActiveSessionsPerStudent !== undefined) {
+    metrics.sessions.perStudentLimit.set(config.lifetimes.maxActiveSessionsPerStudent);
+  }
 
   const server = app.listen(config.port, '0.0.0.0', () => {
     observability.markStarted();
