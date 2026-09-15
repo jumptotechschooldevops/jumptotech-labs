@@ -18,11 +18,31 @@ groups:
         annotations:
           summary: 'API p95 latency is above 1s'
           description: >-
-            Start Lab and End Lab are excluded from this expression — both are
-            legitimately slow (provisioning and teardown) and have their own
-            alerts (ProvisioningSlow; ReaperStalled and the reaper failure
-            alerts). What is left is the interactive API.
+            Start Lab, End Lab, Check Solution and Reset are excluded from this
+            expression — each is bounded by the lab runtime, not the API
+            (provisioning, teardown, reading live state, rebuilding a sandbox)
+            and has its own alerts (ProvisioningSlow; the reaper alerts;
+            VerificationSlow and VerificationErrorRate; LabResetsFailing and
+            SessionResetStuck). What is left is the interactive API.
           runbook_url: docs/runbooks/RB-11-api-errors-and-latency.md
+
+      # BETA-P0-019. Check Solution left ApiLatencyHigh because it is bounded by
+      # the sandbox, not the API; this keeps its latency watched on its own
+      # scale. Measured with five concurrent students: p95 2.2s, max 4s. Above
+      # 10s for most of ten minutes is a student pressing Check and waiting on a
+      # runtime that has stopped answering promptly — one provider at a time.
+      - alert: VerificationSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, provider) (rate(jtt_verification_duration_seconds_bucket[10m]))
+          ) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Check Solution p95 is above 10s'
+          runbook_url: docs/runbooks/RB-13-verification.md
 
       - alert: EventLoopLagHigh
         expr: jtt_nodejs_eventloop_lag_p99_seconds > 0.2

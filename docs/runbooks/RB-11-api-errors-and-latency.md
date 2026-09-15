@@ -12,10 +12,20 @@ jtt:http_duration:p95_10m{service="api"}
 jtt_nodejs_eventloop_lag_p99_seconds{service="api"}
 ```
 
-`POST /api/labs/:id/start` is **excluded** from the latency expression. It is
-bounded by sandbox provisioning, not by the API, and including it would make
-correct behaviour look like an incident. It has its own panel and its own alert
-(RB-10).
+Four routes are **excluded** from the latency expression, because each is bounded
+by the lab runtime, not by the API, and including them would make correct
+behaviour look like an incident:
+
+| Route | Bounded by | Its own alert |
+|---|---|---|
+| `POST /api/labs/:id/start` | sandbox provisioning | `ProvisioningSlow` (RB-10) |
+| `DELETE /api/sessions/:sessionId` | teardown | the reaper alerts (RB-05) |
+| `POST /api/sessions/:sessionId/check` | reading live state in the sandbox | `VerificationSlow`, `VerificationErrorRate` (RB-13) |
+| `POST /api/sessions/:sessionId/reset` | rebuilding the sandbox | `LabResetsFailing`, `SessionResetStuck` (RB-17) |
+
+Check and Reset were added by BETA-P0-019. With five concurrent students a check
+took 1.05s at p50 and 2.2s at p95. Students checking their work every few minutes
+kept `ApiLatencyHigh` firing for a whole class.
 
 ## 2. Scope it
 

@@ -376,7 +376,7 @@ describe('sandbox reads for the verifier', () => {
 
     // Reads run as the unprivileged student, not as root: the check must see
     // exactly what the student can see.
-    const statCall = runtime.execs.find((e) => e.request.argv[0] === '/usr/bin/stat');
+    const statCall = runtime.execs.find((e) => e.request.argv[0] === '/bin/stat');
     expect(statCall?.request.user).toBe('student');
   });
 
@@ -420,7 +420,7 @@ describe('sandbox reads for the verifier', () => {
 
     await provider.readSandboxPath!(context, '/var/log/jumptotech/payments.log');
 
-    const stat = runtime.execs.find((e) => e.request.argv[0] === '/usr/bin/stat');
+    const stat = runtime.execs.find((e) => e.request.argv[0] === '/bin/stat');
     expect(stat).toBeDefined();
     expect(stat!.container).toBe(SANDBOX_A);
     expect(stat!.request.argv).toContain('/var/log/jumptotech/payments.log');

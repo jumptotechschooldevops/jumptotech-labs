@@ -439,12 +439,35 @@ export class AnsibleLabProvider extends ContainerLabProvider {
       user: ANSIBLE_SHELL_USER,
     });
 
-    for (const [path, content, mode] of [
+    /*
+     * The lab's own `ansible.cfg` wins — BETA-P0-019.
+     *
+     * Every Ansible lab ships one in its workspace, seeded by the base create
+     * before this runs, and it carries the lesson's settings: `inventory =
+     * inventory.ini` above all, which is the whole point of ANSIBLE-001 and
+     * which every later lab relies on. Writing the platform file over it
+     * erased that line, so `ansible all -m ping` found no inventory and the
+     * verifier's inventory checks could never pass in any Ansible lab. Ansible
+     * reads exactly one config file, so the two cannot be merged by placement.
+     *
+     * The platform file stays as the fallback for a lab that ships none. A lab
+     * that does ship one still reaches the nodes: `remote_user` and
+     * `remote_port` are in every lab's file, and `ssh` finds the identity
+     * through `~/.ssh/config` above, which it resolves from the account's
+     * passwd home rather than from `$HOME`.
+     */
+    const labConfig = await this.execInSandbox(sandboxRef, {
+      argv: ['/bin/stat', '-c', '%F', '--', `${this.homeDir}/ansible.cfg`],
+      user: ANSIBLE_SHELL_USER,
+    });
+    const files: Array<readonly [string, string, string]> = [
       [`${sshDir}/id_rsa`, keys.privateKey, '0600'],
       [`${sshDir}/id_rsa.pub`, `${keys.publicKey}\n`, '0644'],
       [`${sshDir}/config`, config, '0600'],
-      [`${this.homeDir}/ansible.cfg`, ansibleCfg, '0644'],
-    ] as const) {
+    ];
+    if (labConfig.exitCode !== 0) files.push([`${this.homeDir}/ansible.cfg`, ansibleCfg, '0644']);
+
+    for (const [path, content, mode] of files) {
       // stdin, so no key material is ever part of a command line.
       const write = await this.execInSandbox(sandboxRef, {
         argv: ['/usr/bin/tee', '--', path],

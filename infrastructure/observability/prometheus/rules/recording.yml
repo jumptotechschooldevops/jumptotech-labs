@@ -144,12 +144,25 @@ groups:
       # their own alerts (ReaperStalled, reaper delete failures, orphans found).
       # The `unless` removes only that one method on that one route; the GET
       # stays in the SLO.
+      #
+      # Check Solution and Reset are excluded for the same reason — BETA-P0-019.
+      # A check reads live state inside the sandbox (an `ansible -m ping` to two
+      # nodes, Kubernetes reads, execs through sandboxd) and a container reset
+      # rebuilds the sandbox. Measured with five concurrent students on the real
+      # stack: check p50 1.05s, p95 2.2s; reset p95 1.6s. Almost every check
+      # lands above the 1s bucket, so once checks are more than ~5% of requests
+      # the p95 is theirs — five students each pressing Check every three minutes
+      # against the 15s session poll is enough, and `ApiLatencyHigh` sat firing
+      # through the whole five-student run. Each keeps its own coverage:
+      # `VerificationSlow` / `VerificationErrorRate` for checks, `LabResetsFailing`
+      # / `SessionResetStuck` for resets. Both are distinct route templates, so
+      # nothing else on `/api/sessions/:sessionId` leaves the SLO.
       - record: jtt:http_duration:p95_10m
         expr: |
           histogram_quantile(
             0.95,
             sum by (le, service) (
-              rate(jtt_http_request_duration_seconds_bucket{route!="/api/labs/:id/start"}[10m])
+              rate(jtt_http_request_duration_seconds_bucket{route!~"/api/labs/:id/start|/api/sessions/:sessionId/check|/api/sessions/:sessionId/reset"}[10m])
                 unless
               rate(
                 jtt_http_request_duration_seconds_bucket{

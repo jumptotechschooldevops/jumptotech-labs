@@ -332,7 +332,7 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
         return fail(`env: '${String(binary)}': No such file or directory`);
       }
 
-      case '/usr/bin/stat': {
+      case '/bin/stat': {
         const entry = container.files.get(target);
         if (!entry) {
           return fail(`stat: cannot statx '${target}': No such file or directory`);

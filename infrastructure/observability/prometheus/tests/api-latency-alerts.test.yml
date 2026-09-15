@@ -83,5 +83,88 @@ tests:
             exp_annotations:
               summary: 'API p95 latency is above 1s'
               description: >-
-                Start Lab and End Lab are excluded from this expression — both are legitimately slow (provisioning and teardown) and have their own alerts (ProvisioningSlow; ReaperStalled and the reaper failure alerts). What is left is the interactive API.
+                Start Lab, End Lab, Check Solution and Reset are excluded from this expression — each is bounded by the lab runtime, not the API (provisioning, teardown, reading live state, rebuilding a sandbox) and has its own alerts (ProvisioningSlow; the reaper alerts; VerificationSlow and VerificationErrorRate; LabResetsFailing and SessionResetStuck). What is left is the interactive API.
               runbook_url: docs/runbooks/RB-11-api-errors-and-latency.md
+
+  # ------------------------- 3. five students pressing Check do not page (P0-019)
+  #
+  # The traffic mix measured in the BETA-P0-019 five-student run: five open lab
+  # pages polling GET /api/sessions/:sessionId every 15s (fast), and Check
+  # Solution at p50 1.05s — every check lands in the (1, 2.5] bucket. One check
+  # per 15s across the class is 1 in 6 requests. Against the previous
+  # expression the p95 interpolates inside that bucket (≈2.05s) and
+  # ApiLatencyHigh fires; with checks and resets excluded it is the GET's bucket.
+  - interval: 15s
+    name: five students checking their work does not make the API look slow
+    input_series:
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="0.5"}'
+        values: '0+5x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="1"}'
+        values: '0+5x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="2.5"}'
+        values: '0+5x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="GET",route="/api/sessions/:sessionId",status_class="2xx",le="+Inf"}'
+        values: '0+5x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="POST",route="/api/sessions/:sessionId/check",status_class="2xx",le="0.5"}'
+        values: '0+0x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="POST",route="/api/sessions/:sessionId/check",status_class="2xx",le="1"}'
+        values: '0+0x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="POST",route="/api/sessions/:sessionId/check",status_class="2xx",le="2.5"}'
+        values: '0+1x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="POST",route="/api/sessions/:sessionId/check",status_class="2xx",le="+Inf"}'
+        values: '0+1x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="POST",route="/api/sessions/:sessionId/reset",status_class="2xx",le="1"}'
+        values: '0+0x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="POST",route="/api/sessions/:sessionId/reset",status_class="2xx",le="2.5"}'
+        values: '0+1x80'
+      - series: 'jtt_http_request_duration_seconds_bucket{service="api",method="POST",route="/api/sessions/:sessionId/reset",status_class="2xx",le="+Inf"}'
+        values: '0+1x80'
+    promql_expr_test:
+      # A comparison, not an exact value: promtool 2.54 and 3.x round this
+      # interpolation differently in the last digit. Against the previous
+      # expression the p95 is ≈2.2s and this is 0.
+      - expr: jtt:http_duration:p95_10m < bool 0.5
+        eval_time: 15m
+        exp_samples:
+          - labels: '{service="api"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ApiLatencyHigh
+        exp_alerts: []
+
+  # ------------------------- 4. checking keeps its own latency alert (P0-019)
+  - interval: 15s
+    name: a verifier that has become slow still alerts, on its own scale
+    input_series:
+      # Measured normal: checks under 2.5s. Quiet.
+      - series: 'jtt_verification_duration_seconds_bucket{track="linux",provider="linux",le="2.5"}'
+        values: '0+2x120'
+      - series: 'jtt_verification_duration_seconds_bucket{track="linux",provider="linux",le="10"}'
+        values: '0+2x120'
+      - series: 'jtt_verification_duration_seconds_bucket{track="linux",provider="linux",le="30"}'
+        values: '0+2x120'
+      - series: 'jtt_verification_duration_seconds_bucket{track="linux",provider="linux",le="+Inf"}'
+        values: '0+2x120'
+      # One provider's checks now take 10-30s.
+      - series: 'jtt_verification_duration_seconds_bucket{track="kubernetes",provider="kubernetes",le="2.5"}'
+        values: '0+0x120'
+      - series: 'jtt_verification_duration_seconds_bucket{track="kubernetes",provider="kubernetes",le="10"}'
+        values: '0+0x120'
+      - series: 'jtt_verification_duration_seconds_bucket{track="kubernetes",provider="kubernetes",le="30"}'
+        values: '0+1x120'
+      - series: 'jtt_verification_duration_seconds_bucket{track="kubernetes",provider="kubernetes",le="+Inf"}'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: VerificationSlow
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: VerificationSlow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              provider: kubernetes
+            exp_annotations:
+              summary: 'Check Solution p95 is above 10s'
+              runbook_url: docs/runbooks/RB-13-verification.md
