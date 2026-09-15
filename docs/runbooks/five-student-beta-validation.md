@@ -153,9 +153,14 @@ excused under one of three rules:
   | `SecurityEventBurst`, `AuthzOwnershipDenialSpike` | 31 cross-student requests in phase 5 | any security event other than `unowned_session_access` or `dev_identity_in_use` |
   | `TerminalConnectionFailures` | forged tokens (`unauthorized`), ended sessions' tokens (`no_credentials`) | any other failed terminal connection; every real attach must also reach `ready` |
 
-- **Already firing before the run.** On a laptop these are the TLS and backup
-  alerts, because there is no certificate and no backup job. They are recorded
-  and ignored.
+- **Deployment-environment alerts.** The TLS-certificate and backup alerts
+  (`ENVIRONMENT_ALERTS` in `test-support/beta-validation-contract.ts`) describe
+  whether a production certificate and backup job are installed, not the
+  five-student runtime. The gate runs the development + observability stack (§1),
+  which has neither, so they fire; they are recorded and ignored. They are
+  excused whether or not they were already firing at the pre-run snapshot,
+  because each has its own `for:` timer (5m–1h) and may ignite minutes into the
+  run on a freshly started stack.
 
 Any other alert that starts firing fails the run. A lifecycle, reaper,
 isolation, scope-denial, leak, PTY-drift, runtime or provider alert fails it
