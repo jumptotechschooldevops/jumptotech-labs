@@ -309,13 +309,39 @@ export interface HintRecordResponse {
   revealedCount: number | null;
 }
 
+/** Where the terminal service is, and a token for one session. Held in memory only. */
+export interface TerminalGrant {
+  url: string;
+  token: string;
+}
+
 export interface StartLabResponse {
   session: SessionInfo;
   /** Absent when the progress store could not record the attempt. */
   attempt?: AttemptSummary;
   environment: EnvironmentInfo;
   steps: ProvisionStep[];
-  terminal: { url: string; token: string };
+  terminal: TerminalGrant;
+}
+
+/** One of the caller's own live sessions, from `GET /api/sessions`. */
+export interface ActiveSessionEntry {
+  session: SessionInfo;
+  labTitle: string;
+  attempt?: AttemptSummary;
+}
+
+export interface MySessionsResponse {
+  sessions: ActiveSessionEntry[];
+  count: number;
+  /** The caller's own quota. `null` when the deployment sets none. */
+  limits: { maxActiveSessionsPerStudent: number | null };
+}
+
+/** `POST /api/sessions/:id/terminal` — a fresh token for a session the caller owns. */
+export interface TerminalGrantResponse {
+  session: SessionInfo;
+  terminal: TerminalGrant;
 }
 
 export interface SessionStatusResponse {

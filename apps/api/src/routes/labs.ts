@@ -18,7 +18,6 @@ import {
   InvalidLabIdError,
   LabNotFoundError,
   assertValidLabId,
-  issueSessionToken,
   titleCase,
   type LabRegistry,
   type LoadedLabDefinition,
@@ -29,9 +28,13 @@ import type { LabAttempt } from '@jumptotech/progress';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { progressErrorResponse, resolveStudent } from '../identity.js';
 import { record } from '../progress.js';
-import { resolveTerminalWsBaseForClient } from '../public-origin.js';
 import { toAttemptPayload } from './me.js';
-import { sessionErrorResponse, toSessionPayload, type SessionRoutesDeps } from './sessions.js';
+import {
+  issueTerminalGrant,
+  sessionErrorResponse,
+  toSessionPayload,
+  type SessionRoutesDeps,
+} from './sessions.js';
 
 /**
  * Public, student-safe shape of a lab.
@@ -386,17 +389,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
      * `uid` back to the API, which re-checks it against the live session record
      * before releasing anything — see `apps/api/src/routes/internal.ts`.
      */
-    const { token } = issueSessionToken({
-      sessionId: started.session.sessionId,
-      ownerUserId: owner.userId,
-      labId: def.id,
-      namespace: started.session.namespace,
-      secret: config.terminalSessionSecret,
-      ttlSeconds: Math.min(
-        config.terminalSessionTtlSeconds,
-        Math.max(60, Math.ceil((Date.parse(started.session.expiresAt) - Date.now()) / 1000)),
-      ),
-    });
+    const terminal = issueTerminalGrant(req, config, started.session, owner.userId);
 
     recordStart(def, 'success', {
       durationMs: Date.now() - startedAt,
@@ -408,14 +401,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       ...(bound ? { attempt: toAttemptPayload(bound, registry) } : {}),
       environment: started.environment,
       steps: started.steps,
-      terminal: {
-        url: resolveTerminalWsBaseForClient(req, {
-          publicOrigin: config.publicOrigin,
-          defaultTerminalWsUrl: config.terminalWsUrl,
-        }),
-        // Presented to the terminal service over the WebSocket handshake.
-        token,
-      },
+      terminal,
     });
   }));
 

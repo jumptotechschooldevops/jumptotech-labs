@@ -2,15 +2,35 @@
  * xterm.js terminal bound to the terminal service over a WebSocket.
  *
  * There is no simulation here: keystrokes go to a real PTY and everything
- * rendered is bytes that process produced.
+ * rendered is bytes that process produced. This component owns one connection
+ * at a time and reports what happened to it; *whether* to reconnect is the
+ * workspace's decision, because only the workspace knows the session's state.
+ *
+ * ## What a disconnect means
+ *
+ * The terminal service names a code in an `error` frame before it closes a
+ * socket on purpose; `codeForClose` (lib/terminal.ts) folds that and the close
+ * code into one `code`, so the workspace can tell "your lab ended" from "the
+ * network blinked".
  */
-import { useCallback, useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
+import { codeForClose } from '../lib/terminal';
+import type { TerminalGrant } from '../lib/types';
 
-export type TerminalStatus = 'idle' | 'connecting' | 'connected' | 'closed' | 'error';
+export type TerminalStatus = 'idle' | 'connecting' | 'connected' | 'disconnected';
+
+export interface TerminalEvent {
+  status: TerminalStatus;
+  /** Why it disconnected — see the table above. */
+  code?: string;
+  message?: string;
+  /** True for a `reattached` frame: same socket, new shell after a reset. */
+  reattached?: boolean;
+}
 
 export interface LabTerminalHandle {
   clear: () => void;
@@ -19,20 +39,18 @@ export interface LabTerminalHandle {
 }
 
 interface LabTerminalProps {
-  /** WebSocket base URL of the terminal service, e.g. ws://localhost:4001 */
-  url: string | null;
-  /** Session token minted by POST /api/labs/:id/start. */
-  token: string | null;
+  /** Where to connect, and the token to present. Null means "stay disconnected". */
+  grant: TerminalGrant | null;
   /**
-   * Bump to force a reconnection with the same session.
+   * Bump to force a fresh connection with the current grant.
    *
    * A container-backed Reset replaces the sandbox, which ends the shell that
-   * was attached to the old one. Changing this re-runs the connection effect,
-   * and the terminal service resolves the session's *new* sandbox from the same
-   * token — the browser still names nothing.
+   * was attached to the old one; a Reconnect after a dropped socket does the
+   * same. The terminal service resolves the session's *current* sandbox from
+   * the token — the browser still names nothing.
    */
-  reconnectNonce?: number;
-  onStatusChange: (status: TerminalStatus, detail?: string) => void;
+  connectKey?: number;
+  onEvent: (event: TerminalEvent) => void;
 }
 
 const THEME = {
@@ -52,7 +70,7 @@ const THEME = {
 } as const;
 
 export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(function LabTerminal(
-  { url, token, reconnectNonce = 0, onStatusChange },
+  { grant, connectKey = 0, onEvent },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -61,8 +79,8 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
   const socketRef = useRef<WebSocket | null>(null);
 
   // Keep the latest callback without re-running the connection effect.
-  const statusCbRef = useRef(onStatusChange);
-  statusCbRef.current = onStatusChange;
+  const eventRef = useRef(onEvent);
+  eventRef.current = onEvent;
 
   useImperativeHandle(
     ref,
@@ -79,10 +97,9 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
     if (!containerRef.current) return;
 
     const term = new Terminal({
-      fontFamily:
-        '"JetBrains Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
-      lineHeight: 1.35,
+      fontFamily: '"JetBrains Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace',
+      fontSize: 14,
+      lineHeight: 1.3,
       cursorBlink: true,
       convertEol: false,
       scrollback: 5000,
@@ -92,7 +109,17 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon());
     term.open(containerRef.current);
-    // Defer the first fit until the pane has its final size.
+
+    /*
+     * Shift+Tab leaves the terminal.
+     *
+     * A shell needs Tab for completion, so the terminal must keep it — which on
+     * its own would trap a keyboard user inside. Returning false hands
+     * Shift+Tab back to the browser, whose default moves focus to the previous
+     * control. The terminal bar tells students this.
+     */
+    term.attachCustomKeyEventHandler((event) => !(event.key === 'Tab' && event.shiftKey));
+
     requestAnimationFrame(() => {
       try {
         fit.fit();
@@ -113,7 +140,16 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
     });
     observer.observe(containerRef.current);
 
+    // Push terminal size to the PTY whenever xterm re-flows.
+    const resize = term.onResize(({ cols, rows }) => {
+      const socket = socketRef.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'resize', cols, rows }));
+      }
+    });
+
     return () => {
+      resize.dispose();
       observer.disconnect();
       term.dispose();
       termRef.current = null;
@@ -121,27 +157,22 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
     };
   }, []);
 
-  // Push terminal size to the PTY whenever xterm re-flows.
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
-    const disposable = term.onResize(({ cols, rows }) => {
-      const socket = socketRef.current;
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'resize', cols, rows }));
-      }
-    });
-    return () => disposable.dispose();
-  }, []);
+  // --- connect when there is a grant --------------------------------------
+  const url = grant?.url ?? null;
+  const token = grant?.token ?? null;
 
-  // --- connect when we have a url + token ---------------------------------
   useEffect(() => {
-    if (!url || !token) return;
+    if (!url || !token) {
+      eventRef.current({ status: 'idle' });
+      return;
+    }
 
     let cancelled = false;
     let socket: WebSocket | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
     let keepAlive: ReturnType<typeof setInterval> | null = null;
+    let serverCode: string | undefined;
+    let serverMessage: string | undefined;
 
     const connect = () => {
       if (cancelled) return;
@@ -151,7 +182,7 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
         return;
       }
 
-      statusCbRef.current('connecting');
+      eventRef.current({ status: 'connecting' });
       socket = new WebSocket(`${url.replace(/\/$/, '')}/terminal`);
       socketRef.current = socket;
 
@@ -161,12 +192,11 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
         } catch {
           /* ignore */
         }
-        socket!.send(
-          JSON.stringify({ type: 'auth', token, cols: term.cols, rows: term.rows }),
-        );
+        socket!.send(JSON.stringify({ type: 'auth', token, cols: term.cols, rows: term.rows }));
       };
 
       socket.onmessage = (event) => {
+        if (cancelled) return;
         let msg: Record<string, unknown>;
         try {
           msg = JSON.parse(String(event.data)) as Record<string, unknown>;
@@ -181,24 +211,23 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
             } catch {
               /* ignore */
             }
-            statusCbRef.current('connected');
+            inputDisposable?.dispose();
             inputDisposable = term.onData((data) => {
               if (socket!.readyState === WebSocket.OPEN) {
                 socket!.send(JSON.stringify({ type: 'input', data }));
               }
             });
+            if (keepAlive) clearInterval(keepAlive);
             keepAlive = setInterval(() => {
-              if (socket!.readyState === WebSocket.OPEN) {
-                socket!.send(JSON.stringify({ type: 'ping' }));
-              }
+              if (socket!.readyState === WebSocket.OPEN) socket!.send(JSON.stringify({ type: 'ping' }));
             }, 30_000);
+            eventRef.current({ status: 'connected' });
             term.focus();
             break;
 
           case 'reattached':
-            term.writeln('\r\n\x1b[36mEnvironment reset — reconnected to a fresh shell.\x1b[0m');
-            statusCbRef.current('connected');
-            term.focus();
+            term.writeln('\r\n\x1b[36mEnvironment reset — connected to a fresh shell.\x1b[0m');
+            eventRef.current({ status: 'connected', reattached: true });
             break;
 
           case 'output':
@@ -206,15 +235,22 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
             break;
 
           case 'error': {
-            const detail = String(msg.message ?? 'Terminal error');
-            term.writeln(`\r\n\x1b[31m✗ ${detail}\x1b[0m`);
-            statusCbRef.current('error', detail);
+            serverCode = typeof msg.code === 'string' ? msg.code : serverCode;
+            serverMessage = String(msg.message ?? 'Terminal error');
+            // SESSION_ENDED is also what the terminal service sends this socket
+            // when the same session's terminal is opened in another tab — one
+            // shell per session. Its "the lab has ended" text would be false
+            // then, so the workspace works out which case it is from the
+            // session state and says so in the terminal bar.
+            term.writeln(
+              `\r\n\x1b[31m${serverCode === 'SESSION_ENDED' ? 'The terminal was disconnected.' : serverMessage}\x1b[0m`,
+            );
             break;
           }
 
           case 'exit':
-            term.writeln(`\r\n\x1b[33mShell exited (code ${String(msg.exitCode ?? '?')}).\x1b[0m`);
-            statusCbRef.current('closed', 'Shell exited');
+            term.writeln(`\r\n\x1b[33mThe shell exited (code ${String(msg.exitCode ?? '?')}).\x1b[0m`);
+            serverCode = serverCode ?? 'SHELL_EXITED';
             break;
 
           default:
@@ -222,18 +258,17 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
         }
       };
 
-      socket.onerror = () => {
-        statusCbRef.current('error', `Could not connect to the terminal service at ${url}.`);
-      };
-
       socket.onclose = (event) => {
         inputDisposable?.dispose();
+        inputDisposable = null;
         if (keepAlive) clearInterval(keepAlive);
-        if (event.code !== 1000) {
-          statusCbRef.current('closed', event.reason || `Connection closed (${event.code})`);
-        } else {
-          statusCbRef.current('closed');
-        }
+        // Our own cleanup closed it: nothing happened that anyone needs to hear.
+        if (cancelled) return;
+        eventRef.current({
+          status: 'disconnected',
+          code: codeForClose(event.code, serverCode),
+          ...(serverMessage ? { message: serverMessage } : {}),
+        });
       };
     };
 
@@ -246,7 +281,7 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
       socketRef.current = null;
       socket?.close(1000, 'component unmounted');
     };
-  }, [url, token, reconnectNonce]);
+  }, [url, token, connectKey]);
 
   const handleClick = useCallback(() => termRef.current?.focus(), []);
 
