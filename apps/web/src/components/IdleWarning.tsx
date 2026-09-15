@@ -2,7 +2,7 @@
  * Idle warning banner.
  *
  * Appears once the session's idle countdown enters its warning window.
- * "Continue Lab" records activity server-side, which moves the *idle* deadline
+ * "Stay active" records activity server-side, which moves the *idle* deadline
  * only — the absolute session deadline is never extended, so this cannot keep a
  * lab alive forever.
  */
@@ -19,12 +19,12 @@ export function IdleWarning({
 
   return (
     <div className="banner banner--warning" role="alert">
-      <div>
-        <strong>Your lab has been inactive.</strong>{' '}
-        This environment will automatically stop in {minutes} minute{minutes === 1 ? '' : 's'}.
-      </div>
-      <button type="button" className="btn btn--small" onClick={onContinue} disabled={busy}>
-        {busy ? 'Continuing…' : 'Continue Lab'}
+      <p className="banner__text">
+        <strong>Are you still working?</strong> This lab has been inactive, and its environment will be removed in about{' '}
+        {minutes} minute{minutes === 1 ? '' : 's'}.
+      </p>
+      <button type="button" className="btn btn--sm btn--secondary" onClick={onContinue} disabled={busy}>
+        {busy ? 'Keeping it…' : 'Stay active'}
       </button>
     </div>
   );

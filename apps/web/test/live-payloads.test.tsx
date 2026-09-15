@@ -5,8 +5,7 @@
  * serving the shipped labs. Rendering against them, rather than against
  * hand-written objects, is what catches a drift between what the API actually
  * sends and what the components expect — a shape mismatch that hand-written
- * fixtures would happily hide. Since PLATFORM-LINUX-001 that payload carries
- * two tracks, which is the shape the catalog now has to render.
+ * fixtures would happily hide.
  *
  * Refresh them with:
  *   curl -s localhost:4000/api/labs             | jq '.data' > test/fixtures/labs.json
@@ -17,13 +16,14 @@
  *   curl -s localhost:4000/api/labs/TF-001      | jq '.data' > test/fixtures/lab-tf-001.json
  *   curl -s localhost:4000/api/labs/DOCKER-004  | jq '.data' > test/fixtures/lab-docker-004.json
  *
- * They cover every shipped track. Each non-Kubernetes fixture is here for the
- * same reason as the Kubernetes ones: to catch the day a component quietly
- * starts depending on something only one substrate's payload happens to carry.
+ * Each non-Kubernetes fixture is here for the same reason as the Kubernetes
+ * ones: to catch the day a component quietly starts depending on something only
+ * one substrate's payload happens to carry.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { renderWithAuth } from './auth-harness';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { renderWithProviders } from './app-harness';
+import { apiMock, resetApiMock } from './api-mock';
 import { CatalogPage } from '../src/pages/CatalogPage';
 import { LabBrief } from '../src/components/LabBrief';
 import type { LabDetail, LabSummary, TrackSummary } from '../src/lib/types';
@@ -51,21 +51,30 @@ const labsIn = (track: string) => CATALOG.labs.filter((lab) => lab.track === tra
 /** A literal match for text that may contain regex metacharacters. */
 const escaped = (value: string) => new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 
-const listLabs = vi.fn();
 vi.mock('../src/lib/api', async () => {
   const actual = await vi.importActual<typeof import('../src/lib/api')>('../src/lib/api');
-  return { ...actual, api: { listLabs: (...args: unknown[]) => listLabs(...args) } };
+  const { apiMock: mock } = await import('./api-mock');
+  return { ...actual, api: mock };
 });
 
 beforeEach(() => {
-  listLabs.mockReset();
-  listLabs.mockResolvedValue(CATALOG);
+  resetApiMock();
+  apiMock.listLabs.mockResolvedValue(CATALOG);
+  apiMock.getProgress.mockRejectedValue(new Error('not needed here'));
+  window.history.replaceState(null, '', '/#/labs');
 });
+
+const viewLinks = () => screen.queryAllByRole('link', { name: /^View lab/ });
+
+async function renderCatalog() {
+  const result = renderWithProviders(<CatalogPage />);
+  await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
+  return result;
+}
 
 describe('catalog UI against the real API payload (test requirement 34)', () => {
   it('renders every shipped lab, grouped into its track', async () => {
-    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
+    await renderCatalog();
 
     for (const lab of CATALOG.labs) {
       expect(screen.getByText(lab.title), lab.id).toBeTruthy();
@@ -76,97 +85,62 @@ describe('catalog UI against the real API payload (test requirement 34)', () => 
     expect(DOCKER_LABS).toHaveLength(10);
     expect(labsIn('linux')).toHaveLength(10);
     for (const track of CATALOG.tracks) {
-      expect(screen.getByRole('heading', { name: track.title }), track.track).toBeTruthy();
+      expect(screen.getByRole('heading', { level: 2, name: track.title }), track.track).toBeTruthy();
+      if (track.tagline) expect(screen.getByText(track.tagline)).toBeTruthy();
     }
   });
 
-  it('offers each shipped track as a card, from the API’s own track summary', async () => {
-    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
-
-    const cards = within(screen.getByLabelText('Tracks')).getAllByRole('button');
-    expect(cards).toHaveLength(CATALOG.tracks.length);
-    CATALOG.tracks.forEach((track, index) => {
-      const card = cards[index]!;
-      expect(within(card).getByText(track.title)).toBeTruthy();
-      expect(
-        within(card).getByText(`${track.labCount} lab${track.labCount === 1 ? '' : 's'}`),
-      ).toBeTruthy();
-      if (track.tagline) expect(within(card).getByText(track.tagline)).toBeTruthy();
+  it('offers each shipped track as a filter, from the API’s own track summary', async () => {
+    await renderCatalog();
+    const options = [...(screen.getByRole('combobox', { name: 'Track' }) as HTMLSelectElement).options];
+    expect(options.map((option) => option.value)).toEqual(['', ...CATALOG.tracks.map((track) => track.track)]);
+    CATALOG.tracks.forEach((track) => {
+      expect(options.find((option) => option.value === track.track)?.textContent).toBe(`${track.title} (${track.labCount})`);
     });
   });
 
-  it('shows every card with a duration, a difficulty and its skills', async () => {
-    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
+  it('shows every card with a time, a difficulty and one way in', async () => {
+    const { container } = await renderCatalog();
 
-    // One badge per card, plus the one filter chip that offers that level.
-    const count = (value: string) => CATALOG.labs.filter((l) => l.difficulty === value).length + 1;
-    expect(screen.getAllByText('beginner')).toHaveLength(count('beginner'));
-    expect(screen.getAllByText('intermediate')).toHaveLength(count('intermediate'));
-    expect(screen.getAllByText('CKA')).toHaveLength(KUBERNETES_LABS.length);
-    expect(screen.getAllByText('DCA')).toHaveLength(DOCKER_LABS.length);
-    expect(screen.getAllByRole('button', { name: 'Open lab' })).toHaveLength(CATALOG.labs.length);
-    // Labs that seed an environment say so, on every track.
-    expect(screen.getAllByText('prepared environment')).toHaveLength(
-      CATALOG.labs.filter((l) => l.hasSetup).length,
-    );
+    expect(viewLinks()).toHaveLength(CATALOG.labs.length);
+    const count = (value: string) => CATALOG.labs.filter((l) => l.difficulty === value).length;
+    const badges = [...container.querySelectorAll('.labcard .badge')].map((badge) => badge.textContent);
+    expect(badges.filter((text) => text === 'Beginner')).toHaveLength(count('beginner'));
+    expect(badges.filter((text) => text === 'Intermediate')).toHaveLength(count('intermediate'));
+    expect(container.querySelectorAll('.labcard__facts dt')).not.toHaveLength(0);
   });
 
-  it('narrows the real catalog to one track, then to one of its topics', async () => {
-    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
+  it('narrows the real catalog to one track', async () => {
+    await renderCatalog();
 
-    fireEvent.click(within(screen.getByLabelText('Track')).getByRole('button', { name: /^Linux/ }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Track' }), { target: { value: 'linux' } });
 
     expect(screen.getByText('Files and Directories')).toBeTruthy();
     expect(screen.queryByText('Create Your First Pod')).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'Open lab' })).toHaveLength(
-      labsIn('linux').length,
-    );
-
-    const linuxTrack = CATALOG.tracks.find((t) => t.track === 'linux')!;
-    const topics = within(screen.getByLabelText('Topic'));
-    for (const topic of linuxTrack.topics) {
-      expect(topics.getByRole('button', { name: new RegExp(topic.title) }), topic.topic).toBeTruthy();
-    }
-
-    fireEvent.click(topics.getByRole('button', { name: /Shell Scripting/ }));
-    expect(screen.getAllByRole('button', { name: 'Open lab' })).toHaveLength(
-      labsIn('linux').filter((l) => l.topicTitle === 'Shell Scripting').length,
-    );
+    expect(viewLinks()).toHaveLength(labsIn('linux').length);
   });
 
   it('filters the real catalog down to the intermediate labs', async () => {
-    renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
+    await renderCatalog();
 
-    fireEvent.click(screen.getByRole('button', { name: /^intermediate$/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Difficulty' }), { target: { value: 'intermediate' } });
 
     expect(screen.getByText('Signal Readiness with a Probe')).toBeTruthy();
     expect(screen.getByText('Repair a Broken Deployment')).toBeTruthy();
     expect(screen.queryByText('Create Your First Pod')).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'Open lab' })).toHaveLength(
-      CATALOG.labs.filter((l) => l.difficulty === 'intermediate').length,
-    );
+    expect(viewLinks()).toHaveLength(CATALOG.labs.filter((l) => l.difficulty === 'intermediate').length);
   });
 
-  it('opens the lab the student clicked', async () => {
-    const onOpenLab = vi.fn();
-    renderWithAuth(<CatalogPage onOpenLab={onOpenLab} />);
-    await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
-
-    const openButtons = screen.getAllByRole('button', { name: 'Open lab' });
-    fireEvent.click(openButtons[KUBERNETES_LABS.length - 1]!);
-    expect(onOpenLab).toHaveBeenCalledWith('K8S-010');
-
-    fireEvent.click(openButtons[KUBERNETES_LABS.length]!);
-    expect(onOpenLab).toHaveBeenCalledWith('DOCKER-001');
+  it('links each lab by its own id, across tracks', async () => {
+    await renderCatalog();
+    const hrefs = viewLinks().map((link) => link.getAttribute('href'));
+    expect(hrefs).toContain('#/labs/K8S-010');
+    expect(hrefs).toContain('#/labs/DOCKER-001');
+    expect(hrefs).toHaveLength(new Set(hrefs).size);
   });
 
-  it('never renders a lab\'s expected end state on a card', async () => {
-    const { container } = renderWithAuth(<CatalogPage onOpenLab={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText('Create Your First Pod')).toBeTruthy());
+  it("never renders a lab's expected end state on a card", async () => {
+    const { container } = await renderCatalog();
 
     expect(container.textContent).not.toContain('nginx:stabel');
     expect(container.textContent).not.toContain('setup/ledger-api.yaml');
@@ -204,8 +178,8 @@ describe('lab page UI against the real API payload (test requirement 35)', () =>
 
   it('renders a Linux lab and a Terraform lab from the same component', () => {
     // The point of PLATFORM-004 in one assertion: no LinuxLabPage, no
-    // TerraformLabPage. The same brief renders a Kubernetes lab, a Linux lab
-    // and a Terraform lab, because the only thing that differs is the data.
+    // TerraformLabPage. The same brief renders every track, because the only
+    // thing that differs is the data.
     const { unmount } = render(<LabBrief lab={LINUX} />);
     expect(screen.getByText('LINUX-001')).toBeTruthy();
     expect(screen.getByRole('heading', { name: LINUX.title })).toBeTruthy();
@@ -221,8 +195,6 @@ describe('lab page UI against the real API payload (test requirement 35)', () =>
   });
 
   it('renders a Docker lab through the same component', () => {
-    // No component knows what Docker is: the brief is rendered from the same
-    // fields, populated from the same lab.yaml keys.
     render(<LabBrief lab={DOCKERFILE} />);
 
     expect(screen.getByText('DOCKER-004')).toBeTruthy();
@@ -307,7 +279,7 @@ describe('lab page UI against the real API payload (test requirement 35)', () =>
     expect(container.textContent).not.toContain('docker');
   });
 
-  it('does not put the Linux troubleshooting lab\'s injected fault on the page', () => {
+  it("does not put the Linux troubleshooting lab's injected fault on the page", () => {
     const { container } = render(<LabBrief lab={LINUX_TROUBLESHOOTING} />);
 
     expect(screen.getByText('LINUX-010')).toBeTruthy();
@@ -320,7 +292,7 @@ describe('lab page UI against the real API payload (test requirement 35)', () =>
     expect(container.textContent).not.toContain('/etc/');
   });
 
-  it('does not put the troubleshooting lab\'s fault on the page', () => {
+  it("does not put the troubleshooting lab's fault on the page", () => {
     const { container } = render(<LabBrief lab={TROUBLESHOOTING} />);
 
     // Even with every hint revealed, the page never states the broken values.

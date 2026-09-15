@@ -2589,6 +2589,10 @@ npm run cluster:status
 A `Makefile` wraps the common commands — `make help` lists them, and
 `make setup && make up` is equivalent to the two steps above.
 
+What a student sees once signed in — dashboard, catalog, tracks, Launch, the
+workspace, Verify, Reset, End, capacity messages and known UI limitations — is
+described screen by screen in [docs/student-experience.md](docs/student-experience.md).
+
 ### Running without Docker
 
 ```bash
@@ -2629,45 +2633,41 @@ docker network prune -f --filter label=jumptotech.io/managed=true
 
 ## Starting K8S-001
 
-1. Open http://localhost:3000
-2. Under the **kubernetes** track, click **K8S-001 — Create Your First Pod**
-3. Click **Start Lab**
+1. Open http://localhost:3000 and go to **Labs** (or **Tracks → Kubernetes**)
+2. Open **K8S-001 — Create Your First Pod**
+3. Read the lab page, then click **Launch lab**
 
-You should see:
+The workspace opens and shows:
 
 ```text
-Preparing Kubernetes environment...
+Preparing your lab environment…        (while Start Lab provisions)
 
+Connecting to your terminal…
 ✓ Environment created
 ✓ Kubernetes API available
 ✓ kubectl ready
-✓ Terminal connected
-
-Lab Ready
+· Terminal connecting
 ```
 
-Each line reflects a check that actually ran. If any of them fails, the UI shows
-the real error — the error code, the underlying message, and a remediation hint
-— instead of claiming the lab is ready. For example, stopping the cluster and
-clicking Start Lab produces `ENVIRONMENT_UNREACHABLE` with the genuine
-`connect ECONNREFUSED …:6443` from the Kubernetes client.
+Each ✓ line is a step the API reports as having actually run, and the overlay
+clears only once the terminal service says the shell is ready. If a step fails,
+the workspace shows what it means in plain words with the API's error code as a
+reference — for example, stopping the cluster and launching produces a failure
+whose reference is `ENVIRONMENT_UNREACHABLE` — instead of claiming the lab is
+ready.
 
-The lab page then shows your session's live state:
+The workspace then shows your session's live state:
 
 ```text
-K8S-001
-Create Your First Pod
-
-Status: ACTIVE            Time Remaining: 42:18
-Environment: Ready        namespace: lab-3f9c1a7b2d40
-
-[Reset Lab]  [End Lab]                  [Check Solution]
+K8S-001 · Kubernetes                        [Ready]      Time left 42:18
+Create Your First Pod                          [Verify] [Reset] [End lab]
 ```
 
-`Status` is the explicit lifecycle state, and `Time Remaining` counts down to
-the session's server-side absolute deadline — closing the tab does not stop it.
-The namespace is shown as a developer detail; it is not something a student
-needs, and possessing it grants nothing.
+The badge is the explicit lifecycle state, and `Time left` counts down to the
+session's server-side absolute deadline — closing the tab does not stop it. The
+namespace is not shown in the UI: nothing a student does needs it, and
+possessing it grants nothing. Reloading the page reattaches to the same session
+(`GET /api/sessions`, then a fresh token from `POST /api/sessions/:id/terminal`).
 
 ---
 
@@ -2675,24 +2675,20 @@ needs, and possessing it grants nothing.
 
 The same three clicks, on a different kind of environment.
 
-1. Open http://localhost:3000
-2. Under **Linux**, click **LINUX-001 — Files, Directories & Permissions**
-3. Click **Start Lab**
+1. Open http://localhost:3000 and go to **Labs**, filtered to **Linux**
+2. Open **LINUX-001**
+3. Click **Launch lab**
 
 ```text
-Preparing Linux environment…
-
-✓ Environment created      sandbox container jtt-lab-3f9c1a7b2d40 created
-                           (cpus=0.5 memory=512m pids=128 network=none)
-✓ Sandbox tooling ready    unprivileged user 'student'
-✓ Terminal connected
-
-Lab Ready
+Connecting to your terminal…
+✓ Environment created
+✓ Sandbox tooling ready
+· Terminal connecting
 ```
 
-The terminal pane header reads `container: jtt-lab-3f9c1a7b2d40` instead of
-`namespace: lab-…`, and that is the whole visible difference. Everything else —
-the brief, the hints, the timer, Check Solution, Reset Lab, End Lab — is the
+The terminal bar names the environment — *Linux container* instead of
+*Kubernetes namespace* — and that is the whole visible difference. Everything
+else — the instructions, the hints, the timer, Verify, Reset, End lab — is the
 same page and the same API calls.
 
 Solve it the way you would on a real host:
@@ -2708,9 +2704,11 @@ directory 750 student deployers
 regular file 640 student student
 ```
 
-**Check Solution** reads that filesystem back — not your shell history:
+**Verify** reads that filesystem back — not your shell history:
 
 ```text
+✓ Lab passed — every check passes
+
 ✓ Directory deploy exists
 ✓ Directory deploy/releases exists
 ✓ File deploy/release.txt exists
@@ -2719,8 +2717,6 @@ regular file 640 student student
 ✓ deploy belongs to the deployers group
 ✓ deploy permissions are rwxr-x---
 ✓ deploy/release.txt permissions are rw-r-----
-
-LAB PASSED
 ```
 
 TF-001 works identically, on a sandbox that also has the Terraform CLI:
@@ -2736,9 +2732,10 @@ student@lab:~/terraform$ terraform output
 manifest_path = "build/manifest.txt"
 ```
 
-**Reset Lab** on either track replaces the sandbox and reattaches your terminal;
-your files are gone and the lab's starter state is back. **End Lab** removes the
-container. Confirm it from the host:
+**Reset** (after a confirmation) on either track replaces the sandbox and
+reattaches your terminal; your files are gone and the lab's starter state is
+back. **End lab** (also confirmed) removes the container. Confirm it from the
+host:
 
 ```bash
 docker ps --filter label=jumptotech.io/managed=true
@@ -2780,8 +2777,8 @@ kubectl auth can-i '*' '*' --all-namespaces   # no
 ```
 
 To prove the cluster is not simulated, create something from the host, into your
-namespace, and watch it appear in the browser terminal. The namespace is shown
-in the terminal pane header:
+namespace, and watch it appear in the browser terminal. Print your namespace from
+the browser terminal with `kubectl config view --minify -o jsonpath='{..namespace}'`:
 
 ```bash
 KUBECONFIG=infrastructure/kind/generated/kubeconfig-host.yaml \
@@ -2792,8 +2789,10 @@ Then run `kubectl get pods` in the browser — `proof` is there.
 
 ### Proving isolation with two browsers
 
-Open the lab in two different browser windows and click **Start Lab** in each.
-Each gets its own namespace (visible in the terminal pane header).
+Sign in as two different students in two browsers and click **Launch lab** in
+each. (One student cannot do this alone: `MAX_ACTIVE_SESSIONS_PER_STUDENT=1`
+answers a second launch with *You already have a lab running*.) Each gets its own
+namespace — print it in each terminal with the command above.
 
 In window A:
 
@@ -2812,7 +2811,7 @@ kubectl get pods -n <A's namespace>
 # in API group "" in the namespace "lab-…"
 ```
 
-Then click **Check Solution** in both: A passes, B does not.
+Then press **Verify** in both: A passes, B does not.
 
 ---
 
@@ -2825,17 +2824,15 @@ kubectl run nginx --image=nginx:stable
 kubectl get pod nginx -w        # wait for Running, then Ctrl-C
 ```
 
-Click **Check Solution**:
+Press **Verify**:
 
 ```text
-Checking your environment...
+✓ Lab passed — every check passes
 
 ✓ Pod nginx exists
 ✓ Image nginx:stable is correct
 ✓ Pod is Running
 ✓ Container is Ready
-
-LAB PASSED
 ```
 
 **Failing run.** Break it deliberately:
@@ -2845,18 +2842,21 @@ kubectl delete pod nginx
 kubectl run nginx --image=nginx:1.25    # wrong image
 ```
 
-Click **Check Solution**:
+Press **Verify**:
 
 ```text
-Checking your environment...
+✗ Not complete yet — 3 of 4 checks passing
 
 ✓ Pod nginx exists
 ✗ Incorrect image — found 'nginx:1.25', expected 'nginx:stable'
 ✓ Pod is Running
 ✓ Container is Ready
 
-LAB NOT COMPLETE
+What to look at next …
 ```
+
+A check that could not run at all — the cluster unreachable — is shown as
+*Verification could not run*, never as a failed task, and nothing is recorded.
 
 Or delete the Pod entirely and every check fails with
 `No Pod named 'nginx' found in namespace 'lab-…'`.
@@ -2871,7 +2871,8 @@ your lab pass, because the verifier never reads their namespace.
 
 ## Resetting the lab
 
-Click **Reset Lab**. It:
+Press **Reset**. A confirmation explains what will be lost for this kind of
+environment; confirm it, and the reset:
 
 1. Deletes the resources you created in *your* lab namespace
    (Pods, Deployments, ReplicaSets, StatefulSets, DaemonSets, Jobs, CronJobs,
@@ -2881,7 +2882,8 @@ Click **Reset Lab**. It:
 3. Re-applies the lab's initial state, for labs that declare one
 4. Re-checks cluster health
 5. Clears the terminal scrollback
-6. Reports `Lab reset successfully.` plus exactly what was removed
+6. Shows *Your environment was reset to its starting state.* (the API response,
+   `Lab reset successfully.`, also lists exactly what was removed)
 
 Reset **keeps** your session, your namespace, your terminal, and your
 guardrails. It does not extend your deadline. It affects nothing outside your
@@ -2895,7 +2897,7 @@ without its isolation.
 
 ## Ending a lab
 
-Click **End Lab**. This is different from Reset:
+Press **End lab** and confirm. This is different from Reset:
 
 | | Reset Lab | End Lab |
 |---|---|---|
@@ -3318,7 +3320,9 @@ by lab id — two students on the same lab have two different sandboxes.
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/api/sessions` | the caller's **own** live sessions and per-student quota — how a reloaded page finds its running lab |
 | `GET` | `/api/sessions/:sessionId` | status, countdowns, idle warning |
+| `POST` | `/api/sessions/:sessionId/terminal` | a fresh terminal token for an ACTIVE session the caller owns (reload, expired token) |
 | `POST` | `/api/sessions/:sessionId/check` | run the verifier against this session's own sandbox |
 | `POST` | `/api/sessions/:sessionId/reset` | restore this session's baseline |
 | `POST` | `/api/sessions/:sessionId/activity` | record activity ("Continue Lab") |

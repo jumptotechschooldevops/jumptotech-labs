@@ -1,5 +1,5 @@
 /**
- * PLATFORM-005 — the student dashboard (story test requirements 1, 10–13).
+ * PLATFORM-005 — the progress page (story test requirements 1, 10–13).
  *
  * Rendered against payloads captured verbatim from the real API, in the same
  * spirit as the PLATFORM-003 fixtures: what is asserted here is that the page
@@ -11,48 +11,42 @@
  *   curl -s localhost:4000/api/me/attempts | jq '.data' > test/fixtures/me-attempts.json
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { renderWithAuth } from './auth-harness';
+import { screen, waitFor } from '@testing-library/react';
+import { ApiRequestError } from '../src/lib/api';
 import { ProgressPage } from '../src/pages/ProgressPage';
 import type { AttemptSummary, ProgressSnapshot } from '../src/lib/types';
 import progressFixture from './fixtures/me-progress.json';
 import attemptsFixture from './fixtures/me-attempts.json';
+import { renderWithProviders } from './app-harness';
+import { apiMock, resetApiMock } from './api-mock';
 
 const PROGRESS = progressFixture as unknown as ProgressSnapshot;
 const ATTEMPTS = attemptsFixture as unknown as { attempts: AttemptSummary[] };
 
-const getProgress = vi.fn();
-const listAttempts = vi.fn();
-
 vi.mock('../src/lib/api', async () => {
   const actual = await vi.importActual<typeof import('../src/lib/api')>('../src/lib/api');
-  return {
-    ...actual,
-    api: {
-      getProgress: (...args: unknown[]) => getProgress(...args),
-      listAttempts: (...args: unknown[]) => listAttempts(...args),
-    },
-  };
+  const { apiMock: mock } = await import('./api-mock');
+  return { ...actual, api: mock };
 });
 
 beforeEach(() => {
-  getProgress.mockReset();
-  listAttempts.mockReset();
-  getProgress.mockResolvedValue(PROGRESS);
-  listAttempts.mockResolvedValue({ attempts: ATTEMPTS.attempts, count: ATTEMPTS.attempts.length });
+  resetApiMock();
+  apiMock.getProgress.mockResolvedValue(PROGRESS);
+  apiMock.listAttempts.mockResolvedValue({ attempts: ATTEMPTS.attempts, count: ATTEMPTS.attempts.length });
 });
 
-async function renderPage(onOpenLab = vi.fn()) {
-  renderWithAuth(<ProgressPage onBack={vi.fn()} onOpenLab={onOpenLab} />);
-  await waitFor(() => expect(screen.getByText(/of 12 labs completed/)).toBeTruthy());
-  return { onOpenLab };
+async function renderPage() {
+  const result = renderWithProviders(<ProgressPage />);
+  await waitFor(() => expect(screen.getByText('of 12 labs completed')).toBeTruthy());
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Recent lab attempts' })).toBeTruthy());
+  return result;
 }
 
 describe('ProgressPage', () => {
   it('shows overall progress across every track', async () => {
     await renderPage();
 
-    expect(screen.getByText('2')).toBeTruthy();
+    expect(screen.getByText('2', { selector: '.stat__value' })).toBeTruthy();
     expect(screen.getByText('of 12 labs completed')).toBeTruthy();
     expect(screen.getByText(/17% complete/)).toBeTruthy();
     expect(screen.getByText(/2 in progress/)).toBeTruthy();
@@ -62,9 +56,7 @@ describe('ProgressPage', () => {
     await renderPage();
 
     // The three tracks, each with its own denominator taken from the catalog.
-    const kubernetes = screen.getByRole('progressbar', {
-      name: /Kubernetes: 1 of 10 labs completed/,
-    });
+    const kubernetes = screen.getByRole('progressbar', { name: /Kubernetes: 1 of 10 labs completed/ });
     expect(kubernetes.getAttribute('aria-valuenow')).toBe('1');
     expect(screen.getByRole('progressbar', { name: /Linux: 1 of 1/ })).toBeTruthy();
     expect(screen.getByRole('progressbar', { name: /Terraform: 0 of 1/ })).toBeTruthy();
@@ -74,9 +66,8 @@ describe('ProgressPage', () => {
     }
   });
 
-  it('marks each lab completed, in progress, or neither', async () => {
-    const { container } = renderWithAuth(<ProgressPage onBack={vi.fn()} onOpenLab={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText('of 12 labs completed')).toBeTruthy());
+  it('marks each lab completed, in progress, or neither — in words as well as symbols', async () => {
+    const { container } = await renderPage();
 
     const completed = container.querySelectorAll('.tracklabs__item--completed');
     const inProgress = container.querySelectorAll('.tracklabs__item--in_progress');
@@ -86,13 +77,13 @@ describe('ProgressPage', () => {
     expect(inProgress).toHaveLength(2);
     expect(notStarted).toHaveLength(8);
     expect(completed[0]?.textContent).toContain('K8S-001');
+    expect(completed[0]?.textContent).toContain('completed');
   });
 
   it('lists recent attempts with their real outcomes', async () => {
     await renderPage();
 
-    expect(screen.getByRole('heading', { name: 'Recent lab attempts' })).toBeTruthy();
-    // The four statuses the fixtures actually contain, each rendered as itself
+    // The statuses the fixtures actually contain, each rendered as itself
     // rather than collapsed into "done / not done".
     expect(screen.getAllByText('Passed')).toHaveLength(2);
     expect(screen.getByText('In progress')).toBeTruthy();
@@ -103,52 +94,51 @@ describe('ProgressPage', () => {
     expect(screen.getAllByText('Terraform Init, Plan & Apply')).toHaveLength(2);
   });
 
-  it('opens a lab from its attempt', async () => {
-    const { onOpenLab } = await renderPage();
-
-    fireEvent.click(screen.getByTitle('Open K8S-001'));
-    expect(onOpenLab).toHaveBeenCalledWith('K8S-001');
+  it('links each attempt to its lab', async () => {
+    await renderPage();
+    const links = screen.getAllByRole('link', { name: /K8S-001/ });
+    expect(links.every((link) => link.getAttribute('href') === '#/labs/K8S-001')).toBe(true);
   });
 
-  it('says the identity is a development one, not a login', async () => {
-    await renderPage();
+  it('says a development identity is not a real sign-in — and only when it is one', async () => {
+    const { unmount } = await renderPage();
+    expect(screen.getByText(/Development identity — not a real sign-in/)).toBeTruthy();
+    unmount();
 
-    expect(screen.getByText('dev-student-001')).toBeTruthy();
-    expect(screen.getByText(/development identity — no sign-in yet/)).toBeTruthy();
+    apiMock.getProgress.mockResolvedValue({ ...PROGRESS, student: { ...PROGRESS.student, authenticated: true } });
+    await renderPage();
+    expect(screen.queryByText(/Development identity/)).toBeNull();
+    expect(screen.queryByText(/no sign-in/)).toBeNull();
   });
 
   it('warns when the deployment has no database behind it', async () => {
-    getProgress.mockResolvedValue({
-      ...PROGRESS,
-      student: { ...PROGRESS.student, durable: false },
-    });
+    apiMock.getProgress.mockResolvedValue({ ...PROGRESS, student: { ...PROGRESS.student, durable: false } });
     await renderPage();
 
     // The honest version of "your progress is saved": it is not, here.
-    expect(screen.getByText('not saved to a database')).toBeTruthy();
+    expect(screen.getByText(/Not saved to a database/)).toBeTruthy();
   });
 
   it('does not show a warning when progress really is persisted', async () => {
     await renderPage();
-    expect(screen.queryByText('not saved to a database')).toBeNull();
+    expect(screen.queryByText(/Not saved to a database/)).toBeNull();
   });
 
   it('reports a failure instead of an empty dashboard', async () => {
-    getProgress.mockRejectedValue(
-      Object.assign(new Error('unavailable'), {
-        error: { code: 'PROGRESS_UNAVAILABLE', message: 'Your progress could not be read.' },
-      }),
+    apiMock.getProgress.mockRejectedValue(
+      new ApiRequestError(503, { code: 'PROGRESS_UNAVAILABLE', message: 'Your progress could not be read right now.' }),
     );
-    renderWithAuth(<ProgressPage onBack={vi.fn()} onOpenLab={vi.fn()} />);
+    renderWithProviders(<ProgressPage />);
 
     // An empty dashboard and a broken one look identical to a student, so the
     // page must never render the first when it means the second.
-    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(await screen.findByText('Progress is unavailable right now')).toBeTruthy();
+    expect(screen.getByText('PROGRESS_UNAVAILABLE')).toBeTruthy();
     expect(screen.queryByText(/of 12 labs completed/)).toBeNull();
   });
 
   it('invites a brand-new student to start rather than showing nothing', async () => {
-    getProgress.mockResolvedValue({
+    apiMock.getProgress.mockResolvedValue({
       ...PROGRESS,
       overall: { total: 12, completed: 0, inProgress: 0, notStarted: 12, percent: 0 },
       tracks: PROGRESS.tracks.map((track) => ({
@@ -167,10 +157,10 @@ describe('ProgressPage', () => {
         })),
       })),
     });
-    listAttempts.mockResolvedValue({ attempts: [], count: 0 });
+    apiMock.listAttempts.mockResolvedValue({ attempts: [], count: 0 });
 
     await renderPage();
-    expect(screen.getByText(/No attempts yet/)).toBeTruthy();
+    expect(await screen.findByText(/No attempts yet/)).toBeTruthy();
     expect(screen.getByText('of 12 labs completed')).toBeTruthy();
   });
 });

@@ -172,7 +172,7 @@ minutes. A second run started inside that time sees them as already firing.
 **Reset and the terminal.** A container reset replaces the sandbox. Behind
 sandboxd, the old `docker exec` stream usually ends before the terminal service
 can reattach the same socket, so the socket closes (1000). The API answers
-`reconnectTerminal: true`, and the browser (`LabPage` → `LabTerminal`) reopens
+`reconnectTerminal: true`, and the browser (`WorkspacePage` → `LabTerminal`) reopens
 the terminal with the same token. Phase 7 does exactly that, accepts a
 same-socket `reattached` frame if one arrives, and records which happened.
 

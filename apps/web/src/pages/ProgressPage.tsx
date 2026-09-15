@@ -1,77 +1,44 @@
 /**
- * The student dashboard.
+ * Saved progress and attempt history.
  *
  * Two questions, answered from two different places and joined by the API:
  * "how far through each track am I?" (stored progress ÷ the live catalog) and
  * "what have I actually done?" (the attempt history). Nothing on this page is
- * derived from a running sandbox — that is the point. Every environment the
- * student ever had may be long deleted and this page reads exactly the same.
+ * derived from a running sandbox — every environment the student ever had may
+ * be long deleted and this page reads exactly the same.
  *
- * It is also honest about what it is: the identity is a development identity,
- * and when the deployment has no database the page says the history will not
- * survive a restart rather than quietly implying it will.
+ * A lab is Completed only when the verifier passed it. Launching, resetting or
+ * ending one never marks it complete; the API computes that, not this page.
  */
 import { useEffect, useState } from 'react';
-import { UserMenu } from '../components/UserMenu';
-import { ApiRequestError, api } from '../lib/api';
-import type {
-  ApiError,
-  AttemptStatus,
-  AttemptSummary,
-  ProgressSnapshot,
-  TrackProgress,
-} from '../lib/types';
+import { useCatalog } from '../lib/CatalogContext';
+import { api } from '../lib/api';
+import { describeError, toApiError } from '../lib/errors';
+import { ATTEMPT_LABEL, formatMoment, plural } from '../lib/format';
+import { hrefFor, usePageTitle } from '../lib/router';
+import type { ApiError, AttemptSummary, TrackProgress } from '../lib/types';
+import { ErrorNotice } from '../components/ErrorNotice';
+import { Badge, LoadingState, PageHeader, ProgressBar } from '../components/ui';
 
-/** Human labels for the attempt lifecycle. The status itself is never a boolean. */
-const ATTEMPT_LABEL: Record<AttemptStatus, string> = {
-  IN_PROGRESS: 'In progress',
-  PASSED: 'Passed',
-  FAILED: 'Failed to start',
-  ENDED: 'Ended',
-  EXPIRED: 'Expired',
-};
-
-function toApiError(error: unknown): ApiError {
-  return error instanceof ApiRequestError
-    ? error.error
-    : { code: 'UNEXPECTED_ERROR', message: String(error) };
-}
-
-/** `2026-08-17T10:04:00Z` → `17 Aug, 10:04`. Locale-aware, never a raw ISO string. */
-function formatMoment(iso: string | null): string {
-  if (!iso) return '—';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString(undefined, {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function TrackCard({ track }: { track: TrackProgress }) {
+function TrackProgressCard({ track }: { track: TrackProgress }) {
   return (
-    <article className="trackcard">
-      <header className="trackcard__head">
-        <h3 className="trackcard__title">{track.title}</h3>
-        <span className="trackcard__count">
+    <article className="progress-track" aria-labelledby={`progress-${track.track}`}>
+      <header className="progress-track__head">
+        <h3 className="progress-track__title" id={`progress-${track.track}`}>
+          <a href={hrefFor({ name: 'track', trackId: track.track })}>{track.title}</a>
+        </h3>
+        <span className="progress-track__count">
           <strong>{track.completed}</strong>/{track.total} completed
         </span>
       </header>
 
-      <div
-        className="meter"
-        role="progressbar"
-        aria-valuenow={track.completed}
-        aria-valuemin={0}
-        aria-valuemax={track.total}
-        aria-label={`${track.title}: ${track.completed} of ${track.total} labs completed`}
-      >
-        <span className="meter__fill" style={{ width: `${track.percent}%` }} />
-      </div>
+      <ProgressBar
+        value={track.completed}
+        max={track.total}
+        label={`${track.title}: ${track.completed} of ${track.total} labs completed`}
+      />
 
-      <p className="trackcard__meta">
+      <p className="progress-track__meta">
         {track.inProgress > 0 ? `${track.inProgress} in progress · ` : ''}
         {track.notStarted} not started
       </p>
@@ -82,13 +49,18 @@ function TrackCard({ track }: { track: TrackProgress }) {
             <span className="tracklabs__mark" aria-hidden="true">
               {lab.status === 'COMPLETED' ? '✓' : lab.status === 'IN_PROGRESS' ? '◐' : '○'}
             </span>
-            <span className="tracklabs__id">{lab.labId}</span>
-            <span className="tracklabs__title">{lab.title}</span>
-            {lab.completionCount > 1 && (
+            <a className="tracklabs__link" href={hrefFor({ name: 'lab', labId: lab.labId })}>
+              <span className="tracklabs__id">{lab.labId}</span>
+              <span className="tracklabs__title">{lab.title}</span>
+            </a>
+            <span className="visually-hidden">
+              {lab.status === 'COMPLETED' ? 'completed' : lab.status === 'IN_PROGRESS' ? 'in progress' : 'not started'}
+            </span>
+            {lab.completionCount > 1 ? (
               <span className="tracklabs__repeat" title="Completed more than once">
                 ×{lab.completionCount}
               </span>
-            )}
+            ) : null}
           </li>
         ))}
       </ul>
@@ -96,151 +68,150 @@ function TrackCard({ track }: { track: TrackProgress }) {
   );
 }
 
-export function ProgressPage({
-  onBack,
-  onOpenLab,
-}: {
-  onBack: () => void;
-  onOpenLab: (labId: string) => void;
-}) {
-  const [progress, setProgress] = useState<ProgressSnapshot | null>(null);
+export function ProgressPage() {
+  const catalog = useCatalog();
   const [attempts, setAttempts] = useState<AttemptSummary[] | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
+  const [attemptsError, setAttemptsError] = useState<ApiError | null>(null);
+
+  usePageTitle('Progress');
+
+  const { reloadProgress } = catalog;
+  useEffect(() => {
+    reloadProgress();
+  }, [reloadProgress]);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.getProgress(), api.listAttempts(15)])
-      .then(([snapshot, history]) => {
-        if (cancelled) return;
-        setProgress(snapshot);
-        setAttempts(history.attempts);
+    Promise.resolve()
+      .then(() => api.listAttempts(20))
+      .then((history) => {
+        if (!cancelled) setAttempts(history.attempts);
       })
-      .catch((err: unknown) => {
-        // A dashboard that cannot read its own history says so. Showing an
-        // empty one would be indistinguishable from "you have done nothing".
-        if (!cancelled) setError(toApiError(err));
+      .catch((cause: unknown) => {
+        if (!cancelled) setAttemptsError(toApiError(cause));
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  const progress = catalog.progress;
+
   return (
     <div className="page">
-      <header className="topbar">
-        <button type="button" className="topbar__brand" onClick={onBack}>
-          <span className="topbar__logo" aria-hidden="true">◆</span>
-          JumpToTech <span className="topbar__brand-light">Labs</span>
-        </button>
-        <div className="topbar__center" />
-        <div className="topbar__right">
-          <button type="button" className="btn btn--ghost topbar__link" onClick={onBack}>
-            Catalog
-          </button>
-          <span className="topbar__track">progress</span>
-          <UserMenu />
-        </div>
-      </header>
+      <PageHeader
+        eyebrow="Progress"
+        title="Your progress"
+        description="Lab environments are temporary. What you completed in them is not — this page is read from your saved history, not from any running environment. A lab counts as completed when Verify passes it."
+      />
 
-      <main className="catalog">
-        <div className="catalog__intro">
-          <h1>Your progress</h1>
-          <p>
-            Lab environments are disposable. What you completed in them is not — this page is
-            read from your saved history, not from any running environment.
-          </p>
-        </div>
+      {catalog.progressStatus === 'loading' ? <LoadingState label="Loading your progress…" /> : null}
 
-        {error && (
-          <div className="message-card" role="alert">
-            <h2>{error.code}</h2>
-            <p>{error.message}</p>
-            {error.remediation && <p className="message-card__hint">{error.remediation}</p>}
-          </div>
-        )}
+      {/* A dashboard that cannot read its own history says so. Showing an empty
+          one would be indistinguishable from "you have done nothing". */}
+      {catalog.progressStatus === 'error' && catalog.progressError ? (
+        <ErrorNotice
+          error={describeError(catalog.progressError, 'progress')}
+          actions={
+            <button type="button" className="btn btn--secondary" onClick={catalog.reloadProgress}>
+              Try again
+            </button>
+          }
+        />
+      ) : null}
 
-        {!progress && !error && <p className="catalog__loading">Loading your progress…</p>}
-
-        {progress && (
-          <section className="progress">
-            {/* Said out loud, not buried: this is not a signed-in account. */}
+      {progress ? (
+        <div className="progress">
+          {!progress.student.authenticated || !progress.student.durable ? (
             <div className="progress__identity">
-              <span className="progress__student">{progress.student.studentId}</span>
-              <span className="chip chip--muted">development identity — no sign-in yet</span>
-              {!progress.student.durable && (
-                <span className="chip chip--unavailable" title="No database is configured">
-                  not saved to a database
-                </span>
-              )}
+              {!progress.student.authenticated ? (
+                <Badge tone="warning" title="Nobody proved this identity">
+                  Development identity — not a real sign-in
+                </Badge>
+              ) : null}
+              {!progress.student.durable ? (
+                <Badge tone="warning" title="No database is configured">
+                  Not saved to a database — history is lost when the platform restarts
+                </Badge>
+              ) : null}
             </div>
+          ) : null}
 
-            <div className="progress__overall">
-              <div className="progress__headline">
-                <span className="progress__big">{progress.overall.completed}</span>
-                <span className="progress__of">of {progress.overall.total} labs completed</span>
-              </div>
-              <div
-                className="meter meter--lg"
-                role="progressbar"
-                aria-valuenow={progress.overall.completed}
-                aria-valuemin={0}
-                aria-valuemax={progress.overall.total}
-                aria-label={`Overall: ${progress.overall.completed} of ${progress.overall.total} labs completed`}
-              >
-                <span className="meter__fill" style={{ width: `${progress.overall.percent}%` }} />
-              </div>
-              <p className="progress__meta">
-                {progress.overall.percent}% complete · {progress.overall.inProgress} in progress ·{' '}
-                {progress.overall.notStarted} not started
-              </p>
-            </div>
+          <section className="panel" aria-labelledby="overall-progress-heading">
+            <h2 id="overall-progress-heading" className="panel__title">
+              Overall
+            </h2>
+            <p className="stat">
+              <span className="stat__value">{progress.overall.completed}</span>
+              <span className="stat__label">of {plural(progress.overall.total, 'lab')} completed</span>
+            </p>
+            <ProgressBar
+              value={progress.overall.completed}
+              max={progress.overall.total}
+              label={`Overall: ${progress.overall.completed} of ${progress.overall.total} labs completed`}
+              size="lg"
+            />
+            <p className="panel__meta">
+              {progress.overall.percent}% complete · {progress.overall.inProgress} in progress ·{' '}
+              {progress.overall.notStarted} not started
+            </p>
+          </section>
 
+          <section aria-labelledby="by-track-heading">
+            <h2 id="by-track-heading" className="section-title">
+              By track
+            </h2>
             <div className="progress__tracks">
               {progress.tracks.map((track) => (
-                <TrackCard key={track.track} track={track} />
+                <TrackProgressCard key={track.track} track={track} />
               ))}
             </div>
-
-            <section className="progress__history">
-              <h2 className="progress__heading">Recent lab attempts</h2>
-
-              {attempts && attempts.length === 0 && (
-                <p className="progress__empty">
-                  No attempts yet. Open a lab from the catalog and your history starts here.
-                </p>
-              )}
-
-              {attempts && attempts.length > 0 && (
-                <ul className="attempts">
-                  {attempts.map((attempt) => (
-                    <li key={attempt.attemptId} className="attempts__item">
-                      <button
-                        type="button"
-                        className="attempts__lab"
-                        onClick={() => onOpenLab(attempt.labId)}
-                        title={`Open ${attempt.labId}`}
-                      >
-                        <span className="attempts__id">{attempt.labId}</span>
-                        <span className="attempts__title">{attempt.labTitle}</span>
-                      </button>
-                      <span
-                        className={`attempts__status attempts__status--${attempt.status.toLowerCase()}`}
-                      >
-                        {ATTEMPT_LABEL[attempt.status]}
-                      </span>
-                      <span className="attempts__when">{formatMoment(attempt.startedAt)}</span>
-                      <span className="attempts__counts">
-                        {attempt.checkCount} check{attempt.checkCount === 1 ? '' : 's'}
-                        {attempt.resetCount > 0 ? ` · ${attempt.resetCount} reset` : ''}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
           </section>
+        </div>
+      ) : null}
+
+      <section className="progress__history" aria-labelledby="history-heading">
+        <h2 id="history-heading" className="section-title">
+          Recent lab attempts
+        </h2>
+
+        {attemptsError ? (
+          <ErrorNotice error={describeError(attemptsError, 'progress')} headingLevel={3} live={false} />
+        ) : attempts === null ? (
+          <LoadingState label="Loading your attempts…" />
+        ) : attempts.length === 0 ? (
+          <p className="panel__text">No attempts yet. Launch a lab from the catalog and your history starts here.</p>
+        ) : (
+          <ul className="attempts">
+            {attempts.map((attempt) => (
+              <li key={attempt.attemptId} className="attempts__item">
+                <a className="attempts__lab" href={hrefFor({ name: 'lab', labId: attempt.labId })}>
+                  <span className="mono-id">{attempt.labId}</span>
+                  <span className="attempts__title">{attempt.labTitle}</span>
+                </a>
+                <Badge
+                  tone={
+                    attempt.status === 'PASSED'
+                      ? 'success'
+                      : attempt.status === 'IN_PROGRESS'
+                        ? 'warning'
+                        : attempt.status === 'FAILED'
+                          ? 'danger'
+                          : 'neutral'
+                  }
+                >
+                  {ATTEMPT_LABEL[attempt.status]}
+                </Badge>
+                <span className="attempts__when">{formatMoment(attempt.startedAt)}</span>
+                <span className="attempts__counts">
+                  {plural(attempt.checkCount, 'check')}
+                  {attempt.resetCount > 0 ? ` · ${plural(attempt.resetCount, 'reset')}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
-      </main>
+      </section>
     </div>
   );
 }

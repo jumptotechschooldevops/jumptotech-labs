@@ -742,7 +742,7 @@ async function reset(live: Live[]) {
     `${reply.status} ${reply.body.error?.code ?? ''}`,
   );
   /*
-   * What the browser does (apps/web LabPage → LabTerminal): on
+   * What the browser does (apps/web WorkspacePage → LabTerminal): on
    * `reconnectTerminal` it re-runs the terminal effect, which closes the old
    * socket and opens a new one with the same token. The terminal service may
    * get there first with a same-socket `reattached` frame; behind the broker

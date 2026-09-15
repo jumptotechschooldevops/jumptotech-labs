@@ -9,11 +9,13 @@ import type {
   StudentIdentity,
   LabDetail,
   LabSummary,
+  MySessionsResponse,
   ProviderReadiness,
   ResetResponse,
   SessionInfo,
   SessionStatusResponse,
   StartLabResponse,
+  TerminalGrantResponse,
   TrackSummary,
   VerificationResult,
 } from './types';
@@ -134,7 +136,22 @@ export const api = {
   startLab: (id: string) =>
     request<StartLabResponse>(`/api/labs/${encodeURIComponent(id)}/start`, { method: 'POST' }),
 
+  /**
+   * The caller's own live sessions — how a reloaded page, or a second tab,
+   * finds the lab it is already running. The server decides whose they are.
+   */
+  listMySessions: () => request<MySessionsResponse>('/api/sessions'),
+
   getSession: (sessionId: string) => request<SessionStatusResponse>(session(sessionId)),
+
+  /**
+   * A fresh terminal token for a session this caller owns and that is ACTIVE.
+   *
+   * Used when the page has no token (a reload) or the one it had expired. The
+   * token is kept in memory by the caller and never written anywhere.
+   */
+  issueTerminal: (sessionId: string) =>
+    request<TerminalGrantResponse>(`${session(sessionId)}/terminal`, { method: 'POST' }),
 
   /** Backs "Continue Lab". Moves the idle deadline; never the absolute one. */
   recordActivity: (sessionId: string) =>

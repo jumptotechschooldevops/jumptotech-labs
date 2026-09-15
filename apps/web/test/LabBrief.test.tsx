@@ -1,12 +1,13 @@
 /**
- * PLATFORM-003 — the generic lab page (story test requirement 35).
+ * PLATFORM-003 — the generic lab brief (story test requirement 35).
  *
- * One component renders every lab. These tests feed it two very different
- * definitions and assert that the difference in output comes entirely from the
- * metadata — there is no branch on a lab id anywhere in the component.
+ * One component renders every lab, on the lab page and in the workspace. These
+ * tests feed it two very different definitions and assert that the difference
+ * in output comes entirely from the metadata — there is no branch on a lab id
+ * anywhere in the component.
  */
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { LabBrief } from '../src/components/LabBrief';
 import type { LabDetail } from '../src/lib/types';
 
@@ -26,7 +27,7 @@ function detail(overrides: Partial<LabDetail> = {}): LabDetail {
     objectives: ['Describe what a Deployment adds on top of a bare Pod'],
     task: {
       summary: 'Create a Deployment named frontend running 3 replicas.',
-      description: 'A Deployment describes a desired state.\n\nCreate one named frontend.',
+      description: 'A Deployment describes a desired state.\n\nCreate one named `frontend`.',
     },
     requirements: ['Deployment frontend exists', 'Deployment requests 3 replicas'],
     hints: [
@@ -71,7 +72,7 @@ describe('LabBrief — one component, many labs', () => {
 
     expect(screen.getByText('K8S-002')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Run an Application with a Deployment' })).toBeTruthy();
-    expect(screen.getByText('beginner')).toBeTruthy();
+    expect(screen.getByText('Beginner')).toBeTruthy();
     expect(screen.getByText('30 min')).toBeTruthy();
     expect(screen.getByText('Workloads')).toBeTruthy();
     expect(screen.getByText('CKA')).toBeTruthy();
@@ -94,17 +95,18 @@ describe('LabBrief — one component, many labs', () => {
     expect(screen.getByText('It must survive a node drain.')).toBeTruthy();
   });
 
-  it('renders objectives, task, requirements and documentation', () => {
+  it('renders objectives, task, what Verify checks, and documentation', () => {
     render(<LabBrief lab={detail()} />);
 
     expect(screen.getByText('Describe what a Deployment adds on top of a bare Pod')).toBeTruthy();
     expect(screen.getByText('Create a Deployment named frontend running 3 replicas.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'What Verify checks' })).toBeTruthy();
     expect(screen.getByText('Deployment requests 3 replicas')).toBeTruthy();
+    // Backticked names in lab prose are code, not literal backticks.
+    expect(screen.getByText('frontend', { selector: 'code' })).toBeTruthy();
 
     const link = screen.getByRole('link', { name: /Deployments/ });
-    expect(link.getAttribute('href')).toBe(
-      'https://kubernetes.io/docs/concepts/workloads/controllers/deployment/',
-    );
+    expect(link.getAttribute('href')).toBe('https://kubernetes.io/docs/concepts/workloads/controllers/deployment/');
     expect(link.getAttribute('rel')).toContain('noopener');
   });
 
@@ -114,30 +116,28 @@ describe('LabBrief — one component, many labs', () => {
     // No story, objectives, prerequisites or hints in this definition — and so
     // no empty headings for them either.
     expect(screen.queryByRole('heading', { name: 'Scenario' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Objectives' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Prerequisites' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'What you will learn' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Recommended first' })).toBeNull();
     expect(screen.queryByRole('heading', { name: /Hints/ })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /certification/ })).toBeNull();
   });
 
-  it('shows prerequisites and says they are not enforced', () => {
+  it('shows prerequisites as a recommendation, linked, and says they are not enforced', () => {
     render(<LabBrief lab={detail()} />);
 
-    expect(screen.getByText('K8S-001')).toBeTruthy();
-    expect(screen.getByText('Create Your First Pod')).toBeTruthy();
-    // PLATFORM-003 has no accounts and no progress, so the UI must not imply a gate.
+    const link = screen.getByRole('link', { name: /Create Your First Pod/ });
+    expect(link.getAttribute('href')).toBe('#/labs/K8S-001');
+    // The API serves prerequisitesEnforced: false, so the UI must not imply a gate.
     expect(screen.getByText(/nothing stops you starting this lab now/i)).toBeTruthy();
   });
 
-  it('links to a prerequisite lab when the page can navigate', () => {
-    const onOpenLab = vi.fn();
-    render(<LabBrief lab={detail()} onOpenLab={onOpenLab} />);
-
-    fireEvent.click(screen.getByRole('button', { name: /Create Your First Pod/ }));
-    expect(onOpenLab).toHaveBeenCalledWith('K8S-001');
+  it('says certification topics are related practice, not an award', () => {
+    render(<LabBrief lab={detail()} />);
+    expect(screen.getByText(/does not award a certification/)).toBeTruthy();
   });
 
-  it('embeds the progressive hint ladder', () => {
-    render(<LabBrief lab={detail()} />);
+  it('embeds the progressive hint ladder, and can leave it out', () => {
+    const { unmount } = render(<LabBrief lab={detail()} />);
 
     expect(screen.getByText('0 of 2')).toBeTruthy();
     expect(screen.queryByText('A Deployment is a controller.')).toBeNull();
@@ -145,6 +145,31 @@ describe('LabBrief — one component, many labs', () => {
     fireEvent.click(screen.getByRole('button', { name: /show a hint/i }));
     expect(screen.getByText('A Deployment is a controller.')).toBeTruthy();
     expect(screen.queryByText('Check the replica count.')).toBeNull();
+    unmount();
+
+    render(<LabBrief lab={detail()} showHints={false} />);
+    expect(screen.queryByRole('button', { name: /show a hint/i })).toBeNull();
+  });
+
+  it('marks the checklist with the last verification, only when the checks match the requirements', () => {
+    const { unmount } = render(
+      <LabBrief
+        lab={detail()}
+        checks={[
+          { id: 'a', label: 'Deployment frontend exists', status: 'pass' },
+          { id: 'b', label: 'Deployment requests 3 replicas', status: 'fail', detail: 'found 1' },
+        ]}
+      />,
+    );
+    const checklist = screen.getByRole('heading', { name: /What Verify checks/ }).parentElement!;
+    expect(within(checklist).getByText('1 of 2 passing')).toBeTruthy();
+    expect(within(checklist).getByText(/— passed/)).toBeTruthy();
+    expect(within(checklist).getByText(/— not yet passing/)).toBeTruthy();
+    unmount();
+
+    // A stale result for a different set of requirements marks nothing.
+    render(<LabBrief lab={detail()} checks={[{ id: 'x', label: 'Something else', status: 'pass' }]} />);
+    expect(screen.queryByText(/passing$/)).toBeNull();
   });
 
   it('lists the skills a lab practises', () => {

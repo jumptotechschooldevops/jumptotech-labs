@@ -3,7 +3,9 @@ import type { SessionGuard } from '../auth/middleware.js';
  * Session-scoped routes.
  *
  * ```text
+ *   GET    /api/sessions                       the caller's OWN live sessions
  *   GET    /api/sessions/:sessionId            live status + countdowns
+ *   POST   /api/sessions/:sessionId/terminal   a fresh terminal token (owner only)
  *   POST   /api/sessions/:sessionId/check      verify against THIS namespace
  *   POST   /api/sessions/:sessionId/reset      restore THIS namespace only
  *   POST   /api/sessions/:sessionId/activity   "Continue Lab" / terminal keepalive
@@ -25,9 +27,10 @@ import type { SessionGuard } from '../auth/middleware.js';
  * request, so learning or guessing a namespace name grants nothing at all —
  * there is no route that accepts one.
  */
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import {
   SessionError,
+  issueSessionToken,
   type AnsibleSandboxPort,
   type DockerEngineFactory,
   type KubernetesPort,
@@ -52,6 +55,7 @@ import type { ApiConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { progressErrorResponse } from '../identity.js';
 import { record } from '../progress.js';
+import { resolveTerminalWsBaseForClient } from '../public-origin.js';
 import { toAttemptPayload } from './me.js';
 
 /** The metric groups the browser-facing routers write to. */
@@ -179,6 +183,42 @@ export function toSessionPayload(manager: SessionManager, session: LabSession) {
   };
 }
 
+/**
+ * The terminal grant for one session: where the terminal lives and a token for it.
+ *
+ * Shared by Start Lab and by the resume route below, so there is exactly one
+ * place that decides what a terminal token binds to. It binds the session id
+ * *and* its owner — the terminal service presents `uid` back to the API, which
+ * re-checks it against the live session record before releasing anything (see
+ * `routes/internal.ts`) — and it never outlives the session it names.
+ */
+export function issueTerminalGrant(
+  req: Request,
+  config: ApiConfig,
+  session: LabSession,
+  ownerUserId: string,
+): { url: string; token: string } {
+  const { token } = issueSessionToken({
+    sessionId: session.sessionId,
+    ownerUserId,
+    labId: session.labId,
+    namespace: session.namespace,
+    secret: config.terminalSessionSecret,
+    ttlSeconds: Math.min(
+      config.terminalSessionTtlSeconds,
+      Math.max(60, Math.ceil((Date.parse(session.expiresAt) - Date.now()) / 1000)),
+    ),
+  });
+  return {
+    url: resolveTerminalWsBaseForClient(req, {
+      publicOrigin: config.publicOrigin,
+      defaultTerminalWsUrl: config.terminalWsUrl,
+    }),
+    // Presented to the terminal service over the WebSocket handshake.
+    token,
+  };
+}
+
 export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   const obs = deps.obs ?? silentLogger();
 
@@ -262,6 +302,68 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     };
   }
 
+  // GET /api/sessions -------------------------------------------------------
+  /*
+   * The caller's own live sessions — the "Continue lab" read.
+   *
+   * Without it a running lab was reachable only from the page that started it:
+   * a reload, a Back button or a second tab left the student holding a sandbox
+   * they could not return to, while Start refused them with
+   * STUDENT_SESSION_LIMIT_REACHED until the idle reaper released it.
+   *
+   * What it serves, and why that is safe:
+   *
+   *   - Only sessions whose stored owner *is* the authenticated caller. There is
+   *     no parameter: nobody can ask about anyone else, and an unowned
+   *     (pre-authentication) session matches no caller at all. The role
+   *     exceptions in `policy.ts` do not apply here — this is "mine", not
+   *     "a session I may look at".
+   *   - Only occupying sessions (CREATING … ENDING). Finished history belongs to
+   *     `/api/me/attempts`, which deliberately carries no session id.
+   *   - The same payload Start Lab already returned to this caller, minus any
+   *     terminal token — that is a separate, owner-guarded POST below.
+   *   - The caller's own quota, never the platform's occupancy: how busy other
+   *     students are is not something a student needs to know.
+   */
+  router.get('/', asyncRoute(async (req, res) => {
+    const user = req.user;
+    if (!user) {
+      sendError(res, 401, { code: 'AUTH_REQUIRED', message: 'This request requires authentication.' });
+      return;
+    }
+
+    const mine = (await sessions.listOccupying())
+      .filter((session) => session.ownerUserId !== undefined && session.ownerUserId === user.userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+    const entries = await Promise.all(
+      mine.map(async (session) => {
+        const attempt = await record(log, 'read attempt', () =>
+          progress.attemptForSession(session.sessionId),
+        );
+        let labTitle = session.labId;
+        try {
+          labTitle = registry.get(session.labId).title;
+        } catch {
+          // A lab removed from the catalog while a session of it still runs.
+        }
+        return {
+          session: toSessionPayload(sessions, session),
+          labTitle,
+          ...(attempt ? { attempt: toAttemptPayload(attempt, registry) } : {}),
+        };
+      }),
+    );
+
+    sendOk(res, {
+      sessions: entries,
+      count: entries.length,
+      limits: {
+        maxActiveSessionsPerStudent: deps.config.lifetimes.maxActiveSessionsPerStudent ?? null,
+      },
+    });
+  }));
+
   // GET /api/sessions/:sessionId -------------------------------------------
   // Polling this deliberately does NOT count as activity: an abandoned browser
   // tab must not be able to keep a sandbox alive forever.
@@ -276,6 +378,37 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     }
 
     sendOk(res, { session: toSessionPayload(sessions, session), environment });
+  }));
+
+  // POST /api/sessions/:sessionId/terminal ---------------------------------
+  /*
+   * A fresh terminal token for a session the caller owns.
+   *
+   * The token Start Lab returned lives only in the page that received it. A
+   * reload loses it, and so does a token that simply reached its TTL while the
+   * session is still running. This re-issues exactly what Start issued — same
+   * binding, same TTL rule, same helper — and nothing more:
+   *
+   *   - `session:terminal` is an owner-only action for every role, so an
+   *     instructor or admin who may *read* a session still cannot attach to it.
+   *   - Only an ACTIVE session gets one. The terminal service would refuse any
+   *     other state anyway; refusing here says why.
+   *   - It is a POST, so it passes the origin guard like every other write.
+   *   - It does not count as activity: attaching a terminal is not work, and
+   *     must not keep an abandoned sandbox alive.
+   */
+  router.post('/:sessionId/terminal', asyncRoute(async (req, res) => {
+    const allowed = await guard(req, res, 'session:terminal');
+    if (!allowed) return;
+    try {
+      const { session } = await sessions.requireActive(allowed.session.sessionId);
+      sendOk(res, {
+        session: toSessionPayload(sessions, session),
+        terminal: issueTerminalGrant(req, deps.config, session, allowed.user.userId),
+      });
+    } catch (error) {
+      sessionErrorResponse(res, error);
+    }
   }));
 
   // POST /api/sessions/:sessionId/activity ---------------------------------
