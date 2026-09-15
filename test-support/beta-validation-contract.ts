@@ -114,6 +114,41 @@ export const EXPECTED_WORKLOAD_ALERTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Alerts that describe the deployment *environment* — whether a production TLS
+ * certificate is installed and how soon it expires, and whether the backup job
+ * is running and fresh — not the five-student runtime this gate exercises.
+ *
+ * The gate runs the development + observability stack, not the production
+ * overlay (docs/runbooks/five-student-beta-validation.md §1, §7): there is no
+ * TLS edge and no backup cron, so the certificate-expiry gauge reads 0 (i.e.
+ * "expired") and the backup gauges read stale/absent, and every one of these
+ * alerts fires. The runbook (§3) records and ignores them.
+ *
+ * They are excused *unconditionally*, not merely when already firing at the
+ * pre-run snapshot, because each carries its own `for:` timer (5m–1h) and can
+ * therefore ignite *after* that snapshot — on a freshly started stack the
+ * snapshot is empty and the alert fires minutes later, which is a property of
+ * when the gate started, not of the run. None can be provoked by student
+ * activity, none matches FORBIDDEN_ALERT_PATTERN, and each is proven by its own
+ * suite (BETA-P0-017 TLS, P0-013 backup, P0-018 rules). Every name here must be
+ * a real alert (five-student-beta-contract.test.ts binds this set to
+ * prometheus/alerts/operations.yml).
+ */
+export const ENVIRONMENT_ALERTS: ReadonlySet<string> = new Set([
+  'TlsCertificateRenewalDue',
+  'TlsCertificateExpiresWithin7Days',
+  'TlsEdgeUnhealthy',
+  'TlsHttpRedirectBroken',
+  'TlsEdgeCheckNotRunning',
+  'BackupStale',
+  'BackupMissedTwice',
+  'BackupLastRunFailed',
+  'BackupNeverSucceeded',
+  'BackupStatusUnreadable',
+  'BackupVerifyFailed',
+]);
+
+/**
  * Alerts the scenario provokes on purpose, each excused ONLY while its guard —
  * a PromQL expression over the run's window — is 0. The guard is everything
  * that alert could fire for *except* the deliberate cause, so a real failure
@@ -329,7 +364,9 @@ export function concurrentStartViolations(results: readonly StartObservation[], 
 
 /**
  * Alerts firing now that were not firing before the run and are not expected
- * of it. Provoked alerts are left out here and judged by their guards
+ * of it. Alerts the scenario raises by design (`EXPECTED_WORKLOAD_ALERTS`) and
+ * deployment-environment alerts (`ENVIRONMENT_ALERTS`) are excused
+ * unconditionally; provoked alerts are left out here and judged by their guards
  * (`provokedAlertGuards`); a lifecycle, isolation or runtime alert is never
  * excused by having already been firing.
  */
@@ -338,6 +375,7 @@ export function unexpectedAlerts(firingNow: readonly string[], firingBefore: rea
   return [...new Set(firingNow)].filter(
     (name) =>
       !EXPECTED_WORKLOAD_ALERTS.has(name) &&
+      !ENVIRONMENT_ALERTS.has(name) &&
       !(name in PROVOKED_ALERT_GUARDS) &&
       (!before.has(name) || FORBIDDEN_ALERT_PATTERN.test(name)),
   );

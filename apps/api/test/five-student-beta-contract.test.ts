@@ -16,7 +16,9 @@ import { issueSessionToken, verifySessionToken, type LabRegistry } from '@jumpto
 import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 import {
   BETA_CONTRACT,
+  ENVIRONMENT_ALERTS,
   EXPECTED_WORKLOAD_ALERTS,
+  FORBIDDEN_ALERT_PATTERN,
   LAB_PLAN,
   PROVOKED_ALERT_GUARDS,
   RACE_LAB,
@@ -201,14 +203,44 @@ describe('observability and output helpers', () => {
       'ALERTS{alertname="SessionTeardownStuck", alertstate="firing"} => 1 @[1]',
     ].join('\n');
     expect(alertNames(output)).toEqual(['CapacityExhausted', 'BackupNeverSucceeded', 'SessionTeardownStuck']);
-    // Backup was already firing before the run: environment, not workload.
+    // Backup is a deployment-environment alert: excused whether or not it was
+    // already firing before the run.
     expect(unexpectedAlerts(alertNames(output), ['BackupNeverSucceeded'])).toEqual(['SessionTeardownStuck']);
+    expect(unexpectedAlerts(alertNames(output), [])).toEqual(['SessionTeardownStuck']);
     // A lifecycle alert is never excused by having fired before.
     expect(unexpectedAlerts(['ReaperStalled'], ['ReaperStalled'])).toEqual(['ReaperStalled']);
     for (const never of ['ScopeDenialDetected', 'SandboxLeakSuspected', 'NetworkIsolationNotAttested', 'SessionResetStuck', 'ProviderUnavailable']) {
       expect(unexpectedAlerts([never], [never]), never).toEqual([never]);
     }
     expect([...EXPECTED_WORKLOAD_ALERTS].sort()).toEqual(['CapacityExhausted', 'CapacityNearExhausted']);
+  });
+
+  it('excuses deployment-environment alerts even when they ignite after the pre-run snapshot', () => {
+    // BETA-P0-020 regression. The gate runs the dev + observability stack, where
+    // there is no TLS certificate and no backup job, so these fire on their own
+    // `for:` timers (5m–1h). On a freshly started stack the pre-run snapshot is
+    // empty and the alert ignites minutes into the run — the exact false FAIL
+    // this fix removes. It must be excused with an empty `before`, not only when
+    // it was already firing.
+    expect(unexpectedAlerts(['TlsCertificateExpiresWithin7Days'], [])).toEqual([]);
+    expect(unexpectedAlerts(['TlsCertificateExpiresWithin7Days'], ['TlsCertificateExpiresWithin7Days'])).toEqual([]);
+    for (const name of ENVIRONMENT_ALERTS) {
+      expect(unexpectedAlerts([name], []), name).toEqual([]);
+    }
+    // A real lifecycle alert firing alongside them is still reported.
+    expect(
+      unexpectedAlerts(['TlsCertificateExpiresWithin7Days', 'BackupNeverSucceeded', 'SessionTeardownStuck'], []),
+    ).toEqual(['SessionTeardownStuck']);
+
+    // The set names only real alerts, and can never mask a forbidden family.
+    const operations = read('infrastructure/observability/prometheus/alerts/operations.yml');
+    const declared = new Set([...operations.matchAll(/^\s*-\s*alert:\s*(\S+)/gm)].map((m) => m[1]));
+    for (const name of ENVIRONMENT_ALERTS) {
+      expect(declared.has(name), `${name} is a real alert`).toBe(true);
+      expect(FORBIDDEN_ALERT_PATTERN.test(name), `${name} is not a forbidden family`).toBe(false);
+      expect(EXPECTED_WORKLOAD_ALERTS.has(name), name).toBe(false);
+      expect(name in PROVOKED_ALERT_GUARDS, name).toBe(false);
+    }
   });
 
   it('excuses a provoked alert only through a guard that excludes the deliberate cause', () => {
