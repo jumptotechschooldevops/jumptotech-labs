@@ -14,6 +14,7 @@ import type { OidcBrowserClient } from './auth/oidc-client.js';
 import type { TokenVerifier } from './auth/oidc.js';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
+import { LearningPathCatalog } from '@jumptotech/lab-orchestrator';
 import type {
   AnsibleSandboxPort,
   DockerEngineFactory,
@@ -48,6 +49,7 @@ import { createLabRoutes } from './routes/labs.js';
 import { createSessionRoutes } from './routes/sessions.js';
 import { createInternalRoutes } from './routes/internal.js';
 import { createTrackRoutes } from './routes/tracks.js';
+import { createLearningPathRoutes } from './routes/learning-paths.js';
 import { createMeRoutes } from './routes/me.js';
 import { createAuthRoutes } from './routes/auth.js';
 
@@ -78,6 +80,13 @@ export interface CreateAppDeps {
   workspace?: WorkspacePort;
   config: ApiConfig;
   progress?: ProgressDeps;
+  /**
+   * Learning paths (V1 EPIC-02), loaded from `labs/learning-paths` at startup.
+   *
+   * Optional so existing tests keep composing an app without one; absent means
+   * a deployment with no paths, which lists none and 404s every path id.
+   */
+  learningPaths?: LearningPathCatalog;
   /**
    * How a request's caller is identified (PLATFORM-009).
    *
@@ -162,6 +171,7 @@ export function createApp(deps: CreateAppDeps): Express {
   const app = express();
   const learning = deps.progress ?? inMemoryProgress(deps.config);
   const observability = deps.observability ?? detachedObservability();
+  const learningPaths = deps.learningPaths ?? LearningPathCatalog.empty();
 
   // No `x-powered-by`, and small request bodies only — nothing here needs more.
   app.disable('x-powered-by');
@@ -263,6 +273,8 @@ export function createApp(deps: CreateAppDeps): Express {
       status: 'ok',
       labsLoaded: deps.registry.size,
       labLoadErrors: deps.registry.loadErrors,
+      learningPathsLoaded: learningPaths.size,
+      learningPathLoadErrors: learningPaths.loadErrors,
       providers: providers.map((provider) => ({
         provider: provider.providerId,
         implementation: provider.implementation,
@@ -347,6 +359,7 @@ export function createApp(deps: CreateAppDeps): Express {
   const routes = {
     ...deps,
     ...learning,
+    learningPaths,
     sessionGuard,
     identity: learning.identity,
     /*
@@ -364,6 +377,7 @@ export function createApp(deps: CreateAppDeps): Express {
   };
   app.use('/api/labs', browserCors, originGuard, authenticated, createLabRoutes(routes));
   app.use('/api/tracks', browserCors, originGuard, authenticated, createTrackRoutes(routes));
+  app.use('/api/learning-paths', browserCors, originGuard, authenticated, createLearningPathRoutes(routes));
   app.use('/api/sessions', browserCors, originGuard, authenticated, createSessionRoutes(routes));
   app.use('/api/me', browserCors, originGuard, authenticated, createMeRoutes(routes));
   app.use('/internal', createInternalRoutes(deps));

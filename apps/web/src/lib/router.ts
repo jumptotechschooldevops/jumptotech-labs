@@ -1,7 +1,7 @@
 /**
  * Hash routing for the student app.
  *
- * Still no router dependency: the app has eight views, every one of them is a
+ * Still no router dependency: the app has eleven views, every one of them is a
  * pure function of the hash, and the hash survives a reload and a sign-in round
  * trip (`auth.ts` sends `returnTo` with it). What changed from the three-view
  * MVP is only that the routes are named in one place.
@@ -13,6 +13,9 @@
  *   #/labs/LINUX-001/workspace the running lab: instructions, terminal, verify
  *   #/tracks                   every track
  *   #/tracks/linux             one track, in order
+ *   #/paths                    every learning path
+ *   #/paths/devops-engineer    one learning path: its stages, in order
+ *   #/paths/devops-engineer/stages/linux   one stage: skills, labs, next step
  *   #/progress                 saved progress and attempt history
  *   #/help                     how labs work
  * ```
@@ -37,12 +40,17 @@ export type Route =
   | { name: 'workspace'; labId: string }
   | { name: 'tracks' }
   | { name: 'track'; trackId: string }
+  | { name: 'paths' }
+  | { name: 'path'; pathId: string }
+  | { name: 'stage'; pathId: string; stageId: string }
   | { name: 'progress' }
   | { name: 'help' }
   | { name: 'notFound' };
 
 const LAB_ID = '([A-Za-z0-9-]{1,16})';
 const TRACK_ID = '([a-z0-9][a-z0-9-]{0,31})';
+/** Learning path and stage ids — the same shape the API validates. */
+const PATH_SLUG = '([a-z0-9][a-z0-9-]{1,47})';
 const FILTER_KEYS = ['track', 'q', 'level', 'status'] as const;
 
 export function parseRoute(hash: string): Route {
@@ -61,6 +69,7 @@ export function parseRoute(hash: string): Route {
     return { name: 'labs', ...filters };
   }
   if (path === '/tracks') return { name: 'tracks' };
+  if (path === '/paths') return { name: 'paths' };
   if (path === '/progress') return { name: 'progress' };
   if (path === '/help') return { name: 'help' };
 
@@ -70,6 +79,10 @@ export function parseRoute(hash: string): Route {
   if (lab) return { name: 'lab', labId: lab[1]!.toUpperCase() };
   const track = new RegExp(`^/tracks/${TRACK_ID}$`).exec(path);
   if (track) return { name: 'track', trackId: track[1]! };
+  const stage = new RegExp(`^/paths/${PATH_SLUG}/stages/${PATH_SLUG}$`).exec(path);
+  if (stage) return { name: 'stage', pathId: stage[1]!, stageId: stage[2]! };
+  const learningPath = new RegExp(`^/paths/${PATH_SLUG}$`).exec(path);
+  if (learningPath) return { name: 'path', pathId: learningPath[1]! };
 
   return { name: 'notFound' };
 }
@@ -95,6 +108,12 @@ export function hrefFor(route: Route): string {
       return '#/tracks';
     case 'track':
       return `#/tracks/${encodeURIComponent(route.trackId)}`;
+    case 'paths':
+      return '#/paths';
+    case 'path':
+      return `#/paths/${encodeURIComponent(route.pathId)}`;
+    case 'stage':
+      return `#/paths/${encodeURIComponent(route.pathId)}/stages/${encodeURIComponent(route.stageId)}`;
     case 'progress':
       return '#/progress';
     case 'help':

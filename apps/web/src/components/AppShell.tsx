@@ -7,7 +7,7 @@
  *     and every page sets the document title.
  *   - **Is a lab running?** — an indicator, from the API's own list of this
  *     student's sessions, that links straight back into it.
- *   - **How do I get back?** — five plain links, the same on every page.
+ *   - **How do I get back?** — six plain links, the same on every page.
  *
  * The navigation is deliberately short. Every item is a page with real content;
  * there is nothing here for appearance.
@@ -15,11 +15,13 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useActiveSession } from '../lib/ActiveSessionContext';
 import { SESSION_STATUS_TEXT } from '../lib/format';
+import { FLAGSHIP_PATH_ID } from '../lib/learningPath';
 import { hrefFor, type Route } from '../lib/router';
 import { UserMenu } from './UserMenu';
 
 const NAV: Array<{ label: string; route: Route; matches: Route['name'][] }> = [
   { label: 'Dashboard', route: { name: 'dashboard' }, matches: ['dashboard'] },
+  { label: 'Learning Path', route: { name: 'path', pathId: FLAGSHIP_PATH_ID }, matches: ['paths', 'path', 'stage'] },
   { label: 'Labs', route: { name: 'labs' }, matches: ['labs', 'lab'] },
   { label: 'Tracks', route: { name: 'tracks' }, matches: ['tracks', 'track'] },
   { label: 'Progress', route: { name: 'progress' }, matches: ['progress'] },

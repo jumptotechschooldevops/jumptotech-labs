@@ -1,0 +1,383 @@
+# The skill catalog every learning path draws from.
+#
+# A skill here is a unit a student can be good or not yet good at — coarser than
+# the fine-grained `skills:` tags inside each lab.yaml, and independent of any
+# one path, so a future path (SRE, Cloud Engineer) reuses the same ids. That is
+# what later lets an interview weakness point at a skill, and a skill point at
+# the labs that practise it.
+#
+# A skill with no lab mapped to it in a path is shown to students as
+# "Coming soon". Nothing in this file can mark a skill as covered: only a lab can.
+#
+# Rules (enforced by services/lab-orchestrator/src/learning-paths.ts):
+#   id           dotted lowercase, domain first: `linux.permissions`
+#   title        what a student reads — plain words, not an identifier
+#   description  one or two sentences a beginner can follow
+
+skills:
+  # --- computing foundations ---------------------------------------------------
+  - id: computing.hardware
+    title: How a computer works
+    description: What processors, memory and storage are, how the operating system reports them, and why a container can see more of a machine than it may use.
+  - id: computing.data-representation
+    title: Bits, bytes and text
+    description: How numbers and text are stored as bytes, why one size has two units (MB and MiB), and how UTF-8 stores characters.
+  - id: os.files
+    title: Files and file descriptors
+    description: How a program opens files and connections, and what "too many open files" really means.
+  - id: os.processes
+    title: Processes
+    description: How programs start, run, exit and are cleaned up by the operating system.
+  - id: os.kernel
+    title: The operating system kernel
+    description: System calls, threads and scheduling — what the operating system does for a program, and what that costs.
+  - id: cli.process-contract
+    title: Command-line programs
+    description: Arguments, environment variables, standard output and error, and exit codes — the contract every script and pipeline relies on.
+  - id: programming.fundamentals
+    title: Programming for automation
+    description: Types, decisions, loops, lists, dictionaries, text and error handling, practised by writing small Python tools.
+  - id: data.formats
+    title: JSON and YAML
+    description: The file formats infrastructure tools are configured in, and the mistakes that turn a valid file into the wrong configuration.
+
+  # --- Linux -------------------------------------------------------------------
+  - id: linux.filesystem
+    title: The Linux filesystem
+    description: Moving around directories, creating and finding files, and working out what is using disk space.
+  - id: linux.permissions
+    title: File permissions
+    description: Who may read, change or run a file, and how to give a file exactly the access it needs.
+  - id: linux.users-groups
+    title: Users and groups
+    description: Accounts, groups and service accounts, and how several people share access safely.
+  - id: linux.processes
+    title: Managing processes
+    description: Finding running programs, stopping them with signals, and keeping jobs running in the background.
+  - id: linux.services
+    title: Services
+    description: Keeping an application running under a service manager — enabling it, checking its status and writing a systemd unit.
+  - id: linux.logs
+    title: Reading logs
+    description: Searching and counting log entries to find out what happened and when.
+  - id: linux.packages
+    title: Packages
+    description: Finding which package owns a file, spotting files that were changed after installation, and installing software without internet access.
+  - id: linux.environment
+    title: Environment variables
+    description: How PATH and other environment variables reach a program, and why a service does not see your shell's settings.
+  - id: linux.shell
+    title: Shell scripting and text processing
+    description: Writing Bash scripts that report results through output and exit codes, and editing text across many files with sed, awk and find.
+  - id: linux.scheduling
+    title: Scheduled jobs
+    description: Running work on a schedule with cron, and finding out why a scheduled job never ran.
+  - id: linux.troubleshooting
+    title: Linux troubleshooting
+    description: Working from symptoms and evidence to find and fix what is wrong on a server.
+
+  # --- networking --------------------------------------------------------------
+  - id: networking.ip-addressing
+    title: IP addresses and subnets
+    description: How IPv4 addresses and CIDR ranges are structured, which addresses are private, and how to divide a network into subnets.
+  - id: networking.layers
+    title: Network layers
+    description: The layered model of networking, used to tell which layer a failure comes from.
+  - id: networking.routing
+    title: Routing
+    description: How a machine decides where to send a packet — to a neighbour on the same network, or on towards a destination beyond it.
+  - id: networking.ports
+    title: Ports and sockets
+    description: Which program is listening on which port and address, and why a service can be running yet unreachable.
+  - id: networking.tcp-udp
+    title: TCP and UDP
+    description: How a TCP connection opens and closes, how UDP differs, and what a refused connection or a timeout tells you.
+  - id: networking.http
+    title: HTTP
+    description: Asking a web service for a response from the command line and reading what comes back.
+  - id: networking.dns
+    title: DNS
+    description: How names are turned into addresses, and how to diagnose a name that will not resolve.
+  - id: networking.troubleshooting
+    title: Connectivity troubleshooting
+    description: Reproducing a network failure, collecting evidence, and fixing it at the layer where it happens.
+
+  # --- Git and software delivery -----------------------------------------------
+  - id: git.fundamentals
+    title: Git fundamentals
+    description: What version control is, how a repository records history, and how to make and inspect commits.
+  - id: git.branching
+    title: Branches and merging
+    description: Working on a change in a branch and combining it back safely.
+  - id: git.collaboration
+    title: Pull requests and code review
+    description: Proposing a change, reviewing it with teammates and merging it into the main line.
+  - id: delivery.concepts
+    title: Software delivery concepts
+    description: Continuous integration, delivery and deployment — how a code change travels from a developer to production.
+
+  # --- containers --------------------------------------------------------------
+  - id: docker.containers
+    title: Containers
+    description: Running, stopping, restarting and removing containers, and checking what they are doing.
+  - id: docker.images
+    title: Images
+    description: Pulling, tagging and inspecting images, and how image layers and the build cache work.
+  - id: docker.dockerfile
+    title: Dockerfiles and builds
+    description: Writing a Dockerfile, building an image from it and deciding how its container starts.
+  - id: docker.configuration
+    title: Container configuration
+    description: Passing settings to a container through environment variables instead of building them into the image.
+  - id: docker.volumes
+    title: Volumes
+    description: Keeping data safe when a container is removed.
+  - id: docker.networking
+    title: Container networking
+    description: Letting containers talk to each other by name, and publishing a container's port on the host.
+  - id: docker.compose
+    title: Docker Compose
+    description: Describing and running an application made of several containers from one file.
+  - id: docker.registries
+    title: Registries
+    description: Where images come from, and how a name and a tag identify one.
+  - id: docker.resources
+    title: Container resource limits
+    description: Limiting how much memory, CPU and how many processes a container may use.
+  - id: docker.troubleshooting
+    title: Container troubleshooting
+    description: Using exit codes, logs and inspect to work out why a container is failing or misbehaving.
+
+  # --- CI/CD -------------------------------------------------------------------
+  - id: cicd.pipelines
+    title: Pipelines as code
+    description: Writing pipelines in GitHub Actions and Jenkins — triggers, jobs, stages and steps.
+  - id: cicd.build-test
+    title: Automated build and test
+    description: Making every change build and pass its tests automatically.
+  - id: cicd.artifacts
+    title: Build artifacts
+    description: Publishing what a build produced, so that deployment uses exactly what was tested.
+  - id: cicd.container-builds
+    title: Container images in CI
+    description: Building and tagging a container image as a step of a pipeline.
+  - id: cicd.deployment
+    title: Deployment automation
+    description: Updating what gets deployed as the last stage of a pipeline, and only from releasable code.
+  - id: cicd.troubleshooting
+    title: Pipeline troubleshooting
+    description: Finding out why a pipeline does not run, fails, or passes when it should not.
+
+  # --- AWS ---------------------------------------------------------------------
+  - id: aws.identity
+    title: AWS credentials and ARNs
+    description: Which credentials the AWS command line tool actually uses, and how to read the name of an AWS resource.
+  - id: aws.iam
+    title: IAM policies and roles
+    description: Writing policies that grant exactly the access a workload needs, and deciding who may use a role.
+  - id: aws.audit
+    title: Auditing with CloudTrail
+    description: Tracing a change in an AWS account back to the identity that made it.
+  - id: aws.networking
+    title: VPC networking
+    description: Planning a cloud network's address ranges and subnets across Availability Zones, and routing traffic to the internet.
+  - id: aws.infrastructure-templates
+    title: CloudFormation templates
+    description: Describing AWS resources in a template, and repairing a template that will not deploy.
+  - id: aws.cost
+    title: Cost awareness
+    description: Spotting traffic that costs money unnecessarily, and routing it more cheaply.
+  - id: aws.compute
+    title: Compute (EC2)
+    description: Running and managing virtual servers on AWS.
+  - id: aws.storage
+    title: Storage (S3)
+    description: Storing, sharing and protecting files and objects on AWS.
+
+  # --- Terraform ---------------------------------------------------------------
+  - id: terraform.workflow
+    title: The Terraform workflow
+    description: init, plan, apply and destroy — reading what Terraform is about to change before it changes it.
+  - id: terraform.providers
+    title: Providers
+    description: The plugins Terraform installs to manage a particular kind of infrastructure.
+  - id: terraform.resources
+    title: Resources and dependencies
+    description: Declaring resources and letting Terraform work out the order in which to create them.
+  - id: terraform.variables
+    title: Input variables
+    description: Making one configuration work for different environments with typed input variables.
+  - id: terraform.outputs
+    title: Outputs
+    description: Publishing values from a configuration for people and pipelines to use.
+  - id: terraform.state
+    title: State
+    description: How Terraform remembers what it manages, and how to move, remove and relocate that record safely.
+  - id: terraform.expressions
+    title: Expressions, locals and data sources
+    description: Computing values instead of copying them, and reading data a configuration does not own.
+  - id: terraform.validation
+    title: Custom conditions
+    description: Rejecting bad input and checking assumptions before anything is created.
+  - id: terraform.modules
+    title: Modules
+    description: Packaging a configuration so teams can reuse it with different inputs.
+  - id: terraform.drift
+    title: Drift
+    description: Noticing and resolving differences between real infrastructure and what the configuration says.
+  - id: terraform.troubleshooting
+    title: Terraform troubleshooting
+    description: Diagnosing failed plans and applies from Terraform's own error output.
+
+  # --- Kubernetes --------------------------------------------------------------
+  - id: kubernetes.pods
+    title: Pods
+    description: The smallest thing Kubernetes runs — one or more containers that start, share storage and stop together.
+  - id: kubernetes.deployments
+    title: Deployments and rollouts
+    description: Running several copies of an application, and moving to a new version or back to the old one without downtime.
+  - id: kubernetes.services
+    title: Services
+    description: Giving a changing set of Pods one stable address that other applications can use.
+  - id: kubernetes.configuration
+    title: ConfigMaps
+    description: Keeping an application's configuration outside its container image.
+  - id: kubernetes.secrets
+    title: Secrets
+    description: Giving an application a credential without writing it into the image or the manifest.
+  - id: kubernetes.batch
+    title: Jobs and CronJobs
+    description: Running a task until it finishes, once or on a schedule.
+  - id: kubernetes.probes
+    title: Health probes
+    description: Telling Kubernetes when an application is ready for traffic and when it needs to be restarted.
+  - id: kubernetes.resources
+    title: Resource requests and limits
+    description: Declaring how much CPU and memory an application needs, so Kubernetes can place it and keep it within bounds.
+  - id: kubernetes.storage
+    title: Persistent storage
+    description: Keeping data when Pods are replaced, using PersistentVolumeClaims.
+  - id: kubernetes.rbac
+    title: RBAC
+    description: Giving an application exactly the Kubernetes API access it needs, and no more.
+  - id: kubernetes.controllers
+    title: DaemonSets and StatefulSets
+    description: Running one copy on every node, or replicas that keep stable names and their own storage.
+  - id: kubernetes.troubleshooting
+    title: Kubernetes troubleshooting
+    description: Reading Pod status, events and logs to find and fix a broken workload.
+  - id: kubernetes.namespaces
+    title: Namespaces
+    description: Dividing one cluster between teams and applications.
+  - id: kubernetes.ingress
+    title: Ingress
+    description: Routing web traffic from outside the cluster to the right Service.
+  - id: kubernetes.networkpolicy
+    title: NetworkPolicy
+    description: Controlling which Pods are allowed to talk to each other.
+  - id: kubernetes.disruption-budgets
+    title: PodDisruptionBudgets
+    description: Keeping enough copies of an application running while nodes are drained for maintenance.
+
+  # --- Ansible -----------------------------------------------------------------
+  - id: ansible.inventory
+    title: Inventory
+    description: Listing the servers Ansible manages, and grouping them.
+  - id: ansible.ad-hoc
+    title: Ad-hoc commands
+    description: Making one quick change across many servers from the command line.
+  - id: ansible.playbooks
+    title: Playbooks
+    description: Describing the state servers should be in, in a file you can run again and again.
+  - id: ansible.variables
+    title: Variables, loops and conditions
+    description: Giving servers different values, repeating tasks with loops, and running a task only when a condition holds.
+  - id: ansible.templates
+    title: Templates
+    description: Generating a configuration file for each server from one Jinja2 template.
+  - id: ansible.handlers
+    title: Handlers
+    description: Reloading a service only when its configuration actually changed.
+  - id: ansible.roles
+    title: Roles
+    description: Packaging tasks, templates and default values into a reusable unit.
+  - id: ansible.idempotency
+    title: Idempotency
+    description: Writing automation that is safe to run again and changes nothing when nothing needs changing.
+  - id: ansible.troubleshooting
+    title: Ansible troubleshooting
+    description: Using Ansible's own output to tell a syntax error from a connection error from a template error.
+
+  # --- Helm and GitOps ---------------------------------------------------------
+  - id: helm.charts
+    title: Helm charts
+    description: Packaging Kubernetes manifests as a reusable, versioned chart.
+  - id: helm.releases
+    title: Values and releases
+    description: Installing, configuring, upgrading and rolling back a chart release.
+  - id: gitops.principles
+    title: GitOps
+    description: Using a Git repository as the single description of what should run in a cluster.
+  - id: gitops.argocd
+    title: Argo CD
+    description: Keeping a cluster in step with a Git repository automatically.
+
+  # --- observability and reliability -------------------------------------------
+  - id: observability.logs
+    title: Log collection
+    description: Getting application logs to where people and tools can read them.
+  - id: observability.metrics
+    title: Metrics and monitoring
+    description: Measuring how a system behaves over time, with tools such as Prometheus and Grafana.
+  - id: observability.alerting
+    title: Alerting
+    description: Being told about problems that need a person — and not about the ones that do not.
+  - id: sre.slos
+    title: SLIs and SLOs
+    description: Defining what "working well enough" means for users, and measuring it.
+  - id: sre.incident-investigation
+    title: Incident investigation
+    description: Reconstructing what happened during an incident from evidence rather than memory.
+  - id: sre.reliability
+    title: Reliability
+    description: Keeping users served while applications fail, restart and are updated.
+
+  # --- security and production readiness ---------------------------------------
+  - id: security.least-privilege
+    title: Least privilege
+    description: Granting people and programs only the access they need, and checking a policy by what it refuses.
+  - id: security.secrets
+    title: Handling secrets
+    description: Keeping passwords, tokens and keys out of code, images and logs, and supplying them safely.
+  - id: security.network-isolation
+    title: Network isolation
+    description: Deciding what may be reached from where, so a private system stays private.
+  - id: security.scanning
+    title: Vulnerability scanning
+    description: Finding known vulnerabilities in code, dependencies and container images before they ship.
+  - id: security.runtime
+    title: Runtime security
+    description: Restricting what a running container or process is allowed to do.
+  - id: security.tls
+    title: TLS and certificates
+    description: Encrypting traffic with HTTPS, and managing the certificates that make it trusted.
+  - id: operations.production-readiness
+    title: Production readiness
+    description: Checking a service is ready for production — backups, capacity, monitoring and runbooks.
+
+  # --- production engineering --------------------------------------------------
+  - id: production.integrated-troubleshooting
+    title: Cross-system troubleshooting
+    description: Diagnosing a failure that spans the application, containers, cluster, network and cloud at once.
+  - id: production.incident-response
+    title: Production incident response
+    description: Working a live incident from first alert to follow-up review.
+  - id: production.projects
+    title: Real-world projects
+    description: Building and operating a complete system end to end.
+  - id: career.interview-preparation
+    title: Interview preparation
+    description: Explaining your work and reasoning through technical interview questions.
+  - id: assessment.practical
+    title: Practical assessment
+    description: Demonstrating job-ready skills in a timed, hands-on assessment.

@@ -25,6 +25,9 @@ import { CatalogPage } from './pages/CatalogPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { HelpPage } from './pages/HelpPage';
 import { LabDetailPage } from './pages/LabDetailPage';
+import { LearningPathPage } from './pages/LearningPathPage';
+import { LearningPathsPage } from './pages/LearningPathsPage';
+import { LearningStagePage } from './pages/LearningStagePage';
 import { ProgressPage } from './pages/ProgressPage';
 import { TrackPage } from './pages/TrackPage';
 import { TracksPage } from './pages/TracksPage';
@@ -75,6 +78,12 @@ function Page({ route, navigation }: { route: Route; navigation: number }) {
       return <TracksPage />;
     case 'track':
       return <TrackPage key={route.trackId} trackId={route.trackId} />;
+    case 'paths':
+      return <LearningPathsPage />;
+    case 'path':
+      return <LearningPathPage key={route.pathId} pathId={route.pathId} />;
+    case 'stage':
+      return <LearningStagePage key={`${route.pathId}/${route.stageId}`} pathId={route.pathId} stageId={route.stageId} />;
     case 'progress':
       return <ProgressPage />;
     case 'help':

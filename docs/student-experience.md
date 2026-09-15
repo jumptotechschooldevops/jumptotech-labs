@@ -13,6 +13,7 @@ that text decides whether an action is allowed.
 
 - [Navigation](#navigation)
 - [Dashboard](#dashboard)
+- [Learning path](#learning-path)
 - [Lab catalog](#lab-catalog)
 - [Tracks](#tracks)
 - [Lab page and Launch](#lab-page-and-launch)
@@ -42,13 +43,16 @@ Hash routes, one per page (`apps/web/src/lib/router.ts`):
 | `#/labs/LINUX-001/workspace` | The running lab |
 | `#/tracks` | All tracks |
 | `#/tracks/linux` | One track |
+| `#/paths` | All learning paths |
+| `#/paths/devops-engineer` | The DevOps Engineer learning path |
+| `#/paths/devops-engineer/stages/linux` | One stage of a learning path |
 | `#/progress` | Saved progress and attempt history |
 | `#/help` | How labs work, and what to do when something goes wrong |
 
 Anything else shows **Page not found**; an unknown address no longer quietly
 falls back to the catalog. No URL ever contains a session id.
 
-The top bar has five links (Dashboard, Labs, Tracks, Progress, Help). The
+The top bar has six links (Dashboard, Learning Path, Labs, Tracks, Progress, Help). The
 current one is marked with `aria-current="page"`, and every page sets the
 document title. When the student has a lab running, an **Active lab** link
 appears next to their name and goes straight back into it.
@@ -60,16 +64,29 @@ appears next to their name and goes straight back into it.
 | Welcome, *name* | `GET /auth/session` | — (the app is not mounted signed out) |
 | You have a lab running | `GET /api/sessions` | "We could not check whether you have a lab running", with Try again |
 | How a lab works | shown while the student has no attempts | — |
-| Next up | the rule in `lib/suggest.ts` | not shown: no progress means no suggestion |
+| DevOps Engineer path — path progress, current stage, next lab and why | `GET /api/learning-paths/devops-engineer` + `GET /api/me/learning-paths/devops-engineer` | "We could not load your learning path" or "Progress is unavailable right now", each with Try again — never a zero, never a guessed lab |
 | Recent activity | `GET /api/me/attempts?limit=5` | the error, with Try again |
 | Your progress | `GET /api/me/progress` | "Progress is unavailable right now" — never a zero |
 | Tracks | `GET /api/labs` + progress | counts only, no bars |
 
-**Next up** is not a recommendation engine. In priority order it picks a lab the
-student started and has not completed (most recent first), then the next
-uncompleted lab in the track of their most recent attempt, then the first
-uncompleted lab in catalog order. Labs the platform cannot run are skipped. The
-rule that fired is printed under the suggestion.
+The path panel replaced the earlier **Next up** rule, so the dashboard gives one
+answer to "what next". The next lab is chosen by the API's deterministic
+learning-path rule and its reason is printed beside it; while a lab is running,
+the panel explains the one-lab rule and the running-lab panel keeps the only
+*Continue lab* button. See [docs/learning-paths.md](learning-paths.md).
+
+## Learning path
+
+`#/paths/devops-engineer` lists the fourteen stages of the DevOps Engineer path in
+order, each with its status in words (*Not started*, *In progress*, *Completed*,
+*Available labs completed*, *Earlier stage first*, *Coming soon*), its core-lab
+count and a *You are here* marker, beside verified path progress and the next lab.
+A stage page shows what the stage teaches and why it matters, its labs in
+recommended order, its skills, the stages recommended before it and the next step.
+Stages and skills with no labs are shown as *Coming soon* and never counted.
+Prerequisites are advice: every lab stays one click away. The model, the
+progress rules and the recommendation rule are in
+[docs/learning-paths.md](learning-paths.md).
 
 ## Lab catalog
 
@@ -255,7 +272,9 @@ Operators still see both as distinct metric outcomes and log fields
 
 ## Progress
 
-`#/progress` reads saved history only. A lab is **In progress** once a launch has
+`#/progress` reads saved history only. Between *Overall* and the per-track lists
+it shows the DevOps Engineer path (each stage's status and core labs, and the next
+lab) and **Skills**, grouped by stage, each with *n of m labs* completed. A lab is **In progress** once a launch has
 been attempted — including one the platform refused (capacity or the per-student
 limit), which the attempt history shows as *Could not start* — and **Completed** only when Verify has passed every check; ending,
 resetting or losing an environment never removes a completion. Percentages are
@@ -323,7 +342,8 @@ Storage, IndexedDB or cookies (enforced by `apps/web/test/token-storage.test.tsx
 
 | File | Covers |
 |---|---|
-| `student-logic.test.tsx` | routes, error mapping, next-up rule, safe lab prose, terminal close codes, environment copy |
+| `student-logic.test.tsx` | routes, error mapping, safe lab prose, terminal close codes, environment copy |
+| `learning-path.test.tsx` | path and stage routes, statuses in words, gaps, progress and API outages, unknown path/stage, not locked, running lab |
 | `catalog.test.tsx` | search, filters, URL, grouping, progress badges, empty/error states |
 | `lab-detail.test.tsx` | launch double-click, running lab, per-student limit, capacity, unavailable, not found |
 | `workspace.test.tsx` | resume + token mint, readiness gating, Verify states, Reset/End confirmation and outcomes, terminal reconnect rules, idle warning |
@@ -345,7 +365,7 @@ release smoke against the stack `make beta-validate` already brings up:
    the smoke against an OIDC-configured stack, or — as the pre-merge validation
    did — have the *test browser only* answer `GET /auth/session` with that
    development identity. Nothing else is intercepted.
-2. Dashboard shows *How a lab works* and *Next up*. Open **Labs**, search `files`.
+2. Dashboard shows *How a lab works* and the *DevOps Engineer path* panel with its next lab. Open **Labs**, search `files`.
 3. Open LINUX-001, **Launch lab**. Provisioning shows, then *Terminal: Connected*.
 4. **Reload the page.** The workspace comes back connected (a new token is minted).
 5. Press **Verify** before doing anything: *Not complete yet*, checks marked ✗.
@@ -370,7 +390,8 @@ release smoke against the stack `make beta-validate` already brings up:
 - **No real-browser E2E in CI** (see above).
 - **Hint reveals are per page view.** Revealed hints are recorded server-side,
   but the panel starts collapsed again after a reload.
-- **Next up is a fixed rule**, not personalised guidance.
+- **The next lab is a fixed rule**, not personalised guidance (see
+  [docs/learning-paths.md](learning-paths.md#what-should-i-do-next--the-recommendation-rule)).
 - **An API outage is slow to show.** When the API is unreachable, the web proxy
   answers only after its upstream timeout (about a minute in the pre-merge run),
   so a page shows *Loading…* until then, and then the error with Try again.

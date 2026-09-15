@@ -9,6 +9,9 @@ import {
   InMemorySessionStore,
   PostgresSessionStore,
   LabRegistry,
+  LearningPathCatalog,
+  labSourceFromRegistry,
+  learningPathsDirectory,
   SessionManager,
   SessionReaper,
 } from '@jumptotech/lab-orchestrator';
@@ -104,6 +107,23 @@ async function main(): Promise<void> {
       'config.loaded',
       { reason: 'no_labs_loaded' },
       `no labs loaded from ${config.labsDir} — check LABS_DIR`,
+    );
+  }
+
+  /*
+   * Learning paths (V1 EPIC-02), read from labs/learning-paths beside the labs
+   * they arrange and validated against the catalog just loaded. A refused path
+   * is logged and reported on /health; it never stops the labs being served.
+   */
+  const learningPaths = await LearningPathCatalog.load(
+    learningPathsDirectory(config.labsDir),
+    labSourceFromRegistry(registry),
+  );
+  if (learningPaths.loadErrors.length > 0) {
+    logger.warn(
+      'config.loaded',
+      { count: learningPaths.loadErrors.length, reason: 'learning_path_definition_problems' },
+      `learning path problems: ${learningPaths.loadErrors.join('; ')}`,
     );
   }
 
@@ -353,6 +373,7 @@ async function main(): Promise<void> {
     ansible,
     workspace,
     config,
+    learningPaths,
     identityResolver,
     browserAuth: { users, authSessions, client: browserClient, idTokenVerifier },
     observability: {

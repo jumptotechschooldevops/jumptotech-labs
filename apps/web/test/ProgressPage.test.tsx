@@ -11,7 +11,7 @@
  *   curl -s localhost:4000/api/me/attempts | jq '.data' > test/fixtures/me-attempts.json
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { ApiRequestError } from '../src/lib/api';
 import { ProgressPage } from '../src/pages/ProgressPage';
 import type { AttemptSummary, ProgressSnapshot } from '../src/lib/types';
@@ -61,8 +61,11 @@ describe('ProgressPage', () => {
     expect(screen.getByRole('progressbar', { name: /Linux: 1 of 1/ })).toBeTruthy();
     expect(screen.getByRole('progressbar', { name: /Terraform: 0 of 1/ })).toBeTruthy();
 
+    // Scoped to the track cards: the learning path's Skills section has stage
+    // headings with some of the same names.
+    const byTrack = screen.getByRole('heading', { name: 'By track' }).closest('section')!;
     for (const heading of ['Kubernetes', 'Linux', 'Terraform']) {
-      expect(screen.getByRole('heading', { name: heading }), heading).toBeTruthy();
+      expect(within(byTrack).getByRole('heading', { name: heading }), heading).toBeTruthy();
     }
   });
 

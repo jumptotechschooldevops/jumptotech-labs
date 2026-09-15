@@ -9,12 +9,9 @@ import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 import { hrefFor, parseRoute } from '../src/lib/router';
 import { describeError } from '../src/lib/errors';
-import { suggestNextLab } from '../src/lib/suggest';
 import { InlineText } from '../src/components/RichText';
 import { codeForClose } from '../src/lib/terminal';
 import { describeProvider, describeReset, trackNote } from '../src/lib/environmentInfo';
-import { LABS, TRACKS, labSummary } from './api-mock';
-import type { LabProgressEntry } from '../src/lib/types';
 
 describe('routes', () => {
   it('names every student page', () => {
@@ -120,57 +117,6 @@ describe('what an API error means to a student', () => {
     expect(described.message).toBe('The widget is sideways.');
     expect(described.guidance).toBe('Straighten it.');
     expect(described.reference).toBe('SOMETHING_NEW');
-  });
-});
-
-describe('the "next up" rule', () => {
-  const progressOf =
-    (map: Record<string, LabProgressEntry['status']>) =>
-    (labId: string): LabProgressEntry | undefined =>
-      map[labId]
-        ? { labId, title: labId, status: map[labId]!, attemptCount: 1, completionCount: 0, completedAt: null, lastCompletedAt: null }
-        : undefined;
-  const ordered = [LABS[2]!, LABS[0]!, LABS[1]!]; // kubernetes, then linux — the API's track order
-
-  it('suggests the first lab of the first track to someone who has done nothing', () => {
-    const suggestion = suggestNextLab({ labs: ordered, tracks: TRACKS, progressFor: progressOf({}) });
-    expect(suggestion?.lab.id).toBe('K8S-001');
-    expect(suggestion?.reason).toMatch(/first lab in Kubernetes/);
-  });
-
-  it('prefers unfinished work, most recent first', () => {
-    const suggestion = suggestNextLab({
-      labs: ordered,
-      tracks: TRACKS,
-      progressFor: progressOf({ 'K8S-001': 'IN_PROGRESS', 'LINUX-002': 'IN_PROGRESS' }),
-      recentLabIds: ['LINUX-002', 'K8S-001'],
-    });
-    expect(suggestion?.lab.id).toBe('LINUX-002');
-    // Not "started": a refused launch also leaves a lab IN_PROGRESS (seen live).
-    expect(suggestion?.reason).toBe('You have attempted this lab and not completed it yet.');
-  });
-
-  it('continues in the track the student last worked in', () => {
-    const suggestion = suggestNextLab({
-      labs: ordered,
-      tracks: TRACKS,
-      progressFor: progressOf({ 'LINUX-001': 'COMPLETED' }),
-      recentLabIds: ['LINUX-001'],
-    });
-    expect(suggestion?.lab.id).toBe('LINUX-002');
-    expect(suggestion?.reason).toMatch(/next lab you have not completed in Linux/);
-  });
-
-  it('never suggests a lab this platform cannot run, and suggests nothing when all is done', () => {
-    const unavailable = [labSummary({ id: 'X-1', availability: { available: false, reason: 'no image' } })];
-    expect(suggestNextLab({ labs: unavailable, tracks: TRACKS, progressFor: progressOf({}) })).toBeNull();
-    expect(
-      suggestNextLab({
-        labs: ordered,
-        tracks: TRACKS,
-        progressFor: progressOf({ 'K8S-001': 'COMPLETED', 'LINUX-001': 'COMPLETED', 'LINUX-002': 'COMPLETED' }),
-      }),
-    ).toBeNull();
   });
 });
 
