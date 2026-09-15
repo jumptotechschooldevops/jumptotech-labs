@@ -2,7 +2,7 @@
  * `unprivileged_shell` — removing the student's route to root.
  *
  * The vulnerability this closes, demonstrated end to end before the capability
- * existed: the verifier reads state back by running `/usr/bin/stat` and
+ * existed: the verifier reads state back by running `/bin/stat` and
  * `/bin/cat` *inside the student's own container*. The Linux sandbox grants
  * passwordless `sudo`, so a student could replace those two binaries and make
  * an untouched home directory report a finished lab. CS-001 went from 0/11 to

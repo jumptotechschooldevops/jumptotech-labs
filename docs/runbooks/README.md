@@ -46,7 +46,7 @@ diagnosis, and the alerts that look alike are known in advance.
 | [RB-10 Provisioning slow](RB-10-provisioning-slow.md) | `ProvisioningSlow` |
 | [RB-11 API errors and latency](RB-11-api-errors-and-latency.md) | `ApiErrorRateHigh`, `ApiLatencyHigh`, `EventLoopLagHigh` |
 | [RB-12 Terminal](RB-12-terminal.md) | `TerminalConnectionFailures`, `TerminalPtyDrift` |
-| [RB-13 Verification](RB-13-verification.md) | `VerificationErrorRate` |
+| [RB-13 Verification](RB-13-verification.md) | `VerificationErrorRate`, `VerificationSlow` |
 | [RB-14 Auth](RB-14-auth.md) | `AuthFailureSpike`, `JwksFetchFailing`, `AuthRejectionsAbnormal`, `OidcSignInFailures` |
 | [RB-15 TLS edge](RB-15-tls-edge.md) | `TlsCertificateRenewalDue`, `TlsCertificateExpiresWithin7Days`, `TlsEdgeUnhealthy`, `TlsHttpRedirectBroken`, `TlsEdgeCheckNotRunning` |
 | [RB-16 Backups](RB-16-backups.md) | `BackupStale`, `BackupMissedTwice`, `BackupLastRunFailed`, `BackupNeverSucceeded`, `BackupStatusUnreadable`, `BackupVerifyFailed` |
@@ -82,6 +82,12 @@ shape above:
   the daily health check, the operator contract (23 questions and where each is
   answered), whether students should stop launching labs, a student who cannot
   start a lab, safe restarts, and what is still DECISION REQUIRED.
+- [Five-student private-beta validation](five-student-beta-validation.md)
+  — BETA-P0-019, **the release gate**: `make beta-validate` drives five
+  synthetic students at once on the real runtime (capacity, isolation,
+  terminals, verifier, reset, soak, api restart, cleanup, observability).
+  Prerequisites, PASS criteria, what a FAIL means for a release, cleanup after
+  an interruption, exclusions, and the defects its first runs found.
 - [PostgreSQL backup, restore and disaster recovery](postgres-backup-restore.md)
   — BETA-P0-013: manual and scheduled backups, retention, verification, restore
   into a disposable database, production replacement and rollback, and recovery

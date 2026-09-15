@@ -99,8 +99,17 @@ import {
 const MAX_LIST_DEPTH = 6;
 const MAX_LIST_ENTRIES = 200;
 
-const INTERNAL_EXEC_ALLOWLIST = new Set([
-  '/usr/bin/stat',
+/*
+ * Every path here must exist in EVERY shipped sandbox image — Debian (linux,
+ * terraform) and Alpine/BusyBox (ansible, cicd) alike.
+ * `sandbox-image-binaries-integration.test.ts` checks that against the real
+ * images. BETA-P0-019: this named `/usr/bin/stat`, which Alpine does not have
+ * (BusyBox installs it at `/bin/stat`), so every file read on an Ansible or
+ * CI/CD sandbox returned "not found" and no file check in either track could
+ * pass. `/bin/stat` exists on both, and BusyBox prints the same `-c` format.
+ */
+export const INTERNAL_EXEC_ALLOWLIST: ReadonlySet<string> = new Set([
+  '/bin/stat',
   '/bin/cat',
   '/usr/bin/tee',
   '/bin/mkdir',
@@ -502,7 +511,17 @@ export class ContainerLabProvider implements LabProvider {
       };
     }
 
-    if (context.lab.setup.files.length > 0 || context.lab.setup.seed_scripts.length > 0) {
+    // `workspace_dir` counts. `loadSetupFiles` expands it into ordinary starter
+    // files, but this gate predates it and only looked at `files` and
+    // `seed_scripts` — so a lab that ships only a workspace (every Ansible and
+    // CI/CD lab) skipped seeding entirely and started with an empty project.
+    // Found by BETA-P0-019's five-student run: ANSIBLE-001's ansible.cfg, and
+    // with it `inventory = inventory.ini`, never reached the control node.
+    if (
+      context.lab.setup.files.length > 0 ||
+      context.lab.setup.workspace_dir !== undefined ||
+      context.lab.setup.seed_scripts.length > 0
+    ) {
       const setupStep = await this.#runStep(steps, 'lab-initial-state', 'Lab initial state ready', async () =>
         this.#applySetup(context),
       );
@@ -1248,7 +1267,7 @@ export class ContainerLabProvider implements LabProvider {
     const user = context.policy.sandbox.user;
 
     const stat = await this.#runtime.exec(ref, {
-      argv: ['/usr/bin/stat', '-c', '%F|%a|%U|%G|%s', '--', absolute],
+      argv: ['/bin/stat', '-c', '%F|%a|%U|%G|%s', '--', absolute],
       user,
       workdir: this.#home,
       timeoutMs: 10_000,
@@ -1354,7 +1373,7 @@ export class ContainerLabProvider implements LabProvider {
    * `unprivileged_shell`.
    *
    * Why this matters more than it looks: the verifier reads state back by
-   * running binaries *inside this container* — `/usr/bin/stat` and `/bin/cat`
+   * running binaries *inside this container* — `/bin/stat` and `/bin/cat`
    * for every file check, and an allow-listed inspection command for the rest.
    * A student who can become root can replace those binaries, and a replaced
    * `cat` can make an empty home directory report whatever the lab was looking

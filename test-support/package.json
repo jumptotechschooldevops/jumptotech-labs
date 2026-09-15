@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared test infrastructure: the host-execution guard and run-scoped resource naming (PLATFORM-006).",
+  "description": "Shared test infrastructure: the host-execution guard and run-scoped resource naming (PLATFORM-006), and the private-beta validation contract (BETA-P0-019).",
   "exports": {
     "./host-execution": "./host-execution.ts",
     "./run-id": "./test-run-id.ts",
     "./setup": "./vitest.setup.ts",
     "./guard-contract": "./guard-contract.ts",
-    "./tls-pki": "./tls-pki.ts"
+    "./tls-pki": "./tls-pki.ts",
+    "./beta-contract": "./beta-validation-contract.ts"
   },
   "devDependencies": {
     "vitest": "^3.2.6"

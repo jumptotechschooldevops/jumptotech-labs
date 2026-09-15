@@ -92,6 +92,7 @@ export {
 } from './providers/registry.js';
 export {
   ContainerLabProvider,
+  INTERNAL_EXEC_ALLOWLIST,
   type ContainerProviderOptions,
 } from './providers/container/sandbox-provider.js';
 export { BrokerRuntime, type BrokerRuntimeOptions } from './providers/container/broker-runtime.js';

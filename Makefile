@@ -15,7 +15,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge typecheck check reset clean
+.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -151,6 +151,26 @@ db-backup-verify: ## Check a backup's checksum and readability, changing nothing
 
 test-db-backup: ## Prove the backup/restore scripts' refusals and failure paths (no daemon needed)
 	@bash scripts/test-db-backup-restore.sh
+
+# --- private beta release gate (BETA-P0-019) ----------------------------------
+#
+# docs/runbooks/five-student-beta-validation.md. Five synthetic students at once
+# against the stack this checkout is running: real sessions, real PTYs, real
+# verifier, capacity, isolation, reset, soak, api restart, cleanup. Not CI: it
+# needs the running stack, kind and the observability profile. Reads the ports,
+# owner and cluster from .env; ARGS passes extra flags (--soak-seconds 60).
+beta-validate: ## Five concurrent synthetic students against the running local stack — private-beta release gate (~30 min)
+	@set -a; [ -f ./.env ] && . ./.env; set +a; \
+		npm run --silent beta:validate -- \
+			--api "http://127.0.0.1:$${API_PORT:-4000}" \
+			--terminal "ws://127.0.0.1:$${TERMINAL_PORT:-4001}" \
+			--origin "http://127.0.0.1:$${WEB_PORT:-3000}" \
+			--metrics "http://127.0.0.1:$${API_OBSERVABILITY_PORT:-9400}" \
+			--terminal-metrics "http://127.0.0.1:$${TERMINAL_OBSERVABILITY_PORT:-9401}" \
+			--compose-project "$${COMPOSE_PROJECT_NAME:-jumptotech-labs}" \
+			--runtime-owner "$${RUNTIME_OWNER_ID:?set RUNTIME_OWNER_ID in .env}" \
+			--kubeconfig "$(CURDIR)/infrastructure/kind/generated/kubeconfig-host-$${LAB_CLUSTER_NAME:-jumptotech-labs}.yaml" \
+			$(ARGS)
 
 # --- public TLS edge (BETA-P0-017) --------------------------------------------
 #

@@ -1,6 +1,7 @@
 # RB-13 — Verification requests failing
 
-**Alert:** `VerificationErrorRate` (warning, >5% of checks error)
+**Alerts:** `VerificationErrorRate` (warning, >5% of checks error),
+`VerificationSlow` (warning, one provider's check p95 > 10s for 10 minutes)
 **Blast radius:** students cannot get their work marked. Their environment and
 their progress are intact.
 
@@ -82,3 +83,19 @@ assessment.
 
 If a lab's requirements changed, students who passed before keep their
 completion — it is recorded on the attempt, not recomputed.
+
+## Checks are slow — `VerificationSlow`
+
+A check reads live state inside the sandbox, so it is never instant. With five
+concurrent students (BETA-P0-019) it measured p50 1.05s, p95 2.2s, max 4s. That is
+why Check Solution is left out of `ApiLatencyHigh` (RB-11) and watched here
+instead, per provider:
+
+```promql
+histogram_quantile(0.95, sum by (le, provider) (rate(jtt_verification_duration_seconds_bucket[10m])))
+```
+
+- **One provider** → that provider's runtime. `kubernetes`: the API server (RB-09).
+  `ansible`: the managed nodes' SSH. Container providers: sandboxd (RB-06).
+- **Every provider** → the API process or host pressure (RB-11, RB-19).
+- A slow check is not a failed one. Students still get an answer; they wait for it.

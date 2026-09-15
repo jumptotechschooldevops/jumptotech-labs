@@ -10,7 +10,7 @@ alert runbooks (RB-01…RB-19) go deeper on one alert each.
 | **Public exposure** | 443 (HTTPS) and 80 (redirect, ACME) only — BETA-P0-012/017 |
 | **Operator access** | SSH to the host; Grafana through a tunnel to `127.0.0.1:3001` |
 | **Alert delivery** | **DECISION REQUIRED** (§8). Until decided, alerts are seen only in Grafana and `amtool` |
-| **Proven** | Rules, alerts, dashboard queries and exposure are tested in CI (`npm test`, `scripts/check-observability.sh`, `make secrets-check`). The production overlay renders with `docker compose config`. |
+| **Proven** | Rules, alerts, dashboard queries and exposure are tested in CI (`npm test`, `scripts/check-observability.sh`, `make secrets-check`). The production overlay renders with `docker compose config`. Five concurrent students on the real runtime pass the release gate `make beta-validate` ([five-student-beta-validation.md](five-student-beta-validation.md), BETA-P0-019) |
 | **Not proven** | A production host. None exists yet. Every command below is the command that host runs, and none has been run on one. |
 
 ---
