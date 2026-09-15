@@ -204,6 +204,10 @@ describe('a stage page', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Kubernetes' })).toBeTruthy();
     await waitFor(() => expect(screen.getByText(/You can still open any lab here/)).toBeTruthy());
     expect(within(panel('Before you start')).getByText(/finish first \(not yet\)/)).toBeTruthy();
+    // A coming-soon prerequisite blocks nothing, and is never shown as done.
+    const before = panel('Before you start');
+    expect(within(before).getByText(/recommended \(coming soon\)/)).toBeTruthy();
+    expect(within(before).queryByText(/\(done\)/)).toBeNull();
     // The lab is still one click away.
     expect(screen.getByRole('link', { name: 'K8S-001 Create Your First Pod' }).getAttribute('href')).toBe('#/labs/K8S-001');
   });

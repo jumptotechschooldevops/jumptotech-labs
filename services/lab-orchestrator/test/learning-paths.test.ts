@@ -351,6 +351,10 @@ describe('LearningPathCatalog', () => {
 
     expect(catalog.list().map((p) => p.id)).toEqual(['demo-path']);
     expect(catalog.get('broken-path')).toBeUndefined();
+    // Refused is not the same as unknown: callers must not say "not found".
+    expect(catalog.isRefused('broken-path')).toBe(true);
+    expect(catalog.isRefused('demo-path')).toBe(false);
+    expect(catalog.isRefused('never-defined')).toBe(false);
     expect(catalog.loadErrors).toHaveLength(1);
     expect(catalog.loadErrors[0]).toMatch(/^LEARNING_PATH_INVALID\n\nbroken-path\.yaml:\nstage 'basics': lab ZZ-999/);
   });

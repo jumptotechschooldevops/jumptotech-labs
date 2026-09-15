@@ -266,7 +266,8 @@ The path must place every lab after its prerequisites.
 
 **Stage prerequisites** are declared in the path:
 
-- `recommended` — advice shown on the stage page (*recommended*, done / not yet).
+- `recommended` — advice shown on the stage page (*recommended*, with *done*, *not yet*,
+  or *coming soon* for a prerequisite stage that has no labs — never *done*).
 - `required` — the stage shows **Earlier stage first** until the earlier stage's
   core labs are verified, and the next-lab rule will not *start* the stage early.
 
@@ -298,9 +299,13 @@ carries its reason in words. Implemented in `computeLearningPathProgress`
    not all verified, in this order:
    1. stages the student has already started (any lab attempted or verified), in
       path order;
-   2. stages whose required prerequisites are satisfied and that come after the
-      last stage with a verified lab;
-   3. every other stage whose required prerequisites are satisfied.
+   2. the first stage after the last stage with a verified lab — or, if that stage
+      waits on an unsatisfied *required* stage, that earlier stage (*"Linux comes
+      before Containers & Docker, the next stage…"*);
+   3. every other stage whose required prerequisites are satisfied, in path order
+      — reached only when nothing above can be started on this deployment
+      (*"…the earliest unfinished stage … that can be started on this platform
+      right now"*).
 3. **Pick a lab in that stage**, skipping labs whose provider cannot run on this
    deployment:
    - an attempted core lab (*CONTINUE_ATTEMPT*); else
@@ -319,11 +324,15 @@ Examples, from the real path (and pinned by tests):
 |---|---|
 | New | CS-001 — *Start here. Foundations is the first stage of the DevOps Engineer path.* |
 | Verified LINUX-001…007, nothing else | LINUX-008 — *Next in Linux. Finish the Linux stage before starting Networking.* |
+| Verified all of Networking, nothing else | LINUX-001 — *Linux comes before Containers & Docker, the next stage of the DevOps Engineer path.* |
+| Verified all of Networking and LINUX-001 | LINUX-002 — *Next in Linux.* (no "before starting Networking": it is already done) |
 | Has LINUX-001 running | LINUX-001 — *You have a lab running. Continue it, or end it, before starting another…* |
 | Every lab verified | *You have completed every lab currently available…* (gaps stay Coming soon) |
 
 Rule 2.1 is why a student who skipped Foundations and went straight to Linux is
-not sent back to CS-001: they continue where they are.
+not sent back to CS-001: they continue where they are. Rule 2.2 is why a student
+who skipped ahead is not walked past a stage that a later stage requires. The
+*"Finish X before starting Y"* sentence is only added when Y has not been started.
 
 **Per-stage next lab.** Each stage also reports `nextLabId` — the lab that stage
 would continue with (attempted core, first unverified core, then extra practice),
@@ -354,7 +363,10 @@ recommended order (`labId`, `title`, `summary`, `track`, `trackTitle`,
 `availability: { available }`).
 
 Errors: `400 INVALID_LEARNING_PATH_ID` (the id is not echoed), `404
-LEARNING_PATH_NOT_FOUND`.
+LEARNING_PATH_NOT_FOUND` for an id no file defines, and `503
+LEARNING_PATH_UNAVAILABLE` for a path that is defined but was refused at startup
+(the reason is on `/health`) — so a broken lab definition is never presented to
+students as a wrong address.
 
 ### `GET /api/me/learning-paths/:pathId`
 
@@ -376,8 +388,9 @@ LEARNING_PATH_NOT_FOUND`.
                       "stageId": "linux", "reason": "Next in Linux. Finish the Linux stage before starting Networking." } }
 ```
 
-Errors: `400` / `404` as above; `503 PROGRESS_UNAVAILABLE` when stored progress
-cannot be read — never an empty, all-zero payload.
+Errors: `400` / `404` / `503 LEARNING_PATH_UNAVAILABLE` as above; `503
+PROGRESS_UNAVAILABLE` when stored progress cannot be read — never an empty,
+all-zero payload.
 
 `GET /health` additionally reports `learningPathsLoaded` and
 `learningPathLoadErrors`.

@@ -538,13 +538,26 @@ export interface LearningPathSource {
  */
 export class LearningPathCatalog {
   readonly #paths: Map<string, ResolvedLearningPath>;
+  readonly #refused: Set<string>;
 
   constructor(
     paths: readonly ResolvedLearningPath[],
     readonly skills: ReadonlyMap<string, SkillDefinition>,
     readonly loadErrors: readonly string[],
+    /** Ids of paths that exist on disk but were refused — unavailable, not unknown. */
+    refused: readonly string[] = [],
   ) {
     this.#paths = new Map(paths.map((p) => [p.id, p]));
+    this.#refused = new Set(refused.filter((id) => !this.#paths.has(id)));
+  }
+
+  /**
+   * True for a path that is defined but could not be served — for example
+   * because a lab it references failed to load. Callers report it as
+   * unavailable, never as "not found", which would blame the student's address.
+   */
+  isRefused(pathIdValue: string): boolean {
+    return this.#refused.has(pathIdValue);
   }
 
   static empty(): LearningPathCatalog {
@@ -570,11 +583,12 @@ export class LearningPathCatalog {
   ): LearningPathCatalog {
     const loadErrors: string[] = [];
     let skills: Map<string, SkillDefinition>;
+    const refused = input.paths.flatMap((file) => (file.expectedId ? [file.expectedId] : []));
     try {
       skills = parseSkillCatalog(input.skills.text, input.skills.source);
     } catch (cause) {
       loadErrors.push(describe(cause, input.skills.source));
-      return new LearningPathCatalog([], new Map(), loadErrors);
+      return new LearningPathCatalog([], new Map(), loadErrors, refused);
     }
 
     const resolved: ResolvedLearningPath[] = [];
@@ -587,6 +601,7 @@ export class LearningPathCatalog {
         loadErrors.push(describe(cause, file.source));
         continue;
       }
+      refused.push(def.id);
       const issues = validateLearningPath(def, skills, labs);
       if (file.expectedId !== undefined && file.expectedId !== def.id) {
         issues.unshift(`id '${def.id}' does not match the file name (expected '${file.expectedId}')`);
@@ -599,7 +614,7 @@ export class LearningPathCatalog {
       seen.add(def.id);
       resolved.push(resolveLearningPath(def, skills, labs));
     }
-    return new LearningPathCatalog(resolved, skills, loadErrors);
+    return new LearningPathCatalog(resolved, skills, loadErrors, refused);
   }
 
   /**
@@ -619,7 +634,12 @@ export class LearningPathCatalog {
     }
 
     if (!names.includes(SKILLS_FILENAME)) {
-      return new LearningPathCatalog([], new Map(), [`${path.join(directory, SKILLS_FILENAME)} is missing`]);
+      return new LearningPathCatalog(
+        [],
+        new Map(),
+        [`${path.join(directory, SKILLS_FILENAME)} is missing`],
+        names.map((name) => name.replace(/\.ya?ml$/, '')),
+      );
     }
 
     const read = async (name: string): Promise<LearningPathSource> => {

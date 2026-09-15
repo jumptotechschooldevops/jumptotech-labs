@@ -355,7 +355,10 @@ export function learningPathDetail(): LearningPathDetail {
         why: 'Kubernetes keeps applications running in the state you asked for.',
         objectives: ['Run a Pod'],
         comingSoon: 'There are no labs yet for NetworkPolicy.',
-        prerequisites: [{ stageId: 'linux', title: 'Linux', kind: 'required' }],
+        prerequisites: [
+          { stageId: 'linux', title: 'Linux', kind: 'required' },
+          { stageId: 'git', title: 'Git & Software Delivery', kind: 'recommended' },
+        ],
         estimatedMinutes: { core: 30, all: 30 },
         skills: [
           { id: 'kubernetes.pods', title: 'Pods', description: 'The smallest thing Kubernetes runs.', labIds: ['K8S-001'] },

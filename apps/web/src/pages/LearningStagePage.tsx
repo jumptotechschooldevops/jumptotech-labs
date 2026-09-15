@@ -223,6 +223,8 @@ export function LearningStagePage({ pathId, stageId }: { pathId: string; stageId
             ) : (
               <ul className="plain-list">
                 {stage.prerequisites.map((prerequisite) => {
+                  // A coming-soon stage never blocks anything, but it is not "done" either.
+                  const comingSoon = path.stages.find((s) => s.id === prerequisite.stageId)?.labs.length === 0;
                   const met = prerequisiteMet(prerequisite.stageId);
                   return (
                     <li key={prerequisite.stageId}>
@@ -233,7 +235,7 @@ export function LearningStagePage({ pathId, stageId }: { pathId: string; stageId
                         {prerequisite.title}
                       </a>{' '}
                       — {prerequisite.kind === 'required' ? 'finish first' : 'recommended'}
-                      {met === undefined ? '' : met ? ' (done)' : ' (not yet)'}
+                      {comingSoon ? ' (coming soon)' : met === undefined ? '' : met ? ' (done)' : ' (not yet)'}
                     </li>
                   );
                 })}

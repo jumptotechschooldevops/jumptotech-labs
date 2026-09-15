@@ -52,6 +52,15 @@ export function findLearningPath(
     return null;
   }
   const found = catalog.get(id);
+  if (!found && catalog.isRefused(id)) {
+    // Defined, but refused at startup (see /health learningPathLoadErrors).
+    sendError(res, 503, {
+      code: 'LEARNING_PATH_UNAVAILABLE',
+      message: 'This learning path is unavailable right now.',
+      remediation: 'Try again later. Every lab is still available from the lab catalog.',
+    });
+    return null;
+  }
   if (!found) {
     sendError(res, 404, {
       code: 'LEARNING_PATH_NOT_FOUND',

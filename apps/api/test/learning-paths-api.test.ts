@@ -11,6 +11,7 @@
  * "Verify passed", and nothing else.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
@@ -58,7 +59,13 @@ beforeAll(async () => {
   expect(learningPaths.loadErrors).toEqual([]);
 });
 
-function harness(options: { repository?: InMemoryProgressRepository | BrokenProgressRepository; withPaths?: boolean } = {}) {
+function harness(
+  options: {
+    repository?: InMemoryProgressRepository | BrokenProgressRepository;
+    withPaths?: boolean;
+    catalog?: LearningPathCatalog;
+  } = {},
+) {
   const config = loadConfig({
     TERMINAL_SESSION_SECRET: SECRET,
     INTERNAL_SERVICE_SECRET: SECRET,
@@ -100,7 +107,7 @@ function harness(options: { repository?: InMemoryProgressRepository | BrokenProg
       store: 'memory',
       durable: false,
     },
-    ...(options.withPaths === false ? {} : { learningPaths }),
+    ...(options.withPaths === false ? {} : { learningPaths: options.catalog ?? learningPaths }),
   });
   return { app, sessions, runtime };
 }
@@ -208,6 +215,35 @@ describe('GET /api/learning-paths/:pathId', () => {
     const unknown = await request(app).get('/api/learning-paths/site-reliability').set(as(ALICE));
     expect(unknown.status).toBe(404);
     expect(unknown.body.error.code).toBe('LEARNING_PATH_NOT_FOUND');
+  });
+
+  it('reports a path that failed to load as unavailable, not as a wrong address', async () => {
+    // A lab the path references is missing from the catalog — e.g. its lab.yaml
+    // stopped validating. The path is refused; students must not be told the
+    // Learning Path link points nowhere.
+    const real = labSourceFromRegistry(registry);
+    const withoutLinux001 = { lab: (id: string) => (id === 'LINUX-001' ? undefined : real.lab(id)) };
+    const read = (name: string) => ({
+      text: readFileSync(path.join(learningPathsDirectory(LABS), name), 'utf8'),
+      source: name,
+      expectedId: name.replace(/\.yaml$/, ''),
+    });
+    const broken = LearningPathCatalog.build(
+      { skills: read('skills.yaml'), paths: [read('devops-engineer.yaml')] },
+      withoutLinux001,
+    );
+    expect(broken.loadErrors.join('\n')).toContain('lab LINUX-001 does not exist in the lab catalog');
+
+    const { app } = harness({ catalog: broken });
+    for (const url of ['/api/learning-paths/devops-engineer', '/api/me/learning-paths/devops-engineer']) {
+      const res = await request(app).get(url).set(as(ALICE));
+      expect(res.status, url).toBe(503);
+      expect(res.body.error.code).toBe('LEARNING_PATH_UNAVAILABLE');
+      expect(JSON.stringify(res.body)).not.toMatch(/LINUX-001|lab\.yaml|\/app\/labs/);
+    }
+    // A path that was never defined is still simply not found.
+    expect((await request(app).get('/api/learning-paths/site-reliability').set(as(ALICE))).status).toBe(404);
+    expect((await request(app).get('/health')).body.data.learningPathLoadErrors).toHaveLength(1);
   });
 
   it('requires a valid credential, like every other browser route', async () => {

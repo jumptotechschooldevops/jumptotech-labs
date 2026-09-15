@@ -278,7 +278,12 @@ describe('learning path progress', () => {
 
   it('skips labs this platform cannot start, and says so when nothing is left', () => {
     const blocked = progressOf({}, { unavailable: ['AA-001', 'AA-002', 'AA-003'] });
-    expect(blocked.recommendation).toMatchObject({ kind: 'START_STAGE', labId: 'CC-002' });
+    expect(blocked.recommendation).toMatchObject({
+      kind: 'START_STAGE',
+      labId: 'CC-002',
+      // Not "the next stage": Basics is, and it cannot be started here.
+      reason: 'Clusters is the earliest unfinished stage of the Demo path that can be started on this platform right now.',
+    });
 
     const nothing = progressOf({}, { unavailable: ALL });
     expect(nothing.recommendation).toEqual({
@@ -332,6 +337,41 @@ describe('the DevOps Engineer path, for real students', () => {
       labId: 'LINUX-008',
       stageId: 'linux',
       reason: 'Next in Linux. Finish the Linux stage before starting Networking.',
+    });
+  });
+
+  it('never tells a student to finish a stage "before starting" one they already finished', () => {
+    const networking = devops.stage('networking')!.labs.map((lab) => lab.labId);
+    const progress = progressOf(completed(...networking, 'LINUX-001'), { path: devops });
+
+    expect(progress.recommendation).toEqual({
+      kind: 'NEXT_IN_STAGE',
+      labId: 'LINUX-002',
+      stageId: 'linux',
+      reason: 'Next in Linux.',
+    });
+  });
+
+  it('sends a student who skipped ahead back to the required stage, not past it', () => {
+    // Networking verified, nothing else. Containers & Docker is the next stage and
+    // requires Linux; CI/CD (which requires nothing) must not be offered instead.
+    const networking = devops.stage('networking')!.labs.map((lab) => lab.labId);
+    const progress = progressOf(completed(...networking), { path: devops });
+
+    expect(progress.currentStageId).toBe('linux');
+    expect(progress.recommendation).toEqual({
+      kind: 'START_STAGE',
+      labId: 'LINUX-001',
+      stageId: 'linux',
+      reason: 'Linux comes before Containers & Docker, the next stage of the DevOps Engineer path.',
+    });
+
+    // Once Linux's core labs are verified, the path resumes at Containers & Docker.
+    const linuxCore = devops.stage('linux')!.labs.filter((lab) => !lab.optional).map((lab) => lab.labId);
+    expect(progressOf(completed(...networking, ...linuxCore), { path: devops }).recommendation).toMatchObject({
+      kind: 'START_STAGE',
+      labId: 'DOCKER-001',
+      reason: 'Containers & Docker is the next stage of the DevOps Engineer path.',
     });
   });
 

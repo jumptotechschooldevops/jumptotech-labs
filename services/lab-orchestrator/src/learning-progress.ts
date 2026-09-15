@@ -31,9 +31,10 @@
  *   1. A running lab comes first: one lab at a time.
  *   2. Stages whose core labs are not all verified are considered in this order:
  *      a. stages the student has already started, in path order;
- *      b. stages whose required prerequisites are satisfied and that come after
- *         the last stage with a verified lab;
- *      c. every other stage whose required prerequisites are satisfied.
+ *      b. the first stage after the last stage with a verified lab — or, when
+ *         that stage waits on an unsatisfied required stage, that earlier stage;
+ *      c. every other stage whose required prerequisites are satisfied, in path
+ *         order (reached only when nothing above can be started here).
  *      In the first of those with something startable: an attempted core lab,
  *      else the first unverified core lab — or, if that lab's own prerequisite
  *      is not verified yet, that prerequisite.
@@ -211,12 +212,31 @@ export function computeLearningPathProgress(input: LearningProgressInput): Learn
     -1,
   );
   const eligible = incomplete.filter((stage) => stageOf(stage).prerequisitesMet);
+
+  /*
+   * The stage a student meets next in path order, after their last verified
+   * stage. If it waits on an unsatisfied required stage, that stage comes first
+   * — otherwise a student who skipped ahead would be walked through every later
+   * stage that merely does not require the one they skipped.
+   */
+  const upNext = ((): { stage: ResolvedStage; before?: ResolvedStage } | null => {
+    const next = incomplete.find((stage) => path.stages.indexOf(stage) > lastVerified);
+    if (!next) return null;
+    let current = next;
+    const seen = new Set<string>();
+    while (!stageOf(current).prerequisitesMet && !seen.has(current.id)) {
+      seen.add(current.id);
+      const blocking = stageOf(current).prerequisites.find((p) => p.kind === 'required' && !p.met);
+      const prior = blocking ? path.stage(blocking.stageId) : undefined;
+      if (!prior) break;
+      current = prior;
+    }
+    if (!stageOf(current).prerequisitesMet) return null;
+    return current === next ? { stage: next } : { stage: current, before: next };
+  })();
+
   const order = [
-    ...new Set([
-      ...incomplete.filter(started),
-      ...eligible.filter((stage) => path.stages.indexOf(stage) > lastVerified),
-      ...eligible,
-    ]),
+    ...new Set([...incomplete.filter(started), ...(upNext ? [upNext.stage] : []), ...eligible]),
   ];
 
   const nextStageAfter = (stage: ResolvedStage) =>
@@ -244,11 +264,13 @@ export function computeLearningPathProgress(input: LearningProgressInput): Learn
         reason: 'You started this lab and have not passed Verify yet.',
       };
     } else if (started(stage)) {
+      // "Before starting Y" only when Y really has not been started or finished.
       const following = nextStageAfter(stage);
+      const fresh = following !== undefined && !started(following) && stageOf(following).status !== 'COMPLETED';
       recommendation = {
         kind: 'NEXT_IN_STAGE',
         ...base,
-        reason: following
+        reason: fresh
           ? `Next in ${stage.title}. Finish the ${stage.title} stage before starting ${following.title}.`
           : `Next in ${stage.title}.`,
       };
@@ -259,7 +281,11 @@ export function computeLearningPathProgress(input: LearningProgressInput): Learn
         reason:
           !anyActivity && stage === withLabs[0]
             ? `Start here. ${stage.title} is the first stage of the ${path.title} path.`
-            : `${stage.title} is the next stage of the ${path.title} path.`,
+            : upNext?.stage === stage
+              ? upNext.before
+                ? `${stage.title} comes before ${upNext.before.title}, the next stage of the ${path.title} path.`
+                : `${stage.title} is the next stage of the ${path.title} path.`
+              : `${stage.title} is the earliest unfinished stage of the ${path.title} path that can be started on this platform right now.`,
       };
     }
     break;
