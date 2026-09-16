@@ -1,0 +1,70 @@
+# Initial state for NET-025 — deliberately broken.
+#
+# The ledger-api Pods themselves are healthy and Ready. The failures are in
+# Service discovery/routing:
+#
+# 1. ledger-selector-broken selects app=ledger instead of app=ledger-api,
+#    so its EndpointSlice has no backend addresses.
+# 2. ledger-port-broken selects the correct Pods, but forwards to port 8080
+#    while the application actually listens on port 3000.
+#
+# All resources are applied inside the student's isolated session namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-api
+  labels:
+    app: ledger-api
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ledger-api
+  template:
+    metadata:
+      labels:
+        app: ledger-api
+    spec:
+      containers:
+        - name: ledger-api
+          image: nginx:stable
+          command:
+            - /bin/sh
+            - -c
+            - |
+              sed -i 's/listen       80;/listen       3000;/' /etc/nginx/conf.d/default.conf
+              exec nginx -g 'daemon off;'
+          ports:
+            - name: http
+              containerPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger-selector-broken
+  labels:
+    jumptotech.io/lab-fixture: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app: ledger
+  ports:
+    - port: 80
+      targetPort: 3000
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger-port-broken
+  labels:
+    jumptotech.io/lab-fixture: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app: ledger-api
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
