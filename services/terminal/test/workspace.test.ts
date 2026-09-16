@@ -25,7 +25,7 @@
  * session it was asked about.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -112,21 +112,102 @@ describe('workspace paths cannot leave the session that owns them', () => {
     expect(() => resolveWorkspaceFile('/w/ws-abc', './sub/./../../out')).toThrow(WorkspacePathError);
   });
 
-  it('does not follow a symlink out of the workspace', async () => {
+  it('is string arithmetic, and says so: a symlinked name still resolves', async () => {
     const root = await scratch();
     const workspaces = new SessionWorkspaces({ root, secret: SECRET });
     const dir = await workspaces.seed(SESSION_A, []);
 
-    const outside = path.join(root, 'outside.txt');
-    await writeFile(outside, 'secret from another session\n');
-    await symlink(outside, path.join(dir, 'link.txt'));
+    await writeFile(path.join(root, 'outside.txt'), 'not the student\'s\n');
+    await symlink(path.join(root, 'outside.txt'), path.join(dir, 'link.txt'));
 
-    // The path check cannot see through a symlink, so this is stated honestly:
-    // reading a symlink the *student* created does follow it. What matters is
-    // that the caller can only ever name a path inside this session's own
-    // directory, and that the terminal is the only writer of that directory.
+    // This function touches no filesystem, so it cannot see the link — which is
+    // why `read` and `seed` resolve the path themselves. The two suites below
+    // are what prove the boundary; this one pins the division of labour.
     expect(() => resolveWorkspaceFile(dir, 'link.txt')).not.toThrow();
     expect(() => resolveWorkspaceFile(dir, '../outside.txt')).toThrow(WorkspacePathError);
+  });
+});
+
+// ------------------------------------------------- symlinks a student planted
+//
+// A student owns their workspace and can put a symlink in it. Two things must
+// not follow one:
+//
+//   read   the verifier reads these files through this service, which runs as
+//          uid 1001 with its own /proc closed to the shells it hosts. A read
+//          that followed `Dockerfile -> /proc/self/environ` would hand the
+//          verifier this service's environment — TERMINAL_SESSION_SECRET,
+//          INTERNAL_SERVICE_SECRET, SANDBOXD_ATTACH_SECRET — through a file the
+//          student chose.
+//   seed   a lab reset restores the baseline. Writing *through* a planted link
+//          would put student-chosen content at a student-chosen path outside
+//          the session, with this service's identity.
+
+describe('a symlink planted in a workspace', () => {
+  it('does not redirect a read out of the session workspace', async () => {
+    const root = await scratch();
+    const workspaces = new SessionWorkspaces({ root, secret: SECRET });
+    const dir = await workspaces.seed(SESSION_A, []);
+
+    const serviceOnly = path.join(root, 'service-only.txt');
+    await writeFile(serviceOnly, 'TERMINAL_SESSION_SECRET=would-be-leaked\n');
+    await symlink(serviceOnly, path.join(dir, 'Dockerfile'));
+
+    await expect(workspaces.read(SESSION_A, 'Dockerfile')).rejects.toThrow(WorkspacePathError);
+  });
+
+  it('does not redirect a read into another session workspace', async () => {
+    const root = await scratch();
+    const workspaces = new SessionWorkspaces({ root, secret: SECRET });
+    const mine = await workspaces.seed(SESSION_A, []);
+    const theirs = await workspaces.seed(SESSION_B, [{ path: 'Dockerfile', content: 'FROM theirs\n' }]);
+
+    await symlink(path.join(theirs, 'Dockerfile'), path.join(mine, 'Dockerfile'));
+
+    await expect(workspaces.read(SESSION_A, 'Dockerfile')).rejects.toThrow(WorkspacePathError);
+  });
+
+  it('still reads a symlink that stays inside the session workspace', async () => {
+    const root = await scratch();
+    const workspaces = new SessionWorkspaces({ root, secret: SECRET });
+    const dir = await workspaces.seed(SESSION_A, [{ path: 'app/Dockerfile', content: 'FROM alpine\n' }]);
+
+    await symlink(path.join(dir, 'app', 'Dockerfile'), path.join(dir, 'Dockerfile'));
+
+    expect(await workspaces.read(SESSION_A, 'Dockerfile')).toBe('FROM alpine\n');
+  });
+
+  it('does not write a baseline file through a link out of the workspace', async () => {
+    const root = await scratch();
+    const workspaces = new SessionWorkspaces({ root, secret: SECRET });
+    const dir = await workspaces.seed(SESSION_A, []);
+
+    const outside = path.join(root, 'someone-elses.txt');
+    await writeFile(outside, 'original\n');
+    await symlink(outside, path.join(dir, 'Dockerfile'));
+
+    await workspaces.seed(SESSION_A, [{ path: 'Dockerfile', content: 'FROM attacker\n' }]);
+
+    // The link was replaced by the baseline; what it pointed at is untouched.
+    expect(await readFile(outside, 'utf8')).toBe('original\n');
+    expect(await readFile(path.join(dir, 'Dockerfile'), 'utf8')).toBe('FROM attacker\n');
+    expect((await lstat(path.join(dir, 'Dockerfile'))).isSymbolicLink()).toBe(false);
+  });
+
+  it('does not write a baseline file through a linked parent directory', async () => {
+    const root = await scratch();
+    const workspaces = new SessionWorkspaces({ root, secret: SECRET });
+    const dir = await workspaces.seed(SESSION_A, []);
+
+    const outsideDir = path.join(root, 'elsewhere');
+    await mkdir(outsideDir, { recursive: true });
+    await symlink(outsideDir, path.join(dir, 'app'));
+
+    await expect(
+      workspaces.seed(SESSION_A, [{ path: 'app/Dockerfile', content: 'FROM attacker\n' }]),
+    ).rejects.toThrow(WorkspacePathError);
+
+    await expect(readFile(path.join(outsideDir, 'Dockerfile'), 'utf8')).rejects.toThrow();
   });
 });
 

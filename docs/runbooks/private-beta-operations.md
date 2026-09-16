@@ -9,6 +9,7 @@ alert runbooks (RB-01…RB-19) go deeper on one alert each.
 | **Capacity contract** | `MAX_ACTIVE_SESSIONS=5`, `MAX_ACTIVE_SESSIONS_PER_STUDENT=1` |
 | **Public exposure** | 443 (HTTPS) and 80 (redirect, ACME) only — BETA-P0-012/017 |
 | **Operator access** | SSH to the host; Grafana through a tunnel to `127.0.0.1:3001` |
+| **Unattended restart** | `restart: unless-stopped` on every production service (§6.1). A service you `stop` stays stopped |
 | **Alert delivery** | **DECISION REQUIRED** (§8). Until decided, alerts are seen only in Grafana and `amtool` |
 | **Proven** | Rules, alerts, dashboard queries and exposure are tested in CI (`npm test`, `scripts/check-observability.sh`, `make secrets-check`). The production overlay renders with `docker compose config`. Five concurrent students on the real runtime pass the release gate `make beta-validate` ([five-student-beta-validation.md](five-student-beta-validation.md), BETA-P0-019) |
 | **Not proven** | A production host. None exists yet. Every command below is the command that host runs, and none has been run on one. |
@@ -67,7 +68,9 @@ use `exec` rather than a URL.
    sudo install -d -m 0755 -o jtt-ops /srv/jumptotech/backups/status
    ```
 5. `make secrets-check` — every service receives exactly its secrets and ports.
-6. `prod up -d --build`, then §2.
+6. `prod up -d --build`, then §2 — including the two capacity gauges, which are
+   the only place the ceiling from step 1 can be read back from the running
+   platform.
 7. Optional until §8 is decided: install the alert destination,
    [alertmanager/secrets/README.md](../../infrastructure/observability/alertmanager/secrets/README.md).
 
@@ -109,11 +112,22 @@ alerts                         # nothing critical
 ready api 9400                 # 200, database and lab_registry ok
 ready terminal 9401
 ready sandboxd 9402            # 200, runtime ok
+q 'jtt_sessions_capacity_limit'       # 5, and jtt_sessions_per_student_limit 1
+q 'jtt_sessions_per_student_limit'
 q 'jtt:sessions_headroom:count'
 q 'jtt:tls_certificate_expiry:seconds / 86400'
 q 'jtt:backup_age:seconds / 3600'
 q 'jtt_network_isolation_attestation_valid'
 ```
+
+**Read the two limit gauges, not just the headroom.** `MAX_ACTIVE_SESSIONS`
+defaults to `20` (`.env.example`, `apps/api/src/config.ts`), and a deployment
+whose `.env` is missing the line from §1.1 runs with that ceiling and looks
+perfectly healthy: headroom reads 20, no alert fires, and the first sign is a
+host sized for five students carrying four times the sandboxes. The gauges are
+the deployed values, read from the running api — which is why they belong in
+the check that runs before every class rather than in a file somebody edited
+once.
 
 Then open the dashboard and read it top to bottom. Every row is one of these
 questions:
@@ -226,6 +240,31 @@ q 'max by (status) (jtt_sessions_oldest_status_age_seconds) / 60'
 
 Look at §2 first, and restart one component at a time.
 
+### 6.1 What restarts by itself
+
+Every production service carries `restart: unless-stopped`, so a crashed
+container, an out-of-memory kill and a host reboot bring the stack back without
+an operator. Three things follow from the exact policy:
+
+- **A service you stopped stays stopped**, including across a reboot. That is
+  what makes §3's `prod stop web` a real way to take the site down. Use `stop`,
+  not `kill`.
+- **A container that cannot start restarts in a loop.** The expected case is
+  the web tier with no valid certificate: its gate fails closed, and it comes
+  back on its own once [`make tls-install`](production-tls.md) has run. Read
+  `prod logs --tail 50 web` rather than the repeated restarts.
+- **Coming back is not the same as being healthy.** `restart` returns a
+  process; §2 is still what says the platform is serving. A service that
+  restarted while students were working lost their in-flight work exactly as
+  the table below describes.
+
+`prod ps` shows a restart as a low uptime against an old `CREATED`. Nothing
+counts restarts today — a restart-count metric would need a host exporter,
+which is DECISION REQUIRED (§8).
+
+Development has no restart policy at all, on purpose: a container that died on
+a laptop should stay dead where it can be read.
+
 | Component | What students lose | Command | Check afterwards |
 |---|---|---|---|
 | api | In-flight requests. Sessions are durable; the reaper and the operations checks restart with it | `prod restart api` | `ready api 9400` |
@@ -287,4 +326,9 @@ that is the incident.
 - Per-container CPU and memory are not measured (docs/observability.md §8).
 - Pod Security admission denials (P0-016) show only as failed provisioning steps.
 - No alert is proven to reach a person (§8).
-- One host, one instance of each service: no failover.
+- One host, one instance of each service: no failover. `restart: unless-stopped`
+  (§6.1) brings a service back **on this host**; it moves nothing anywhere, and
+  a host that is gone stays gone.
+- Restarts are not counted or alerted on. A service that crash-loops shows as
+  repeated gaps in `up{job=...}` and in the readiness gauges; there is no
+  "container restarted N times" series without a host exporter (§8).

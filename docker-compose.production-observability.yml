@@ -50,6 +50,19 @@
 # host container runtime.
 # ---------------------------------------------------------------------------
 
+# ## Unattended restart
+#
+# The same `restart: unless-stopped` the platform services get in
+# docker-compose.production.yml, for the same reason: on a host nobody is
+# watching, monitoring that died is monitoring that stays dead, and it is the
+# one component whose absence no alert can report.
+#
+# Safe for the three of them despite the shared network namespace: a restart
+# keeps the leader container's sandbox, so Alertmanager and Grafana still reach
+# Prometheus's loopback afterwards. Measured, not assumed — and it is a
+# *restart*. Re-creating Prometheus (`up -d --build`) still means restarting all
+# three together, which is what runbook §6 says.
+
 services:
   # The observability overlay published sandboxd's metrics listener on loopback
   # for development. Prometheus reaches it by service name; the host does not.
@@ -76,6 +89,7 @@ services:
           create_host_path: true
 
   prometheus:
+    restart: unless-stopped
     # The whole command, replaced: loopback inside the namespace, and no
     # --web.enable-lifecycle. Reload rules with `kill -s HUP` (runbook §6).
     command:
@@ -88,6 +102,7 @@ services:
       - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
 
   alertmanager:
+    restart: unless-stopped
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
@@ -95,6 +110,7 @@ services:
       - --cluster.listen-address=
 
   grafana:
+    restart: unless-stopped
     environment:
       # The HTTP API with a password is not needed by an operator using the UI,
       # and is the easier surface to guess against.

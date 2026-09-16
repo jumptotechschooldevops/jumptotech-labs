@@ -23,9 +23,11 @@ import {
   DOCKER_REQUIREMENT_TYPES,
   InMemoryWorkspace,
   LabRegistry,
+  WorkspaceUnavailableError,
   requirementSchema,
   type LoadedLabDefinition,
   type Requirement,
+  type WorkspacePort,
 } from '@jumptotech/lab-orchestrator';
 import { FakeDockerDaemon, containerSpec } from '@jumptotech/lab-orchestrator/testing';
 import { scanLabsDirectory } from '@jumptotech/lab-orchestrator/testing/catalog';
@@ -872,6 +874,42 @@ describe('docker verifier — an unreachable daemon is not a failed lab', () => 
     expect(result.error?.code).toBe('ENVIRONMENT_UNREACHABLE');
     expect(result.checks.every((c) => c.status === 'skipped')).toBe(true);
     expect(result.checks[0]?.detail).toBe('Could not read Docker state');
+  });
+
+  /*
+   * The workspace lives in another service, so it has its own outage.
+   *
+   * A Docker lab that grades an authored file reads it over the terminal
+   * service's internal API (`HttpTerminalWorkspace`). That service restarting —
+   * or refusing a path — throws `WorkspaceUnavailableError` from inside a
+   * handler, which is exactly the shape `ENVIRONMENT_UNREACHABLE` exists for:
+   * the environment could not be read, so no check happened and the student did
+   * not fail. Before this was handled the error escaped `verifyLab`, and
+   * `POST /api/sessions/:id/check` answered 500 INTERNAL_ERROR — a student
+   * being told the platform broke, with no skipped checks and no verification
+   * error metric.
+   */
+  it('reports ENVIRONMENT_UNREACHABLE when the workspace service cannot be read', async () => {
+    const docker = new FakeDockerDaemon();
+    const workspace: WorkspacePort = {
+      async seed() {},
+      async read() {
+        throw new WorkspaceUnavailableError('Could not reach the terminal service.');
+      },
+      async destroy() {},
+    };
+
+    const result = await verifyLab({
+      lab: registry.get('DOCKER-004'),
+      namespace: SANDBOX_A,
+      docker,
+      workspace: { port: workspace, sessionId: SESSION_A },
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.error?.code).toBe('ENVIRONMENT_UNREACHABLE');
+    expect(result.checks.length).toBeGreaterThan(0);
+    expect(result.checks.every((c) => c.status === 'skipped')).toBe(true);
   });
 
   it('refuses to grade a Docker lab with no Docker engine, rather than guessing', async () => {

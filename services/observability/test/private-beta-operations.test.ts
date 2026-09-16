@@ -347,6 +347,60 @@ describe('monitoring joins production without becoming reachable', () => {
   });
 });
 
+/*
+ * Nobody is watching the host.
+ *
+ * Compose restarts nothing on its own: without a policy, a crashed api, a
+ * terminal the kernel killed, or a reboot leaves the platform down until an
+ * operator happens to look. The runbook's health check (§2) is five minutes
+ * before a class, which is not a supervisor.
+ *
+ * `unless-stopped` rather than `always`, everywhere: `prod stop web` is the
+ * runbook's only way to take the site down (§3), and `always` would bring it
+ * back at the next daemon start.
+ *
+ * Development deliberately gets none. A container that died on a laptop should
+ * stay dead, where it is read.
+ */
+describe('the production stack comes back by itself', () => {
+  const production = withoutComments(read('docker-compose.production.yml'));
+  const productionObservability = withoutComments(read('docker-compose.production-observability.yml'));
+  const development = [
+    withoutComments(read('docker-compose.yml')),
+    withoutComments(read('docker-compose.runtime.yml')),
+    withoutComments(read('docker-compose.observability.yml')),
+  ];
+
+  function block(text: string, service: string): string {
+    return new RegExp(`^ {2}${service}:\\n((?: {4,}.*\\n|\\s*\\n)*)`, 'm').exec(`${text}\n`)?.[1] ?? '';
+  }
+
+  it('gives every production platform service an unattended restart', () => {
+    for (const service of ['postgres', 'api', 'terminal', 'sandboxd', 'web']) {
+      expect(block(production, service), service).toMatch(/^\s+restart: unless-stopped$/m);
+    }
+  });
+
+  it('gives monitoring one too — it is the component whose absence no alert can report', () => {
+    for (const service of ['prometheus', 'alertmanager', 'grafana']) {
+      expect(block(productionObservability, service), service).toMatch(/^\s+restart: unless-stopped$/m);
+    }
+  });
+
+  it('never uses `always`, which would undo the runbook\'s only way to take the site down', () => {
+    for (const text of [production, productionObservability]) {
+      expect(text).not.toMatch(/^\s+restart:\s*always\s*$/m);
+      expect(text).not.toMatch(/^\s+restart:\s*on-failure/m);
+    }
+  });
+
+  it('leaves the development stack with no restart policy at all', () => {
+    for (const text of development) {
+      expect(text).not.toMatch(/^\s+restart:/m);
+    }
+  });
+});
+
 describe('the private-beta operator dashboard', () => {
   const dashboard = JSON.parse(
     read('infrastructure/observability/grafana/dashboards/00-private-beta-operations.json'),

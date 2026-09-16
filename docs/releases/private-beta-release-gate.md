@@ -19,6 +19,12 @@ The verdict is **conditional**: the *software* release gate passes, but the
 platform has never run on a production host, and the deployment-time decisions
 in §7 must be made before students reach a hosted deployment.
 
+> **`main` has moved since this gate ran.** Everything in §1–§9 is evidence
+> against `c8eb2c6` and stays as written — a gate record that is edited later
+> is not a record. §11 is a separate, dated re-validation against the current
+> tree, and it says which of these gates have been re-run there and which have
+> not. Read §11 before treating §10's verdict as current.
+
 ---
 
 ## 1. What is proven
@@ -234,3 +240,102 @@ stated trusted-beta audience it is a documented, accepted limitation.
 **GO FOR 5-STUDENT PRIVATE BETA** — conditional on completing the deployment
 decisions in §7 before the platform is exposed to students, and on the audience
 being the stated ~five trusted students (§6).
+
+As of §11 this verdict carries one further condition: `make beta-validate` has
+not been re-run since three feature merges landed on `main`, and must be, on
+the tree that ships.
+
+---
+
+## 11. Post-gate re-validation — 2026-09-16
+
+An overnight production-readiness pass on `feat/beta-overnight-hardening`,
+branched from `cb7804a`. Its own report, with the reasoning and everything that
+was looked at and left alone, is
+[private-beta-overnight-report.md](../development/private-beta-overnight-report.md).
+
+This section exists because §3's evidence is against `c8eb2c6` and `main` is
+sixteen commits past it. Three feature merges landed after the gate and have
+never been through one:
+
+| Merge | What it added |
+|---|---|
+| `82e1ec1` | the student beta experience in the web app |
+| `ad20ea8` | guided learning paths (V1 EPIC-02), `/api/learning-paths`, the first per-route rate limit |
+| `4a4f949`, `33aa63b`, `cb7804a` | NET-022, NET-024, NET-025 — the catalog is 117 labs, not the 114 named throughout this document |
+
+### 11.1 Re-run on the current tree, and passing
+
+Everything here is **repository proven** or **local-runtime proven** on one
+development machine, exactly as §3's local rows were. Nothing here is proven on
+a production host.
+
+| Gate | Command | Result |
+|---|---|---|
+| Typecheck | `npm run typecheck` | **PASS** — 8 workspaces |
+| Unit / contract suites | `npm test` | **PASS** — 4,687 passed, 0 failed, 347 skipped |
+| Production composition wiring | `npm run test:composition` | **PASS** — 25 |
+| Secret / mount / port / network distribution | `node scripts/check-secret-distribution.mjs` | **PASS** — production publishes 443 and 80 only; postgres internal; only sandboxd holds a socket |
+| Observability config | `bash scripts/check-observability.sh` | **PASS** — 10 rule files, 82 rules, 4 alert-test files |
+| Backup & restore refusals | `bash scripts/test-db-backup-restore.sh` | **PASS** — 117 |
+| PostgreSQL persistence suites | `make test-db` | **PASS** — 173 + 20 + progress |
+| Backup/restore round trip | `make db-restore-drill` | **PASS** — destroyed and restored to an identical fingerprint, migrations current, application read and write |
+| TLS edge, real web image | `make test-tls-edge` | **PASS** — 36, test-only certificates |
+| Production rendering | `docker compose -f … config` over the five production files | **PASS** — 443/80 public, Grafana on `127.0.0.1:3001` inside Prometheus's namespace, nothing else published |
+| Build | `npm run build` | **PASS** |
+
+So the three post-gate merges broke none of the software gates in §3 that can
+be run without a live stack.
+
+### 11.2 NOT re-run on the current tree
+
+Each needs infrastructure this pass deliberately did not build: the development
+machine was already carrying two compose stacks and four kind clusters
+belonging to other work, and a fifth cluster or a third stack risked those
+rather than proving anything about this one.
+
+| Gate | Last proven | Why not tonight |
+|---|---|---|
+| **`make beta-validate`** — the five-student gate | `c8eb2c6` (§4) | Needs the running stack, kind and the observability profile. **This is the gap that matters**: the capacity, isolation, lifecycle, soak, restart-recovery and cleanup evidence in §4 is from before the three merges above |
+| `npm run verify:network-policy` | `c8eb2c6` (§3) | Needs a dedicated kind cluster |
+| kind, docker, sandboxd, terminal and networking integration jobs | `c8eb2c6` CI (§3) | CI builds each on its own runner; they are not a laptop gate |
+| CI "Quality gates" on this branch | — | The branch is pushed, but the workflow triggers on `push` to `main` and on `pull_request`; no run exists until a pull request is opened |
+
+### 11.3 Changed by this pass
+
+Four defects and two gaps, each with a regression test that fails against the
+previous code. None weakens a security control, and none changes the capacity,
+isolation, authentication or exposure contracts in §1.
+
+| Change | Class | Proven by |
+|---|---|---|
+| Session workspace reads and writes no longer follow a student-planted symlink | **security** | 5 cases in `services/terminal/test/workspace.test.ts`, plus the HTTP boundary in `workspace-endpoints.test.ts`. Probed against the shipped code first: the read returned the linked file and the seed overwrote its target |
+| An unreadable workspace is `ENVIRONMENT_UNREACHABLE`, not a 500 | reliability | `services/verifier/test/docker-requirements.test.ts` |
+| `restart: unless-stopped` on every production service | reliability | `docker compose config`; contract test in `services/observability/test/private-beta-operations.test.ts`. The shared-netns case was measured, not assumed |
+| `ServiceRestartLoop`, because a restart policy can hide an outage from `ServiceDown` | observability | 3 promtool cases in `infrastructure/observability/prometheus/tests/service-restart-alerts.test.yml` |
+| The internal workspace endpoints now have a suite | test coverage | 13 cases; they had none |
+| The runbook's five-minute check reads the deployed capacity ceiling | operator | `MAX_ACTIVE_SESSIONS` defaults to 20; the beta contract is 5; nothing read it back |
+| Three of four production dependency advisories closed by in-range patch bumps | dependencies | `npm audit --omit=dev`: 1 high + 3 moderate → 2 moderate. The high (`js-yaml`) is not reachable from student input; the two left are `express`'s own `qs` range |
+
+### 11.4 What §6's limitations look like after this pass
+
+- **Shared-uid credential read** — unchanged, and still the one to watch. The
+  symlink fix is a *different* boundary: §6 is a student reading, as uid 1001,
+  what uid 1001 owns; the fix stops a student directing the *service* to read
+  and write on their behalf, which reached files uid 1001 cannot open. A
+  per-student uid is still required before any untrusted cohort.
+- **No maintenance-mode switch** — unchanged, still a follow-up.
+- **No API/edge rate limiting** beyond the learning-path routes — unchanged.
+- **No restart policy** — this one is closed, for production only.
+
+### 11.5 Still not claimed, and still not proven
+
+Unchanged from §2 and §7, and re-stated because nothing tonight touched any of
+it: no browser end-to-end (none exists in the repository — the web suite is 195
+component tests under jsdom, which is not the same claim); no production host;
+no real CA or DNS certificate; no off-host DR drill; no alert proven to reach a
+human; AWS labs simulated. §7's decisions are all still open.
+
+**The next step before students**: bring up the production composition on the
+chosen host and run `make beta-validate` there, on the tree that ships. Until
+that run exists, the five-student evidence in §4 belongs to `c8eb2c6`.
