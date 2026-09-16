@@ -140,7 +140,7 @@ function world(options: World = {}) {
     };
   }
 
-  docker.probes['netns-none: nc -z -w 3 10.255.255.1 80'] = options.noneConnect ?? { exitCode: 1 };
+  docker.probes['netns-none: nc -z -w 10 netns-peer 80'] = options.noneConnect ?? { exitCode: 1 };
   docker.probes['netns-user: wget -q -O /dev/null -T 5 http://netns-peer:80/'] =
     options.userFetch ?? { exitCode: 0 };
 
@@ -212,7 +212,7 @@ describe('NET-021 after the work', () => {
       'netns-bridge: ip -o link show',
       'netns-none: ip -o link show',
       'netns-none: ip -o link show',
-      'netns-none: nc -z -w 3 10.255.255.1 80',
+      'netns-none: nc -z -w 10 netns-peer 80',
       'netns-user: ip -o link show',
       'netns-user: wget -q -O /dev/null -T 5 http://netns-peer:80/',
     ]);

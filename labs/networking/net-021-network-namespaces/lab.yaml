@@ -128,7 +128,9 @@ task:
     That address is not routable from anywhere here, so no container will reach
     it. The interesting part is *how* each one fails — time the command. Two of
     them fail the same way and one fails differently, and that difference is the
-    first half of your onboarding section.
+    first half of your onboarding section. (Use that literal address for your
+    own measurement: it keeps name resolution out of the picture, so what you
+    are timing is the route and nothing else.)
 
     **Then connect the peer.** A container named `netns-peer` is already running
     on the default bridge, serving HTTP on port 80. Attach it to `netns-net` as
@@ -353,16 +355,22 @@ requirements:
     label: The third container has an interface from the user-defined network
 
   # A namespace with nothing plumbed into it has nowhere to send a packet. The
-  # address is documented as unroutable here, so this is about the namespace
-  # rather than about what is at the other end.
+  # target is the peer — a container in this session, which is the only kind of
+  # target a probe may name (VERIFIER-CONTRACTS §3.3) — and it is running and
+  # serving, so the only reason this fails is the namespace the probe runs in.
+  #
+  # The timeout is generous on purpose: with no resolver reachable, the name
+  # lookup inside the container exhausts its own retries first, which was
+  # measured at 5s. A tighter budget would kill the probe and report "unknown"
+  # instead of "could not connect", and both are failures but only one is true.
   - type: docker_exec_probe
     container: netns-none
     probe: tcp_connect
-    host: 10.255.255.1
+    host: netns-peer
     port: 80
-    timeout_seconds: 3
+    timeout_seconds: 10
     expect: failure
-    label: The first container cannot open a connection to anything
+    label: The first container cannot open a connection to the peer
 
   # The positive half: the third container's namespace does have a path, and it
   # reaches the peer over the network the student created.

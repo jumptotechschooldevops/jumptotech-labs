@@ -112,6 +112,37 @@ export const dockerExecProbe: DockerVerifierHandler<'docker_exec_probe'> = {
       return fail(`Container '${r.container}' is not running, so nothing can be observed inside it`);
     }
 
+    /*
+     * The target must be a container in this session's own daemon.
+     *
+     * This is the ownership gate `docs/docker/VERIFIER-CONTRACTS.md` §3.3
+     * specifies, and it is the reason a probe cannot be pointed anywhere
+     * interesting. `host` passes a syntactic check in the schema, but a
+     * syntactic check would still accept `169.254.169.254`, `host.docker
+     * .internal`, the platform's own API or any Internet host. Requiring the
+     * name to resolve to a container the session-scoped reader can see makes
+     * all of those unnameable by construction rather than by blocklist — the
+     * reader holds one daemon and takes no daemon parameter, so a container in
+     * another session is not merely forbidden, it is unaddressable.
+     *
+     * A student may of course type any address they like in their own shell.
+     * This is about what a *lab definition* can make the platform do.
+     *
+     * The one gate from §3.3 deliberately not adopted is "from and to must
+     * share a network". That short-circuits the negative case by inspecting the
+     * daemon's view, and the negative case is exactly what NET-021 needs to
+     * *observe*: a namespace with no route out must be shown not to reach a
+     * container, not assumed not to.
+     */
+    if (r.host !== undefined) {
+      const target = await reader.container(r.host);
+      if (!target) {
+        return fail(
+          `No container named '${r.host}' exists in your Docker environment, so there is nothing to probe for`,
+        );
+      }
+    }
+
     let result: Awaited<ReturnType<typeof reader.probe>>;
     try {
       result = await reader.probe(r.container, toProbe(r));

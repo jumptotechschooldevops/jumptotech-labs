@@ -210,6 +210,24 @@ describe('a hostile operand cannot become a flag, a path or an authority', () =>
     }
   });
 
+  it('returns a fresh object, so a hostile key cannot ride along', () => {
+    // `JSON.parse` makes `__proto__` an inert own property rather than
+    // polluting anything, but the property that matters here is stronger and
+    // is the reason `assertContainerProbe` rebuilds instead of casting: what it
+    // returns carries only the keys it validated, so nothing else reaches
+    // `probeArgv` or the broker even in principle.
+    const hostile = JSON.parse(
+      '{"kind":"dns_lookup","host":"a","__proto__":{"kind":"exec","host":"pwned"}}',
+    );
+    const probe = assertContainerProbe(hostile);
+
+    expect(Object.keys(probe)).toEqual(['kind', 'host']);
+    expect(probeArgv(probe)).toEqual(['nslookup', 'a']);
+    // And nothing was polluted on the way through.
+    expect((Object.prototype as Record<string, unknown>).kind).toBeUndefined();
+    expect(({} as Record<string, unknown>).kind).toBeUndefined();
+  });
+
   it('ignores operands a probe does not take, rather than smuggling them into the argv', () => {
     // The requirement schema refuses a stray operand outright. This is the
     // second line: even if one reached here, it contributes nothing, because

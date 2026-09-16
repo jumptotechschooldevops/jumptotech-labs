@@ -38,16 +38,25 @@ function check(docker: FakeDockerDaemon, raw: Record<string, unknown>) {
   );
 }
 
-/** A daemon holding one running container, with probes stubbed by argv. */
+/**
+ * A daemon holding the probing container and the container being probed.
+ *
+ * Both are needed: a probe's target must itself be a container in this
+ * session's daemon (VERIFIER-CONTRACTS §3.3), so a fixture with only the
+ * prober would fail the ownership gate before any probe ran.
+ */
 function daemon(
   probes: Record<string, { exitCode?: number; stdout?: string; timedOut?: boolean }> = {},
-  options: { state?: string } = {},
+  options: { state?: string; withTarget?: boolean } = {},
 ): FakeDockerDaemon {
   const docker = new FakeDockerDaemon();
   docker.addContainer(
     containerSpec({ name: 'ledger-worker', image: 'alpine:3.20' }),
     options.state ?? 'running',
   );
+  if (options.withTarget !== false) {
+    docker.addContainer(containerSpec({ name: 'ledger-api', image: 'nginx:1.27-alpine' }));
+  }
   Object.assign(docker.probes, probes);
   return docker;
 }
@@ -99,6 +108,62 @@ describe('a probe grades the exit code, and nothing else', () => {
     expect(docker.probeRuns).toEqual(['ledger-worker: nc -z -w 3 ledger-api 8081']);
     // Nothing reached the arbitrary-exec path at any point.
     expect(docker.execs).toEqual([]);
+  });
+});
+
+// ------------------------------------------- 1b. what a probe may be aimed at
+
+describe('a probe may only be aimed at a container in this session', () => {
+  it('refuses a target that is not a container here, before running anything', async () => {
+    // The ownership gate from VERIFIER-CONTRACTS §3.3. A syntactic check on
+    // `host` would accept every one of these; requiring the name to resolve to
+    // a container the session-scoped reader can see makes them unnameable.
+    for (const host of ['169.254.169.254', 'metadata', 'evil', 'localhost']) {
+      const docker = daemon({}, { withTarget: false });
+      const result = await check(docker, { ...DNS, host });
+
+      expect(result.status, host).toBe('fail');
+      expect(result.detail, host).toContain('is nothing to probe for');
+      // Nothing was executed on the way to that verdict.
+      expect(docker.probeRuns, host).toEqual([]);
+    }
+  });
+
+  it('refuses an absent target even when the lab expected the probe to fail', async () => {
+    // Otherwise "this must not be reachable" would be satisfied by naming
+    // something that was never there — including an Internet host.
+    const docker = daemon({}, { withTarget: false });
+    const result = await check(docker, { ...TCP, expect: 'failure' });
+
+    expect(result.status).toBe('fail');
+    expect(docker.probeRuns).toEqual([]);
+  });
+
+  it('still probes when the target exists but shares no network with the prober', async () => {
+    // Deliberately NOT short-circuited on a shared-network check: proving that
+    // an isolated namespace cannot reach a running container is the observation
+    // NET-021 is built on, and inspecting the daemon's view instead would
+    // assume the answer.
+    const docker = daemon({ 'ledger-worker: nc -z -w 3 ledger-api 8081': { exitCode: 1 } });
+    const result = await check(docker, { ...TCP, expect: 'failure' });
+
+    expect(result.status).toBe('pass');
+    expect(docker.probeRuns).toEqual(['ledger-worker: nc -z -w 3 ledger-api 8081']);
+  });
+
+  it('needs no target for a probe that names none', async () => {
+    const docker = daemon(
+      { 'ledger-worker: ip -o link show': { exitCode: 0, stdout: '1: lo: <UP>' } },
+      { withTarget: false },
+    );
+    const result = await check(docker, {
+      type: 'docker_exec_probe',
+      container: 'ledger-worker',
+      probe: 'interface_exists',
+      interface: 'lo',
+    });
+
+    expect(result.status).toBe('pass');
   });
 });
 
