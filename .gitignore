@@ -9,6 +9,10 @@ coverage/
 .env
 .env.local
 .env.*.local
+# Any other environment file (.env.production, .env.prod, …) holds the same
+# secrets as .env. Only the template is source.
+.env.*
+!.env.example
 
 # Generated kubeconfigs — contain client certificates for the local throwaway
 # kind cluster. Never commit credentials, even development ones.
