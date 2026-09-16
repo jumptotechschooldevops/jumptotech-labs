@@ -50,7 +50,13 @@ import { createSessionRoutes } from './routes/sessions.js';
 import { createInternalRoutes } from './routes/internal.js';
 import { createTrackRoutes } from './routes/tracks.js';
 import { createLearningPathRoutes } from './routes/learning-paths.js';
-import { LEARNING_PATH_RATE_LIMIT, createRateLimiter, type RateLimitPolicy } from './rate-limit.js';
+import {
+  LEARNING_PATH_RATE_LIMIT,
+  SANDBOX_WRITE_RATE_LIMIT,
+  byAuthenticatedUser,
+  createRateLimiter,
+  type RateLimitPolicy,
+} from './rate-limit.js';
 import { createMeRoutes } from './routes/me.js';
 import { createAuthRoutes } from './routes/auth.js';
 
@@ -90,6 +96,8 @@ export interface CreateAppDeps {
   learningPaths?: LearningPathCatalog;
   /** Per-client request budget for the learning-path routes. Defaults to `LEARNING_PATH_RATE_LIMIT`. */
   learningPathRateLimit?: RateLimitPolicy;
+  /** Per-student budget for Start and Reset, the routes that create a sandbox. Defaults to `SANDBOX_WRITE_RATE_LIMIT`. */
+  sandboxWriteRateLimit?: RateLimitPolicy;
   /**
    * How a request's caller is identified (PLATFORM-009).
    *
@@ -257,6 +265,20 @@ export function createApp(deps: CreateAppDeps): Express {
     observability.logger.warn('security.event', { securityEvent: 'rate_limited', reason: 'learning_paths' });
   });
 
+  /*
+   * Start Lab and Reset Lab share one per-student budget. Mounted inside the
+   * routers, after `authenticate`, so the budget belongs to the student rather
+   * than to whoever shares their address.
+   */
+  const sandboxWriteLimiter = createRateLimiter(
+    deps.sandboxWriteRateLimit ?? SANDBOX_WRITE_RATE_LIMIT,
+    () => {
+      observability.metrics.common.securityEvents.inc({ service: 'api', event: 'rate_limited' });
+      observability.logger.warn('security.event', { securityEvent: 'rate_limited', reason: 'sandbox_writes' });
+    },
+    byAuthenticatedUser,
+  );
+
   app.get('/health', asyncRoute(async (_req, res) => {
     /*
      * Every dependency read here is individually guarded — PLATFORM-003.
@@ -400,6 +422,7 @@ export function createApp(deps: CreateAppDeps): Express {
     logger: observability.logger.legacy('progress.write_failed', 'warn'),
     obs: observability.logger,
     metrics: observability.metrics,
+    sandboxWriteLimiter,
   };
   app.use('/api/labs', browserCors, originGuard, authenticated, createLabRoutes(routes));
   app.use('/api/tracks', browserCors, originGuard, authenticated, createTrackRoutes(routes));
@@ -427,6 +450,16 @@ export function createApp(deps: CreateAppDeps): Express {
 
   // Central error handler — never leak a stack trace to the client.
   app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
+    // A body `express.json` refused is the client's error, and it is reached
+    // before authentication. Answering it as 500 let anyone raise the 5xx rate
+    // `ApiErrorRate` pages on, and logging it wrote the parser's message — which
+    // quotes the body — at error level. The request is still logged, as a 4xx,
+    // by the HTTP middleware; the body is not.
+    const refusal = bodyParserRefusal(error);
+    if (refusal) {
+      sendError(res, refusal.status, { code: refusal.code, message: refusal.message });
+      return;
+    }
     // The logger serialises the error without its stack and redacts the
     // message; the client still gets a structured code and nothing else.
     observability.logger.error('http.request.failed', { err: error });
@@ -437,4 +470,29 @@ export function createApp(deps: CreateAppDeps): Express {
   });
 
   return app;
+}
+
+/**
+ * The client-side failures `express.json` reports, mapped to a fixed answer.
+ *
+ * Matched on body-parser's documented `type`, never on the message, and the
+ * message sent back is ours, so no part of the refused body is echoed.
+ */
+function bodyParserRefusal(error: unknown): { status: number; code: string; message: string } | undefined {
+  const type = (error as { type?: unknown } | null)?.type;
+  switch (type) {
+    case 'entity.parse.failed':
+      return { status: 400, code: 'INVALID_JSON', message: 'The request body is not valid JSON.' };
+    case 'entity.too.large':
+      return { status: 413, code: 'PAYLOAD_TOO_LARGE', message: 'The request body is too large.' };
+    case 'encoding.unsupported':
+    case 'charset.unsupported':
+      return { status: 415, code: 'UNSUPPORTED_BODY', message: 'The request body encoding is not supported.' };
+    case 'request.aborted':
+    case 'request.size.invalid':
+    case 'stream.encoding.set':
+      return { status: 400, code: 'INVALID_BODY', message: 'The request body could not be read.' };
+    default:
+      return undefined;
+  }
 }

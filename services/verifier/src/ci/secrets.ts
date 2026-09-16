@@ -24,6 +24,8 @@
  * the labs that use this check grade what they say they grade.
  */
 
+import { matchLineValue } from '../line-value.js';
+
 /** A key/value pair to judge, from a workflow `env:` or a Jenkins `environment`. */
 export interface CandidateAssignment {
   key: string;
@@ -124,12 +126,13 @@ export function scanTextForAssignments(text: string, location: string): Candidat
     if (trimmed.length === 0) continue;
     if (trimmed.startsWith('#') || trimmed.startsWith('//')) continue;
 
-    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]\s*(.+?)\s*$/.exec(trimmed);
-    if (!match?.[1] || !match[2]) continue;
+    // Linear: the file is the student's, and `(.+?)\s*$` was not.
+    const match = matchLineValue(trimmed, /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]\s*/);
+    if (!match?.groups[1]) continue;
 
     assignments.push({
-      key: match[1],
-      value: match[2],
+      key: match.groups[1],
+      value: match.value,
       location: `${location}:${i + 1}`,
     });
   }

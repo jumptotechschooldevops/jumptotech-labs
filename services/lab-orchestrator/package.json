@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./session-token": "./src/session-token.ts",
+    "./output-flow": "./src/output-flow.ts",
     "./testing": "./test/fakes.ts",
     "./testing/catalog": "./test/catalog-shape.ts",
     "./testing/real-catalog": "./test/real-catalog.ts",

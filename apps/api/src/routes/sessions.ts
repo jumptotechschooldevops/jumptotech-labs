@@ -27,7 +27,7 @@ import type { SessionGuard } from '../auth/middleware.js';
  * request, so learning or guessing a namespace name grants nothing at all —
  * there is no route that accepts one.
  */
-import { Router, type Request, type Response } from 'express';
+import { Router, type Request, type RequestHandler, type Response } from 'express';
 import {
   SessionError,
   issueSessionToken,
@@ -109,7 +109,15 @@ export interface SessionRoutesDeps {
    */
   obs?: Logger;
   metrics?: RouteMetrics;
+  /**
+   * The per-student budget for requests that create a sandbox (Start, Reset).
+   * Optional so routers composed directly in tests need none.
+   */
+  sandboxWriteLimiter?: RequestHandler;
 }
+
+/** Stand-in when no limiter is composed. */
+export const noLimit: RequestHandler = (_req, _res, next) => next();
 
 /** HTTP status for each session-domain error code. */
 const STATUS_BY_CODE: Record<string, number> = {
@@ -426,6 +434,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     }
   }));
 
+  /*
+   * Sessions with a verification running right now.
+   *
+   * A check is the most expensive thing a student can ask for: one Check can
+   * be dozens of reads against a sandbox, and it runs in this process. Nothing
+   * stopped one student firing a hundred at once against the same session,
+   * which multiplies that work for no result a second check could change —
+   * the browser never does it (Verify is disabled while one runs), so a
+   * concurrent second check on one session is refused rather than queued.
+   * Per process: the private beta runs one API instance.
+   */
+  const checksInFlight = new Set<string>();
+
   // POST /api/sessions/:sessionId/check ------------------------------------
   router.post('/:sessionId/check', asyncRoute(async (req, res) => {
     const allowed = await guard(req, res, 'session:check');
@@ -438,6 +459,23 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       return;
     }
 
+    if (checksInFlight.has(session.sessionId)) {
+      sendError(res, 409, {
+        code: 'CHECK_IN_PROGRESS',
+        message: 'A check of this lab is already running.',
+        remediation: 'Wait for it to finish, then check again.',
+      });
+      return;
+    }
+    checksInFlight.add(session.sessionId);
+    try {
+      await runCheck(res, session);
+    } finally {
+      checksInFlight.delete(session.sessionId);
+    }
+  }));
+
+  async function runCheck(res: Response, session: LabSession): Promise<void> {
     const lab = registry.get(session.labId);
     const verifyStartedAt = Date.now();
     const result = await verifyLab({
@@ -535,7 +573,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
           }
         : {}),
     });
-  }));
+  }
 
   // POST /api/sessions/:sessionId/hints -------------------------------------
   // Records that a hint was revealed. Idempotent per (attempt, hint level): a
@@ -580,7 +618,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   }));
 
   // POST /api/sessions/:sessionId/reset ------------------------------------
-  router.post('/:sessionId/reset', asyncRoute(async (req, res) => {
+  router.post('/:sessionId/reset', deps.sandboxWriteLimiter ?? noLimit, asyncRoute(async (req, res) => {
     if (!(await guard(req, res, 'session:reset'))) return;
     try {
       const { session, result } = await sessions.reset(String(req.params.sessionId));

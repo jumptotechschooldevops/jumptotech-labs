@@ -25,7 +25,11 @@
  */
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { LabDefinitionError, type LoadedLabDefinition } from '../lab-definition.js';
+import {
+  LabDefinitionError,
+  resolveLabAssetForRead,
+  type LoadedLabDefinition,
+} from '../lab-definition.js';
 import { assertSafeSandboxPath } from './sandbox-paths.js';
 
 /** Cap on a single starter file. Lab skeletons are a few hundred bytes. */
@@ -114,7 +118,7 @@ export async function loadSetupFiles(lab: LoadedLabDefinition): Promise<LoadedSe
 
   const declaredFiles = [...(await expandWorkspaceDir(lab)), ...lab.setup.files];
   for (const declared of declaredFiles) {
-    const absolute = resolveSourcePath(lab, declared.source);
+    const absolute = await resolveLabAssetForRead(lab, declared.source, 'Setup file');
 
     let content: string;
     try {
@@ -158,25 +162,4 @@ export async function loadSetupFiles(lab: LoadedLabDefinition): Promise<LoadedSe
   }
 
   return files;
-}
-
-/**
- * Resolve a declared source path inside the lab directory.
- *
- * Mirrors `resolveManifestPath`: the schema already rejects `..` and absolute
- * paths, and this re-checks the resolved result so a symlinked or unusual path
- * cannot escape either.
- */
-function resolveSourcePath(lab: LoadedLabDefinition, relative: string): string {
-  const resolved = path.resolve(lab.directory, relative);
-  const root = path.resolve(lab.directory) + path.sep;
-  if (!resolved.startsWith(root)) {
-    throw new LabDefinitionError(
-      `Setup file '${relative}' resolves outside the lab directory`,
-      lab.sourcePath,
-      [],
-      lab.id,
-    );
-  }
-  return resolved;
 }

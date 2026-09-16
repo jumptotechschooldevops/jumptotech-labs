@@ -55,6 +55,89 @@ function statusCodeOf(error: unknown): number | undefined {
   return undefined;
 }
 
+/** The most of a Service's HTTP response body a check will read. */
+export const MAX_SERVICE_HTTP_BODY_BYTES = 64 * 1024;
+
+/**
+ * One HTTP request to a student's Service, as the verifier's `service_http`.
+ *
+ * The student owns what answers on that address — the Service, its Endpoints
+ * and the Pod behind them — so the answer is treated as hostile:
+ *
+ *   - **Redirects are not followed.** `fetch` follows up to twenty by default,
+ *     which let a student's backend send the next request from this process to
+ *     anywhere this process can reach (the database, `sandboxd`, the API's
+ *     internal routes, instance metadata) and read back the status in the
+ *     failure message. A redirect is simply the status the Service returned.
+ *   - **The body is read up to `MAX_SERVICE_HTTP_BODY_BYTES`**, and only when
+ *     the check looks at it. `response.text()` read whatever the backend
+ *     streamed until the timeout, into the API's memory.
+ */
+export async function probeServiceHttp(
+  target: { host: string; service: string; port: number; path: string },
+  options: { expectedStatus?: number; bodyContains?: string; timeoutSeconds?: number } = {},
+  fetchImpl: typeof fetch = fetch,
+): Promise<ServiceReachabilityResult> {
+  const { service, port, path } = target;
+  const timeoutMs = (options.timeoutSeconds ?? 5) * 1000;
+  const url = `http://${target.host}:${port}${path}`;
+
+  try {
+    const response = await fetchImpl(url, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { Accept: '*/*' },
+      redirect: 'manual',
+    });
+    const expectedStatus = options.expectedStatus ?? 200;
+    if (response.status !== expectedStatus) {
+      await response.body?.cancel().catch(() => undefined);
+      return {
+        ok: false,
+        detail: `HTTP ${response.status} from ${service}:${port}${path}, expected ${expectedStatus}`,
+        statusCode: response.status,
+      };
+    }
+    if (options.bodyContains) {
+      const body = await readBodyCapped(response, MAX_SERVICE_HTTP_BODY_BYTES);
+      if (!body.includes(options.bodyContains)) {
+        return {
+          ok: false,
+          detail: `Response body from ${service}:${port}${path} does not contain '${options.bodyContains}'`,
+          statusCode: response.status,
+        };
+      }
+    } else {
+      await response.body?.cancel().catch(() => undefined);
+    }
+    return { ok: true, statusCode: response.status };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: `Could not reach ${service}:${port}${path} — ${messageOf(error)}`,
+    };
+  }
+}
+
+/** Read at most `maxBytes` of a response body, then stop the stream. */
+async function readBodyCapped(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const piece = value.byteLength > maxBytes - total ? value.subarray(0, maxBytes - total) : value;
+      chunks.push(piece);
+      total += piece.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 function messageOf(error: unknown): string {
   const e = error as { body?: unknown; message?: unknown };
   if (typeof e?.body === 'string' && e.body.length > 0) {
@@ -864,38 +947,10 @@ export class KubernetesClient implements KubernetesPort {
       return { ok: false, detail: `Service '${service}' has no ClusterIP to probe` };
     }
 
-    const timeoutMs = (options.timeoutSeconds ?? 5) * 1000;
-    const path = options.path ?? '/';
-    const url = `http://${svc.clusterIP}:${port}${path}`;
-
-    try {
-      const response = await fetch(url, {
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: { Accept: '*/*' },
-      });
-      const body = await response.text();
-      const expectedStatus = options.expectedStatus ?? 200;
-      if (response.status !== expectedStatus) {
-        return {
-          ok: false,
-          detail: `HTTP ${response.status} from ${service}:${port}${path}, expected ${expectedStatus}`,
-          statusCode: response.status,
-        };
-      }
-      if (options.bodyContains && !body.includes(options.bodyContains)) {
-        return {
-          ok: false,
-          detail: `Response body from ${service}:${port}${path} does not contain '${options.bodyContains}'`,
-          statusCode: response.status,
-        };
-      }
-      return { ok: true, statusCode: response.status };
-    } catch (error) {
-      return {
-        ok: false,
-        detail: `Could not reach ${service}:${port}${path} — ${messageOf(error)}`,
-      };
-    }
+    return probeServiceHttp(
+      { host: svc.clusterIP, service, port, path: options.path ?? '/' },
+      options,
+    );
   }
 
   async checkServiceTcp(

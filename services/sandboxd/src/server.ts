@@ -60,7 +60,12 @@ import {
 } from '@jumptotech/observability';
 import * as pty from 'node-pty';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { BROKER_TLS_MIN_VERSION, type ContainerRuntimePort } from '@jumptotech/lab-orchestrator';
+import {
+  BROKER_TLS_MIN_VERSION,
+  createOutputFlow,
+  type ContainerRuntimePort,
+  type OutputFlow,
+} from '@jumptotech/lab-orchestrator';
 import { AttachDeniedError, attachArgv, resolveAttachTarget, type SandboxInspectorPort } from './attach.js';
 import type { SandboxdConfig } from './config.js';
 import { authorizeScope, scopeForEndpoint, type SandboxdScope } from './scopes.js';
@@ -108,6 +113,14 @@ export interface BrokerPty {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
+  /**
+   * Stop and restart output while the terminal service falls behind.
+   *
+   * Optional so a test double need not implement them; a PTY without them is
+   * bounded by the output hard limit alone, which closes its connection.
+   */
+  pause?(): void;
+  resume?(): void;
   onData(listener: (data: string) => void): void;
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): void;
 }
@@ -122,6 +135,7 @@ interface LiveShell {
   sessionId: string;
   sandboxRef: string;
   term: BrokerPty;
+  output: OutputFlow;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
 }
@@ -151,6 +165,8 @@ function defaultSpawn(command: string, args: string[], options: { cols: number; 
     write: (data) => term.write(data),
     resize: (cols, rows) => term.resize(cols, rows),
     kill: () => term.kill(),
+    pause: () => term.pause(),
+    resume: () => term.resume(),
     onData: (listener) => {
       term.onData(listener);
     },
@@ -612,10 +628,32 @@ export function createSandboxd(deps: SandboxdDeps): Server {
       return;
     }
 
+    /*
+     * Bounded, because the terminal service decides how fast this drains — and
+     * it drains only as fast as the student's browser does. Without it a
+     * student running `yes` behind a client that stops reading grows this
+     * process, which hosts every student's shell, until it is killed.
+     */
+    const output = createOutputFlow(
+      ws,
+      {
+        pause: () => term.pause?.(),
+        resume: () => term.resume?.(),
+      },
+      () => {
+        common?.securityEvents.inc({ service: 'sandboxd', event: 'output_backlog' });
+        obs.warn('security.event', { securityEvent: 'output_backlog', sessionId });
+        endShell(ws);
+        ws.terminate();
+      },
+      config.outputFlow,
+    );
+
     const shell: LiveShell = {
       sessionId,
       sandboxRef: target.ref,
       term,
+      output,
       idleTimer: setTimeout(() => closeFor(ws, 'IDLE_TIMEOUT'), config.idleTimeoutMs),
       maxTimer: setTimeout(() => closeFor(ws, 'SESSION_EXPIRED'), config.maxSessionMs),
     };
@@ -633,7 +671,10 @@ export function createSandboxd(deps: SandboxdDeps): Server {
      * is already being handled, and duplicating it here would mean a second
      * copy of code that must never look at the payload.
      */
-    term.onData((data) => send(ws, { type: 'output', data }));
+    term.onData((data) => {
+      send(ws, { type: 'output', data });
+      output.afterSend();
+    });
     term.onExit(({ exitCode, signal }) => {
       send(ws, { type: 'exit', exitCode, ...(signal !== undefined ? { signal } : {}) });
       endShell(ws);
@@ -665,6 +706,7 @@ export function createSandboxd(deps: SandboxdDeps): Server {
     if (!shell) return;
     shells.delete(ws);
     if (bySessionId.get(shell.sessionId) === ws) bySessionId.delete(shell.sessionId);
+    shell.output.dispose();
     clearTimeout(shell.idleTimer);
     clearTimeout(shell.maxTimer);
     try {

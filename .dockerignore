@@ -9,3 +9,14 @@
 infrastructure/docker/nginx/tls/
 # ACME challenge tokens: not secret, but host state, not source.
 infrastructure/docker/nginx/acme-webroot/
+
+# Secrets and host state (private-beta security audit). The Dockerfiles copy
+# whole service directories, so a `.env` or a credential that ends up inside
+# one would otherwise ship in the image. Nothing copies any of these today.
+.git
+**/.env
+**/.env.*
+infrastructure/kind/generated/
+infrastructure/observability/secrets/
+infrastructure/observability/alertmanager/secrets/
+backups/
