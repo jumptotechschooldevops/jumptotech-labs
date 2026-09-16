@@ -13,6 +13,6 @@
     "./beta-contract": "./beta-validation-contract.ts"
   },
   "devDependencies": {
-    "vitest": "^3.2.6"
+    "vitest": "^5.0.0"
   }
 }
