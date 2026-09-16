@@ -269,6 +269,11 @@ export class DockerCliRuntime implements ContainerRuntimePort {
   async create(spec: ContainerSpec): Promise<ContainerInfo> {
     assertValidManagedContainerRef(spec.name);
     assertImageReference(spec.image);
+    // This is the daemon boundary, and `sandboxd` passes a spec it received
+    // over HTTP straight to it: every field that would widen the container
+    // beyond a sandbox is checked here, not only where the spec was built.
+    assertSandboxNetwork(spec.network);
+    assertResourceCeilings(spec);
 
     const argv = [
       'run',
@@ -723,6 +728,52 @@ export function assertCapabilityName(capability: unknown, providerId?: string): 
     );
   }
   return capability;
+}
+
+/**
+ * A network a sandbox container may join: `none`, or a network by name.
+ *
+ * Never `host`, which shares the daemon host's network stack, and never
+ * `container:<name>`, which joins another container's — another student's
+ * sandbox, or a platform service. Docker accepts both through the same
+ * `--network` flag as an ordinary bridge name, so nothing but this check tells
+ * them apart. The name rule is Docker's own, minus the `:` those modes need.
+ */
+const SANDBOX_NETWORK_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+export function assertSandboxNetwork(network: unknown): string {
+  if (
+    typeof network !== 'string' ||
+    !SANDBOX_NETWORK_PATTERN.test(network) ||
+    network.toLowerCase() === 'host'
+  ) {
+    throw new ContainerRuntimeError(
+      `'${String(network)}' is not a network a sandbox may join (none, or a network name; never host or another container's)`,
+    );
+  }
+  return network;
+}
+
+const MEMORY_PATTERN = /^[1-9][0-9]*[bkmg]?$/i;
+const CPUS_PATTERN = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)$/;
+
+/**
+ * The resource ceilings, as ceilings.
+ *
+ * Docker reads `--pids-limit 0` or `-1` and `--memory 0` as *no limit*, so a
+ * zero that slipped through configuration would not fail — it would quietly
+ * give one sandbox the whole host. Refused here instead.
+ */
+export function assertResourceCeilings(spec: Pick<ContainerSpec, 'cpus' | 'memory' | 'pidsLimit'>): void {
+  if (!Number.isSafeInteger(spec.pidsLimit) || spec.pidsLimit < 1) {
+    throw new ContainerRuntimeError(`pidsLimit must be a positive integer, not '${String(spec.pidsLimit)}'`);
+  }
+  if (typeof spec.memory !== 'string' || !MEMORY_PATTERN.test(spec.memory)) {
+    throw new ContainerRuntimeError(`memory must be a positive size such as 512m, not '${String(spec.memory)}'`);
+  }
+  if (typeof spec.cpus !== 'string' || !CPUS_PATTERN.test(spec.cpus) || !(Number(spec.cpus) > 0)) {
+    throw new ContainerRuntimeError(`cpus must be a positive number such as 0.5, not '${String(spec.cpus)}'`);
+  }
 }
 
 const ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,63}$/;
