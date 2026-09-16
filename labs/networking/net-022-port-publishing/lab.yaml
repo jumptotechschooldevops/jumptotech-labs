@@ -1,0 +1,343 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# Content is written from the official Docker documentation only; the pages
+# this lab is grounded in are listed under `references`.
+#
+# THE INCIDENT IS SEEDED, NOT DESCRIBED. `payments-status` is running, healthy,
+# and published — and unreachable. The published mapping sends host port 3000
+# to a container port nothing is serving, while the application inside listens
+# on a different port entirely. Nothing in the task text names either number;
+# both are read out of the running system.
+#
+# HOW THE APPLICATION COMES TO LISTEN SOMEWHERE ELSE. The image is stock
+# `nginx:1.27-alpine`, which serves on 80. The seeded container's command
+# rewrites the `listen` directive before starting nginx, which is how a real
+# deployment moves an application's port without rebuilding an image. That
+# command is part of the deployment: a student who removes the container
+# without reading `.Config.Cmd` first recreates an application on the wrong
+# port and their own end-to-end check fails. That is deliberate, and it is the
+# same lesson DOCKER-010 teaches about settings worth keeping.
+#
+# WHY THIS IS NOT DOCKER-012. DOCKER-012 is a host-port collision: two
+# containers want the same number on the host, and the daemon refuses. Here
+# nothing collides and nothing is refused — the mapping is accepted, appears in
+# `docker ps`, and is wrong on the container side of the colon.
+#
+# WHAT THIS LAB VERIFIES, AND WHAT IT DOES NOT.
+#
+#   verified      the port BINDING the repaired container was created with,
+#                 read from `docker inspect` — container port and host port —
+#                 plus the container's image and running state, plus the two
+#                 worksheets the student fills in
+#   NOT verified  that an HTTP request through the published port returns
+#                 anything
+#
+# The same boundary DOCKER-012 documents applies here: grading an HTTP response
+# needs the verifier to make a request from inside a container, which is a
+# separate executor and security design that has not been approved — see
+# docs/docker/VERIFIER-CONTRACTS.md §3, marked DESIGNED / NOT APPROVED. The
+# student proves reachability for themselves with `curl`; nothing here parses
+# its output or looks at command history.
+#
+# NET-021 is this lab's curriculum prerequisite and is not implemented yet.
+# The registry refuses a prerequisite that does not resolve, so `prerequisites`
+# stays empty until NET-021 lands — the same policy NET-002 follows for
+# NET-001.
+# ---------------------------------------------------------------------------
+id: NET-022
+slug: net-022-port-publishing
+title: "Port Publishing: The Path from Host to Container"
+track: networking
+topic: container-networking
+difficulty: intermediate
+level: challenge
+duration_minutes: 35
+order: 22
+
+environment:
+  provider: docker
+  isolation: container
+
+# NET-021 is designed but not implemented. The registry refuses a prerequisite
+# it cannot resolve, so this stays empty until that lab exists.
+prerequisites: []
+
+story: >
+  JumpToTech Bank's payments status page is deployed as a container on this
+  host, and the on-call engineer has spent an hour proving it is fine.
+  `docker ps` shows it up. The application inside answers its own health check.
+  The deployment command has a `--publish` in it, on the host port the load
+  balancer has always used.
+
+  Nothing outside the container can reach it.
+
+  Because there is a port mapping in the deployment, nobody has looked at the
+  port mapping. You are the next person on the ticket.
+
+objectives:
+  - Tell the host side of a published port mapping from the container side
+  - Read a container's published mappings back from the daemon's own state
+  - Find which TCP port an application inside a container is really listening on
+  - Diagnose a published mapping that targets a container port nothing serves
+  - Recreate a container with a corrected mapping, keeping the settings that were right
+  - Explain the address translation that carries a packet from the host into the container
+
+task:
+  summary: Work out why a healthy, published container is unreachable on host port 3000, repair the mapping without changing the host port, and explain how the packet gets in.
+  description: >
+    Nothing below tells you what went wrong. Finding that out is the exercise.
+
+    The container `payments-status` is running. Start by separating what the
+    deployment *claims* from what the application is *doing*.
+
+    **What the mapping claims.** `docker ps` shows a PORTS column, `docker port
+    payments-status` prints the published mappings on their own, and
+    `docker inspect payments-status --format '{{json .HostConfig.PortBindings}}'`
+    shows the bindings the container was created with. A mapping is written
+    `HOST_PORT:CONTAINER_PORT`, and the daemon will accept one whether or not
+    anything is serving on the container side.
+
+    **What the application is doing.** The container has its own network
+    namespace, so the sockets you want are not in this shell's socket table —
+    they are in the container's. `docker exec payments-status netstat -ltn`
+    lists them from inside. (On a full distribution this inventory is
+    `ss -ltn`; this image is Alpine and ships BusyBox `netstat` instead.) The
+    image also has `curl`, so `docker exec payments-status curl -sv
+    http://127.0.0.1:PORT/` will tell you whether a given port really answers.
+
+    Record what you found in `diagnosis.txt` in your workspace, replacing each
+    `____`.
+
+    **Then repair it.** The load balancer's address is fixed, so host port
+    `3000` stays exactly as it is. What has to change is the other side of the
+    colon: the container port the host port is published to. A container's port
+    bindings are fixed when it is created, so this one cannot be edited in
+    place — remove it and create it again.
+
+    Before you remove anything, read the container's configuration. It was
+    created with a command, and that command is how this deployment configures
+    the application. Recreate `payments-status` with the same name, the same
+    `nginx:1.27-alpine` image, and the same command — only the mapping is
+    wrong. If you drop the command, the application comes back serving
+    somewhere else and your own proof will fail.
+
+    **Prove it end to end.** Published ports are bound in the network namespace
+    of the Docker host, which is not this shell. The honest way to test one
+    from the host's own side is to make the request from there:
+
+      `docker run --rm --network host nginx:1.27-alpine curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/`
+
+    That is a request to the published host port, travelling the whole path you
+    just repaired. Before the fix it fails to connect; after it, you get a
+    status code.
+
+    **The required final state.**
+
+      - `payments-status` is running.
+      - It runs the `nginx:1.27-alpine` image.
+      - Host port `3000` is published to the container port the application is
+        actually listening on.
+
+    Finally, fill in `model.txt` in your workspace. That one is not about this
+    container: it is the explanation you would leave behind so the next person
+    does not lose an hour to the same mapping.
+
+    One thing this lab does **not** check: whether an HTTP request through the
+    published port returns anything. It grades the port binding the daemon
+    holds, the image, the container's state, and your two worksheets. The
+    `curl` above is your proof, not the platform's.
+
+setup:
+  docker:
+    images:
+      - nginx:1.27-alpine
+    containers:
+      # The incident. Published on the host port the load balancer uses, to a
+      # container port nothing serves; the command moves the application's
+      # listener somewhere else before nginx starts.
+      - name: payments-status
+        image: nginx:1.27-alpine
+        command:
+          - sh
+          - -c
+          - "sed -i 's/listen       80;/listen       8080;/' /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"
+        state: running
+        ports:
+          - container: 80
+            host: 3000
+    files:
+      # Worksheets, not answer keys: every value below is read out of the
+      # running system, and neither number nor mechanism appears here.
+      - path: diagnosis.txt
+        content: |
+          # NET-022 — diagnosis
+          #
+          # Replace each ____ with what you observed. Keep the field names;
+          # only the values need to change. Nothing here is a guess: every
+          # answer is readable from the running container.
+          #
+          # 1. Which container port does the published mapping on host port
+          #    3000 currently send traffic to?
+          mapping_sends_traffic_to_container_port: ____
+          #
+          # 2. Which TCP port is the application inside the container actually
+          #    listening on?
+          application_is_listening_on_port: ____
+          #
+          # 3. In one sentence: why does a request to host port 3000 fail even
+          #    though the container is running and the application is healthy?
+          why_the_request_fails: ____
+      - path: model.txt
+        content: |
+          # NET-022 — the networking model
+          #
+          # Answer in your own words, in full sentences. This is the part of
+          # the incident that belongs in the post-mortem: it is what stops the
+          # same mapping being written again next quarter.
+          #
+          # 1. A published port is written HOST_PORT:CONTAINER_PORT. Which of
+          #    those two numbers belongs to this host's own network stack, and
+          #    which belongs to the network namespace inside the container?
+          #    Say which side of the colon you changed, and write out the
+          #    corrected mapping in full.
+          #
+          # 2. A container has its own network namespace and its own address,
+          #    and no process on the host is listening inside it. Name the kind
+          #    of address translation the daemon installs for a published port
+          #    — the one that rewrites the DESTINATION address and port of an
+          #    arriving packet. Give it as the four-letter target name that
+          #    appears in the daemon's own NAT rules, in capitals, and say what
+          #    it rewrites the destination to.
+          #
+          # 3. Two containers on this host can both listen on the same port
+          #    inside themselves without any conflict, but two published
+          #    mappings cannot share one host port. Explain why, in terms of
+          #    the namespaces involved.
+
+  verify:
+    - type: docker_image_exists
+      image: nginx:1.27-alpine
+      label: The nginx:1.27-alpine image is available
+    - type: docker_container_running
+      name: payments-status
+      label: The payments-status container is running
+    - type: docker_container_port
+      name: payments-status
+      container_port: 80
+      host_port: 3000
+      label: The deployment's published mapping is in place
+    - type: workspace_file_exists
+      path: diagnosis.txt
+      label: The diagnosis worksheet is in the workspace
+    - type: workspace_file_exists
+      path: model.txt
+      label: The model worksheet is in the workspace
+
+  verify_timeout_seconds: 180
+
+# Five checks. The three Docker ones read structured fields of `docker inspect`
+# against this session's own daemon — never shell history, and never a
+# substring match. `docker_container_port` with a `host_port` requires a real
+# published binding: a container that merely exposes the port reports it with
+# no host side and fails.
+#
+# The labels are deliberately colourless. They are rendered next to each check
+# on Check Solution, so a label that repeated the value it grades would hand
+# over the diagnosis to anyone who pressed the button once.
+requirements:
+  - type: docker_container_running
+    name: payments-status
+    label: Container payments-status is running
+
+  - type: docker_container_image
+    name: payments-status
+    image: nginx:1.27-alpine
+    label: Container payments-status still runs the nginx:1.27-alpine image
+
+  - type: docker_container_port
+    name: payments-status
+    container_port: 8080
+    host_port: 3000
+    label: The published port mapping is correct
+
+  - type: workspace_file_exists
+    path: diagnosis.txt
+    contains:
+      - "8080"
+    label: diagnosis.txt records the port the application is listening on
+
+  - type: workspace_file_exists
+    path: model.txt
+    contains:
+      - "DNAT"
+      - "8080"
+    label: model.txt explains the corrected mapping and what carries the packet
+
+# `Reset Lab` restores this session's Docker environment to its baseline: the
+# student's containers are removed, `payments-status` is seeded again with its
+# original mapping, and both worksheets are restored — so a student who filled
+# one in and wants to start over gets a blank one back.
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    # Images are kept: re-pulling on every reset would turn a two-second reset
+    # into a two-minute one.
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      A mapping existing is not the same as a mapping being right. There are
+      two numbers in it, and only one of them has been checked.
+
+      Ask the two questions separately: what does the deployment say traffic to
+      host port 3000 should be handed to, and what is the application inside
+      the container actually bound to? They are answered by different commands,
+      and the answers do not agree.
+  - level: 2
+    text: >
+      `docker port payments-status` prints the published mappings, and
+      `docker inspect payments-status --format '{{json .HostConfig.PortBindings}}'`
+      shows the binding the container was created with.
+
+      For the other side, the container has its own socket table:
+      `docker exec payments-status netstat -ltn` lists what is listening inside
+      it. Whatever that shows is where a request has to arrive to be answered.
+  - level: 3
+    text: >
+      Port bindings are fixed at creation, so this container cannot be
+      repaired by restarting it: remove it and create it again with host port
+      3000 published to the port you found listening.
+
+      Read `docker inspect payments-status --format '{{json .Config.Cmd}}'`
+      before you remove it. The deployment's command is what puts the
+      application on that port in the first place, and recreating the container
+      without it gives you a correct mapping in front of an application that
+      moved.
+
+      When it is back, run the end-to-end check from the task description — the
+      one that makes the request from the Docker host's own network namespace.
+      A status code means the whole path works; a connection failure means one
+      of the two halves is still wrong.
+
+references:
+  - title: Docker Engine — Published ports
+    url: https://docs.docker.com/engine/network/#published-ports
+  - title: Docker Engine — Packet filtering and firewalls
+    url: https://docs.docker.com/engine/network/packet-filtering-firewalls/
+  - title: Docker CLI reference — docker container run
+    url: https://docs.docker.com/reference/cli/docker/container/run/
+  - title: Docker CLI reference — docker container port
+    url: https://docs.docker.com/reference/cli/docker/container/port/
+  - title: Docker CLI reference — docker container inspect
+    url: https://docs.docker.com/reference/cli/docker/container/inspect/
+
+skills:
+  - container.port-publishing
+  - net.troubleshoot.wrong-port
+  - container.bridge
+  - devops.nat
