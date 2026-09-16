@@ -29,6 +29,8 @@
  * each Jenkins exercise as syntax-verified, locally-executed, or future work.
  */
 
+import { matchLineValue } from '../line-value.js';
+
 export interface JenkinsStep {
   /** The step's text, one entry per non-empty line inside `steps { }`. */
   text: string;
@@ -311,9 +313,10 @@ function readEnvironmentBlock(
   for (const line of block.body.split('\n')) {
     const trimmed = line.trim();
     if (trimmed.length === 0 || trimmed.startsWith('//')) continue;
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$/.exec(trimmed);
-    if (!match?.[1] || !match[2]) continue;
-    assignments.push({ key: match[1], value: match[2], location });
+    // Linear: the Jenkinsfile is the student's, and `(.+?)\s*$` was not.
+    const match = matchLineValue(trimmed, /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*/);
+    if (!match?.groups[1]) continue;
+    assignments.push({ key: match.groups[1], value: match.value, location });
   }
   return assignments;
 }

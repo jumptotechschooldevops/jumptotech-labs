@@ -20,6 +20,7 @@ import {
   scanTextForAssignments,
   type CandidateAssignment,
 } from '../ci/secrets.js';
+import { valueAfterSeparator } from '../line-value.js';
 
 /** Does this path look like a GitHub Actions workflow? */
 function isWorkflowPath(path: string): boolean {
@@ -168,10 +169,11 @@ function mentionsName(text: string, name: string): boolean {
   const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`);
   for (const line of text.split('\n')) {
     if (!pattern.test(line)) continue;
-    const assignment = /[:=]\s*(.+?)\s*$/.exec(line);
+    // Linear: the pipeline file is the student's, and `(.+?)\s*$` was not.
+    const assignment = valueAfterSeparator(line);
     // A line that assigns a plain literal to this name is a hardcoded value,
     // not a reference; `secret_not_hardcoded` is the check that reports it.
-    if (assignment?.[1] && !isSecretReference(assignment[1])) continue;
+    if (assignment && !isSecretReference(assignment)) continue;
     return true;
   }
   return false;

@@ -24,6 +24,7 @@ import {
   type SandboxListOptions,
   type SandboxPathRead,
 } from '@jumptotech/lab-orchestrator';
+import { matchLineValue } from './line-value.js';
 
 /** The primitives a sandbox provider offers the verifier. */
 export interface SandboxPort {
@@ -439,10 +440,11 @@ export function parseTerraformState(text: string): TerraformStateSnapshot | null
 export function parseProcessTable(text: string): ProcessEntry[] {
   const entries: ProcessEntry[] = [];
   for (const line of text.split('\n')) {
-    const match = /^\s*(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    // Linear: the command line is the student's, and `(.+?)\s*$` was not.
+    const match = matchLineValue(line, /^\s*(\d+)\s+(\S+)\s+/);
     if (!match) continue;
-    const [, pid, user, command] = match;
-    entries.push({ pid: Number.parseInt(pid ?? '0', 10), user: user ?? '', command: command ?? '' });
+    const [, pid, user] = match.groups;
+    entries.push({ pid: Number.parseInt(pid ?? '0', 10), user: user ?? '', command: match.value });
   }
   return entries;
 }
