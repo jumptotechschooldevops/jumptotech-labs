@@ -1,0 +1,154 @@
+id: NET-025
+slug: net-025-service-no-endpoints
+title: "The Service With No Backend Endpoints"
+track: networking
+topic: kubernetes-networking
+difficulty: advanced
+level: practice
+duration_minutes: 40
+order: 25
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+prerequisites:
+  - NET-024
+
+story: >
+  The ledger-api Pods are Running and Ready, but two Services are broken.
+  One Service has no backend addresses at all. The other discovers the
+  correct Pods, yet requests still fail. Diagnose both incidents by reading
+  the Service configuration, Pod labels, and EndpointSlices before making
+  any changes.
+
+objectives:
+  - Distinguish a Service selector failure from a Service port or application failure.
+  - Compare Service selectors with Pod labels.
+  - Use EndpointSlices to determine whether a Service discovered its backend Pods.
+  - Compare a Service targetPort with the application's container port.
+  - Repair both Services and verify successful HTTP traffic.
+
+task:
+  summary: >
+    Diagnose two broken Kubernetes Services by using Pod labels,
+    Service configuration, and EndpointSlices, then repair both.
+
+  description: >
+    Two Services are broken for different reasons. Diagnose the existing
+    state before editing anything.
+
+    Inspect the Pods and their labels with `kubectl get pods --show-labels`.
+    Inspect both Services with `kubectl get svc -o yaml` and
+    `kubectl describe svc`. Then inspect their EndpointSlices with
+    `kubectl get endpointslices`.
+
+    Determine why `ledger-selector-broken` has no backend addresses.
+    Determine why `ledger-port-broken` discovers the Pods but still cannot
+    successfully send requests to the application.
+
+    Fix both Services. Both must select the ledger-api Pods and successfully
+    route HTTP traffic to the application listening on container port 3000.
+
+    Finally, create a ConfigMap named `diagnosis` with two keys: `selector`
+    and `targetPort`. The `selector` value should explain why an empty
+    EndpointSlice points toward a Service-selector and Pod-label mismatch.
+    The `targetPort` value should explain why a populated EndpointSlice with
+    failing requests points toward the Service targetPort or application
+    listening port.
+
+setup:
+  manifests:
+    - setup/ledger-services.yaml
+  verify:
+    - type: deployment_exists
+      name: ledger-api
+      label: The ledger-api Deployment exists
+    - type: deployment_replicas
+      name: ledger-api
+      replicas: 2
+      label: The ledger-api Deployment has the expected replica count
+    - type: deployment_available
+      name: ledger-api
+      min_available: 2
+      label: The ledger-api Pods are available
+  verify_timeout_seconds: 180
+
+requirements:
+  - type: service_selector
+    name: ledger-selector-broken
+    selector:
+      app: ledger-api
+    label: The first Service selects the intended workload
+
+  - type: service_endpoints
+    name: ledger-selector-broken
+    min_ready: 1
+    label: The first Service has ready backend endpoints
+
+  - type: service_http
+    service: ledger-selector-broken
+    port: 80
+    path: /
+    expected_status: 200
+    label: The first Service successfully reaches its application
+
+  - type: service_selector
+    name: ledger-port-broken
+    selector:
+      app: ledger-api
+    label: The second Service selects the intended workload
+
+  - type: service_endpoints
+    name: ledger-port-broken
+    min_ready: 1
+    label: The second Service has ready backend endpoints
+
+  - type: service_http
+    service: ledger-port-broken
+    port: 80
+    path: /
+    expected_status: 200
+    label: The second Service successfully reaches its application
+
+  - type: configmap_key
+    name: diagnosis
+    key: selector
+    label: The diagnosis records the selector failure
+
+  - type: configmap_key
+    name: diagnosis
+    key: targetPort
+    label: The diagnosis records the target port failure
+
+hints:
+  - level: 1
+    text: >
+      Start with EndpointSlices. A Service with no backend addresses and a
+      Service with backend addresses are two different failure classes.
+
+  - level: 2
+    text: >
+      Compare each Service selector with the labels shown by
+      kubectl get pods --show-labels. A Service discovers only Pods whose
+      labels match its selector.
+
+  - level: 3
+    text: >
+      If the EndpointSlice already contains Pod addresses, discovery worked.
+      Compare the Service targetPort with the port where ledger-api is
+      actually listening.
+
+references:
+  - title: Kubernetes Services
+    url: https://kubernetes.io/docs/concepts/services-networking/service/
+  - title: Kubernetes EndpointSlices
+    url: https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/
+  - title: Kubernetes Debug Services
+    url: https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/
+
+skills:
+  - k8s.service.selectors
+  - k8s.endpoints
+  - k8s.troubleshoot.service
+  - k8s.service.targetport
