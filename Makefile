@@ -50,12 +50,21 @@ secrets: ## Generate missing or placeholder secrets in .env (idempotent)
 secrets-check: ## Prove secrets, mounts, published ports and private networks per stack, from `docker compose config`
 	@node scripts/check-secret-distribution.mjs
 
+# Prometheus runs as nobody (65534) and reads this file through a bind mount, so
+# on a Linux host it must be readable by others and its directory traversable.
+# It used to be 0600: owned by the operator, that left every scrape target down
+# with "unable to read authorization credentials ... permission denied" on a
+# Linux host, while Docker Desktop's file sharing hid it on every laptop. The
+# alertmanager webhook-url file follows the same rule (its README). What keeps
+# other local accounts out is the checkout directory's own mode — see
+# docs/development/production-host-readiness.md §5.
 observability-token: ## Write the scrape token where Prometheus reads it
 	@mkdir -p infrastructure/observability/secrets
-	@grep -E '^OBSERVABILITY_SCRAPE_TOKEN=' .env \
+	@chmod 0711 infrastructure/observability/secrets
+	@(umask 077; grep -E '^OBSERVABILITY_SCRAPE_TOKEN=' .env \
 		| head -1 | cut -d= -f2- | tr -d '\n' \
-		> infrastructure/observability/secrets/scrape-token
-	@chmod 600 infrastructure/observability/secrets/scrape-token
+		> infrastructure/observability/secrets/scrape-token)
+	@chmod 0644 infrastructure/observability/secrets/scrape-token
 	@echo "wrote infrastructure/observability/secrets/scrape-token (git-ignored)"
 
 observability-up: ## Start the stack with Prometheus, Alertmanager and Grafana
