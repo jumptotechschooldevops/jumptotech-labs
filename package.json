@@ -26,6 +26,7 @@
     "test:integration:network-policy": "RUN_INTEGRATION_TESTS=1 vitest run test/network-policy-enforcement-integration.test.ts --root services/lab-orchestrator --testTimeout=900000 --hookTimeout=900000",
     "verify:network-policy": "tsx scripts/verify-network-policy.ts",
     "beta:validate": "tsx scripts/beta-validation/five-student.ts",
+    "validate:labs": "tsx scripts/validate-labs.ts",
     "tls:check": "tsx scripts/tls-check.ts",
     "test:integration:tls-edge": "RUN_INTEGRATION_TESTS=1 vitest run test/tls-edge-integration.test.ts --root services/observability --testTimeout=300000 --hookTimeout=900000",
     "test:integration:docker": "RUN_DOCKER_INTEGRATION_TESTS=1 vitest run test/docker-integration.test.ts --root services/lab-orchestrator --testTimeout=900000 --hookTimeout=900000",

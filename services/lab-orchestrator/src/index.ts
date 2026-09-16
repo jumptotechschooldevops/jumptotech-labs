@@ -7,6 +7,8 @@ export * from './track-definition.js';
 // V1 EPIC-02 — learning paths, and progress through them derived from verified labs.
 export * from './learning-paths.js';
 export * from './learning-progress.js';
+// Whole-catalog structural validation: `npm run validate:labs`.
+export * from './catalog-validation.js';
 export * from './k8s/port.js';
 export * from './k8s/labels.js';
 // BETA-P0-015 — the session network contract and its enforcement proof.
