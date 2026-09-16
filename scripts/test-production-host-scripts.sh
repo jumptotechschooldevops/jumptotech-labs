@@ -138,7 +138,7 @@ case "${2:-}" in
   scripts/production-config-check.ts)
     echo 'PASS   compose.services  8 services'
     [ -z "${FAKE_CONFIG_FAIL-}" ] || echo 'FAIL   capacity.beta-contract  MAX_ACTIVE_SESSIONS resolves to 20, not the proven 5'
-    [ -z "${FAKE_CONFIG_WARN-}" ] || echo 'WARN   durability.restart-policy  api has no restart policy'
+    [ -z "${FAKE_CONFIG_WARN-}" ] || echo 'WARN   backup.status-dir  BACKUP_STATUS_DIR is the in-checkout default'
     echo "INFO   attestation.expected-digest  ${FAKE_EXPECTED_DIGEST:-digest-abc}"
     [ -z "${FAKE_CONFIG_FAIL-}" ] || exit 1
     ;;
@@ -202,6 +202,7 @@ cat >"$fakebin/docker" <<'FAKE'
 #!/usr/bin/env bash
 { printf 'docker'; printf ' %s' "$@"; printf '\n'; } >>"$FAKE_LOG"
 if [ -n "${FAKE_DOCKER_DOWN-}" ] && [ "${1:-}" != compose ]; then exit 1; fi
+if [ -n "${FAKE_DOCKER_HANG-}" ]; then exec sleep 600; fi
 services='postgres api terminal sandboxd web prometheus alertmanager grafana'
 promql() {
   case $1 in
@@ -409,6 +410,7 @@ run() { # script case-root args...
   out=$(env -i PATH="$fakebin:/usr/bin:/bin" HOME="$root" TMPDIR="$work" REAL_NODE="$real_node" \
     FAKE_LOG="$root/log" FAKE_DOCKER_ROOT="$root/docker-root" JTT_PROC_ROOT="$root/proc" \
     JTT_DOCKER_SOCKET="$root/docker.sock" JTT_BACKUP_CRON_FILE="$root/cron" \
+    JTT_COMMAND_TIMEOUT="${JTT_COMMAND_TIMEOUT_FOR_TEST:-60}" \
     ${fakes[@]+"${fakes[@]}"} \
     bash "$root/repo/scripts/$script" "$@" 2>&1)
   status=$?
@@ -424,7 +426,9 @@ check() { # description condition-command...
   printf '  not ok: %s\n' "$description"
 }
 
-has_line() { printf '%s\n' "$out" | grep -Eq "$1"; }
+# Here-strings, not `printf | grep -q`: under pipefail an early grep exit can
+# SIGPIPE the writer and report a miss for a line that is there (seen on Linux).
+has_line() { grep -Eq "$1" <<<"$out"; }
 has_fail() { has_line "^FAIL +$1( |$)"; }
 exit_is() { [ "$status" -eq "$1" ]; }
 
@@ -432,7 +436,7 @@ no_secret_leaked() {
   local value file
   [ -s "$root/secret-values" ] || return 1
   while IFS= read -r value; do
-    if printf '%s' "$out" | grep -qF "$value"; then return 1; fi
+    if grep -qF "$value" <<<"$out"; then return 1; fi
     for file in "$root"/*.txt "$root"/evidence/*; do
       [ -f "$file" ] || continue
       if grep -qF "$value" "$file"; then return 1; fi
@@ -443,17 +447,19 @@ no_secret_leaked() {
 
 # Every docker and kubectl call is a read-only verb.
 only_read_only_calls() {
-  ! grep -E '^docker ' "$root/log" | sed -E 's/ -f [^ ]+//g; s/ --profile [^ ]+//g' |
+  local violations
+  violations=$(grep -E '^docker ' "$root/log" | sed -E 's/ -f [^ ]+//g; s/ --profile [^ ]+//g' |
     grep -vE '^docker (info|version|network inspect|image inspect|ps|inspect|port|stats|compose (version|ps|exec -T (prometheus promtool query instant|prometheus wget -qO- http://127\.0\.0\.1:3000/api/health|alertmanager amtool alert query|postgres sh -c pg_isready|(api|terminal|sandboxd) node -e)))( |$)' |
-    grep -q . &&
-    ! grep -E '^kubectl ' "$root/log" | grep -vE '^kubectl( -n kube-system)? (version|get)( |$)' | grep -q .
+    cat || true)
+  violations+=$(grep -E '^kubectl ' "$root/log" | { grep -vE '^kubectl( -n kube-system)? (version|get)( |$)' || true; } || true)
+  [ -z "$violations" ]
 }
 
 manual_never_passes() {
   local manual_count summary
   manual_count=$(printf '%s\n' "$out" | grep -c '^MANUAL CHECK REQUIRED ' || true)
   summary=$(printf '%s\n' "$out" | grep -E '^[0-9]+ PASS, ' | tail -1)
-  [ -n "$summary" ] && printf '%s' "$summary" | grep -q " $manual_count MANUAL CHECK REQUIRED"
+  [ -n "$summary" ] && grep -q " $manual_count MANUAL CHECK REQUIRED" <<<"$summary"
 }
 
 scenario() { # name, then the body runs in the caller
@@ -524,7 +530,7 @@ root=$(fixture tokenstale)
 printf 'stale-token-value-0123456789' >"$root/repo/infrastructure/observability/secrets/scrape-token"
 preflight "$root"
 check 'scrape-token-match FAIL' has_fail 'observability\.scrape-token-match'
-check 'the stale value is not printed' bash -c '! printf "%s" "$1" | grep -q stale-token-value' _ "$out"
+check 'the stale value is not printed' bash -c '! grep -q stale-token-value <<<"$1"' _ "$out"
 common_properties
 
 scenario 'preflight: a non-Linux machine is not host evidence'
@@ -538,6 +544,16 @@ FAKE_DOCKER_DOWN=1 preflight "$root"
 check 'docker.daemon FAIL' has_fail 'docker\.daemon'
 check 'a RESULT line is still printed' has_line '^RESULT: FAIL'
 check 'exit 1' exit_is 1
+
+scenario 'preflight: a hung Docker daemon is a FAIL within the command timeout, not a hang'
+root=$(fixture hung)
+if type -P timeout >/dev/null 2>&1; then
+  FAKE_DOCKER_HANG=1 JTT_COMMAND_TIMEOUT_FOR_TEST=2 preflight "$root"
+  check 'docker.daemon FAIL' has_fail 'docker\.daemon'
+  check 'the run still completes' has_line '^RESULT: FAIL'
+else
+  printf '  skipped: coreutils timeout is not installed here (it is on a Linux host and in CI)\n'
+fi
 
 scenario 'preflight: a missing Docker socket fails'
 root=$(fixture nosocket)
@@ -754,11 +770,14 @@ root=$(fixture stale)
 FAKE_BACKUP_AGE=200000 smoke "$root"
 check 'stale backup FAIL' has_fail 'backup\.recent'
 
-scenario 'smoke: a Docker restart count and a missing restart policy are warned about'
+scenario 'smoke: Docker restarts are warned about; a service without the production restart policy fails'
 root=$(fixture restarts)
 FAKE_RESTARTS=3 FAKE_RESTART_POLICY=no smoke "$root"
 check 'restarts WARN' has_line '^WARN +stack\.api-restarts '
-check 'restart policy WARN' has_line '^WARN +stack\.api-restart-policy '
+check 'restart policy FAIL' has_fail 'stack\.api-restart-policy'
+root=$(fixture always)
+FAKE_RESTART_POLICY=always smoke "$root"
+check 'restart: always FAIL' has_fail 'stack\.web-restart-policy'
 
 # --- host-capacity-sample.sh --------------------------------------------------------------------
 

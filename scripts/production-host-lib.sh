@@ -47,7 +47,42 @@ jtt_summary_line() {
     "$jtt_pass_count" "$jtt_fail_count" "$jtt_warn_count" "$jtt_manual_count" "$jtt_info_count"
 }
 
-have() { command -v "$1" >/dev/null 2>&1; }
+# An installed executable. `type -P`, not `command -v`: the wrappers below are
+# functions, and a function must not make a missing binary look installed.
+have() { type -P "$1" >/dev/null 2>&1; }
+
+# Match against captured text, never `cmd | grep -q`. Under `set -o pipefail`
+# grep -q exits at its first match, the writer can then die of SIGPIPE, and the
+# pipeline reports failure for text that did match — an intermittent false
+# result that a large `ss` or `configz` output on a real host would trigger.
+# jtt_contains TEXT GREP-ARGS...
+jtt_contains() {
+  local text=$1
+  shift
+  grep -q "$@" <<<"$text"
+}
+
+# --- bounded external calls ---------------------------------------------------------
+#
+# A wedged Docker daemon or cluster API must produce a FAIL, not a script that
+# never finishes. Every docker, kubectl and kind call runs under coreutils
+# `timeout` (JTT_COMMAND_TIMEOUT seconds, default 60; npx gets
+# JTT_TOOL_TIMEOUT, default 300, because it compiles TypeScript and renders
+# compose). A timed-out call exits 124 and is reported like any other failure.
+# Where `timeout` is absent (macOS, not a production host) calls are unbounded.
+jtt_bounded() {
+  local seconds=$1
+  shift
+  if type -P timeout >/dev/null 2>&1; then
+    timeout -k 5 "$seconds" "$@"
+  else
+    command "$@"
+  fi
+}
+docker() { jtt_bounded "${JTT_COMMAND_TIMEOUT:-60}" docker "$@"; }
+kubectl() { jtt_bounded "${JTT_COMMAND_TIMEOUT:-60}" kubectl "$@"; }
+kind() { jtt_bounded "${JTT_COMMAND_TIMEOUT:-60}" kind "$@"; }
+npx() { jtt_bounded "${JTT_TOOL_TIMEOUT:-300}" npx "$@"; }
 
 # --- portable file facts: GNU stat on a Linux host, BSD stat where tests may run ---
 

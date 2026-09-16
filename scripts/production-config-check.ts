@@ -102,7 +102,8 @@ function resolveComposition(options: { envFile?: string; env: NodeJS.ProcessEnv 
     '--format',
     'json',
   ];
-  const result = spawnSync('docker', args, { env: options.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  // Rendering needs no daemon; two minutes is a hung CLI, not a slow one.
+  const result = spawnSync('docker', args, { env: options.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120_000 });
   if (result.error) return { error: `could not run docker compose: ${result.error.message}` };
   if (result.status !== 0) {
     const message = result.stderr.trim().split('\n').slice(-3).join(' ') || `docker compose config exited ${result.status}`;

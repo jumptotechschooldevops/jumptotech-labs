@@ -56,8 +56,13 @@ export const PRODUCTION_PUBLICATIONS = Object.freeze([
   { service: 'prometheus', published: undefined, target: 3000, loopbackOnly: true },
 ] as const);
 
-/** Restart policies that bring a service back after a daemon restart or a reboot. */
-export const RESTARTING_POLICIES = Object.freeze(['always', 'unless-stopped']);
+/**
+ * The one restart policy production uses (docker-compose.production.yml,
+ * BETA-overnight hardening, pinned by private-beta-operations.test.ts).
+ * `unless-stopped`, never `always`: `prod stop web` is the runbook's only way to
+ * take the site down, and `always` would undo it at the next daemon restart.
+ */
+export const PRODUCTION_RESTART_POLICY = 'unless-stopped';
 
 export type CheckStatus = 'PASS' | 'FAIL' | 'WARN' | 'MANUAL' | 'INFO';
 
@@ -345,17 +350,20 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
     ),
   );
 
-  const noRestart = Object.entries(services)
-    .filter(([, service]) => !RESTARTING_POLICIES.includes(service.restart ?? ''))
-    .map(([name]) => name)
+  const wrongRestart = Object.entries(services)
+    .filter(([, service]) => service.restart !== PRODUCTION_RESTART_POLICY)
+    .map(([name, service]) => `${name} (${service.restart ?? 'none'})`)
     .sort();
   results.push(
-    noRestart.length === 0
-      ? pass('durability.restart-policy', 'every service restarts after a daemon restart or reboot')
-      : warn(
-          'durability.restart-policy',
-          `${noRestart.join(', ')} ${noRestart.length === 1 ? 'has' : 'have'} no always/unless-stopped restart policy: after a Docker restart or a reboot the platform stays down until an operator runs \`prod up -d\``,
-        ),
+    one(
+      'durability.restart-policy',
+      wrongRestart.length
+        ? [
+            `${wrongRestart.join(', ')}: every production service must be restart: ${PRODUCTION_RESTART_POLICY} — none leaves the platform down after a crash or reboot, always would undo \`prod stop web\``,
+          ]
+        : [],
+      `every service is restart: ${PRODUCTION_RESTART_POLICY}`,
+    ),
   );
 
   const status = (services.api?.volumes ?? []).find((volume) => volume.target === '/var/lib/jumptotech/backup-status');

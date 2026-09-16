@@ -204,7 +204,7 @@ if have docker && docker info >/dev/null 2>&1; then
   ostype=$(docker info -f '{{.OSType}}' 2>/dev/null || echo unknown)
   if [ "$ostype" = linux ]; then pass docker.ostype linux; else fail docker.ostype "$ostype: the images are Linux images"; fi
   info docker.cgroup "cgroup v$(docker info -f '{{.CgroupVersion}}' 2>/dev/null || echo '?') driver $(docker info -f '{{.CgroupDriver}}' 2>/dev/null || echo '?')"
-  if docker info -f '{{json .SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+  if jtt_contains "$(docker info -f '{{json .SecurityOptions}}' 2>/dev/null || true)" rootless; then
     warn docker.rootless 'rootless Docker is not proven: Docker-track sandboxes and the kind node need a privileged container'
   else
     pass docker.rootless 'rootful daemon (what kind and the Docker-track sandboxes were proven on)'
@@ -400,7 +400,7 @@ cluster=$(env_or LAB_CLUSTER_NAME jumptotech-labs)
 host_kubeconfig=$repo/infrastructure/kind/generated/kubeconfig-host-$cluster.yaml
 internal_kubeconfig=$repo/infrastructure/kind/generated/kubeconfig-internal.yaml
 cluster_ok=0
-if have kind && kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+if have kind && jtt_contains "$(kind get clusters 2>/dev/null || true)" -x "$cluster"; then
   pass kind.cluster "$cluster exists"
   cluster_ok=1
 else
@@ -435,7 +435,7 @@ if [ $cluster_ok -eq 1 ] && [ -s "$host_kubeconfig" ] && have kubectl; then
   else
     fail kind.nodes 'the cluster API is unreachable or a node is not Ready'
   fi
-  if kube get --raw "/api/v1/nodes/$cluster-control-plane/proxy/configz" 2>/dev/null | grep -q '"seccompDefault":true'; then
+  if jtt_contains "$(kube get --raw "/api/v1/nodes/$cluster-control-plane/proxy/configz" 2>/dev/null || true)" '"seccompDefault":true'; then
     pass kind.seccomp-default 'kubelet seccompDefault on (BETA-P0-016)'
   else
     fail kind.seccomp-default 'kubelet seccompDefault is not on: the cluster predates infrastructure/kind/cluster.yaml; recreate it before students'
@@ -443,7 +443,7 @@ if [ $cluster_ok -eq 1 ] && [ -s "$host_kubeconfig" ] && have kubectl; then
   policies=$(kube get validatingadmissionpolicies -o name 2>/dev/null || true)
   missing_policies=()
   for policy in jumptotech-deny-clusterrole-bindings jumptotech-protect-managed-resources jumptotech-require-pod-security; do
-    printf '%s\n' "$policies" | grep -q "/$policy\$" || missing_policies+=("$policy")
+    jtt_contains "$policies" "/$policy\$" || missing_policies+=("$policy")
   done
   if [ ${#missing_policies[@]} -eq 0 ]; then
     pass kind.admission-policies 'all three lab admission policies are installed'
@@ -504,7 +504,7 @@ section 'network exposure'
 if have ss; then
   listeners=$( (ss -Hltn 2>/dev/null || true) | awk '{print $4}')
   for port in 80 443; do
-    if printf '%s\n' "$listeners" | grep -Eq "[:.]$port\$"; then
+    if jtt_contains "$listeners" -E "[:.]$port\$"; then
       holder=
       if [ $docker_ok -eq 1 ]; then holder=$( (docker ps --filter "publish=$port" --format '{{.Names}}' 2>/dev/null || true) | head -1); fi
       if [ -z "$holder" ]; then
@@ -576,7 +576,7 @@ manual backup.offhost 'off-host destination and encryption are DECISION REQUIRED
 
 section 'configuration'
 if [ $env_ok -eq 1 ] && [ -x "$repo/node_modules/.bin/tsx" ] && [ $skip_config_check -eq 0 ]; then
-  if (cd "$repo" && node scripts/check-secret-distribution.mjs >/dev/null 2>&1); then
+  if (cd "$repo" && jtt_bounded "${JTT_TOOL_TIMEOUT:-300}" node scripts/check-secret-distribution.mjs >/dev/null 2>&1); then
     pass config.secret-distribution 'each service receives exactly its secrets, mounts, ports and networks (make secrets-check)'
   else
     fail config.secret-distribution 'make secrets-check fails: run it for the names involved'

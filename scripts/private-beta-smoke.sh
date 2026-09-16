@@ -23,6 +23,23 @@
 # route, Prometheus and Alertmanager queries. It starts, stops, restarts and
 # creates nothing, and needs no student account. It never signs in.
 #
+# ## What kind of proof each line is
+#
+# Every section header names its proof class, because they are not
+# interchangeable:
+#
+#   LOCAL ENDPOINT PROOF      a request to 127.0.0.1 inside a container
+#   HOST-LOCAL PROOF          the Docker daemon's view on this host
+#   PUBLIC-ENDPOINT PROOF     a request to the public name, made from this host.
+#                             It proves the edge serves that name with a trusted
+#                             certificate; the packets may never leave the host,
+#                             so it does NOT prove the internet can reach it
+#   EXTERNAL-INFRASTRUCTURE   DNS as others see it, the provider firewall, a
+#                             person receiving an alert: always MANUAL CHECK REQUIRED
+#
+# Every network call is bounded: curl --max-time (JTT_SMOKE_CURL_TIMEOUT, 15 s),
+# docker and npx through scripts/production-host-lib.sh's timeouts.
+#
 # ## It never prints a secret
 #
 # It reads no secret. .env supplies PUBLIC_ORIGIN only. Response bodies are
@@ -102,7 +119,7 @@ q() {
 }
 q_first() { q "$1" | awk 'NR==1 {print $NF}'; }
 
-section 'stack'
+section 'stack — HOST-LOCAL PROOF (the Docker daemon on this host)'
 services=(postgres api terminal sandboxd web prometheus alertmanager grafana)
 if ! ps_output=$(jtt_prod ps -a --format '{{.Service}}|{{.State}}|{{.Health}}|{{.Name}}' 2>&1); then
   fail stack.compose "docker compose ps failed: $(printf '%s' "$ps_output" | tail -1)"
@@ -125,14 +142,13 @@ for service in "${services[@]}"; do
   if restart=$(docker inspect -f '{{.RestartCount}} {{.HostConfig.RestartPolicy.Name}}' "$name" 2>/dev/null); then
     read -r count policy <<<"$restart"
     if [ "${count:-0}" -gt 0 ]; then warn "stack.$service-restarts" "restarted $count time(s) by Docker since it was created"; fi
-    case $policy in
-      always | unless-stopped) ;;
-      *) warn "stack.$service-restart-policy" "restart policy '${policy:-no}': this service stays down after a Docker restart or reboot" ;;
-    esac
+    if [ "$policy" != unless-stopped ]; then
+      fail "stack.$service-restart-policy" "restart policy '${policy:-no}', not unless-stopped as docker-compose.production.yml ships: was the stack started without the production overlays?"
+    fi
   fi
 done
 
-section 'readiness'
+section 'readiness — LOCAL ENDPOINT PROOF (loopback inside each container)'
 for pair in 'api 9400' 'terminal 9401' 'sandboxd 9402'; do
   read -r service port <<<"$pair"
   if code=$(jtt_prod exec -T "$service" node -e \
@@ -143,7 +159,7 @@ for pair in 'api 9400' 'terminal 9401' 'sandboxd 9402'; do
   fi
 done
 
-section 'runtime'
+section 'runtime — LOCAL ENDPOINT PROOF (the api, from inside its container)'
 health_json=$(jtt_prod exec -T api node -e \
   "fetch('http://127.0.0.1:4000/health').then(r => r.text()).then(t => console.log(t)).catch(() => process.exit(1))" 2>/dev/null || true)
 if [ -z "$health_json" ]; then
@@ -175,16 +191,16 @@ else
   fail database.ready 'pg_isready failed'
 fi
 
-section 'public edge'
+section 'public edge — PUBLIC-ENDPOINT PROOF, requested FROM THIS HOST (not proof the internet can reach it)'
 root_code=$(edge_curl -o /dev/null -w '%{http_code}' "https://$host/" 2>/dev/null) && root_status=0 || root_status=$?
 if [ "$root_status" -eq 0 ] && [ "$root_code" = 200 ]; then
-  pass edge.https "https://$host/ answers 200 with a certificate this host's CA store trusts"
+  pass edge.https "https://$host/ answers 200 with a certificate this host's CA store trusts${connect:+ (connected to $connect, not through DNS)}"
 elif [ "$root_status" -eq 60 ] || [ "$root_status" -eq 35 ] || [ "$root_status" -eq 51 ]; then
   fail edge.https "https://$host/: TLS verification failed (curl exit $root_status)"
 else
   fail edge.https "https://$host/: HTTP ${root_code:-none}, curl exit $root_status"
 fi
-if edge_curl -o /dev/null -D - "https://$host/" 2>/dev/null | grep -qi '^strict-transport-security:'; then
+if jtt_contains "$(edge_curl -o /dev/null -D - "https://$host/" 2>/dev/null || true)" -i '^strict-transport-security:'; then
   pass edge.hsts 'Strict-Transport-Security is sent'
 else
   fail edge.hsts 'no Strict-Transport-Security header'
@@ -209,9 +225,9 @@ else
   fail edge.tls-check 'not run: npm ci is needed for npm run tls:check'
 fi
 
-section 'authentication boundary'
+section 'authentication boundary — PUBLIC-ENDPOINT PROOF, from this host'
 auth_config=$(edge_curl "https://$host/auth/config" 2>/dev/null || true)
-if printf '%s' "$auth_config" | grep -q '"mode":"oidc"' && printf '%s' "$auth_config" | grep -q '"signInAvailable":true'; then
+if jtt_contains "$auth_config" '"mode":"oidc"' && jtt_contains "$auth_config" '"signInAvailable":true'; then
   pass auth.config 'mode oidc, sign-in available'
 else
   fail auth.config '/auth/config does not report mode oidc with sign-in available'
@@ -240,23 +256,23 @@ else
   fail auth.login-redirect "GET /auth/login answered ${login_code:-nothing}: sign-in cannot reach the identity provider"
 fi
 
-section 'private paths through the edge'
+section 'private paths through the edge — PUBLIC-ENDPOINT PROOF, from this host'
 internal=$(edge_curl -X POST -H 'content-type: application/json' --data '{}' "https://$host/internal/sessions/jtt-smoke/credentials" 2>/dev/null || true)
-if printf '%s' "$internal" | grep -q 'internal service use only'; then
+if jtt_contains "$internal" 'internal service use only'; then
   fail edge.internal-not-routed 'POST /internal/... reached the api through the public edge'
 else
   pass edge.internal-not-routed '/internal is not routed to the api'
 fi
 for path in /metrics /readyz /health; do
   body=$(edge_curl "https://$host$path" 2>/dev/null || true)
-  if printf '%s' "$body" | grep -qE '^# (HELP|TYPE) |"service":"api"|jtt_'; then
+  if jtt_contains "$body" -E '^# (HELP|TYPE) |"service":"api"|jtt_'; then
     fail "edge.not-routed$path" "GET $path returned an api/metrics response through the public edge"
   else
     pass "edge.not-routed$path" "GET $path does not reach a service"
   fi
 done
 
-section 'exposure'
+section 'exposure — HOST-LOCAL PROOF (published ports, networks); EXTERNAL-INFRASTRUCTURE is manual'
 unexpected=()
 published=()
 if ids=$(jtt_prod ps -q 2>/dev/null) && [ -n "$ids" ]; then
@@ -319,7 +335,7 @@ else
   manual exposure.external 'pass --public-ip, and scan the public address from a machine outside the host: only 80 and 443 (and SSH if intended) may answer'
 fi
 
-section 'observability'
+section 'observability — LOCAL ENDPOINT PROOF (inside the monitoring namespace)'
 up=$(q 'up' || true)
 if [ -z "$up" ]; then
   fail observability.targets 'Prometheus returned no targets (is it running, and can it read the scrape token?)'
@@ -342,7 +358,7 @@ if jtt_prod exec -T alertmanager amtool alert query --alertmanager.url=http://12
 else
   fail observability.alertmanager 'Alertmanager did not answer'
 fi
-if jtt_prod exec -T prometheus wget -qO- http://127.0.0.1:3000/api/health 2>/dev/null | grep -q '"database": *"ok"'; then
+if jtt_contains "$(jtt_prod exec -T prometheus wget -qO- http://127.0.0.1:3000/api/health 2>/dev/null || true)" '"database": *"ok"'; then
   pass observability.grafana 'Grafana is healthy inside the namespace'
 else
   fail observability.grafana 'Grafana /api/health is not ok'
@@ -372,7 +388,7 @@ else
   else pass tls.expiry-metric "certificate expires in ${whole} days"; fi
 fi
 
-section 'backups'
+section 'backups — LOCAL ENDPOINT PROOF (what the backup job recorded)'
 backup_age=$(q_first 'jtt:backup_age:seconds{operation="backup"}' || true)
 if [ -z "$backup_age" ]; then
   fail backup.recent 'no successful backup has been recorded (run scripts/db-backup.sh and schedule it)'
@@ -396,7 +412,7 @@ else
 fi
 manual backup.restore 'restore the newest archive beside production with scripts/db-restore.sh --into and validate it (postgres-backup-restore.md §6.3); record the archive name and result'
 
-section 'what only a person can confirm'
+section 'EXTERNAL-INFRASTRUCTURE and PERSON — no script on this host can prove these'
 manual student.flow 'sign in at the public origin as a beta account; start LINUX-001; type in the terminal; Check Solution; Reset; End Lab. Record times (readiness doc §16)'
 manual auth.admission 'sign in with an account that is NOT on the beta list: it must be refused by the identity provider. The platform admits any account the issuer authenticates'
 manual alerts.delivery 'fire the drill alert (readiness doc §12) and confirm a person received it; record who, where and when'

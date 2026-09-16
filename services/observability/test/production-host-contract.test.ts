@@ -7,7 +7,7 @@
  * fabricated resolved configurations, so a check that silently stops checking
  * fails here in every `npm test`:
  *
- *   · the shipped shape passes, and each unsafe variation is a FAIL, not a WARN;
+ *   · the shipped shape passes cleanly, and each unsafe variation is a FAIL, not a WARN;
  *   · a loader refusal never carries a secret value to the terminal;
  *   · the contract's file list and publications are the ones the runbook and
  *     infrastructure/secret-distribution.json already declare;
@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import * as contract from '@jumptotech/test-support/production-host-contract';
 import {
   PRODUCTION_COMPOSE_FILES,
   PRODUCTION_PUBLICATIONS,
@@ -100,6 +101,7 @@ function shipped(): ResolvedCompose {
       volumes: [{ type: 'volume', source: 'grafana-data', target: '/var/lib/grafana' }],
     },
   };
+  for (const service of Object.values(services)) service.restart = 'unless-stopped';
   return { services, networks: { database: { internal: true }, default: {}, kind: { external: true }, sandboxes: {} } };
 }
 
@@ -113,17 +115,9 @@ function mutate(change: (config: ResolvedCompose) => void): CheckResult[] {
 }
 
 describe('the shipped production shape', () => {
-  it('passes every check, and only warns about the absent restart policy', () => {
+  it('passes every check with no warning', () => {
     const results = evaluateProductionComposition(shipped(), { repoRoot: '/repo', hostDockerSocketGid: 998 });
-    expect(results.filter((result) => result.status === 'FAIL')).toEqual([]);
-    expect(results.filter((result) => result.status === 'WARN').map((result) => result.id)).toEqual(['durability.restart-policy']);
-  });
-
-  it('passes the restart check once every service restarts on its own', () => {
-    const results = mutate((config) => {
-      for (const service of Object.values(config.services!)) service.restart = 'unless-stopped';
-    });
-    expect(statusOf(results, 'durability.restart-policy')).toBe('PASS');
+    expect(results.filter((result) => result.status !== 'PASS')).toEqual([]);
   });
 
   it('does not judge the socket group when the host socket could not be read', () => {
@@ -163,6 +157,9 @@ describe('each unsafe variation is a FAIL', () => {
     ['two labs per student', 'capacity.beta-contract', (c) => (c.services!.api!.environment!.MAX_ACTIVE_SESSIONS_PER_STUDENT = '2')],
     ['PostgreSQL data in a bind mount', 'durability.volumes', (c) => (c.services!.postgres!.volumes = [{ type: 'bind', source: '/tmp/pg', target: '/var/lib/postgresql/data' }])],
     ['no database health check', 'durability.healthchecks', (c) => delete c.services!.postgres!.healthcheck],
+    ['a service with no restart policy', 'durability.restart-policy', (c) => delete c.services!.sandboxd!.restart],
+    ['restart: always, which undoes prod stop web', 'durability.restart-policy', (c) => (c.services!.web!.restart = 'always')],
+    ['restart: on-failure', 'durability.restart-policy', (c) => (c.services!.grafana!.restart = 'on-failure')],
     ['no backup status mount', 'backup.status-dir', (c) => (c.services!.api!.volumes = c.services!.api!.volumes!.filter((v) => !v.target.includes('backup')))],
     ['a writable backup status mount', 'backup.status-dir', (c) => (c.services!.api!.volumes![1]!.read_only = false)],
   ];
@@ -173,6 +170,7 @@ describe('each unsafe variation is a FAIL', () => {
 
   it('warns, rather than passes, when the backup status directory is the in-checkout default', () => {
     const results = mutate((c) => (c.services!.api!.volumes![1]!.source = '/repo/backups/status'));
+    expect(results.filter((result) => result.status === 'WARN').map((result) => result.id)).toEqual(['backup.status-dir']);
     expect(statusOf(results, 'backup.status-dir')).toBe('WARN');
   });
 });
@@ -262,6 +260,14 @@ describe('the contract restates declarations it does not own', () => {
     ].sort();
     const contract = PRODUCTION_PUBLICATIONS.map((p) => `${p.service}:${p.loopbackOnly ? 'loopback' : p.published}:${p.target}`).sort();
     expect(contract).toEqual(declared);
+  });
+
+  it('requires the restart policy the production overlays ship', () => {
+    const { PRODUCTION_RESTART_POLICY } = contract;
+    expect(PRODUCTION_RESTART_POLICY).toBe('unless-stopped');
+    for (const file of ['docker-compose.production.yml', 'docker-compose.production-observability.yml']) {
+      expect(read(file)).toContain(`restart: ${PRODUCTION_RESTART_POLICY}`);
+    }
   });
 
   it('holds the beta capacity contract the five-student gate proved', async () => {
