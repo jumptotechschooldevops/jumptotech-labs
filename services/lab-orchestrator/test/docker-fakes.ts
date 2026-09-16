@@ -93,6 +93,16 @@ interface FakeContainer {
   files: Map<string, string>;
   /** Paths that exist but are not regular files. */
   directories: Set<string>;
+  /**
+   * Networks attached *after* the container was created.
+   *
+   * `runContainer` takes at most one `--network`, but a container can be on
+   * several: `docker network connect` attaches a running container to another
+   * one, and `docker inspect` then reports both. A lab that has the student
+   * move a running container onto a user-defined network produces exactly that
+   * state, so the fake has to be able to hold it.
+   */
+  attachedNetworks: Set<string>;
 }
 
 interface FakeImage {
@@ -193,7 +203,23 @@ export class FakeDockerDaemon implements DockerEnginePort {
       createdAt: new Date(0).toISOString(),
       files: new Map(),
       directories: new Set(),
+      attachedNetworks: new Set(),
     });
+  }
+
+  /**
+   * Attach an existing container to another network, as `docker network
+   * connect` does.
+   *
+   * The network has to exist, for the same reason the daemon requires it: a
+   * test that attaches to a network nobody created is asserting against a state
+   * the real daemon would have refused to produce.
+   */
+  attachNetwork(container: string, network: string): void {
+    const found = this.containers.get(container);
+    if (!found) throw new Error(`fake daemon has no container '${container}'`);
+    if (!this.networks.has(network)) throw new Error(`fake daemon has no network '${network}'`);
+    found.attachedNetworks.add(network);
   }
 
   /**
@@ -303,6 +329,7 @@ export class FakeDockerDaemon implements DockerEnginePort {
       createdAt: new Date(0).toISOString(),
       files: new Map(),
       directories: new Set(),
+      attachedNetworks: new Set(),
     };
     this.containers.set(spec.name, container);
 
@@ -604,7 +631,7 @@ function toSnapshot(container: FakeContainer): DockerContainerSnapshot {
     restartPolicy: spec.restartPolicy ?? 'no',
     env: { ...(spec.env ?? {}) },
     labels: { ...(spec.labels ?? {}) },
-    networks: spec.network ? [spec.network] : ['bridge'],
+    networks: [...new Set([spec.network ?? 'bridge', ...container.attachedNetworks])],
     ports: (spec.ports ?? []).map((p) => ({
       containerPort: p.containerPort,
       protocol: p.protocol ?? 'tcp',

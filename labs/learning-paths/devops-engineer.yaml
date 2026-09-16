@@ -257,6 +257,9 @@ stages:
       - lab: NET-022
         skills: [docker.networking]
         why: Diagnoses a Docker port mapping that targets the wrong container port and repairs the host-to-container path.
+      - lab: NET-023
+        skills: [docker.networking, networking.troubleshooting]
+        why: Shows why a container name resolves on one network and not another, and what scope a container DNS name actually lives in.
 
   # ---------------------------------------------------------------------------
   - id: git

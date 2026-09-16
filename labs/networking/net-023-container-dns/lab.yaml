@@ -1,0 +1,426 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# NET-023 — container DNS, and why "on the network" is not one thing.
+#
+# Content is written from the official Docker documentation only; the pages
+# this lab is grounded in are listed under `references`.
+#
+# THE INCIDENT IS SEEDED, NOT DESCRIBED. `ledger-worker` and `ledger-api` are
+# both running, both are "on the network", and the worker cannot reach the API
+# by name. They are on the **default** bridge, where the daemon's embedded DNS
+# does not serve container names — the documented difference between the
+# default bridge and a user-defined one. Nothing in the task text names the
+# network or the resolver; both are read out of the running system.
+#
+# MEASURED, not assumed. The behaviour this lab grades was re-measured on
+# Docker Engine 28.4.0 on 2026-09-16, because it is the kind of behaviour that
+# changes between releases and the whole lab rests on it:
+#
+#   default bridge          /etc/resolv.conf carries the daemon host's
+#                           nameserver; a container name returns NXDOMAIN
+#   user-defined bridge     /etc/resolv.conf carries `nameserver 127.0.0.11`
+#                           plus `options ndots:0`, and container names resolve
+#   docker network connect  rewrites a *running* container's /etc/resolv.conf
+#                           to the embedded resolver
+#   two user-defined nets   one name resolves per network, to the container on
+#                           that network — the same name on another network is
+#                           a different answer, and from a third network it is
+#                           NXDOMAIN
+#
+# WHAT THIS LAB VERIFIES, AND WHAT IT DOES NOT.
+#
+#   observed      the network the student created and its driver, which
+#                 containers the daemon has attached to it, both containers'
+#                 state and image, and — read from *inside* each container
+#                 through the daemon's archive endpoint, not from anything the
+#                 student typed — the resolver in its /etc/resolv.conf
+#   student-written  the two worksheets
+#
+# The resolver check is the one that matters: `127.0.0.11` inside the container
+# is the platform observing the embedded DNS server itself, so the worksheet
+# value it corroborates cannot be invented. The curriculum's plan for this lab
+# graded the resolver from workspace evidence alone and flagged that as an
+# honest weakness needing N9 (`docker_exec_probe`). It does not: the existing
+# `docker_container_file_content` reads the file through the archive endpoint
+# with nothing executing in the student's container, which closes that half of
+# the gap with no new capability. What still needs N9 is running the *lookup*
+# itself — proving name resolution rather than proving the resolver.
+#
+# NOT verified: that a DNS query was actually made, and the contents of the
+# student's own before/after transcripts. The student proves those for
+# themselves; nothing here parses command output or reads shell history.
+#
+# NET-012 is this lab's second curriculum prerequisite and is not implemented.
+# The registry refuses a prerequisite that does not resolve, so only NET-022 is
+# declared — the same policy NET-002 follows for NET-001.
+# ---------------------------------------------------------------------------
+id: NET-023
+slug: net-023-container-dns
+title: "Container DNS: The Name That Only Resolves on Some Networks"
+track: networking
+topic: container-networking
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 23
+
+environment:
+  provider: docker
+  isolation: container
+
+# NET-012 (the resolution path) is designed but not implemented; see the header.
+prerequisites:
+  - NET-022
+
+story: >
+  The ledger worker was deployed this morning and has not processed a single
+  job. Its logs say the same thing every thirty seconds: it cannot reach
+  `ledger-api`.
+
+  Both containers are running. Both were started on this host by the same
+  engineer, in the same session, minutes apart. `docker ps` shows them side by
+  side. And when the engineer checked by hand, the API answered — they used its
+  IP address, which worked, and closed the ticket as a worker bug.
+
+  It is not a worker bug. The name is the whole incident, and the reason the
+  name does not work is a property of the network the two containers happen to
+  be on.
+
+objectives:
+  - Tell the default bridge network apart from a user-defined bridge network
+  - Read which network the daemon has attached a container to
+  - Find the resolver a container is configured to use, from inside the container
+  - Explain why a container name resolves on one network and not on another
+  - Move running containers onto a user-defined network and confirm the resolver changed
+  - Describe the scope a container DNS name lives in, and what a network alias changes
+
+task:
+  summary: Work out why ledger-worker cannot reach ledger-api by name, repair it by putting both containers on a network whose DNS serves container names, and record what the scope of a container name actually is.
+  description: >
+    Nothing below tells you which network the containers are on, or what a
+    container's resolver turns out to be. Finding those out is the exercise.
+
+    **Separate the two failures first.** `ledger-worker` is an Alpine container,
+    so `docker exec ledger-worker nslookup ledger-api` asks the resolver the
+    container is actually configured with, and `docker exec ledger-worker wget
+    -qO- http://ADDRESS/` tries the connection. Do the lookup and the connection
+    as two separate questions: one of them fails and one of them works, and that
+    difference is the diagnosis. `docker inspect ledger-api` reports the
+    addresses the daemon gave it, under `NetworkSettings`.
+
+    **Find out where they are.** `docker inspect ledger-worker --format '{{json
+    .NetworkSettings.Networks}}'` names every network the daemon has attached
+    the container to. `docker network ls` lists what exists on this daemon.
+    There is more than one network here, and they do not all behave the same
+    way.
+
+    **Find out what resolver each container has.** A container's
+    `/etc/resolv.conf` is written by the daemon when the container is attached
+    to a network, and `docker exec ledger-worker cat /etc/resolv.conf` prints
+    it. Read it now, before you change anything — you will read it again
+    afterwards, and the difference between the two readings is the mechanism
+    this lab is about.
+
+    Record what you found in `diagnosis.txt` in your workspace, replacing each
+    `____`.
+
+    **Then repair it.** Create a network named `ledger-net`, and attach both
+    `ledger-api` and `ledger-worker` to it. You do not have to recreate either
+    container: `docker network connect` attaches a container that is already
+    running, and the daemon rewrites that container's resolver as it does so.
+    Leave both containers running, and leave `ledger-api` on the image it
+    already has.
+
+    Prove it: the lookup that returned nothing now returns an address, and the
+    request by name now answers.
+
+    **Then the part that is not about this incident.** There is a third
+    container on this daemon, running the same application on a network of its
+    own. From `ledger-worker`, on your new network, its name does not resolve —
+    even though it is running, on the same daemon, right now. Work out which
+    network it is on, and fill in `scope.txt`.
+
+    **The required final state.**
+
+      - A bridge network named `ledger-net` exists.
+      - `ledger-api` and `ledger-worker` are both attached to it and running.
+      - `ledger-api` still runs the image it was deployed with.
+      - The third container is left where it is — it is the demonstration, not
+        the fault.
+
+    One thing this lab does **not** check: whether a lookup was made. It grades
+    the networks the daemon holds, both containers' state and image, the
+    resolver inside each container, and your two worksheets. The `nslookup` is
+    your proof, not the platform's.
+
+setup:
+  docker:
+    images:
+      - nginx:1.27-alpine
+      - alpine:3.20
+    networks:
+      # The third scope. A user-defined network the student does not have to
+      # touch — it exists so that "this name does not resolve" can be shown for
+      # a container that is running and healthy on this very daemon.
+      - name: ledger-canary-net
+    containers:
+      # The API. On the DEFAULT bridge, which is where the incident comes from:
+      # the daemon's embedded DNS does not serve container names there.
+      - name: ledger-api
+        image: nginx:1.27-alpine
+        state: running
+      # The worker. Also on the default bridge, so the name lookup it makes
+      # goes to the daemon host's resolver and comes back with nothing.
+      - name: ledger-worker
+        image: alpine:3.20
+        command:
+          - sh
+          - -c
+          - 'exec sleep 3600'
+        state: running
+      # The same application, on a network of its own. Nothing is wrong with
+      # it; it is the second half of the lesson.
+      - name: ledger-api-canary
+        image: nginx:1.27-alpine
+        network: ledger-canary-net
+        state: running
+    files:
+      # Worksheets, not answer keys: every value below is read out of the
+      # running system, and no network name, resolver address or option name
+      # that is graded appears here.
+      - path: diagnosis.txt
+        content: |
+          # NET-023 — diagnosis
+          #
+          # Replace each ____ with what you observed. Keep the field names;
+          # only the values need to change. Nothing here is a guess: every
+          # answer is readable from the running containers.
+          #
+          # 1. Before you changed anything, did the name `ledger-api` resolve
+          #    from inside ledger-worker?
+          #    Answer exactly one of: resolved / not_resolved
+          name_lookup_before: ____
+          #
+          # 2. Which network had the daemon attached ledger-api to at that
+          #    point? Give the network's name exactly as `docker inspect`
+          #    reports it under NetworkSettings.Networks.
+          network_before: ____
+          #
+          # 3. After both containers were attached to the network you created,
+          #    which nameserver address does ledger-worker's /etc/resolv.conf
+          #    list? Give the address on its own.
+          resolver_after: ____
+          #
+          # 4. In one sentence: why did the lookup fail before, when both
+          #    containers were running on the same host the whole time?
+          why_the_lookup_failed: ____
+      - path: scope.txt
+        content: |
+          # NET-023 — the scope of a container name
+          #
+          # Answer in your own words, in full sentences. This is the part that
+          # outlives the incident: it is what stops someone assuming that
+          # "the container is running" and "the name works" are the same claim.
+          #
+          # 1. There is a third container on this daemon running the same
+          #    application. From ledger-worker its name does not resolve, even
+          #    though it is running right now. Name the network it is attached
+          #    to, exactly as `docker network ls` prints it, and say what that
+          #    proves about where a container DNS name exists — is a name known
+          #    to the daemon, or to something smaller than the daemon?
+          #
+          # 2. A container is normally reachable by its own name. Suppose you
+          #    wanted that third container to ALSO answer to a second name, for
+          #    containers on its own network only, without renaming it or
+          #    recreating it. Name the `docker network connect` option that
+          #    does this, written exactly as the Docker CLI reference spells
+          #    it, including its leading dashes.
+          #
+          # 3. Two containers on this daemon can carry the same network-scoped
+          #    name as long as they are on different networks, and a lookup
+          #    will give a different answer on each. Say in one sentence why
+          #    that is a useful property rather than a bug.
+
+  verify:
+    - type: docker_image_exists
+      image: nginx:1.27-alpine
+      label: The nginx:1.27-alpine image is available
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: The alpine:3.20 image is available
+    - type: docker_container_running
+      name: ledger-api
+      label: The ledger-api container is running
+    - type: docker_container_running
+      name: ledger-worker
+      label: The ledger-worker container is running
+    - type: docker_container_network
+      name: ledger-api
+      network: bridge
+      label: The deployment left ledger-api where it was deployed
+    - type: docker_container_running
+      name: ledger-api-canary
+      label: The third container is running
+    - type: docker_container_network
+      name: ledger-api-canary
+      network: ledger-canary-net
+      label: The third container is on its own network
+    - type: workspace_file_exists
+      path: diagnosis.txt
+      label: The diagnosis worksheet is in the workspace
+    - type: workspace_file_exists
+      path: scope.txt
+      label: The scope worksheet is in the workspace
+
+  verify_timeout_seconds: 180
+
+# Eleven checks. The Docker ones read structured fields of `docker inspect`
+# against this session's own daemon; the two resolver checks read
+# /etc/resolv.conf out of the container through the daemon's archive endpoint,
+# so nothing executes inside the student's containers and a value the student
+# typed cannot satisfy them.
+#
+# The labels are deliberately colourless. They are rendered next to every check
+# on Check Solution, so a label that repeated the value it grades would hand
+# over the diagnosis to anyone who pressed the button once.
+requirements:
+  # --- the network the student created -------------------------------------
+  - type: docker_network_exists
+    name: ledger-net
+    driver: bridge
+    label: A user-defined network exists with the name the task asked for
+
+  # --- both containers are on it, and still what they were -----------------
+  - type: docker_container_network
+    name: ledger-api
+    network: ledger-net
+    label: ledger-api is attached to that network
+  - type: docker_container_network
+    name: ledger-worker
+    network: ledger-net
+    label: ledger-worker is attached to that network
+  - type: docker_container_running
+    name: ledger-api
+    label: Container ledger-api is running
+  - type: docker_container_running
+    name: ledger-worker
+    label: Container ledger-worker is running
+  - type: docker_container_image
+    name: ledger-api
+    image: nginx:1.27-alpine
+    label: Container ledger-api still runs the image it was deployed with
+
+  # --- the mechanism, observed inside the containers ------------------------
+  #
+  # The daemon writes /etc/resolv.conf when it attaches a container to a
+  # network, so this is the embedded DNS server itself rather than a value the
+  # student wrote down. Read through the archive endpoint: nothing executes in
+  # the student's container.
+  - type: docker_container_file_content
+    container: ledger-worker
+    path: /etc/resolv.conf
+    contains:
+      - "127.0.0.11"
+    label: ledger-worker resolves through the daemon's own resolver
+  - type: docker_container_file_content
+    container: ledger-api
+    path: /etc/resolv.conf
+    contains:
+      - "127.0.0.11"
+    label: ledger-api resolves through the daemon's own resolver
+
+  # --- the demonstration is still standing ---------------------------------
+  - type: docker_container_network
+    name: ledger-api-canary
+    network: ledger-canary-net
+    label: The third container was left on the network it was deployed to
+
+  # --- the worksheets -------------------------------------------------------
+  - type: workspace_file_exists
+    path: diagnosis.txt
+    contains:
+      - "name_lookup_before: not_resolved"
+      - "network_before: bridge"
+      - "resolver_after: 127.0.0.11"
+    label: diagnosis.txt records what was observed before and after the change
+  - type: workspace_file_exists
+    path: scope.txt
+    contains:
+      - "ledger-canary-net"
+      - "--alias"
+    label: scope.txt names the network the third container's name lives on and the option that adds another
+
+# `Reset Lab` restores this session's Docker environment to its baseline: the
+# student's networks and containers are removed, the three containers are
+# seeded again on their original networks, and both worksheets are restored —
+# so a student who filled one in and wants to start over gets a blank one back.
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    # Images are kept: re-pulling on every reset would turn a two-second reset
+    # into a two-minute one.
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Two containers being "on the network" is not one fact. Ask the daemon
+      which network each one is attached to, by name — `docker inspect` reports
+      it, and `docker network ls` shows you what the alternatives are.
+
+      Then ask the containers, separately, what resolver they were given.
+      `/etc/resolv.conf` inside a container is written by the daemon, not by the
+      image, and it is not the same on every network.
+  - level: 2
+    text: >
+      The Docker networking documentation states the difference plainly: on a
+      user-defined bridge network, containers can resolve each other by name;
+      on the default bridge network they cannot. That is not a configuration
+      you turn on — it is which network the container is attached to.
+
+      You do not have to recreate anything to move a running container.
+      `docker network create` makes the network and `docker network connect`
+      attaches a container that is already up. Read `/etc/resolv.conf` again
+      immediately afterwards.
+  - level: 3
+    text: >
+      Three commands, in this order, and the task text has already named all
+      three: create the network the required final state asks for, connect
+      `ledger-api` to it, then connect `ledger-worker` to it. Neither container
+      is recreated and neither is restarted.
+
+      Confirm the mechanism rather than assuming it: read
+      `/etc/resolv.conf` inside `ledger-worker` again with `docker exec`, and
+      compare the nameserver line with the one you read before. Then run the
+      lookup again — the same `nslookup` that came back with nothing.
+
+      For `scope.txt`, `docker network ls` lists the third container's network
+      and `docker inspect` confirms which one it is attached to. For the second
+      question, read the *options* section of the `docker network connect` page
+      in the CLI reference: one of them adds a second, network-scoped name to a
+      container. It is the same idea `docker run` spells `--network-alias`, and
+      what the worksheet wants is how `docker network connect` spells it.
+
+references:
+  - title: Docker Engine — Networking overview
+    url: https://docs.docker.com/engine/network/
+  - title: Docker Engine — Bridge network driver
+    url: https://docs.docker.com/engine/network/drivers/bridge/
+  - title: Docker Engine — Container networking and DNS services
+    url: https://docs.docker.com/engine/network/#dns-services
+  - title: Docker CLI reference — docker network create
+    url: https://docs.docker.com/reference/cli/docker/network/create/
+  - title: Docker CLI reference — docker network connect
+    url: https://docs.docker.com/reference/cli/docker/network/connect/
+  - title: Docker CLI reference — docker container inspect
+    url: https://docs.docker.com/reference/cli/docker/container/inspect/
+
+skills:
+  - container.dns
+  - container.service-discovery
+  - container.networks
+  - net.troubleshoot.name-resolution
