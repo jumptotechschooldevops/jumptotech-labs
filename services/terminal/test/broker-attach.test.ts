@@ -115,7 +115,11 @@ interface Stack {
  * enforces the same ownership rule the real one does — that is the check the
  * cross-user tests below are exercising.
  */
-async function bringUpStack(containers: Record<string, SandboxSnapshot>): Promise<Stack> {
+async function bringUpStack(
+  containers: Record<string, SandboxSnapshot>,
+  /** Latency to add, each kept inside that step's own timeout. */
+  delays: { apiMs?: number; inspectMs?: number } = {},
+): Promise<Stack> {
   const owners = new Map<string, string>([
     [SESSION_A, OWNER_A],
     [SESSION_B, OWNER_B],
@@ -134,7 +138,8 @@ async function bringUpStack(containers: Record<string, SandboxSnapshot>): Promis
     const sessionId = match[1]!;
     let body = '';
     req.on('data', (c) => (body += c));
-    req.on('end', () => {
+    req.on('end', async () => {
+      if (delays.apiMs) await new Promise((r) => setTimeout(r, delays.apiMs));
       const claimed = (JSON.parse(body || '{}') as { ownerUserId?: string }).ownerUserId;
       if (!claimed || owners.get(sessionId) !== claimed) {
         res
@@ -179,7 +184,12 @@ async function bringUpStack(containers: Record<string, SandboxSnapshot>): Promis
   };
   const broker = createSandboxd({
     config: brokerConfig,
-    inspector: { inspect: async (ref) => containers[ref] ?? null },
+    inspector: {
+      inspect: async (ref) => {
+        if (delays.inspectMs) await new Promise((r) => setTimeout(r, delays.inspectMs));
+        return containers[ref] ?? null;
+      },
+    },
     spawn: (_cmd, args) => {
       argvs.push(args);
       const p = fakePty();
@@ -225,9 +235,9 @@ function open(url: string): WebSocket {
   return ws;
 }
 
-function frame(ws: WebSocket, types: string[]): Promise<Record<string, unknown>> {
+function frame(ws: WebSocket, types: string[], timeoutMs = 5000): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`no ${types.join('/')} frame`)), 5000);
+    const timer = setTimeout(() => reject(new Error(`no ${types.join('/')} frame`)), timeoutMs);
     ws.on('message', (raw) => {
       const msg = JSON.parse(String(raw)) as Record<string, unknown>;
       if (!types.includes(String(msg.type))) return;
@@ -330,4 +340,36 @@ describe('a container-backed lab gets a shell without this process holding a run
     expect(first).toMatchObject({ type: 'error' });
     expect(stack.ptys).toHaveLength(0);
   });
+});
+
+describe('the auth grace period bounds the wait for a token, not the attach', () => {
+  // Both tests run on the real 10 s grace period, so each takes over 10 s.
+
+  it('gives a shell to a client that sent its token at once, however long the attach then takes', async () => {
+    // 6 s for credentials plus 6 s for the broker's inspect: past the grace
+    // period, each within its own step's timeout. An API this slow was
+    // measured on a loaded host (docs/development/browser-e2e-private-beta.md).
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiMs: 6_000, inspectMs: 6_000 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const started = Date.now();
+    const first = frame(ws, ['ready', 'error'], 25_000);
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+
+    expect(await first).toMatchObject({ type: 'ready', sandboxRef: refFor(SESSION_A) });
+    expect(Date.now() - started).toBeGreaterThan(10_000);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    expect(stack.ptys).toHaveLength(1);
+  }, 30_000);
+
+  it('still drops a socket that never sends a token', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+
+    expect(await frame(ws, ['error'], 15_000)).toMatchObject({ code: 'AUTH_TIMEOUT' });
+    expect(await closed).toBe(4401);
+    expect(stack.ptys).toHaveLength(0);
+  }, 30_000);
 });

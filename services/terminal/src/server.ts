@@ -607,7 +607,7 @@ export function createTerminalServer(
     let authenticated = false;
     let authenticating = false;
 
-    // A socket that never authenticates is dropped quickly.
+    // A socket that never sends a valid token is dropped quickly.
     const authTimer = setTimeout(() => {
       if (!authenticated) {
         terminalMetrics?.connections.inc({ outcome: 'auth_timeout' });
@@ -671,14 +671,18 @@ export function createTerminalServer(
         }
 
         authenticating = true;
+        // The grace period bounds the wait for a token, and a signed one has
+        // now arrived. The attach below is bounded by its own timeouts (the
+        // credentials fetch, the broker connect). Leaving this timer running
+        // told a client that sent its token on time "No session token
+        // received" whenever a slow API pushed the attach past 10 s, and
+        // closed a socket that was about to get a shell.
+        clearTimeout(authTimer);
         const cols = message.cols ?? 80;
         const rows = message.rows ?? 24;
         void startSession(ws, claims, cols, rows)
           .then((started) => {
-            if (started) {
-              authenticated = true;
-              clearTimeout(authTimer);
-            }
+            if (started) authenticated = true;
           })
           .finally(() => {
             authenticating = false;
