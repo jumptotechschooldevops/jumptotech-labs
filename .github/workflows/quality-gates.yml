@@ -92,6 +92,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Static and a few seconds long: every lab.yaml, its setup assets, its
+      # prerequisites and every learning path, read the way the API and the
+      # providers read them. `npm test` asserts the same thing, but this step
+      # fails first and prints one line per defect instead of a test diff.
+      # Warnings are printed and never fail the build. See
+      # docs/development/catalog-quality-audit.md.
+      - name: Lab catalog validation
+        run: npm run validate:labs
+
       # No Docker daemon is needed: the host-execution guard makes any attempt to
       # start one a hard failure rather than a silent dependency, so a suite that
       # regains one fails here instead of on someone's laptop months later.
