@@ -32,6 +32,7 @@ const EXCLUDED = [
   'infrastructure/observability/secrets/',
   'infrastructure/observability/alertmanager/secrets/',
   'backups/',
+  'e2e/.stack/',
 ];
 
 describe('Docker build contexts', () => {
