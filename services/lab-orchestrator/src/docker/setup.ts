@@ -106,6 +106,20 @@ const setupFile = z
   })
   .strict();
 
+/**
+ * Kernel capabilities a seeded container may be granted (N19).
+ *
+ * Exactly one member: `NET_ADMIN`, which NET-011 and NET-019 need to install
+ * firewall and NAT rules inside a container. It is namespaced — a container
+ * administers only its own network namespace — and a seeded container is never
+ * in the sandbox's namespace, so the grant is confined to one sandbox. The full
+ * argument is in docs/development/n19-security-review.md. Nothing else is
+ * grantable this way: `SYS_ADMIN`, `NET_RAW`, `SYS_PTRACE` and the rest are not
+ * in the vocabulary, so a lab cannot name them.
+ */
+export const SETUP_GRANTABLE_CAPABILITIES = ['NET_ADMIN'] as const;
+export type SetupGrantableCapability = (typeof SETUP_GRANTABLE_CAPABILITIES)[number];
+
 const setupContainer = z
   .object({
     name: dockerName,
@@ -161,8 +175,17 @@ const setupContainer = z
       .regex(/^[0-9]+(\.[0-9]+)?$/, 'must be a CPU count such as 0.5')
       .optional(),
     restart: z.enum(['no', 'always', 'unless-stopped', 'on-failure']).default('no'),
+    /**
+     * Linux capabilities to add to this container (N19). `NET_ADMIN` only, and
+     * refused on a host-networked container below.
+     */
+    cap_add: z.array(z.enum(SETUP_GRANTABLE_CAPABILITIES)).max(1).default([]),
   })
-  .strict();
+  .strict()
+  .refine((c) => !(c.cap_add.length > 0 && c.network === 'host'), {
+    message:
+      'a container with cap_add must not use host networking: a capability is only safe on a container in its own network namespace',
+  });
 
 /**
  * A Docker lab's declared initial state.

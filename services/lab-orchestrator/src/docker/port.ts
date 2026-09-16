@@ -270,6 +270,13 @@ export interface RunContainerSpec {
   securityOpts?: string[];
   /** `--cap-drop`. */
   capDrop?: string[];
+  /**
+   * `--cap-add` (N19). The only member a lab may cause is `NET_ADMIN`, and
+   * only on a seeded container that is not host-networked — see
+   * `docs/development/n19-security-review.md`. `NET_ADMIN` is namespaced, so a
+   * container holds it over its own netns only.
+   */
+  capAdd?: string[];
   /** Extra daemon flags passed *after* the image, for images like dind. */
   args?: string[];
   /** `--init`. */

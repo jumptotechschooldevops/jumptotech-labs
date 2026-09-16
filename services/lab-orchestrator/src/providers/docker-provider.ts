@@ -1166,6 +1166,10 @@ export class DockerLabProvider implements LabProvider {
       ...(container.labels ? { labels: container.labels } : {}),
       ...(container.workdir ? { workingDir: container.workdir } : {}),
       ...(container.network ? { network: container.network } : {}),
+      // N19 — NET_ADMIN for a seeded container that needs to program its own
+      // firewall or NAT. The schema has already checked the vocabulary and
+      // refused it on a host-networked container; sandboxd checks again.
+      ...(container.cap_add.length > 0 ? { capAdd: container.cap_add } : {}),
       ...(container.memory ? { memory: container.memory } : {}),
       ...(container.cpus ? { cpus: container.cpus } : {}),
       ...(container.ports

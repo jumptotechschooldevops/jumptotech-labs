@@ -430,6 +430,7 @@ export class DockerCliClient implements DockerEnginePort {
     for (const target of spec.tmpfs ?? []) argv.push('--tmpfs', target);
     for (const opt of spec.securityOpts ?? []) argv.push('--security-opt', opt);
     for (const cap of spec.capDrop ?? []) argv.push('--cap-drop', cap);
+    for (const cap of spec.capAdd ?? []) argv.push('--cap-add', cap);
 
     argv.push(spec.image);
     // Everything after the image is the container's own argv. `--` is not used

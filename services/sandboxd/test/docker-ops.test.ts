@@ -163,6 +163,10 @@ function fakeEngines(containers: Record<string, DockerContainerSnapshot> = {}) {
           record('copyFileFromContainer', { c, path });
           return null;
         },
+        runContainer: async (spec: RunContainerSpec) => {
+          record('runContainer', spec);
+          return spec.name;
+        },
         probeContainer: async (c: string, probe: unknown) => {
           record('probeContainer', { c, probe });
           return { exitCode: 0, stdout: '', stderr: '', timedOut: false };
@@ -204,6 +208,61 @@ describe('the operation list is closed', () => {
         code: 'UNKNOWN_OPERATION',
       });
     }
+  });
+});
+
+describe('sessionRunContainer validates a granted capability (N19)', () => {
+  const specWith = (extra: Record<string, unknown>) => ({
+    sessionId: SESSION_A,
+    spec: { name: 'natbox', image: 'busybox:1.36', detach: true, ...extra },
+  });
+
+  it('passes NET_ADMIN through to the daemon when a lab granted it', async () => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await opsOver(fake).run('sessionRunContainer', specWith({ network: 'lab-net', capAdd: ['NET_ADMIN'] }));
+
+    const run = fake.sessionCalls.find((c) => c.op === 'runContainer');
+    expect((run?.arg as { capAdd?: string[] }).capAdd).toEqual(['NET_ADMIN']);
+    // And privileged is still forced off alongside it.
+    expect((run?.arg as { privileged?: boolean }).privileged).toBe(false);
+  });
+
+  it('grants nothing when a lab asked for nothing', async () => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await opsOver(fake).run('sessionRunContainer', specWith({ network: 'lab-net' }));
+
+    const run = fake.sessionCalls.find((c) => c.op === 'runContainer');
+    expect((run?.arg as { capAdd?: string[] }).capAdd).toEqual([]);
+  });
+
+  it.each([
+    ['SYS_ADMIN', ['SYS_ADMIN']],
+    ['ALL', ['ALL']],
+    ['NET_ADMIN plus a smuggled second cap', ['NET_ADMIN', 'SYS_ADMIN']],
+    ['a lowercase spelling', ['net_admin']],
+  ])('refuses %s with a 403, before the container is created', async (_name, capAdd) => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await expect(
+      opsOver(fake).run('sessionRunContainer', specWith({ network: 'lab-net', capAdd })),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(fake.sessionCalls.some((c) => c.op === 'runContainer')).toBe(false);
+  });
+
+  it('refuses NET_ADMIN on a host-networked container', async () => {
+    // The one case the review's confinement argument excludes: host networking
+    // would put the capable container in the sandbox's own namespace.
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await expect(
+      opsOver(fake).run('sessionRunContainer', specWith({ network: 'host', capAdd: ['NET_ADMIN'] })),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(fake.sessionCalls.some((c) => c.op === 'runContainer')).toBe(false);
+  });
+
+  it('refuses a capAdd that is not even an array', async () => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await expect(
+      opsOver(fake).run('sessionRunContainer', specWith({ capAdd: 'NET_ADMIN' })),
+    ).rejects.toMatchObject({ status: 400 });
   });
 });
 

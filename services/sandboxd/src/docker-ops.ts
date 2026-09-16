@@ -265,6 +265,39 @@ export class DockerOps {
   }
 
   /** Dispatch one operation. The `switch` is the closed list. */
+  /**
+   * The capabilities a seeded container may be granted (N19), validated.
+   *
+   * The vocabulary is exactly `NET_ADMIN`. Anything else — a different
+   * capability, a non-array, a capability on a host-networked container — is a
+   * 400, before the container is created. This is the counterpart of the
+   * schema check in the API process: sandboxd is reached over HTTP and does not
+   * trust that the caller validated its input.
+   */
+  #grantedCapabilities(spec: Record<string, unknown>): string[] {
+    const requested = spec.capAdd;
+    if (requested === undefined) return [];
+    if (!Array.isArray(requested)) {
+      throw new DockerOpDeniedError(400, 'BAD_REQUEST', 'spec.capAdd must be an array');
+    }
+    for (const cap of requested) {
+      if (cap !== 'NET_ADMIN') {
+        throw new DockerOpDeniedError(
+          403,
+          'CAPABILITY_DENIED',
+          `capability '${String(cap)}' is not one a lab may grant`,
+        );
+      }
+    }
+    if (requested.length > 0 && spec.network === 'host') {
+      throw new DockerOpDeniedError(
+        403,
+        'CAPABILITY_DENIED',
+        'a capability may not be granted to a host-networked container',
+      );
+    }
+    return requested as string[];
+  }
   async run(op: string, payload: Record<string, unknown>): Promise<unknown> {
     if (!(DOCKER_OPERATIONS as readonly string[]).includes(op)) {
       throw new DockerOpDeniedError(
@@ -570,6 +603,18 @@ export class DockerOps {
              * removes the question.
              */
             privileged: false,
+            /*
+             * N19 — validated here, not spread through.
+             *
+             * `capAdd` is the one grantable capability field. It is checked
+             * against the allowlist on this side of the HTTP boundary rather
+             * than trusted from the wire, and it is refused on a host-networked
+             * container — a capability is only confined on a container in its
+             * own network namespace. `docs/development/n19-security-review.md`
+             * has the argument. Rebuilt explicitly, so no future spec field
+             * rides through the spread unvalidated either.
+             */
+            capAdd: this.#grantedCapabilities(spec),
           }),
         };
       }

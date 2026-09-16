@@ -103,6 +103,7 @@ export {
   type DockerCliOptions,
 } from './docker/cli-client.js';
 export {
+  SETUP_GRANTABLE_CAPABILITIES,
   describeDockerSetup,
   dockerSetupSchema,
   isEmptyDockerSetup,
@@ -111,6 +112,7 @@ export {
   type DockerSetupContainer,
   type DockerSetupFile,
   type DockerSetupPlan,
+  type SetupGrantableCapability,
 } from './docker/setup.js';
 
 // --- multi-track sandbox providers (PLATFORM-004) ---------------------------
