@@ -489,6 +489,9 @@ stages:
       - lab: AWS-009
         skills: [aws.networking, security.network-isolation]
         why: Routes public subnets to the internet while keeping private subnets private.
+      - lab: NET-028
+        skills: [aws.networking, networking.ip-addressing]
+        why: Designs a two-zone VPC end to end — four non-overlapping subnets and the two route tables that decide which of them is public.
       - lab: AWS-012
         skills: [aws.cost, aws.networking]
         why: Cuts NAT gateway cost with VPC endpoints without breaking the traffic that still needs it.

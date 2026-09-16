@@ -1,0 +1,360 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# NET-028 — the VPC design review, on paper and graded exactly.
+#
+# EXECUTION MODEL: offline design lab. This lab creates no AWS resources,
+# holds no AWS credentials, calls no AWS API and runs no Terraform. It runs on
+# the Terraform sandbox — the curriculum's `tf` substrate — which is the Linux
+# sandbox plus the Terraform CLI and an offline provider mirror, started with
+# `--network none`. Nothing here needs the network, and nothing here reaches
+# for it.
+#
+# Why the sandbox has a Terraform CLI in it and the lab does not use it: the
+# AWS provider is a stub on this branch (curriculum capability C5/N14), so a
+# lab that "provisioned a VPC" would be provisioning nothing while telling the
+# student otherwise. The honest form of this lesson is the one the design
+# review actually takes at a bank — the addressing, the two route tables and
+# the four questions, decided before anyone opens the console. When N14 lands,
+# the *content* of this lab is unchanged; only its substrate becomes live.
+#
+# GRADING: deterministic literal text, and nothing else. Every check is a
+# `file_content` substring against a labelled line the student wrote, or a
+# `file_content_absent` against the wrong value for that same line. The
+# absent checks are what make it a decision rather than a hedge: a student who
+# lists every allowed value on a line fails, exactly as NET-003 grades its
+# layer triage.
+#
+# ANSWER VOCABULARY: each conceptual question prints its allowed values, and
+# the check grades the *pairing* of a label with one of them. The seeded files
+# therefore contain the vocabulary but never a graded string — no seeded line
+# is `label = value` — so there is nothing to copy and the student still has to
+# choose. This is the platform's existing pattern for grading reasoning
+# (see NET-003 `setup/triage.txt`).
+#
+# What the forbidding checks do and do not catch, stated rather than implied:
+# each one names `label = wrong value`, so it catches the hedge this file
+# format invites — the label repeated with a second value after it. It does not
+# catch a hedge written as free prose on one line ("A or B"). The check that
+# would is a bare `file_content_absent` on the wrong value alone, and every
+# wrong value is printed in the allowed-value list the student is handed, so
+# that check would fail on the seeded file before the student had touched it.
+# Failing a correct student to catch a hedge is the worse error, so the trade
+# is made the same way NET-003 makes it. Closing it needs a requirement type
+# that counts matches or grades a single line, which this branch does not have.
+# `services/verifier/test/networking-net028.test.ts` pins both halves.
+#
+# Content is written from the Amazon VPC User Guide and the Amazon EC2 User
+# Guide (see `references`), and from RFC 4632 for the CIDR arithmetic. The
+# rule the checks encode is the Guide's own:
+#
+#   "If a subnet is associated with a route table that has a route to an
+#    internet gateway, it's known as a public subnet."
+#
+# Scenario, task wording, templates and answer keys are original JumpToTech
+# content.
+#
+# PREREQUISITES: the curriculum names NET-019 and NET-002. NET-019 (NAT and
+# port translation) is designed but not implemented, and the registry refuses a
+# prerequisite that does not resolve, so only NET-002 is declared here. NET-002
+# is the one that is load-bearing for the graded arithmetic; NET-019 adds the
+# mechanism behind the NAT Gateway and becomes a prerequisite when it lands.
+#
+# Classification: PRODUCTION DEVOPS SKILL. No AWS certification objective is
+# claimed — see labs/networking/CURRICULUM.md §4 and its AWS row.
+# ---------------------------------------------------------------------------
+id: NET-028
+slug: net-028-vpc-architecture
+title: "VPC Architecture: Subnets, Route Tables, IGW and NAT Gateway"
+track: networking
+topic: cloud-networking
+difficulty: advanced
+level: practice
+duration_minutes: 50
+order: 28
+
+environment:
+  provider: terraform
+
+# NET-019 is designed but not yet implemented; see the header note.
+prerequisites:
+  - NET-002
+
+story: >
+  The ledger platform is moving into AWS, and Networking has asked for the
+  design before anyone opens the console. Their reasoning is the same one you
+  met in NET-002: an overlapping range costs nothing to fix on paper and costs
+  a weekend to fix once three environments are running on it.
+
+  The requirements are already written down. A public tier that terminates
+  traffic from the internet, a private tier that must reach the internet for
+  package updates and must never be reachable *from* it, two availability
+  zones, and room to grow.
+
+  What the review is really testing is whether you know what makes a subnet
+  public. It is not the name, and it is not a checkbox. It is one line in a
+  route table, and everything else in this design follows from it.
+
+objectives:
+  - Allocate four non-overlapping /20 subnets inside a /16 VPC across two availability zones
+  - Write the public and private route tables, including the route the VPC creates for itself
+  - Explain what makes an AWS subnet public in terms of its route table rather than its name
+  - Explain why a NAT Gateway must sit in a public subnet to serve a private one
+  - Identify the availability risk of a single NAT Gateway serving both zones
+
+task:
+  summary: >
+    Produce the VPC design — four subnet CIDRs, two route tables, and the four
+    answers from the architecture review — without creating any AWS resources.
+  description: >
+    Your working directory is `/home/student/vpc`. Read `requirements.txt`
+    first: it states the job, lists the design requirements, and — importantly
+    — states the answer format every file uses.
+
+    `design.txt`, `routes.txt` and `answers.txt` are templates that are already
+    there. Every answer line ends with `= `; type your value immediately after
+    that space and leave the labels alone. A completed line looks exactly like
+    `az_a_public = 10.0.0.0/24`, with one space either side of the `=`. Do not
+    add, remove or reorder the labels.
+
+    In `design.txt`, allocate `10.30.0.0/16` into four consecutive,
+    non-overlapping `/20` networks — one public and one private subnet in each
+    of two availability zones. Start at the first address of the VPC and work
+    upwards, filling the four lines in the order they appear in the file. This
+    is NET-002's arithmetic: the distance between the start of one `/20` and
+    the start of the next is the size of a `/20`.
+
+    In `routes.txt`, write the two route tables. Each table gets two routes:
+    the one the VPC creates for itself and you cannot remove, and the default
+    route. One of those tables is what makes its subnets public and the other
+    is what keeps its subnets private — that difference is one target name, and
+    it is the whole lesson. The file states how a route is written; follow it
+    exactly, and name the *kind* of gateway rather than inventing an id.
+
+    In `answers.txt`, answer the four review questions. Each question prints
+    the values you may choose from. Copy one of them onto the labelled line
+    exactly as printed, capitalisation included, and write nothing else on that
+    line. Listing two values is not an answer and is marked as one.
+
+    Nothing in this lab creates AWS resources, and nothing in it needs the
+    network. This sandbox has no route off itself and no AWS credentials, by
+    design: the deliverable of a design review is the design.
+
+setup:
+  files:
+    - source: setup/requirements.txt
+      path: vpc/requirements.txt
+      mode: "0644"
+    - source: setup/design.txt
+      path: vpc/design.txt
+      mode: "0644"
+    - source: setup/routes.txt
+      path: vpc/routes.txt
+      mode: "0644"
+    - source: setup/answers.txt
+      path: vpc/answers.txt
+      mode: "0644"
+  verify:
+    - type: directory_exists
+      path: /home/student/vpc
+      label: The working directory exists
+    - type: file_content
+      path: /home/student/vpc/requirements.txt
+      contains: "10.30.0.0/16"
+      label: The requirements were seeded
+    - type: file_content
+      path: /home/student/vpc/design.txt
+      contains: "az_b_private ="
+      label: The subnet design template was seeded
+    - type: file_content
+      path: /home/student/vpc/routes.txt
+      contains: "private_default ="
+      label: The route-table template was seeded
+    - type: file_content
+      path: /home/student/vpc/answers.txt
+      contains: "q4_single_nat_gateway ="
+      label: The review questions were seeded
+
+requirements:
+  # --- design.txt: the four /20 allocations --------------------------------
+  #
+  # 10.30.0.0/16 holds sixteen /20s; the first four, ascending, are the ones
+  # the file asks for. Each check grades a label *and* its value, so a correct
+  # CIDR written on the wrong line does not pass.
+  - type: file_content
+    path: /home/student/vpc/design.txt
+    contains: "az_a_public = 10.30.0.0/20"
+    label: The first subnet starts at the first address of the VPC
+  - type: file_content
+    path: /home/student/vpc/design.txt
+    contains: "az_a_private = 10.30.16.0/20"
+    label: The second subnet follows the first without overlapping it
+  - type: file_content
+    path: /home/student/vpc/design.txt
+    contains: "az_b_public = 10.30.32.0/20"
+    label: The third subnet follows the second without overlapping it
+  - type: file_content
+    path: /home/student/vpc/design.txt
+    contains: "az_b_private = 10.30.48.0/20"
+    label: The fourth subnet follows the third without overlapping it
+
+  # The two overlaps a wrong allocation actually produces: reusing the VPC's
+  # first block for a second subnet, and restarting the count in the second
+  # availability zone. One check, because they are one mistake — and because
+  # the schema caps a lab at twenty checks, which is a budget worth spending on
+  # distinct lessons rather than on two halves of the same one.
+  - type: file_contains
+    path: /home/student/vpc/design.txt
+    absent:
+      - "az_a_private = 10.30.0.0/20"
+      - "az_b_public = 10.30.16.0/20"
+    label: No two subnets in the design cover the same addresses
+
+  # --- routes.txt: the two route tables ------------------------------------
+  - type: file_content
+    path: /home/student/vpc/routes.txt
+    contains: "public_local = 10.30.0.0/16 -> local"
+    label: The public table carries the route the VPC creates for itself
+  - type: file_content
+    path: /home/student/vpc/routes.txt
+    contains: "public_default = 0.0.0.0/0 -> Internet Gateway"
+    label: The public table's default route is what makes its subnets public
+  - type: file_content
+    path: /home/student/vpc/routes.txt
+    contains: "private_local = 10.30.0.0/16 -> local"
+    label: The private table carries the route the VPC creates for itself
+  - type: file_content
+    path: /home/student/vpc/routes.txt
+    contains: "private_default = 0.0.0.0/0 -> NAT Gateway"
+    label: The private table's default route reaches the internet outbound only
+
+  # The two ways this design is got wrong, and the reason the lab exists. The
+  # first turns the private tier public — the failure this whole lab is about —
+  # and the second leaves the public tier unable to accept a connection.
+  - type: file_contains
+    path: /home/student/vpc/routes.txt
+    absent:
+      - "private_default = 0.0.0.0/0 -> Internet Gateway"
+      - "public_default = 0.0.0.0/0 -> NAT Gateway"
+    label: Neither table sends its default route to the gateway belonging to the other tier
+
+  # --- answers.txt: the review questions -----------------------------------
+  - type: file_content
+    path: /home/student/vpc/answers.txt
+    contains: "q1_public_subnet_is = a route to an Internet Gateway"
+    label: Q1 — what makes a subnet public
+  - type: file_content
+    path: /home/student/vpc/answers.txt
+    contains: "q2_nat_gateway_lives_in = public subnet"
+    label: Q2 — where the NAT Gateway sits
+  - type: file_content
+    path: /home/student/vpc/answers.txt
+    contains: "q2_because = it forwards through that subnet's route to the Internet Gateway"
+    label: Q2 — why it has to sit there
+  - type: file_content
+    path: /home/student/vpc/answers.txt
+    contains: "q3_unreachable_because = it has no public IP for a client to address it by"
+    label: Q3 — why the instance is still unreachable
+  - type: file_content
+    path: /home/student/vpc/answers.txt
+    contains: "q4_single_nat_gateway = losing one availability zone breaks outbound traffic in both"
+    label: Q4 — the risk of one shared gateway
+
+  # One answer per line. Each of these names the same line with the most
+  # tempting wrong value on it, so a student who lists every allowed value
+  # satisfies the checks above and fails here.
+  - type: file_content_absent
+    path: /home/student/vpc/answers.txt
+    contains: "q1_public_subnet_is = the word public in its Name tag"
+    label: Q1 was answered once, not hedged
+  - type: file_content_absent
+    path: /home/student/vpc/answers.txt
+    contains: "q2_nat_gateway_lives_in = private subnet"
+    label: Q2 was answered once, not hedged
+  - type: file_content_absent
+    path: /home/student/vpc/answers.txt
+    contains: "q3_unreachable_because = its subnet has no route to the Internet Gateway"
+    label: Q3 was answered once, not hedged
+  - type: file_content_absent
+    path: /home/student/vpc/answers.txt
+    contains: "q4_single_nat_gateway = the private subnets would become reachable from the internet"
+    label: Q4 was answered once, not hedged
+
+hints:
+  - level: 1
+    text: >
+      Start with the arithmetic, because the rest of the design hangs off it.
+      A /20 leaves twelve free bits, so each block covers 4096 addresses — and
+      4096 addresses is sixteen whole values of the third octet. Four
+      consecutive /20s therefore start sixteen apart in that octet, beginning
+      at the VPC's own first address.
+
+      For the route tables, ask what the VPC already knows how to reach without
+      being told. That route is in both tables, it has the same destination in
+      both, and its target is not a resource you created.
+  - level: 2
+    text: >
+      The Amazon VPC User Guide defines public and private in terms of the
+      route table a subnet is associated with, not in terms of anything on the
+      subnet itself — the "Configure route tables" and "internet gateway" pages
+      in the references state the rule in one sentence. Read that sentence
+      before you write `routes.txt`, and the two default routes write
+      themselves.
+
+      For Q2, think about what the NAT Gateway itself has to be able to do once
+      it receives a packet from the private tier. It is a device on a subnet
+      like anything else, and it is subject to that subnet's route table.
+
+      For Q3, separate three different things that all have to be true before a
+      client on the internet reaches an instance: a route out of the subnet, a
+      security group that permits the traffic, and something for the client to
+      address. Two of the three are already true in that question.
+  - level: 3
+    text: >
+      The four blocks run from the VPC's first address, sixteen apart in the
+      third octet, in the order the lines appear in `design.txt` — AZ-A's
+      public subnet first, AZ-B's private subnet last. Check your work by
+      writing the last address of each block and confirming it is one less than
+      the first address of the next.
+
+      Both route tables carry the VPC CIDR itself with the target `local`. The
+      two default routes are both `0.0.0.0/0`; only their targets differ, and
+      the difference between those two targets is precisely the difference
+      between a public subnet and a private one — one of them accepts
+      connections initiated from the internet, and the other only ever
+      translates connections initiated from inside.
+
+      For Q4, a NAT Gateway is a zonal resource. Write down what is still
+      working in AZ-B at the moment AZ-A is unavailable, and you have the
+      answer.
+
+references:
+  - title: Amazon VPC User Guide — How Amazon VPC works
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/how-it-works.html
+  - title: Amazon VPC User Guide — Subnets for your VPC
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html
+  - title: Amazon VPC User Guide — Subnet sizing
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html
+  - title: Amazon VPC User Guide — Configure route tables
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html
+  - title: Amazon VPC User Guide — Connect to the internet using an internet gateway
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html
+  - title: Amazon VPC User Guide — Connect to the internet or other networks using NAT gateways
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html
+  - title: Amazon VPC User Guide — IP addressing for your VPCs and subnets
+    url: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-ip-addressing.html
+  - title: Amazon EC2 User Guide — Regions and Availability Zones
+    url: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html
+  - title: RFC 4632 — Classless Inter-domain Routing (CIDR), BCP 122
+    url: https://www.rfc-editor.org/info/rfc4632
+
+skills:
+  - net.cidr.prefix-length
+  - net.subnet.allocation
+  - aws.vpc
+  - aws.subnets
+  - aws.route-tables
+  - aws.igw-vs-natgw
+  - net.topology.public-private
+
+certification: []

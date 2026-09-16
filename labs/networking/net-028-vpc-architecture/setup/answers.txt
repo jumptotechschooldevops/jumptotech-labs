@@ -1,0 +1,64 @@
+JumpToTech Bank — architecture review
+======================================
+
+Four questions from the review. Each one has a list of allowed values printed
+above it, and one labelled line to answer on.
+
+Copy one allowed value onto the line exactly as it is printed, capitalisation
+included, and write nothing else on that line. Listing two of them is not an
+answer, and is marked as if you had not answered.
+
+------------------------------------------------------------------------------
+Q1. Two subnets in this VPC hold identical instances. One of them is public.
+    What is it that actually makes that one public?
+
+    Allowed values:
+      a route to an Internet Gateway
+      a route to a NAT Gateway
+      the word public in its Name tag
+      a public IP on every instance in it
+
+  q1_public_subnet_is = 
+
+------------------------------------------------------------------------------
+Q2. The private tier reaches the internet through a NAT Gateway. Which kind of
+    subnet must that NAT Gateway itself sit in?
+
+    Allowed values:
+      public subnet
+      private subnet
+
+  q2_nat_gateway_lives_in = 
+
+    And why? Allowed values:
+      it forwards through that subnet's route to the Internet Gateway
+      a NAT Gateway cannot be created in the other kind of subnet
+      it has to share an availability zone with the Internet Gateway
+      it is billed at a lower rate there
+
+  q2_because = 
+
+------------------------------------------------------------------------------
+Q3. An instance sits in one of your public subnets. Its security group allows
+    TCP 443 from anywhere. It was launched with no public IPv4 address. A
+    client on the internet still cannot reach it. Why not?
+
+    Allowed values:
+      it has no public IP for a client to address it by
+      its subnet has no route to the Internet Gateway
+      its security group is stateless
+      the Internet Gateway is attached to a different VPC
+
+  q3_unreachable_because = 
+
+------------------------------------------------------------------------------
+Q4. Suppose both private subnets sent 0.0.0.0/0 to a single NAT Gateway placed
+    in AZ-A. What is wrong with that?
+
+    Allowed values:
+      losing one availability zone breaks outbound traffic in both
+      outbound traffic is slower for the subnet in the other zone
+      the two private subnets would start to overlap
+      the private subnets would become reachable from the internet
+
+  q4_single_nat_gateway = 

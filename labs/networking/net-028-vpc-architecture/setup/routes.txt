@@ -1,0 +1,30 @@
+JumpToTech Bank — route-table design
+=====================================
+
+Two route tables. The public one is associated with both public subnets, the
+private one with both private subnets.
+
+Each value is one route, written as:
+
+  <destination> -> <target>
+
+with one space either side of the arrow. The destination is written in CIDR
+notation.
+
+The target is either the single word
+
+  local
+
+for the route the VPC creates for itself and you cannot remove, or the name of
+the AWS resource the route hands traffic to. Where it is a resource, write the
+resource *kind* in Title Case — two words, the second of which is Gateway.
+Do not invent an id; the design review is about which kind of gateway, not
+which instance of it.
+
+PUBLIC ROUTE TABLE
+  public_local = 
+  public_default = 
+
+PRIVATE ROUTE TABLE
+  private_local = 
+  private_default = 

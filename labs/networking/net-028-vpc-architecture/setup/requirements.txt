@@ -1,0 +1,40 @@
+JumpToTech Bank — AWS VPC architecture requirements
+====================================================
+
+The ledger platform is moving into AWS. This is the design review, and it
+happens before anyone opens the console.
+
+VPC CIDR:
+  10.30.0.0/16
+
+Design requirements:
+  - Two availability zones, named AZ-A and AZ-B below
+  - One public subnet in each availability zone
+  - One private subnet in each availability zone
+  - Every subnet must be a /20
+  - The four subnet CIDRs must not overlap
+  - Public workloads must have a path to the Internet Gateway
+  - Private workloads must be able to initiate outbound internet connections
+  - Private workloads must not become directly reachable from the internet
+
+Complete these three files, in this directory:
+
+  design.txt   the four subnet CIDRs
+  routes.txt   the two route tables
+  answers.txt  the four review questions
+
+How every answer is written
+---------------------------
+Each file is a list of labelled lines ending in "= ". Type your value
+immediately after that space, and leave the label alone. A completed line
+looks exactly like:
+
+  some_label = some value
+
+One value per line. Do not add, remove or reorder the labels.
+
+Use NET-002's CIDR arithmetic when allocating the four /20 networks.
+
+This is a design exercise on paper. Create no AWS resources, and expect no
+AWS credentials: this sandbox has no network and no AWS account behind it.
+The design is the deliverable, and the design is what is graded.

@@ -1,0 +1,19 @@
+JumpToTech Bank — VPC subnet design
+====================================
+
+VPC = 10.30.0.0/16
+
+Allocate four consecutive, non-overlapping /20 networks inside that VPC.
+Start at the first address of the VPC and work upwards, filling the lines
+below in the order they appear. Write each one in CIDR notation.
+
+AZ-A
+  az_a_public = 
+  az_a_private = 
+
+AZ-B
+  az_b_public = 
+  az_b_private = 
+
+No two of these four may cover the same address. If you can write one address
+that falls inside two of your blocks, the allocation is wrong.
