@@ -1,7 +1,8 @@
 # Browser E2E for the private beta
 
-**Branch** `feat/browser-e2e-beta`, rebased onto `origin/main` at `0f33b1f`
-(PR #34, the overnight hardening pass). **Date** 2026-09-16.
+**Branch** `feat/browser-e2e-beta`, rebased onto `origin/main` at `9a0e22e`
+(PR #35, catalog quality validation; previously on `0f33b1f`, PR #34).
+**Date** 2026-09-16. Results on this base: §14.2.
 
 ## 1. Executive summary
 
@@ -24,6 +25,12 @@ browser tests plus 1 guard test that starts no browser.
 - **Tier C** (production host): **NOT PROVEN.** Nothing here ran on a host,
   domain, TLS edge or real identity provider.
 - **CI:** the `browser-e2e` job is configured, but has **never executed**.
+
+The branch is test and CI work plus **one product fix** found by the suite:
+the terminal service told a client that had sent its token on time "No
+session token received" whenever attaching took more than 10 s (§14.2). The
+fix is in `services/terminal/src/server.ts` and has a regression test in
+`services/terminal/test/broker-attach.test.ts`.
 
 It is not "full E2E" for the platform. The Kubernetes, Docker, Terraform,
 Ansible and CI/CD runtimes are not exercised, the identity provider is a
@@ -49,7 +56,7 @@ At `cb7804a`, before this branch:
 | Web | React 18 + Vite bundle, hash router. In compose, nginx serves the build and proxies `/api/`, `/auth/`, `/terminal` on one origin. |
 | Auth | The API is the confidential OIDC client: `/auth/login` → provider → `/auth/callback` → opaque HttpOnly `jtt_session` cookie. A cookie is tried first, then the `Authorization` header. Unsafe methods pass an Origin guard. |
 | Session | `POST /api/labs/:id/start` → `SessionManager` → provider → for Linux, `sandboxd` creates a labelled container. Limits are enforced in PostgreSQL. |
-| Terminal | `POST /api/sessions/:id/terminal` issues an HMAC token (`sid`, `uid`, …). The browser opens `/terminal` and sends `{type:'auth', token}`. The terminal verifies the HMAC, fetches credentials from the API (which re-checks the owner, 10 s budget), and attaches through `sandboxd`. |
+| Terminal | `POST /api/sessions/:id/terminal` issues an HMAC token (`sid`, `uid`, …). The browser opens `/terminal` and sends `{type:'auth', token}`. The terminal verifies the HMAC, fetches credentials from the API (which re-checks the owner, 10 s budget), and attaches through `sandboxd` (15 s connect budget). A socket that sends no valid token within 10 s is dropped (`AUTH_TIMEOUT`). |
 | Verify | `POST /api/sessions/:id/check` → verifier reads the live sandbox (state, not command history) → attempt recorded. |
 | Progress | PostgreSQL attempts/progress (`DATABASE_URL` set by `docker-compose.yml`; the API refuses to start if a configured database is unreachable). |
 | Cleanup | `DELETE /api/sessions/:id`; the reaper; `scripts/sandbox-clean.sh` by runtime owner. |
@@ -63,6 +70,16 @@ At `cb7804a`, before this branch:
 | `restart: unless-stopped` on production services, `ServiceRestartLoop` | The E2E overlay layers on the **development** files and sets no `restart:`. That matches main's contract ("development deliberately keeps none"), so a crashed service in a test stays down and fails the run instead of looping. |
 | Dependency patches (`body-parser` 1.20.8, `qs` 6.16.0, `js-yaml` 4.3.2) | Kept. After the rebase, `package-lock.json` differs from main only by the `e2e` workspace and Playwright entries. |
 | Runbooks, observability alerts, release gate §11 | Kept. Release gate §11 is untouched; browser evidence is §12. |
+
+**Changes on main from PR #35 (`9a0e22e`) and their effect here:**
+
+| Change on main | Affects E2E? |
+|---|---|
+| `npm run validate:labs` and the `Lab catalog validation` step in the `gates` job | Kept. `browser-e2e` `needs: gates`, so it runs only after catalog validation passes. The rebase merged the workflow without conflict: PR #35 edits `gates`, this branch appends a job and edits the header comment. |
+| Catalog now 117 labs; NET-022, NET-024, NET-025 placed in the DevOps Engineer path | No assertion depends on the count (the tests match `Overall: N of \d+`). The readiness probe reported 117 labs. |
+| `catalog-starter-state.test.ts` (no lab passes Verify on untouched starter files) | Consistent with E2E: LINUX-001's live Verify starts at 1 of 5. |
+| TF-026 starter file mode | Not exercised (Terraform disabled in the E2E stack). |
+| `package.json` `validate:labs` script | Merged beside this branch's `e2e` workspace and `test:e2e` scripts; no conflict. |
 
 ## 4. Browser framework decision
 
@@ -199,6 +216,13 @@ There are 7 tests: 6 browser tests and 1 non-browser guard.
     control). The same token with `sid` re-pointed at A's session is closed
     **4401 UNAUTHORIZED** with none of A's output. A's terminal keeps working.
 - **What it does NOT prove:**
+  - That the terminal refuses a *validly signed* token naming A's session
+    with B's uid. The forged token here fails the HMAC check; a signed
+    cross-owner token cannot be minted from a browser. The owner re-check at
+    the credentials fetch is covered by
+    `services/terminal/test/broker-attach.test.ts` ("opens no shell at all
+    when the API refuses the ownership check", stub API) and the API's own
+    ownership suites, not by this browser test.
   - A token *stolen* from A's browser used by B. The token is a bearer
     credential bound to A's session and A's uid; possession would work for
     that session until expiry. That is by design, and not covered.
@@ -258,9 +282,9 @@ There are 7 tests: 6 browser tests and 1 non-browser guard.
 - **Security boundaries crossed:** the real terminal auth on retry.
 - **What it proves:** the workspace reaches "The terminal could not connect"
   (bounded, no spinner), and Try again connects for real.
-- **What it does NOT prove:** real terminal-service outages, or credential
-  fetch timeouts (see §14, where one occurred under load and produced a
-  different message).
+- **What it does NOT prove:** real terminal-service outages, or a slow
+  attach. §14.2 records the slow-attach defect that load exposed, which this
+  injected test could not have caught.
 
 ### 7.7 `test-identity-provider-guard.spec.ts` — "[guard] the test identity provider refuses production and non-loopback configurations"
 
@@ -369,6 +393,7 @@ The `browser-e2e` job in `.github/workflows/quality-gates.yml`:
 | Least privilege | workflow-level `permissions: contents: read`; the job adds none |
 | No production credentials | uses no `secrets.*`; no registry login; no cloud credentials |
 | No conflict with other jobs | own runner (fresh daemon), `needs: gates`, run-scoped project and owner, unique job name; shares the workflow's concurrency group like every other job |
+| Coexists with the catalog gate (PR #35) | `gates` now runs `npm run validate:labs`; `browser-e2e` depends on `gates`, so a catalog defect stops it before the stack starts. No gate was removed, relaxed or made optional, and `browser-e2e` does not use `continue-on-error` |
 
 **Not observed on a runner yet.** The workflow triggers on `pull_request` and
 on `push` to `main`, and no PR exists. Linux-runner-specific risks remain
@@ -463,7 +488,7 @@ characteristic: a 10 s credential budget with no automatic retry turns a
 slow API into a lost terminal. The student can press Reconnect. The tests were
 not loosened and no retry was added to hide it.
 
-### 14.1 How to read these numbers
+### 14.1 How to read these numbers (on `0f33b1f`)
 
 Two clean-cycle runs on the rebased tree have been recorded: one failed 2 of 7
 under load, and the final one passed 7 of 7. That is evidence the suite
@@ -471,6 +496,71 @@ under load, and the final one passed 7 of 7. That is evidence the suite
 evidence of stability on a quiet machine or a CI runner, which has not been
 measured on this tree. Across every run, failures included, no sandbox
 container or network was left behind.
+
+### 14.2 Results after rebasing onto `9a0e22e` (PR #35)
+
+Same machine. Other worktrees' kind clusters and stacks were still running.
+
+| Run | Tree | Load average | Result |
+|---|---|---|---|
+| Clean cycle `npm run test:e2e` (images rebuilt) | rebased branch, before the terminal fix | 7 → 24 | **6 passed, 1 failed** (isolation, "Connection to the terminal was lost."); teardown 0 containers, 0 networks left |
+| Clean cycle | `0553cf1` (with the fix) | 9–17 | **7 passed** (1.2 min of tests) |
+| Clean cycle | `0553cf1` | 16–17 | **7 passed** (1.1 min of tests, 2 min 15 s total); 0 containers, 0 networks left |
+| `npm run validate:labs` | rebased | — | 117 labs, 0 errors, 0 warnings |
+| `npm run typecheck`, `npm run build` | rebased and `0553cf1` | — | pass |
+| `apps/api` `browser-e2e-overlay` + `learning-paths-api` | rebased | — | 24 passed |
+| orchestrator `catalog-validation`, `learning-paths`, `learning-progress` | rebased | — | 73 passed |
+| verifier `catalog-starter-state` | rebased | — | 2 passed |
+| terminal workspace (`npm test`) | `0553cf1` | — | 154 passed, 20 skipped (integration, env-gated) |
+| `git diff --check` | — | — | clean |
+
+**Root cause of the isolation failure.** It was diagnosed from the failed
+run's trace, not assumed:
+
+- The failing step was student A reopening the workspace
+  (`student-isolation.spec.ts:105`). The API was answering in 7–17 s
+  (`GET /api/sessions/:id` 16.8 s, `POST …/check` 13.3 s).
+- A's new WebSocket closed after 10.46 s. The terminal output in A's page
+  snapshot read **"No session token received."** That is the terminal
+  service's `AUTH_TIMEOUT` frame (close 4401).
+- A had sent its token on open. The service's 10 s grace timer started when
+  the socket opened and was cleared only after the shell attached. So an
+  attach that took more than 10 s (credentials fetch plus broker attach, each
+  within its own budget) closed a correctly authenticated socket.
+- The web app has no text for `AUTH_TIMEOUT` and does not retry it. It showed
+  "Connection to the terminal was lost." and stayed there.
+
+This corrects §14's explanation. The credentials fetch's own 10 s abort
+(`CREDENTIALS_UNAVAILABLE`, close 4403) would show "The terminal could not
+attach to your environment." The message students actually saw belongs to
+the grace timer, which fires first because it starts earlier. That is
+consistent with the `CREDENTIALS_UNAVAILABLE … aborted` line §14 found in
+the terminal log for the same failure.
+
+**Classification:** a deterministic product defect whose trigger is latency.
+It reproduces whenever socket-open-to-attach exceeds 10 s. Host load only
+determines whether a run gets there.
+
+**Fix (`0553cf1`):** the grace timer is cleared once a signed token is
+accepted, so it bounds the wait for a token and nothing else. The attach
+stays bounded by its own budgets: credentials 10 s, broker connect 15 s.
+Regression test in `broker-attach.test.ts`:
+
+- a stub API (6 s) and broker inspect (6 s) give a ready shell after more
+  than 10 s; this **fails without the fix** with the `AUTH_TIMEOUT` error;
+- a socket that never sends a token is still dropped with `AUTH_TIMEOUT`/4401.
+
+No assertion, timeout, retry or sleep in the browser suite was changed.
+
+**What this does not settle:**
+
+- The two passing cycles after the fix ran at lower load than the failing
+  one. They are not by themselves proof that the suite is stable under load.
+  The unit regression test is the evidence for the fix.
+- An API slower than 10 s on the credentials fetch still fails the attach
+  (`CREDENTIALS_UNAVAILABLE`, "could not attach"). The browser does not
+  auto-retry that code; the student presses Try again or Reconnect. See §15.
+- CI has still never run the suite.
 
 ## 15. Findings
 
@@ -480,9 +570,20 @@ container or network was left behind.
     container waited 38.9 s; later ones ~3 s.
   - The session fetch has no client timeout.
   - Not fixed here.
-- **Terminal attach is fragile under API latency.** The 10 s credentials
-  budget is exceeded when the API is CPU-starved, and the UI then shows
-  "Connection to the terminal was lost." (§14). Recovery is manual (Reconnect).
+- **Fixed: a slow attach closed an authenticated terminal socket** with a
+  false "No session token received" (§14.2, `0553cf1`).
+- **Open, non-blocking: the credentials fetch has a fixed 10 s budget and the
+  browser does not retry `CREDENTIALS_UNAVAILABLE`.** An API slower than that
+  shows "The terminal could not attach to your environment." with a manual
+  Try again. Not changed here, for two reasons:
+  - the same code also carries permanent refusals, so an automatic retry
+    needs a retryable/permanent distinction first;
+  - the only credentials fetch measured over 10 s (10.5 s, §14) was on this
+    laptop at a load average of 23–27. No beta-host latency has been measured
+    either way.
+- **Minor: the web app has no text for `AUTH_TIMEOUT`** and shows the generic
+  "Connection to the terminal was lost." After the fix, only a client that
+  never sends a token reaches it, and the web app always sends one.
 - **nginx static upstream resolution** also means a *recreated* API container
   with a new IP would stay 502 until web restarts (not measured; follows from
   the same resolution behaviour). Relevant to main's `restart: unless-stopped`:
@@ -493,7 +594,7 @@ container or network was left behind.
 | Tier | Definition | Status | Evidence |
 |---|---|---|---|
 | **A** | real browser + web + API + deterministic dependencies (PostgreSQL, test IdP) | **PROVEN** (locally) | sign-in, cookie properties, dashboard, learning path, catalog, progress page, sign-out revocation, forged cookie, UI failure handling |
-| **B** | real browser + actual sandbox/runtime | **PARTIALLY PROVEN** | Linux provider only: launch, real WebSocket terminal, real verifier, End lab, container removal, two-student isolation incl. WebSocket refusal. Intermittent under heavy host load (§14). Kubernetes, Docker-daemon, Terraform, Ansible, CI/CD: not exercised |
+| **B** | real browser + actual sandbox/runtime | **PARTIALLY PROVEN** | Linux provider only: launch, real WebSocket terminal, real verifier, End lab, container removal, two-student isolation incl. WebSocket refusal. Heavy host load exposed a terminal defect, now fixed (§14.2); stability under that load after the fix is not yet measured. Kubernetes, Docker-daemon, Terraform, Ansible, CI/CD: not exercised |
 | **C** | production-host smoke | **NOT PROVEN** | nothing ran on a host, domain, TLS edge, production overlay or real IdP. Local Docker Compose is not Tier C |
 
 **CI:** not proven (never executed).
@@ -519,8 +620,9 @@ Recommended next steps:
 
 1. Open the PR to get the first `browser-e2e` CI run on a clean runner (lower
    contention than this laptop), and fix what it reveals.
-2. Decide on terminal attach resilience under API latency: retry the
-   credentials fetch, or a larger budget with a bound.
+2. Decide on credentials-fetch resilience under API latency: separate
+   retryable from permanent `CREDENTIALS_UNAVAILABLE`, then retry the
+   retryable case (§15).
 3. Bound the web app's session query and nginx `proxy_connect_timeout`, then
    add a real api-stop browser test.
 4. Browser coverage for reset, second-tab takeover and reload during CREATING.

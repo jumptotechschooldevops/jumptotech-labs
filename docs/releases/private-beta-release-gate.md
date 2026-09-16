@@ -358,15 +358,19 @@ development stack:
 - PostgreSQL, terminal and sandboxd;
 - a real Linux sandbox container.
 
-The final clean cycle passed 7/7. An earlier clean cycle on the same tree
-failed 2/7 under heavy host load: the terminal's 10 s credential fetch was
-exceeded by 10–17 s API latency. No run leaked a sandbox. The suite has not
-yet run on a CI runner.
+On `0f33b1f` the final clean cycle passed 7/7, and an earlier one failed 2/7
+under heavy host load. After rebasing onto `9a0e22e` (PR #35), a load-24 cycle
+failed 1/7. Its trace showed the cause: the terminal service's 10 s auth grace
+timer closed a socket that had already sent a valid token, because attaching
+took longer than 10 s. Students saw "Connection to the terminal was lost."
+That is fixed on the branch (`0553cf1`, with a regression test), and two
+later clean cycles passed 7/7 at lower load. No run leaked a sandbox. The
+suite has not yet run on a CI runner.
 
 | Tier | Status |
 |---|---|
 | A — real browser + web + API + deterministic dependencies | **PROVEN** (local) |
-| B — real browser + actual sandbox runtime | **PARTIALLY PROVEN** — Linux provider only; load-sensitive |
+| B — real browser + actual sandbox runtime | **PARTIALLY PROVEN** — Linux provider only; stability under heavy load after the fix not yet measured |
 | C — production-host smoke | **NOT PROVEN** |
 
 | Area | Status | Evidence / limit |
@@ -387,8 +391,13 @@ yet run on a CI runner.
 | Reset, second-tab takeover, reload during start | **NOT PROVEN** | not exercised |
 | Production overlay, TLS, `wss://`, Secure cookies, real IdP, host | **NOT PROVEN** | unchanged; §2, §7, §11.5 still apply |
 
-No new release blocker. Two non-blocking resilience findings:
+No new release blocker. One defect fixed on the branch, and two non-blocking
+resilience findings:
 
-1. A real API outage shows ~39 s of "Checking your session…" before the error.
-2. Terminal attach fails when API latency exceeds the terminal's 10 s
-   credentials budget; the student must press Reconnect.
+- **Fixed:** a slow attach (over 10 s) closed an authenticated terminal socket
+  with a false "No session token received".
+- **Non-blocking:** a real API outage shows ~39 s of "Checking your
+  session…" before the error.
+- **Non-blocking:** an API slower than the terminal's 10 s credentials budget
+  still fails the attach. The browser does not auto-retry
+  `CREDENTIALS_UNAVAILABLE`; the student presses Try again.
