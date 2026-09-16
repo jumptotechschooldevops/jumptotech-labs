@@ -11,6 +11,21 @@ import { fail, pass } from '../contract.js';
 import { looksLikeDockerfile, parseDockerfile } from '../dockerfile.js';
 import { imageMatches } from '../image.js';
 
+/**
+ * A file the student wrote holds what the lab asked for.
+ *
+ * **Non-disclosure.** A worksheet check's `contains` is frequently the answer
+ * itself — the port a service turned out to be on, the resolver a container
+ * turned out to use — and a detail that listed the missing values would hand
+ * those over to anyone who pressed Check Solution once with a blank worksheet.
+ * So the detail says *how many* of the required values are absent and never
+ * which, the same rule `docker_container_file_content` holds and for the same
+ * reason.
+ *
+ * That is deliberately less helpful than naming them, and it is the right
+ * trade: a student who cannot tell which field they have not answered still has
+ * the worksheet in front of them, with its own questions on it.
+ */
 export const workspaceFileExists: DockerVerifierHandler<'workspace_file_exists'> = {
   type: 'workspace_file_exists',
   label: (r) => `File ${r.path} exists`,
@@ -20,10 +35,14 @@ export const workspaceFileExists: DockerVerifierHandler<'workspace_file_exists'>
     const content = await reader.file(r.path);
     if (content === null) return fail(`No file named '${r.path}' in your lab workspace`);
 
-    const missing = (r.contains ?? []).filter((needle) => !content.includes(needle));
-    return missing.length === 0
-      ? pass(`${content.length} bytes`)
-      : fail(`'${r.path}' does not mention ${missing.map((m) => `'${m}'`).join(', ')}`);
+    const required = r.contains ?? [];
+    const missing = required.filter((needle) => !content.includes(needle));
+    if (missing.length === 0) return pass(`${content.length} bytes`);
+    return fail(
+      missing.length === required.length
+        ? `'${r.path}' is missing everything the lab requires (read ${content.length} bytes)`
+        : `'${r.path}' is missing ${missing.length} of the ${required.length} values the lab requires`,
+    );
   },
 };
 
