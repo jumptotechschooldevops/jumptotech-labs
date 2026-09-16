@@ -16,7 +16,7 @@
  *   - Setup manifest paths are confined to the lab's own directory.
  *   - At least one reference must point at official upstream documentation.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { parse as parseYaml } from 'yaml';
@@ -1036,7 +1036,8 @@ export async function loadLabDefinition(filePath: string): Promise<LoadedLabDefi
  * Resolve a declared asset path to an absolute path inside the lab directory.
  *
  * The schema already rejects `..` and absolute paths; this re-checks the
- * resolved result so a symlinked or unusual path cannot escape either.
+ * *lexically* resolved result. It does not see through a symlink — for that,
+ * a loader that reads the file goes through `resolveLabAssetForRead`.
  */
 export function resolveLabAssetPath(
   lab: LoadedLabDefinition,
@@ -1054,6 +1055,48 @@ export function resolveLabAssetPath(
     );
   }
   return resolved;
+}
+
+/**
+ * Resolve a declared asset path for reading, following symlinks first.
+ *
+ * `path.resolve` is lexical, while `readFile` follows symlinks: a lab file
+ * `setup/x -> /etc/…` (or a symlinked `setup/` directory) passes the lexical
+ * check and would hand the api process's view of that file to a student's
+ * sandbox. Comparing *real* paths closes that. `validate:labs` already refuses
+ * a symlink in a lab directory in CI; this is the same rule at the point of
+ * use, so an image built from an unvalidated tree still fails closed.
+ *
+ * The window between this check and the read is not student-reachable: lab
+ * directories are platform content baked into the image.
+ */
+export async function resolveLabAssetForRead(
+  lab: LoadedLabDefinition,
+  relative: string,
+  what = 'Setup manifest',
+): Promise<string> {
+  const lexical = resolveLabAssetPath(lab, relative, what);
+  let real: string;
+  let root: string;
+  try {
+    [real, root] = await Promise.all([realpath(lexical), realpath(lab.directory)]);
+  } catch (cause) {
+    throw new LabDefinitionError(
+      `Cannot read ${what.toLowerCase()} '${relative}': ${(cause as Error).message}`,
+      lab.sourcePath,
+      [],
+      lab.id,
+    );
+  }
+  if (!real.startsWith(root + path.sep)) {
+    throw new LabDefinitionError(
+      `${what} '${relative}' resolves outside the lab directory`,
+      lab.sourcePath,
+      [],
+      lab.id,
+    );
+  }
+  return real;
 }
 
 /** Back-compatible alias; setup manifests are the Kubernetes flavour of asset. */

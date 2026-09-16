@@ -26,8 +26,8 @@
  * A seed script is *platform content*, on exactly the same footing as a
  * Kubernetes setup manifest:
  *
- *   · it is a path into the lab's own directory, re-checked after resolution
- *     (`resolveLabAssetPath`) — lab.yaml carries a filename, never a command;
+ *   · it is a path into the lab's own directory, re-checked after symlinks are
+ *     resolved (`resolveLabAssetForRead`) — lab.yaml carries a filename, never a command;
  *   · it must be a real script with a `#!` line, so a stray data file cannot be
  *     handed to the sandbox as executable content;
  *   · it is size-capped, so a lab cannot push an unbounded payload into a
@@ -45,7 +45,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   LabDefinitionError,
-  resolveLabAssetPath,
+  resolveLabAssetForRead,
   type LoadedLabDefinition,
 } from '../lab-definition.js';
 
@@ -64,7 +64,7 @@ export async function loadSeedScripts(lab: LoadedLabDefinition): Promise<LoadedS
   const scripts: LoadedSeedScript[] = [];
 
   for (const relative of lab.setup.seed_scripts) {
-    const absolute = resolveLabAssetPath(lab, relative, 'Seed script');
+    const absolute = await resolveLabAssetForRead(lab, relative, 'Seed script');
 
     let content: Buffer;
     try {

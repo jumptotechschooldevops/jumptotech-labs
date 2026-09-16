@@ -21,7 +21,7 @@ import { readFile } from 'node:fs/promises';
 import { parseAllDocuments } from 'yaml';
 import {
   LabDefinitionError,
-  resolveManifestPath,
+  resolveLabAssetForRead,
   type LoadedLabDefinition,
 } from '../lab-definition.js';
 import type { KubernetesManifestObject } from '../k8s/port.js';
@@ -116,7 +116,7 @@ export async function loadSetupManifests(
   const objects: KubernetesManifestObject[] = [];
 
   for (const relative of lab.setup.manifests) {
-    const absolute = resolveManifestPath(lab, relative);
+    const absolute = await resolveLabAssetForRead(lab, relative, 'Setup manifest');
 
     let text: string;
     try {
