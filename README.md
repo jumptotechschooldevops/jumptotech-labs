@@ -1137,6 +1137,10 @@ that does not exist, or a cycle, unregisters the offending lab and records a
 `LAB_DEFINITION_INVALID` error rather than shipping a catalog with a broken
 path through it.
 
+Learning paths (`labs/learning-paths/`) arrange labs into stages and must agree
+with these prerequisites; they add stage-level *required* / *recommended* advice
+but still gate nothing. See [docs/learning-paths.md](docs/learning-paths.md#prerequisites).
+
 ### The lab definition schema
 
 One file, `labs/<track>/<slug>/lab.yaml`, is the single source of truth for a
@@ -2592,6 +2596,8 @@ A `Makefile` wraps the common commands — `make help` lists them, and
 What a student sees once signed in — dashboard, catalog, tracks, Launch, the
 workspace, Verify, Reset, End, capacity messages and known UI limitations — is
 described screen by screen in [docs/student-experience.md](docs/student-experience.md).
+The DevOps Engineer learning path — stages, skills, curriculum gaps, verified
+progress and the next-lab rule — is described in [docs/learning-paths.md](docs/learning-paths.md).
 
 ### Running without Docker
 

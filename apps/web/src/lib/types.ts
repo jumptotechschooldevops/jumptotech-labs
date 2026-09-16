@@ -398,3 +398,135 @@ export interface EndLabResponse {
   attempt?: AttemptSummary;
   steps: ProvisionStep[];
 }
+
+// --- learning paths (V1 EPIC-02) ----------------------------------------------
+
+/**
+ * `required`: the stage waits on this one, and the next-lab rule will not start
+ * it early. `recommended`: advice. Neither stops a student opening a lab.
+ */
+export type PrerequisiteKind = 'required' | 'recommended';
+
+export interface LearningPathTotals {
+  stages: number;
+  /** Stages with no labs yet — curriculum gaps, never counted as done. */
+  comingSoonStages: number;
+  labs: number;
+  coreLabs: number;
+  skills: number;
+  /** Skills no lab in the path covers yet. */
+  gapSkills: number;
+  /** Sums of the labs' own estimated durations. */
+  estimatedMinutes: { core: number; all: number };
+}
+
+export interface LearningPathSummary {
+  id: string;
+  title: string;
+  summary: string;
+  audience: string;
+  totals: LearningPathTotals;
+}
+
+export interface LearningPathSkill {
+  id: string;
+  title: string;
+  description: string;
+  /** Labs anywhere in the path that practise this skill. Empty means Coming soon. */
+  labIds: string[];
+}
+
+export interface LearningPathLab {
+  labId: string;
+  title: string;
+  summary: string;
+  track: string;
+  trackTitle: string;
+  difficulty: string;
+  durationMinutes: number;
+  /** Extra practice: not needed to complete the stage. */
+  optional: boolean;
+  /** Why this lab is at this point of the path. */
+  why: string;
+  skills: string[];
+  prerequisites: Array<{ id: string; title: string }>;
+  availability: { available: boolean };
+}
+
+export interface LearningStage {
+  id: string;
+  /** 1-based. */
+  position: number;
+  title: string;
+  summary: string;
+  why: string;
+  objectives: string[];
+  /** What is missing from this stage, when something is. */
+  comingSoon?: string;
+  prerequisites: Array<{ stageId: string; title: string; kind: PrerequisiteKind }>;
+  estimatedMinutes: { core: number; all: number };
+  skills: LearningPathSkill[];
+  /** In recommended order. */
+  labs: LearningPathLab[];
+}
+
+export interface LearningPathDetail extends LearningPathSummary {
+  outcomes: string[];
+  stages: LearningStage[];
+}
+
+export type StageStatus = 'COMING_SOON' | 'LOCKED' | 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
+export type SkillStatus = 'COMING_SOON' | 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
+
+export type RecommendationKind =
+  | 'RESUME_ACTIVE'
+  | 'ACTIVE_SESSION_UNKNOWN'
+  | 'CONTINUE_ATTEMPT'
+  | 'PREREQUISITE_FIRST'
+  | 'START_STAGE'
+  | 'NEXT_IN_STAGE'
+  | 'EXTRA_PRACTICE'
+  | 'PATH_COMPLETE'
+  | 'NONE_AVAILABLE';
+
+/** The server's deterministic answer to "what should I do next?". */
+export interface LearningRecommendation {
+  kind: RecommendationKind;
+  labId?: string;
+  labTitle?: string;
+  stageId?: string;
+  reason: string;
+}
+
+export interface StageProgressEntry {
+  stageId: string;
+  status: StageStatus;
+  prerequisitesMet: boolean;
+  prerequisites: Array<{ stageId: string; kind: PrerequisiteKind; met: boolean }>;
+  labs: { total: number; completed: number; inProgress: number };
+  /** Completed only when every core lab passed Verify. */
+  core: { total: number; completed: number };
+  nextLabId: string | null;
+}
+
+export interface SkillProgressEntry {
+  skillId: string;
+  status: SkillStatus;
+  labs: { total: number; completed: number };
+}
+
+export interface LearningPathProgress {
+  student: StudentIdentity;
+  pathId: string;
+  overall: {
+    labs: { total: number; completed: number; inProgress: number; notStarted: number };
+    core: { total: number; completed: number };
+    stages: { total: number; completed: number; comingSoon: number };
+    skills: { total: number; completed: number; comingSoon: number };
+  };
+  currentStageId: string | null;
+  stages: StageProgressEntry[];
+  skills: SkillProgressEntry[];
+  labs: Array<{ labId: string; status: LabProgressStatus }>;
+  recommendation: LearningRecommendation;
+}

@@ -9,6 +9,10 @@
  *
  * A lab is Completed only when the verifier passed it. Launching, resetting or
  * ending one never marks it complete; the API computes that, not this page.
+ *
+ * Between the overall numbers and the per-track lists sit the learning path and
+ * its skills (V1 EPIC-02): where the student is on the DevOps Engineer path,
+ * the next lab, and each skill as "labs that practise it, and how many passed".
  */
 import { useEffect, useState } from 'react';
 import { useCatalog } from '../lib/CatalogContext';
@@ -18,7 +22,15 @@ import { ATTEMPT_LABEL, formatMoment, plural } from '../lib/format';
 import { hrefFor, usePageTitle } from '../lib/router';
 import type { ApiError, AttemptSummary, TrackProgress } from '../lib/types';
 import { ErrorNotice } from '../components/ErrorNotice';
+import {
+  PathProgressSummary,
+  ProgressRule,
+  Recommendation,
+  SkillStatusText,
+  StageStatusBadge,
+} from '../components/LearningPath';
 import { Badge, LoadingState, PageHeader, ProgressBar } from '../components/ui';
+import { FLAGSHIP_PATH_ID, gapSkills, useLearningPath, useProgressLookup } from '../lib/learningPath';
 
 function TrackProgressCard({ track }: { track: TrackProgress }) {
   return (
@@ -65,6 +77,131 @@ function TrackProgressCard({ track }: { track: TrackProgress }) {
         ))}
       </ul>
     </article>
+  );
+}
+
+function LearningPathSections() {
+  const { definition, progress, reloadDefinition, reloadProgress } = useLearningPath(FLAGSHIP_PATH_ID);
+  const lookup = useProgressLookup(progress.data);
+  const path = definition.data;
+
+  if (definition.status === 'loading') return <LoadingState label="Loading your learning path…" />;
+  if (!path) {
+    return (
+      <section className="progress__path" aria-labelledby="path-section-heading">
+        <h2 id="path-section-heading" className="section-title">
+          Learning path
+        </h2>
+        <ErrorNotice
+          error={{ ...describeError(definition.error!, 'load'), title: 'The learning path could not be loaded' }}
+          headingLevel={3}
+          live={false}
+          actions={
+            <button type="button" className="btn btn--secondary btn--sm" onClick={reloadDefinition}>
+              Try again
+            </button>
+          }
+        />
+      </section>
+    );
+  }
+
+  const data = progress.data;
+  return (
+    <>
+      <section className="progress__path" aria-labelledby="path-section-heading">
+        <div className="section-head">
+          <h2 id="path-section-heading" className="section-title">
+            {path.title} path
+          </h2>
+          <a className="text-link" href={hrefFor({ name: 'path', pathId: path.id })}>
+            View path
+          </a>
+        </div>
+        {progress.status === 'loading' ? (
+          <LoadingState label="Loading your progress on this path…" />
+        ) : !data ? (
+          <ErrorNotice
+            error={describeError(progress.error!, 'progress')}
+            headingLevel={3}
+            live={false}
+            actions={
+              <button type="button" className="btn btn--secondary btn--sm" onClick={reloadProgress}>
+                Try again
+              </button>
+            }
+          />
+        ) : (
+          <>
+            <div className="panel">
+              <PathProgressSummary path={path} progress={data} />
+              <Recommendation recommendation={data.recommendation} />
+              <ProgressRule path={path} />
+            </div>
+            <ol className="path-progress" aria-label={`${path.title} path stages`}>
+              {path.stages.map((stage) => {
+                const stageProgress = lookup.stage(stage.id);
+                return (
+                  <li key={stage.id} className="path-progress__item">
+                    <a className="path-progress__link" href={hrefFor({ name: 'stage', pathId: path.id, stageId: stage.id })}>
+                      <span className="path-progress__position" aria-hidden="true">
+                        {stage.position}
+                      </span>
+                      {stage.title}
+                    </a>
+                    {stageProgress ? (
+                      <StageStatusBadge status={stageProgress.status} gapCount={gapSkills(stage).length} />
+                    ) : null}
+                    <span className="path-progress__count">
+                      {stage.labs.length === 0 || !stageProgress
+                        ? 'No labs yet'
+                        : `${stageProgress.core.completed}/${stageProgress.core.total} core labs`}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          </>
+        )}
+      </section>
+
+      {data ? (
+        <section className="progress__skills" aria-labelledby="skills-heading">
+          <h2 id="skills-heading" className="section-title">
+            Skills
+          </h2>
+          <p className="panel__text">
+            Each skill is practised in one or more labs. A skill is complete when every lab that practises it has
+            passed Verify. Skills with no lab yet are shown as Coming soon.
+          </p>
+          <div className="skill-groups">
+            {path.stages.map((stage) => (
+              <section key={stage.id} className="skill-group" aria-labelledby={`skills-${stage.id}`}>
+                <h3 id={`skills-${stage.id}`} className="skill-group__title">
+                  <a href={hrefFor({ name: 'stage', pathId: path.id, stageId: stage.id })}>{stage.title}</a>
+                </h3>
+                <ul className="skill-list">
+                  {stage.skills.map((skill) => {
+                    const skillProgress = lookup.skill(skill.id);
+                    return (
+                      <li key={skill.id} className="skill-list__item">
+                        <span className="skill-list__title">{skill.title}</span>
+                        {skillProgress ? <SkillStatusText status={skillProgress.status} /> : null}
+                        {skillProgress && skillProgress.labs.total > 0 ? (
+                          <span className="skill-list__count">
+                            {skillProgress.labs.completed} of {plural(skillProgress.labs.total, 'lab')}
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </>
   );
 }
 
@@ -156,7 +293,13 @@ export function ProgressPage() {
               {progress.overall.notStarted} not started
             </p>
           </section>
+        </div>
+      ) : null}
 
+      <LearningPathSections />
+
+      {progress ? (
+        <div className="progress">
           <section aria-labelledby="by-track-heading">
             <h2 id="by-track-heading" className="section-title">
               By track

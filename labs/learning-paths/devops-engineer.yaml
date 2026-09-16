@@ -1,0 +1,868 @@
+# The DevOps Engineer learning path — the flagship path.
+#
+# Every lab placed here was placed from its lab.yaml (task, objectives, skills,
+# prerequisites), not from its id. Every lab in the catalog is placed exactly
+# once; `test/learning-paths.test.ts` fails if a new lab is added to labs/
+# without being placed here, so the path cannot silently fall behind.
+#
+# Stages with `labs: []` are curriculum gaps: they are shown to students as
+# "Coming soon", are never counted as completed, and never block a later stage.
+# Skills that no lab covers are gaps in the same way. Do not map a lab to a
+# skill it does not actually teach in order to close a gap.
+#
+# Order matters twice:
+#   - stages are in the order a beginner should meet them;
+#   - labs are in recommended order within a stage, and must come after every
+#     prerequisite their own lab.yaml names.
+#
+# `optional: true` marks extra practice. A stage is complete when its core labs
+# are verified. Prerequisite `kind: required` shows a stage as waiting on an
+# earlier one and keeps the next-lab rule from starting it early; it never stops
+# a student (or an instructor) opening any lab.
+#
+# See docs/learning-paths.md.
+
+id: devops-engineer
+title: DevOps Engineer
+summary: >-
+  From how a computer works to running applications in production — the skills a
+  DevOps engineer uses every day, in the order that makes each one easier to learn.
+audience: >-
+  Beginners with no DevOps experience, and working engineers who want to find and
+  fill their gaps. No Linux, cloud or programming experience is assumed.
+outcomes:
+  - Work confidently on a Linux server from the command line
+  - Diagnose network and connectivity problems from evidence
+  - Package, run and troubleshoot applications in containers
+  - Build CI/CD pipelines that test and deliver software automatically
+  - Design identity and networking for applications on AWS
+  - Manage infrastructure as code with Terraform
+  - Run, update and repair applications on Kubernetes
+  - Configure fleets of servers with Ansible
+
+stages:
+  # ---------------------------------------------------------------------------
+  - id: foundations
+    title: Foundations
+    summary: >-
+      How a computer and its operating system actually work — memory, bytes, files,
+      processes and the rules every command-line program follows. File permissions
+      are taught hands-on in the Linux stage.
+    why: >-
+      Almost every production incident eventually comes down to one of these basics:
+      a disk or memory limit, a process that never exited, a script that reported
+      success when it failed. Engineers who understand them diagnose problems instead
+      of guessing.
+    objectives:
+      - Read a machine's processors, memory and storage from the files the kernel exposes
+      - Convert between bytes, MB and MiB, and explain why the two sizes differ
+      - Explain what a file descriptor is and why programs run out of them
+      - Describe how a process starts, what it hands back, and how it is cleaned up
+      - Use exit codes, output streams and environment variables the way automation expects
+    skills:
+      - computing.hardware
+      - computing.data-representation
+      - os.files
+      - os.processes
+      - os.kernel
+      - cli.process-contract
+      - programming.fundamentals
+      - data.formats
+    labs:
+      - lab: CS-001
+        skills: [computing.hardware]
+        why: Shows what a machine is made of — processors, memory and storage — using the files the kernel exposes, which every later capacity question builds on.
+      - lab: CS-002
+        skills: [computing.data-representation]
+        why: Teaches bits, bytes and the two kinds of units (MB and MiB), the arithmetic behind every memory limit and disk size.
+      - lab: CS-003
+        skills: [computing.data-representation]
+        why: Explains how text becomes bytes, the cause of many encoding and field-length failures.
+      - lab: CS-004
+        skills: [os.files]
+        why: Introduces file descriptors and resource limits through a real "too many open files" failure.
+      - lab: CS-005
+        skills: [cli.process-contract, os.processes]
+        why: Covers the contract every command follows — arguments, environment, output streams and exit codes — which scripts and pipelines depend on.
+      - lab: CS-011
+        skills: [os.processes]
+        why: Shows how processes are created and cleaned up, and why the first process in a container matters.
+      - lab: CS-012
+        optional: true
+        skills: [os.kernel]
+        why: Goes deeper into system calls and the boundary between a program and the kernel.
+      - lab: CS-013
+        optional: true
+        skills: [os.kernel]
+        why: Goes deeper into threads, scheduling and the CPU limits a container really has.
+      - lab: CS-006
+        optional: true
+        skills: [programming.fundamentals]
+        why: Practises types and decisions by writing a small program — the basis of every automation script.
+      - lab: CS-007
+        optional: true
+        skills: [programming.fundamentals]
+        why: Turns raw text into structured data with lists and dictionaries.
+      - lab: CS-008
+        optional: true
+        skills: [programming.fundamentals]
+        why: Parses log lines without silently losing data.
+      - lab: CS-009
+        optional: true
+        skills: [programming.fundamentals]
+        why: Makes a program fail in ways the thing that called it can understand.
+      - lab: CS-010
+        optional: true
+        skills: [data.formats, programming.fundamentals]
+        why: Covers JSON and YAML, the formats CI pipelines, Kubernetes and Ansible are written in.
+
+  # ---------------------------------------------------------------------------
+  - id: linux
+    title: Linux
+    summary: >-
+      Working on a Linux server from the command line — files, permissions, users,
+      processes, services, logs, packages, environment variables and shell scripts.
+    why: >-
+      Nearly every server, container and cloud machine a DevOps engineer touches runs
+      Linux. Docker, Kubernetes, CI runners and Ansible all assume you can find your way
+      around a Linux shell and fix what you find.
+    objectives:
+      - Navigate the filesystem and manage files and directories
+      - Set permissions and ownership so the right people and programs have access
+      - Manage users, groups, processes and services
+      - Find evidence in logs and reclaim disk space safely
+      - Give services the environment they need and write a systemd unit
+      - Write a Bash script that reports its result through its exit status
+    prerequisites:
+      - stage: foundations
+        kind: recommended
+    skills:
+      - linux.filesystem
+      - linux.permissions
+      - linux.users-groups
+      - linux.processes
+      - linux.services
+      - linux.logs
+      - linux.packages
+      - linux.environment
+      - linux.shell
+      - linux.scheduling
+      - linux.troubleshooting
+    labs:
+      - lab: LINUX-001
+        skills: [linux.filesystem]
+        why: First steps at a Linux shell — moving around the filesystem and creating, moving and checking files.
+      - lab: LINUX-002
+        skills: [linux.permissions]
+        why: Reads and sets permission bits, the access model every server, container and key file relies on.
+      - lab: LINUX-011
+        optional: true
+        skills: [linux.permissions]
+        why: Adds the special permission bits and umask used to keep shared directories safe.
+      - lab: LINUX-003
+        skills: [linux.users-groups, linux.permissions]
+        why: Creates a group and a service account and gives them a shared directory.
+      - lab: LINUX-004
+        skills: [linux.processes]
+        why: Finds, stops and backgrounds processes by name rather than by guesswork.
+      - lab: LINUX-005
+        skills: [linux.services]
+        why: Enables and disables supervised services — how applications stay running on a server.
+      - lab: LINUX-006
+        skills: [networking.ip-addressing, networking.ports, networking.http]
+        why: Gathers a host's addresses, listening ports and an HTTP response — a first look at networking from a Linux shell.
+      - lab: LINUX-007
+        skills: [linux.logs, observability.logs]
+        why: Searches and counts log entries to build evidence for an investigation.
+      - lab: LINUX-016
+        optional: true
+        skills: [linux.shell, linux.filesystem]
+        why: Edits and summarises text across many files at once with sed, awk and find.
+      - lab: LINUX-008
+        skills: [linux.filesystem]
+        why: Works out what is using disk space and reclaims it without deleting what the system still needs.
+      - lab: LINUX-019
+        skills: [linux.packages]
+        why: Uses the package manager to find files that were changed and to install software from a local package.
+      - lab: LINUX-009
+        skills: [linux.shell]
+        why: Writes a Bash health-check script that reports its result through its output and its exit status.
+      - lab: LINUX-014
+        skills: [linux.environment, linux.services]
+        why: Shows why a service does not inherit your shell's environment, and how to give it the variables and PATH it needs.
+      - lab: LINUX-018
+        optional: true
+        skills: [linux.scheduling, linux.environment]
+        why: Schedules work with cron and finds out why a scheduled job never ran.
+      - lab: LINUX-017
+        skills: [linux.services]
+        why: Writes a systemd unit, the service definition most Linux servers use.
+      - lab: LINUX-010
+        skills: [linux.troubleshooting, linux.services, linux.processes]
+        why: Brings the stage together — diagnose and repair a service outage from evidence.
+
+  # ---------------------------------------------------------------------------
+  - id: networking
+    title: Networking
+    summary: >-
+      How machines find and talk to each other — IP addresses and subnets, routing,
+      ports, TCP and UDP — and how to tell which layer a connection failure lives in.
+    why: >-
+      "It can't connect" is the most common problem in DevOps work. Containers, clusters
+      and cloud networks are all built on these ideas, and knowing them turns a vague
+      outage into a specific, fixable cause.
+    objectives:
+      - Work out the network, broadcast and host range of an address block
+      - Classify a failure by the network layer that reported it
+      - Read a routing table and decide whether a destination is reachable
+      - Find which program is listening on which port and address
+      - Tell a refused connection from a timeout, and explain what each means
+    prerequisites:
+      - stage: linux
+        kind: recommended
+    skills:
+      - networking.ip-addressing
+      - networking.layers
+      - networking.routing
+      - networking.ports
+      - networking.tcp-udp
+      - networking.http
+      - networking.dns
+      - networking.troubleshooting
+    coming_soon: >-
+      There is no DNS lab yet, so name resolution is not practised in this stage. HTTPS
+      and certificates are part of the DevSecOps stage, which does not have a TLS lab yet either.
+    labs:
+      - lab: NET-002
+        skills: [networking.ip-addressing]
+        why: Works out network and broadcast addresses and plans subnets — the addressing every cloud network and cluster uses.
+      - lab: NET-003
+        skills: [networking.layers, networking.troubleshooting]
+        why: Reproduces real failures and classifies which network layer each one came from.
+      - lab: NET-004
+        skills: [networking.routing, networking.layers]
+        why: Shows how a machine finds a neighbour on its own network before it can send anything.
+      - lab: NET-005
+        skills: [networking.routing, networking.troubleshooting]
+        why: Diagnoses why one destination is reachable and another is not, using the routing table.
+      - lab: NET-006
+        skills: [networking.ports]
+        why: Takes an inventory of listening sockets and fixes a service bound to the wrong address.
+      - lab: NET-007
+        skills: [networking.ports, networking.troubleshooting]
+        why: Proves a fix from another machine — the classic "it works here and nowhere else" incident.
+      - lab: NET-008
+        skills: [networking.tcp-udp]
+        why: Captures a TCP handshake, a refused connection and a UDP datagram to see how connections really behave.
+
+  # ---------------------------------------------------------------------------
+  - id: git
+    title: Git & Software Delivery
+    summary: >-
+      Version control with Git — commits, branches, pull requests — and how a code
+      change travels from a developer's laptop to production.
+    why: >-
+      Every pipeline, infrastructure change and GitOps deployment starts with a commit.
+      Teams review, test and release through Git, so it is a daily tool for every
+      DevOps engineer.
+    objectives:
+      - Record and inspect changes in a Git repository
+      - Work on changes in branches and merge them
+      - Propose and review a change through a pull request
+      - Explain continuous integration, delivery and deployment
+    prerequisites:
+      - stage: linux
+        kind: recommended
+    skills:
+      - git.fundamentals
+      - git.branching
+      - git.collaboration
+      - delivery.concepts
+    coming_soon: >-
+      JumpToTech Labs does not have Git labs yet. Software delivery concepts are practised
+      in the first CI/CD lab (CICD-001), which is part of the CI/CD stage.
+    labs: []
+
+  # ---------------------------------------------------------------------------
+  - id: docker
+    title: Containers & Docker
+    summary: >-
+      Packaging and running applications in containers — images, Dockerfiles, volumes,
+      networks, configuration, Compose — and working out why a container misbehaves.
+    why: >-
+      Containers are how modern applications are built, shipped and run. CI pipelines
+      build them and Kubernetes runs them, so this stage is the bridge between a single
+      server and a production platform.
+    objectives:
+      - Explain the difference between an image and a container
+      - Build an image from a Dockerfile and run it
+      - Keep data with volumes and connect containers on a network
+      - Configure containers with environment variables and Compose
+      - Diagnose failing containers from exit codes, logs and configuration
+    prerequisites:
+      - stage: linux
+        kind: required
+      - stage: networking
+        kind: recommended
+    skills:
+      - docker.containers
+      - docker.images
+      - docker.dockerfile
+      - docker.configuration
+      - docker.volumes
+      - docker.networking
+      - docker.compose
+      - docker.registries
+      - docker.resources
+      - docker.troubleshooting
+    labs:
+      - lab: DOCKER-001
+        skills: [docker.containers]
+        why: Runs a first container and explains how a running container differs from an image.
+      - lab: DOCKER-002
+        skills: [docker.containers]
+        why: Starts, stops, restarts and removes containers, including ones that have already exited.
+      - lab: DOCKER-003
+        skills: [docker.images, docker.registries]
+        why: Pulls an image from a registry and gives it a new name and tag.
+      - lab: DOCKER-004
+        skills: [docker.dockerfile, docker.images]
+        why: Builds an image from a Dockerfile you wrote and runs it.
+      - lab: DOCKER-013
+        optional: true
+        skills: [docker.images, docker.dockerfile]
+        why: Orders a Dockerfile so rebuilds reuse the build cache instead of starting over.
+      - lab: DOCKER-014
+        optional: true
+        skills: [docker.dockerfile]
+        why: Uses CMD and ENTRYPOINT to package a tool that accepts arguments.
+      - lab: DOCKER-007
+        skills: [docker.configuration]
+        why: Configures a container with environment variables instead of rebuilding its image.
+      - lab: DOCKER-005
+        skills: [docker.volumes]
+        why: Keeps a container's data in a named volume so it survives the container.
+      - lab: DOCKER-006
+        skills: [docker.networking]
+        why: Connects containers on a user-defined network so they can find each other by name.
+      - lab: DOCKER-008
+        skills: [docker.compose, docker.networking]
+        why: Runs an application made of several containers from one Compose file.
+      - lab: DOCKER-009
+        optional: true
+        skills: [docker.resources]
+        why: Limits memory, CPU and processes, and recognises a container killed for going over.
+      - lab: DOCKER-010
+        skills: [docker.troubleshooting]
+        why: Diagnoses three failing containers from exit codes, logs and configuration.
+      - lab: DOCKER-011
+        skills: [docker.troubleshooting, observability.logs]
+        why: Investigates a container that is running but not actually working.
+      - lab: DOCKER-012
+        skills: [docker.networking, docker.troubleshooting]
+        why: Publishes a container's port on the host and resolves a port collision.
+
+  # ---------------------------------------------------------------------------
+  - id: cicd
+    title: CI/CD
+    summary: >-
+      Pipelines that build, test and deliver software automatically — in GitHub Actions
+      and in Jenkins — with artifacts, container images, credentials and deployment.
+    why: >-
+      CI/CD is how teams ship safely many times a day. A DevOps engineer builds these
+      pipelines, keeps secrets out of them and is the person called when one breaks.
+    objectives:
+      - Explain continuous integration, delivery and deployment
+      - Write pipelines as code in GitHub Actions and Jenkins
+      - Build, test and publish artifacts automatically
+      - Build a container image and update a deployment from a pipeline
+      - Use credentials safely and repair a broken pipeline
+    prerequisites:
+      - stage: docker
+        kind: recommended
+      - stage: git
+        kind: recommended
+    skills:
+      - cicd.pipelines
+      - cicd.build-test
+      - cicd.artifacts
+      - cicd.container-builds
+      - cicd.deployment
+      - cicd.troubleshooting
+    coming_soon: >-
+      Security scanning in pipelines belongs to the DevSecOps stage, which has no
+      scanning lab yet.
+    labs:
+      - lab: CICD-001
+        skills: [delivery.concepts, cicd.artifacts]
+        why: Runs each stage of a delivery pipeline by hand, so the automated version makes sense.
+      - lab: CICD-002
+        skills: [cicd.pipelines]
+        why: Writes a first GitHub Actions workflow with a trigger and a job.
+      - lab: CICD-003
+        skills: [cicd.build-test, cicd.pipelines]
+        why: Makes the workflow check out, build and test the project.
+      - lab: CICD-004
+        skills: [cicd.artifacts]
+        why: Publishes the build output as an artifact that deployment can use.
+      - lab: CICD-005
+        skills: [cicd.container-builds, docker.dockerfile]
+        why: Builds and tags a container image in the pipeline — where the Docker stage meets CI.
+      - lab: CICD-006
+        skills: [cicd.pipelines]
+        why: Writes a first declarative Jenkins pipeline, the other widely used CI system.
+      - lab: CICD-007
+        skills: [cicd.pipelines, cicd.build-test]
+        why: Splits a Jenkins pipeline into ordered stages and shows what happens when one fails.
+      - lab: CICD-008
+        skills: [security.secrets, cicd.pipelines]
+        why: Replaces a hard-coded password with a credentials binding.
+      - lab: CICD-009
+        skills: [cicd.deployment, cicd.container-builds]
+        why: Composes a complete build, image and deploy pipeline that only releases from the main branch.
+      - lab: CICD-010
+        skills: [cicd.troubleshooting]
+        why: Diagnoses and repairs two broken pipelines.
+
+  # ---------------------------------------------------------------------------
+  - id: aws
+    title: Cloud & AWS
+    summary: >-
+      Cloud fundamentals on AWS — identity and access, auditing, VPC networking,
+      CloudFormation and cost. These labs are simulated: they use no AWS account and
+      create no AWS resources.
+    why: >-
+      Most companies run on a public cloud. Getting access control and networking right
+      is what keeps a cloud account secure and affordable, and those mistakes are among
+      the most expensive a team can make.
+    objectives:
+      - Work out which credentials a tool is using and read AWS resource names
+      - Write least-privilege IAM policies and role trust policies
+      - Trace a change back to the identity that made it with CloudTrail
+      - Plan VPC address ranges, subnets and internet routing across Availability Zones
+      - Repair a CloudFormation template and reduce unnecessary network cost
+    prerequisites:
+      - stage: networking
+        kind: recommended
+    skills:
+      - aws.identity
+      - aws.iam
+      - aws.audit
+      - aws.networking
+      - aws.infrastructure-templates
+      - aws.cost
+      - aws.compute
+      - aws.storage
+    coming_soon: >-
+      There are no labs yet for compute (EC2) or storage (S3).
+    labs:
+      - lab: AWS-001
+        skills: [aws.identity]
+        why: Works out which credentials the AWS command line tool uses, and reads resource names (ARNs).
+      - lab: AWS-002
+        skills: [aws.iam, security.least-privilege]
+        why: Rewrites an over-permissive IAM policy so it grants exactly what a job needs.
+      - lab: AWS-003
+        skills: [aws.iam]
+        why: Shows why an explicit Deny always wins when AWS evaluates policies.
+      - lab: AWS-004
+        skills: [aws.iam]
+        why: Writes a trust policy that decides who may assume a role.
+      - lab: AWS-005
+        skills: [aws.iam, security.least-privilege]
+        why: Closes a privilege-escalation path through handing roles to services.
+      - lab: AWS-006
+        skills: [aws.audit, sre.incident-investigation]
+        why: Traces a production-breaking change to the identity behind it using CloudTrail records.
+      - lab: AWS-018
+        skills: [aws.infrastructure-templates]
+        why: Repairs a CloudFormation template so the stack it describes would create.
+      - lab: AWS-007
+        skills: [aws.networking, networking.ip-addressing]
+        why: Plans VPC address ranges that leave room to grow, applying the subnetting from the Networking stage.
+      - lab: AWS-008
+        skills: [aws.networking]
+        why: Extends a VPC into a second Availability Zone.
+      - lab: AWS-009
+        skills: [aws.networking, security.network-isolation]
+        why: Routes public subnets to the internet while keeping private subnets private.
+      - lab: AWS-012
+        skills: [aws.cost, aws.networking]
+        why: Cuts NAT gateway cost with VPC endpoints without breaking the traffic that still needs it.
+
+  # ---------------------------------------------------------------------------
+  - id: terraform
+    title: Infrastructure as Code
+    summary: >-
+      Describing infrastructure in code with Terraform — the plan and apply workflow,
+      variables, outputs, state, dependencies and expressions. The labs run Terraform
+      locally, without a cloud account.
+    why: >-
+      Infrastructure written as code can be reviewed, repeated and rolled back like any
+      other change. Terraform is the most widely used tool for it, and reading a plan
+      carefully is what stops an accidental deletion in production.
+    objectives:
+      - Take a configuration through init, plan, apply and destroy
+      - Use variables and outputs to make a configuration reusable
+      - Inspect and safely change Terraform state
+      - Let Terraform order resources from their references
+      - Compute values with locals, data sources and expressions
+    prerequisites:
+      - stage: aws
+        kind: recommended
+    skills:
+      - terraform.workflow
+      - terraform.providers
+      - terraform.resources
+      - terraform.variables
+      - terraform.outputs
+      - terraform.state
+      - terraform.expressions
+      - terraform.validation
+      - terraform.modules
+      - terraform.drift
+      - terraform.troubleshooting
+    coming_soon: >-
+      There are no labs yet for modules, drift, or troubleshooting a failed plan or apply.
+    labs:
+      - lab: TF-001
+        skills: [terraform.workflow, terraform.providers, terraform.resources]
+        why: Takes a first configuration through init, plan and apply.
+      - lab: TF-011
+        skills: [terraform.workflow]
+        why: Saves and reviews an execution plan before applying exactly that plan.
+      - lab: TF-012
+        skills: [terraform.workflow]
+        why: Destroys infrastructure safely, including a single targeted resource.
+      - lab: TF-002
+        skills: [terraform.variables]
+        why: Makes one configuration build any environment with input variables.
+      - lab: TF-003
+        skills: [terraform.outputs]
+        why: Publishes the outputs a release pipeline needs, including a sensitive value.
+      - lab: TF-004
+        skills: [terraform.state]
+        why: Renames and stops managing resources without destroying them.
+      - lab: TF-026
+        optional: true
+        skills: [terraform.state]
+        why: Moves state to a new location with the local backend without losing it.
+      - lab: TF-005
+        skills: [terraform.resources]
+        why: Builds resources that depend on each other and reads the order Terraform chose.
+      - lab: TF-016
+        optional: true
+        skills: [terraform.resources]
+        why: States an ordering Terraform cannot work out on its own with depends_on.
+      - lab: TF-006
+        skills: [terraform.expressions]
+        why: Replaces copied values with a local value and a data source.
+      - lab: TF-017
+        optional: true
+        skills: [terraform.variables, terraform.expressions]
+        why: Describes structured input with complex types so bad input is rejected early.
+      - lab: TF-018
+        optional: true
+        skills: [terraform.expressions]
+        why: Computes values with for expressions and built-in functions.
+      - lab: TF-025
+        optional: true
+        skills: [terraform.validation]
+        why: Adds validation rules, preconditions and checks for the assumptions a configuration makes.
+
+  # ---------------------------------------------------------------------------
+  - id: kubernetes
+    title: Kubernetes
+    summary: >-
+      Running applications on Kubernetes — Pods, Deployments, Services, configuration,
+      Secrets, health probes, resources, storage and access control — and repairing
+      them when they break.
+    why: >-
+      Kubernetes is the platform most teams use to run containers in production. It keeps
+      applications running in the state you asked for, and a DevOps engineer is expected
+      to deploy to it, update safely and fix what goes wrong.
+    objectives:
+      - Run an application as Pods and Deployments and give it a stable Service
+      - Keep configuration and credentials outside the image
+      - Tell Kubernetes when an application is ready, and how much it needs
+      - Roll out a new version and roll back a bad one
+      - Grant an application only the API access it needs
+      - Diagnose a broken workload from status, events and logs
+    prerequisites:
+      - stage: docker
+        kind: required
+      - stage: networking
+        kind: recommended
+    skills:
+      - kubernetes.pods
+      - kubernetes.deployments
+      - kubernetes.services
+      - kubernetes.configuration
+      - kubernetes.secrets
+      - kubernetes.batch
+      - kubernetes.probes
+      - kubernetes.resources
+      - kubernetes.storage
+      - kubernetes.rbac
+      - kubernetes.controllers
+      - kubernetes.troubleshooting
+      - kubernetes.namespaces
+      - kubernetes.ingress
+      - kubernetes.networkpolicy
+      - kubernetes.disruption-budgets
+    coming_soon: >-
+      There are no labs yet for namespaces, Ingress, NetworkPolicy or PodDisruptionBudgets.
+    labs:
+      - lab: K8S-001
+        skills: [kubernetes.pods]
+        why: Creates a first Pod and confirms it is both running and ready.
+      - lab: K8S-002
+        skills: [kubernetes.deployments]
+        why: Runs an application as a Deployment with several replicas.
+      - lab: K8S-003
+        skills: [kubernetes.services]
+        why: Gives a set of Pods one stable address with a Service.
+      - lab: K8S-004
+        skills: [kubernetes.configuration]
+        why: Moves an application's configuration into a ConfigMap.
+      - lab: K8S-005
+        skills: [kubernetes.secrets, security.secrets]
+        why: Gives an application a credential through a Secret, and explains why base64 is not encryption.
+      - lab: K8S-006
+        optional: true
+        skills: [kubernetes.batch]
+        why: Runs a one-off task to completion with a Job.
+      - lab: K8S-007
+        optional: true
+        skills: [kubernetes.batch]
+        why: Schedules recurring work with a CronJob.
+      - lab: K8S-008
+        skills: [kubernetes.probes, sre.reliability]
+        why: Adds a readiness probe so traffic only reaches Pods that can serve it.
+      - lab: K8S-009
+        skills: [kubernetes.resources]
+        why: Declares CPU and memory requests and limits for a workload.
+      - lab: K8S-011
+        skills: [kubernetes.storage]
+        why: Keeps an application's data with a PersistentVolumeClaim.
+      - lab: K8S-012
+        skills: [kubernetes.rbac, security.least-privilege]
+        why: Grants an application read-only API access with a Role and a RoleBinding.
+      - lab: K8S-013
+        skills: [kubernetes.deployments]
+        why: Rolls out a new version of a running application in place.
+      - lab: K8S-014
+        skills: [kubernetes.deployments, kubernetes.troubleshooting]
+        why: Recognises a stalled rollout and rolls back to the working version.
+      - lab: K8S-015
+        optional: true
+        skills: [kubernetes.deployments, sre.reliability]
+        why: Chooses an update strategy that fits what an application can tolerate during a release.
+      - lab: K8S-016
+        skills: [kubernetes.pods, kubernetes.troubleshooting]
+        why: Prepares a workload with an init container, diagnosed from Pod status and events.
+      - lab: K8S-018
+        optional: true
+        skills: [kubernetes.controllers]
+        why: Runs one agent on every node with a DaemonSet.
+      - lab: K8S-019
+        optional: true
+        skills: [kubernetes.controllers, kubernetes.storage]
+        why: Gives a database stable identity and its own storage with a StatefulSet.
+      - lab: K8S-010
+        skills: [kubernetes.troubleshooting]
+        why: Brings the stage together — investigate and repair a broken workload until it serves again.
+
+  # ---------------------------------------------------------------------------
+  - id: ansible
+    title: Configuration Management
+    summary: >-
+      Configuring many servers at once with Ansible — inventories, playbooks, variables,
+      templates, handlers and roles — written so they are safe to run again.
+    why: >-
+      Configuring servers by hand does not scale and cannot be repeated reliably. Ansible
+      turns server setup into reviewed, repeatable code, and idempotent automation is what
+      makes running it again safe.
+    objectives:
+      - Describe servers in an inventory and reach them with Ansible
+      - Write playbooks that use variables, loops, conditions and templates
+      - Restart services only when their configuration changed
+      - Package automation as a reusable role
+      - Troubleshoot a broken Ansible project from its output
+    prerequisites:
+      - stage: linux
+        kind: required
+    skills:
+      - ansible.inventory
+      - ansible.ad-hoc
+      - ansible.playbooks
+      - ansible.variables
+      - ansible.templates
+      - ansible.handlers
+      - ansible.roles
+      - ansible.idempotency
+      - ansible.troubleshooting
+    labs:
+      - lab: ANSIBLE-001
+        skills: [ansible.inventory]
+        why: Builds an inventory and proves Ansible can reach the servers in it.
+      - lab: ANSIBLE-002
+        skills: [ansible.ad-hoc]
+        why: Changes several servers at once with ad-hoc commands, and shows why that is not a playbook.
+      - lab: ANSIBLE-003
+        skills: [ansible.playbooks]
+        why: Writes and runs a first playbook.
+      - lab: ANSIBLE-004
+        skills: [ansible.variables]
+        why: Moves hard-coded values into group and host variables.
+      - lab: ANSIBLE-005
+        skills: [ansible.variables]
+        why: Uses loops and conditions instead of repeated tasks.
+      - lab: ANSIBLE-006
+        skills: [ansible.handlers, ansible.idempotency]
+        why: Reloads a service only when its configuration changed, and proves a second run changes nothing.
+      - lab: ANSIBLE-007
+        skills: [ansible.templates]
+        why: Renders a configuration file for each server from one Jinja2 template.
+      - lab: ANSIBLE-008
+        skills: [ansible.roles, ansible.idempotency]
+        why: Refactors a playbook into a reusable role.
+      - lab: ANSIBLE-009
+        skills: [ansible.playbooks, ansible.templates, ansible.idempotency]
+        why: Deploys a web tier to two servers from one idempotent playbook.
+      - lab: ANSIBLE-010
+        skills: [ansible.troubleshooting]
+        why: Repairs a broken Ansible project using the tool's own error output.
+
+  # ---------------------------------------------------------------------------
+  - id: helm-gitops
+    title: Helm & GitOps
+    summary: >-
+      Packaging Kubernetes applications as Helm charts, and deploying them from Git with
+      Argo CD so the cluster always matches what the repository says.
+    why: >-
+      Teams rarely apply raw manifests in production. Helm makes applications reusable
+      and configurable, and GitOps makes every deployment a reviewed Git change that can
+      be audited and rolled back.
+    objectives:
+      - Install, configure and upgrade an application from a Helm chart
+      - Explain how chart values and releases work
+      - Describe the GitOps model and why Git is the source of truth
+      - Keep a cluster in step with a repository using Argo CD
+    prerequisites:
+      - stage: kubernetes
+        kind: required
+      - stage: git
+        kind: recommended
+    skills:
+      - helm.charts
+      - helm.releases
+      - gitops.principles
+      - gitops.argocd
+    coming_soon: >-
+      JumpToTech Labs does not have Helm, Argo CD or GitOps labs yet.
+    labs: []
+
+  # ---------------------------------------------------------------------------
+  - id: observability
+    title: Observability & SRE
+    summary: >-
+      Knowing what a running system is doing — logs, metrics, alerts and service level
+      objectives — and using that evidence to keep it reliable.
+    why: >-
+      You cannot fix what you cannot see. Site reliability work depends on collecting the
+      right signals, alerting on what matters to users, and investigating incidents from
+      evidence rather than memory.
+    objectives:
+      - Get application logs to where people and tools can read them
+      - Explain what metrics, monitoring and alerting are for
+      - Define service level indicators and objectives
+      - Investigate an incident from its evidence
+    prerequisites:
+      - stage: kubernetes
+        kind: recommended
+    skills:
+      - observability.logs
+      - observability.metrics
+      - observability.alerting
+      - sre.slos
+      - sre.incident-investigation
+      - sre.reliability
+    coming_soon: >-
+      There are no labs yet for metrics, monitoring tools such as Prometheus and Grafana,
+      alerting, or SLOs. Incident investigation and reliability are practised in earlier
+      stages (AWS-006, K8S-008, K8S-015).
+    labs:
+      - lab: K8S-017
+        skills: [observability.logs, kubernetes.pods]
+        why: Makes a file-based audit log readable with kubectl logs using a sidecar — how logs reach collection tools on Kubernetes.
+
+  # ---------------------------------------------------------------------------
+  - id: devsecops
+    title: DevSecOps & Production Readiness
+    summary: >-
+      Building security into everyday work — least privilege, secrets, network isolation,
+      scanning, TLS and runtime controls — and checking a service is ready for production.
+    why: >-
+      Security is part of every change a DevOps engineer makes, not a final review. Most
+      breaches start with too much access, a leaked secret or an unpatched dependency —
+      all things this work prevents.
+    objectives:
+      - Grant exactly the access a person or program needs, and verify it by what it refuses
+      - Keep secrets out of code, images and pipelines
+      - Keep private systems unreachable from where they should not be reached
+      - Explain scanning, TLS and runtime security controls
+    prerequisites:
+      - stage: linux
+        kind: recommended
+      - stage: kubernetes
+        kind: recommended
+    skills:
+      - security.least-privilege
+      - security.secrets
+      - security.network-isolation
+      - security.scanning
+      - security.runtime
+      - security.tls
+      - operations.production-readiness
+    coming_soon: >-
+      There are no labs yet for vulnerability scanning, TLS and certificates, runtime
+      security or production readiness reviews. Least privilege, secrets and network
+      isolation are also practised in earlier stages (AWS-002, AWS-005, AWS-009, CICD-008,
+      K8S-005, K8S-012).
+    labs:
+      - lab: LINUX-015
+        skills: [security.least-privilege]
+        why: Replaces a blanket sudo rule with one that grants exactly two commands, and checks it by what it denies.
+
+  # ---------------------------------------------------------------------------
+  - id: production-engineer
+    title: Production Engineering
+    summary: >-
+      Putting it all together — troubleshooting failures that cross systems, working
+      production incidents, building complete projects, and preparing for interviews and
+      a practical assessment.
+    why: >-
+      Real incidents do not stay inside one tool. Employers look for engineers who can
+      follow a problem from the application to the cluster to the network to the cloud,
+      and explain how they found it.
+    objectives:
+      - Diagnose failures that span several systems
+      - Work a production incident from alert to review
+      - Build and operate a complete project
+      - Explain your work clearly in an interview
+    prerequisites:
+      - stage: observability
+        kind: recommended
+      - stage: devsecops
+        kind: recommended
+    skills:
+      - production.integrated-troubleshooting
+      - production.incident-response
+      - production.projects
+      - career.interview-preparation
+      - assessment.practical
+    coming_soon: >-
+      This stage has no labs yet. Each earlier stage ends with a troubleshooting lab for
+      its own technology (LINUX-010, DOCKER-010, CICD-010, K8S-010, ANSIBLE-010).
+    labs: []

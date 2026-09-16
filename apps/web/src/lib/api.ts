@@ -5,6 +5,9 @@ import type {
   AttemptSummary,
   EndLabResponse,
   HintRecordResponse,
+  LearningPathDetail,
+  LearningPathProgress,
+  LearningPathSummary,
   ProgressSnapshot,
   StudentIdentity,
   LabDetail,
@@ -194,6 +197,20 @@ export const api = {
     request<{ student: StudentIdentity; attempts: AttemptSummary[]; count: number }>(
       `/api/me/attempts${limit ? `?limit=${limit}` : ''}`,
     ),
+
+  /*
+   * Learning paths (V1 EPIC-02). The path itself is catalog data; progress
+   * through it is `me` — the server decides whose, and there is no student
+   * parameter to send.
+   */
+  listLearningPaths: () =>
+    request<{ learningPaths: LearningPathSummary[]; count: number }>('/api/learning-paths'),
+
+  getLearningPath: (pathId: string) =>
+    request<{ learningPath: LearningPathDetail }>(`/api/learning-paths/${encodeURIComponent(pathId)}`),
+
+  getLearningPathProgress: (pathId: string) =>
+    request<LearningPathProgress>(`/api/me/learning-paths/${encodeURIComponent(pathId)}`),
 
   getAttempt: (attemptId: string) =>
     request<{ student: StudentIdentity; attempt: AttemptDetail }>(

@@ -8,12 +8,13 @@
  *   - the running lab        GET /api/sessions      (ActiveSessionContext)
  *   - progress per track     GET /api/me/progress   (CatalogContext)
  *   - recent attempts        GET /api/me/attempts
- *   - tracks and next lab    GET /api/labs          (CatalogContext) + the above
+ *   - tracks                 GET /api/labs          (CatalogContext) + the above
+ *   - learning path + next   GET /api/learning-paths/:id + GET /api/me/learning-paths/:id
  *
- * No percentage is shown that the API did not compute, and "Next up" is the
- * deterministic rule in `lib/suggest.ts`, stated beside it.
+ * No percentage is shown that the API did not compute, and the next lab is the
+ * API's deterministic learning-path rule, with its reason printed beside it.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useActiveSession } from '../lib/ActiveSessionContext';
 import { useAuth } from '../lib/AuthContext';
 import { displayNameFor } from '../lib/auth';
@@ -22,10 +23,11 @@ import { api } from '../lib/api';
 import { describeError, toApiError } from '../lib/errors';
 import { ATTEMPT_LABEL, SESSION_STATUS_TEXT, formatMoment, plural } from '../lib/format';
 import { hrefFor, usePageTitle } from '../lib/router';
-import { suggestNextLab } from '../lib/suggest';
+import { FLAGSHIP_PATH_ID, useLearningPath } from '../lib/learningPath';
 import type { ApiError, AttemptSummary } from '../lib/types';
 import { ErrorNotice } from '../components/ErrorNotice';
-import { Badge, DifficultyBadge, LoadingState, PageHeader, ProgressBar } from '../components/ui';
+import { PathProgressSummary, Recommendation } from '../components/LearningPath';
+import { Badge, LoadingState, PageHeader, ProgressBar } from '../components/ui';
 
 function minutesLeft(expiresAt: string): number | null {
   const ms = Date.parse(expiresAt) - Date.now();
@@ -130,10 +132,74 @@ function FirstSteps() {
   );
 }
 
+/**
+ * The student's place on the flagship learning path, and the next lab.
+ *
+ * Replaces the old "Next up" rule: one answer to "what should I do next?",
+ * computed by the API from verified progress. A running lab is already offered
+ * by the panel above, so this panel explains rather than repeating the button.
+ */
+function LearningPathPanel() {
+  const { definition, progress, reloadDefinition, reloadProgress } = useLearningPath(FLAGSHIP_PATH_ID);
+  const path = definition.data;
+  const firstTime =
+    progress.data !== null && progress.data.overall.labs.completed + progress.data.overall.labs.inProgress === 0;
+
+  return (
+    <section className="panel" aria-labelledby="path-heading">
+      <div className="panel__head">
+        <h2 id="path-heading" className="panel__title">
+          {path ? `${path.title} path` : 'Your learning path'}
+        </h2>
+        {path ? (
+          <a className="text-link" href={hrefFor({ name: 'path', pathId: path.id })}>
+            View path
+          </a>
+        ) : null}
+      </div>
+      {definition.status === 'loading' ? (
+        <LoadingState label="Loading your learning path…" />
+      ) : !path ? (
+        <ErrorNotice
+          error={{ ...describeError(definition.error!, 'load'), title: 'We could not load your learning path' }}
+          headingLevel={3}
+          live={false}
+          actions={
+            <button type="button" className="btn btn--secondary btn--sm" onClick={reloadDefinition}>
+              Try again
+            </button>
+          }
+        />
+      ) : progress.status === 'loading' ? (
+        <LoadingState label="Loading your progress on this path…" />
+      ) : !progress.data ? (
+        <ErrorNotice
+          error={describeError(progress.error!, 'progress')}
+          headingLevel={3}
+          live={false}
+          actions={
+            <button type="button" className="btn btn--secondary btn--sm" onClick={reloadProgress}>
+              Try again
+            </button>
+          }
+        />
+      ) : (
+        <>
+          <p className="panel__text">
+            {firstTime ? 'Start your DevOps journey' : 'Continue your DevOps journey'} — one stage at a time, each
+            building on the last.
+          </p>
+          <PathProgressSummary path={path} progress={progress.data} />
+          <Recommendation recommendation={progress.data.recommendation} firstTime={firstTime} showResumeAction={false} />
+        </>
+      )}
+    </section>
+  );
+}
+
 export function DashboardPage() {
   const auth = useAuth();
   const catalog = useCatalog();
-  const { entries } = useActiveSession();
 
   const [attempts, setAttempts] = useState<AttemptSummary[] | null>(null);
   const [attemptsError, setAttemptsError] = useState<ApiError | null>(null);
@@ -165,18 +231,6 @@ export function DashboardPage() {
   const name = auth.identity ? displayNameFor(auth.identity) : null;
   const firstTime = attempts !== null && attempts.length === 0;
 
-  const suggestion = useMemo(() => {
-    if (catalog.status !== 'ready' || catalog.progressStatus !== 'ready') return null;
-    return suggestNextLab({
-      labs: catalog.labs,
-      tracks: catalog.tracks,
-      progressFor: catalog.progressFor,
-      recentLabIds: (attempts ?? []).map((attempt) => attempt.labId),
-    });
-  }, [catalog, attempts]);
-
-  const runningLabId = entries[0]?.session.labId;
-
   return (
     <div className="page">
       <PageHeader
@@ -191,24 +245,7 @@ export function DashboardPage() {
 
           {firstTime ? <FirstSteps /> : null}
 
-          {suggestion && suggestion.lab.id !== runningLabId ? (
-            <section className="panel" aria-labelledby="next-up-heading">
-              <div className="panel__head">
-                <h2 id="next-up-heading" className="panel__title">
-                  Next up
-                </h2>
-                <DifficultyBadge difficulty={suggestion.lab.difficulty} />
-              </div>
-              <p className="panel__lead">
-                <span className="mono-id">{suggestion.lab.id}</span> {suggestion.lab.title}
-              </p>
-              <p className="panel__text">{suggestion.lab.summary}</p>
-              <p className="panel__why">{suggestion.reason}</p>
-              <a className="btn btn--primary" href={hrefFor({ name: 'lab', labId: suggestion.lab.id })}>
-                View lab
-              </a>
-            </section>
-          ) : null}
+          <LearningPathPanel />
 
           <section className="panel" aria-labelledby="recent-heading">
             <div className="panel__head">

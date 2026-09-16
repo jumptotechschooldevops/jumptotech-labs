@@ -12,13 +12,14 @@
   },
   "dependencies": {
     "@jumptotech/lab-orchestrator": "*",
+    "@jumptotech/observability": "*",
     "@jumptotech/progress": "*",
     "@jumptotech/verifier": "*",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.7.0",
     "jose": "^6.2.9",
-    "tsx": "^4.19.2",
-    "@jumptotech/observability": "*"
+    "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

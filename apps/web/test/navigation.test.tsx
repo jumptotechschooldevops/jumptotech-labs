@@ -27,12 +27,13 @@ const nav = () => within(screen.getByRole('navigation', { name: 'Main' }));
 const current = () => nav().getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page').map((l) => l.textContent);
 
 describe('navigation', () => {
-  it('offers the same five sections everywhere, and marks the current one', async () => {
+  it('offers the same six sections everywhere, and marks the current one', async () => {
     renderApp('#/');
     await screen.findByRole('heading', { level: 1, name: /Welcome/ });
 
     expect(nav().getAllByRole('link').map((link) => link.textContent)).toEqual([
       'Dashboard',
+      'Learning Path',
       'Labs',
       'Tracks',
       'Progress',
@@ -54,6 +55,12 @@ describe('navigation', () => {
     act(() => go('#/tracks/linux'));
     await screen.findByRole('heading', { level: 1, name: 'Linux' });
     expect(current()).toEqual(['Tracks']);
+
+    // A stage lives under Learning Path.
+    act(() => go('#/paths/devops-engineer/stages/linux'));
+    await screen.findByRole('heading', { level: 1, name: 'Linux' });
+    expect(current()).toEqual(['Learning Path']);
+    expect(document.title).toBe('Linux · JumpToTech Labs');
   });
 
   it('moves focus to the new page on navigation, for keyboard and screen-reader users', async () => {

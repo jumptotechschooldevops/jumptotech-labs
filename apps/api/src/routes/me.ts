@@ -6,6 +6,7 @@
  *   GET /api/me/progress              completed / total, per track
  *   GET /api/me/attempts              recent attempts, newest first
  *   GET /api/me/attempts/:attemptId   one attempt, with the hints it used
+ *   GET /api/me/learning-paths/:pathId  verified progress through a learning path, and the next lab
  * ```
  *
  * `me` rather than `/api/students/:id` on purpose. A route that takes a student
@@ -24,7 +25,7 @@
  * has to know how either is stored.
  */
 import { Router, type Request, type Response } from 'express';
-import type { LabRegistry } from '@jumptotech/lab-orchestrator';
+import { LearningPathCatalog, type LabRegistry, type SessionManager } from '@jumptotech/lab-orchestrator';
 import {
   DEFAULT_ATTEMPT_PAGE,
   type AttemptDetail,
@@ -37,6 +38,12 @@ import {
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { progressErrorResponse, resolveStudent } from '../identity.js';
 import { record } from '../progress.js';
+import {
+  activeLabIdsFor,
+  findLearningPath,
+  labStartability,
+  toLearningPathProgressPayload,
+} from './learning-paths.js';
 
 export interface MeRoutesDeps {
   registry: LabRegistry;
@@ -45,6 +52,9 @@ export interface MeRoutesDeps {
   /** False when history is only in memory. Served so the UI can be honest. */
   durable: boolean;
   logger?: (message: string) => void;
+  /** For the learning-path route: the caller's running lab, and which labs can start. */
+  sessions?: SessionManager;
+  learningPaths?: LearningPathCatalog;
 }
 
 /** Per-lab standing, including labs the student has never opened. */
@@ -285,6 +295,42 @@ export function createMeRoutes(deps: MeRoutesDeps): Router {
     sendOk(res, {
       student: toStudentPayload(identity, durable),
       attempt: toAttemptDetailPayload(detail, registry),
+    });
+  }));
+
+  // GET /api/me/learning-paths/:pathId --------------------------------------
+  /*
+   * The caller's verified progress through one learning path, and the next lab.
+   *
+   * The same subject rule as every route here: the student is whoever
+   * authenticated, and nothing in the request can name anyone else. Completed
+   * means Verify passed; nothing about a path or a gap can mark a lab done.
+   *
+   * A running lab is found with the same owner filter as `GET /api/sessions`,
+   * and only its lab id is used — no session id reaches this payload.
+   */
+  router.get('/learning-paths/:pathId', asyncRoute(async (req, res) => {
+    const learningPath = findLearningPath(deps.learningPaths ?? LearningPathCatalog.empty(), req, res);
+    if (!learningPath) return;
+    const identity = readIdentity(req, res);
+    if (!identity) return;
+
+    let rows: LabProgress[];
+    try {
+      rows = await progress.progressFor(identity.studentId);
+    } catch (error) {
+      unavailable(res, error, log);
+      return;
+    }
+
+    const { sessions } = deps;
+    sendOk(res, {
+      student: toStudentPayload(identity, durable),
+      ...toLearningPathProgressPayload(learningPath, rows, {
+        canStartProvider: sessions ? await labStartability(sessions) : () => false,
+        activeLabIds: sessions ? await activeLabIdsFor(sessions, req.user?.userId, log) : null,
+        labTitle: (labId) => titleOf(registry, labId),
+      }),
     });
   }));
 

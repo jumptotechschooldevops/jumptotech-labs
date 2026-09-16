@@ -2223,3 +2223,399 @@ main:focus {
     scroll-behavior: auto !important;
   }
 }
+
+/* --- learning paths ------------------------------------------------------------------ */
+
+.path-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: var(--space-5);
+  align-items: start;
+  margin-top: var(--space-5);
+}
+.path-layout__main > * + * {
+  margin-top: var(--space-5);
+}
+.path-layout__side .panel + .panel {
+  margin-top: var(--space-4);
+}
+@media (max-width: 900px) {
+  .path-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.panel__subtitle {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.plain-list,
+.gap-list {
+  margin: 0 0 var(--space-2);
+  padding-left: 1.25em;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.plain-list li + li,
+.gap-list li + li {
+  margin-top: 6px;
+}
+.gap-list strong {
+  color: var(--text);
+}
+
+/* The stage list: a numbered column joined by a thin line, one card per stage. */
+.stage-list {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.stage-row {
+  position: relative;
+  display: flex;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+}
+.stage-row::before {
+  content: '';
+  position: absolute;
+  left: 15px;
+  top: 32px;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+.stage-row:last-child::before {
+  display: none;
+}
+.stage-row__marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+.stage-row--completed .stage-row__marker {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.stage-row--in_progress .stage-row__marker {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.stage-row--coming_soon .stage-row__marker {
+  border-style: dashed;
+  color: var(--text-faint);
+}
+.stage-row__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.stage-row--coming_soon .stage-row__body {
+  background: transparent;
+  border-style: dashed;
+}
+.stage-row--current .stage-row__body {
+  border-color: var(--accent-dim);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.stage-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.stage-row__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.stage-row__title a,
+.stage-lab__title a,
+.skill-group__title a {
+  color: var(--text);
+  text-decoration: none;
+}
+.stage-row__title a:hover,
+.stage-lab__title a:hover,
+.skill-group__title a:hover {
+  text-decoration: underline;
+}
+.stage-row__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.stage-row__summary {
+  margin: 4px 0 6px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.stage-row__meta {
+  margin: 0 0 var(--space-2);
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.recommendation {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.recommendation__heading {
+  margin: 0 0 6px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.recommendation__reason {
+  margin: 0 0 var(--space-3);
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.stage-section {
+  margin-top: var(--space-5);
+}
+.stage-labs {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.stage-lab {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.stage-lab__mark {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  line-height: 1.6;
+}
+.stage-lab--completed .stage-lab__mark {
+  color: var(--accent);
+}
+.stage-lab--in_progress .stage-lab__mark {
+  color: var(--warn);
+}
+.stage-lab__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.stage-lab__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.stage-lab__why {
+  margin: 4px 0 6px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.stage-lab__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--space-2);
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.skill-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.skill-list__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-2);
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+.skill-list__item:first-child {
+  border-top: 0;
+}
+.skill-list__title {
+  flex: 1 1 150px;
+  min-width: 0;
+  color: var(--text);
+}
+.skill-list__count {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.skill-status {
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.skill-status--completed {
+  color: var(--accent);
+}
+.skill-status--in_progress {
+  color: var(--warn);
+}
+.skill-status--coming_soon {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.progress__path,
+.progress__skills {
+  margin-top: var(--space-6);
+}
+.progress__path .panel {
+  margin-top: var(--space-3);
+}
+.path-progress {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 0 var(--space-5);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.path-progress__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.path-progress__link {
+  flex: 1 1 140px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 14px;
+  text-decoration: none;
+}
+.path-progress__link:hover {
+  text-decoration: underline;
+}
+.path-progress__position {
+  display: inline-block;
+  min-width: 1.8em;
+  color: var(--text-faint);
+  font-family: var(--mono);
+}
+.path-progress__count {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.skill-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+.skill-group {
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.skill-group__title {
+  margin: 0 0 var(--space-2);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.path-cards {
+  display: grid;
+  gap: var(--space-4);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 560px) {
+  .stage-row::before {
+    left: 13px;
+    top: 28px;
+  }
+  .stage-row__marker {
+    flex-basis: 28px;
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+  .stage-row__body,
+  .stage-lab {
+    padding: var(--space-3);
+  }
+}
+.progress__path + .progress,
+.progress__skills + .progress {
+  margin-top: var(--space-6);
+}
+/* A link inside a sentence or list item must not rely on colour alone (WCAG 1.4.1). */
+.plain-list .text-link,
+.panel__text .text-link,
+.panel__meta .text-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* The development-identity and in-memory warnings are sentences; let them wrap on a phone. */
+.progress__identity .badge {
+  white-space: normal;
+}
+/*
+ * Progress and the next step come first in the document, so a phone shows them
+ * before a long stage or lab list; on wider screens they sit in the right column.
+ */
+.path-layout__main {
+  grid-column: 1;
+  grid-row: 1;
+}
+.path-layout__side {
+  grid-column: 2;
+  grid-row: 1;
+}
+@media (max-width: 900px) {
+  .path-layout__main,
+  .path-layout__side {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
