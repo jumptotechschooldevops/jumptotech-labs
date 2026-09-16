@@ -1,0 +1,113 @@
+# ---------------------------------------------------------------------------
+# A crash loop must be visible once the stack restarts itself.
+#
+# The gap
+# -------
+# `restart: unless-stopped` on every production service (BETA overnight
+# hardening, docker-compose.production.yml) keeps an unattended host from
+# staying down. It also changes what a failure looks like to Prometheus:
+# `ServiceDown` is `up == 0 for: 2m`, which needs two *continuous* minutes of
+# a failed scrape. A container that dies, is restarted, serves one scrape and
+# dies again never gives them — so the alert that exists for "the service is
+# gone" can stay silent while students cannot use the platform.
+#
+# `ServiceRestartLoop` counts the transitions instead. The three cases below
+# pin the three things it has to get right:
+#
+#   1. a crash loop fires it;
+#   2. one clean restart — a deployment, or runbook §6 — does not;
+#   3. a service that is simply gone does not fire it, because it produces no
+#      transitions to count. That case is ServiceDown's, and it still fires.
+#
+# Case 1 is the one that fails without the rule. Case 3 is the one that keeps
+# the two alerts from both describing the same incident.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../alerts/platform.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ------------------------------------------------- 1. a real crash loop
+  #
+  # `up` alternating every 15s scrape: the container serves a scrape, exits, is
+  # restarted, serves another. 60 samples is 15 minutes, giving well over the
+  # six transitions the rule asks for.
+  - interval: 15s
+    name: a service that keeps dying and restarting alerts
+    input_series:
+      - series: 'up{job="api",instance="api:9400"}'
+        values: '1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0'
+    alert_rule_test:
+      # 12 minutes in: the 15m window holds the whole flapping series, and the
+      # `for: 2m` has long since elapsed.
+      - eval_time: 12m
+        alertname: ServiceRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: api
+              instance: api:9400
+            exp_annotations:
+              summary: 'api keeps restarting'
+              description: >-
+                api has gone away and come back at least three times in fifteen
+                minutes. Its restart policy is putting it back rather than it
+                staying up, so students see intermittent failures while `up`
+                reads 1 between scrapes. Read the exit reason before restarting
+                it again.
+              runbook_url: docs/runbooks/RB-01-service-down.md
+      # ServiceDown never gets its two continuous minutes, which is the whole
+      # reason this rule exists.
+      - eval_time: 12m
+        alertname: ServiceDown
+        exp_alerts: []
+
+  # --------------------------------------------- 2. one deliberate restart
+  #
+  # Up, 45 seconds of failed scrapes, up for good: two transitions. An operator
+  # following runbook §6 must not be paged for doing so.
+  - interval: 15s
+    name: a single clean restart does not alert
+    input_series:
+      - series: 'up{job="terminal",instance="terminal:9401"}'
+        values: '1x20 0 0 0 1x36'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ServiceRestartLoop
+        exp_alerts: []
+      # 45s of absence is under ServiceDown's 2m too: neither alert fires, which
+      # is correct for a restart that worked.
+      - eval_time: 12m
+        alertname: ServiceDown
+        exp_alerts: []
+
+  # ------------------------------------------------ 3. a service that is gone
+  #
+  # One transition, then nothing. `changes()` counts one, so this rule stays
+  # quiet and ServiceDown — the alert that means "students cannot use it at
+  # all" — is the only one that fires.
+  - interval: 15s
+    name: a service that stays down is ServiceDown, not a restart loop
+    input_series:
+      - series: 'up{job="sandboxd",instance="sandboxd:9402"}'
+        values: '1x8 0x52'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ServiceRestartLoop
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: sandboxd
+              instance: sandboxd:9402
+            exp_annotations:
+              summary: 'sandboxd is not being scraped'
+              description: >-
+                Prometheus cannot reach sandboxd. Either the process is gone, or
+                its observability listener is. Students are affected if this is
+                api or terminal.
+              runbook_url: docs/runbooks/RB-01-service-down.md

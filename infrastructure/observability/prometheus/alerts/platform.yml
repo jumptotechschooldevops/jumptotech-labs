@@ -26,6 +26,36 @@ groups:
             this is api or terminal.
           runbook_url: docs/runbooks/RB-01-service-down.md
 
+      # A service that keeps coming back.
+      #
+      # `restart: unless-stopped` (docker-compose.production.yml) is what keeps
+      # a crashed service from staying down on an unattended host. It also means
+      # ServiceDown can miss the outage it exists for: `up == 0 for: 2m` needs
+      # two *continuous* minutes, and a container that dies, restarts, serves a
+      # scrape and dies again never gives them. The restart policy turns a clean
+      # outage into a flap, so something has to count flaps.
+      #
+      # `changes()` rather than an average over `up`: it counts transitions, so
+      # a service that is simply down contributes none and stays ServiceDown's
+      # to report — and Alertmanager's first inhibit rule suppresses this one
+      # underneath it anyway. Six changes in fifteen minutes is three full
+      # down-up cycles: more than an operator restarting a service by hand,
+      # and far fewer than a real loop, which Docker's one-minute backoff
+      # ceiling puts at about fifteen.
+      - alert: ServiceRestartLoop
+        expr: changes(up{job=~"api|terminal|sandboxd"}[15m]) >= 6
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.job }} keeps restarting'
+          description: >-
+            {{ $labels.job }} has gone away and come back at least three times in
+            fifteen minutes. Its restart policy is putting it back rather than it
+            staying up, so students see intermittent failures while `up` reads 1
+            between scrapes. Read the exit reason before restarting it again.
+          runbook_url: docs/runbooks/RB-01-service-down.md
+
       - alert: ServiceNotReady
         expr: jtt_readyz_ok == 0
         for: 3m
