@@ -1,0 +1,28 @@
+# Initial state for NET-024.
+#
+# The Deployment is applied into the student's isolated session namespace.
+# There is deliberately no Service at the start of the lab: students first
+# observe that Pod IPs belong to individual, replaceable Pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-api
+  labels:
+    app: ledger-api
+    jumptotech.io/lab-fixture: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ledger-api
+  template:
+    metadata:
+      labels:
+        app: ledger-api
+    spec:
+      containers:
+        - name: ledger-api
+          image: nginx:stable
+          ports:
+            - name: http
+              containerPort: 80
