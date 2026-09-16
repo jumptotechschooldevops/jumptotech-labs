@@ -135,3 +135,69 @@ export function ownerContainers(): string[] {
   );
   return out.split('\n').filter(Boolean);
 }
+
+export interface SocketProbe {
+  /** The terminal service answered the auth frame with `ready`. */
+  ready: boolean;
+  /** WebSocket close code, or null if still open when the probe ended. */
+  closeCode: number | null;
+  /** Server `error` frame codes, in order. */
+  errors: string[];
+  /** Concatenated `output` frames. */
+  output: string;
+}
+
+/**
+ * Open the terminal WebSocket from inside the page — the browser's own
+ * `WebSocket`, same origin, through nginx — authenticate with `token`, and if
+ * the service accepts it, run `command` and collect output until `expect`
+ * appears. Bounded by `timeoutMs`; always closes the socket it opened.
+ */
+export async function probeTerminalSocket(
+  page: Page,
+  token: string,
+  command: string,
+  expectText: string,
+  timeoutMs = 20_000,
+): Promise<SocketProbe> {
+  return page.evaluate(
+    ({ token, command, expectText, timeoutMs }) =>
+      new Promise<SocketProbe>((resolve) => {
+        const result: SocketProbe = { ready: false, closeCode: null, errors: [], output: '' };
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socket = new WebSocket(`${proto}//${window.location.host}/terminal`);
+        const finish = () => {
+          clearTimeout(timer);
+          if (socket.readyState === WebSocket.OPEN) socket.close(1000);
+          resolve(result);
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        socket.onopen = () => socket.send(JSON.stringify({ type: 'auth', token, cols: 120, rows: 30 }));
+        socket.onmessage = (event) => {
+          const msg = JSON.parse(String(event.data)) as { type: string; data?: string; code?: string };
+          if (msg.type === 'ready') {
+            result.ready = true;
+            socket.send(JSON.stringify({ type: 'input', data: `${command}\r` }));
+          } else if (msg.type === 'output') {
+            result.output += msg.data ?? '';
+            if (result.output.includes(expectText)) finish();
+          } else if (msg.type === 'error' && msg.code) {
+            result.errors.push(msg.code);
+          }
+        };
+        socket.onclose = (event) => {
+          result.closeCode = event.code;
+          finish();
+        };
+      }),
+    { token, command, expectText, timeoutMs },
+  );
+}
+
+/** A fresh terminal grant for a session, requested with the context's own cookie. */
+export async function terminalToken(context: BrowserContext, sessionId: string): Promise<{ status: number; token?: string }> {
+  const response = await apiSend(context, 'POST', `/api/sessions/${encodeURIComponent(sessionId)}/terminal`);
+  if (response.status() !== 200) return { status: response.status() };
+  const body = (await response.json()) as { data: { terminal: { token: string } } };
+  return { status: 200, token: body.data.terminal.token };
+}
