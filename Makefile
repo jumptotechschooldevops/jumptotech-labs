@@ -15,7 +15,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate typecheck check reset clean
+.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate production-preflight production-config-check private-beta-smoke host-capacity-sample test-production-host typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -197,6 +197,28 @@ tls-check: ## Check the TLS edge and certificate expiry; exit 0/1/2 (ARGS="--ori
 test-tls-edge: ## Prove the TLS edge in the real web image: gate, redirect, WebSocket, renewal (needs Docker)
 	@RUN_INTEGRATION_TESTS=1 npx vitest run test/tls-edge-integration.test.ts --root services/observability \
 		--testTimeout=300000 --hookTimeout=900000
+
+# --- production host readiness -------------------------------------------------
+#
+# docs/development/production-host-readiness.md. Run on the production host, from
+# the checkout. None of these starts, stops or changes anything; each prints
+# PASS / FAIL / WARN / INFO / MANUAL CHECK REQUIRED and never a secret value.
+
+production-preflight: ## Can this host run the production stack as proven? Before `prod up` (ARGS="--backup-dir DIR --report FILE")
+	@bash scripts/production-preflight.sh $(ARGS)
+
+production-config-check: ## Resolve the production compose files with .env and run the real service config gates (ARGS="--print-network-env")
+	@npm run --silent production:config-check -- $(ARGS)
+
+private-beta-smoke: ## Is the running production stack serving the beta as proven? Evidence file (ARGS="--public-ip IP --report-dir DIR")
+	@bash scripts/private-beta-smoke.sh $(ARGS)
+
+host-capacity-sample: ## Record host CPU/memory/disk/containers/pods while students work (ARGS="--out-dir DIR --duration 3600")
+	@bash scripts/host-capacity-sample.sh $(ARGS)
+
+test-production-host: ## Prove the production-host scripts and the production config gates fail closed (no daemon for the scripts)
+	@bash scripts/test-production-host-scripts.sh
+	@npm run --silent production:config-check -- --self-test
 
 db-restore-drill: ## Back up, destroy, restore and verify against disposable PostgreSQL servers (needs Docker)
 	@bash scripts/db-restore-drill.sh
