@@ -46,6 +46,9 @@ export const BAKED_IMAGES: Readonly<Record<string, string>> = Object.freeze({
   'busybox:1.36': 'busybox-1.36.tar',
   'alpine:3.20': 'alpine-3.20.tar',
   'nginx:1.27-alpine': 'nginx-1.27-alpine.tar',
+  // The firewall/diagnostics image NET-011 and NET-019 seed inside the inner
+  // daemon (built by infrastructure/docker/lab-nettools.Dockerfile).
+  'jumptotech/lab-nettools:1.0': 'jumptotech-lab-nettools-1.0.tar',
 });
 
 /**

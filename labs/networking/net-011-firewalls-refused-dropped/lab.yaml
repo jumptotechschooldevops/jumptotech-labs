@@ -1,0 +1,360 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# NET-011 — refused, dropped, and reading the rules.
+#
+# Content is written from the official Docker and nftables documentation and
+# RFC 793; the pages this lab is grounded in are listed under `references`.
+#
+# THE INCIDENT IS SEEDED, NOT DESCRIBED. A `services` container serves four
+# HTTP ports. 8080 is reachable; 8081 has a healthy server behind it and hangs;
+# 8082 has nothing behind it and refuses instantly; 8083 is an admin port that
+# is supposed to stay closed. The difference between 8081 and 8083 is the whole
+# lab: one is a firewall bug to fix, the other a firewall rule to leave alone.
+#
+# CAPABILITIES THIS LAB CONSUMES.
+#   N8   tcpdump/nc on the sandbox host; `jumptotech/lab-nettools` carries
+#        `nft` inside the container.
+#   N9   `docker_exec_probe tcp_connect` grades reachability from a client
+#        container — the platform observes what connects, instead of trusting
+#        a student's written timings.
+#   N18  the nettools image is baked, so the seed needs no registry.
+#   N19  the `services` container is seeded with `NET_ADMIN`, which is what lets
+#        it program its own nftables ruleset. The capability is namespaced, so
+#        it governs only that container's own netns — see
+#        docs/development/n19-security-review.md.
+#
+# MEASURED, 2026-09-16. With a default-drop policy accepting established
+# connections, loopback and 8080, a *separate client* on the network sees 8080
+# reachable and 8081/8083 unreachable. Adding `tcp dport 8081 accept` makes 8081
+# reachable and leaves 8083 dropped. Flushing the ruleset to make 8081 work
+# opens 8083 as well — which is why 8083 is graded `expect: failure`: the lab's
+# own check fails a student who fixed the symptom by removing the firewall.
+#
+# The probes run from a *client* container, not from `services` itself: a probe
+# of `services` from `services` travels loopback, which the ruleset accepts, and
+# would tell us nothing about the firewall. Measured — from the client the
+# ports behave as above; from services-to-self every port is "reachable".
+#
+# WHAT IS VERIFIED, AND WHAT IS NOT. Verified from the client: 8080 reachable,
+# 8081 reachable after the fix, 8083 not reachable. NOT verified: the *timing*
+# difference between a refused port and a dropped one — a property of a RST
+# versus a silent drop that the student measures with `time` and records.
+# Reachable/unreachable does not capture it, so it is graded by the worksheet.
+#
+# NET-010 is this lab's curriculum prerequisite, and is declared below.
+# ---------------------------------------------------------------------------
+id: NET-011
+slug: net-011-firewalls-refused-dropped
+title: "Firewalls: Refused, Dropped, and Reading the Rules"
+track: networking
+topic: container-networking
+difficulty: advanced
+level: practice
+duration_minutes: 40
+
+environment:
+  provider: docker
+  isolation: container
+
+prerequisites:
+  - NET-010
+
+story: >
+  Two complaints landed this morning about the same host. One team says a
+  service "refuses connections instantly". Another says a different service on
+  the same host "just hangs and eventually times out". The on-call engineer has
+  filed both as "firewall blocking traffic" and asked you to fix the firewall.
+
+  One of them is a firewall problem. The other is not, and telling them apart
+  without reading the rules is guesswork — the two symptoms feel similar to the
+  person hitting refresh, and completely different to the machine.
+
+  There is also a third port on that host that is supposed to be closed. When
+  you fix the one that is broken, you must not open the one that is not.
+
+objectives:
+  - Tell a refused connection from a dropped one by how each one fails
+  - Read an nftables ruleset and find the rule responsible for a symptom
+  - Explain why a DROP produces a timeout and a closed port produces an instant reset
+  - Repair a firewall so one port opens without opening the rest
+  - Describe what a stateful rule does that a stateless one cannot
+
+task:
+  summary: Diagnose why one port hangs and another refuses instantly, open the one that should be public without flushing the ruleset, and leave the admin port closed.
+  description: >
+    Your Docker host is this sandbox. A container named `services` is running on
+    a network called `svc-net`, serving several ports, and it programs its own
+    firewall with nftables. A second container, `client`, is on the same network
+    for you to test from.
+
+    Measure all the ports from the client, with timings — `time` is the point:
+
+      `docker exec client sh -c 'time nc -zv services 8080; time nc -zv services 8081; time nc -zv services 8082'`
+
+    - `8080` answers.
+    - `8081` hangs and then fails. There *is* a healthy server behind it.
+    - `8082` fails instantly, and there is nothing behind it at all.
+
+    Record what you saw in `symptoms.txt` — the outcome and roughly the time for
+    each — and note which two failures are not the same kind of failure.
+
+    **Read the rules.** `docker exec services nft list ruleset` prints the
+    firewall. Find the rule — or the missing rule — responsible for `8081`
+    hanging, and write it in `rule.txt`. The ruleset has a default policy and a
+    few explicit rules; one port is handled and one is not.
+
+    **Fix it, narrowly.** `8081` should be reachable. Add what it needs, inside
+    the `services` container with `nft`, and prove it from the client. There is
+    a fourth port, `8083`, an admin port that is *supposed* to stay closed. If
+    your fix opens `8083` as well, it was too broad. Do not flush the ruleset.
+
+    **Explain the mechanism.** In `mechanism.txt`, two things. First: why does a
+    dropped packet make the client hang while a closed port fails instantly?
+    Name what the closed port sends back that the dropped one does not. Second:
+    the ruleset accepts packets that are part of a connection it has already
+    seen. Say what a *stateful* rule tracks that a stateless one cannot, and why
+    that is what lets a reply come back through a default-drop firewall.
+
+    **The required final state.**
+
+      - `8080` is reachable from the client.
+      - `8081` is reachable from the client.
+      - `8083` is *not* reachable from the client.
+
+setup:
+  docker:
+    images:
+      - jumptotech/lab-nettools:1.0
+    networks:
+      - name: svc-net
+    containers:
+      # The seeded incident. NET_ADMIN (N19) lets it program its own ruleset;
+      # the capability governs only this container's own network namespace.
+      # Default-drop with explicit accepts, 8081 deliberately left without one
+      # (the bug), 8083 deliberately closed and meant to stay so.
+      - name: services
+        image: jumptotech/lab-nettools:1.0
+        network: svc-net
+        cap_add: [NET_ADMIN]
+        command:
+          - sh
+          - -c
+          - "mkdir -p /web && echo ok > /web/index.html; httpd -p 8080 -h /web; httpd -p 8081 -h /web; httpd -p 8083 -h /web; nft add table inet filter; nft add chain inet filter input '{ type filter hook input priority 0; policy drop; }'; nft add rule inet filter input ct state established,related accept; nft add rule inet filter input iif lo accept; nft add rule inet filter input tcp dport 8080 accept; exec sleep 3600"
+        state: running
+      # The client the platform probes from, and the one the task tells the
+      # student to test from. A probe of `services` from `services` itself would
+      # travel loopback, which the ruleset accepts.
+      - name: client
+        image: jumptotech/lab-nettools:1.0
+        network: svc-net
+        command: [ "sleep", "3600" ]
+        state: running
+    files:
+      - path: symptoms.txt
+        content: |
+          # NET-011 — the three symptoms
+          #
+          # For each port, paste the outcome and roughly the time it took.
+          # Use `time nc -zv services <port>` from the client.
+          #
+          # 8080:
+          # 8081:
+          # 8082:
+          #
+          # Two of these failed, and not the same way. In one sentence: which
+          # failed instantly and which hung, and what that tells you about where
+          # each failure came from:
+          #
+      - path: rule.txt
+        content: |
+          # NET-011 — the rule responsible
+          #
+          # `docker exec services nft list ruleset` prints the firewall. Name
+          # the default policy of the input chain, and say why 8081 is not
+          # reachable under it.
+          #
+          default_policy:
+          why_8081_is_unreachable:
+      - path: mechanism.txt
+        content: |
+          # NET-011 — why the two failures differ, and what "stateful" buys
+          #
+          # Answer in full sentences.
+          #
+          # 1. A dropped packet makes the client hang until it gives up; a
+          #    closed port fails instantly. Name what the closed port sends back
+          #    that the dropped one does not, and say why that one packet is the
+          #    whole difference between a timeout and an instant failure.
+          #
+          # 2. The ruleset accepts packets that belong to a connection it has
+          #    already seen ("ct state established,related accept"). Say what a
+          #    stateful rule tracks that a stateless one cannot, and why that is
+          #    what lets a reply come back in through a default-drop firewall.
+
+  verify:
+    - type: docker_image_exists
+      image: jumptotech/lab-nettools:1.0
+      label: The lab-nettools image is available
+    - type: docker_container_running
+      name: services
+      label: The services container is running
+    - type: docker_container_network
+      name: services
+      network: svc-net
+      label: The services container is on the lab network
+    - type: docker_container_running
+      name: client
+      label: The client container is running
+    - type: workspace_file_exists
+      path: symptoms.txt
+      label: The symptoms worksheet is in the workspace
+    - type: workspace_file_exists
+      path: rule.txt
+      label: The rule worksheet is in the workspace
+    - type: workspace_file_exists
+      path: mechanism.txt
+      label: The mechanism worksheet is in the workspace
+
+  verify_timeout_seconds: 180
+
+# Eleven checks. The three reachability probes are the ones that grade the fix:
+# 8080 and 8081 must be reachable from the client and 8083 must not, so a
+# student who opens the whole firewall to fix 8081 opens 8083 and fails. The
+# probes run against the session's own daemon — see docker/probes.ts.
+#
+# Labels stay colourless: they are shown on Check Solution, so a label naming a
+# graded value would hand it over.
+requirements:
+  - type: docker_container_running
+    name: services
+    label: Container services is running
+  - type: docker_container_image
+    name: services
+    image: jumptotech/lab-nettools:1.0
+    label: Container services runs the image the task named
+  - type: docker_container_running
+    name: client
+    label: Container client is running
+  - type: docker_network_exists
+    name: svc-net
+    driver: bridge
+    label: The lab network exists
+
+  # The public port was always fine; this is the control.
+  - type: docker_exec_probe
+    container: client
+    probe: tcp_connect
+    host: services
+    port: 8080
+    timeout_seconds: 4
+    expect: success
+    label: The public port is reachable from the client
+
+  # The fix: 8081 must become reachable.
+  - type: docker_exec_probe
+    container: client
+    probe: tcp_connect
+    host: services
+    port: 8081
+    timeout_seconds: 4
+    expect: success
+    label: The port that was hanging is now reachable
+
+  # The constraint: the admin port must stay closed. A student who flushed the
+  # ruleset to fix 8081 opens this one and fails here.
+  - type: docker_exec_probe
+    container: client
+    probe: tcp_connect
+    host: services
+    port: 8083
+    timeout_seconds: 4
+    expect: failure
+    label: The admin port was left closed
+
+  # --- the worksheets -------------------------------------------------------
+  - type: workspace_file_exists
+    path: symptoms.txt
+    label: The symptoms worksheet was filled in
+  - type: workspace_file_exists
+    path: rule.txt
+    contains:
+      - "drop"
+    label: The rule worksheet names the default policy
+  - type: workspace_file_exists
+    path: mechanism.txt
+    contains:
+      - "RST"
+      - "stateful"
+    label: The mechanism worksheet explains both failures and the connection-tracking rule
+
+# `Reset Lab` restores this session's Docker environment to its baseline: the
+# student's containers and networks are removed, `services` and `client` are
+# seeded again with the original ruleset, and the three worksheets are restored.
+# The nettools image is kept, because re-loading it on every reset would slow a
+# reset down.
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Measure the two failures before you touch anything, and time them. One
+      port fails the instant you try it; the other makes you wait. That
+      difference is not cosmetic — it tells you whether anything is refusing you
+      or whether your packets are simply vanishing. A refusal is an answer; a
+      timeout is silence.
+
+      Then read the firewall. A default-drop ruleset accepts only what it is
+      told to, so the interesting question is not "what rule blocks 8081" but
+      "what rule is missing for it".
+  - level: 2
+    text: >
+      `docker exec services nft list ruleset` shows the chain, its policy, and
+      the accepts. A chain with `policy drop` discards anything no rule
+      accepted. 8080 has an accept and 8081 does not, which is why one answers
+      and the other's packets are dropped and never answered — the client waits
+      for a reply the firewall silently swallowed.
+
+      8082 is different again: nothing is listening there, so the host itself
+      answers with a reset. That is the instant failure, and it is not a
+      firewall at all.
+  - level: 3
+    text: >
+      Add exactly one rule, inside the container, with `nft` — an accept for TCP
+      destination port 8081 on the input chain. Then prove it from the client,
+      and check `8083` from the client too: it must still fail. If it now
+      answers, you opened too much; only `8081` was the bug. Do not `nft flush`
+      anything — the default-drop policy and the established-connection rule are
+      what keep 8083 shut and let replies home, and flushing them is how 8083
+      comes open.
+
+      For `mechanism.txt`: the closed port's instant failure is a TCP RST, and
+      the established-connection rule is stateful — it accepts a packet because
+      the firewall remembers the connection it belongs to, which a rule matching
+      only ports cannot do.
+
+references:
+  - title: RFC 793 — Transmission Control Protocol (the RST that refuses a connection)
+    url: https://www.rfc-editor.org/info/rfc793
+  - title: nftables wiki — Configuring chains (policies and hooks)
+    url: https://wiki.nftables.org/wiki-nftables/index.php/Configuring_chains
+  - title: nftables wiki — Matching connection tracking stateful metainformation
+    url: https://wiki.nftables.org/wiki-nftables/index.php/Matching_connection_tracking_stateful_metainformation
+  - title: Docker Engine — Networking overview
+    url: https://docs.docker.com/engine/network/
+  - title: Docker CLI reference — docker container run
+    url: https://docs.docker.com/reference/cli/docker/container/run/
+  - title: Docker CLI reference — docker exec
+    url: https://docs.docker.com/reference/cli/docker/container/exec/
+
+skills:
+  - net.firewall.rules
+  - net.firewall.stateful
+  - net.troubleshoot.refused-vs-timeout
+  - net.l4.filtering

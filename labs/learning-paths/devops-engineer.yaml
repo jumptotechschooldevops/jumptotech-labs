@@ -257,6 +257,9 @@ stages:
       - lab: NET-010
         skills: [networking.ip-addressing, docker.networking]
         why: Runs a real DHCP exchange and then shows an ordinary container getting its address with no DHCP at all — the difference between a lease and IPAM.
+      - lab: NET-011
+        skills: [docker.networking, networking.troubleshooting]
+        why: Tells a refused connection from a dropped one by how each fails, reads an nftables ruleset, and opens one port without opening the rest.
       - lab: NET-021
         skills: [docker.networking]
         why: Replaces "containers are isolated" with something a new engineer can run — three network modes, one image, and the veth pair behind the isolation.

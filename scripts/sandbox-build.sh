@@ -111,6 +111,16 @@ BAKED_LIST="${REPO_ROOT}/infrastructure/docker/baked-images.txt"
 BAKED_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jtt-baked-images.XXXXXX")"
 trap 'rm -rf "${BAKED_DIR}"' EXIT
 
+# Lab-owned images that are baked must be built here first — they are built
+# from a public base (alpine), the same as jumptotech/greeter. The sandbox
+# then carries them as archives (N18).
+NETTOOLS_IMAGE="${NETTOOLS_LAB_IMAGE:-jumptotech/lab-nettools:1.0}"
+echo "==> Building ${NETTOOLS_IMAGE}"
+docker build \
+  --file "${REPO_ROOT}/infrastructure/docker/lab-nettools.Dockerfile" \
+  --tag "${NETTOOLS_IMAGE}" \
+  "${REPO_ROOT}"
+
 echo "==> Saving baked images for ${DOCKER_IMAGE}"
 while read -r reference filename; do
   case "${reference}" in ''|'#'*) continue ;; esac
