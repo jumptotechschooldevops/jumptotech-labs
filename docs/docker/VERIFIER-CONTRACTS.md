@@ -1,10 +1,47 @@
 # Docker Verifier — Requirement Contracts and Security Design
 
-**Status:** design. Nothing in this document is implemented **except** the
-`State.OOMKilled` snapshot field and `docker_container_oom_killed` from §4.2,
-which shipped with DOCKER-009 after the Phase-2 evidence confirmed the signal.
-**Implemented:** nothing. See §5. Sections 6–7 are the formal security
-design and the shared-architecture recommendation.
+**Status:** partly implemented. Section 0's invariant and §3's ownership
+argument are live; the specific schemas below are design notes, and where the
+shipped code differs it is recorded inline.
+
+| Contract | Status | Where |
+|---|---|---|
+| `docker_container_oom_killed` (§4.2) + `State.OOMKilled` | **IMPLEMENTED** | shipped with DOCKER-009 |
+| `docker_container_file_content` (§2) | **IMPLEMENTED** as the §1 archive read | `handlers/docker-file.ts` |
+| `docker_http_reachable` (§3) | **SUPERSEDED — IMPLEMENTED** as `docker_exec_probe` | `docker/probes.ts`, `handlers/docker-probe.ts` |
+
+**On §3.** The capability §3 designs — the verifier making a request from inside
+a student's container — shipped on 2026-09-16 as capability **N9**, under a
+different and wider name. `docker_exec_probe` answers four closed-vocabulary
+questions (`dns_lookup`, `tcp_connect`, `http_get`, `interface_exists`) rather
+than one, because the Networking labs need to observe a namespace and a
+connection as well as a response.
+
+What it keeps from §3, unchanged and for the reasons §3 gives:
+
+- **no URL, and no free host.** §3.1's "a lab may not name a host, an IP address,
+  or a URL" is enforced by §3.3's gate 1 — the target must resolve to a container
+  in the session-scoped reader's own daemon. That is what makes
+  `169.254.169.254`, `host.docker.internal`, the platform's own API and every
+  Internet host unnameable by construction rather than by blocklist.
+- **no shell, fixed argv positions** (§3.4). `docker/probes.ts` owns every
+  executable and flag and builds the argv on both sides of the broker; the argv
+  never travels as data.
+- **bounded timeout and output** (§3.6, §3.7), and **no disclosure** in failure
+  detail (§3.8).
+
+What it changes, deliberately:
+
+- **the `from`/`to` shared-network gate (§3.3 gate 3) is not adopted.** It
+  short-circuits the negative case by inspecting the daemon's view, and the
+  negative case is exactly what NET-021 must *observe* — an isolated namespace
+  shown not to reach a running container, not assumed not to.
+- **a timeout fails under both expectations.** §3 did not say; the shipped rule
+  is that a timeout is the absence of an answer, not evidence of one, so
+  `expect: failure` is not satisfied by a probe that never returned.
+
+Sections 6–7 remain the formal security design and the shared-architecture
+recommendation.
 
 ---
 
@@ -69,6 +106,12 @@ the "verification is entirely reads" property rather than eroding it.
 That leaves `docker_http_reachable` as the only proposed check that genuinely
 needs to execute inside a student container — because the thing being measured
 *is* the network position of that container. Exec stays the exception.
+
+> **Shipped 2026-09-16.** That exception is now `docker_exec_probe` (N9), and it
+> is still the only one: every other Docker check reads `docker inspect` or the
+> archive endpoint. It is narrower than "exec" in the way this section argues
+> for — a lab names a question from a closed set, never a command — and the
+> session engine's `execInContainer` remains *not brokered at all*.
 
 ---
 

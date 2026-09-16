@@ -802,6 +802,23 @@ must find rather than a task they must perform.
   `workspace_file_exists` with `contains` for `veth`, `8080`, and `namespace`.
 - **Supported today?** Yes (privileged DinD), with N8 for images.
 - **New capability** N8.
+- **Implemented 2026-09-16**, on N8 and N9, and the measurement changed the
+  design. A `--network none` container is **not** "only `lo`": the kernel
+  auto-creates nine tunnel devices (tunl0, gre0, gretap0, erspan0, ip_vti0,
+  ip6_vti0, sit0, ip6tnl0, ip6gre0) in every fresh namespace when those modules
+  are loaded, so an interface *count* would pass on one host and fail on
+  another. `eth0` is the portable signal, and `interface_exists` grades that.
+  The other measurement worth keeping: from a namespace with nothing plumbed in,
+  a connect to an unroutable address fails in **0.00s** (no route to try); from
+  a bridge namespace the identical command takes the full timeout. Same command,
+  same target, two different failures — which is the lesson the student records.
+  Five probes grade the three modes from inside the real containers, each with
+  `docker_container_image` pinned beside it. The veth pair is *not* graded on a
+  literal — its name and peer index are per-run — so `veth.txt` is graded on the
+  shape of real `ip -o link` output (`veth`, `@if`, `master`). NET-005 is the
+  only declared prerequisite; NET-010 is still not implemented.
+  Validated end to end on a real DinD sandbox: baseline 1/20, solved 20/20,
+  reset back to 1/20.
 
 ---
 
@@ -1286,6 +1303,9 @@ Six labs are fully buildable and fully verifiable today:
 | NET-025 Service with no endpoints | `k8s` | `service_selector` + `service_endpoints` + `service_http` |
 | NET-028 VPC design | `tf`/`linux` | deterministic design answers |
 
+Shipped since, and no longer "zero platform changes": NET-023 (`docker`,
+2026-09-16, needed nothing new) and NET-021 (`docker`, 2026-09-16, on N8 + N9).
+
 Three more are buildable today with **evidence-based** verification (student-
 written workspace files) and become properly verifiable with N9: NET-010,
 NET-019, NET-021, NET-023. NET-032, the capstone, is ~90% buildable today.
@@ -1298,19 +1318,21 @@ Kubernetes service debugging — before any sandbox work starts.
 
 | ID | Capability | What it unblocks | Size |
 |---|---|---|---|
-| **N5** | `address` field on `port_listening` / `port_not_listening` | NET-006, NET-007, NET-030 | **XS** — the parser already keeps `address` (`sandbox-reader.ts:302`); schema field + handler comparison, ~20 lines, plus normalising `*`/`0.0.0.0`/`[::]` |
+| **N5** | `address` field on `port_listening` / `port_not_listening` | NET-006, NET-007, NET-030 | **IMPLEMENTED 2026-08-25, verified again 2026-09-16.** Optional `address`, single or list, on both checks; omitting it keeps the previous meaning exactly. Normalisation is in one place (`normaliseBindAddress`), so the value a lab writes and the value the kernel reports cannot drift — and `0.0.0.0` is deliberately *not* the same binding as `::`. 44 tests in `services/verifier/test/bind-address.test.ts`. No work was needed this run. |
 | **N1** | `jumptotech/lab-net` sandbox image | all `net` labs | **S** — Linux image + `curl`, `dnsutils`, `traceroute`, `tcpdump`, `openssl`, `nginx`, `jq`, `nftables`. Also fixes the LINUX-006 `curl` discrepancy if `curl` is added to the Linux image |
 | **N2** | Per-session **internal** bridge + deterministic addressing | all `net` labs | **M** — a `networking` provider setting `network:` to a per-session `--internal` bridge, fixed subnet `10.90.0.0/24`, fixed sandbox IP. Must stay egress-free: an internal bridge gives a real link with no route off the host |
 | **N3** | Multi-container topology per session (peers, DNS servers, proxies) | NET-001, 004, 006, 007, 009, 012–018, 020, 030, 031 | **L** — the largest item. The session model owns one sandbox ref today; a topology needs N containers with one shell attachment, plus lifecycle/reaper/quota changes. Alternative: express topologies as `setup.docker` on the Docker provider and accept `docker exec` as the student's entry point |
 | **N6** | `http_request` requirement (sandbox family) | NET-007, 015, 017, 018, 020, 030 | **S/M** — a platform-performed HTTP request from inside the session's sandbox (or from a topology peer) with `expected_status`, `body_contains`, `timeout_seconds`. Modelled on `service_http`, which is `kubernetes`-only. **Must support non-2xx expectations** (NET-020 grades a `503` that must still be there) |
 | **N4** | `NET_ADMIN` / `NET_RAW` grantable — for the networking provider only | NET-004, 008, 011, 029 pt2 | **S code / L review** — one entry each in `GRANTABLE_CAPABILITIES`. This is a genuine security decision, not a config tweak: `NET_ADMIN` in a container lets it manipulate its own netns and, combined with a shared bridge, observe neighbours. Mitigation: per-session `--internal` bridge (N2) so the blast radius is one session's own segment, and grant only to the `networking` provider. **If this review does not pass, route these four labs to the Docker provider instead** — the privileged DinD sandbox already permits all of it with no policy change |
-| **N8** | Tooling-image pre-pull for Docker labs | NET-010, 011, 019, 021, 022, 023 | **XS** — `setup.docker.images` already exists; add the networking tooling image to those labs |
-| **N9** | `docker_exec_probe` — allow-listed argv inside a named container, read-only | honest verification for NET-010, 011, 019, 021, 023 | **M** — mirrors the existing `command_output` fence (closed command allow-list, argv array, no shell) but targets a student container via their own daemon. Turns "the student wrote it in a file" into "the platform observed it" |
+| **N8** | Networking diagnostics in the Docker sandbox | NET-021 (shipped); partially NET-010, 011, 019 | **IMPLEMENTED 2026-09-16.** Sized XS on the assumption that a tooling image existed to be added. It did not — measured: stock `docker:27-dind` has BusyBox `ip` (no `-d`, no `ip netns`), `iptables`, `nsenter`, `nslookup`; `alpine:3.20` has BusyBox and nothing else. Solved the way the Terraform sandbox solves its registry dependency: **baked into the sandbox image**, `infrastructure/docker/sandbox-docker.Dockerfile`, built by `npm run sandbox:build` as `jumptotech/lab-docker`. iproute2, tcpdump, bind-tools, curl, nftables, netcat-openbsd — 18MB over the base. No registry fetch at lab time, no new egress, no privilege change. A missing image now reports the track unavailable in the catalog with the build command, rather than failing after a click. **Caveat:** this puts tools in the *sandbox* (the Docker host), which is where NET-021 needs them. Tools *inside a student container* are still N18 below. |
+| **N9** | `docker_exec_probe` — a closed-vocabulary question inside a named container | honest verification for NET-021 (shipped), 010, 011, 019, 023 | **IMPLEMENTED 2026-09-16.** Narrower than the sketch: a lab names a **question**, never a command. Four kinds — `dns_lookup`, `tcp_connect`, `http_get`, `interface_exists` — with typed operands; `docker/probes.ts` owns every executable and argv position and builds the command on both sides of the broker, so the argv never travels as data and `execInContainer` stays *not brokered*. The target must resolve to a container in the session's own daemon (`docs/docker/VERIFIER-CONTRACTS.md` §3.3), which is what makes a metadata endpoint or an Internet host unnameable. Fails closed on a missing or stopped container, a refused probe, and a timeout — a timeout under **both** expectations, because it is the absence of an answer rather than evidence of one. 94 tests; 17 checks against a real daemon. |
 | **N7** | `ip` (read-only subcommands) added to `VERIFIER_COMMANDS` | NET-005, 030 | **S** — `ip` is not read-only as a binary; needs an argv-shape allow-list (`ip route show`, `ip -j addr show`, `ip neigh show`) rather than a bare command entry, or a dedicated `route_exists` requirement type |
 | **N10** | `file_content_matches` (anchored regex, bounded) | NET-014, and richer grading everywhere | **S** — today only literal `contains` exists, which forces every gradeable value to be seeded |
 | **N11** | `tls_certificate` requirement | NET-016 | **M** — assert subject/SAN/issuer/expiry and whether the endpoint validates against the sandbox trust store |
-| **N12** | Confirm or install a NetworkPolicy-enforcing CNI in `kind` | NET-026, NET-032 | **Confirmed for the platform contract (BETA-P0-015).** kindnetd `v20250512-df8de77b` on `kindest/node:v1.34.0` enforces deny-all, pod/namespace selectors, ports and plain `ipBlock` — measured with negative controls by `npm run verify:network-policy` and the `kind-integration` CI job (docs/kubernetes-network-security.md §3). Still open for NET-026: the lab's *own* behavioural verifier (a student-written policy must be judged by connections, not YAML), and `ipBlock.except`, whose kind measurements disagree |
-| **N13** | ingress-nginx + `extraPortMappings` in `infrastructure/kind/cluster.yaml` | NET-027, NET-032 end-to-end | **M** — plus a per-namespace ingress class or host-based isolation so sessions do not collide on one shared controller |
+| **N12** | Confirm or install a NetworkPolicy-enforcing CNI in `kind` | NET-026, NET-032 | **Confirmed for the platform contract (BETA-P0-015).** kindnetd `v20250512-df8de77b` on `kindest/node:v1.34.0` enforces deny-all, pod/namespace selectors, ports and plain `ipBlock` — measured with negative controls by `npm run verify:network-policy` and the `kind-integration` CI job (docs/kubernetes-network-security.md §3). Still open for NET-026: the lab's *own* behavioural verifier (a student-written policy must be judged by connections, not YAML), and `ipBlock.except`, whose kind measurements disagree. **Audited 2026-09-16 — the remainder is now precise:** `service_http` and `service_tcp` have no negative form (no `expect_reachable: false`), so "resolves but every connection times out" — the whole symptom NET-026 teaches — cannot be expressed. Call that **N20**. It is *not* a copy of N9's `expect: failure`: N9 rules that a timeout fails under both expectations, because a timeout is the absence of an answer rather than evidence of one. A deny test wants the opposite — a timeout is the pass. Both rules are right in their own place, and the way to have both is a **positive control**: a deny check must be paired with a connection that must still succeed, or "the cluster is broken" and "the policy works" are the same observation. That pairing is the design work, and it should be done before the lab, not during it |
+| **N13** | ingress-nginx + `extraPortMappings` in `infrastructure/kind/cluster.yaml` | NET-027, NET-032 end-to-end | **M** — plus a per-namespace ingress class or host-based isolation so sessions do not collide on one shared controller. **Audited 2026-09-16: not started.** `infrastructure/kind/cluster.yaml` declares no ingress controller and no `extraPortMappings`; nothing in the repo installs one. The isolation question is the substantive part and is unanswered: one shared controller across per-student namespaces is a cross-session surface, and it is the first thing a design should settle |
+| **N18** | A lab-usable diagnostics image **inside the session daemon**, delivered offline | NET-010, NET-011, NET-019 | **DESIGNED, NOT IMPLEMENTED.** The gap N8 does not close. A Docker lab may only use `alpine:3.20`, `nginx:1.27-alpine` and `busybox:1.36` — none carries `nft`, `iptables`, `tcpdump` or `dnsmasq` — and `setup.docker.images` pulls from a registry, so adding a third-party tooling image is both a supply-chain dependency and a fetch on the path of every lab start. The architecture-consistent answer is the Terraform mirror's: bake a `docker save` tarball into the sandbox image and load it into the session daemon. **Known hazard:** the provider mounts a fresh volume at `/var/lib/docker`, which masks anything the image pre-populated there, so a load has to happen after dockerd starts — and the readiness gate (`docker info`) can pass before the load finishes. A naive entrypoint loader is therefore racy; the load needs its own readiness signal, or an explicit provider step before `#ensureImage` falls back to a pull. |
+| **N19** | `cap_add` on a container in `setup.docker` | NET-010, NET-019 | **DESIGNED, NOT IMPLEMENTED.** NET-010's DHCP client and NET-019's NAT box both need `NET_ADMIN` *inside a student container*. `setup.docker.containers` has no capability, sysctl or privileged field, and the Docker provider never runs seed scripts — so there is no way to express privileged network state in a Docker lab's initial state at all. This reaches `--cap-add` inside an already-privileged DinD sandbox, so the blast radius is one session; it is still a security decision and not a schema tweak, and it should be argued for on its own rather than added alongside a lab. |
 | **N14** | AWS-real path: LocalStack service + AWS provider in the Terraform mirror | hands-on Phase 6 | **L** — needs egress or a vendored mirror, a LocalStack container per session, and cost/isolation review. The AWS provider stub stays untouched |
 
 ### Suggested build order
@@ -1320,6 +1342,25 @@ Kubernetes service debugging — before any sandbox work starts.
 2. **Wave 2 — N5 + N8 + N9.** NET-006 (partial), NET-010, NET-011, NET-019,
    NET-021, NET-023. All on the existing Docker provider. Cheap, and it front-
    loads container networking, which is what the audience needs first.
+
+   **Status 2026-09-16.** N5, N8 and N9 are all implemented; the wave is *not*
+   complete, and the reason is a capability the wave never named.
+
+   | Lab | Status |
+   |---|---|
+   | NET-006 (partial) | **DONE** — shipped 2026-08-25 with N5 |
+   | NET-023 | **DONE** — shipped 2026-09-16; needed neither N8 nor N9 |
+   | NET-021 | **DONE** — shipped 2026-09-16 on N8 + N9 |
+   | NET-010 | **BLOCKED** on **N18** (`dnsmasq`, `tcpdump` in a lab container) and **N19** (`NET_ADMIN` on the DHCP client) |
+   | NET-011 | **BLOCKED** on **N18** (`nft`/`iptables` in the topology container) |
+   | NET-019 | **BLOCKED** on **N18** + **N19** (a NAT box that can actually NAT), and its prerequisite NET-011 |
+
+   N8 put the diagnostics in the **sandbox**, which is the Docker host — where
+   NET-021 needs them, and where a veth peer, a bridge and a DHCP exchange on
+   that bridge actually live. The three remaining labs need tools *inside a
+   student container* and the privilege to use them, which are N18 and N19, and
+   both are decisions rather than schema changes. Building them without those
+   would mean a lab that cannot do what its own task text asks.
 3. **Wave 3 — N12, N13.** NET-026, NET-027, NET-032. Completes Kubernetes.
 4. **Wave 4 — N1, N2, N6 (+N3, N4).** The whole `net` substrate: Phases 1–4 and
    the DNS/TLS/proxy labs. This is the big investment and the biggest payoff —
