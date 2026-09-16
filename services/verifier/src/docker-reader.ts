@@ -18,6 +18,8 @@ import type {
   DockerImageSnapshot,
   DockerNetworkSnapshot,
   DockerVolumeSnapshot,
+  ContainerProbe,
+  DockerExecResult,
 } from '@jumptotech/lab-orchestrator';
 import type { WorkspacePort } from '@jumptotech/lab-orchestrator';
 
@@ -91,6 +93,19 @@ export class DockerVerifyReader {
         timeoutMs: CONTAINER_FILE_TIMEOUT_MS,
       }),
     );
+  }
+
+  /**
+   * Ask one closed-vocabulary question from inside a container (N9).
+   *
+   * Not cached. Every other read here is a snapshot of state that cannot change
+   * while one verification runs; a probe is an *observation of behaviour*, and
+   * two probes of the same kind against the same container are two different
+   * questions if their operands differ. Caching on the probe's identity would
+   * be correct but buys nothing — a lab runs a handful of probes, once.
+   */
+  probe(container: string, probe: ContainerProbe): Promise<DockerExecResult> {
+    return this.docker.probeContainer(container, probe);
   }
 
   /**

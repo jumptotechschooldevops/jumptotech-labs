@@ -26,6 +26,12 @@
 import { DEFAULT_FILE_READ_BYTES } from '../src/docker/cli-client.js';
 import { TarReadError } from '../src/docker/tar.js';
 import {
+  MAX_PROBE_OUTPUT_BYTES,
+  assertContainerProbe,
+  probeArgv,
+  type ContainerProbe,
+} from '../src/docker/probes.js';
+import {
   DockerUnreachableError,
   type CreateNetworkSpec,
   type DockerContainerSnapshot,
@@ -79,6 +85,7 @@ export type FakeDockerOperation =
   | 'removeImage'
   | 'pullImage'
   | 'execInContainer'
+  | 'probeContainer'
   | 'version';
 
 interface FakeContainer {
@@ -356,6 +363,61 @@ export class FakeDockerDaemon implements DockerEnginePort {
   async containerLogs(name: string): Promise<string> {
     this.#guard();
     return this.containers.has(name) ? `logs for ${name}` : '';
+  }
+
+  /**
+   * Probe outcomes this daemon will report, keyed `<container>: <argv joined>`.
+   *
+   * Keyed on the *argv* rather than on the probe, deliberately: a test states
+   * the command it expects the probe vocabulary to have produced, so a change
+   * to `probeArgv` that quietly alters what runs shows up as an unstubbed probe
+   * rather than as a silently different question being asked.
+   */
+  readonly probes: Record<string, { exitCode?: number; stdout?: string; timedOut?: boolean }> = {};
+
+  /** Every probe this daemon was asked to run, as `<container>: <argv joined>`. */
+  readonly probeRuns: string[] = [];
+
+  /**
+   * Ask one closed-vocabulary question inside a container.
+   *
+   * Models the three things the real implementation has to get right and the
+   * security tests assert: the probe is re-validated here (so an invalid one
+   * throws rather than running), a missing or stopped container is a non-zero
+   * result rather than a pass, and output is capped.
+   */
+  async probeContainer(name: string, probe: ContainerProbe): Promise<DockerExecResult> {
+    this.#guard('probeContainer');
+    const validated = assertContainerProbe(probe);
+    const argv = probeArgv(validated);
+    const key = `${name}: ${argv.join(' ')}`;
+    this.probeRuns.push(key);
+
+    const container = this.containers.get(name);
+    if (!container) {
+      return { exitCode: 1, stdout: '', stderr: `Error: No such container: ${name}`, timedOut: false };
+    }
+    if (container.state !== 'running') {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: `Error: Container ${name} is not running`,
+        timedOut: false,
+      };
+    }
+
+    const stubbed = this.probes[key];
+    if (!stubbed) {
+      // An unstubbed probe is a failed probe, never a pass: the fake must not
+      // be the reason a check goes green.
+      return { exitCode: 1, stdout: '', stderr: '', timedOut: false };
+    }
+    return {
+      exitCode: stubbed.exitCode ?? 0,
+      stdout: (stubbed.stdout ?? '').slice(0, MAX_PROBE_OUTPUT_BYTES),
+      stderr: '',
+      timedOut: stubbed.timedOut ?? false,
+    };
   }
 
   async execInContainer(name: string, argv: string[]): Promise<DockerExecResult> {

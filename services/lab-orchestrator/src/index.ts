@@ -63,6 +63,24 @@ export {
 
 // --- Docker track (PLATFORM-DOCKER-001) ------------------------------------
 export * from './docker/port.js';
+export {
+  CONTAINER_PROBES,
+  DEFAULT_PROBE_TIMEOUT_SECONDS,
+  MAX_PROBE_OUTPUT_BYTES,
+  MAX_PROBE_TIMEOUT_SECONDS,
+  MIN_PROBE_TIMEOUT_SECONDS,
+  ProbeError,
+  assertContainerProbe,
+  isProbeHost,
+  isProbeInterface,
+  isProbePath,
+  isProbePort,
+  linkListingHasInterface,
+  probeArgv,
+  probeTimeoutMs,
+  type ContainerProbe,
+  type ContainerProbeKind,
+} from './docker/probes.js';
 export * from './docker/workspace.js';
 export {
   DockerCliClient,

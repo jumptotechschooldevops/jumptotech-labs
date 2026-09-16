@@ -58,6 +58,7 @@ import {
   type DockerVolumeSummary,
   type RunContainerSpec,
 } from './port.js';
+import { assertContainerProbe, type ContainerProbe } from './probes.js';
 import { SESSION_LABEL, LAB_LABEL, EXPIRES_AT_LABEL } from '../k8s/labels.js';
 import { isContainerSandboxRef } from '../session/identifiers.js';
 
@@ -293,6 +294,11 @@ class BrokerHostEngine implements DockerEnginePort {
   copyFileFromContainer(): Promise<DockerFileRead | null> {
     return notBrokeredAsync('copyFileFromContainer on the host engine');
   }
+  probeContainer(): Promise<DockerExecResult> {
+    // A probe is a question about a *session's* container. There is no such
+    // thing on the host engine, whose containers are the sandboxes themselves.
+    return notBrokeredAsync('probeContainer on the host engine');
+  }
   inspectImage(): Promise<DockerImageSnapshot | null> {
     return notBrokeredAsync('inspectImage on the host engine');
   }
@@ -527,6 +533,23 @@ class BrokerSessionEngine implements DockerEnginePort {
   }
   execInContainer(): Promise<DockerExecResult> {
     return notBrokeredAsync('execInContainer on a session daemon');
+  }
+
+  /**
+   * The brokered form of a container probe (N9).
+   *
+   * Note what crosses the wire: a **probe**, not an argv. `sandboxd` calls the
+   * same `probeArgv` on its own side, so the command is built from a closed
+   * vocabulary in trusted code twice over and never travels as data. That is
+   * what keeps `execInContainer` above refused while this is allowed — the
+   * capability being brokered is "ask this question", not "run this".
+   */
+  async probeContainer(name: string, probe: ContainerProbe): Promise<DockerExecResult> {
+    const { result } = await this.#broker.call<{ result: DockerExecResult }>(
+      'sessionProbeContainer',
+      { sessionId: this.#sessionId, container: name, probe: assertContainerProbe(probe) },
+    );
+    return result;
   }
 }
 

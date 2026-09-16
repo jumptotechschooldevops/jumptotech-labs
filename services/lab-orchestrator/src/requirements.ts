@@ -52,6 +52,15 @@ import { z } from 'zod';
 import { isAllowedManagedPath, isSafeWorkspacePath } from './ansible/paths.js';
 import { WORKSPACE_TASK_IDS, type WorkspaceTaskId } from './cicd/tasks.js';
 import { isSafeSandboxPath, MAX_SANDBOX_PATH_LENGTH } from './session/sandbox-paths.js';
+import {
+  CONTAINER_PROBES,
+  DEFAULT_PROBE_TIMEOUT_SECONDS,
+  MAX_PROBE_TIMEOUT_SECONDS,
+  MIN_PROBE_TIMEOUT_SECONDS,
+  isProbeHost,
+  isProbeInterface,
+  isProbePath,
+} from './docker/probes.js';
 
 /**
  * A path inside the session's sandbox.
@@ -2797,6 +2806,95 @@ const dockerRequirementSchemas = {
       { message: 'must assert exactly one of equals, contains, exists, or absent' },
     ),
 
+  /**
+   * Ask one closed-vocabulary question from inside a container (N9).
+   *
+   * The only Docker check that *executes* anything, and the reason it can is
+   * that a lab never names what runs. It names a **probe** — one of
+   * `CONTAINER_PROBES` — and typed operands; `docker/probes.ts` owns the
+   * executable and every argument's position, and builds the argv on both sides
+   * of the broker so the validated shape and the executed shape cannot drift.
+   * There is no field here that carries an executable, a flag, or a string that
+   * reaches a shell, because there is no shell in the path: the argv goes to
+   * `execve`.
+   *
+   * `expect` is the whole verdict. `success` means the probe's binary exited 0;
+   * `failure` means it did not — which is how a lab grades a connection that
+   * must still be refused, a name that must not resolve, or an interface a
+   * `--network none` container must not have. Output is read for exactly one
+   * probe (`interface_exists`), is capped, and is never quoted back.
+   *
+   * What it observes and what that is worth is documented on `probes.ts`: the
+   * container belongs to the student, so a probe is strictly better than asking
+   * them to write the answer down, and is not proof against one who sets out to
+   * forge it. Labs pair it with `docker_container_image`.
+   */
+  docker_exec_probe: z
+    .object({
+      type: z.literal('docker_exec_probe'),
+      /** A container in *this session's own* daemon. No other is addressable. */
+      container: dockerObjectName,
+      probe: z.enum(CONTAINER_PROBES),
+      /** Exit code 0, or anything else. There is no third answer. */
+      expect: z.enum(['success', 'failure']).default('success'),
+      timeout_seconds: z
+        .number()
+        .int()
+        .min(MIN_PROBE_TIMEOUT_SECONDS)
+        .max(MAX_PROBE_TIMEOUT_SECONDS)
+        .default(DEFAULT_PROBE_TIMEOUT_SECONDS),
+      /** `dns_lookup`, `tcp_connect`, `http_get`: what to point the probe at. */
+      host: z.string().min(1).max(253).refine(isProbeHost, {
+        message: 'must be a hostname or IPv4 literal, with no leading dash, slash or colon',
+      }).optional(),
+      /** `tcp_connect`, `http_get`. */
+      port: z.number().int().min(1).max(65535).optional(),
+      /** `http_get` only. No query, no fragment, no `..`, no empty segment. */
+      path: z.string().min(1).max(255).refine(isProbePath, {
+        message: 'must be a path beginning with / and free of query syntax, .. and //',
+      }).optional(),
+      /** `interface_exists` only. Never passed to the binary; the listing is parsed. */
+      interface: z.string().min(1).max(15).refine(isProbeInterface, {
+        message: 'must be a network interface name such as eth0',
+      }).optional(),
+      ...common,
+    })
+    .strict()
+    .superRefine((value, ctx) => {
+      /*
+       * Exactly the operands the probe uses, and no others.
+       *
+       * Both halves matter. A missing operand would otherwise be defaulted into
+       * something meaningless at argv-build time; a *stray* one is the more
+       * interesting case, because a lab that sets `path` on a `tcp_connect`
+       * believes it is grading a URL and is not. Refusing both at load time
+       * means a lab cannot ship believing it checks something it does not.
+       */
+      const required: Record<string, readonly string[]> = {
+        dns_lookup: ['host'],
+        tcp_connect: ['host', 'port'],
+        http_get: ['host', 'port', 'path'],
+        interface_exists: ['interface'],
+      };
+      const operands = ['host', 'port', 'path', 'interface'] as const;
+      const wanted = required[value.probe] ?? [];
+      for (const operand of operands) {
+        const present = value[operand] !== undefined;
+        if (wanted.includes(operand) && !present) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `probe '${value.probe}' requires '${operand}'`,
+          });
+        }
+        if (!wanted.includes(operand) && present) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `probe '${value.probe}' does not take '${operand}'`,
+          });
+        }
+      }
+    }),
+
   // --- Images -------------------------------------------------------------
   docker_image_exists: z
     .object({ type: z.literal('docker_image_exists'), image: imageReference, ...common })
@@ -3891,6 +3989,7 @@ export const REQUIREMENT_FAMILIES = {
   docker_container_env: 'docker',
   docker_container_port: 'docker',
   docker_container_network: 'docker',
+  docker_exec_probe: 'docker',
   docker_container_mount: 'docker',
   docker_container_resource_limit: 'docker',
 

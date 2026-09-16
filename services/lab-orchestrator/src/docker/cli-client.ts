@@ -55,6 +55,13 @@ import {
   type DockerVolumeSnapshot,
   type DockerVolumeSummary,
 } from './port.js';
+import {
+  MAX_PROBE_OUTPUT_BYTES,
+  assertContainerProbe,
+  probeArgv,
+  probeTimeoutMs,
+  type ContainerProbe,
+} from './probes.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** Pulls cross a network and are the one genuinely slow operation. */
@@ -534,6 +541,34 @@ export class DockerCliClient implements DockerEnginePort {
     if (options.workingDir) full.push('--workdir', options.workingDir);
     full.push(name, ...argv);
     return this.#tryDocker(full, options.timeoutMs ?? this.#timeoutMs);
+  }
+
+  /**
+   * Ask one closed-vocabulary question from inside a container (N9).
+   *
+   * The probe is re-validated here even though the schema already checked the
+   * lab definition, because this method is reachable from `sandboxd` as well
+   * and a component that trusts its input on the strength of another
+   * component's validation is one deployment mistake away from no validation.
+   *
+   * `--` terminates option parsing before the container name, so a name that
+   * somehow reached here beginning with a dash is an argument and not a flag.
+   * The argv itself comes from `probeArgv`, where every executable and flag is
+   * a literal.
+   */
+  async probeContainer(name: string, probe: ContainerProbe): Promise<DockerExecResult> {
+    const validated = assertContainerProbe(probe);
+    const result = await this.#tryDocker(
+      ['exec', '--', name, ...probeArgv(validated)],
+      probeTimeoutMs(validated),
+    );
+    // Output is a student-controlled process's stdout. Only one probe reads it
+    // at all, and it is capped before it is carried anywhere.
+    return {
+      ...result,
+      stdout: result.stdout.slice(0, MAX_PROBE_OUTPUT_BYTES),
+      stderr: result.stderr.slice(0, MAX_PROBE_OUTPUT_BYTES),
+    };
   }
 
   // --- images ---------------------------------------------------------------

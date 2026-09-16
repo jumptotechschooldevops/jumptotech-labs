@@ -218,6 +218,8 @@ export interface DockerFileRead {
   truncated: boolean;
 }
 
+import type { ContainerProbe } from './probes.js';
+
 /** Result of running one command inside a container. */
 export interface DockerExecResult {
   exitCode: number;
@@ -371,12 +373,33 @@ export interface DockerEnginePort {
    * There is no shell: `argv` is passed straight to `execve`, so argument
    * content can never become syntax. Used to reach a session's own daemon and
    * to read a session's workspace files.
+   *
+   * Deliberately **not brokered** on either engine: an arbitrary argv is the
+   * shape of a capability this platform has chosen not to have. A lab that
+   * needs to observe behaviour inside a container uses `probeContainer` below,
+   * which carries a question rather than a command.
    */
   execInContainer(
     name: string,
     argv: string[],
     options?: { timeoutMs?: number; user?: string; workingDir?: string },
   ): Promise<DockerExecResult>;
+
+  /**
+   * Ask one closed-vocabulary question from inside a container (N9).
+   *
+   * The counterpart of `execInContainer` that *is* safe to expose to a lab,
+   * because the lab never supplies an argv. It supplies a `ContainerProbe` — a
+   * kind from a closed set plus typed operands — and `docker/probes.ts` builds
+   * the argv, on whichever side of the broker the call lands. The probe travels
+   * the wire; the command never does.
+   *
+   * Output is capped at `MAX_PROBE_OUTPUT_BYTES` and the exec is bounded by the
+   * probe's own timeout. Implementations must fail closed: a container that is
+   * missing, stopped, or unreachable is a non-zero result, never a silent
+   * success.
+   */
+  probeContainer(name: string, probe: ContainerProbe): Promise<DockerExecResult>;
 
   // --- images -------------------------------------------------------------
 

@@ -92,6 +92,7 @@ import {
   ownershipLabels,
   type DockerContainerSnapshot,
   type DockerEngineFactory,
+  assertContainerProbe,
   type DockerSandboxPolicy,
   type RunContainerSpec,
 } from '@jumptotech/lab-orchestrator';
@@ -122,6 +123,7 @@ export const DOCKER_OPERATIONS = [
   'sessionInspectVolume',
   'sessionInspectNetwork',
   'sessionCopyFile',
+  'sessionProbeContainer',
   'sessionListContainers',
   'sessionListImages',
   'sessionListVolumes',
@@ -605,6 +607,40 @@ export class DockerOps {
         const reference = objectName(payload.reference, 'reference');
         await this.#engines.session(ref).removeImage(reference, payload.force === true);
         return { removed: reference };
+      }
+
+      /*
+       * N9 — one closed-vocabulary question, asked inside a session's own
+       * container.
+       *
+       * The thing to notice is what the payload does *not* carry: an argv.
+       * `execInContainer` is deliberately not brokered at all — an arbitrary
+       * argv is the shape of a capability this platform has chosen not to have
+       * — so this operation carries a *probe*, and calls the same
+       * `assertContainerProbe` / `probeArgv` the caller used to build the
+       * command on its own side. Trusted code owns the executable and every
+       * flag at both ends, and the command never travels as data.
+       *
+       * Re-validated here rather than trusted: this process is reached over
+       * HTTP, and a component that trusts its input because another component
+       * validated it is one deployment mistake away from no validation at all.
+       * `assertContainerProbe` throws on an unknown kind or a bad operand,
+       * which becomes a refusal rather than a probe.
+       */
+      case 'sessionProbeContainer': {
+        const { ref } = await this.#ownedSandbox(payload.sessionId);
+        const container = objectName(payload.container, 'container');
+        let probe;
+        try {
+          probe = assertContainerProbe(payload.probe);
+        } catch (error) {
+          throw new DockerOpDeniedError(
+            400,
+            'BAD_REQUEST',
+            error instanceof Error ? error.message : 'invalid probe',
+          );
+        }
+        return { result: await this.#engines.session(ref).probeContainer(container, probe) };
       }
 
       case 'sessionCopyFile': {
