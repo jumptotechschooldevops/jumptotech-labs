@@ -40,10 +40,9 @@
 # student proves reachability for themselves with `curl`; nothing here parses
 # its output or looks at command history.
 #
-# NET-021 is this lab's curriculum prerequisite and is not implemented yet.
-# The registry refuses a prerequisite that does not resolve, so `prerequisites`
-# stays empty until NET-021 lands — the same policy NET-002 follows for
-# NET-001.
+# NET-021 is this lab's curriculum prerequisite. It landed on 2026-09-16, so
+# the placeholder this header used to carry — "stays empty until NET-021 lands"
+# — is now the declared prerequisite below.
 # ---------------------------------------------------------------------------
 id: NET-022
 slug: net-022-port-publishing
@@ -59,9 +58,8 @@ environment:
   provider: docker
   isolation: container
 
-# NET-021 is designed but not implemented. The registry refuses a prerequisite
-# it cannot resolve, so this stays empty until that lab exists.
-prerequisites: []
+prerequisites:
+  - NET-021
 
 story: >
   JumpToTech Bank's payments status page is deployed as a container on this

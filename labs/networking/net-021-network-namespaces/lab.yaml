@@ -1,0 +1,482 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# NET-021 — what "containers are isolated" actually means.
+#
+# Content is written from the official Docker documentation and the Linux
+# man-pages project; the pages this lab is grounded in are listed under
+# `references`.
+#
+# THE LESSON IS A NEGATIVE AND A POSITIVE, AND BOTH ARE OBSERVED. A
+# `--network none` container has no `eth0` — nothing of the host's networking
+# reaches into it — and it still has a working `lo`. Isolation is not "no
+# network stack"; it is "its own network stack". Every claim in that sentence is
+# graded by a probe against the real container rather than by a worksheet.
+#
+# CAPABILITIES THIS LAB CONSUMES.
+#   N8  the sandbox carries iproute2, so `ip -d link show` can name a veth's
+#       peer and its bridge. BusyBox's `ip` applet cannot, and that is the whole
+#       of the second half of this lab.
+#   N9  `docker_exec_probe` asks four questions inside the student's own
+#       containers: does this namespace have `eth0`, does it have `lo`, can it
+#       open a connection, can it fetch a page. Before N9 those were worksheet
+#       claims the student wrote down themselves.
+#
+# MEASURED, not assumed. Re-measured on Docker Engine 28.4.0, 2026-09-16:
+#
+#   `--network none`   `lo`, and NO `eth0`. It is **not** "only lo": this
+#                      kernel also auto-creates tunl0, gre0, gretap0, erspan0,
+#                      ip_vti0, ip6_vti0, sit0, ip6tnl0 and ip6gre0 in every
+#                      fresh namespace, because those modules are loaded. A lab
+#                      grading "only lo" would pass here and fail on a kernel
+#                      without them. `eth0` is the portable signal, which is why
+#                      `interface_exists` grades that and not a count.
+#   `--network bridge` the same, plus `eth0@if<N>` — the container end of a
+#                      veth pair, whose peer index is the host-side interface.
+#   connect attempt    from a `--network none` namespace a connection to an
+#                      unroutable address fails in **0.00s** (there is no route
+#                      to try); from a bridge namespace the identical command
+#                      takes the full timeout. Same command, same target, two
+#                      different failures — which is the lesson, and is what the
+#                      student records in three-modes.txt.
+#
+# WHAT IS VERIFIED, AND WHAT IS NOT.
+#
+#   observed   the three containers, the networks the daemon has attached them
+#              to, their images, and — from inside each one — whether it has
+#              `eth0`, whether it has `lo`, whether it can open a connection and
+#              whether it can fetch a page
+#   student-written  the three worksheets
+#
+# A probe runs inside a container the student created, so it is strictly better
+# than asking them to report a result and is not proof against one who sets out
+# to forge it. `docker_container_image` is pinned beside every probed container
+# for exactly that reason — see `docker/probes.ts`.
+#
+# NOT verified: the veth pair the student identifies. Its name and peer index
+# are assigned at container creation and differ every run, so there is no
+# literal to grade; `veth.txt` is graded on the *shape* of real `ip -o link`
+# output (`veth`, `@if`, `master`), which a student who did not run it does not
+# have.
+#
+# NET-010 is this lab's second curriculum prerequisite and is not implemented.
+# The registry refuses a prerequisite that does not resolve, so only NET-005 is
+# declared — the policy NET-002 follows for NET-001.
+# ---------------------------------------------------------------------------
+id: NET-021
+slug: net-021-network-namespaces
+title: "Network Namespaces: What Container Isolation Actually Is"
+track: networking
+topic: container-networking
+difficulty: advanced
+level: practice
+duration_minutes: 40
+order: 21
+
+environment:
+  provider: docker
+  isolation: container
+
+# NET-010 (DHCP and container IPAM) is designed but not implemented.
+prerequisites:
+  - NET-005
+
+story: >
+  "Containers are isolated" is in every onboarding deck at the bank and is
+  explained in none of them. Last month it was used to argue that a container
+  could not possibly be reaching a production database, and the week after that
+  to argue that two services could not both listen on 8080 on the same host.
+  One of those was wrong.
+
+  You are writing the section of the onboarding document that replaces the
+  slogan with something a new engineer can run for themselves. It needs three
+  containers, one command typed three ways, and an honest account of what the
+  isolation is made of — because the answer is not "no network", and the
+  difference is what both arguments turned on.
+
+objectives:
+  - Start the same image on three different network modes and compare what each container sees
+  - Show that a container with no network still has its own loopback interface
+  - Find the host-side end of a container's veth pair and the bridge it is attached to
+  - Explain why two containers can bind the same port with no conflict
+  - Distinguish a namespace with no route out from one whose packets go nowhere
+
+task:
+  summary: Run one image on three network modes, find the host side of a container's link, and write down what a network namespace actually contains.
+  description: >
+    Your working directory is the lab workspace, and your Docker host is this
+    sandbox. Everything below happens inside it.
+
+    **Three modes, one image.** Start three `alpine:3.20` containers, each
+    sleeping so it stays up, named exactly:
+
+      - `netns-none`, started with no networking at all
+      - `netns-bridge`, started on the daemon's default bridge
+      - `netns-user`, started on a user-defined bridge network you create and
+        name `netns-net`
+
+    `docker run --network` takes the mode for the first two; `docker network
+    create` makes the third. Leave all three running.
+
+    **Look inside each one.** `docker exec <name> ip -o link show` lists the
+    interfaces that container's own network stack has. Do it for all three and
+    put the results in `three-modes.txt`, along with, for each container, what
+    happens when you try to reach something:
+
+      `docker exec <name> nc -z -w 3 10.255.255.1 80`
+
+    That address is not routable from anywhere here, so no container will reach
+    it. The interesting part is *how* each one fails — time the command. Two of
+    them fail the same way and one fails differently, and that difference is the
+    first half of your onboarding section.
+
+    **Then connect the peer.** A container named `netns-peer` is already running
+    on the default bridge, serving HTTP on port 80. Attach it to `netns-net` as
+    well, so that `netns-user` has something on its own network to talk to, and
+    confirm `netns-user` can fetch a page from it by name.
+
+    **Find the other end of the link.** `netns-bridge` has an `eth0`. That
+    interface is one end of a veth pair, and the other end is on this Docker
+    host — in the sandbox, not in the container. Read the container's end first:
+
+      `docker exec netns-bridge ip -o link show eth0`
+
+    The `@if<N>` suffix is the *index* of the interface at the other end. Now
+    look on the host side with `ip -o link show` and `ip -d link show`, find the
+    interface with that index, and note which bridge it is attached to. Put the
+    container's line and the host's line in `veth.txt`, unedited.
+
+    **Write the section.** `explain.txt` has two questions with their allowed
+    answers printed above each one. Copy one value onto the labelled line
+    exactly as printed, and write nothing else on that line.
+
+    A note on what you are seeing: nothing here needs a privileged container and
+    nothing here changes the host. Every command is a read.
+
+setup:
+  docker:
+    images:
+      - alpine:3.20
+      - nginx:1.27-alpine
+    # No user-defined networks are seeded: creating one is part of the task,
+    # and `docker_network_exists` grades that it was.
+    containers:
+      # The peer. On the default bridge, which is where it stays until the
+      # student attaches it to the network they create.
+      - name: netns-peer
+        image: nginx:1.27-alpine
+        state: running
+    files:
+      # Worksheets, not answer keys. No graded pairing appears here: the
+      # allowed values are printed, the `label = value` a check grades is not.
+      - path: three-modes.txt
+        content: |
+          # NET-021 — the same image, three ways
+          #
+          # For each container, paste the output of
+          #   docker exec <name> ip -o link show
+          # and then the result of
+          #   docker exec <name> nc -z -w 3 10.255.255.1 80
+          # including roughly how long it took.
+          #
+          # These are your notes for the onboarding section. Nothing is graded
+          # on their wording — the platform checks the containers themselves.
+          # What you are looking for is the one container that fails
+          # differently from the other two, and why.
+
+          ## netns-none
+
+          ## netns-bridge
+
+          ## netns-user
+      - path: veth.txt
+        content: |
+          # NET-021 — the two ends of one link
+          #
+          # Paste two lines, unedited.
+          #
+          # 1. The container's end. From:
+          #      docker exec netns-bridge ip -o link show eth0
+          #    Note the @if<N> suffix — N is the index of the other end.
+          container_end:
+          #
+          # 2. The host's end. From `ip -o link show` in this sandbox, the
+          #    interface whose index is that N. `ip -d link show` will tell you
+          #    more about what it is attached to.
+          host_end:
+      - path: explain.txt
+        content: |
+          # NET-021 — what the isolation is made of
+          #
+          # Two questions. Each has a list of allowed values printed above it.
+          # Copy one value onto the labelled line exactly as it is printed,
+          # capitalisation included, and write nothing else on that line.
+          #
+          # ------------------------------------------------------------------
+          # 1. Two containers on this host can each run a server bound to port
+          #    8080 inside themselves, at the same time, and neither one
+          #    conflicts with the other. What makes that possible?
+          #
+          #    Allowed values:
+          #      each container has its own network namespace, with its own socket table
+          #      the daemon renumbers one of them automatically
+          #      only one of them is really listening
+          #      the kernel lets two processes share a listening port
+          #
+          two_containers_same_port_because =
+          #
+          # ------------------------------------------------------------------
+          # 2. You saw that netns-none has no eth0 — and still has a working
+          #    loopback interface of its own. What does that tell you the
+          #    isolation actually is?
+          #
+          #    Allowed values:
+          #      it has its own network stack, not no network stack
+          #      it has no network stack at all
+          #      its loopback is shared with the host
+          #      the daemon failed to remove the last interface
+          #
+          network_none_means =
+
+  verify:
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: The alpine:3.20 image is available
+    - type: docker_image_exists
+      image: nginx:1.27-alpine
+      label: The nginx:1.27-alpine image is available
+    - type: docker_container_running
+      name: netns-peer
+      label: The peer container is running
+    - type: docker_container_network
+      name: netns-peer
+      network: bridge
+      label: The peer starts on the network it was deployed to
+    - type: workspace_file_exists
+      path: three-modes.txt
+      label: The three-modes worksheet is in the workspace
+    - type: workspace_file_exists
+      path: veth.txt
+      label: The link worksheet is in the workspace
+    - type: workspace_file_exists
+      path: explain.txt
+      label: The explanation worksheet is in the workspace
+
+  verify_timeout_seconds: 180
+
+# Eighteen checks. The Docker ones read structured fields of `docker inspect`
+# against this session's own daemon. The five probes ask a closed-vocabulary
+# question inside the student's own containers — see `docker/probes.ts` — and
+# each probed container has its image pinned beside it, because a probe observes
+# behaviour in a container the student controls.
+#
+# The labels are deliberately colourless: they are rendered next to every check
+# on Check Solution, so a label that repeated a graded value would hand it over.
+requirements:
+  # --- the three modes exist, and are what they claim to be ----------------
+  - type: docker_network_exists
+    name: netns-net
+    driver: bridge
+    label: A user-defined bridge network exists with the name the task asked for
+
+  - type: docker_container_network
+    name: netns-none
+    network: none
+    label: The first container was started with no networking
+  - type: docker_container_network
+    name: netns-bridge
+    network: bridge
+    label: The second container was started on the default bridge
+  - type: docker_container_network
+    name: netns-user
+    network: netns-net
+    label: The third container was started on the user-defined network
+  - type: docker_container_network
+    name: netns-peer
+    network: netns-net
+    label: The peer was attached to the user-defined network as well
+
+  - type: docker_container_running
+    name: netns-none
+    label: Container netns-none is running
+  - type: docker_container_running
+    name: netns-bridge
+    label: Container netns-bridge is running
+  - type: docker_container_running
+    name: netns-user
+    label: Container netns-user is running
+
+  # Pinned beside the probes below: a probe observes behaviour inside a
+  # container the student created, so the image it runs is part of the claim.
+  - type: docker_container_image
+    name: netns-none
+    image: alpine:3.20
+    label: Container netns-none runs the image the task named
+  - type: docker_container_image
+    name: netns-bridge
+    image: alpine:3.20
+    label: Container netns-bridge runs the image the task named
+  - type: docker_container_image
+    name: netns-user
+    image: alpine:3.20
+    label: Container netns-user runs the image the task named
+
+  # --- what each namespace actually holds, observed from inside ------------
+  #
+  # `eth0` rather than an interface count: a fresh namespace also gets whatever
+  # tunnel devices the host kernel's loaded modules create, which differs
+  # between hosts. `eth0` is the portable signal for "something of the host's
+  # networking was plumbed in here".
+  - type: docker_exec_probe
+    container: netns-none
+    probe: interface_exists
+    interface: eth0
+    expect: failure
+    label: Nothing was plumbed into the first container's network namespace
+  - type: docker_exec_probe
+    container: netns-none
+    probe: interface_exists
+    interface: lo
+    expect: success
+    label: The first container still has a loopback interface of its own
+  - type: docker_exec_probe
+    container: netns-bridge
+    probe: interface_exists
+    interface: eth0
+    expect: success
+    label: The second container has an interface from the default bridge
+  - type: docker_exec_probe
+    container: netns-user
+    probe: interface_exists
+    interface: eth0
+    expect: success
+    label: The third container has an interface from the user-defined network
+
+  # A namespace with nothing plumbed into it has nowhere to send a packet. The
+  # address is documented as unroutable here, so this is about the namespace
+  # rather than about what is at the other end.
+  - type: docker_exec_probe
+    container: netns-none
+    probe: tcp_connect
+    host: 10.255.255.1
+    port: 80
+    timeout_seconds: 3
+    expect: failure
+    label: The first container cannot open a connection to anything
+
+  # The positive half: the third container's namespace does have a path, and it
+  # reaches the peer over the network the student created.
+  - type: docker_exec_probe
+    container: netns-user
+    probe: http_get
+    host: netns-peer
+    port: 80
+    path: /
+    timeout_seconds: 5
+    expect: success
+    label: The third container reaches the peer over that network
+
+  # --- the worksheets -------------------------------------------------------
+  #
+  # `three-modes.txt` carries no `contains`: its claims are graded above, from
+  # the containers themselves, and inventing a literal to match here would grade
+  # wording rather than work.
+  - type: workspace_file_exists
+    path: three-modes.txt
+    label: The three-modes worksheet was filled in
+
+  # The veth pair's name and peer index are assigned per run, so there is no
+  # literal to grade. What is gradeable is the shape of real `ip -o link`
+  # output: the host end of a container link is a `veth…@if…` attached to a
+  # `master`. A student who did not run the command does not have those.
+  - type: workspace_file_exists
+    path: veth.txt
+    contains:
+      - "veth"
+      - "@if"
+      - "master"
+    label: The link worksheet carries both ends, as the commands printed them
+
+  - type: workspace_file_exists
+    path: explain.txt
+    contains:
+      - "two_containers_same_port_because = each container has its own network namespace, with its own socket table"
+      - "network_none_means = it has its own network stack, not no network stack"
+    label: explain.txt answers both questions
+
+# `Reset Lab` restores this session's Docker environment to its baseline: the
+# student's three containers and their network are removed, `netns-peer` is
+# seeded again on the default bridge, and all three worksheets are restored — so
+# a student who filled one in and wants to start over gets a blank one back.
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    # Images are kept: re-pulling on every reset would turn a two-second reset
+    # into a two-minute one.
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Start with what each container can see of its own networking, before
+      worrying about what it can reach. `ip -o link show` inside a container
+      lists the interfaces that container's network stack has, and the three
+      lists are not the same length.
+
+      The container with no networking is the interesting one, and not for the
+      reason people expect. Look at what it still has, not only at what it is
+      missing.
+  - level: 2
+    text: >
+      The Docker networking documentation describes `none` as giving a container
+      its own network stack with no external connectivity — its own stack, not
+      an absent one. That distinction is the whole of question 2 in
+      `explain.txt`, and `ip -o link show` inside `netns-none` shows you the
+      evidence for it directly.
+
+      For the connection attempts, time them. A namespace with nothing plumbed
+      into it has no route to try, so the attempt comes back immediately. A
+      namespace that *does* have an interface sends the packet and waits for an
+      answer that never arrives, so it takes the whole timeout. Same command,
+      same address, two different failures.
+  - level: 3
+    text: >
+      For the veth pair: `ip -o link show eth0` inside `netns-bridge` prints
+      `eth0@if<N>`. That `<N>` is an interface *index* on this Docker host, so
+      run `ip -o link show` in the sandbox itself — not inside a container — and
+      find the line that begins with that number. It will be a `veth…` with a
+      `master` naming the bridge it is attached to. `ip -d link show` on that
+      bridge confirms what it is. Paste both lines into `veth.txt` without
+      editing them.
+
+      For the peer: a running container can be attached to another network
+      without being recreated, and the task names the network to attach it to.
+      Once it is on `netns-net`, `netns-user` can reach it by its container
+      name.
+
+references:
+  - title: Docker Engine — Networking overview
+    url: https://docs.docker.com/engine/network/
+  - title: Docker Engine — Bridge network driver
+    url: https://docs.docker.com/engine/network/drivers/bridge/
+  - title: Docker Engine — None network driver
+    url: https://docs.docker.com/engine/network/drivers/none/
+  - title: Docker CLI reference — docker network create
+    url: https://docs.docker.com/reference/cli/docker/network/create/
+  - title: Docker CLI reference — docker network connect
+    url: https://docs.docker.com/reference/cli/docker/network/connect/
+  - title: network_namespaces(7) — Linux manual page
+    url: https://man7.org/linux/man-pages/man7/network_namespaces.7.html
+  - title: veth(4) — Linux manual page
+    url: https://man7.org/linux/man-pages/man4/veth.4.html
+  - title: ip-link(8) — iproute2 manual page
+    url: https://man7.org/linux/man-pages/man8/ip-link.8.html
+
+skills:
+  - container.netns
+  - container.veth
+  - container.bridge
+  - net.model.isolation

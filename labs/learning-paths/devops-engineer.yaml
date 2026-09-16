@@ -254,6 +254,9 @@ stages:
       - lab: NET-008
         skills: [networking.tcp-udp]
         why: Captures a TCP handshake, a refused connection and a UDP datagram to see how connections really behave.
+      - lab: NET-021
+        skills: [docker.networking]
+        why: Replaces "containers are isolated" with something a new engineer can run — three network modes, one image, and the veth pair behind the isolation.
       - lab: NET-022
         skills: [docker.networking]
         why: Diagnoses a Docker port mapping that targets the wrong container port and repairs the host-to-container path.

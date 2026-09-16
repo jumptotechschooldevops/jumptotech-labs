@@ -1111,6 +1111,18 @@ function solve(lab: LoadedLabDefinition): {
 const dockerLabs = (): LoadedLabDefinition[] =>
   registry.all().filter((lab) => lab.track === 'docker');
 
+/**
+ * Every lab graded against a Docker daemon, whichever track it belongs to.
+ *
+ * The Docker *vocabulary* and the Docker *track* stopped being the same set
+ * when the Networking curriculum put container labs on this provider: NET-021,
+ * NET-022 and NET-023 are `track: networking` and are verified entirely through
+ * the checks in this file. A coverage assertion scoped to the track would
+ * therefore report a requirement type as unused while three labs used it.
+ */
+const dockerProviderLabs = (): LoadedLabDefinition[] =>
+  registry.all().filter((lab) => lab.environment.provider === 'docker');
+
 describe('docker verifier — every shipped lab', () => {
 
   it('ships every Docker lab on disk, all on the Docker substrate', async () => {
@@ -1209,11 +1221,31 @@ describe('docker verifier — registry completeness', () => {
   it('exercises every Docker requirement type across the shipped labs', () => {
     // A vocabulary word nothing uses is either dead or untested; this keeps the
     // schema and the catalog honest with each other.
+    //
+    // Scoped by *provider*, not by track: the labs that exercise this
+    // vocabulary include the Networking track's container labs, and a
+    // track-scoped assertion would call a type unused while a lab used it.
     const used = new Set<string>();
-    for (const lab of dockerLabs()) {
+    for (const lab of dockerProviderLabs()) {
       for (const requirement of [...lab.requirements, ...lab.setup.verify]) used.add(requirement.type);
     }
 
     expect([...DOCKER_REQUIREMENT_TYPES].filter((type) => !used.has(type))).toEqual([]);
+  });
+
+  it('holds every Docker-provider lab to the same daemon-only vocabulary', () => {
+    // The counterpart of the coverage assertion above, and the reason widening
+    // it is safe: a lab on this provider may use these checks and nothing else,
+    // whichever track it is in. So "used by a Networking lab" still means
+    // "used by a lab this file's handlers grade".
+    const allowed = new Set<string>(DOCKER_REQUIREMENT_TYPES);
+    for (const lab of dockerProviderLabs()) {
+      for (const requirement of [...lab.requirements, ...lab.setup.verify]) {
+        expect(allowed.has(requirement.type), `${lab.id}: ${requirement.type}`).toBe(true);
+      }
+    }
+    // And the set genuinely spans more than the Docker track, or the widening
+    // above would be untested.
+    expect(dockerProviderLabs().length).toBeGreaterThan(dockerLabs().length);
   });
 });
