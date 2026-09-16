@@ -625,6 +625,9 @@ stages:
       - lab: K8S-003
         skills: [kubernetes.services]
         why: Gives a set of Pods one stable address with a Service.
+      - lab: NET-024
+        skills: [kubernetes.services]
+        why: Shows why Pod IPs change and uses a ClusterIP Service as the stable interface to replaceable Pods.
       - lab: K8S-004
         skills: [kubernetes.configuration]
         why: Moves an application's configuration into a ConfigMap.

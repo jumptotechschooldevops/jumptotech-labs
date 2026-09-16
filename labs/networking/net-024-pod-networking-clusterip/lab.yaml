@@ -1,0 +1,175 @@
+id: NET-024
+slug: net-024-pod-networking-clusterip
+title: "Pod Networking and ClusterIP: Why Pod IPs Are Not an Interface"
+
+track: networking
+topic: kubernetes-networking
+difficulty: intermediate
+level: practice
+duration_minutes: 40
+order: 24
+
+environment:
+  provider: kubernetes
+  isolation: namespace
+
+# NET-023 is the designed curriculum prerequisite, but it is not implemented
+# yet. The registry refuses unresolved prerequisites, so this remains empty
+# until NET-023 lands.
+prerequisites: []
+
+story: >
+  A team hard-coded a ledger-api Pod IP into a ConfigMap. It worked for four
+  days, then requests suddenly started failing even though the application was
+  still deployed. Your job is to demonstrate why a Pod IP is not a stable
+  application interface and replace that assumption with Kubernetes Service
+  discovery.
+
+objectives:
+  - Observe that replacement Pods can receive different IP addresses
+  - Explain the Kubernetes flat Pod-network model provided by the CNI
+  - Create a stable ClusterIP Service in front of replaceable Pods
+  - Inspect EndpointSlices as the backend Pod set changes
+  - Verify application traffic through the Service instead of a Pod IP
+
+task:
+  summary: >
+    Prove that Pod IPs can change, then give ledger-api a stable ClusterIP
+    Service.
+
+  description: >
+    The ledger-api Deployment is already running with two replicas. There is
+    deliberately no Service.
+
+    Start by running `kubectl get pods -o wide` and record the names and IP
+    addresses of both ledger-api Pods. Delete one of those Pods. Wait for the
+    Deployment to create its replacement, then run the command again and record
+    the replacement Pod and its IP.
+
+    Save your before-and-after observations in a ConfigMap named
+    `pod-ip-observation` with a key named `ip-churn.txt`. The value should
+    contain your evidence from the experiment. The platform checks that you
+    created the evidence record, but the networking result itself is something
+    you must observe and explain.
+
+    Next create a Service named `ledger-api` of type ClusterIP. It must select
+    `app=ledger-api`, accept traffic on port 80, and forward to target port 80.
+
+    Record the Service ClusterIP. Inspect its EndpointSlices with
+    `kubectl get endpointslices -l kubernetes.io/service-name=ledger-api -o wide`.
+
+    Delete one ledger-api Pod again and wait for its replacement. Inspect the
+    Service and EndpointSlice again. Compare what remained stable with what
+    changed.
+
+    Finally, write down the model you observed: every Pod receives a real,
+    routable, cluster-unique IP under Kubernetes' flat-network model, while a
+    Service provides a stable virtual address in front of a changing set of
+    Pods.
+
+setup:
+  manifests:
+    - setup/ledger-api-deployment.yaml
+
+  verify:
+    - type: deployment_exists
+      name: ledger-api
+
+    - type: deployment_replicas
+      name: ledger-api
+      replicas: 2
+
+    - type: deployment_available
+      name: ledger-api
+      min_available: 2
+
+    - type: deployment_selector
+      name: ledger-api
+      selector:
+        app: ledger-api
+
+  verify_timeout_seconds: 180
+
+requirements:
+  - type: configmap_exists
+    name: pod-ip-observation
+    label: Pod IP observation evidence exists
+
+  - type: configmap_key
+    name: pod-ip-observation
+    key: ip-churn.txt
+    label: Pod replacement observation was recorded
+
+  - type: service_exists
+    name: ledger-api
+    label: Stable Service exists
+
+  - type: service_type
+    name: ledger-api
+    expected: ClusterIP
+    label: Service uses an internal virtual address
+
+  - type: service_selector
+    name: ledger-api
+    selector:
+      app: ledger-api
+    label: Service selects the ledger workload
+
+  - type: service_port
+    name: ledger-api
+    port: 80
+    target_port: 80
+    label: Service forwards traffic to the application
+
+  - type: service_endpoints
+    name: ledger-api
+    min_ready: 2
+    label: Service has two ready backends
+
+  - type: service_http
+    service: ledger-api
+    port: 80
+    path: /
+    expected_status: 200
+    label: Application responds through the Service
+
+hints:
+  - level: 1
+    text: >
+      A Deployment keeps the desired number of Pods running, but it does not
+      promise that a replacement Pod will keep the identity or IP address of
+      the Pod it replaced. Compare `kubectl get pods -o wide` before and after
+      deleting one Pod.
+
+  - level: 2
+    text: >
+      A Service discovers Pods through labels. Inspect the labels on ledger-api
+      and make sure your Service selector matches them. Then inspect the
+      EndpointSlice associated with the Service.
+
+  - level: 3
+    text: >
+      Create a ClusterIP Service named `ledger-api` selecting
+      `app=ledger-api`, with Service port 80 forwarding to target port 80.
+      Store your Pod-IP experiment in ConfigMap `pod-ip-observation` under the
+      key `ip-churn.txt`. Use EndpointSlice, not the deprecated Endpoints API,
+      when inspecting the changing backend addresses.
+
+references:
+  - title: Kubernetes Pods
+    url: https://kubernetes.io/docs/concepts/workloads/pods/
+
+  - title: Kubernetes Services
+    url: https://kubernetes.io/docs/concepts/services-networking/service/
+
+  - title: Kubernetes EndpointSlices
+    url: https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/
+
+  - title: Kubernetes Cluster Networking
+    url: https://kubernetes.io/docs/concepts/cluster-administration/networking/
+
+skills:
+  - k8s.pod-networking
+  - k8s.service.clusterip
+  - k8s.endpoints
+  - k8s.cni-model
