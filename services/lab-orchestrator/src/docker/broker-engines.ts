@@ -59,6 +59,7 @@ import {
   type RunContainerSpec,
 } from './port.js';
 import { assertContainerProbe, type ContainerProbe } from './probes.js';
+import type { BakedImageResult } from './baked-images.js';
 import { SESSION_LABEL, LAB_LABEL, EXPIRES_AT_LABEL } from '../k8s/labels.js';
 import { isContainerSandboxRef } from '../session/identifiers.js';
 
@@ -299,6 +300,11 @@ class BrokerHostEngine implements DockerEnginePort {
     // thing on the host engine, whose containers are the sandboxes themselves.
     return notBrokeredAsync('probeContainer on the host engine');
   }
+  loadBakedImage(): Promise<BakedImageResult> {
+    // A baked archive lives inside a sandbox image. On the host engine the same
+    // path would name a host file, which is exactly what must never be read.
+    return notBrokeredAsync('loadBakedImage on the host engine');
+  }
   inspectImage(): Promise<DockerImageSnapshot | null> {
     return notBrokeredAsync('inspectImage on the host engine');
   }
@@ -533,6 +539,22 @@ class BrokerSessionEngine implements DockerEnginePort {
   }
   execInContainer(): Promise<DockerExecResult> {
     return notBrokeredAsync('execInContainer on a session daemon');
+  }
+
+  /**
+   * The brokered form of loading a baked image (N18).
+   *
+   * Carries a **reference**. sandboxd looks the archive up in the same closed
+   * `BAKED_IMAGES` map on its own side, so no filesystem path is ever on the
+   * wire — the same arrangement as `readCertificate`, which carries a
+   * certificate *name* and never a path.
+   */
+  async loadBakedImage(reference: string): Promise<BakedImageResult> {
+    const { result } = await this.#broker.call<{ result: BakedImageResult }>(
+      'sessionLoadBakedImage',
+      { sessionId: this.#sessionId, reference },
+    );
+    return result;
   }
 
   /**

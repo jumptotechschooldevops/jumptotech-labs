@@ -219,6 +219,7 @@ export interface DockerFileRead {
 }
 
 import type { ContainerProbe } from './probes.js';
+import type { BakedImageResult } from './baked-images.js';
 
 /** Result of running one command inside a container. */
 export interface DockerExecResult {
@@ -406,6 +407,21 @@ export interface DockerEnginePort {
   inspectImage(reference: string): Promise<DockerImageSnapshot | null>;
   listImages(): Promise<DockerImageSummary[]>;
   pullImage(reference: string, timeoutMs?: number): Promise<void>;
+
+  /**
+   * Load a platform-shipped image archive into this daemon, by reference (N18).
+   *
+   * Takes a **reference**, never a path: the archive's location is looked up in
+   * the closed `BAKED_IMAGES` map, so no filesystem path crosses any boundary.
+   * Returns `'not-baked'` for a reference the platform ships no archive for —
+   * an answer, not an error — and throws when an archive *should* exist and
+   * cannot be loaded, because a sandbox image built without its archives is a
+   * build defect that a silent fallback to a pull would hide.
+   *
+   * Only meaningful on a **session** engine, whose daemon runs inside a sandbox
+   * built from `jumptotech/lab-docker`. A host engine refuses.
+   */
+  loadBakedImage(reference: string): Promise<BakedImageResult>;
   removeImage(reference: string, force?: boolean): Promise<void>;
 
   // --- volumes ------------------------------------------------------------

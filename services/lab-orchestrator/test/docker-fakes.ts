@@ -31,6 +31,7 @@ import {
   probeArgv,
   type ContainerProbe,
 } from '../src/docker/probes.js';
+import { BakedImageError, bakedImagePath, type BakedImageResult } from '../src/docker/baked-images.js';
 import {
   DockerUnreachableError,
   type CreateNetworkSpec,
@@ -67,6 +68,17 @@ export interface FakeDockerOptions {
   /** Marks this daemon as the platform's host daemon, which nests sandboxes. */
   isHost?: boolean;
   /**
+   * What the baked archives in this daemon's sandbox image look like (N18).
+   *
+   *   present  every archive in BAKED_IMAGES loads and produces its image
+   *   missing  the sandbox image was built without them: loading one fails
+   *   corrupt  loading "succeeds" but produces no image — the case the
+   *            provider must not paper over with a pull
+   *
+   * On a host this is the value handed to each sandbox daemon it nests.
+   */
+  bakedArchives?: 'present' | 'missing' | 'corrupt';
+  /**
    * Failures applied to every sandbox daemon this host creates.
    *
    * A session daemon does not exist until its sandbox is created, so a test that
@@ -86,6 +98,7 @@ export type FakeDockerOperation =
   | 'pullImage'
   | 'execInContainer'
   | 'probeContainer'
+  | 'loadBakedImage'
   | 'version';
 
 interface FakeContainer {
@@ -141,6 +154,9 @@ export class FakeDockerDaemon implements DockerEnginePort {
 
   readonly #version: DockerVersion;
   readonly #isHost: boolean;
+  readonly #bakedArchives: 'present' | 'missing' | 'corrupt';
+  /** References loaded from a baked archive, in order. */
+  readonly bakedLoads: string[] = [];
   readonly #sessionFailOn: Partial<Record<FakeDockerOperation, string>>;
   /** Sandbox name → the isolated daemon inside it. Only populated on a host. */
   readonly nested = new Map<string, FakeDockerDaemon>();
@@ -153,6 +169,7 @@ export class FakeDockerDaemon implements DockerEnginePort {
       ...options.version,
     };
     this.#isHost = options.isHost ?? false;
+    this.#bakedArchives = options.bakedArchives ?? 'present';
     this.#sessionFailOn = { ...options.sessionFailOn };
     this.unreachable = options.unreachable;
     this.failOn = { ...options.failOn };
@@ -318,10 +335,16 @@ export class FakeDockerDaemon implements DockerEnginePort {
      * the fact the whole design rests on — so the fake models it literally: a
      * *separate* object store, reachable only through this sandbox.
      */
-    if (this.#isHost && /dind/.test(spec.image)) {
+    // `lab-docker` is the N8 sandbox image — `docker:dind` plus diagnostics —
+    // and nests a daemon exactly as the stock image does.
+    if (this.#isHost && /dind|lab-docker/.test(spec.image)) {
       this.nested.set(
         spec.name,
-        new FakeDockerDaemon({ version: this.#version, failOn: this.#sessionFailOn }),
+        new FakeDockerDaemon({
+          version: this.#version,
+          failOn: this.#sessionFailOn,
+          bakedArchives: this.#bakedArchives,
+        }),
       );
       // The image mints its own CA at startup; that per-sandbox material is
       // exactly what makes one session's certificates useless against another.
@@ -494,6 +517,28 @@ export class FakeDockerDaemon implements DockerEnginePort {
       byId.set(image.id, entry);
     }
     return [...byId.values()];
+  }
+
+  /**
+   * Load a baked archive, modelled on the real one's three outcomes.
+   *
+   * The host refuses, as the CLI host client does: a baked archive's path is
+   * only meaningful inside a sandbox image.
+   */
+  async loadBakedImage(reference: string): Promise<BakedImageResult> {
+    this.#guard('loadBakedImage');
+    if (this.#isHost) {
+      throw new BakedImageError('baked images can only be loaded into a session daemon');
+    }
+    if (bakedImagePath(reference) === null) return 'not-baked';
+    if (this.#bakedArchives === 'missing') {
+      throw new BakedImageError(`the sandbox image carries no loadable archive for '${reference}'`);
+    }
+    this.bakedLoads.push(reference);
+    if (this.#bakedArchives === 'present' && !this.images.has(normalizeTag(reference))) {
+      this.addImage(reference);
+    }
+    return 'loaded';
   }
 
   async pullImage(reference: string): Promise<void> {

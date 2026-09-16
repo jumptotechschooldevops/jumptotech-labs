@@ -93,6 +93,7 @@ import {
   type DockerContainerSnapshot,
   type DockerEngineFactory,
   assertContainerProbe,
+  bakedImagePath,
   type DockerSandboxPolicy,
   type RunContainerSpec,
 } from '@jumptotech/lab-orchestrator';
@@ -130,6 +131,7 @@ export const DOCKER_OPERATIONS = [
   'sessionListNetworks',
   // --- session scope: seeding and resetting a lab's declared state ---------
   'sessionPullImage',
+  'sessionLoadBakedImage',
   'sessionRunContainer',
   'sessionStopContainer',
   'sessionRemoveContainer',
@@ -515,6 +517,29 @@ export class DockerOps {
       case 'sessionListNetworks': {
         const { ref } = await this.#ownedSandbox(payload.sessionId);
         return { networks: await this.#engines.session(ref).listNetworks() };
+      }
+
+      /*
+       * N18 — load a platform-shipped image archive, by reference.
+       *
+       * The payload carries an image *reference*, never a path. The reference
+       * is checked against the closed `BAKED_IMAGES` map here, on this side of
+       * the HTTP boundary, before anything else happens; a reference outside it
+       * is refused with a 400 rather than being passed on to be looked up
+       * somewhere less careful. The path is then derived by the session engine
+       * from that same map.
+       */
+      case 'sessionLoadBakedImage': {
+        const { ref } = await this.#ownedSandbox(payload.sessionId);
+        const reference = objectName(payload.reference, 'reference');
+        if (bakedImagePath(reference) === null) {
+          throw new DockerOpDeniedError(
+            400,
+            'BAD_REQUEST',
+            `'${reference}' is not an image this platform ships an archive for`,
+          );
+        }
+        return { result: await this.#engines.session(ref).loadBakedImage(reference) };
       }
 
       case 'sessionPullImage': {

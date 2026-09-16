@@ -241,8 +241,33 @@ setup:
 
     await provider.create(contextFor(lab));
 
-    // Both the declared image and the one only a container mentions.
-    expect(engines.daemon(SANDBOX_A).pulls).toEqual(['alpine:3.20', 'busybox:1.36']);
+    // Both the declared image and the one only a container mentions are
+    // obtained during setup. Both are baked into the sandbox image (N18), so
+    // both arrive from the archive and nothing touches a registry.
+    expect(engines.daemon(SANDBOX_A).bakedLoads).toEqual(['alpine:3.20', 'busybox:1.36']);
+    expect(engines.daemon(SANDBOX_A).pulls).toEqual([]);
+  });
+
+  it('still pulls an image the platform ships no archive for', async () => {
+    // N18 changes where baked images come from and nothing else: an image
+    // outside BAKED_IMAGES is obtained exactly as it always was.
+    const { provider, engines } = build();
+    const lab = dockerLab(`
+setup:
+  docker:
+    images:
+      - alpine:3.20
+      - postgres:16-alpine
+  verify:
+    - type: docker_image_exists
+      image: postgres:16-alpine
+      label: postgres is available
+`);
+
+    await provider.create(contextFor(lab));
+
+    expect(engines.daemon(SANDBOX_A).bakedLoads).toEqual(['alpine:3.20']);
+    expect(engines.daemon(SANDBOX_A).pulls).toEqual(['postgres:16-alpine']);
   });
 
   it('seeds workspace files a lab declares', async () => {

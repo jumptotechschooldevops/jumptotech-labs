@@ -1097,6 +1097,45 @@ export class DockerLabProvider implements LabProvider {
   async #ensureImage(context: LabSessionContext, reference: string): Promise<void> {
     const session = this.#engines.session(sandboxRefOf(context));
     if (await session.inspectImage(reference)) return;
+
+    /*
+     * N18 — a baked archive first, and a registry pull only for what is not
+     * baked. See docs/development/n18-design.md.
+     *
+     * This is the place the load has to happen, and the reason is a race that
+     * was reproduced rather than assumed. Loading archives from the sandbox's
+     * *entrypoint* instead would leave two independent actors — the loader and
+     * this provider — and `#waitForDaemon`'s `docker info` was measured passing
+     * while the image store was still empty. `#ensureImage` runs after that
+     * gate and before any container is created, on both create and reset, so
+     * here there is one actor and nothing to race.
+     *
+     * It also makes reset restore a baked image a student deleted, offline,
+     * with no separate reset logic: reset re-runs `#applySetup`, which comes
+     * back through here.
+     */
+    let baked: Awaited<ReturnType<typeof session.loadBakedImage>>;
+    try {
+      baked = await session.loadBakedImage(reference);
+    } catch (error) {
+      // An archive that should be there and cannot be loaded is a sandbox image
+      // built wrongly. Falling back to a pull would hide that until the day
+      // there was no network, so it fails the setup instead.
+      throw new DockerSetupError(
+        `could not load the baked image '${reference}' for ${context.labId}: ${describe(error)}`,
+        error,
+      );
+    }
+
+    if (baked === 'loaded') {
+      if (!(await session.inspectImage(reference))) {
+        throw new DockerSetupError(
+          `the baked archive for '${reference}' loaded but did not produce the image — the sandbox image is inconsistent; rebuild it with npm run sandbox:build`,
+        );
+      }
+      return;
+    }
+
     try {
       await session.pullImage(reference);
     } catch (error) {

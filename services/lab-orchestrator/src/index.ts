@@ -64,6 +64,14 @@ export {
 // --- Docker track (PLATFORM-DOCKER-001) ------------------------------------
 export * from './docker/port.js';
 export {
+  BAKED_IMAGES,
+  BAKED_IMAGE_DIR,
+  BakedImageError,
+  bakedImagePath,
+  bakedImageReferences,
+  type BakedImageResult,
+} from './docker/baked-images.js';
+export {
   CONTAINER_PROBES,
   DEFAULT_PROBE_TIMEOUT_SECONDS,
   MAX_PROBE_OUTPUT_BYTES,

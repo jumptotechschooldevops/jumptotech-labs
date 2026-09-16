@@ -62,6 +62,7 @@ import {
   probeTimeoutMs,
   type ContainerProbe,
 } from './probes.js';
+import { BakedImageError, bakedImagePath, type BakedImageResult } from './baked-images.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** Pulls cross a network and are the one genuinely slow operation. */
@@ -96,6 +97,15 @@ export interface DockerCliOptions {
   run?: CliRunner;
   /** Injected in tests. Only the archive read uses it. */
   runBinary?: CliBinaryRunner;
+  /**
+   * Whether this client may load baked image archives (N18).
+   *
+   * Set only by `DockerCliFactory.session()`. A baked archive's path is
+   * meaningful inside a sandbox built from `jumptotech/lab-docker`; on the host
+   * the same path would name a host file, so the host client leaves this unset
+   * and `loadBakedImage` refuses.
+   */
+  bakedImages?: boolean;
 }
 
 /** The one primitive everything else in this file is built from. */
@@ -231,8 +241,10 @@ export class DockerCliClient implements DockerEnginePort {
   readonly #run: CliRunner;
   readonly #runBinary: CliBinaryRunner;
   readonly #env: NodeJS.ProcessEnv;
+  readonly #bakedImages: boolean;
 
   constructor(options: DockerCliOptions = {}) {
+    this.#bakedImages = options.bakedImages ?? false;
     this.#binary = options.binary ?? 'docker';
     this.#prefix = options.argvPrefix ?? [];
     this.#timeoutMs = options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -573,6 +585,31 @@ export class DockerCliClient implements DockerEnginePort {
 
   // --- images ---------------------------------------------------------------
 
+  /**
+   * Load a baked archive into this daemon (N18).
+   *
+   * The path comes from `bakedImagePath`, never from the caller. On a session
+   * engine the argv prefix is `exec <sandbox> docker`, so the path resolves
+   * **inside the sandbox**, where `sandbox-docker.Dockerfile` put the archives.
+   * On the host engine that same path would name a file on the host, so the
+   * host engine refuses outright rather than trying.
+   */
+  async loadBakedImage(reference: string): Promise<BakedImageResult> {
+    if (!this.#bakedImages) {
+      throw new BakedImageError('baked images can only be loaded into a session daemon');
+    }
+    const path = bakedImagePath(reference);
+    if (path === null) return 'not-baked';
+
+    const result = await this.#tryDocker(['load', '--quiet', '--input', path], this.#timeoutMs);
+    if (result.exitCode !== 0) {
+      throw new BakedImageError(
+        `the sandbox image carries no loadable archive for '${reference}' — rebuild it with npm run sandbox:build (${result.stderr.trim().slice(0, 200) || `exit ${result.exitCode}`})`,
+      );
+    }
+    return 'loaded';
+  }
+
   async inspectImage(reference: string): Promise<DockerImageSnapshot | null> {
     const raw = await this.#inspect<RawImage>(['image', 'inspect', reference]);
     return raw ? toImageSnapshot(raw) : null;
@@ -749,6 +786,9 @@ export class DockerCliFactory implements DockerEngineFactory {
       // The inner `docker` runs inside the sandbox and reaches that sandbox's
       // own daemon over its local socket.
       argvPrefix: [...(this.#options.argvPrefix ?? []), 'exec', sandbox, 'docker'],
+      // Only a session engine reaches a daemon inside a sandbox image that
+      // carries baked archives, so only a session engine may load one.
+      bakedImages: true,
     });
     this.#sessions.set(sandbox, client);
     return client;

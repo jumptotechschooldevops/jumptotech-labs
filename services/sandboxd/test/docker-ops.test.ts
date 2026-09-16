@@ -163,6 +163,14 @@ function fakeEngines(containers: Record<string, DockerContainerSnapshot> = {}) {
           record('copyFileFromContainer', { c, path });
           return null;
         },
+        probeContainer: async (c: string, probe: unknown) => {
+          record('probeContainer', { c, probe });
+          return { exitCode: 0, stdout: '', stderr: '', timedOut: false };
+        },
+        loadBakedImage: async (reference: string) => {
+          record('loadBakedImage', reference);
+          return 'loaded';
+        },
       } as unknown as DockerEnginePort;
     },
   };
@@ -614,5 +622,124 @@ describe('a daemon outage is reported as the environment being down', () => {
       throw new DockerUnreachableError('Cannot connect to the Docker daemon');
     };
     await expect(opsOver(fake).run('hostVersion', {})).rejects.toBeInstanceOf(DockerUnreachableError);
+  });
+});
+
+// ------------------------------------------------ N9 and N18 at the HTTP boundary
+
+/*
+ * Both new operations carry something other than a command or a path — a probe,
+ * and an image reference — and sandboxd derives the command or the path itself.
+ * These tests are about the boundary that makes that true: sandboxd is reached
+ * over HTTP, so it re-validates rather than trusting that the API process did.
+ */
+describe('sessionProbeContainer (N9) carries a question, never a command', () => {
+  it('passes a valid probe through to this session only', async () => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await opsOver(fake).run('sessionProbeContainer', {
+      sessionId: SESSION_A,
+      container: 'worker',
+      probe: { kind: 'dns_lookup', host: 'ledger-api' },
+    });
+
+    expect(fake.sessionCalls).toEqual([
+      {
+        sandbox: refFor(SESSION_A),
+        op: 'probeContainer',
+        arg: { c: 'worker', probe: { kind: 'dns_lookup', host: 'ledger-api' } },
+      },
+    ]);
+  });
+
+  it.each([
+    ['an unknown kind', { kind: 'exec', host: 'x' }],
+    ['an argv smuggled as the kind', { kind: ['sh', '-c', 'id'] }],
+    ['a host that is a flag', { kind: 'dns_lookup', host: '--help' }],
+    ['a host with command substitution', { kind: 'dns_lookup', host: '$(id)' }],
+    ['a timeout beyond the ceiling', { kind: 'tcp_connect', host: 'h', port: 80, timeoutSeconds: 3600 }],
+    ['an http path with traversal', { kind: 'http_get', host: 'h', port: 80, path: '/../x', timeoutSeconds: 1 }],
+    ['no probe at all', undefined],
+  ])('refuses %s with a 400, before any daemon is touched', async (_name, probe) => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await expect(
+      opsOver(fake).run('sessionProbeContainer', { sessionId: SESSION_A, container: 'worker', probe }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(fake.sessionCalls).toEqual([]);
+  });
+
+  it('refuses a container name that is a flag', async () => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await expect(
+      opsOver(fake).run('sessionProbeContainer', {
+        sessionId: SESSION_A,
+        container: '--privileged',
+        probe: { kind: 'dns_lookup', host: 'x' },
+      }),
+    ).rejects.toBeInstanceOf(DockerOpDeniedError);
+    expect(fake.sessionCalls).toEqual([]);
+  });
+
+  it("never reaches another session's sandbox", async () => {
+    const fake = fakeEngines({
+      [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A),
+      [refFor(SESSION_B)]: sandboxSnapshot(SESSION_B),
+    });
+    await opsOver(fake).run('sessionProbeContainer', {
+      sessionId: SESSION_A,
+      container: 'worker',
+      probe: { kind: 'dns_lookup', host: 'x' },
+    });
+    expect(new Set(fake.sessionCalls.map((c) => c.sandbox))).toEqual(new Set([refFor(SESSION_A)]));
+  });
+});
+
+describe('sessionLoadBakedImage (N18) carries a reference, never a path', () => {
+  it('loads a baked image into this session only', async () => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    const result = (await opsOver(fake).run('sessionLoadBakedImage', {
+      sessionId: SESSION_A,
+      reference: 'busybox:1.36',
+    })) as { result: string };
+
+    expect(result.result).toBe('loaded');
+    expect(fake.sessionCalls).toEqual([
+      { sandbox: refFor(SESSION_A), op: 'loadBakedImage', arg: 'busybox:1.36' },
+    ]);
+  });
+
+  it.each([
+    ['an image the platform ships no archive for', 'postgres:16-alpine'],
+    ['a path instead of a reference', '/etc/passwd'],
+    ['a baked reference with traversal glued on', 'busybox:1.36/../../../etc/shadow'],
+    ['an inherited object key', '__proto__'],
+  ])('refuses %s before any daemon is touched', async (_name, reference) => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await expect(
+      opsOver(fake).run('sessionLoadBakedImage', { sessionId: SESSION_A, reference }),
+    ).rejects.toBeInstanceOf(DockerOpDeniedError);
+    expect(fake.sessionCalls).toEqual([]);
+  });
+
+  it('ignores a path sent alongside the reference', async () => {
+    // There is no path field. One sent anyway reaches nothing: the engine is
+    // called with the reference alone and derives the archive location itself.
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await opsOver(fake).run('sessionLoadBakedImage', {
+      sessionId: SESSION_A,
+      reference: 'alpine:3.20',
+      path: '/etc/shadow',
+      input: '/host/secrets.tar',
+    });
+    expect(fake.sessionCalls).toEqual([
+      { sandbox: refFor(SESSION_A), op: 'loadBakedImage', arg: 'alpine:3.20' },
+    ]);
+  });
+
+  it('refuses a session that does not own a sandbox', async () => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    await expect(
+      opsOver(fake).run('sessionLoadBakedImage', { sessionId: SESSION_B, reference: 'busybox:1.36' }),
+    ).rejects.toBeInstanceOf(DockerOpDeniedError);
+    expect(fake.sessionCalls).toEqual([]);
   });
 });

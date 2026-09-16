@@ -99,9 +99,39 @@ docker build \
 # Networking track's container labs are written against (capability N8). Built
 # last because it shares nothing with the other four — it is not FROM the Linux
 # sandbox, it is FROM the upstream dind image.
+# N18 — baked images.
+#
+# Each image in baked-images.txt is `docker save`d into a private temporary
+# directory and handed to the build as a *named* build context, so the
+# archives never land in the repository tree and cannot be committed by
+# accident. The fetch happens here, on the operator's machine at build time —
+# which is the point: it moves every Docker lab's image fetch off the path of a
+# student clicking Start. See docs/development/n18-design.md.
+BAKED_LIST="${REPO_ROOT}/infrastructure/docker/baked-images.txt"
+BAKED_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jtt-baked-images.XXXXXX")"
+trap 'rm -rf "${BAKED_DIR}"' EXIT
+
+echo "==> Saving baked images for ${DOCKER_IMAGE}"
+while read -r reference filename; do
+  case "${reference}" in ''|'#'*) continue ;; esac
+  # A filename that is not a bare basename could write outside BAKED_DIR. The
+  # same rule is asserted over the TypeScript map at module load.
+  if [[ ! "${filename}" =~ ^[a-z0-9][a-z0-9.-]*\.tar$ ]]; then
+    echo "Refusing to build: '${filename}' is not a safe archive name." >&2
+    exit 1
+  fi
+  if ! docker image inspect "${reference}" >/dev/null 2>&1; then
+    echo "    pulling ${reference}"
+    docker pull --quiet "${reference}" >/dev/null
+  fi
+  docker save --output "${BAKED_DIR}/${filename}" "${reference}"
+  echo "    ${reference} -> ${filename}"
+done < "${BAKED_LIST}"
+
 echo "==> Building ${DOCKER_IMAGE}"
 docker build \
   --file "${REPO_ROOT}/infrastructure/docker/sandbox-docker.Dockerfile" \
+  --build-context "baked-images=${BAKED_DIR}" \
   --tag "${DOCKER_IMAGE}" \
   "${REPO_ROOT}"
 

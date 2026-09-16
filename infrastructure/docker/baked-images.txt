@@ -1,0 +1,15 @@
+# Images baked into the Docker sandbox image as `docker save` archives (N18).
+#
+# One line per image: <reference> <archive filename>.
+#
+# This file is the build-time half of a list whose runtime half is
+# `BAKED_IMAGES` in services/lab-orchestrator/src/docker/baked-images.ts. The
+# build script reads this file rather than parsing TypeScript, and
+# `docker-baked-images.test.ts` asserts the two are identical — so adding an
+# image is two edits that a test will not let drift apart.
+#
+# Every reference here is one the Docker track's labs already name. This is not
+# new supply: it moves each image's fetch from lab start to the operator's build.
+busybox:1.36 busybox-1.36.tar
+alpine:3.20 alpine-3.20.tar
+nginx:1.27-alpine nginx-1.27-alpine.tar

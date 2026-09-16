@@ -110,6 +110,34 @@ RUN set -eux; \
     ip -j link show lo >/dev/null; \
     docker --version
 
+# N18 — image archives, loaded into a session's daemon by the provider.
+#
+# `baked-images` is a named build context supplied by `scripts/sandbox-build.sh`,
+# which `docker save`s every image listed in `baked-images.txt` into it. The
+# archives are *not* loaded here: loading needs a running dockerd, which a build
+# does not have, and a pre-populated `/var/lib/docker` does not survive anyway —
+# `docker:dind` declares `VOLUME /var/lib/docker`, so it is never part of an
+# image layer. The provider loads each one on demand in `#ensureImage`, which
+# runs after the daemon is ready and before any container is created. See
+# docs/development/n18-design.md for the measurements behind both statements.
+#
+# Read-only is set here, at COPY time, and not by a later `chmod`: a `RUN chmod`
+# over the archives makes overlayfs copy every one of them up into a new layer,
+# which was measured doubling their ~28MB in the image for no benefit.
+COPY --from=baked-images --chmod=0444 . /opt/jumptotech/images/
+COPY --chmod=0444 infrastructure/docker/baked-images.txt /opt/jumptotech/images/baked-images.txt
+
+# Every listed archive must be present and must be a `docker save` archive —
+# one that carries a manifest. A sandbox image missing one would otherwise fail
+# a student's lab start, which is where the provider refuses to fall back to a
+# silent pull.
+RUN set -eu; \
+    cd /opt/jumptotech/images; \
+    grep -vE '^[[:space:]]*(#|$)' baked-images.txt | while read -r reference filename; do \
+      test -s "$filename" || { echo "missing baked archive: $filename ($reference)" >&2; exit 1; }; \
+      tar -tf "$filename" manifest.json >/dev/null || { echo "not a docker save archive: $filename" >&2; exit 1; }; \
+    done
+
 # Entrypoint, command, user and environment are inherited from the base image
 # unchanged: this image is `docker:dind` with diagnostics, not a different
 # sandbox. The Docker provider starts it exactly as it started the stock one.
