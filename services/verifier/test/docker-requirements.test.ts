@@ -766,7 +766,45 @@ describe('docker verifier — workspace checks read a file and nothing more', ()
       workspace,
     );
     expect(missingText.status).toBe('fail');
-    expect(missingText.detail).toContain("'volumes:'");
+    expect(missingText.detail).toContain('compose.yaml');
+  });
+
+  it('never names the values it is looking for, because they are often the answer', async () => {
+    // A worksheet check's `contains` is regularly the thing the student had to
+    // work out — the port a service turned out to be on, the resolver a
+    // container turned out to use. A detail that listed the missing values
+    // would hand those over to anyone who pressed Check Solution once with a
+    // blank worksheet. Same rule as `docker_container_file_content`, and the
+    // same rule PLATFORM-SEC holds for Terraform outputs.
+    const docker = new FakeDockerDaemon();
+    const workspace = withWorkspace({ 'diagnosis.txt': 'port: ____\nresolver: ____\n' });
+
+    const blank = await check(
+      docker,
+      {
+        type: 'workspace_file_exists',
+        path: 'diagnosis.txt',
+        contains: ['port: 8080', 'resolver: 127.0.0.11'],
+      } as Requirement,
+      workspace,
+    );
+    expect(blank.status).toBe('fail');
+    expect(JSON.stringify(blank)).not.toContain('8080');
+    expect(JSON.stringify(blank)).not.toContain('127.0.0.11');
+
+    // A partial answer still gets a useful count, and still names nothing.
+    const partial = await check(
+      docker,
+      {
+        type: 'workspace_file_exists',
+        path: 'diagnosis.txt',
+        contains: ['port: ____', 'resolver: 127.0.0.11'],
+      } as Requirement,
+      workspace,
+    );
+    expect(partial.status).toBe('fail');
+    expect(partial.detail).toContain('1 of the 2');
+    expect(JSON.stringify(partial)).not.toContain('127.0.0.11');
   });
 
   it('parses a Dockerfile structurally and never evaluates it', () => {
