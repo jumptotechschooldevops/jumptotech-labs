@@ -29,8 +29,18 @@ const sequence = (...parts: Buffer[]): Buffer => tlv(0x30, ...parts);
 const set = (...parts: Buffer[]): Buffer => tlv(0x31, ...parts);
 const boolTrue = (): Buffer => tlv(0x01, Buffer.from([0xff]));
 
+/**
+ * A DER INTEGER for an unsigned big-endian value. DER demands the minimal
+ * encoding: no leading 0x00 unless the next byte's high bit is set. A random
+ * serial starts with 0x00 about once in 256; OpenSSL 3 refuses that
+ * certificate outright (ERR_OSSL_ASN1_ILLEGAL_PADDING), so every leading zero
+ * is stripped before the sign byte is decided.
+ */
 function integer(bytes: Buffer): Buffer {
-  return tlv(0x02, bytes[0]! & 0x80 ? Buffer.concat([Buffer.from([0]), bytes]) : bytes);
+  let start = 0;
+  while (start < bytes.length - 1 && bytes[start] === 0) start++;
+  const value = bytes.subarray(start);
+  return tlv(0x02, value[0]! & 0x80 ? Buffer.concat([Buffer.from([0]), value]) : value);
 }
 
 function oid(dotted: string): Buffer {
