@@ -307,7 +307,7 @@ services:
       # names no broker. The runtime overlay switches it on and points it at
       # `sandboxd`, which is the only process that ever holds a Docker socket.
       DOCKER_TRACK_ENABLED: "false"
-      DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-docker:27-dind}
+      DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-jumptotech/lab-docker:latest}
       DOCKER_SANDBOX_MEMORY: ${DOCKER_SANDBOX_MEMORY:-2g}
       DOCKER_SANDBOX_CPUS: ${DOCKER_SANDBOX_CPUS:-2}
       DOCKER_SANDBOX_PIDS_LIMIT: ${DOCKER_SANDBOX_PIDS_LIMIT:-512}

@@ -162,6 +162,7 @@ export {
   DEFAULT_DOCKER_SANDBOX_IMAGE,
   DOCKER_PROVIDER_DISABLED_REASON,
   DOCKER_PROVIDER_REMEDIATION,
+  DOCKER_SANDBOX_IMAGE_REMEDIATION,
   type DockerProviderOptions,
 } from './providers/docker-provider.js';
 export {

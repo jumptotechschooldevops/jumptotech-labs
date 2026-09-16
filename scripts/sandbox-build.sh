@@ -20,37 +20,40 @@ LINUX_IMAGE="${LINUX_SANDBOX_IMAGE:-jumptotech/lab-linux:latest}"
 TERRAFORM_IMAGE="${TERRAFORM_SANDBOX_IMAGE:-jumptotech/lab-terraform:latest}"
 ANSIBLE_IMAGE="${ANSIBLE_SANDBOX_IMAGE:-jumptotech/lab-ansible:latest}"
 CICD_IMAGE="${CICD_SANDBOX_IMAGE:-jumptotech/lab-cicd:latest}"
+DOCKER_IMAGE="${DOCKER_SANDBOX_IMAGE:-jumptotech/lab-docker:latest}"
 
 # Every tag, or none of them.
 #
-# This script builds all three images, and the Terraform one is built FROM the
+# This script builds all five images, and the Terraform one is built FROM the
 # Linux one. Setting only `LINUX_SANDBOX_IMAGE` — the natural thing to do when
 # testing a Linux change — therefore built a private Linux tag and then quietly
 # overwrote the shared `jumptotech/lab-terraform:latest` that every other
 # worktree runs from. Refusing the half-configured case is the whole point:
 # a shared tag must never be rewritten by accident.
 #
-# Counted rather than compared pairwise so that adding a fourth image cannot
+# Counted rather than compared pairwise so that adding a fifth image cannot
 # reintroduce the gap by being left out of the condition.
 __set_count=0
-for __var in "${LINUX_SANDBOX_IMAGE:-}" "${TERRAFORM_SANDBOX_IMAGE:-}" "${ANSIBLE_SANDBOX_IMAGE:-}" "${CICD_SANDBOX_IMAGE:-}"; do
+for __var in "${LINUX_SANDBOX_IMAGE:-}" "${TERRAFORM_SANDBOX_IMAGE:-}" "${ANSIBLE_SANDBOX_IMAGE:-}" "${CICD_SANDBOX_IMAGE:-}" "${DOCKER_SANDBOX_IMAGE:-}"; do
   [[ -n "${__var}" ]] && __set_count=$((__set_count + 1))
 done
-if [[ "${__set_count}" -ne 0 ]] && [[ "${__set_count}" -ne 4 ]]; then
+if [[ "${__set_count}" -ne 0 ]] && [[ "${__set_count}" -ne 5 ]]; then
   echo "Refusing to build: only some sandbox image variables are set." >&2
   echo >&2
   echo "  LINUX_SANDBOX_IMAGE     = ${LINUX_SANDBOX_IMAGE:-<unset>}" >&2
   echo "  TERRAFORM_SANDBOX_IMAGE = ${TERRAFORM_SANDBOX_IMAGE:-<unset>}" >&2
   echo "  ANSIBLE_SANDBOX_IMAGE   = ${ANSIBLE_SANDBOX_IMAGE:-<unset>}" >&2
   echo "  CICD_SANDBOX_IMAGE      = ${CICD_SANDBOX_IMAGE:-<unset>}" >&2
+  echo "  DOCKER_SANDBOX_IMAGE    = ${DOCKER_SANDBOX_IMAGE:-<unset>}" >&2
   echo >&2
-  echo "This script builds all four, so an unset one would be written to its" >&2
+  echo "This script builds all five, so an unset one would be written to its" >&2
   echo "shared ':latest' tag — the tag every other worktree runs from. Set all:" >&2
   echo >&2
   echo "  LINUX_SANDBOX_IMAGE=jumptotech/lab-linux:<suffix> \\" >&2
   echo "  TERRAFORM_SANDBOX_IMAGE=jumptotech/lab-terraform:<suffix> \\" >&2
   echo "  ANSIBLE_SANDBOX_IMAGE=jumptotech/lab-ansible:<suffix> \\" >&2
   echo "  CICD_SANDBOX_IMAGE=jumptotech/lab-cicd:<suffix> \\" >&2
+  echo "  DOCKER_SANDBOX_IMAGE=jumptotech/lab-docker:<suffix> \\" >&2
   echo "  npm run sandbox:build" >&2
   echo >&2
   echo "Or set none, to rebuild the canonical operator images." >&2
@@ -92,9 +95,19 @@ docker build \
   --tag "${CICD_IMAGE}" \
   "${REPO_ROOT}"
 
+# The Docker sandbox: `docker:dind` plus the networking diagnostics the
+# Networking track's container labs are written against (capability N8). Built
+# last because it shares nothing with the other four — it is not FROM the Linux
+# sandbox, it is FROM the upstream dind image.
+echo "==> Building ${DOCKER_IMAGE}"
+docker build \
+  --file "${REPO_ROOT}/infrastructure/docker/sandbox-docker.Dockerfile" \
+  --tag "${DOCKER_IMAGE}" \
+  "${REPO_ROOT}"
+
 echo
 echo "Sandbox images ready:"
-for image in "${LINUX_IMAGE}" "${TERRAFORM_IMAGE}" "${ANSIBLE_IMAGE}" "${CICD_IMAGE}"; do
+for image in "${LINUX_IMAGE}" "${TERRAFORM_IMAGE}" "${ANSIBLE_IMAGE}" "${CICD_IMAGE}" "${DOCKER_IMAGE}"; do
   docker image ls --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' "${image}"
 done
 echo

@@ -218,6 +218,9 @@ export function buildProviderRegistry(options: BuildProviderRegistryOptions): Pr
       provider: new DockerLabProvider({
         engines: options.engines,
         sandboxDaemonAvailable: config.dockerEnabled,
+        // The same image the session policy will use, so the catalog's
+        // availability answer is about the image labs will actually start from.
+        sandboxImage: config.policy.docker.image,
         runtimeOwner: config.sandbox.runtimeOwner,
         ...(options.sleep ? { sleep: options.sleep } : {}),
         ...(options.workspace ? { workspace: options.workspace } : {}),

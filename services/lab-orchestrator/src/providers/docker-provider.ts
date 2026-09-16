@@ -155,14 +155,31 @@ function isSandboxComponent(labels: Record<string, string>): boolean {
 
 const DEFAULT_EXEC_TIMEOUT_MS = 30_000;
 
-/** Default image providing the per-session daemon. Overridden from config. */
-export const DEFAULT_DOCKER_SANDBOX_IMAGE = 'docker:27-dind';
+/**
+ * Default image providing the per-session daemon. Overridden from config.
+ *
+ * `jumptotech/lab-docker` is `docker:dind` plus the networking diagnostics the
+ * Networking track's container labs are written against — capability **N8**.
+ * See `infrastructure/docker/sandbox-docker.Dockerfile` for what is in it and
+ * why each package is there; it is built by `npm run sandbox:build` alongside
+ * the other sandbox images.
+ *
+ * Naming a locally built image here rather than an upstream one is the same
+ * decision the Linux, Terraform, Ansible and CI/CD providers already make, and
+ * it is what `availability()` below checks for: a host that has not built it
+ * reports Docker labs unavailable with the command to fix it, rather than
+ * accepting a lab start and failing once the student has clicked.
+ */
+export const DEFAULT_DOCKER_SANDBOX_IMAGE = 'jumptotech/lab-docker:latest';
 
 export const DOCKER_PROVIDER_DISABLED_REASON =
   'Docker labs need a per-session Docker daemon, which this deployment has not enabled (DOCKER_TRACK_ENABLED=false).';
 
 export const DOCKER_PROVIDER_REMEDIATION =
   'Set DOCKER_TRACK_ENABLED=true on a host with a reachable Docker daemon that permits a privileged sandbox container. See README → Docker sandbox security for what that grants.';
+
+export const DOCKER_SANDBOX_IMAGE_REMEDIATION =
+  'Build the sandbox images once with: npm run sandbox:build';
 
 export interface DockerProviderOptions {
   engines: DockerEngineFactory;
@@ -184,6 +201,17 @@ export interface DockerProviderOptions {
    * marked unavailable in the catalog rather than one that fails on click.
    */
   sandboxDaemonAvailable?: boolean;
+  /**
+   * The image a sandbox is created from, for the availability check only.
+   *
+   * `create()` takes the image from the session policy, which is where it has
+   * always come from. `availability()` has no session and therefore no policy,
+   * so it needs the configured value here. The composition root passes the same
+   * string it puts in the policy; when they disagree, the worst case is a
+   * catalog that reports unavailable while labs would in fact have started,
+   * which fails in the safe direction.
+   */
+  sandboxImage?: string;
   /** Injectable for tests. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -202,6 +230,7 @@ export class DockerLabProvider implements LabProvider {
   readonly #engines: DockerEngineFactory;
   readonly #runtimeOwner: string;
   readonly #sandboxDaemonAvailable: boolean;
+  readonly #sandboxImage: string;
   readonly #hostName: string;
   readonly #workspace: WorkspacePort;
   readonly #wait: RequirementWaiter | undefined;
@@ -217,6 +246,7 @@ export class DockerLabProvider implements LabProvider {
     this.#engines = options.engines;
     this.#runtimeOwner = options.runtimeOwner ?? DEFAULT_RUNTIME_OWNER;
     this.#sandboxDaemonAvailable = options.sandboxDaemonAvailable ?? false;
+    this.#sandboxImage = options.sandboxImage ?? DEFAULT_DOCKER_SANDBOX_IMAGE;
     this.#hostName = options.hostName ?? 'local';
     this.#workspace = options.workspace ?? noopWorkspace;
     this.#wait = options.waitForRequirements;
@@ -228,10 +258,22 @@ export class DockerLabProvider implements LabProvider {
   /**
    * Can this deployment actually run a Docker lab right now?
    *
-   * Two independent gates, in order: the operator must have enabled the track,
-   * *and* a host daemon must actually answer. Reported rather than thrown, so a
-   * laptop without Docker still serves the rest of the catalog and the Docker
-   * cards say plainly why they cannot start here.
+   * Three independent gates, in order, because the fixes differ: the operator
+   * must have enabled the track, a host daemon must actually answer, *and* the
+   * sandbox image must have been built on this host.
+   *
+   * The third gate arrived with N8. Before it, the sandbox image was an
+   * upstream tag the host daemon would pull on demand, so its absence could not
+   * be a configuration error. It is now a locally built image carrying the
+   * diagnostics the Networking labs are written against, which means a host
+   * that has not built it can no longer start a Docker lab — and the honest
+   * place to say so is the catalog, not a failed provision after the click.
+   * This is the same gate `ContainerLabProvider.availability()` applies to the
+   * Linux and Terraform sandbox images, for the same reason.
+   *
+   * Reported rather than thrown, so a laptop without Docker still serves the
+   * rest of the catalog and the Docker cards say plainly why they cannot start
+   * here.
    */
   async availability(): Promise<ProviderAvailability> {
     if (!this.#sandboxDaemonAvailable) {
@@ -242,13 +284,28 @@ export class DockerLabProvider implements LabProvider {
     }
     try {
       await this.#engines.host.version();
-      return AVAILABLE;
     } catch (error) {
       return unavailable(
         error instanceof Error ? error.message : String(error),
         'Start the Docker daemon on the host running the API, then reload the catalog.',
       );
     }
+
+    try {
+      if (!(await this.#engines.host.inspectImage(this.#sandboxImage))) {
+        return unavailable(
+          `the sandbox image '${this.#sandboxImage}' has not been built on this machine`,
+          DOCKER_SANDBOX_IMAGE_REMEDIATION,
+        );
+      }
+    } catch (error) {
+      return unavailable(
+        `could not inspect '${this.#sandboxImage}' (${error instanceof Error ? error.message : String(error)})`,
+        DOCKER_SANDBOX_IMAGE_REMEDIATION,
+      );
+    }
+
+    return AVAILABLE;
   }
 
   environmentId(context: LabSessionContext): string {

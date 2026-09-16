@@ -125,7 +125,7 @@ services:
       # environment and cannot be named by any caller. See
       # services/sandboxd/src/docker-ops.ts.
       DOCKER_TRACK_ENABLED: ${DOCKER_TRACK_ENABLED:-true}
-      DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-docker:27-dind}
+      DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-jumptotech/lab-docker:latest}
       DOCKER_SANDBOX_PRIVILEGED: ${DOCKER_SANDBOX_PRIVILEGED:-true}
       DOCKER_SANDBOX_MEMORY: ${DOCKER_SANDBOX_MEMORY:-2g}
       DOCKER_SANDBOX_CPUS: ${DOCKER_SANDBOX_CPUS:-2}
@@ -185,7 +185,7 @@ services:
       # Reported to the student as the ceilings their session runs under. The
       # values that are actually applied are sandboxd's, above; these are set
       # from the same variables so the two cannot disagree.
-      DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-docker:27-dind}
+      DOCKER_SANDBOX_IMAGE: ${DOCKER_SANDBOX_IMAGE:-jumptotech/lab-docker:latest}
       DOCKER_SANDBOX_MEMORY: ${DOCKER_SANDBOX_MEMORY:-2g}
       DOCKER_SANDBOX_CPUS: ${DOCKER_SANDBOX_CPUS:-2}
       DOCKER_SANDBOX_PIDS_LIMIT: ${DOCKER_SANDBOX_PIDS_LIMIT:-512}
