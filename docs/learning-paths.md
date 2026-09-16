@@ -98,7 +98,7 @@ the id of the flagship path the navigation link opens (`FLAGSHIP_PATH_ID` in
 
 ## The DevOps Engineer path
 
-Fourteen stages, in the order a beginner should meet them. Every one of the 114
+Fourteen stages, in the order a beginner should meet them. Every one of the 117
 labs is placed in exactly one stage. Counts below are for the catalog at the time
 of writing; the API always reports live numbers.
 
@@ -106,13 +106,13 @@ of writing; the API always reports live numbers.
 |---|---|---|---|---|
 | 1 | Foundations | CS-001–005, CS-011 (core); CS-006–010, CS-012, CS-013 (extra) | — | — |
 | 2 | Linux | LINUX-001–010, -014, -017, -019 (core); -011, -016, -018 (extra) | — | — |
-| 3 | Networking | NET-002–008 | — | DNS |
+| 3 | Networking | NET-002–008, NET-022 | — | DNS |
 | 4 | Git & Software Delivery | *none* | — | Git fundamentals, branching, pull requests |
 | 5 | Containers & Docker | DOCKER-001–008, -010–012 (core); -009, -013, -014 (extra) | Linux | — |
 | 6 | CI/CD | CICD-001–010 | — | — |
 | 7 | Cloud & AWS (simulated) | AWS-001–009, -012, -018 | — | EC2, S3 |
 | 8 | Infrastructure as Code | TF-001–006, -011, -012 (core); -016, -017, -018, -025, -026 (extra) | — | modules, drift, troubleshooting |
-| 9 | Kubernetes | K8S-001–005, -008–014, -016 (core); -006, -007, -015, -018, -019 (extra) | Containers & Docker | namespaces, Ingress, NetworkPolicy, PodDisruptionBudgets |
+| 9 | Kubernetes | K8S-001–003, NET-024, NET-025, K8S-004, -005, -008–014, -016 (core); -006, -007, -015, -018, -019 (extra) | Containers & Docker | namespaces, Ingress, NetworkPolicy, PodDisruptionBudgets |
 | 10 | Configuration Management | ANSIBLE-001–010 | Linux | — |
 | 11 | Helm & GitOps | *none* | Kubernetes | Helm charts, releases, GitOps, Argo CD |
 | 12 | Observability & SRE | K8S-017 | — | metrics, alerting, SLOs |
@@ -122,7 +122,7 @@ of writing; the API always reports live numbers.
 Every stage also lists **recommended** earlier stages (for example, Networking
 recommends Linux); see the path file.
 
-Four placements cross track lines on purpose, each from the lab's own content:
+Seven placements cross track or provider lines, each from the lab's own content:
 
 - **LINUX-006** (*Networking Basics*) stays in Linux because LINUX-007 requires
   it, but it is mapped to the networking skills it teaches (addresses, ports, HTTP).
@@ -132,6 +132,11 @@ Four placements cross track lines on purpose, each from the lab's own content:
   subject is how logs reach collection tools.
 - **LINUX-015** (*Least-Privilege sudo Delegation*) is placed in DevSecOps: its
   subject is least privilege, verified by what a policy refuses.
+- **NET-022** (*Port Publishing*) is a Networking-track lab on the Docker
+  provider, placed in Networking — two stages before Containers & Docker. See
+  `docs/development/catalog-quality-audit.md` for why that ordering is flagged.
+- **NET-024** and **NET-025** are Networking-track labs about Services, placed in
+  Kubernetes straight after K8S-003.
 
 ## Stage model
 
@@ -351,8 +356,8 @@ answers `429 RATE_LIMITED` with `Retry-After`.
 
 ```json
 { "learningPaths": [ { "id": "devops-engineer", "title": "DevOps Engineer", "summary": "…", "audience": "…",
-    "totals": { "stages": 14, "comingSoonStages": 3, "labs": 114, "coreLabs": 91, "skills": 113,
-                "gapSkills": 29, "estimatedMinutes": { "core": 3330, "all": 4240 } } } ],
+    "totals": { "stages": 14, "comingSoonStages": 3, "labs": 117, "coreLabs": 94, "skills": 113,
+                "gapSkills": 29, "estimatedMinutes": { "core": 3445, "all": 4355 } } } ],
   "count": 1 }
 ```
 
@@ -376,8 +381,8 @@ students as a wrong address.
 ```json
 { "student": { "studentId": "…", "authenticated": true, "identitySource": "authenticated", "durable": true },
   "pathId": "devops-engineer",
-  "overall": { "labs": { "total": 114, "completed": 7, "inProgress": 1, "notStarted": 106 },
-               "core": { "total": 91, "completed": 7 },
+  "overall": { "labs": { "total": 117, "completed": 7, "inProgress": 1, "notStarted": 109 },
+               "core": { "total": 94, "completed": 7 },
                "stages": { "total": 14, "completed": 0, "comingSoon": 3 },
                "skills": { "total": 113, "completed": 3, "comingSoon": 29 } },
   "currentStageId": "linux",
@@ -481,6 +486,17 @@ Refused, with a precise message:
 - a stage with labs but no core lab;
 - a path file whose name does not match its id.
 
+The same rules, plus the repository-level ones (lab layout, setup assets loaded
+through the providers' own loaders, flagship coverage, content hygiene), run
+without a server:
+
+```sh
+npm run validate:labs            # one line per finding; exit 1 on any error
+npm run validate:labs -- --json  # the structured report
+```
+
+CI runs it in the `gates` job. See `docs/development/catalog-quality-audit.md`.
+
 ## How to add a skill
 
 1. Add it to `labs/learning-paths/skills.yaml`: a dotted id (domain first), a
@@ -502,7 +518,7 @@ that is intended.
    `optional: true` if it is extra practice (a core lab cannot depend on an
    optional one).
 4. If it closes a gap, update or remove that stage's `coming_soon` note.
-5. Run the orchestrator and API learning-path suites.
+5. Run `npm run validate:labs`, then the orchestrator and API learning-path suites.
 
 ## How to add a learning path
 
@@ -518,6 +534,8 @@ that is intended.
 | Suite | Covers |
 |---|---|
 | `services/lab-orchestrator/test/learning-paths.test.ts` | shipped paths load clean, stage order, every lab placed once, prerequisite order, gaps explained, no invented Git/Helm labs; every validation rule; catalog loading |
+| `services/lab-orchestrator/test/catalog-validation.test.ts` | the shipped catalog validates with no errors; each whole-catalog rule against a one-defect fixture (duplicate id, unknown prerequisite, cycle, layout, missing setup asset, seeding collision, symlink, unknown skill, unplaced lab, invalid path reference) |
+| `services/verifier/test/catalog-starter-state.test.ts` | no lab graded by reading the sandbox passes Verify on its untouched starter files |
 | `services/lab-orchestrator/test/learning-progress.test.ts` | no progress, partial, attempted-not-completed, completed stage, Coming soon never blocks, went-ahead student, prerequisite first, running-lab precedence, unknown sessions, extra practice, path complete, skill progress, unavailable labs, determinism; the real path's new-student, LINUX-001…007 and all-complete answers |
 | `apps/api/test/learning-paths-api.test.ts` | routes, totals from the catalog, gaps, no internal keys, 400/404, 401, verified-only completion through Start → Verify → End, running-lab precedence, no session id, student isolation vs query/header, 503 on progress outage, unknown session store, `/health` |
 | `apps/web/test/learning-path.test.tsx` | routes, loading, stage list statuses in words, current stage, gaps, "Available labs completed", progress outage, API outage, unknown path/stage, stage detail, Coming soon stage, not locked, running lab, navigation focus |
