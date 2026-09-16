@@ -489,7 +489,8 @@ as hardening.
 
 From the sub-audit (`npm audit` was the only network call). No CRITICAL/HIGH.
 
-- **SEC-CI-1 — DEFERRED, MEDIUM:** no Dependabot, no `npm audit` in CI, no image scanning;
+- **SEC-CI-1 — DEFERRED, MEDIUM:** no Dependabot *update* configuration (`.github/dependabot.yml`
+  is absent), no `npm audit` in CI, no image scanning;
   GitHub Actions pinned by tag not SHA (and codeql uses `checkout@v7` while the
   rest use `@v4`); base images and `docker:27-dind` are floating tags; CI/Dockerfile
   binary downloads (kubectl, docker CLI, compose, terraform) are version-pinned
@@ -498,7 +499,9 @@ From the sub-audit (`npm audit` was the only network call). No CRITICAL/HIGH.
   vulnerable version present but **not reachable** (express calls `qs.parse`
   without `comma:true`, and the app mounts only `express.json`); a `qs` bump
   needs an express release that moves its `~6.15.1` range. vitest moderate is
-  dev-only.
+  dev-only. GitHub's Dependabot *alerts* are on for the repository and agree:
+  on 2026-09-16 they listed 13 open, all medium — `qs` ×2 (runtime), `vitest`
+  ×10 and `@vitest/mocker` ×1 (development).
 - **Verified sound:** top-level `permissions: contents: read` on quality-gates;
   codeql declares its own per-job permissions; no `pull_request_target`; no
   `${{ github.event.* }}` interpolation in `run:`; `npm ci` everywhere; the
