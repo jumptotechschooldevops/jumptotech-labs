@@ -1054,6 +1054,30 @@ teach console clicking from memory. Both become hands-on labs unchanged in
 - **Supported today?** **Yes, as designed** (deterministic literal answers on the
   existing sandbox).
 - **New capability** none for this form; N14 for the LocalStack/Terraform form.
+- **Implemented 2026-09-16.** Shipped on the `terraform` provider — the `tf`
+  substrate is the Linux sandbox plus the Terraform CLI and an offline provider
+  mirror, started `--network none`, so the lab has a real substrate, no egress
+  and no AWS credentials while running no Terraform at all. Prerequisites are
+  `NET-002` only: NET-019 is not implemented and the registry refuses a
+  prerequisite it cannot resolve, so it joins when it lands.
+  Two departures from the plan above, both about grading:
+  · the key phrases are graded as a **`label = value` pairing** rather than as
+    bare text, the pattern NET-003 established — the seeded files print each
+    question's allowed values but never a graded pairing, so there is nothing to
+    copy and the student still has to choose, and a correct value written on the
+    wrong line does not pass;
+  · the exact CIDRs are graded per labelled line, and a `file_contains`/`absent`
+    check grades **non-overlap** directly by forbidding the two overlaps a wrong
+    allocation actually produces. A second one forbids the two default routes
+    that belong to the other tier, including the one that quietly turns the
+    private tier public.
+  Known boundary, recorded in the lab header and pinned by its verifier suite: a
+  forbidding check names `label = wrong value`, so it catches the hedge the file
+  format invites but not one written as free prose on one line. A bare
+  `file_content_absent` on the wrong value alone would fail on the seeded file,
+  because the allowed-value list is printed there. Closing it needs a
+  requirement type that counts matches or grades a single line — call it
+  **N17** — which this branch does not have.
 
 ---
 
