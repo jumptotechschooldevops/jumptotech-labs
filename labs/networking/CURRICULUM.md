@@ -530,6 +530,16 @@ must find rather than a task they must perform.
 - **Supported today?** Yes, mechanically (privileged DinD). Verification is
   evidence-based until N9.
 - **New capability** N8, N9 (strongly recommended here).
+- **Implemented 2026-09-16**, on N8+N9+N18+N19. The seeded `services` container
+  is given `NET_ADMIN` (N19) so it programs its own default-drop nftables chain,
+  from the `jumptotech/lab-nettools` image delivered offline (N18). Verification
+  is behavioural, not evidence-based: three `tcp_connect` probes (N9) from a
+  seeded *client* container require 8080 and 8081 reachable and an admin port
+  8083 not — so a student who fixes 8081 by flushing the ruleset opens 8083 and
+  fails. The refused-vs-dropped *timing* is the one thing left to the worksheet,
+  because reachable/unreachable cannot capture a RST versus a silent drop.
+  Validated end to end on a real sandbox: baseline 1/10, correct narrow fix
+  10/10, flush-everything shortcut fails on 8083, reset restores the break.
 
 ---
 
@@ -766,6 +776,17 @@ must find rather than a task they must perform.
   platform verify the published path itself.
 - **Supported today?** Yes, mechanically. Evidence-based verification until N9.
 - **New capability** N8, N9.
+- **Status 2026-09-16: BLOCKED on N21, not N18/N19.** N18 (offline image) and
+  N19 (NET_ADMIN on a seed) are both done, and a prototype confirmed the NAT
+  mechanism works — an internal network, an external network, a NAT box running
+  `iptables -t nat MASQUERADE` with `ip_forward` enabled under NET_ADMIN, and an
+  external service that logs the source address it saw. What cannot be expressed
+  is the *topology*: NET-019's NAT box sits on **both** networks, and
+  `setup.docker.containers` allows one `network` per container. That is N21 (a
+  multi-network seeded container). Until it lands, NET-019 cannot be seeded
+  honestly. Behavioural verification, when it is built, reads the external
+  service's access log (`docker_container_file_content`) to confirm the source
+  address was the NAT box, and probes the published-port path with N9.
 
 ---
 
@@ -1356,10 +1377,12 @@ Kubernetes service debugging — before any sandbox work starts.
 | **N7** | `ip` (read-only subcommands) added to `VERIFIER_COMMANDS` | NET-005, 030 | **S** — `ip` is not read-only as a binary; needs an argv-shape allow-list (`ip route show`, `ip -j addr show`, `ip neigh show`) rather than a bare command entry, or a dedicated `route_exists` requirement type |
 | **N10** | `file_content_matches` (anchored regex, bounded) | NET-014, and richer grading everywhere | **S** — today only literal `contains` exists, which forces every gradeable value to be seeded |
 | **N11** | `tls_certificate` requirement | NET-016 | **M** — assert subject/SAN/issuer/expiry and whether the endpoint validates against the sandbox trust store |
+| **N20** | Lab-level behavioural NetworkPolicy verifier (`network_reachable`, allow **and** deny with a positive control) | NET-026 | **DESIGNED, not implemented** — `docs/development/n20-network-policy-verifier-design.md`. Two measured gaps: `service_http`/`service_tcp` probe from the *verifier*, not a source Pod, so a policy that denies by source is invisible; and neither has a deny form. Not a copy of N9's `expect: failure` — a deny test wants a timeout to be the pass, which is only safe paired with a positive control (an allowed connection that must succeed), the shape BETA-P0-015's own probe already uses. The executor is a `kubectl exec` boundary that needs its own review and a cluster; the schema + paired-control refinement is a safe executor-free first step. |
+| **N21** | A seeded `setup.docker` container attached to more than one network | NET-019 | **DESIGNED, not implemented.** `setup.docker.containers` allows one `network` each; NET-019's NAT box is on both the private and external networks. The runtime form (`docker network connect` on a running container) is what NET-023 uses; the *seed* form does not exist. Smallest version: a `networks: [..]` list on a setup container, or a post-create attach step in the provider, both plain and confined to the inner daemon. |
 | **N12** | Confirm or install a NetworkPolicy-enforcing CNI in `kind` | NET-026, NET-032 | **Confirmed for the platform contract (BETA-P0-015).** kindnetd `v20250512-df8de77b` on `kindest/node:v1.34.0` enforces deny-all, pod/namespace selectors, ports and plain `ipBlock` — measured with negative controls by `npm run verify:network-policy` and the `kind-integration` CI job (docs/kubernetes-network-security.md §3). Still open for NET-026: the lab's *own* behavioural verifier (a student-written policy must be judged by connections, not YAML), and `ipBlock.except`, whose kind measurements disagree. **Audited 2026-09-16 — the remainder is now precise:** `service_http` and `service_tcp` have no negative form (no `expect_reachable: false`), so "resolves but every connection times out" — the whole symptom NET-026 teaches — cannot be expressed. Call that **N20**. It is *not* a copy of N9's `expect: failure`: N9 rules that a timeout fails under both expectations, because a timeout is the absence of an answer rather than evidence of one. A deny test wants the opposite — a timeout is the pass. Both rules are right in their own place, and the way to have both is a **positive control**: a deny check must be paired with a connection that must still succeed, or "the cluster is broken" and "the policy works" are the same observation. That pairing is the design work, and it should be done before the lab, not during it |
 | **N13** | ingress-nginx + `extraPortMappings` in `infrastructure/kind/cluster.yaml` | NET-027, NET-032 end-to-end | **M** — plus a per-namespace ingress class or host-based isolation so sessions do not collide on one shared controller. **Audited 2026-09-16: not started.** `infrastructure/kind/cluster.yaml` declares no ingress controller and no `extraPortMappings`; nothing in the repo installs one. The isolation question is the substantive part and is unanswered: one shared controller across per-student namespaces is a cross-session surface, and it is the first thing a design should settle |
 | **N18** | Offline image delivery into a session's Docker daemon | every Docker lab's start; prerequisite for NET-011, NET-019 (with N19) | **IMPLEMENTED 2026-09-16 · TESTED · MANUALLY VERIFIED.** Design and investigation in `docs/development/n18-design.md`. Archives of the images the Docker track already uses are baked into `jumptotech/lab-docker` and loaded by the provider inside `#ensureImage`, after the daemon is ready and before any container — on create *and* reset — with a registry pull only for images the platform ships no archive for. Three measurements decided it: the fresh `/var/lib/docker` volume does **not** mask image content (an earlier entry here said it did — corrected); pre-baking a store is not buildable, because `docker:dind` declares `VOLUME /var/lib/docker` and `docker commit` never captures it; and an **entrypoint** loader races the readiness gate — in five of five concurrent offline sessions the store was empty the instant `docker info` first answered. A lab names a reference, never a path; the archive location comes from a closed map, and sandboxd re-checks the reference on its side of the HTTP boundary. Fails closed: a baked image whose archive is missing or does not produce the image fails setup rather than silently pulling. Validated on real sandboxes run with `--network none`, where a registry is unreachable. **Does not by itself unblock NET-011 or NET-019**, which also need N19. |
-| **N19** | `cap_add` on a container in `setup.docker` | NET-011, NET-019 (NET-010 was listed here in error) | **DESIGNED, NOT IMPLEMENTED.** NET-010's DHCP client and NET-019's NAT box both need `NET_ADMIN` *inside a student container*. `setup.docker.containers` has no capability, sysctl or privileged field, and the Docker provider never runs seed scripts — so there is no way to express privileged network state in a Docker lab's initial state at all. This reaches `--cap-add` inside an already-privileged DinD sandbox, so the blast radius is one session; it is still a security decision and not a schema tweak, and it should be argued for on its own rather than added alongside a lab. |
+| **N19** | `NET_ADMIN` on a seeded `setup.docker` container | NET-011 (shipped), NET-019 (with N21) | **IMPLEMENTED 2026-09-16 · TESTED.** Review in `docs/development/n19-security-review.md`. A seeded container may add exactly `NET_ADMIN`, and not on a host-networked container. Safe because `NET_ADMIN` is network-namespaced: a container holds it over its own netns only, and a seeded container is never in the sandbox's netns. Measured: a NET_ADMIN container on an inner network has no route to the shared bridge and cannot reach a neighbour sandbox. sandboxd validates the capability explicitly rather than spreading the wire spec, which also hardens the existing path. |
 | **N14** | AWS-real path: LocalStack service + AWS provider in the Terraform mirror | hands-on Phase 6 | **L** — needs egress or a vendored mirror, a LocalStack container per session, and cost/isolation review. The AWS provider stub stays untouched |
 
 ### Suggested build order
@@ -1379,8 +1402,8 @@ Kubernetes service debugging — before any sandbox work starts.
    | NET-023 | **DONE** — shipped 2026-09-16; needed neither N8 nor N9 |
    | NET-021 | **DONE** — shipped 2026-09-16 on N8 + N9 |
    | NET-010 | **DONE** — shipped 2026-09-16. Was recorded here as blocked on N18 + N19 in error; it needs neither |
-   | NET-011 | **BLOCKED** on **N18** (`nft`/`iptables` in the topology container) |
-   | NET-019 | **BLOCKED** on **N18** + **N19** (a NAT box that can actually NAT), and its prerequisite NET-011 |
+   | NET-011 | **DONE** — shipped 2026-09-16 on N8+N9+N18+N19 and the `jumptotech/lab-nettools` image |
+   | NET-019 | **BLOCKED on N21** — a seeded container on two networks. N18 and N19 are done; the remaining gap is that `setup.docker.containers` allows one `network` each, and NET-019's NAT box sits on both the private and the external network. Confirmed by prototype: the mechanism (NET_ADMIN + iptables MASQUERADE + ip_forward) works, but the topology cannot be seeded |
 
    N8 put the diagnostics in the **sandbox**, which is the Docker host — where
    NET-021 needs them, and where a veth peer, a bridge and a DHCP exchange on

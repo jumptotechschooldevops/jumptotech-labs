@@ -11,6 +11,149 @@ wave never named — with that gap specified rather than worked around.
 
 ---
 
+# Continuation — session 2, 2026-09-16
+
+The first run (above) shipped N8, N9 and NET-021 and left N18/N19 as blockers
+and N20 as groundwork. This session took those on.
+
+**Final commit (this session)** `94b194a` · **Branch** `feat/networking-wave2-platform` (pushed) · nothing merged, nothing force-pushed.
+
+## What shipped this session
+
+| Commit | What |
+|---|---|
+| `ed22e0a` | **`address_in_range`** probe — the N9 kind NET-010 needed to grade a DHCP lease behaviourally |
+| `a839694` | **NET-010** — DHCP and IPAM, and the correction that it never needed N18/N19 |
+| `7ef2981` | **N18** — offline image delivery into a session daemon |
+| `1e28b66` | **N19** — `NET_ADMIN` on a seeded container, tightly scoped |
+| `94b194a` | **NET-011** — firewall lab + the `jumptotech/lab-nettools` image |
+| (docs) | N18 design, N19 review, N20 design, roadmap status |
+
+## Capabilities
+
+**N5** — confirmed implemented (2026-08-25); no work. NET-006's partial is
+shipped; its remaining cross-host half needs N3 (a peer), which does not exist.
+
+**`address_in_range` (N9 extension)** — IMPLEMENTED, TESTED, MANUALLY VERIFIED.
+NET-010's own curriculum names the weakness N9 was meant to close — a forgeable
+capture — and the first N9 could not, because none of its probes observed an
+*address*. This adds one: an interface plus an IPv4 range, compared with
+`ipv4CidrContains`, argv fixed at `ip -o addr show`, failing closed when the
+listing cannot be read. Validated on a real daemon: a client that applied a DHCP
+lease holds a pool address and passes; one that obtained the lease without
+applying it does not.
+
+**N18** — IMPLEMENTED, TESTED, MANUALLY VERIFIED. Design and the three
+measurements that shaped it are in `n18-design.md`. Archives of the images the
+Docker track uses are baked into the sandbox image and loaded by the provider
+inside `#ensureImage` — after the daemon is ready, before any container, on
+create and reset — so there is no registry fetch and no entrypoint-loader race.
+The earlier claim that a fresh `/var/lib/docker` volume *masks* image content
+was **reproduced and found false** and is corrected. Validated on real sandboxes
+run `--network none`: offline load, not-baked fallthrough, host refusal, a
+student-deleted image restored by reset, cross-session isolation, fail-closed on
+a missing archive, six hostile references resolving to nothing, and five
+concurrent offline sessions each ending deterministic.
+
+**N19** — IMPLEMENTED, TESTED. Review in `n19-security-review.md`. A seeded
+container may add exactly `NET_ADMIN`, never on a host-networked container. Safe
+because `NET_ADMIN` is network-namespaced — measured: a NET_ADMIN container on
+an inner network has no route to the shared bridge and cannot reach a neighbour
+sandbox. sandboxd now validates `capAdd` explicitly instead of spreading the
+wire spec, which hardens the existing path too. The review also records a
+**pre-existing** shared-bridge exposure (a student's own `--network host
+--cap-add=NET_ADMIN` container can reach neighbour sandboxes) that N19 does not
+introduce or widen and whose fix is per-tenant isolation.
+
+**N20** — DESIGNED, not implemented (`n20-network-policy-verifier-design.md`).
+Two measured gaps in the current vocabulary: `service_http`/`service_tcp` probe
+from the *verifier*, not a source Pod, so a policy that denies by source is
+invisible; and neither has a deny form. The design pairs every deny assertion
+with a positive control, enforced at load time, so "policy works" and "cluster
+broken" are never the same observation — which is why it is *not* an inversion
+of N9. The executor is a `kubectl exec` boundary left for review with a cluster;
+the schema is a safe executor-free next step.
+
+**N21** — DESIGNED, newly identified. NET-019's NAT box must sit on two
+networks, and `setup.docker.containers` allows one each. Recorded in the
+roadmap.
+
+## Labs
+
+| Lab | Status | Reason |
+|---|---|---|
+| **NET-010** | **SHIPPED** | DHCP/IPAM. Needed neither N18 nor N19 — `busybox:1.36` carries `udhcpd`, and `--cap-add` on a student-run container is the existing boundary. Graded with `address_in_range`. Lifecycle 0/14 → 14/14 → reset 0/14; both forge attacks fail. |
+| **NET-011** | **SHIPPED** | Firewall. First lab on all four Wave-2 capabilities. Behavioural grading with a decoy admin port that a "flush everything" fix opens, catching the shortcut. Lifecycle 1/10 → 10/10 → reset; flush fails on 8083. |
+| **NET-019** | **BLOCKED on N21** | N18 and N19 are done and the NAT mechanism prototypes correctly; the NAT box needs to be seeded on two networks, which `setup.docker` cannot express. |
+| **NET-006** | **SHIPPED earlier** | Partial done 2026-08-25 with N5; cross-host half needs N3. |
+| **NET-026** | **BLOCKED on N20** | Design done; needs the source-Pod probe executor. |
+
+## New image
+
+`jumptotech/lab-nettools:1.0` — Alpine + nftables/iptables/iproute2/tcpdump,
+33MB, built from a public base like `jumptotech/greeter`, baked and loaded
+offline (N18). It carries a firewall *inside* a student container, the
+counterpart of N8's sandbox-host tools. The baked-list test asserts every baked
+image is used by a shipped lab, so it cannot become dead supply.
+
+## Manual integration results
+
+- **N18:** 16 offline real-daemon checks + 5 concurrent offline sessions.
+- **N19:** confinement measured on two sandboxes on a shared bridge — a seeded
+  NET_ADMIN container is confined to its own netns.
+- **NET-010:** full lifecycle + two forge attacks, on a real DinD sandbox.
+- **NET-011:** full lifecycle + the flush-everything shortcut, on a real DinD
+  sandbox with the seeded NET_ADMIN container programming its own nftables.
+
+## Security findings (this session)
+
+- **Pre-existing shared-bridge exposure**, found while reviewing N19 and
+  documented there and in §5 of that review. Not introduced by this work; fix is
+  per-tenant isolation, out of scope for N19.
+- **sandboxd spread-trust**, fixed as part of N19: `sessionRunContainer` spread
+  the wire spec and would have passed a future field through unvalidated. It now
+  builds the spec explicitly.
+- A schema-layer attack battery (capability escalation, CIDR injection, baked
+  path steering) was run against N18/N19/`address_in_range`; every attempt was
+  refused. No new regression needed beyond the suites already added.
+
+## Test results (this session, final)
+
+| Suite | Result |
+|---|---|
+| `services/lab-orchestrator` | **1396 passed**, 253 skipped, 0 failed |
+| `services/verifier` | **1634 passed**, 0 failed |
+| `services/sandboxd` | **163 passed**, 7 skipped, 0 failed |
+| typecheck (orchestrator, verifier, sandboxd) | 0 errors |
+| `apps/api` | pre-existing `express-rate-limit` collection failure, unchanged and untouched |
+
+New tests this session: 15 (`address_in_range`), 4 (probe handler), 24
+(`docker-baked-images`), 11 sandboxd boundary (N9/N18), 14 (`docker-cap-add`), 6
+sandboxd (N19), 17 (`networking-net010`), 11 (`networking-net011`).
+
+## Known limitations
+
+1. NET-019 blocked on N21 (multi-network seed).
+2. NET-026 blocked on N20's executor.
+3. `jumptotech/lab-nettools:1.0` and `jumptotech/lab-docker:latest` are floating
+   tags for operator-built images; their bases are pinned.
+4. The shared-bridge exposure (§ N19 review) remains; architectural fix.
+
+## Next 3 tasks
+
+1. **N21** — a `networks: []` list on a `setup.docker` container (or a
+   post-create attach in the provider), confined to the inner daemon. Small, and
+   it unblocks NET-019.
+2. **N20 schema step** — land `network_reachable` with the paired-control
+   refinement and validation tests, executor-free, ahead of the `kubectl exec`
+   review.
+3. **NET-019** — once N21 exists, using behavioural verification (read the
+   external service's access log for the NAT'd source address; probe the
+   published-port path).
+
+
+---
+
 ## 1. Commits
 
 | | Commit | What |
