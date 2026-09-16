@@ -42,7 +42,28 @@
 #   · a firewall, security group or private subnet. Compose cannot express
 #     them, and nothing here assumes any exist;
 #   · a split runtime host. sandboxd stays on this host's private bridge, as
-#     declared in docker-compose.runtime.yml (BETA-P0-011).
+#     declared in docker-compose.runtime.yml (BETA-P0-011);
+#   · failover. One host, one instance of each service. `restart` below brings a
+#     service back where it stands; it does not move it anywhere.
+#
+# ## Unattended restart
+#
+# `restart: unless-stopped` on every production service. The development stack
+# deliberately has none — a container that died on a laptop should stay dead,
+# where it is looked at — but on a host nobody is watching, a crashed api, a
+# terminal that ran out of memory, or a reboot would otherwise leave the
+# platform down until an operator noticed. Compose restarts nothing on its own.
+#
+# `unless-stopped`, never `always`: a service the operator stopped on purpose
+# stays stopped, including across a daemon restart. The private-beta runbook's
+# only way to take the site down is `prod stop web` (§3), and `always` would
+# quietly undo it at the next reboot.
+#
+# This restores a service where it stands. It is not a supervisor: a service
+# that starts, fails its gate and exits will restart in a loop, which is what
+# the health check and the alerts are for. The web tier's certificate gate is
+# the expected case — it fails closed until a certificate is installed, and then
+# comes back by itself rather than waiting for a hand.
 #
 # Enforced from `docker compose config` by scripts/check-secret-distribution.mjs
 # (`make secrets-check`, CI `gates`) and from the text of this file by
@@ -52,11 +73,13 @@
 
 services:
   postgres:
+    restart: unless-stopped
     # The development loopback port goes. The api reaches `postgres:5432` on
     # the internal `database` network; nothing on the host needs to.
     ports: !reset []
 
   api:
+    restart: unless-stopped
     environment:
       # Pinned, so every production gate — owner, secrets, broker transport and
       # database transport — runs. `.env` cannot turn them back off.
@@ -70,9 +93,11 @@ services:
     ports: !reset []
 
   terminal:
+    restart: unless-stopped
     ports: !reset []
 
   web:
+    restart: unless-stopped
     environment:
       # Pinned: the certificate gate runs, and a failure stops the container.
       WEB_TLS: required
@@ -107,6 +132,13 @@ services:
       timeout: 15s
       retries: 3
       start_period: 20s
+
+  # The broker holds the only Docker socket, and every container-track shell
+  # goes through it. It has no other stanza here: its ports are reset in
+  # docker-compose.production-observability.yml, where the observability overlay
+  # published them.
+  sandboxd:
+    restart: unless-stopped
 
 networks:
   # No route off the host for PostgreSQL, and no published port can reach it.
