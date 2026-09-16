@@ -8,17 +8,27 @@
  * runs on the stock Linux sandbox, reads the kernel's own local routing table,
  * and grades arithmetic the student can only have done.
  *
+ * The track is not single-substrate, though, and was never planned to be: its
+ * own curriculum puts container and cluster networking on the Docker and
+ * Kubernetes providers, because a published port or a NetworkPolicy cannot be
+ * taught on a sandbox that has no daemon and no cluster. NET-022 is the first
+ * of those, and §5 below is written per provider for that reason — each lab is
+ * held to the row of `PROVIDER_REQUIREMENT_FAMILIES` belonging to the provider
+ * it declares, never to a wider set.
+ *
  * These tests pin the boundary. A future networking lab that quietly reaches
- * for a privileged capability, a seed script, a Docker daemon or a shell has to
- * break one of them first.
+ * for a privileged capability, a seed script, a shell, or a check its own
+ * provider cannot answer has to break one of them first.
  */
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import {
   LabDefinitionError,
+  LAB_PROVIDERS,
   MAX_SEED_SCRIPT_BYTES,
   OFFICIAL_DOC_HOSTS,
+  PROVIDER_ISOLATION,
   PROVIDER_REQUIREMENT_FAMILIES,
   VERIFIER_COMMANDS,
   loadSeedScripts,
@@ -312,32 +322,92 @@ task:`,
 
 // ------------------------------------------------- 5. every networking lab
 
+/**
+ * The track-wide boundary, stated per provider.
+ *
+ * The Networking curriculum is deliberately multi-substrate: addressing,
+ * routing and sockets are taught on the stock Linux sandbox, container port
+ * publishing on the Docker provider, and the Service/NetworkPolicy labs will
+ * arrive on Kubernetes. "Every networking lab is a Linux lab" was true of the
+ * labs that existed and was never the boundary — the boundary is that a lab
+ * asks only for what the provider it *declares* can actually deliver, and for
+ * nothing beyond it.
+ *
+ * So these tests read `lab.environment.provider` and hold each lab to that
+ * provider's own row of `PROVIDER_REQUIREMENT_FAMILIES` and `PROVIDER_ISOLATION`.
+ * A Docker networking lab may use Docker checks; it still may not use
+ * Kubernetes ones, and a Linux one still may not use either.
+ */
 describe('every Networking lab keeps the track-wide boundary', () => {
-  it('runs on the stock Linux sandbox and asks for no extra session capability', async () => {
+  it("declares a provider the platform implements, and takes that provider's own isolation", async () => {
     const registry = await realRegistry();
 
     for (const summary of registry.labsForTrack('networking')) {
       const lab = registry.get(summary.id);
-      expect(lab.environment.provider, lab.id).toBe('linux');
-      expect(lab.environment.isolation, lab.id).toBe('container');
+      expect(LAB_PROVIDERS, lab.id).toContain(lab.environment.provider);
+      // Isolation is never taken from the YAML on trust: the loader fills it
+      // in from the provider, so a lab cannot claim isolation its provider
+      // does not implement.
+      expect(lab.environment.isolation, lab.id).toBe(
+        PROVIDER_ISOLATION[lab.environment.provider],
+      );
+      // Unchanged by the provider: no lab in this track asks for an extra
+      // session capability, so the RBAC overlay and friends stay off.
       expect(lab.environment.capabilities, lab.id).toEqual([]);
-      expect(lab.setup.manifests, lab.id).toEqual([]);
-      expect(lab.setup.docker, lab.id).toBeUndefined();
     }
   });
 
-  it('asks only for checks a Linux sandbox can answer', async () => {
+  it('asks only for checks its own declared provider can answer', async () => {
     const registry = await realRegistry();
 
     for (const summary of registry.labsForTrack('networking')) {
       const lab = registry.get(summary.id);
+      const supported = PROVIDER_REQUIREMENT_FAMILIES[lab.environment.provider];
+      // A provider with no families at all cannot verify anything, and must
+      // not pass this test by having nothing to compare against.
+      expect(supported.length, `${lab.id}: provider '${lab.environment.provider}'`).toBeGreaterThan(
+        0,
+      );
+
       for (const requirement of [...lab.requirements, ...lab.setup.verify]) {
         const family = requirementFamily(requirement.type);
         expect(
-          PROVIDER_REQUIREMENT_FAMILIES.linux.includes(family),
-          `${lab.id}: ${requirement.type} is a ${family} check`,
+          supported.includes(family),
+          `${lab.id}: ${requirement.type} is a ${family} check, which the '${lab.environment.provider}' provider cannot verify`,
         ).toBe(true);
       }
+    }
+  });
+
+  it('keeps provider-specific setup with the provider that implements it', async () => {
+    const registry = await realRegistry();
+
+    for (const summary of registry.labsForTrack('networking')) {
+      const lab = registry.get(summary.id);
+      // Manifests are Kubernetes objects; a Docker setup block is applied by
+      // the Docker provider against the session's own daemon. Neither can be
+      // honoured by any other provider, so neither may appear beside one.
+      if (lab.environment.provider !== 'kubernetes') {
+        expect(lab.setup.manifests, lab.id).toEqual([]);
+      }
+      if (lab.environment.provider !== 'docker') {
+        expect(lab.setup.docker, lab.id).toBeUndefined();
+      }
+    }
+  });
+
+  it('asks for a kernel capability only where the platform grants one', async () => {
+    const registry = await realRegistry();
+
+    for (const summary of registry.labsForTrack('networking')) {
+      const lab = registry.get(summary.id);
+      if (lab.environment.sandbox_capabilities.length === 0) continue;
+      // `NET_RAW` reaches `--cap-add` on a real container, and is safe only on
+      // a segment carrying nothing but this session's own traffic. That is the
+      // Linux provider's `network: link`, and nothing else — the Docker
+      // provider's sandboxes sit on a shared network and can never qualify.
+      expect(lab.environment.provider, lab.id).toBe('linux');
+      expect(lab.environment.network, lab.id).toBe('link');
     }
   });
 
@@ -346,16 +416,23 @@ describe('every Networking lab keeps the track-wide boundary', () => {
 
     // Labels are rendered next to every check on Check Solution. A label that
     // repeats the value it grades is a free answer.
+    //
+    // `contains` is a single string on the sandbox checks and a list on the
+    // workspace ones, so both shapes are flattened here: a list used to be
+    // compared as a whole, which silently passed a label naming one of its
+    // values.
     for (const summary of registry.labsForTrack('networking')) {
       const lab = registry.get(summary.id);
       for (const requirement of lab.requirements) {
-        const answer = (requirement as { contains?: string }).contains;
-        if (!answer) continue;
-        for (const other of lab.requirements) {
-          expect(
-            other.label?.includes(answer),
-            `${lab.id}: label '${other.label}' contains the graded value '${answer}'`,
-          ).not.toBe(true);
+        const contains = (requirement as { contains?: string | string[] }).contains;
+        const answers = typeof contains === 'string' ? [contains] : (contains ?? []);
+        for (const answer of answers) {
+          for (const other of lab.requirements) {
+            expect(
+              other.label?.includes(answer),
+              `${lab.id}: label '${other.label}' contains the graded value '${answer}'`,
+            ).not.toBe(true);
+          }
         }
       }
     }
