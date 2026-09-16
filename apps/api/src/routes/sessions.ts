@@ -27,7 +27,7 @@ import type { SessionGuard } from '../auth/middleware.js';
  * request, so learning or guessing a namespace name grants nothing at all —
  * there is no route that accepts one.
  */
-import { Router, type Request, type Response } from 'express';
+import { Router, type Request, type RequestHandler, type Response } from 'express';
 import {
   SessionError,
   issueSessionToken,
@@ -109,7 +109,15 @@ export interface SessionRoutesDeps {
    */
   obs?: Logger;
   metrics?: RouteMetrics;
+  /**
+   * The per-student budget for requests that create a sandbox (Start, Reset).
+   * Optional so routers composed directly in tests need none.
+   */
+  sandboxWriteLimiter?: RequestHandler;
 }
+
+/** Stand-in when no limiter is composed. */
+export const noLimit: RequestHandler = (_req, _res, next) => next();
 
 /** HTTP status for each session-domain error code. */
 const STATUS_BY_CODE: Record<string, number> = {
@@ -610,7 +618,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   }));
 
   // POST /api/sessions/:sessionId/reset ------------------------------------
-  router.post('/:sessionId/reset', asyncRoute(async (req, res) => {
+  router.post('/:sessionId/reset', deps.sandboxWriteLimiter ?? noLimit, asyncRoute(async (req, res) => {
     if (!(await guard(req, res, 'session:reset'))) return;
     try {
       const { session, result } = await sessions.reset(String(req.params.sessionId));

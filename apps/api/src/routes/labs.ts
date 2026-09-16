@@ -31,6 +31,7 @@ import { record } from '../progress.js';
 import { toAttemptPayload } from './me.js';
 import {
   issueTerminalGrant,
+  noLimit,
   sessionErrorResponse,
   toSessionPayload,
   type SessionRoutesDeps,
@@ -282,7 +283,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
   }));
 
   // POST /api/labs/:id/start ----------------------------------------------
-  router.post('/:id/start', asyncRoute(async (req, res) => {
+  router.post('/:id/start', deps.sandboxWriteLimiter ?? noLimit, asyncRoute(async (req, res) => {
     const def = resolveLab(req, res);
     if (!def) return;
 
