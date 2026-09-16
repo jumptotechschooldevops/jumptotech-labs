@@ -3,6 +3,12 @@
 Audit of the lab catalog and the learning-path system at `cb7804a` (main after
 PR #33, NET-025), on branch `feat/catalog-quality-audit`, 2026-09-16.
 
+Re-checked the same day after rebasing onto `0f33b1f` (main after PR #34,
+beta overnight hardening). PR #34 changed no file under `labs/`, no
+learning-path file and nothing in `services/lab-orchestrator`, so the catalog
+numbers below are unchanged. Where it changed a conclusion, the section says so
+(§9, §13, §14, §18).
+
 Every number here was derived from repository files by loading them through
 the same registry and loaders the API uses, not from older summaries. Scripts
 were run against the real `labs/` directory; where a claim depends on a
@@ -229,6 +235,26 @@ cannot be modelled without running the script; their per-lab verifier suites
 cover them. This is now a regression test
 (`services/verifier/test/catalog-starter-state.test.ts`).
 
+What the test proves, and for which labs. "No lab passes Verify on its
+untouched starter files" is proven for **15 of 117 labs**: a lab is modelled
+only if it has no seed scripts, no manifests, and every requirement belongs to
+the `filesystem`, `terraform`, `iam` or `cloudformation` family. The other 102
+are **not** covered by this test:
+
+| Provider | Modelled | Excluded, and why |
+|---|---|---|
+| terraform | 13 (all) | none |
+| linux | 2 (LINUX-001, NET-002) | 46: 45 have seed scripts (all 11 AWS, all 13 CS, LINUX-002–011 and LINUX-014–019, NET-003 and NET-005–008); NET-004 has no seed script but uses `linux`-family checks |
+| docker | 0 | 15 (DOCKER-001–014, NET-022): `docker` family |
+| kubernetes | 0 | 21 (K8S-001–019, NET-024, NET-025): `kubernetes` family, and 17 of them apply manifests |
+| ansible | 0 | 10: `ansible` family |
+| cicd | 0 | 10: `cicd` family |
+
+So the `iam` and `cloudformation` families are allowed by the model but
+exercise no lab today: every AWS lab has a seed script. The test's own coverage
+guard pins only the Terraform labs; if LINUX-001 or NET-002 dropped out of the
+model, nothing would fail.
+
 ### 8a. Security review of lab content
 
 | Concern | Finding |
@@ -271,8 +297,10 @@ Notes on reading this table:
   labs, where the filesystem *is* the state being taught. AWS-001, AWS-006,
   CS-001 and NET-002 record findings in files; the first three have dedicated
   verifier suites with bypass tests (`aws-001-verification.test.ts`,
-  `aws-006-verification.test.ts`, `cs-001-verification.test.ts`). NET-002 does
-  not have one.
+  `aws-006-verification.test.ts`, `cs-001-verification.test.ts`), and NET-002
+  has `networking-requirements.test.ts`, including before-the-work and
+  one-wrong-value tests. (The first version of this audit said NET-002 had no
+  suite. That was wrong at `cb7804a` too.)
 - C is expected for the AWS track: it is simulated (no credentials), and it
   grades IAM and CloudFormation documents semantically, not by substring.
 
@@ -284,10 +312,13 @@ Notes on reading this table:
 | **DOCKER-003** | Two `docker_image_exists` checks confirm both names exist, not that `jumptotech/toolbox:1.0` points at the *same* image as `busybox:1.36`, which is the lesson. Tagging any other image with that name passes. | Needs a new requirement capability (image-id equality); that is a verifier/platform change, not catalog metadata. |
 | K8S-006 | Any Job named `ledger-migration` that completes passes. | Intentional and stated in the task ("You choose the image and the command"). |
 
-**Per-lab verification test coverage (heuristic).** 46 labs are not named, by
+**Per-lab verification test coverage (heuristic).** 44 labs are not named, by
 id or directory, in any `services/verifier/test` file: ANSIBLE-001–010,
-CICD-001–009, DOCKER-002–008, -010, -011, K8S-011, K8S-012, NET-002, NET-006,
-NET-022, NET-024, NET-025, and all Terraform labs except TF-001 and TF-005. Many of them
+CICD-001–009, DOCKER-002, -003, -005–008, -010, -011, K8S-011, K8S-012, NET-006,
+NET-022, NET-024, NET-025, and all Terraform labs except TF-001 and TF-005.
+Re-measured on `0f33b1f`: PR #34 added a DOCKER-004 case to
+`docker-requirements.test.ts` (an unreadable workspace is reported as
+`ENVIRONMENT_UNREACHABLE`), and NET-002 was listed here by mistake (46 → 44). Many of them
 are exercised elsewhere: requirement-type suites with inline definitions,
 `terraform-labs.test.ts`, `ansible-lab-config.test.ts`, and the gated runtime
 integration suites. The heuristic finds missing *named* coverage, not
@@ -354,12 +385,18 @@ No duration or difficulty value was changed: none is objectively invalid.
 | DOCKER-003 does not prove both tags name one image | Needs a new requirement type (platform change). |
 | Lab-level skill prefix inconsistency (`permissions.*`, `k8s.*`, `net.*`) | Student-visible taxonomy; no repository evidence for a canonical form. |
 | Non-monotonic difficulty inside Docker, CI/CD and AWS stages | Follows each track's prerequisite chain; docs say the path follows teaching order. |
-| 46 labs without a named verifier suite | Test-authoring work, not a catalog defect. Listed in §9. |
+| 44 labs without a named verifier suite | Test-authoring work, not a catalog defect. Listed in §9. |
 
 ## 14. Networking items deferred to the networking branch
 
 Other agents are actively building networking capabilities and labs, so these
-are recorded, not changed:
+are recorded, not changed.
+
+Re-checked on `0f33b1f`: main still has exactly ten networking labs (NET-002–008,
+NET-022, NET-024, NET-025). NET-021, NET-023 and NET-028 are not on main; NET-023
+and NET-028 exist only on unmerged branches. PR #34 touched no networking lab,
+learning path or networking platform file. Every item below still applies as
+written.
 
 1. **NET-022 placement.** A Docker-provider lab sits in the Networking stage,
    before Containers & Docker (required prerequisite: Linux). Its curriculum
@@ -457,6 +494,22 @@ runs in isolation and in a clean rerun of the whole `apps/api` suite.
 **Classification: ENVIRONMENT.** It is a load-dependent HTTP flake while every
 workspace suite runs at once on one laptop, in code this branch does not touch.
 No change was made for it.
+
+**Re-run after rebasing onto `0f33b1f`** (same machine, `npm ci` against the
+updated lockfile, Node 22.23.2):
+
+| Run | Result |
+|---|---|
+| `npm run validate:labs` | 117 labs, 0 errors, 0 warnings; `--json` output identical to `--json --strict`, no absolute paths; exit 0 |
+| `npm run typecheck` (all workspaces) | pass |
+| `npm test` (all workspaces) | api 583, web 195, lab-orchestrator 1289, observability 704, progress 96, sandboxd 138, terminal 152, verifier 1561 passed; **0 failed**, exit 0 |
+| `npm run test:composition` | 25 passed |
+| focused: `catalog-validation`, `learning-paths`, `learning-progress` (lab-orchestrator) | 73 passed |
+| focused: `catalog-starter-state` (verifier) | 2 passed |
+| focused: `learning-paths-api`, `progress-api`, `catalog-api` (api) | 80 passed |
+
+The observability, terminal and verifier counts grew because of PR #34's own
+tests, not this branch. The `oidc-ownership-e2e` flake did not happen on this run.
 
 Skipped suites are the gated runtime integration suites
 (`RUN_INTEGRATION_TESTS`, `RUN_DOCKER_INTEGRATION_TESTS`, `RUN_DB_TESTS`),
