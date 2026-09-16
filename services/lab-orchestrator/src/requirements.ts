@@ -57,6 +57,7 @@ import {
   DEFAULT_PROBE_TIMEOUT_SECONDS,
   MAX_PROBE_TIMEOUT_SECONDS,
   MIN_PROBE_TIMEOUT_SECONDS,
+  isProbeCidr,
   isProbeHost,
   isProbeInterface,
   isProbePath,
@@ -2853,9 +2854,16 @@ const dockerRequirementSchemas = {
       path: z.string().min(1).max(255).refine(isProbePath, {
         message: 'must be a path beginning with / and free of query syntax, .. and //',
       }).optional(),
-      /** `interface_exists` only. Never passed to the binary; the listing is parsed. */
+      /**
+       * `interface_exists` and `address_in_range`. Never passed to the binary;
+       * the whole listing comes back and is parsed.
+       */
       interface: z.string().min(1).max(15).refine(isProbeInterface, {
         message: 'must be a network interface name such as eth0',
+      }).optional(),
+      /** `address_in_range` only. Compared against, never executed with. */
+      cidr: z.string().min(9).max(18).refine(isProbeCidr, {
+        message: 'must be an IPv4 range in CIDR notation, such as 10.77.0.128/26',
       }).optional(),
       ...common,
     })
@@ -2875,8 +2883,9 @@ const dockerRequirementSchemas = {
         tcp_connect: ['host', 'port'],
         http_get: ['host', 'port', 'path'],
         interface_exists: ['interface'],
+        address_in_range: ['interface', 'cidr'],
       };
-      const operands = ['host', 'port', 'path', 'interface'] as const;
+      const operands = ['host', 'port', 'path', 'interface', 'cidr'] as const;
       const wanted = required[value.probe] ?? [];
       for (const operand of operands) {
         const present = value[operand] !== undefined;

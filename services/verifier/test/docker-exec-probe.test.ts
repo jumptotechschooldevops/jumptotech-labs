@@ -291,6 +291,61 @@ describe('interface_exists reads the listing rather than an exit code alone', ()
   });
 });
 
+// ------------------------------------------- 3b. the address probe
+
+describe('address_in_range grades the address, not the exit code', () => {
+  const LISTING = [
+    '1: lo    inet 127.0.0.1/8 scope host lo',
+    '22: eth0    inet 10.77.0.137/24 brd 10.77.0.255 scope global eth0',
+  ].join('\n');
+
+  const probe = (cidr: string, expectation = 'success') => ({
+    type: 'docker_exec_probe',
+    container: 'ledger-worker',
+    probe: 'address_in_range',
+    interface: 'eth0',
+    cidr,
+    expect: expectation,
+  });
+
+  it('passes when the address falls inside the range', async () => {
+    const docker = daemon(
+      { 'ledger-worker: ip -o addr show': { exitCode: 0, stdout: LISTING } },
+      { withTarget: false },
+    );
+    expect((await check(docker, probe('10.77.0.128/26'))).status).toBe('pass');
+  });
+
+  it('fails when it falls outside, even though `ip` exited 0', async () => {
+    // The whole point: a Docker-IPAM address and a DHCP-pool address are both
+    // valid addresses, and only the range tells them apart.
+    const docker = daemon(
+      { 'ledger-worker: ip -o addr show': { exitCode: 0, stdout: LISTING } },
+      { withTarget: false },
+    );
+    expect((await check(docker, probe('10.77.0.0/26'))).status).toBe('fail');
+  });
+
+  it('fails when the listing could not be read, under both expectations', async () => {
+    // An image with no `ip` must not prove an address is outside a range.
+    const broken = () =>
+      daemon({ 'ledger-worker: ip -o addr show': { exitCode: 127, stdout: '' } }, { withTarget: false });
+
+    expect((await check(broken(), probe('10.77.0.128/26'))).status).toBe('fail');
+    expect((await check(broken(), probe('10.77.0.128/26', 'failure'))).status).toBe('fail');
+  });
+
+  it('needs no probe target container', async () => {
+    const docker = daemon(
+      { 'ledger-worker: ip -o addr show': { exitCode: 0, stdout: LISTING } },
+      { withTarget: false },
+    );
+    const result = await check(docker, probe('10.77.0.128/26'));
+    expect(result.status).toBe('pass');
+    expect(docker.probeRuns).toEqual(['ledger-worker: ip -o addr show']);
+  });
+});
+
 // ------------------------------------------------------ 4. non-disclosure
 
 describe('a probe never hands back what it saw', () => {

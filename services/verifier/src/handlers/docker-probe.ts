@@ -41,6 +41,7 @@
  */
 import {
   DockerUnreachableError,
+  interfaceAddressInRange,
   linkListingHasInterface,
   type ContainerProbe,
   type Requirement,
@@ -61,6 +62,8 @@ function describe(r: ProbeRequirement): string {
       return `fetch http://${r.host}:${r.port}${r.path}`;
     case 'interface_exists':
       return `find the ${r.interface} interface`;
+    case 'address_in_range':
+      return `hold an address on ${r.interface} inside ${r.cidr}`;
   }
 }
 
@@ -92,6 +95,12 @@ function toProbe(r: ProbeRequirement): ContainerProbe {
       };
     case 'interface_exists':
       return { kind: 'interface_exists', interface: r.interface as string };
+    case 'address_in_range':
+      return {
+        kind: 'address_in_range',
+        interface: r.interface as string,
+        cidr: r.cidr as string,
+      };
   }
 }
 
@@ -177,16 +186,18 @@ export const dockerExecProbe: DockerVerifierHandler<'docker_exec_probe'> = {
      * refused connection. So it fails under either expectation, exactly as a
      * timeout does.
      */
-    if (r.probe === 'interface_exists' && result.exitCode !== 0) {
+    if ((r.probe === 'interface_exists' || r.probe === 'address_in_range') && result.exitCode !== 0) {
       return fail(
-        `Could not list the interfaces inside '${r.container}', so whether it has ${r.interface} is unknown`,
+        `Could not list the interfaces inside '${r.container}', so whether it can ${describe(r)} is unknown`,
       );
     }
 
     const succeeded =
       r.probe === 'interface_exists'
         ? linkListingHasInterface(result.stdout, r.interface as string)
-        : result.exitCode === 0;
+        : r.probe === 'address_in_range'
+          ? interfaceAddressInRange(result.stdout, r.interface as string, r.cidr as string)
+          : result.exitCode === 0;
 
     if (succeeded === (r.expect === 'success')) return pass();
 

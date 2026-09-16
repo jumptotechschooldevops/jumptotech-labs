@@ -19,6 +19,8 @@ import {
   assertContainerProbe,
   linkListingHasInterface,
   probeArgv,
+  addressesForInterface,
+  interfaceAddressInRange,
   probeTimeoutMs,
   requirementSchema,
   type ContainerProbe,
@@ -34,6 +36,7 @@ const http: ContainerProbe = {
   timeoutSeconds: 5,
 };
 const iface: ContainerProbe = { kind: 'interface_exists', interface: 'eth0' };
+const addr: ContainerProbe = { kind: 'address_in_range', interface: 'eth0', cidr: '10.77.0.128/26' };
 
 // ------------------------------------------------------- 1. the vocabulary
 
@@ -47,6 +50,7 @@ describe('the probe vocabulary is closed', () => {
       'tcp_connect',
       'http_get',
       'interface_exists',
+      'address_in_range',
     ]);
   });
 
@@ -81,11 +85,15 @@ describe('the argv is built here, never supplied', () => {
     // The interface name is parsed out of the listing, never passed to `ip`.
     expect(probeArgv(iface)).toEqual(['ip', '-o', 'link', 'show']);
     expect(probeArgv(iface)).not.toContain('eth0');
+    // Same for the address probe: neither operand reaches the binary.
+    expect(probeArgv(addr)).toEqual(['ip', '-o', 'addr', 'show']);
+    expect(probeArgv(addr)).not.toContain('eth0');
+    expect(probeArgv(addr)).not.toContain('10.77.0.128/26');
   });
 
   it('draws every executable from a set a lab cannot influence', () => {
     const executables = new Set(
-      ([dns, tcp, http, iface] as ContainerProbe[]).map((p) => probeArgv(p)[0]),
+      ([dns, tcp, http, iface, addr] as ContainerProbe[]).map((p) => probeArgv(p)[0]),
     );
     expect([...executables].sort()).toEqual(['ip', 'nc', 'nslookup', 'wget']);
     // None of them is a shell, and none of them is the Docker CLI.
@@ -367,6 +375,87 @@ describe('a lab definition cannot ask for a probe it did not fully specify', () 
     expect(parse({ probe: 'dns_lookup', host: 'h', timeout_seconds: 0 })).toThrow();
     expect(
       parse({ probe: 'dns_lookup', host: 'h', timeout_seconds: MAX_PROBE_TIMEOUT_SECONDS + 1 }),
+    ).toThrow();
+  });
+});
+
+// ------------------------------------------- 6. the address probe
+
+describe('address_in_range compares, and never executes, its range', () => {
+  // Real `ip -o addr show` output, from BusyBox on a user-defined network.
+  const LISTING = [
+    '1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever',
+    '22: eth0    inet 10.77.0.137/24 brd 10.77.0.255 scope global eth0\\       valid_lft forever',
+  ].join('\n');
+
+  it('reads the addresses of the interface it was asked about', () => {
+    expect(addressesForInterface(LISTING, 'eth0')).toEqual(['10.77.0.137']);
+    expect(addressesForInterface(LISTING, 'lo')).toEqual(['127.0.0.1']);
+    expect(addressesForInterface(LISTING, 'eth1')).toEqual([]);
+  });
+
+  it('does not let one interface answer for another', () => {
+    // `eth0` appears twice on its own line; a loose match would report it for
+    // any query that happened to be a substring.
+    expect(addressesForInterface(LISTING, 'eth')).toEqual([]);
+    expect(addressesForInterface(LISTING, 'th0')).toEqual([]);
+  });
+
+  it('ignores inet6, which is a family this probe does not claim', () => {
+    const v6 = '22: eth0    inet6 fe80::42:acff:fe13:3/64 scope link\\       valid_lft forever';
+    expect(addressesForInterface(v6, 'eth0')).toEqual([]);
+  });
+
+  it('decides containment from the range, not from a prefix string match', () => {
+    expect(interfaceAddressInRange(LISTING, 'eth0', '10.77.0.128/26')).toBe(true);
+    // .137 is in .128/26 (.128-.191) and not in .64/26 (.64-.127), which a
+    // string comparison on "10.77.0.1" would get wrong.
+    expect(interfaceAddressInRange(LISTING, 'eth0', '10.77.0.64/26')).toBe(false);
+    expect(interfaceAddressInRange(LISTING, 'eth0', '10.77.0.0/24')).toBe(true);
+    expect(interfaceAddressInRange(LISTING, 'eth0', '10.78.0.0/16')).toBe(false);
+  });
+
+  it('is false when the interface has no address at all', () => {
+    expect(interfaceAddressInRange('1: lo    inet 127.0.0.1/8 scope host lo', 'eth0', '10.0.0.0/8')).toBe(
+      false,
+    );
+    expect(interfaceAddressInRange('', 'eth0', '10.0.0.0/8')).toBe(false);
+  });
+
+  it.each([
+    ['no prefix', '10.77.0.128'],
+    ['a prefix above 32', '10.77.0.128/33'],
+    ['an octet above 255', '10.77.0.300/24'],
+    ['a leading-zero octet', '10.77.0.01/24'],
+    ['an IPv6 range', 'fe80::/64'],
+    ['a hostname', 'ledger-api/24'],
+    ['command substitution', '$(id)/24'],
+    ['a space', '10.77.0.128 /26'],
+    ['two slashes', '10.77.0.128//26'],
+  ])('refuses %s as a range', (_name, cidr) => {
+    expect(() =>
+      assertContainerProbe({ kind: 'address_in_range', interface: 'eth0', cidr }),
+    ).toThrow(ProbeError);
+  });
+
+  it('is refused by the schema without both of its operands', () => {
+    const base = { type: 'docker_exec_probe', container: 'c', label: 'l', probe: 'address_in_range' };
+    expect(() => requirementSchema.parse({ ...base, interface: 'eth0' })).toThrow();
+    expect(() => requirementSchema.parse({ ...base, cidr: '10.0.0.0/8' })).toThrow();
+    expect(() =>
+      requirementSchema.parse({ ...base, interface: 'eth0', cidr: '10.0.0.0/8' }),
+    ).not.toThrow();
+    // And a `cidr` on a probe that does not take one is refused, so a lab
+    // cannot believe it grades a range when it grades presence.
+    expect(() =>
+      requirementSchema.parse({
+        type: 'docker_exec_probe',
+        container: 'c',
+        label: 'l',
+        probe: 'interface_exists',
+        interface: 'eth0',
+        cidr: '10.0.0.0/8',
+      }),
     ).toThrow();
   });
 });

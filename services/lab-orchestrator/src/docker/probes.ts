@@ -59,6 +59,8 @@
  * session, and touches nothing on the host.
  */
 
+import { ipv4CidrContains } from '../k8s/cidr.js';
+
 /** The questions a lab may ask from inside a container. A closed set. */
 export const CONTAINER_PROBES = [
   /** Does this name resolve, using whatever resolver the container was given? */
@@ -69,6 +71,8 @@ export const CONTAINER_PROBES = [
   'http_get',
   /** Does the container's own network namespace hold this interface? */
   'interface_exists',
+  /** Is that interface's address inside a range the lab names? */
+  'address_in_range',
 ] as const;
 
 export type ContainerProbeKind = (typeof CONTAINER_PROBES)[number];
@@ -116,6 +120,17 @@ const PROBE_PATH = /^\/[A-Za-z0-9._~\-/]*$/;
 /** An interface name, as the kernel allows one. */
 const PROBE_INTERFACE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,14}$/;
 
+/**
+ * An IPv4 block a lab may test an address against.
+ *
+ * Syntactic here; `ipv4CidrContains` does the arithmetic. Bounded and
+ * dotted-quad only, for the same reason `PROBE_HOST` is: an operand that can
+ * only be four numbers and a prefix length cannot be anything else. It never
+ * reaches a binary in any case — `address_in_range` passes no operand to `ip`
+ * at all, and the comparison happens here.
+ */
+const PROBE_CIDR = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
+
 export function isProbeHost(value: string): boolean {
   return PROBE_HOST.test(value);
 }
@@ -128,6 +143,18 @@ export function isProbeInterface(value: string): boolean {
   return PROBE_INTERFACE.test(value);
 }
 
+export function isProbeCidr(value: string): boolean {
+  if (!PROBE_CIDR.test(value)) return false;
+  const [address, prefix] = value.split('/');
+  if (Number(prefix) > 32) return false;
+  return (address ?? '').split('.').every((octet) => {
+    // `01` is not an octet; a bare numeric check would accept it and then
+    // disagree with whatever parsed it next.
+    if (octet.length > 1 && octet.startsWith('0')) return false;
+    return Number(octet) <= 255;
+  });
+}
+
 export function isProbePort(value: number): boolean {
   return Number.isInteger(value) && value >= 1 && value <= 65535;
 }
@@ -137,7 +164,8 @@ export type ContainerProbe =
   | { kind: 'dns_lookup'; host: string }
   | { kind: 'tcp_connect'; host: string; port: number; timeoutSeconds: number }
   | { kind: 'http_get'; host: string; port: number; path: string; timeoutSeconds: number }
-  | { kind: 'interface_exists'; interface: string };
+  | { kind: 'interface_exists'; interface: string }
+  | { kind: 'address_in_range'; interface: string; cidr: string };
 
 export class ProbeError extends Error {
   readonly code = 'INVALID_CONTAINER_PROBE';
@@ -214,6 +242,17 @@ export function assertContainerProbe(value: unknown): ContainerProbe {
       }
       return { kind, interface: name };
     }
+    case 'address_in_range': {
+      const name = probe.interface;
+      if (typeof name !== 'string' || !isProbeInterface(name)) {
+        throw new ProbeError(`'${String(name)}' is not a valid interface name`);
+      }
+      const cidr = probe.cidr;
+      if (typeof cidr !== 'string' || !isProbeCidr(cidr)) {
+        throw new ProbeError(`'${String(cidr)}' is not a valid IPv4 range`);
+      }
+      return { kind, interface: name, cidr };
+    }
     /* c8 ignore next 2 -- unreachable: `kind` was checked against the closed set above. */
     default:
       throw new ProbeError(`'${kind}' is not a probe this platform performs`);
@@ -263,6 +302,13 @@ export function probeArgv(probe: ContainerProbe): string[] {
       // The listing is parsed by the caller; the interface name is *not* passed
       // to `ip`, so no operand reaches the binary at all for this probe.
       return ['ip', '-o', 'link', 'show'];
+
+    case 'address_in_range':
+      // Same discipline: neither the interface nor the range is passed to `ip`.
+      // The whole address listing comes back and the comparison happens in
+      // `addressesForInterface` and `ipv4CidrContains`, where a lab's operand is
+      // data being compared rather than an argument being executed.
+      return ['ip', '-o', 'addr', 'show'];
   }
 }
 
@@ -282,6 +328,43 @@ export function probeTimeoutMs(probe: ContainerProbe): number {
  * only, anchored, so `eth0` does not match `eth01` and a name appearing later
  * in the line — inside `master eth0`, say — is not a hit.
  */
+/**
+ * The IPv4 addresses `ip -o addr show` reports for one interface.
+ *
+ * A line looks like:
+ *
+ * ```text
+ *   22: eth0    inet 10.77.0.3/24 brd 10.77.0.255 scope global eth0
+ * ```
+ *
+ * Anchored on the index-and-name prefix for the same reason
+ * `linkListingHasInterface` is: the name appears again later in the line, and a
+ * loose match would let one interface answer for another. Only `inet` lines are
+ * read — `inet6` is a different family and this probe does not claim it.
+ */
+export function addressesForInterface(listing: string, name: string): string[] {
+  const found: string[] = [];
+  for (const line of listing.split('\n')) {
+    const match = /^\s*\d+:\s*([A-Za-z0-9._-]+)(?:@[A-Za-z0-9._-]+)?\s+inet\s+((?:\d{1,3}\.){3}\d{1,3})\//.exec(
+      line,
+    );
+    if (match && match[1] === name && match[2]) found.push(match[2]);
+  }
+  return found;
+}
+
+/**
+ * Does this interface hold an address inside the range the lab named?
+ *
+ * Separate from the parser so the verdict and the parsing are testable apart,
+ * and so the arithmetic stays in `k8s/cidr.ts` rather than being written twice.
+ */
+export function interfaceAddressInRange(listing: string, name: string, cidr: string): boolean {
+  return addressesForInterface(listing, name).some((address) =>
+    ipv4CidrContains(cidr, address),
+  );
+}
+
 export function linkListingHasInterface(listing: string, name: string): boolean {
   for (const line of listing.split('\n')) {
     const match = /^\s*\d+:\s*([A-Za-z0-9._-]+)(?:@[A-Za-z0-9._-]+)?:/.exec(line);
