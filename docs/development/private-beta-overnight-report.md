@@ -16,8 +16,9 @@ alone, and what is still not proven.
 The platform was already in good shape. The BETA-P0-010…P0-020 sequence left a
 repository where the interesting failure modes have been thought about, written
 down and tested, and most of tonight was spent confirming that rather than
-repairing it. Four defects and two gaps were found and fixed, each with a
-regression test that fails against the previous code.
+repairing it. Five defects and two gaps were found and fixed. Each of the four in the
+platform's own code carries a regression test that fails against the previous
+code; the fifth is a dependency bump.
 
 The single most important finding is not one of those fixes. It is that
 **`main` has moved sixteen commits past the release gate's evidence, and the
@@ -43,6 +44,9 @@ The defects, in the order they matter:
 4. **An unreadable workspace answered a student with 500 INTERNAL_ERROR**
    instead of the designed `ENVIRONMENT_UNREACHABLE`, and moved none of the
    metrics the verification alert watches.
+5. **One high and three moderate advisories in production dependencies**, three
+   of them closed by in-range patch bumps. The high one turned out not to be
+   reachable from student input; the patch was taken anyway.
 
 Nothing was weakened. No capacity, isolation, authentication or exposure
 contract changed. The release-gate verdict stays **GO (conditional)**, with one
@@ -103,6 +107,7 @@ work.
 | `bash scripts/check-observability.sh` | PASS — 10 rule files, 82 rules, 4 alert-test files |
 | `bash scripts/test-db-backup-restore.sh` | PASS — 117 |
 | `npm run build` | PASS |
+| `npm audit --omit=dev` | 1 high + 3 moderate before; **2 moderate after** (express → `qs`, left open by choice) |
 
 `npm test` by workspace: api 583, web 195, lab-orchestrator 1,260,
 observability 704, progress 96, sandboxd 138, terminal 152, verifier 1,559.
@@ -123,7 +128,7 @@ observability 704, progress 96, sandboxd 138, terminal 152, verifier 1,559.
 | `make beta-validate` | Needs the running stack + kind + the observability profile. The machine already held two stacks and four kind clusters; a third stack risked both them and a concurrent session's work, and `compose`/`kind` cross-stack DNS makes a third stack actively hazardous. **This is the meaningful gap.** |
 | `npm run verify:network-policy` | Needs a dedicated kind cluster |
 | kind / docker / sandboxd / terminal / networking integration jobs | CI builds each on its own runner |
-| CI on this branch | Not pushed at the time of writing |
+| CI on this branch | The branch is pushed, but `quality-gates.yml` triggers on `push` to `main` and on `pull_request`; no run exists until a pull request is opened |
 
 ### Two load-sensitive flakes, reported rather than patched
 
@@ -250,6 +255,43 @@ from a path refusal to a 400 rather than a 500 — and nothing covered them. The
 unit suite stopped at the class; the Docker integration suite uses its own
 `TempDirWorkspace`. 13 cases added (`cae9f10`).
 
+### Finding 4 — advisories in production dependencies (three of four fixed)
+
+`npm audit --omit=dev` on the shipped tree: one high, three moderate. GitHub
+reports 14 on the default branch, which counts development dependencies too.
+
+| | |
+|---|---|
+| `js-yaml` 4.3.1 | **high** — CPU exhaustion via empty merge sources |
+| `qs` ≤ 6.15.3 | moderate ×2 — array-limit bypass via bracket-key comma parsing; DoS via attacker-controlled `isBuffer` |
+| `body-parser` 1.20.6 | moderate, through `qs` |
+
+**Reachability first, so the severity is not taken at face value.** The high one
+is *not* reachable from a student. The platform parses YAML with the `yaml`
+package everywhere it touches input a student can shape — lab and
+learning-path definitions, session manifests, and the verifier's Ansible,
+CloudFormation and workflow readers. `js-yaml` arrives only under
+`@kubernetes/client-node`, which parses kubeconfigs and API-server responses:
+both server-controlled. The `qs` array-limit bypass *is* reachable — query
+strings are student input — but it is a bounded allocation, behind
+authentication, the origin guard and nginx, for five trusted students.
+
+**Fixed** (`a5dc275`) — `npm audit fix --package-lock-only` takes three of the
+four with patch bumps inside every declared range: `js-yaml` 4.3.1 → 4.3.2,
+`body-parser` 1.20.6 → 1.20.8, and `qs` under body-parser 6.15.x → 6.16.0. No
+`package.json` change, no major version, 23 lockfile lines. Re-validated with
+typecheck, the full 4,687-test suite, composition, secret distribution and
+build.
+
+**Left open deliberately.** `express@4.22.2` declares `qs: ~6.15.1`, so its own
+copy stays at 6.15.3 and the two moderate advisories with it. An `overrides`
+entry was tried and then reverted rather than left in: it forces `qs` past the
+range express declares, npm reports the result `invalid`, and express's own
+suite has never run against it. Bumping a transitive dependency outside its
+parent's range is a deliberate decision with a maintainer behind it, not
+something to slip into an overnight pass. The real fix is an express release
+that moves the range.
+
 ### Not a finding
 
 - The `read_only: true` that `api` and `sandboxd` carry is **absent on
@@ -263,7 +305,7 @@ unit suite stopped at the class; the Docker integration suite uses its own
 
 ## Reliability findings
 
-### Finding 4 — nothing in production restarted itself (fixed)
+### Finding 5 — nothing in production restarted itself (fixed)
 
 No compose file in the repository declared a `restart:` policy. Compose restarts
 nothing on its own, so a crashed api, a terminal the kernel killed for memory, a
@@ -287,9 +329,9 @@ services, in the two production overlays only.
   follower still reached its loopback listener afterwards. Re-creating
   Prometheus is a different thing, and runbook §6 already covers it.
 
-### Finding 5 — a restarting service can hide from `ServiceDown` (fixed)
+### Finding 6 — a restarting service can hide from `ServiceDown` (fixed)
 
-Directly caused by fixing (4), and found by asking what the change did to
+Directly caused by fixing (5), and found by asking what the change did to
 detection rather than by waiting for it to bite. `ServiceDown` is
 `up == 0 for: 2m` — two *continuous* minutes. A container that dies, restarts,
 serves one scrape and dies again never supplies them. Before the restart policy
@@ -310,7 +352,7 @@ a crashed service supplied them by staying dead.
 - 3 promtool cases against the shipped rule file; the crash-loop case fails
   against the previous `platform.yml` (verified by restoring it).
 
-### Finding 6 — an unreadable workspace answered a student with a 500 (fixed)
+### Finding 7 — an unreadable workspace answered a student with a 500 (fixed)
 
 `verifyLab`'s unreachable-environment branch recognised only the Kubernetes and
 Docker errors, so `WorkspaceUnavailableError` — thrown whenever the terminal
@@ -391,7 +433,7 @@ service by service.
 | Docker socket | `sandboxd` only, in every file |
 | Healthchecks | `api` → `/readyz` 9400; `terminal` → `/livez` 9401; `web` → `jtt-tls-preflight served`; `postgres` → `pg_isready`; `sandboxd`, `prometheus`, `alertmanager`, `grafana` from their images |
 | Dependency ordering | `api` → postgres + sandboxd healthy; `terminal` → api + sandboxd healthy; `web` → api healthy |
-| **Restart policies** | **were absent everywhere — fixed, see Finding 4** |
+| **Restart policies** | **were absent everywhere — fixed, see Finding 5** |
 | Resource limits | `terminal` 512m/256 pids, `sandboxd` 512m/512 pids. `api`, `postgres`, `web` and the monitoring containers have **none** |
 | Secrets | `make secrets-check` PASS; every required variable is `${X:?...}` with no default |
 | Volumes | `./labs` read-only into api; TLS directory and ACME webroot read-only into web; `BACKUP_STATUS_DIR` read-only into api |
@@ -456,8 +498,8 @@ committed, so the seam is real and empty rather than faked.
 
 Gaps, both pre-existing and both correctly recorded as decisions: **no alert is
 proven to reach a human** until a destination is configured, and **container
-restarts are not counted** without a host exporter. Fixing (4) made the second
-one matter more, which is why (5) exists — `ServiceRestartLoop` reads a signal
+restarts are not counted** without a host exporter. Fixing (5) made the second
+one matter more, which is why (6) exists — `ServiceRestartLoop` reads a signal
 Prometheus already has rather than waiting for an exporter.
 
 ---
@@ -535,7 +577,7 @@ and the warning never to run `prod down -v` is correct and prominent.
 
 ## Commits created
 
-Six, on `feat/beta-overnight-hardening`, each one concern:
+Eight, on `feat/beta-overnight-hardening`, each one concern:
 
 | | |
 |---|---|
@@ -545,10 +587,12 @@ Six, on `feat/beta-overnight-hardening`, each one concern:
 | `cae9f10` | `test(terminal): cover the internal workspace endpoints` |
 | `589d65f` | `docs(beta): check the deployed capacity ceiling before every class` |
 | `601eadd` | `feat(observability): alert on a service that keeps restarting` |
+| `1be676e` | `docs(beta): record what this pass proved, and what it did not` |
+| `a5dc275` | `fix(deps): take the in-range patches for the advisories in the tree` |
 
 ## Files changed
 
-12 files, +866 / −25, plus this report and the release-gate §11.
+14 files, plus this report and the release-gate §11.
 
 ```
 docker-compose.production-observability.yml
@@ -563,6 +607,7 @@ services/terminal/test/workspace-endpoints.test.ts                              
 services/terminal/test/workspace.test.ts
 services/verifier/src/index.ts
 services/verifier/test/docker-requirements.test.ts
+package-lock.json
 ```
 
 No file under `labs/networking/` was touched; a concurrent session owns that
@@ -590,6 +635,7 @@ tree.
 - **The api's shutdown has no timeout escape hatch**, unlike the terminal's.
 - **Catalog-scale tests have no explicit timeout** and their margin narrows as
   the catalog grows.
+- **Two moderate `qs` advisories remain** under `express`, by choice (Finding 4).
 - **Docs still say 114 labs** in `docker-compose.yml`, the Makefile and the
   release gate. Not corrected: the count is changing tonight in a tree this
   session must not touch, and a number corrected into a moving target is worth
@@ -634,14 +680,18 @@ and a per-student shell uid before any untrusted cohort. Added by this pass:
    needing a real student shell to validate.
 4. **Whether the catalog-scale tests should carry explicit timeouts** as the
    catalog grows past 117 labs.
+5. **Whether to force `qs` past the range `express` declares** (Finding 4), or
+   to wait for an express release that moves it.
 
 ---
 
 ## Anything pushed
 
-**Nothing.** All six commits are local on `feat/beta-overnight-hardening`. The
-branch has not been pushed, nothing was merged to `main`, nothing was force
-pushed, and no other branch was touched.
+`feat/beta-overnight-hardening` was pushed to `origin` as a new branch, which
+is the one outward action this pass was authorised to take. **No pull request
+was opened, nothing was merged to `main`, nothing was force pushed, and no
+other branch was touched.** The workflow triggers on `push` to `main` and on
+`pull_request`, so pushing the branch alone runs no CI — see the next step.
 
 Temporary resources were cleaned up: the restore-drill containers (label-scoped,
 removed by their own trap — confirmed empty afterwards), the TLS-edge test
@@ -653,10 +703,12 @@ belonging to other work was removed or modified.
 
 ## Exact recommended next step
 
-**Push the branch and open a pull request, so CI runs the integration jobs this
-laptop could not.** That is the one action that converts tonight's
-repository-proven work into evidence from clean, isolated runners — the kind,
-docker, sandboxd, terminal, networking and TLS-edge jobs in particular.
+**Open a pull request for `feat/beta-overnight-hardening`, so CI runs the
+integration jobs this laptop could not.** The branch is pushed; the workflow
+triggers on `pull_request`, so until one is opened no run exists. That is the
+one action that converts tonight's repository-proven work into evidence from
+clean, isolated runners — the kind, docker, sandboxd, terminal, networking and
+TLS-edge jobs in particular.
 
 Then, and before students:
 

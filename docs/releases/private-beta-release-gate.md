@@ -299,7 +299,7 @@ rather than proving anything about this one.
 | **`make beta-validate`** — the five-student gate | `c8eb2c6` (§4) | Needs the running stack, kind and the observability profile. **This is the gap that matters**: the capacity, isolation, lifecycle, soak, restart-recovery and cleanup evidence in §4 is from before the three merges above |
 | `npm run verify:network-policy` | `c8eb2c6` (§3) | Needs a dedicated kind cluster |
 | kind, docker, sandboxd, terminal and networking integration jobs | `c8eb2c6` CI (§3) | CI builds each on its own runner; they are not a laptop gate |
-| CI "Quality gates" on this branch | — | Not pushed at the time of writing |
+| CI "Quality gates" on this branch | — | The branch is pushed, but the workflow triggers on `push` to `main` and on `pull_request`; no run exists until a pull request is opened |
 
 ### 11.3 Changed by this pass
 
@@ -315,6 +315,7 @@ isolation, authentication or exposure contracts in §1.
 | `ServiceRestartLoop`, because a restart policy can hide an outage from `ServiceDown` | observability | 3 promtool cases in `infrastructure/observability/prometheus/tests/service-restart-alerts.test.yml` |
 | The internal workspace endpoints now have a suite | test coverage | 13 cases; they had none |
 | The runbook's five-minute check reads the deployed capacity ceiling | operator | `MAX_ACTIVE_SESSIONS` defaults to 20; the beta contract is 5; nothing read it back |
+| Three of four production dependency advisories closed by in-range patch bumps | dependencies | `npm audit --omit=dev`: 1 high + 3 moderate → 2 moderate. The high (`js-yaml`) is not reachable from student input; the two left are `express`'s own `qs` range |
 
 ### 11.4 What §6's limitations look like after this pass
 
