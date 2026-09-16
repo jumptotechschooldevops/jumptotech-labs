@@ -474,6 +474,33 @@ must find rather than a task they must perform.
 - **Supported today?** Mostly yes — the privileged DinD sandbox already permits
   all of it; needs the images added to a pre-pull list (C5 egress caveat).
 - **New capability** N8 (tooling image pre-pull), N9 (preferred, not required).
+- **Implemented 2026-09-16 — and an earlier run of this track was wrong about
+  it.** That run recorded NET-010 as blocked on N18 (a tooling image inside the
+  session daemon) and N19 (`cap_add` in `setup.docker`), reasoning from the word
+  `dnsmasq` above without checking what the shipped images already carry.
+  Re-checked, neither is needed:
+  · `busybox:1.36`, already a shipped lab image, carries **`udhcpd`** — a real
+    DHCP server — as well as `udhcpc`. No `dnsmasq`, no new image.
+  · `--cap-add=NET_ADMIN` on a container the **student** runs is the existing
+    privileged-DinD boundary, not a platform change. Verified both ways: with
+    the flag a container can configure an interface, without it the identical
+    command fails `Operation not permitted`. N19 is about *seeding* a
+    privileged container, and NET-010 seeds none.
+  · `tcpdump` runs in the sandbox (N8), where the user-defined bridge lives.
+  The verification is stronger than planned. The weakness named above — a
+  forgeable capture — is closed by a new probe kind, `address_in_range`, which
+  reads the addresses each container's interface actually holds. A measurement
+  shaped it: **`udhcpc` obtains a lease and does not apply it** without a `-s`
+  script, so an address from the server's pool proves the exchange *completed*.
+  The pool is the subnet's upper quarter (`10.77.0.128/26`) and Docker's IPAM
+  allocates from the bottom, so the two sources cannot be confused. Two attacks
+  were run against the real daemon and both failed for the asserted reason: a
+  lease obtained but never applied, and the "ordinary" container secretly
+  running `udhcpc` as well. One departure from the initial state: the network
+  is *not* seeded. `setup.docker.networks` cannot carry a subnet, and having the
+  student pass `--subnet` is on-topic for an addressing lab rather than
+  incidental. Validated end to end: baseline 0/14, solved 14/14, reset 0/14.
+  NET-009 is still unimplemented, so `prerequisites` is empty.
 
 ---
 
@@ -1331,8 +1358,8 @@ Kubernetes service debugging — before any sandbox work starts.
 | **N11** | `tls_certificate` requirement | NET-016 | **M** — assert subject/SAN/issuer/expiry and whether the endpoint validates against the sandbox trust store |
 | **N12** | Confirm or install a NetworkPolicy-enforcing CNI in `kind` | NET-026, NET-032 | **Confirmed for the platform contract (BETA-P0-015).** kindnetd `v20250512-df8de77b` on `kindest/node:v1.34.0` enforces deny-all, pod/namespace selectors, ports and plain `ipBlock` — measured with negative controls by `npm run verify:network-policy` and the `kind-integration` CI job (docs/kubernetes-network-security.md §3). Still open for NET-026: the lab's *own* behavioural verifier (a student-written policy must be judged by connections, not YAML), and `ipBlock.except`, whose kind measurements disagree. **Audited 2026-09-16 — the remainder is now precise:** `service_http` and `service_tcp` have no negative form (no `expect_reachable: false`), so "resolves but every connection times out" — the whole symptom NET-026 teaches — cannot be expressed. Call that **N20**. It is *not* a copy of N9's `expect: failure`: N9 rules that a timeout fails under both expectations, because a timeout is the absence of an answer rather than evidence of one. A deny test wants the opposite — a timeout is the pass. Both rules are right in their own place, and the way to have both is a **positive control**: a deny check must be paired with a connection that must still succeed, or "the cluster is broken" and "the policy works" are the same observation. That pairing is the design work, and it should be done before the lab, not during it |
 | **N13** | ingress-nginx + `extraPortMappings` in `infrastructure/kind/cluster.yaml` | NET-027, NET-032 end-to-end | **M** — plus a per-namespace ingress class or host-based isolation so sessions do not collide on one shared controller. **Audited 2026-09-16: not started.** `infrastructure/kind/cluster.yaml` declares no ingress controller and no `extraPortMappings`; nothing in the repo installs one. The isolation question is the substantive part and is unanswered: one shared controller across per-student namespaces is a cross-session surface, and it is the first thing a design should settle |
-| **N18** | A lab-usable diagnostics image **inside the session daemon**, delivered offline | NET-010, NET-011, NET-019 | **DESIGNED, NOT IMPLEMENTED.** The gap N8 does not close. A Docker lab may only use `alpine:3.20`, `nginx:1.27-alpine` and `busybox:1.36` — none carries `nft`, `iptables`, `tcpdump` or `dnsmasq` — and `setup.docker.images` pulls from a registry, so adding a third-party tooling image is both a supply-chain dependency and a fetch on the path of every lab start. The architecture-consistent answer is the Terraform mirror's: bake a `docker save` tarball into the sandbox image and load it into the session daemon. **Known hazard:** the provider mounts a fresh volume at `/var/lib/docker`, which masks anything the image pre-populated there, so a load has to happen after dockerd starts — and the readiness gate (`docker info`) can pass before the load finishes. A naive entrypoint loader is therefore racy; the load needs its own readiness signal, or an explicit provider step before `#ensureImage` falls back to a pull. |
-| **N19** | `cap_add` on a container in `setup.docker` | NET-010, NET-019 | **DESIGNED, NOT IMPLEMENTED.** NET-010's DHCP client and NET-019's NAT box both need `NET_ADMIN` *inside a student container*. `setup.docker.containers` has no capability, sysctl or privileged field, and the Docker provider never runs seed scripts — so there is no way to express privileged network state in a Docker lab's initial state at all. This reaches `--cap-add` inside an already-privileged DinD sandbox, so the blast radius is one session; it is still a security decision and not a schema tweak, and it should be argued for on its own rather than added alongside a lab. |
+| **N18** | A lab-usable diagnostics image **inside the session daemon**, delivered offline | NET-011, NET-019 (NET-010 was listed here in error — see its block) | **DESIGNED, NOT IMPLEMENTED.** The gap N8 does not close. A Docker lab may only use `alpine:3.20`, `nginx:1.27-alpine` and `busybox:1.36` — none carries `nft`, `iptables`, `tcpdump` or `dnsmasq` — and `setup.docker.images` pulls from a registry, so adding a third-party tooling image is both a supply-chain dependency and a fetch on the path of every lab start. The architecture-consistent answer is the Terraform mirror's: bake a `docker save` tarball into the sandbox image and load it into the session daemon. **Correction, 2026-09-16:** an earlier entry here claimed the provider's fresh `/var/lib/docker` volume *masks* anything the image pre-populated there. Reproduced, and it does not — Docker copies an image's content into an **empty** named volume on first mount. |
+| **N19** | `cap_add` on a container in `setup.docker` | NET-011, NET-019 (NET-010 was listed here in error) | **DESIGNED, NOT IMPLEMENTED.** NET-010's DHCP client and NET-019's NAT box both need `NET_ADMIN` *inside a student container*. `setup.docker.containers` has no capability, sysctl or privileged field, and the Docker provider never runs seed scripts — so there is no way to express privileged network state in a Docker lab's initial state at all. This reaches `--cap-add` inside an already-privileged DinD sandbox, so the blast radius is one session; it is still a security decision and not a schema tweak, and it should be argued for on its own rather than added alongside a lab. |
 | **N14** | AWS-real path: LocalStack service + AWS provider in the Terraform mirror | hands-on Phase 6 | **L** — needs egress or a vendored mirror, a LocalStack container per session, and cost/isolation review. The AWS provider stub stays untouched |
 
 ### Suggested build order
@@ -1351,7 +1378,7 @@ Kubernetes service debugging — before any sandbox work starts.
    | NET-006 (partial) | **DONE** — shipped 2026-08-25 with N5 |
    | NET-023 | **DONE** — shipped 2026-09-16; needed neither N8 nor N9 |
    | NET-021 | **DONE** — shipped 2026-09-16 on N8 + N9 |
-   | NET-010 | **BLOCKED** on **N18** (`dnsmasq`, `tcpdump` in a lab container) and **N19** (`NET_ADMIN` on the DHCP client) |
+   | NET-010 | **DONE** — shipped 2026-09-16. Was recorded here as blocked on N18 + N19 in error; it needs neither |
    | NET-011 | **BLOCKED** on **N18** (`nft`/`iptables` in the topology container) |
    | NET-019 | **BLOCKED** on **N18** + **N19** (a NAT box that can actually NAT), and its prerequisite NET-011 |
 

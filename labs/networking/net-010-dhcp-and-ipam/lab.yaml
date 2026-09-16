@@ -1,0 +1,400 @@
+# ---------------------------------------------------------------------------
+# JumpToTech Labs — lab definition
+#
+# NET-010 — DHCP, and what containers do instead.
+#
+# Content is written from the official Docker documentation, the BusyBox
+# manual, and RFC 2131; the pages this lab is grounded in are listed under
+# `references`.
+#
+# THE ANSWER IS "NO", AND THE LAB PROVES IT BOTH WAYS. A new engineer asks why
+# their container already had an address and whether that was DHCP. Part one
+# runs a *real* DHCP exchange so the student knows what one looks like on the
+# wire. Part two puts an ordinary container on the same network and shows it
+# has an address having sent no DHCP at all. The contrast is the lesson, and
+# the platform can see both halves.
+#
+# CORRECTION TO THE CURRICULUM BLOCK ABOVE THIS LAB. The block calls for
+# `dnsmasq` and a pre-pulled tooling image, and a previous run of this track
+# recorded NET-010 as blocked on capability N18 for that reason. Re-checked on
+# 2026-09-16, that was wrong:
+#
+#   · `busybox:1.36` — already a shipped lab image, already used by DOCKER-003
+#     — carries **`udhcpd`**, a real DHCP server, as well as `udhcpc`. No
+#     `dnsmasq` and no new image is needed. (`alpine:3.20` has the client only.)
+#   · `--cap-add=NET_ADMIN` on a container the *student* runs needs no platform
+#     change: the sandbox is an already-approved privileged Docker-in-Docker
+#     container, and its inner daemon grants capabilities to its own containers.
+#     Verified both ways — with the flag the client can configure an interface,
+#     without it the same command fails `Operation not permitted`.
+#   · `tcpdump` runs in the **sandbox**, which is the Docker host, and the
+#     user-defined bridge lives in the sandbox's own network namespace. That is
+#     capability N8, already shipped.
+#
+# So this lab needs N18 for nothing. N19 (`cap_add` in `setup.docker`) is also
+# not needed, because nothing privileged is *seeded* — the student runs it.
+#
+# WHAT IS VERIFIED, AND WHAT IS NOT.
+#
+#   observed   the network and its containers; and, read from inside each
+#              container, which addresses its interface actually holds —
+#              `dhcp-client` must hold one from the DHCP pool, and `ipam-client`
+#              must hold one and must NOT hold a pool address
+#   student-written  the packet capture and the explanation
+#
+# The address checks are what make this more than a worksheet. A lease that was
+# offered but never applied does not move an address; a container that never
+# asked cannot end up in the server's pool. Measured while building this:
+# `udhcpc` obtains a lease but does **not** configure the interface without a
+# script, which is why the task asks for one — and why the address is evidence
+# that the exchange completed rather than merely started.
+#
+# NOT verified: that a capture was taken. `dhcp.txt` is the student's own
+# record, graded on the four DHCP message types `tcpdump -v` prints. Nothing
+# here parses command history.
+#
+# WHY THE ADDRESS RANGES ARE DECISIVE. The network is a /24 and the DHCP pool
+# is its upper quarter, `10.77.0.128/26`. Docker's IPAM allocates from the
+# bottom of the subnet upward, so an IPAM address and a DHCP address cannot be
+# confused without ~126 prior containers on one network — far beyond what the
+# sandbox's memory and pids limits allow. If it ever did happen the check would
+# fail rather than pass, which is the safe direction.
+#
+# NET-009 is this lab's curriculum prerequisite and is not implemented. The
+# registry refuses a prerequisite that does not resolve, so `prerequisites`
+# stays empty — the same policy NET-002 follows for NET-001.
+# ---------------------------------------------------------------------------
+id: NET-010
+slug: net-010-dhcp-and-ipam
+title: "How an Interface Gets an Address: DHCP, and What Containers Do Instead"
+track: networking
+topic: container-networking
+difficulty: advanced
+level: practice
+duration_minutes: 35
+order: 10
+
+environment:
+  provider: docker
+  isolation: container
+
+# NET-009 is designed but not implemented.
+prerequisites: []
+
+story: >
+  A new engineer on the platform team started a container yesterday, ran
+  `ip addr` inside it, and found it already had an address. Nobody had
+  configured one. They asked the obvious question — "so containers use DHCP?"
+  — and got three different answers from three different people.
+
+  The answer is no. But "no" on its own is worth very little, and the engineer
+  is right to be unconvinced by it: something assigned that address, and until
+  you can show what, "it just works" is indistinguishable from magic.
+
+  So you are going to show them both. First a real DHCP exchange, on a network
+  you build, with a server you run — so they know what one actually looks like.
+  Then the same network, an ordinary container, and not one DHCP packet.
+
+objectives:
+  - Run a DHCP server and client and capture the four-message exchange
+  - Identify DISCOVER, OFFER, REQUEST and ACK in a packet capture
+  - Show that obtaining a lease and applying it are two different steps
+  - Show that an ordinary container gets its address without sending any DHCP
+  - Name what assigns a container's address, and when
+  - Explain what happened to the lease concept in container networking
+
+task:
+  summary: Run a real DHCP exchange between two containers and capture it, then show that an ordinary container on the same network gets an address without DHCP at all.
+  description: >
+    Your Docker host is this sandbox, and it has `tcpdump` on it. The image you
+    need is already here: `busybox:1.36` carries both a DHCP server (`udhcpd`)
+    and a DHCP client (`udhcpc`).
+
+    **Build the network.** Create a user-defined bridge network named
+    `dhcp-lab` with the subnet `10.77.0.0/24`. Giving the subnet explicitly is
+    the point of this lab, not an incidental detail — you are about to watch two
+    different things hand out addresses on it, and you need to know which range
+    belongs to which.
+
+    **Part one — a real DHCP exchange.**
+
+    Run a container named `dhcp-server` on that network, with a fixed address of
+    `10.77.0.2` and `--cap-add=NET_ADMIN`, serving DHCP from the *upper quarter*
+    of the subnet: `10.77.0.129` to `10.77.0.190`. `udhcpd` reads a config file;
+    it needs at minimum a `start`, an `end`, an `interface`, and a subnet
+    option, and it will want a lease file that already exists. Run it in the
+    foreground so the container stays up.
+
+    Then run a container named `dhcp-client` on the same network, also with
+    `--cap-add=NET_ADMIN`, and have it ask for a lease with `udhcpc`.
+
+    One thing will surprise you, and it is worth knowing: `udhcpc` will report
+    that it obtained a lease, and the interface will not have changed. Obtaining
+    a lease and applying it are two separate steps — the client runs a script on
+    each event, and BusyBox ships no default one. Write a small script, point
+    `udhcpc` at it with `-s`, and have it add the offered address to the
+    interface. Two lines is enough. When it works, the client will hold *two*
+    addresses: the one Docker gave it and the one DHCP gave it.
+
+    Capture the exchange while it happens. The bridge is in this sandbox's own
+    network namespace, so `tcpdump` here can see it — find the interface with
+    `ip -o link show`, filter on the DHCP ports, and use `-v` so the message
+    types are named rather than just `BOOTP/DHCP`. Save the capture, as text,
+    to `dhcp.txt` in your workspace. Four messages matter, and you should be
+    able to point at each one.
+
+    **Part two — what containers actually do.**
+
+    Now run a container named `ipam-client` on the *same* network. An ordinary
+    one: no `--cap-add`, no `udhcpc`, nothing but a shell that stays running.
+
+    Look at its address. Then look at your capture again. It never sent a single
+    DHCP packet, and it has an address anyway — and the address is not from the
+    range your server hands out, because your server was never asked.
+
+    Write `ipam.txt` with what you conclude. The questions are in the file, and
+    the allowed answers are printed above each one.
+
+    **The required final state.**
+
+      - The `dhcp-lab` network exists.
+      - `dhcp-server`, `dhcp-client` and `ipam-client` are all running on it.
+      - `dhcp-client` holds an address from the DHCP pool.
+      - `ipam-client` holds an address, and it is not from the pool.
+
+setup:
+  docker:
+    images:
+      - busybox:1.36
+    # No network is seeded: creating it with a stated subnet is the first thing
+    # an addressing lab should have a student do, and `docker_network_exists`
+    # grades that it was.
+    files:
+      - path: dhcp.txt
+        content: |
+          # NET-010 — the exchange
+          #
+          # Paste your capture here, as text. Use `tcpdump -v` so the message
+          # types are named: without -v every packet reads only as
+          # "BOOTP/DHCP" and you cannot tell the four apart.
+          #
+          # Four messages matter. They are the whole protocol, and you should
+          # be able to say which host sent each one and why.
+
+      - path: ipam.txt
+        content: |
+          # NET-010 — so was it DHCP?
+          #
+          # Two questions. Each has a list of allowed values printed above it.
+          # Copy one value onto the labelled line exactly as it is printed,
+          # capitalisation included, and write nothing else on that line.
+          #
+          # ------------------------------------------------------------------
+          # 1. ipam-client sent no DHCP packets — your own capture shows that —
+          #    and it has an address anyway. What gave it one, and when?
+          #
+          #    Allowed values:
+          #      the daemon's IPAM driver, when the container was created
+          #      a DHCP server running inside the daemon
+          #      the kernel, when the interface came up
+          #      the image, which had one baked in
+          #
+          ipam_client_address_came_from =
+          #
+          # ------------------------------------------------------------------
+          # 2. A DHCP lease expires and has to be renewed. A container's
+          #    address does not. What happened to the lease?
+          #
+          #    Allowed values:
+          #      there is no lease — the address is held for the life of the container
+          #      the daemon renews it for the container
+          #      the lease is infinite
+          #      the address is renewed each time the container is restarted
+          #
+          what_happened_to_the_lease =
+
+  verify:
+    - type: docker_image_exists
+      image: busybox:1.36
+      label: The busybox:1.36 image is available
+    - type: workspace_file_exists
+      path: dhcp.txt
+      label: The capture worksheet is in the workspace
+    - type: workspace_file_exists
+      path: ipam.txt
+      label: The conclusions worksheet is in the workspace
+
+  verify_timeout_seconds: 180
+
+# Twelve checks. The address checks are the ones that carry the lab: they are
+# read from inside each container, so a lease that was offered but never
+# applied does not satisfy them, and a container that never asked cannot hold a
+# pool address.
+#
+# The labels are deliberately colourless — they are rendered next to every
+# check on Check Solution, so a label repeating a graded value would hand it
+# over.
+requirements:
+  # --- the network the student built ---------------------------------------
+  - type: docker_network_exists
+    name: dhcp-lab
+    driver: bridge
+    label: A user-defined bridge network exists with the name the task asked for
+
+  # --- part one: the server, the client, and a lease that was applied -------
+  - type: docker_container_running
+    name: dhcp-server
+    label: Container dhcp-server is running
+  - type: docker_container_image
+    name: dhcp-server
+    image: busybox:1.36
+    label: Container dhcp-server runs the image the task named
+  - type: docker_container_network
+    name: dhcp-server
+    network: dhcp-lab
+    label: Container dhcp-server is on that network
+
+  - type: docker_container_running
+    name: dhcp-client
+    label: Container dhcp-client is running
+  - type: docker_container_image
+    name: dhcp-client
+    image: busybox:1.36
+    label: Container dhcp-client runs the image the task named
+  - type: docker_container_network
+    name: dhcp-client
+    network: dhcp-lab
+    label: Container dhcp-client is on that network
+
+  # The one that proves DHCP happened end to end. The pool is the subnet's
+  # upper quarter; Docker's IPAM allocates from the bottom, so an address here
+  # can only have come from the server — and only if the client applied it.
+  - type: docker_exec_probe
+    container: dhcp-client
+    probe: address_in_range
+    interface: eth0
+    cidr: 10.77.0.128/26
+    expect: success
+    label: The client applied an address from the range the server hands out
+
+  # --- part two: an address with no DHCP behind it --------------------------
+  - type: docker_container_running
+    name: ipam-client
+    label: Container ipam-client is running
+  - type: docker_container_network
+    name: ipam-client
+    network: dhcp-lab
+    label: Container ipam-client is on that network
+
+  # Together these two are the lesson: it has an address, and that address is
+  # not one the DHCP server ever handed out.
+  - type: docker_exec_probe
+    container: ipam-client
+    probe: address_in_range
+    interface: eth0
+    cidr: 10.77.0.0/24
+    expect: success
+    label: The ordinary container has an address on that network
+  - type: docker_exec_probe
+    container: ipam-client
+    probe: address_in_range
+    interface: eth0
+    cidr: 10.77.0.128/26
+    expect: failure
+    label: The ordinary container's address did not come from the server
+
+  # --- the worksheets -------------------------------------------------------
+  - type: workspace_file_exists
+    path: dhcp.txt
+    contains:
+      - "Discover"
+      - "Offer"
+      - "Request"
+      - "ACK"
+    label: The capture shows all four messages of the exchange
+
+  - type: workspace_file_exists
+    path: ipam.txt
+    contains:
+      - "ipam_client_address_came_from = the daemon's IPAM driver, when the container was created"
+      - "what_happened_to_the_lease = there is no lease — the address is held for the life of the container"
+    label: Both conclusions were answered
+
+# `Reset Lab` restores this session's Docker environment to its baseline: every
+# container and network the student created is removed and both worksheets are
+# restored, so a student who filled one in and wants to start over gets a blank
+# one back. The busybox image is kept, because re-pulling it on every reset
+# would turn a two-second reset into a slow one.
+reset:
+  docker:
+    containers: true
+    volumes: true
+    networks: true
+    images: false
+    workspace: true
+
+hints:
+  - level: 1
+    text: >
+      Start with the server, and give it somewhere to write. `udhcpd` wants a
+      configuration file and a lease file that already exists; if the lease file
+      is missing it will say so and carry on in a way that looks like it worked.
+      Run it in the foreground, or the container exits the moment it daemonises
+      and you will be debugging the wrong thing.
+
+      For the capture: the bridge you created is an interface on *this* host,
+      not inside any container. `ip -o link show` here will show it, and its
+      name is derived from the network's id.
+  - level: 2
+    text: >
+      DHCP is four messages between a client that has no address yet and a
+      server it has not met, which is why the first two are broadcast. The
+      client asks, the server offers, the client asks for that specific offer,
+      and the server confirms. `tcpdump -v` prints the type of each one; without
+      `-v` you get the transport and nothing above it.
+
+      When `udhcpc` tells you it obtained a lease and nothing has changed, that
+      is not a failure — it is the division of labour. The client speaks the
+      protocol; a script applies the result. `udhcpc -s` names the script, and
+      the script is called with the event as its first argument and the offered
+      values in the environment.
+  - level: 3
+    text: >
+      The server's configuration needs `start`, `end`, `interface` and a subnet
+      option, and the task states the range to serve. Create the lease file
+      before starting it.
+
+      The client script needs to act on one event only — the one that means a
+      lease was granted — and add the address it was given to the interface it
+      was given. Both arrive in the environment. Check your work with
+      `ip -o addr show eth0` inside the client: when it is right, the interface
+      has two addresses, and the second one is from the range your server is
+      serving.
+
+      For part two, run something with no capability and no DHCP client at all,
+      look at its address, and compare it with the range you configured. Then
+      re-read your capture and count how many packets it sent.
+
+references:
+  - title: RFC 2131 — Dynamic Host Configuration Protocol
+    url: https://www.rfc-editor.org/info/rfc2131
+  - title: RFC 2132 — DHCP Options and BOOTP Vendor Extensions
+    url: https://www.rfc-editor.org/info/rfc2132
+  - title: Docker Engine — Networking overview
+    url: https://docs.docker.com/engine/network/
+  - title: Docker Engine — Bridge network driver
+    url: https://docs.docker.com/engine/network/drivers/bridge/
+  - title: Docker CLI reference — docker network create
+    url: https://docs.docker.com/reference/cli/docker/network/create/
+  - title: Docker CLI reference — docker container run
+    url: https://docs.docker.com/reference/cli/docker/container/run/
+  - title: tcpdump(8) — manual page
+    url: https://man7.org/linux/man-pages/man8/tcpdump.8.html
+  - title: ip-address(8) — iproute2 manual page
+    url: https://man7.org/linux/man-pages/man8/ip-address.8.html
+
+skills:
+  - net.l3.dhcp
+  - net.addressing.assignment
+  - net.container.ipam
+  - net.tools.tcpdump

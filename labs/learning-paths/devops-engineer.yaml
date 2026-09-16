@@ -254,6 +254,9 @@ stages:
       - lab: NET-008
         skills: [networking.tcp-udp]
         why: Captures a TCP handshake, a refused connection and a UDP datagram to see how connections really behave.
+      - lab: NET-010
+        skills: [networking.ip-addressing, docker.networking]
+        why: Runs a real DHCP exchange and then shows an ordinary container getting its address with no DHCP at all — the difference between a lease and IPAM.
       - lab: NET-021
         skills: [docker.networking]
         why: Replaces "containers are isolated" with something a new engineer can run — three network modes, one image, and the veth pair behind the isolation.

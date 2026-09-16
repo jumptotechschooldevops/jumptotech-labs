@@ -59,9 +59,9 @@
 # output (`veth`, `@if`, `master`), which a student who did not run it does not
 # have.
 #
-# NET-010 is this lab's second curriculum prerequisite and is not implemented.
-# The registry refuses a prerequisite that does not resolve, so only NET-005 is
-# declared — the policy NET-002 follows for NET-001.
+# NET-005 and NET-010 are this lab's curriculum prerequisites, and both are now
+# declared. NET-010 was unimplemented when this lab first shipped and was added
+# here when it landed.
 # ---------------------------------------------------------------------------
 id: NET-021
 slug: net-021-network-namespaces
@@ -77,9 +77,9 @@ environment:
   provider: docker
   isolation: container
 
-# NET-010 (DHCP and container IPAM) is designed but not implemented.
 prerequisites:
   - NET-005
+  - NET-010
 
 story: >
   "Containers are isolated" is in every onboarding deck at the bank and is
