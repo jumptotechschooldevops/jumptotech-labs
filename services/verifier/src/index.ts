@@ -20,6 +20,7 @@
 import {
   DockerUnreachableError,
   KubernetesUnreachableError,
+  WorkspaceUnavailableError,
   assertValidLabNamespace,
   requirementsNeedDocker,
   requirementsNeedKubernetes,
@@ -192,12 +193,30 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
   try {
     checks = await verifyRequirements(lab.requirements as readonly Requirement[], readers);
   } catch (error) {
-    // An environment we cannot read is not a failed lab — it is a broken
-    // environment, and the UI must say so rather than blame the student.
+    /*
+     * An environment we cannot read is not a failed lab — it is a broken
+     * environment, and the UI must say so rather than blame the student.
+     *
+     * The workspace is one of those environments. A Docker lab that grades an
+     * authored file reads it out of the terminal service over an internal
+     * HTTP call, and that service restarting throws `WorkspaceUnavailableError`
+     * from inside a handler. Without it here the error escaped this function
+     * and `POST /api/sessions/:id/check` answered 500 INTERNAL_ERROR: the
+     * student was told the platform broke, no check was reported skipped, and
+     * `jtt_verification_errors_total` — the metric the verification alert
+     * watches — never moved.
+     */
     const unreachable =
-      error instanceof KubernetesUnreachableError || error instanceof DockerUnreachableError;
+      error instanceof KubernetesUnreachableError ||
+      error instanceof DockerUnreachableError ||
+      error instanceof WorkspaceUnavailableError;
     if (unreachable) {
-      const substrate = lab.environment.provider === 'docker' ? 'Docker' : 'cluster';
+      const substrate =
+        error instanceof WorkspaceUnavailableError
+          ? 'lab workspace'
+          : lab.environment.provider === 'docker'
+            ? 'Docker'
+            : 'cluster';
       return {
         labId: lab.id,
         sandboxRef: namespace,
