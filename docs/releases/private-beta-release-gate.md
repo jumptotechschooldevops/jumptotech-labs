@@ -417,9 +417,9 @@ resilience findings:
 
 ## 12. Production-host readiness — 2026-09-16
 
-Added by `feat/production-host-readiness`, rebased onto `main` at `0f33b1f`
-(after §11). §1–§11 are left as recorded. The full procedure, audits and
-evidence are in
+Added by `feat/production-host-readiness`, rebased onto `main` at `9a0e22e`
+(after §11, and after PR #35's catalog validation). §1–§11 are left as
+recorded. The full procedure, audits and evidence are in
 [production-host-readiness.md](../development/production-host-readiness.md).
 
 **No production host has been deployed.** Nothing in §1–§11 or here is evidence

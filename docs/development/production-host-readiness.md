@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Branch** | `feat/production-host-readiness`, rebased onto `origin/main` at `0f33b1f` (PR #34 merged) |
+| **Branch** | `feat/production-host-readiness`, rebased onto `origin/main` at `9a0e22e` (PR #34 and PR #35 merged) |
 | **Date** | 2026-09-16 |
 | **Audience** | the operator who deploys JumpToTech Labs on its first real host, for about five trusted students |
 | **Production host deployed?** | **No.** Nothing in this document ran on a production host. No host, DNS record, public certificate, identity provider, firewall or backup destination exists. |
@@ -79,9 +79,10 @@ D2, not a default.
 | Claim | Status | Evidence |
 |---|---|---|
 | Five students: capacity 5/1 refusals, isolation, reset, soak, api restart, cleanup | PROVEN LOCALLY at `c8eb2c6` only | `make beta-validate`, release gate §4; **not re-run since** (§11.2) |
-| Unit/contract suites, typecheck, build | PROVEN IN CI at `c8eb2c6`; PROVEN LOCALLY on `0f33b1f` (release gate §11.1) and on this branch (§20) | `npm test`, `npm run typecheck`, `npm run build` |
+| Unit/contract suites, typecheck, build | PROVEN IN CI at `c8eb2c6` and on PR #35 (base `0f33b1f`, `gates` passed); PROVEN LOCALLY on this branch at `9a0e22e` (§20) | `npm test`, `npm run typecheck`, `npm run build` |
+| Lab catalog validation (PR #35) still passes with this branch's changes | PROVEN IN CI on PR #35 without them; PROVEN LOCALLY with them (§20) | `npm run validate:labs` |
 | Production renders with 443/80 public, loopback Grafana, postgres internal, per-service secrets | PROVEN IN CI + PROVEN LOCALLY | `check-secret-distribution.mjs`, `compose-secret-distribution.test.ts` |
-| `restart: unless-stopped` on every production service; `ServiceRestartLoop` | PROVEN LOCALLY (PR #34); CI runs these on a pull request | `private-beta-operations.test.ts`, `service-restart-alerts.test.yml` |
+| `restart: unless-stopped` on every production service; `ServiceRestartLoop` | PROVEN IN CI (PR #35's `gates` job ran them on a tree containing PR #34) and PROVEN LOCALLY; on a host: REQUIRES PRODUCTION HOST | `private-beta-operations.test.ts`, `service-restart-alerts.test.yml` |
 | TLS edge fails closed, redirect, WebSocket over TLS, renewal | PROVEN IN CI with test-only certificates | `make test-tls-edge` |
 | Backup → destroy → restore → identical fingerprint | PROVEN IN CI | `make db-restore-drill` |
 | NetworkPolicy enforcement, negative controls | PROVEN IN CI on kind, one node | `kind-integration` |
@@ -633,22 +634,29 @@ credentials, or delete or overwrite data.
 
 ## 20. Evidence for this branch
 
-Run on this branch after rebasing onto `0f33b1f`, on a development machine and in
-a local Linux container. **None of it is host evidence.**
+Run on this branch after rebasing onto `9a0e22e` (PR #35: catalog validation and
+its CI step), on a development machine and in a local Linux container. The
+rebase had no conflicts, and `git range-diff` shows every commit's change
+unchanged except one line of `package.json` context (`validate:labs` next to
+`production:config-check`). **None of it is host evidence.**
 
 | Command | Result |
 |---|---|
+| `npm run validate:labs` | PASS — 117 labs, 0 errors, 0 warnings |
 | `npm run typecheck` | PASS |
-| `npm test` | PASS |
+| `npm test` | PASS (includes `production-host-contract.test.ts`, `catalog-validation.test.ts`, `catalog-starter-state.test.ts`) |
 | `npm run build` | PASS |
-| `npm run test:composition` | PASS |
 | `node scripts/check-secret-distribution.mjs` | PASS |
 | `bash scripts/check-observability.sh` | PASS |
-| `bash scripts/test-db-backup-restore.sh` | PASS |
 | `npm run production:config-check -- --self-test` | PASS, 20 scenarios |
-| `bash scripts/test-production-host-scripts.sh` | PASS on macOS; PASS 5/5 consecutive runs in `node:22-bookworm-slim` after the S13 fix (includes the hung-daemon timeout case) |
+| `bash scripts/test-production-host-scripts.sh` | PASS on macOS (bash 3.2) and in `node:22-bookworm-slim` (bash 5.2), 41 cases each; before this rebase also 5/5 consecutive Linux runs after the S13 fix |
 
-CI `gates` runs the same on a pull request; until then these are PROVEN LOCALLY.
+In CI the two production-host steps sit in `gates` after PR #35's
+`Lab catalog validation` step and after `npm test`; they replace no existing step.
+PR #35's `gates` job took 3 min 50 s of its 20-minute limit, and the two steps
+take about one minute locally. They need no credentials and no Docker daemon
+beyond what `gates` already has. Until a pull request runs them on GitHub they
+are PROVEN LOCALLY, not PROVEN IN CI.
 
 ## 21. Rollback procedure
 
