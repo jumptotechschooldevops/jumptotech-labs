@@ -529,7 +529,7 @@ export function createTerminalServer(
      * /etc/shadow, and generating keys — this is the single most sensitive
      * stream in the platform. A byte count answers every operational question
      * worth asking (is the shell alive, is something flooding it) and reveals
-     * none of it. `terminal-no-content-logging.test.ts` asserts no logger call
+     * none of it. `test/terminal-content-logging.test.ts` asserts no log line
      * receives this value.
      */
     /*
