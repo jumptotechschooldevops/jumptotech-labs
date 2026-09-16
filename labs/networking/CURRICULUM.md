@@ -858,6 +858,36 @@ must find rather than a task they must perform.
   `127.0.0.11` and `alias`. N9 would let the platform run the lookup itself.
 - **Supported today?** Yes, with evidence-based verification.
 - **New capability** N8, N9 (preferred).
+- **Implemented 2026-09-16, and it needed neither N8 nor N9.**
+  · **N8 was not needed** — the lab is built from `alpine:3.20` and
+    `nginx:1.27-alpine`, which the Docker track already ships. `nslookup` is in
+    BusyBox, so no networking tooling image has to be pulled for this one.
+  · **N9 was half-unnecessary.** The plan graded the resolver from
+    `workspace_file_exists` and flagged that as forgeable. It is not: the
+    existing **`docker_container_file_content`** reads `/etc/resolv.conf` out of
+    each container through the daemon's **archive endpoint**, so the platform
+    observes the embedded DNS server itself with nothing executing in the
+    student's container. What N9 would still add is running the *lookup* —
+    proving resolution rather than proving the resolver. Measured while building
+    this: the archive endpoint **cannot** read procfs (`docker cp
+    <container>:/proc/net/dev` fails with "Could not find the file"), so this
+    technique extends to real files only, not to `/proc` or `/sys`. That rules it
+    out for NET-021's interface inventory.
+  · **The twist changed shape.** `setup.docker.containers` has no `aliases`
+    field, so "the same name resolves to a different container" is not
+    expressible in seeded state. The third container therefore teaches scope by
+    *absence* — running, healthy, on its own seeded network, and its name does
+    not resolve from the student's network — which is the same documented lesson
+    and is observable. The alias half is graded as a `scope.txt` answer naming
+    the `docker network connect` option.
+  Prerequisites are `NET-022` only; NET-012 is not implemented.
+  **Behaviour re-measured on Docker Engine 28.4.0, 2026-09-16**, because this
+  lab rests entirely on it: the default bridge gives a container the daemon
+  host's nameserver and a container name returns `NXDOMAIN`; a user-defined
+  bridge gives `nameserver 127.0.0.11` plus `options ndots:0`; `docker network
+  connect` rewrites a *running* container's `resolv.conf`; and one name resolves
+  per network, so the same name on another network is a different answer and
+  from a third network is none.
 
 ---
 
