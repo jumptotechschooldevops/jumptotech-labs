@@ -68,7 +68,9 @@ use `exec` rather than a URL.
    sudo install -d -m 0755 -o jtt-ops /srv/jumptotech/backups/status
    ```
 5. `make secrets-check` — every service receives exactly its secrets and ports.
-6. `prod up -d --build`, then §2.
+6. `prod up -d --build`, then §2 — including the two capacity gauges, which are
+   the only place the ceiling from step 1 can be read back from the running
+   platform.
 7. Optional until §8 is decided: install the alert destination,
    [alertmanager/secrets/README.md](../../infrastructure/observability/alertmanager/secrets/README.md).
 
@@ -110,11 +112,22 @@ alerts                         # nothing critical
 ready api 9400                 # 200, database and lab_registry ok
 ready terminal 9401
 ready sandboxd 9402            # 200, runtime ok
+q 'jtt_sessions_capacity_limit'       # 5, and jtt_sessions_per_student_limit 1
+q 'jtt_sessions_per_student_limit'
 q 'jtt:sessions_headroom:count'
 q 'jtt:tls_certificate_expiry:seconds / 86400'
 q 'jtt:backup_age:seconds / 3600'
 q 'jtt_network_isolation_attestation_valid'
 ```
+
+**Read the two limit gauges, not just the headroom.** `MAX_ACTIVE_SESSIONS`
+defaults to `20` (`.env.example`, `apps/api/src/config.ts`), and a deployment
+whose `.env` is missing the line from §1.1 runs with that ceiling and looks
+perfectly healthy: headroom reads 20, no alert fires, and the first sign is a
+host sized for five students carrying four times the sandboxes. The gauges are
+the deployed values, read from the running api — which is why they belong in
+the check that runs before every class rather than in a file somebody edited
+once.
 
 Then open the dashboard and read it top to bottom. Every row is one of these
 questions:
