@@ -1,0 +1,103 @@
+# JumpToTech Labs — browser E2E overlay. TEST ONLY; never deploy it.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.runtime.yml \
+#     -f e2e/docker-compose.e2e.yml --env-file e2e/.stack/stack.env up
+#
+# Driven by e2e/stack.sh, which writes that env file with per-run random
+# secrets. Paths below are relative to the repository root (the directory of
+# the first compose file).
+#
+# What this overlay changes, and nothing else:
+#
+#   · adds `oidc`, a loopback-only test identity provider (e2e/oidc-provider);
+#   · runs the api with AUTH_MODE=oidc against it — the browser sign-in path
+#     production uses, instead of development identity, which has no browser
+#     sign-in at all;
+#   · keeps api and terminal off the shared external `kind` network, whose
+#     service-name DNS resolves across every stack on the host;
+#   · mounts a kubeconfig that points nowhere, because this stack exercises the
+#     Linux track through sandboxd only. The Kubernetes provider reports itself
+#     unavailable; nothing pretends it works;
+#   · uses a sandbox image tag of its own, so building it never overwrites the
+#     shared `jumptotech/lab-linux:latest` other worktrees run from.
+#
+# NODE_ENV stays `development` (the base default). Production would refuse this
+# overlay outright: an http issuer, a localhost public origin and a non-Secure
+# cookie are each a startup refusal under NODE_ENV=production (BETA-P0-014).
+
+services:
+  oidc:
+    image: node:22-bookworm-slim
+    init: true
+    read_only: true
+    user: node
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command: ["node", "/opt/e2e-oidc/server.mjs"]
+    environment:
+      NODE_ENV: test
+      E2E_OIDC_PORT: 9500
+      E2E_OIDC_ISSUER: http://oidc:9500
+      E2E_OIDC_BROWSER_BASE: http://127.0.0.1:${E2E_OIDC_PORT:?set by e2e/stack.sh}
+      E2E_OIDC_CLIENT_ID: jumptotech-labs-e2e
+      E2E_OIDC_CLIENT_SECRET: ${E2E_OIDC_CLIENT_SECRET:?set by e2e/stack.sh}
+      E2E_OIDC_REDIRECT_URI: http://127.0.0.1:${WEB_PORT:?set by e2e/stack.sh}/auth/callback
+    volumes:
+      - type: bind
+        source: ./e2e/oidc-provider
+        target: /opt/e2e-oidc
+        read_only: true
+    ports:
+      - "127.0.0.1:${E2E_OIDC_PORT:?set by e2e/stack.sh}:9500"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9500/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - default
+
+  api:
+    environment:
+      AUTH_MODE: oidc
+      OIDC_ISSUER: http://oidc:9500
+      OIDC_CLIENT_ID: jumptotech-labs-e2e
+      OIDC_CLIENT_SECRET: ${E2E_OIDC_CLIENT_SECRET:?set by e2e/stack.sh}
+      OIDC_AUDIENCE: jumptotech-labs-e2e-api
+      PUBLIC_ORIGIN: http://127.0.0.1:${WEB_PORT:?set by e2e/stack.sh}
+      ALLOWED_ORIGINS: http://127.0.0.1:${WEB_PORT:?set by e2e/stack.sh}
+      DEV_STUDENT_HEADER_ENABLED: "false"
+      # The private-beta contract (BETA-P0-019): five students, one lab each.
+      MAX_ACTIVE_SESSIONS: "5"
+      MAX_ACTIVE_SESSIONS_PER_STUDENT: "1"
+      LINUX_SANDBOX_IMAGE: ${E2E_LINUX_SANDBOX_IMAGE:?set by e2e/stack.sh}
+      # Only the Linux provider is exercised; the others would only fail their
+      # image probes or start a Docker daemon per session on a CI runner.
+      TERRAFORM_PROVIDER_ENABLED: "false"
+      ANSIBLE_PROVIDER_ENABLED: "false"
+      CICD_PROVIDER_ENABLED: "false"
+      DOCKER_TRACK_ENABLED: "false"
+    volumes:
+      - type: bind
+        source: ./e2e/fixtures/kubeconfig-unavailable.yaml
+        target: /etc/jumptotech/kubeconfig.yaml
+        read_only: true
+    depends_on:
+      oidc:
+        condition: service_healthy
+    networks: !override
+      - default
+      - database
+
+  terminal:
+    environment:
+      ALLOWED_ORIGINS: http://127.0.0.1:${WEB_PORT:?set by e2e/stack.sh}
+    networks: !override
+      - default
+      - sandboxes
+
+  sandboxd:
+    environment:
+      DOCKER_TRACK_ENABLED: "false"
