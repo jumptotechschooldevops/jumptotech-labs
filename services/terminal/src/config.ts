@@ -1,3 +1,4 @@
+import type { OutputFlowOptions } from '@jumptotech/lab-orchestrator/output-flow';
 import {
   assertTlsVerificationEnabled,
   resolveBrokerClientTransport,
@@ -123,6 +124,13 @@ export interface TerminalConfig {
    * per window. 30 seconds against a 20-minute idle budget is invisible.
    */
   activityReportIntervalMs: number;
+  /**
+   * Overrides for the output flow-control limits (`DEFAULT_OUTPUT_FLOW`).
+   *
+   * Not read from the environment: the defaults are the policy, and this seam
+   * exists so a test can prove the bound without streaming megabytes.
+   */
+  outputFlow?: Partial<OutputFlowOptions>;
   shell: string;
   promptUser: string;
   promptHost: string;

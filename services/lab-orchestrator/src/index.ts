@@ -223,6 +223,7 @@ export {
 } from './session/reaper.js';
 
 export * from './session-token.js';
+export * from './output-flow.js';
 
 export { LAB_NETWORK_MODES, type LabNetworkMode } from './providers/catalog.js';
 

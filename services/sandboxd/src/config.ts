@@ -7,6 +7,7 @@
  * session id from the network.
  */
 
+import type { OutputFlowOptions } from '@jumptotech/lab-orchestrator';
 import {
   assertTlsVerificationEnabled,
   resolveBrokerServerTransport,
@@ -178,6 +179,13 @@ export interface SandboxdConfig {
   idleTimeoutMs: number;
   /** Hard ceiling on one PTY, whatever the traffic. */
   maxSessionMs: number;
+  /**
+   * Overrides for the output flow-control limits (`DEFAULT_OUTPUT_FLOW`).
+   *
+   * Not read from the environment: the defaults are the policy, and this seam
+   * exists so a test can prove the bound without streaming megabytes.
+   */
+  outputFlow?: Partial<OutputFlowOptions>;
 }
 
 function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {

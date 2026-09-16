@@ -149,6 +149,9 @@ export const SECURITY_EVENTS = [
   'dev_identity_in_use',
   // A client exceeded a route's request budget (apps/api/src/rate-limit.ts).
   'rate_limited',
+  // A shell's output outran its reader past the hard limit, so that one
+  // connection was closed (lab-orchestrator/src/output-flow.ts).
+  'output_backlog',
 ] as const;
 
 export type SecurityEventKind = (typeof SECURITY_EVENTS)[number];

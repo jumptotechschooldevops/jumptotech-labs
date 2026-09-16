@@ -41,6 +41,17 @@ export interface Shell {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
+  /**
+   * Stop producing output until `resume`.
+   *
+   * The server calls these when the browser falls behind, so a student's
+   * output cannot pile up in this process (see `output-flow.ts` in the
+   * orchestrator). For a local PTY that stops reading the master side; for a
+   * broker shell it stops reading the broker socket, which pushes the same
+   * backpressure on to `sandboxd`.
+   */
+  pause(): void;
+  resume(): void;
   /** Replaces any previous listener. */
   onData(listener: (data: string) => void): void;
   /** Replaces any previous listener. */
@@ -81,6 +92,8 @@ export function localShell(
     write: (data) => term.write(data),
     resize: (cols, rows) => term.resize(cols, rows),
     kill: () => term.kill(),
+    pause: () => term.pause(),
+    resume: () => term.resume(),
     onData: (listener) => {
       onData = listener;
     },
@@ -204,6 +217,8 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
                   /* already closing */
                 }
               },
+              pause: () => ws.pause(),
+              resume: () => ws.resume(),
               onData: (listener) => {
                 onData = listener;
               },

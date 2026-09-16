@@ -46,6 +46,7 @@ import {
   writeSessionDockerCerts,
   writeSessionKubeconfig,
 } from './credentials.js';
+import { createOutputFlow, type OutputFlow } from '@jumptotech/lab-orchestrator/output-flow';
 import { reportSessionActivity } from './activity.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
 import { brokerShell, localShell, ShellStartError, type Shell } from './shell.js';
@@ -128,6 +129,8 @@ export function createTerminalServer(
   const sessions = new Map<WebSocket, Session>();
   /** sessionId → socket, so the API can close one specific student's shell. */
   const bySessionId = new Map<string, WebSocket>();
+  /** The output flow control for each socket's current shell. */
+  const outputFlows = new Map<WebSocket, OutputFlow>();
   const workspaces = new SessionWorkspaces({
     root: config.workspaceRoot,
     secret: config.sessionSecret,
@@ -529,9 +532,37 @@ export function createTerminalServer(
      * none of it. `terminal-no-content-logging.test.ts` asserts no logger call
      * receives this value.
      */
+    /*
+     * Bounded, because the browser decides how fast this drains.
+     *
+     * `send` queues whatever the browser has not read yet in this process, so
+     * without this one student running `yes` behind a client that stops
+     * reading grows the service until it is killed for memory — and every
+     * other student's shell goes with it. The shell is paused while the socket
+     * is behind; a socket that falls past the hard limit anyway loses its own
+     * connection, and nobody else's.
+     */
+    outputFlows.get(ws)?.dispose();
+    const flow = createOutputFlow(
+      ws,
+      term,
+      () => {
+        securityMetrics?.securityEvents.inc({ service: 'terminal', event: 'output_backlog' });
+        obs.warn('security.event', {
+          securityEvent: 'output_backlog',
+          sessionId: sessions.get(ws)?.claims.sid,
+        });
+        endSession(ws);
+        ws.terminate();
+      },
+      config.outputFlow,
+    );
+    outputFlows.set(ws, flow);
+
     term.onData((data) => {
       terminalMetrics?.bytes.inc({ direction: 'out' }, data.length);
       send(ws, { type: 'output', data });
+      flow.afterSend();
     });
     term.onExit(({ exitCode, signal }) => {
       send(ws, { type: 'exit', exitCode, ...(signal !== undefined ? { signal } : {}) });
@@ -983,6 +1014,8 @@ export function createTerminalServer(
     terminalMetrics?.connectionsOpen.set(sessions.size);
     terminalMetrics?.closes.inc({ code: String(ws.readyState === ws.OPEN ? 'server' : 'client') });
     if (bySessionId.get(session.claims.sid) === ws) bySessionId.delete(session.claims.sid);
+    outputFlows.get(ws)?.dispose();
+    outputFlows.delete(ws);
     clearTimeout(session.idleTimer);
     clearTimeout(session.maxTimer);
     try {
