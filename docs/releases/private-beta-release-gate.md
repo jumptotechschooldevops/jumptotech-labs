@@ -92,6 +92,31 @@ tree, either locally on the development machine or on isolated CI runners.
   notification route is configured (§7).
 - **AWS labs are simulated** (local Linux sandbox, no credentials).
 
+### 2.1 Production-host evidence status
+
+Added by `feat/production-host-readiness` (2026-09-16). **No production host has
+been deployed.** Nothing in §1 or §3 is evidence about a host: those results come
+from a laptop and from CI runners. A row moves to **PROVEN ON HOST** only when
+the deployment's own evidence file — a copy of
+[production-host-evidence-template.md](production-host-evidence-template.md)
+filled on the host — records it.
+
+| Production-host item | Status | Procedure |
+|---|---|---|
+| Host exists; `make production-preflight` RESULT: PASS on it | **REQUIRES PRODUCTION HOST** | [production-host-readiness.md §14](../development/production-host-readiness.md) |
+| Production `.env` passes the real config gates (`make production-config-check`) | **REQUIRES PRODUCTION HOST** (the gates themselves: PROVEN LOCALLY, `--self-test`) | §6 |
+| Running stack passes `make private-beta-smoke` | **REQUIRES PRODUCTION HOST** | §16 |
+| Only 80/443 reachable from outside the host | **REQUIRES PRODUCTION HOST** | §15 step 17 |
+| Real certificate, DNS, scheduled renewal | **REQUIRES EXTERNAL DECISION** | §9 |
+| OIDC sign-in against the real provider | **REQUIRES EXTERNAL DECISION** | §8 |
+| Only beta students can sign in | **REQUIRES EXTERNAL DECISION** — the api admits any account the issuer authenticates | §8 |
+| Five students on the host: capacity measured and accepted | **NOT PROVEN** (laptop only; no acceptance thresholds defined) | §13 |
+| `make beta-validate` on the commit being deployed | **NOT PROVEN** (gated commit was `c8eb2c6`) | §13.1 |
+| Off-host, encrypted backup and a restore from it | **REQUIRES EXTERNAL DECISION** | §11 |
+| An alert delivered to a person | **REQUIRES EXTERNAL DECISION** | §12.1 |
+| Recovery after a Docker restart and a host reboot | **NOT PROVEN** | §17 |
+| Prometheus can read its scrape token on a Linux host | Defect found and fixed on this branch; PROVEN LOCALLY; **REQUIRES PRODUCTION HOST** to observe | §18 S1 |
+
 ## 3. Release-gate commands and evidence
 
 Run against `c8eb2c6`. Local runs used a dedicated kind cluster `jtt-p0-020`
@@ -208,13 +233,17 @@ deliberately leaves open.
   (the enforcement probe must PASS there).
 - Production hostname, DNS provider, and CA / ACME client for certificate
   issuance and renewal.
-- OIDC provider and the allowed user population.
+- OIDC provider and the allowed user population. **The api admits any account
+  the issuer authenticates** (authentication.md §4.7), so the provider must
+  restrict the client to the beta students before a public host is opened.
 - Operator private-access path (SSH tunnel to Grafana on `127.0.0.1:3001`).
 - **Off-host backup destination**, encryption, and a real restore drill.
 - **Alert notification destination** and on-call (the seam is
   `infrastructure/observability/alertmanager/secrets/webhook-url`).
 - Attestation re-probe cadence; metric/log retention.
 - **A per-student shell uid** if the cohort is ever untrusted (see §6).
+- Capacity acceptance thresholds for the host measurements, and the host
+  procedure itself: [production-host-readiness.md §15, §19, §22](../development/production-host-readiness.md).
 
 ## 8. Operator prerequisites and resource readiness
 
