@@ -2,398 +2,364 @@
 
 | | |
 |---|---|
-| **Branch** | `feat/production-host-readiness`, from `origin/main` at `cb7804a` |
+| **Branch** | `feat/production-host-readiness`, rebased onto `origin/main` at `0f33b1f` (PR #34 merged) |
 | **Date** | 2026-09-16 |
 | **Audience** | the operator who deploys JumpToTech Labs on its first real host, for about five trusted students |
-| **Production host deployed?** | **No.** Nothing in this document ran on a production host. No host, DNS record, certificate, identity provider or backup destination exists yet. |
+| **Production host deployed?** | **No.** Nothing in this document ran on a production host. No host, DNS record, public certificate, identity provider, firewall or backup destination exists. |
 
-> **Read this first.** Every status below says where its evidence came from.
-> `PROVEN LOCALLY` and `PROVEN IN CI` are software evidence from a laptop or a
-> GitHub runner. They are **never** evidence that a production host works. Only
-> a result recorded on the host itself, in the evidence checklist (§20), is
-> `PROVEN ON HOST` — and today nothing is.
-
-Status vocabulary used throughout:
+> **Read this first.** Every status says where its evidence came from.
+> `PROVEN IN CI` and `PROVEN LOCALLY` are software evidence from a GitHub runner
+> or a development machine. They are **never** evidence that a production host
+> works. The checklist in §23 is what must be true on the host before any student
+> gets access, and none of it is done.
 
 | Status | Meaning |
 |---|---|
-| **PROVEN LOCALLY** | a command in this repository passed on a development machine (Docker Desktop, macOS) |
 | **PROVEN IN CI** | a GitHub Actions job passed on an ephemeral `ubuntu-latest` runner |
-| **REQUIRES PRODUCTION HOST** | can only be proven on the real host; the procedure is here, the evidence is not |
-| **REQUIRES EXTERNAL DECISION** | blocked on a choice nobody has made (provider, destination, policy) |
+| **PROVEN LOCALLY** | a repository command passed on a development machine (macOS, Docker Desktop) or in a local Linux container |
+| **PROCEDURE READY** | the command, script or step exists and is tested against fakes; it has not run where it matters |
+| **REQUIRES PRODUCTION HOST** | can only be proven on the real host |
+| **REQUIRES EXTERNAL DECISION** | blocked on a choice or configuration outside this repository |
 | **NOT PROVEN** | no evidence of any kind |
-| **PROVEN ON HOST** | recorded on the production host itself, in that deployment's evidence checklist (§20). **Nothing has this status today** |
 
 ---
 
 ## 1. Executive summary
 
-The software release gate for the five-student private beta passed
-([private-beta-release-gate.md](../releases/private-beta-release-gate.md),
-BETA-P0-020). That gate ran on a laptop and on CI runners. **The platform has
-never run on a production host**, and several things that decide whether it
-works there cannot be seen from a laptop.
+The software release gate passed (BETA-P0-020), and PR #34 re-ran the gates it
+could on the current tree and added unattended restart for production (release
+gate §11). **The platform has never run on a production host.**
 
-This pass made the first deployment controlled and measurable rather than
-improvised:
+This branch makes the first deployment a procedure with evidence:
 
-- **A production-host defect, found and fixed.** `make observability-token`
-  wrote the Prometheus scrape token `0600`, owned by the operator. Prometheus runs
-  as uid 65534. On a Linux host every scrape would fail with `permission denied`
-  and every target would be down; Docker Desktop's file sharing hid it on every
-  laptop. Reproduced with the real `prom/prometheus:v2.54.1` image and Linux file
-  ownership (target `down`, `lastError: ... permission denied`), fixed (`0644` in
-  a `0711` directory; also proven `up`), and pinned by a regression test (§18, S1).
-- **`npm run production:config-check`.** Resolves the five production compose
-  files with the operator's `.env` and runs the **real** api, terminal and
-  sandboxd configuration loaders against what Compose resolves for each service,
-  plus a production-host contract (exposure, privilege, pinned gates, the 5/1
-  capacity contract, durability). Its `--self-test` proves 20 fail-closed
-  scenarios against the real files and loaders.
-- **`scripts/production-preflight.sh`** (`make production-preflight`). About 80
-  host checks, fail-closed, secrets reported as `NAME: present` only, and
-  `MANUAL CHECK REQUIRED` for everything a script cannot prove.
-- **`scripts/private-beta-smoke.sh`** (`make private-beta-smoke`). About 50
-  non-destructive checks of the running stack. Writes an evidence file.
-- **`scripts/host-capacity-sample.sh`**. Records CPU, memory, disk, containers
-  and Pods while five students work. Host sizing is not proven, so this measures
-  and does not judge.
-- **An exact deployment procedure** (§15), recovery drills (§17), rollback
-  (§21) and an evidence checklist (§20).
+- **A Linux-host defect, fixed** (§18.1). `make observability-token` wrote the
+  scrape token `0600`; Prometheus runs as uid 65534 and could not have read it on
+  a Linux host. Docker Desktop hides this.
+- **`make production-config-check`** renders the five production files with the
+  operator's `.env`, checks them against a host contract (which also requires
+  PR #34's `restart: unless-stopped`), and runs the **real** api, terminal and
+  sandboxd configuration loaders on what Compose resolved.
+- **`make production-preflight`** — host checks before the first start, fail-closed.
+- **`make private-beta-smoke`** — read-only checks of the running stack, each
+  labelled with the kind of proof it is.
+- **`scripts/host-capacity-sample.sh`** — measures host usage; never judges it.
+- The deployment, capacity, alert, recovery and rollback procedures, and the
+  evidence template.
 
-**Verdict for a production host: NOT READY TO INVITE STUDENTS until the
-blockers in §22 are closed.** Several of those blockers are external decisions,
-not software: who may sign in, the off-host backup destination, where alerts go,
-and the host itself.
+**Verdict: the tooling is ready for review; a production host is NOT ready for
+students.** §23 lists what remains; most of it is external decisions and a real host.
 
 ## 2. Current production architecture
 
-One Linux host runs everything. From repository evidence
-(`docker-compose*.yml`, [runtime-architecture.md](../runtime-architecture.md)):
+One Linux host runs everything (`docker-compose*.yml`,
+[runtime-architecture.md](../runtime-architecture.md)):
 
 ```
 Internet ─443─► web (nginx, TLS gate) ─┬─► api :4000 ──► postgres :5432   (internal "database" network)
          ─80──► redirect + ACME         │      │  └────► kind API server  (external "kind" network)
-                                        │      └───────► sandboxd :4002   (Docker socket; the only holder)
+                                        │      └───────► sandboxd :4002   (holds the only Docker socket)
                                         └─► terminal :4001 ─► sandboxd (attach), kind (per-session kubeconfig)
                                                              └► session sandboxes ("jumptotech-sandboxes" network)
 127.0.0.1:3001 ─► Grafana (in Prometheus's netns) ◄── Prometheus :9090, Alertmanager :9093 (loopback in that netns)
-kind node container ("jumptotech-labs-control-plane") — a whole Kubernetes node, privileged, on the same host
+kind node container "jumptotech-labs-control-plane" — a whole Kubernetes node, privileged, on the same host
 Per-session sandboxes — created by sandboxd; Docker-track sandboxes run --privileged (docker:27-dind)
 ```
 
-The production command is the runbook's `prod` function:
-[private-beta-operations.md §1](../runbooks/private-beta-operations.md) — five
-compose files and `--profile observability`, in that order.
+Every production service is `restart: unless-stopped` (PR #34). The production
+command is the runbook's `prod` function
+([private-beta-operations.md §1](../runbooks/private-beta-operations.md)).
 
-**Substrate.** The only Kubernetes substrate this repository implements and
-proves is the kind cluster created on the same host by `npm run cluster:up`.
-[kubernetes-network-security.md §8](../kubernetes-network-security.md) calls kind
-"development infrastructure, not a production substrate", and the production
-substrate is **DECISION REQUIRED** (P0-015 D1/D2). For a first host with five
-trusted students, the practical choice is kind on the host — and that is itself a
-decision to record (§19, D2), not a default to drift into.
+The only Kubernetes substrate the repository implements and proves is kind on the
+same host. [kubernetes-network-security.md §8](../kubernetes-network-security.md)
+calls kind development infrastructure; choosing it for the first host is decision
+D2, not a default.
 
-## 3. What is already proven
+## 3. What is proven, and where
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Five students, capacity 5/1 refusals, isolation, reset, soak, api restart, cleanup | PROVEN LOCALLY (at `c8eb2c6`) | `make beta-validate`, release gate §4. `main` is 16 commits past `c8eb2c6` and has not been re-run (the unmerged `feat/beta-overnight-hardening` report says the same) |
-| Unit and contract suites | PROVEN IN CI (at `c8eb2c6`) | `npm test`, release gate §3 |
-| Production composition publishes only 443/80 (+ loopback Grafana); postgres internal; secrets distributed per service | PROVEN IN CI | `node scripts/check-secret-distribution.mjs`, `compose-secret-distribution.test.ts` |
-| TLS edge fails closed; redirect; WebSocket over TLS; renewal | PROVEN IN CI with test-only certificates | `make test-tls-edge`, CI `tls-edge-integration` |
-| PostgreSQL backup → destroy → restore → identical fingerprint | PROVEN IN CI | `make db-restore-drill`, CI `postgres-integration` |
-| NetworkPolicy enforcement on kind, with negative controls | PROVEN IN CI (kind, one node) | CI `kind-integration` |
-| Rules, alerts, dashboards valid; label policy | PROVEN IN CI | `scripts/check-observability.sh`, `npm test` |
-| Production config gates fail closed against the real compose files and real loaders (20 scenarios, including a malformed `.env` never echoing its value) | PROVEN LOCALLY (this branch) | `npm run production:config-check -- --self-test`; added to CI `gates`, which runs on pull requests — not yet run there |
-| Preflight, smoke and sampler decisions; no secret printed; only read-only docker/kubectl verbs | PROVEN LOCALLY on macOS bash 3.2 **and** in a Linux container (bash 5.2, GNU coreutils 9.1) | `bash scripts/test-production-host-scripts.sh` (40 cases) |
-| Scrape token readable by Prometheus under Linux file ownership | PROVEN LOCALLY with the real Prometheus image and Linux ownership semantics | §18 S1 |
+| Five students: capacity 5/1 refusals, isolation, reset, soak, api restart, cleanup | PROVEN LOCALLY at `c8eb2c6` only | `make beta-validate`, release gate §4; **not re-run since** (§11.2) |
+| Unit/contract suites, typecheck, build | PROVEN IN CI at `c8eb2c6`; PROVEN LOCALLY on `0f33b1f` (release gate §11.1) and on this branch (§20) | `npm test`, `npm run typecheck`, `npm run build` |
+| Production renders with 443/80 public, loopback Grafana, postgres internal, per-service secrets | PROVEN IN CI + PROVEN LOCALLY | `check-secret-distribution.mjs`, `compose-secret-distribution.test.ts` |
+| `restart: unless-stopped` on every production service; `ServiceRestartLoop` | PROVEN LOCALLY (PR #34); CI runs these on a pull request | `private-beta-operations.test.ts`, `service-restart-alerts.test.yml` |
+| TLS edge fails closed, redirect, WebSocket over TLS, renewal | PROVEN IN CI with test-only certificates | `make test-tls-edge` |
+| Backup → destroy → restore → identical fingerprint | PROVEN IN CI | `make db-restore-drill` |
+| NetworkPolicy enforcement, negative controls | PROVEN IN CI on kind, one node | `kind-integration` |
+| Rules, alerts, Alertmanager config, dashboards | PROVEN IN CI | `scripts/check-observability.sh`, promtool tests |
+| Production config gates fail closed against the real files and loaders (20 scenarios) | PROVEN LOCALLY | `npm run production:config-check -- --self-test`; in CI `gates`, not yet run on GitHub |
+| Preflight, smoke and sampler decisions; no secret printed; only read-only docker/kubectl verbs; a hung daemon ends as a FAIL | PROVEN LOCALLY on macOS bash 3.2 and in a Linux container (bash 5.2, GNU coreutils) | `bash scripts/test-production-host-scripts.sh` |
+| Scrape token readable by Prometheus under Linux ownership | PROVEN LOCALLY with the real image | §18.1 |
 
-## 4. What remains unproven
+## 4. What is not proven
 
 | Item | Status |
 |---|---|
-| Anything running on a production host | **REQUIRES PRODUCTION HOST** |
-| `make beta-validate` on the current `main` (only `c8eb2c6` was gated) | NOT PROVEN |
-| Host sizing (CPU, memory, disk) for five students | NOT PROVEN — measured on one laptop only; §13 |
-| A public CA certificate, real DNS, renewal on a schedule | REQUIRES EXTERNAL DECISION, then PRODUCTION HOST |
-| OIDC sign-in against a real identity provider over TLS | REQUIRES EXTERNAL DECISION, then PRODUCTION HOST |
+| Anything on a production host | REQUIRES PRODUCTION HOST |
+| `make beta-validate` on the current tree | NOT PROVEN |
+| Host sizing for five students | NOT PROVEN (§13) |
+| Public DNS, a real CA certificate, scheduled renewal | REQUIRES EXTERNAL DECISION |
+| Sign-in through a real identity provider | REQUIRES EXTERNAL DECISION |
 | Admission restricted to the beta students | REQUIRES EXTERNAL DECISION (§8) |
-| Off-host backup copy, encryption, and a restore from it | REQUIRES EXTERNAL DECISION, then PRODUCTION HOST |
-| An alert reaching a person | REQUIRES EXTERNAL DECISION, then PRODUCTION HOST |
-| External firewall / only 80 and 443 reachable from the internet | REQUIRES PRODUCTION HOST |
-| Recovery after a Docker daemon restart or host reboot (no `restart:` policy on `main`; kind node behaviour) | NOT PROVEN |
-| NetworkPolicy enforcement on the production substrate | REQUIRES PRODUCTION HOST (probe must PASS there) |
-| The React UI driven in a real browser end to end | NOT PROVEN here (another branch is working on browser E2E) |
-| The new CI gates on GitHub | NOT PROVEN until a pull request runs them |
+| Off-host encrypted backup and a restore from it | REQUIRES EXTERNAL DECISION |
+| An alert delivered to a person | REQUIRES EXTERNAL DECISION |
+| Provider firewall admitting only 80/443/SSH | REQUIRES PRODUCTION HOST |
+| Unattended recovery after a Docker restart or reboot | NOT PROVEN on a host (the policy exists; the kind node's behaviour is unmeasured) |
+| NetworkPolicy enforcement on the host's substrate | REQUIRES PRODUCTION HOST (probe must PASS there) |
+| The new CI steps on GitHub | NOT PROVEN until a pull request runs them |
 
 ## 5. Host prerequisites
 
-Every row cites its evidence. Nothing here is invented: where the repository does
-not justify a number, the row says so and §13 measures it.
-
-### 5.1 Required
+### 5.1 Required (repository evidence cited)
 
 | Requirement | Value | Evidence |
 |---|---|---|
-| OS | Linux | Every image is a Linux image; kind and `--privileged` DinD sandboxes need a Linux kernel. `production-preflight.sh` fails on anything else |
-| Architecture | `x86_64` (amd64) proven; `arm64` builds but is not proven in CI | `api.Dockerfile`/`sandboxd.Dockerfile` map only amd64/arm64; CI runs `ubuntu-latest` amd64 |
-| Docker Engine | rootful, reachable by the operator, `OSType=linux`, socket at exactly `/var/run/docker.sock` | `docker-compose.runtime.yml` mounts that path into sandboxd; kind nodes and Docker-track sandboxes are privileged containers |
-| Docker Compose | v2 plugin supporting `!reset` and `!override` | the production overlays use both. Proven functionally by `production:config-check` (it renders the stack); observed locally with v2.39.2 |
-| `DOCKER_SOCKET_GID` | the gid owning `/var/run/docker.sock` | default `0` only works on Docker Desktop (`docker-compose.runtime.yml` comment); preflight compares |
-| kind | v0.31.0, node image `kindest/node:v1.34.0` | CI `kind-integration` pins `KIND_VERSION: v0.31.0`; `infrastructure/kind/cluster.yaml` |
-| kubectl | v1.34.2 | CI pin; `api.Dockerfile` `KUBECTL_VERSION` |
-| Node.js | 22 (`.nvmrc`), plus `npm ci` in the checkout | operator tooling runs on the host: `make secrets-check`, `npm run tls:check`, `npm run verify:network-policy`, `npm run production:config-check`, `make beta-validate` |
-| `git`, `openssl`, `curl`, `iproute2` (`ss`) | installed | clone/record commit; `make secrets` uses `openssl rand`; smoke uses `curl`; preflight uses `ss` |
-| Outbound registry and download access at build/first start | Docker Hub (`node`, `nginx`, `postgres`, `prom/*`, `grafana/*`, `docker:27-dind`, `busybox`, lab images such as `nginx:1.27-alpine`, `nginx:stable`), `registry.npmjs.org`, `download.docker.com`, `dl.k8s.io`, `kind.sigs.k8s.io` | Dockerfiles download the Docker CLI and kubectl; `cluster-up.sh` may apply a manifest from GitHub; labs pull images on first start (five-student runbook §1 step 6) |
-| Checkout readable by container users | files other-readable, directories other-executable (clone under `umask 022`) | api/sandboxd run as uid 1000, Prometheus/Alertmanager 65534, Grafana 472, nginx workers 101; all read bind mounts. Preflight `checkout.bind-mounts` |
-| Clock | NTP-synchronized | OIDC token checks allow 5 s of skew (`authentication.md` §4.4); certificates and the attestation are time-bound |
-| Free ports | host 80 and 443 | the production publication; preflight `exposure.port-80/443` |
+| OS | Linux | Linux images; kind and `--privileged` DinD need a Linux kernel |
+| Architecture | amd64 proven in CI; arm64 builds, not CI-proven | `api.Dockerfile`/`sandboxd.Dockerfile` map amd64/arm64; CI is `ubuntu-latest` |
+| Docker Engine | rootful; socket at exactly `/var/run/docker.sock` | `docker-compose.runtime.yml` mounts that path into sandboxd |
+| `DOCKER_SOCKET_GID` | the socket's group id | default `0` works only on Docker Desktop (compose comment) |
+| Docker Compose | v2 with `!reset`/`!override` | used by the production overlays; proven by rendering (`production-config-check`) |
+| kind / kubectl | v0.31.0 / v1.34.2; node image `kindest/node:v1.34.0` | CI pins; `infrastructure/kind/cluster.yaml` |
+| Node.js | 22 + `npm ci` | `.nvmrc`; host tooling is Node |
+| Tools | git, openssl, curl, iproute2 (`ss`), coreutils `timeout` | `make secrets`, smoke, preflight |
+| Registry and download access at build and first start | Docker Hub, `registry.npmjs.org`, `download.docker.com`, `dl.k8s.io` | Dockerfiles; lab images pulled on first start |
+| Checkout readable by container users | files other-readable, directories other-executable | uids 1000 (api, sandboxd), 65534 (Prometheus, Alertmanager), 472 (Grafana), 101 (nginx) read bind mounts |
+| Clock | NTP-synchronized | OIDC allows 5 s skew; certificates and the attestation are time-bound |
+| Ports | 80 and 443 free | the production publication |
 
 ### 5.2 Recommended
 
 | Recommendation | Why |
 |---|---|
-| A dedicated host with **no other local accounts** besides operators | the kind admin kubeconfig and the scrape token must be other-readable for their containers (`cluster-up.sh` writes kubeconfigs `0644`); `docker` group membership is root-equivalent |
-| Checkout directory mode `0750` (or `0700`), owned by the operator | keeps other local accounts away from the files above. Docker resolves bind mounts as root, so containers are unaffected. Preflight `checkout.mode` |
-| `BACKUP_DIR` on a different filesystem (ideally a different disk) from Docker's data root | [postgres-backup-restore.md §5.5](../runbooks/postgres-backup-restore.md) |
-| Pre-pull `docker:27-dind` | first Docker-track start otherwise depends on Docker Hub; preflight warns |
+| A dedicated host with no local accounts but operators | kind kubeconfigs (cluster-admin) and the scrape token are `0644` by necessity; `docker` membership is root-equivalent |
+| Checkout directory `0750`, owned by the operator | keeps other local accounts away from those files; containers are unaffected |
+| `BACKUP_DIR` on a different disk from Docker's data | [postgres-backup-restore.md §5.5](../runbooks/postgres-backup-restore.md) |
+| Pre-pull `docker:27-dind` | the first Docker-track start otherwise depends on Docker Hub |
 
-### 5.3 Unknown — must be measured or decided
+### 5.3 UNKNOWN — MEASURE ON HOST
 
-| Item | Why it is unknown | How to close it |
+| Item | Known | How to close |
 |---|---|---|
-| CPU count | never measured on a server | §13 |
-| Memory | laptop: ~0.7 GiB idle platform + ~0.7 GiB kind node; DOCKER-001 may use up to `DOCKER_SANDBOX_MEMORY=2g`; one laptop run died of *host* memory pressure (release gate §8, five-student runbook §9) | §13 |
-| Disk | Docker images, the kind node, per-session DinD image stores, Prometheus (15 d retention), PostgreSQL growth and on-host backups — none sized | §13; alert thresholds are 15 % / 8 % free |
-| Kernel settings (`fs.inotify.max_user_watches`, `max_user_instances`) | kind runs a full node on the host kernel; the repository sets and proves no value | preflight records them as INFO; raise only if the kind node or Pods fail with "too many open files", and record what you set |
-| cgroup version / driver | not constrained by the repository; the laptop ran cgroup v2 | preflight records it |
-| IPv6 | `443:8443`/`80:8080` publish on every address family Docker is configured for ([runtime-architecture.md §11.7](../runtime-architecture.md)) | decide; add an AAAA record only if 443/80 really serve IPv6 |
-| Rootless Docker | not proven; privileged containers are required | use rootful (preflight warns) |
+| CPU | nothing about a server | §13 |
+| Memory | laptop only: ~0.7 GiB idle platform + ~0.7 GiB kind node; DOCKER-001 may use up to `DOCKER_SANDBOX_MEMORY=2g` | §13 |
+| Disk | nothing sized: images, kind node, DinD stores, 15 d Prometheus, PostgreSQL, on-host backups | §13 |
+| Kernel (`fs.inotify.*`) | no value set or proven | preflight records it as INFO |
+| cgroup version, IPv6, rootless Docker | not constrained or not proven | preflight records/warns |
+
+The preflight judges memory and disk **only** against the repository's alert
+thresholds (memory < 10 % / 5 % available, disk < 15 % / 8 % free). Those are
+pressure alarms, not sizing: a host that passes them may still be too small.
 
 ### 5.4 Filesystem layout
 
-The runbooks already use these paths; nothing here is new.
-
 | Path | Owner / mode | Holds |
 |---|---|---|
-| `/srv/jumptotech-labs` | `jtt-ops`, `0750` | the checkout, `.env` (`0600`), TLS key (`0600`), scrape token (`0644` in `0711`), kind kubeconfigs |
-| `/srv/jumptotech/backups/postgres` | `jtt-ops`, `0700` | `BACKUP_DIR`: archives (`0600`) and checksums |
-| `/srv/jumptotech/backups/status` | `jtt-ops`, `0755` | `BACKUP_STATUS_DIR`: backup outcome files (`0644`), mounted read-only into the api. Must not overlap `BACKUP_DIR` |
-| `/var/log/jumptotech` | `jtt-ops` | cron job logs |
-| `/srv/jumptotech/evidence` | `jtt-ops`, `0700` | preflight reports, smoke evidence, capacity samples, the filled checklist (§20). Never a secret |
-| `/var/lib/docker` (Docker data root) | root | named volumes `jumptotech-labs-postgres-data`, `-prometheus-data`, `-grafana-data`, `-alertmanager-data`; images; the kind node |
-
-`jtt-ops` is the runbooks' name for the operator account. It is in the `docker`
-group, which is root-equivalent: choose who has it accordingly.
+| `/srv/jumptotech-labs` | `jtt-ops`, `0750` | checkout, `.env` (`0600`), TLS key (`0600`), scrape token (`0644` in `0711`), kind kubeconfigs |
+| `/srv/jumptotech/backups/postgres` | `jtt-ops`, `0700` | `BACKUP_DIR` |
+| `/srv/jumptotech/backups/status` | `jtt-ops`, `0755` | `BACKUP_STATUS_DIR`, read-only in the api; must not overlap `BACKUP_DIR` |
+| `/var/log/jumptotech` | `jtt-ops` | cron logs |
+| `/srv/jumptotech/evidence` | `jtt-ops`, `0700` | preflight, smoke, capacity and probe outputs; the filled template. Never a secret |
+| Docker data root | root | named volumes `jumptotech-labs-{postgres,prometheus,grafana,alertmanager}-data`, images, kind node |
 
 ## 6. Production configuration contract
 
-`npm run production:config-check` is the executable form of this section
-(`test-support/production-host-contract.ts`). What it requires of the merged
-configuration:
+`make production-config-check` is its executable form
+(`test-support/production-host-contract.ts`).
 
-| Check id | Contract |
+| Check | Contract |
 |---|---|
 | `compose.services` | exactly alertmanager, api, grafana, postgres, prometheus, sandboxd, terminal, web |
 | `exposure.published-ports` | only `443→web:8443`, `80→web:8080`, `127.0.0.1:*→grafana:3000` |
-| `exposure.database` | postgres publishes nothing; `database` network is `internal: true` with members api and postgres only |
-| `exposure.observability` | Prometheus and Alertmanager on `127.0.0.1` in one namespace; no lifecycle API; Grafana anonymous and basic auth off |
-| `privilege.docker-socket` | only sandboxd mounts `/var/run/docker.sock` |
-| `privilege.containers` | no compose service privileged, on the host network, or given capabilities (except the terminal's SETUID/SETGID drop) |
+| `exposure.database` | postgres unpublished; `database` network internal, members api and postgres only |
+| `exposure.observability` | Prometheus/Alertmanager on `127.0.0.1` in one namespace; no lifecycle API; Grafana anonymous and basic auth off |
+| `privilege.docker-socket` | only sandboxd mounts the socket |
+| `privilege.containers` | no compose service privileged, host-networked, or given capabilities (except the terminal's SETUID/SETGID drop) |
 | `runtime.docker-socket-gid` | sandboxd joins the socket's group |
-| `gates.node-env` | api, terminal, sandboxd run `NODE_ENV=production` (pinned; `.env` cannot change it — self-test proves) |
-| `gates.authentication` | `AUTH_MODE=oidc` pinned; `DEV_STUDENT_HEADER_ENABLED` not `true` |
-| `gates.tls-edge` | `WEB_TLS=required` pinned; `PUBLIC_ORIGIN` a bare `https://` origin, the same for api and web; served-certificate health check |
-| `gates.network-policy` | neither `NETWORK_POLICY_ENABLED` nor the attestation requirement is waived |
-| `capacity.beta-contract` | `MAX_ACTIVE_SESSIONS=5`, `MAX_ACTIVE_SESSIONS_PER_STUDENT=1`. **The compose default is 20**; `.env` must set 5 |
-| `durability.volumes` | postgres, prometheus, alertmanager, grafana data are named volumes |
-| `durability.healthchecks` | postgres, api, terminal, web have health checks |
-| `durability.restart-policy` | WARN on `main`: no service has a restart policy (§17) |
-| `backup.status-dir` | the api mounts an absolute host status directory read-only; WARN when it is the in-checkout default |
-| `loader.api`, `loader.terminal`, `loader.sandboxd` | the real loaders accept the resolved environment: secrets present, not placeholders, long enough, distinct; OIDC https; cookie Secure; CORS origins https and include `PUBLIC_ORIGIN`; broker and database transport rules; runtime owner |
+| `gates.node-env` | `NODE_ENV=production` pinned for api, terminal, sandboxd |
+| `gates.authentication` | `AUTH_MODE=oidc` pinned; development student header off |
+| `gates.tls-edge` | `WEB_TLS=required` pinned; `PUBLIC_ORIGIN` a bare https origin, identical for api and web; served-certificate health check |
+| `gates.network-policy` | NetworkPolicy and its attestation not waived |
+| `capacity.beta-contract` | `MAX_ACTIVE_SESSIONS=5`, `MAX_ACTIVE_SESSIONS_PER_STUDENT=1` (compose default is 20) |
+| `durability.volumes` | named volumes for postgres, prometheus, alertmanager, grafana |
+| `durability.healthchecks` | postgres, api, terminal, web |
+| `durability.restart-policy` | every service exactly `restart: unless-stopped` (PR #34); `always` is a FAIL because it would undo `prod stop web` |
+| `backup.status-dir` | absolute host directory, read-only in the api; WARN on the in-checkout default |
+| `loader.api/terminal/sandboxd` | the real loaders accept the resolved environment (secrets present, strong, distinct; https OIDC; Secure cookie; https CORS including the origin; broker/database transport; runtime owner) |
 | `attestation.expected-digest` | INFO: the NetworkPolicy contract digest the api will demand |
 
-`.env` must set, in addition to what `make secrets` generates:
-`PUBLIC_ORIGIN`, `ALLOWED_ORIGINS` (= `PUBLIC_ORIGIN`), `OIDC_ISSUER`,
-`OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (from the identity provider, ≥ 16
-characters), `OIDC_AUDIENCE`, `OIDC_REDIRECT_URI` (optional; must be
-`PUBLIC_ORIGIN/auth/callback`), `RUNTIME_OWNER_ID`, `MAX_ACTIVE_SESSIONS=5`,
-`MAX_ACTIVE_SESSIONS_PER_STUDENT=1`, `BACKUP_STATUS_DIR`, `DOCKER_SOCKET_GID`,
-`JTT_COMMIT` and `JTT_VERSION`.
-
-A variable exported in the operator's shell overrides `.env` for Compose. The
-preflight warns about each one it finds.
+`.env` must set, beyond `make secrets`: `PUBLIC_ORIGIN`, `ALLOWED_ORIGINS`,
+`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_AUDIENCE`,
+`RUNTIME_OWNER_ID`, `MAX_ACTIVE_SESSIONS=5`, `MAX_ACTIVE_SESSIONS_PER_STUDENT=1`,
+`BACKUP_STATUS_DIR`, `DOCKER_SOCKET_GID`, `JTT_COMMIT`, `JTT_VERSION`. A shell
+export overrides `.env` for Compose; the preflight warns about each one.
 
 ## 7. Network exposure contract
 
-| Surface | Contract | Proven by | Status |
-|---|---|---|---|
-| Docker publications | 443, 80, `127.0.0.1:3001` only | `check-secret-distribution.mjs`, `production:config-check`, smoke `exposure.published` | PROVEN IN CI (config); REQUIRES PRODUCTION HOST (running) |
-| PostgreSQL | no host port; internal network | same; smoke `exposure.database-network` | PROVEN IN CI (config); REQUIRES PRODUCTION HOST |
-| api, terminal, sandboxd, metrics | unpublished; `/internal`, `/metrics`, `/health`, `/readyz` not routed by nginx | `compose-secret-distribution.test.ts`; smoke `edge.internal-not-routed`, `edge.not-routed/*` | PROVEN IN CI (config); REQUIRES PRODUCTION HOST |
-| Grafana | `127.0.0.1:3001` for an SSH tunnel; a login page to other containers on the default network (documented limitation) | `private-beta-operations.test.ts` | PROVEN IN CI (config) |
-| kind API server | `127.0.0.1:16443` (`cluster.yaml`) | cluster config | PROVEN IN CI (kind) |
-| Host firewall | only 80, 443 and operator SSH reachable from outside. **Docker-published ports bypass ufw/firewalld `INPUT` rules**: filter in the provider firewall or the `DOCKER-USER` chain | smoke `exposure.public-ip` (from the host) + a scan from outside | **REQUIRES PRODUCTION HOST** |
-| Node-local destinations from Pods (kubelet `10250`, instance metadata) | not governed by NetworkPolicy; needs host firewall or CNI host policy | [kubernetes-network-security.md §9](../kubernetes-network-security.md) | REQUIRES EXTERNAL DECISION (P0-015 D3) |
+Repository configuration decides what Docker publishes. **It cannot prove what
+the host's provider firewall or security group admits.**
 
-## 8. Authentication contract
+### 7.1 Required host ingress
 
-What holds (PROVEN IN CI, `production-oidc-config`, `oidc-flow-hardening`,
-`token-storage` suites; [authentication.md §4](../authentication.md)):
+| Port | From | Purpose |
+|---|---|---|
+| TCP 443 | wherever students are | the application (TLS) |
+| TCP 80 | anywhere (required by ACME HTTP-01, if chosen) | redirect to https; ACME challenge |
+| TCP 22 (or the operator's SSH port) | operator addresses only | administration; Grafana through `ssh -L 3001:127.0.0.1:3001` |
+| everything else | nowhere | — |
 
-- production pins `AUTH_MODE=oidc`; development auth and the development student
-  header are refused at config load and at request time;
-- https issuer, confidential client secret, exact callback on `PUBLIC_ORIGIN`,
-  Secure cookie, CSRF origin guard, durable PostgreSQL sessions, PKCE/state/nonce;
-- the self-test proves these refusals survive the real compose merge (§6).
+Egress: registries and downloads at build and first start (§5.1), the identity
+provider (discovery, JWKS, token endpoint), NTP, the ACME CA if chosen, and the
+backup and alert destinations once chosen.
 
-What does **not** hold, and blocks a public host:
+### 7.2 Evidence by layer
 
-> **ADMISSION — BLOCKER, REQUIRES EXTERNAL DECISION.** The api admits **any**
-> account the configured issuer authenticates, and provisions it as a student
-> ([authentication.md §4.7](../authentication.md), "WHO MAY SIGN IN"). With a
-> public identity provider, anyone on the internet could sign in and start a
-> privileged Docker-in-Docker sandbox. Until the platform has its own admission
-> rule, the identity provider **must** restrict the client to the beta students
-> (application assignment, a dedicated tenant, an invite-only directory). The
-> choice is provider-specific and was deliberately not guessed here. Proven only
-> by the smoke's `auth.admission` manual check: a non-beta account is refused.
+| Layer | Contract | Status |
+|---|---|---|
+| Compose publications | 443, 80, `127.0.0.1:3001` only; postgres, api, terminal, sandboxd, metrics, Prometheus, Alertmanager unpublished | PROVEN IN CI (rendered config); smoke `exposure.published` REQUIRES PRODUCTION HOST |
+| nginx routing | `/internal`, `/metrics`, `/health`, `/readyz` not routed | PROVEN IN CI (config); smoke REQUIRES PRODUCTION HOST |
+| kind API server | `127.0.0.1:16443` | PROVEN IN CI (kind) |
+| Host firewall | Docker-published ports bypass ufw/firewalld `INPUT`; filter in the provider firewall or `DOCKER-USER` | REQUIRES PRODUCTION HOST — scan from another network |
+| Pod → node-local destinations (kubelet 10250, instance metadata) | not governed by NetworkPolicy | REQUIRES EXTERNAL DECISION (P0-015 D3) |
 
-Also open (authentication.md §4.7): federated logout behaviour; idle timeout
-(sessions have a 12 h absolute lifetime by default).
+## 8. Authentication and identity contract
+
+What holds (PROVEN IN CI; [authentication.md §4](../authentication.md)): production
+pins OIDC; development auth and the development header are refused at config load
+and per request; https issuer, confidential client, exact callback, Secure cookie,
+CSRF origin guard, PKCE/state/nonce, durable sessions. The self-test shows these
+refusals survive the real compose merge.
+
+**Sign-in admission — REQUIRES EXTERNAL DECISION. Not fixed.**
+
+- *What the code does:* after verifying the ID token, the api upserts the user and
+  provisions them as `STUDENT`. There is no allowlist, group/role claim check,
+  email-domain rule or invitation table.
+- *Classification:* it is the **current, documented product policy**
+  (authentication.md §4.7, "WHO MAY SIGN IN — DECISION REQUIRED"), which means
+  **application-level admission is missing**. For the private beta, restricting
+  sign-in is therefore an **operational requirement that today can only be met in
+  the identity provider's configuration**.
+- *Why it matters:* with a public identity provider, anyone who can authenticate
+  there could start a lab, including a privileged Docker-in-Docker sandbox, and
+  take one of the five slots.
+- *What must be configured before inviting the students* (provider-specific; no
+  provider is chosen here):
+  1. a dedicated OIDC client for this deployment;
+  2. the provider configured so that **only** the five beta accounts can obtain a
+     token for that client (for example: user or application assignment required,
+     a dedicated tenant or realm containing only those users, or an invite-only
+     directory);
+  3. self-service sign-up disabled for that tenant or client;
+  4. proven by signing in with an account that is *not* a beta student and being
+     refused **at the provider** (smoke `auth.admission`, MANUAL).
+- A platform-side restriction is a separate product change; this branch does not
+  invent one.
+
+Also open: federated logout and idle timeout (authentication.md §4.7, D13).
 
 ## 9. TLS contract
 
-PROVEN IN CI with test-only certificates ([production-tls.md](../runbooks/production-tls.md)):
-the web container refuses to start without a valid certificate and key for
-`PUBLIC_ORIGIN`'s host, a key readable by group/others, an expired or mismatched
-certificate, or a missing chain; TLS 1.2/1.3 AEAD only; HSTS; `421` on SNI/Host
-mismatch; port 80 serves only the ACME route and a 301; renewal is hot and
-keeps open WebSockets. There is no plaintext fallback: the self-test shows
-`WEB_TLS=off` in `.env` cannot reach the edge.
+| Claim | Status |
+|---|---|
+| Web container refuses to start without a valid certificate/key for `PUBLIC_ORIGIN`, with a group/other-readable key, an expired or mismatched certificate, or a missing chain; TLS 1.2/1.3 AEAD; HSTS; `421` on SNI/Host mismatch; port 80 only redirects and serves ACME; hot renewal keeps WebSockets | PROVEN BY REPOSITORY TEST (CI `tls-edge-integration`, test-only CA) |
+| `WEB_TLS` cannot be turned off from `.env` | PROVEN LOCALLY (self-test) |
+| Preflight: files present, key mode, `tls:check --offline` against `PUBLIC_ORIGIN` | PROCEDURE READY |
+| The edge serves the installed certificate to a request for the public name made from the host | REQUIRES REAL HOST (smoke `edge.*`) |
+| The name resolves publicly to the host; a public CA chain browsers trust; reachable from outside; renewal on a schedule | REQUIRES DNS/CA — REQUIRES EXTERNAL DECISION (D4, D5) |
 
-REQUIRES EXTERNAL DECISION: the CA and ACME client, the hostname and DNS
-provider, HSTS preload/CAA/IPv6, key custody (production-tls.md §10).
-REQUIRES PRODUCTION HOST: issuance, DNS resolution, scheduled renewal, the
-external `tls:check`.
+No public certificate validity is claimed anywhere in this repository.
 
 ## 10. Database contract
 
-- PostgreSQL 16 (`postgres:16-alpine`) in a named volume; health-checked; only
-  the api reaches it, on an internal network; plaintext only on that declared
-  single-host bridge (`DATABASE_SAME_HOST_PLAINTEXT` is set in compose, once).
-- Forward-only migrations run at api start (`DATABASE_AUTO_MIGRATE=true`). Take a
-  `pre-migration` backup before starting a new api image that adds a migration
-  ([postgres-backup-restore.md §5.2](../runbooks/postgres-backup-restore.md)).
-- `POSTGRES_PASSWORD` must be generated (≥ 16 characters, not a placeholder).
-  The shipped placeholder is refused in production (self-test).
-- Managed PostgreSQL is not supported by these scripts (they `docker exec`).
+| Claim | Status |
+|---|---|
+| PostgreSQL 16 in named volume `jumptotech-labs-postgres-data`, health-checked, internal network, `restart: unless-stopped` | PROVEN IN CI (rendered config); config-check `durability.*` |
+| `prod down` keeps the volume; this branch never runs `down -v`, never removes a volume and never edits data | PROVEN LOCALLY (the script tests assert read-only verbs) |
+| Forward-only migrations at api start; take a `pre-migration` backup before an image with a new migration | documented, [postgres-backup-restore.md §5.2](../runbooks/postgres-backup-restore.md) |
+| A placeholder or short database password is refused | PROVEN LOCALLY (self-test) |
+| The volume on the host's disk, and its growth | REQUIRES PRODUCTION HOST |
 
-Status: PROVEN IN CI (persistence suites, restore drill); REQUIRES PRODUCTION
-HOST (the volume on the host's disk, growth).
+## 11. Backup and restore contract
 
-## 11. Backup/restore contract
+| Aspect | Status |
+|---|---|
+| `scripts/db-backup.sh`: custom-format archive, checksum, read-back, retention 14 d / min 7 | PROVEN IN CI |
+| `db-restore.sh --verify-only` / `--into` (beside production) / `--replace` (renames, never drops) and their refusals | PROVEN IN CI |
+| No destructive default: no `db-restore` make target; a restore requires an explicit mode and confirmation | PROVEN IN CI (`test-db-backup-restore.sh`) |
+| Schedule (cron in [private-beta-operations.md §1.2](../runbooks/private-beta-operations.md)) | PROCEDURE READY; REQUIRES PRODUCTION HOST |
+| Freshness/verification alerts via `BACKUP_STATUS_DIR` | PROVEN IN CI (rules); REQUIRES PRODUCTION HOST |
+| **Off-host destination** (`BACKUP_COPY_HOOK` is only a seam) | **REQUIRES EXTERNAL DECISION** |
+| **Encryption** (archives are not encrypted) | **REQUIRES EXTERNAL DECISION** |
+| Off-host retention, credentials, who may restore, `.env`/TLS-key recovery | REQUIRES EXTERNAL DECISION |
+| A restore from an off-host copy onto a fresh host | NOT PROVEN |
 
-| Aspect | State | Status |
-|---|---|---|
-| Backup mechanism (`scripts/db-backup.sh`: custom-format archive, checksum, read-back, retention 14 d / min 7) | implemented | PROVEN IN CI |
-| Restore (`db-restore.sh --verify-only / --into / --replace`), refusals | implemented | PROVEN IN CI |
-| Scheduling | cron example in [private-beta-operations.md §1.2](../runbooks/private-beta-operations.md) | REQUIRES PRODUCTION HOST |
-| Freshness and verification alerts (`BackupStale`, `BackupMissedTwice`, `BackupLastRunFailed`, `BackupVerifyFailed`) | implemented; the api reads `BACKUP_STATUS_DIR` | PROVEN IN CI (rules); REQUIRES PRODUCTION HOST |
-| **Off-host destination** | `BACKUP_COPY_HOOK` seam only; no provider chosen | **REQUIRES EXTERNAL DECISION — BLOCKER** |
-| **Encryption** | archives are not encrypted | **REQUIRES EXTERNAL DECISION — BLOCKER** |
-| Off-host retention, access control, credentials | depends on the destination | REQUIRES EXTERNAL DECISION |
-| Who may restore | Docker access = root-equivalent | REQUIRES EXTERNAL DECISION |
-| A restore from the off-host copy onto a fresh host | never done | NOT PROVEN |
-| `.env` and TLS key recovery (not in any database archive) | no location decided | REQUIRES EXTERNAL DECISION |
-| RPO 24 h / RTO 4 h | targets, not measurements ([postgres-backup-restore.md §4](../runbooks/postgres-backup-restore.md)) | REQUIRES PRODUCTION HOST |
-
-The smoke reports `backup.offhost` as **FAIL** until `jtt_backup_last_success_offhost`
-reads 1: without an off-host copy, a lost host loses every student record.
+No provider is chosen here. The smoke's `backup.offhost` is a FAIL until
+`jtt_backup_last_success_offhost` reads 1.
 
 ## 12. Observability contract
 
-| What | Status |
+| Layer | Status |
 |---|---|
-| Rules, alerts, dashboards valid; label policy; promtool unit tests | PROVEN IN CI |
-| Monitoring private: loopback in one namespace, no socket, no student/cluster/database networks | PROVEN IN CI (config) |
-| Scrape token readable by Prometheus on Linux | fixed on this branch; PROVEN LOCALLY (§18 S1); REQUIRES PRODUCTION HOST (`observability.targets`) |
-| All targets `up` on the host; Grafana dashboard renders through the SSH tunnel | REQUIRES PRODUCTION HOST (smoke) |
-| Host gauges reflect the right filesystems (`container_root` is Docker's storage) | REQUIRES PRODUCTION HOST ([private-beta-operations.md §9](../runbooks/private-beta-operations.md)) |
-| **Alert destination** (webhook URL, chat, mail, paging) and on-call | **REQUIRES EXTERNAL DECISION — BLOCKER** |
-| Delivery of an alert to a person | NOT PROVEN |
-| External reachability monitoring | REQUIRES EXTERNAL DECISION |
-| Metric/log retention beyond 15 days / container stdout | REQUIRES EXTERNAL DECISION |
+| **Prometheus config** — scrape jobs using `credentials_file`, loopback listener, no lifecycle API, 15 d retention | PROVEN IN CI (promtool check config; compose contract) |
+| **Alert rules** — including PR #34's `ServiceRestartLoop` (`changes(up[15m]) >= 6`) and the BETA-P0-018 set | PROVEN IN CI (promtool unit tests, including `service-restart-alerts.test.yml`) |
+| **Alertmanager config** — one `default` webhook receiver read from `secrets/webhook-url`; inhibit rules | PROVEN IN CI (amtool check-config) |
+| Monitoring private (loopback, one namespace, no socket, no student/cluster/database network) | PROVEN IN CI (config) |
+| Scrape token readable by Prometheus on Linux | PROVEN LOCALLY (§18.1); REQUIRES PRODUCTION HOST (smoke `observability.targets`) |
+| Targets up; dashboard renders through the tunnel; host gauges on the right filesystems | REQUIRES PRODUCTION HOST |
+| **Human delivery** — any destination configured, any alert received by a person | **NOT PROVEN / REQUIRES EXTERNAL DECISION** (D6) |
 
-Alertmanager has one receiver, `default`, a webhook read from
-`infrastructure/observability/alertmanager/secrets/webhook-url`; every severity
-routes to it. No destination is configured or invented here.
+### 12.1 Alert delivery drill (after D6)
 
-### 12.1 Alert delivery drill (once a destination is installed)
-
-1. Install the destination (README in that directory; file `0644`, directory
-   `0711`), then `prod kill -s HUP alertmanager`.
-2. Prometheus is wired to Alertmanager:
-   `prod exec -T prometheus wget -qO- http://127.0.0.1:9090/api/v1/alertmanagers`
-   lists `127.0.0.1:9093` under `activeAlertmanagers`.
-3. Send a clearly labelled drill alert that expires by itself (it changes no
-   platform state; it exists only in Alertmanager until `--end`):
+1. Install the destination (`infrastructure/observability/alertmanager/secrets/README.md`;
+   file `0644`, directory `0711`), then `prod kill -s HUP alertmanager`.
+2. `prod exec -T prometheus wget -qO- http://127.0.0.1:9090/api/v1/alertmanagers`
+   lists `127.0.0.1:9093` as active.
+3. Send a labelled drill alert that expires by itself (it exists only in Alertmanager):
    ```bash
    end=$(date -u -d '+10 minutes' +%Y-%m-%dT%H:%M:%SZ)
    prod exec -T alertmanager amtool alert add alertname=JttAlertDeliveryDrill severity=warning service=drill \
      --annotation=summary="Delivery drill - no action required" --end="$end" \
      --alertmanager.url=http://127.0.0.1:9093
    ```
-4. Within `group_wait` (30 s) plus the destination's own latency, a person
-   confirms receipt. After `--end`, the resolved notification arrives
-   (`send_resolved: true`).
+4. A person confirms receipt (after `group_wait`, 30 s), and then the resolved notice.
 5. `prod logs --since 15m alertmanager | grep -i notify` shows no delivery error.
-6. Record in §20: destination type (not the URL), who received it, sent and
-   received times.
-
-This proves Alertmanager → destination → person. The Prometheus → Alertmanager
-leg is step 2 plus CI's promtool rule tests.
+6. Record the destination type (never the URL), the recipient, and sent/received times.
 
 ## 13. Five-student capacity validation
 
-**What exists.** `make beta-validate` proved five concurrent synthetic students
-on a laptop (Docker Desktop, 10 CPUs, 7.65 GiB VM) at `c8eb2c6`. Its resource
-figures are orders of magnitude from one machine
-([five-student-beta-validation.md §9](../runbooks/five-student-beta-validation.md)).
-**No host sizing is proven**, and no acceptance threshold (start latency,
-Check latency, headroom) has been defined as a product requirement.
+| | Status |
+|---|---|
+| Five concurrent synthetic students (harness) | PROVEN LOCALLY at `c8eb2c6` (laptop) |
+| Measurement procedure and sampler | PROCEDURE READY |
+| Measured on a production host | **NOT PROVEN** |
+| Acceptance thresholds | **REQUIRES EXTERNAL DECISION** (D8) |
 
-**What must be repeated on the host**, and why each:
+**Nothing here claims a host supports five students.** What to collect, and from where:
 
-| Measurement | Why it cannot be carried over | Source on the host |
-|---|---|---|
-| Peak CPU load and memory with five active | different CPU, memory, kernel, no VM | `host-capacity-sample.sh` (`host.csv`) |
-| Peak per-container memory (DinD daemon, kind node, TF-001 burst) | the dominant costs were never measured on server hardware | `containers.csv` |
-| Disk used by five sessions and after End | DinD image stores and first pulls | `host.csv` Docker disk; `docker system df` before/after |
-| Container count and Pod count at five | sanity against leaks | `host.csv`; harness "nothing orphaned" |
-| Session start latency per provider | image pull and host speed | harness report `concurrentStart[].ms`; `histogram_quantile(0.95, sum by (le, provider) (rate(jtt_lab_provision_duration_seconds_bucket[30m])))` |
-| Check Solution latency | host speed | harness `solveTimings`; `histogram_quantile(0.95, sum by (le, provider) (rate(jtt_verification_duration_seconds_bucket[30m])))` |
-| Terminal responsiveness | **not instrumented**: no metric measures keystroke echo latency | the five-person rehearsal (B) records it by hand; NOT MEASURED otherwise |
-| Service restarts and errors during the run | host stability | `docker inspect -f '{{.RestartCount}}'`; `changes(process_start_time_seconds[1h])`; `sum by (outcome) (increase(jtt_lab_start_outcome_total[1h]))` |
+| Evidence | Source on the host |
+|---|---|
+| Five concurrent sessions admitted; 6th refused; per-student refusal | `make beta-validate` phases 1 and 4 (§13.1) |
+| Session creation and sandbox startup latency per provider | harness `concurrentStart[].ms`; `histogram_quantile(0.95, sum by (le, provider) (rate(jtt_lab_provision_duration_seconds_bucket[30m])))` |
+| Verification latency and results | harness `solveTimings`; `histogram_quantile(0.95, sum by (le, provider) (rate(jtt_verification_duration_seconds_bucket[30m])))` |
+| Terminal connectivity | harness phase 2 (five PTYs, per-shell markers); echo latency is **not instrumented** — testers record it in §13.2 |
+| CPU, memory, swap, disk | `host-capacity-sample.sh` → `host.csv` |
+| Container, sandbox and Pod counts; per-container memory | `host.csv`, `containers.csv` |
+| Session cleanup | harness after-End phase (active 0, nothing orphaned); `docker ps --filter label=jumptotech.io/managed=true` empty |
+| Failure rate | `sum by (outcome) (increase(jtt_lab_start_outcome_total[1h]))`; alerts that fired |
+| Service restarts | smoke `stack.*-restarts`; `ServiceRestartLoop` |
 
-**Operational alarms that exist** (not product SLOs): `ApiLatencyHigh`
-(p95 > 1 s), `VerificationSlow` (Check p95 > 10 s), `ProvisioningSlow`
-(start p95 > 60 s), `HostCpuSaturated` (load5/CPU > 2), `HostMemoryPressure`
-(< 10 % available), `HostDiskSpaceLow` (< 15 % free). Record whether any fired
-during the run. **Whether the measured values are acceptable for students is
-DECISION REQUIRED** (§19, D8) — this procedure does not invent a pass mark.
+Existing alarms (operational, not SLOs) to note if they fire: `ApiLatencyHigh`
+(p95 > 1 s), `VerificationSlow` (> 10 s), `ProvisioningSlow` (> 60 s),
+`HostCpuSaturated`, `HostMemoryPressure`, `HostDiskSpaceLow`, `ServiceRestartLoop`.
 
-### 13.1 A — synthetic gate on the host, before first production start
+### 13.1 A — synthetic gate on the host, before the first production start
 
-The harness drives only a loopback stack with development auth, so it cannot run
-against the production stack (OIDC). It also must not share the `kind` network
-with a running production stack: two stacks there resolve each other's `api`
-and `terminal` names. So it runs **before** the production stack is first started.
+The harness drives a loopback stack with development auth, so it cannot target the
+production stack. It also must not run while the production stack is on the same
+`kind` network, because the two stacks resolve each other's `api`/`terminal`.
 
-1. Complete §15 steps 1–9 (host, checkout, cluster, images). Do not start `prod`.
-2. Make a second checkout at the **same commit**: `git clone … /srv/jumptotech-validation && git -C /srv/jumptotech-validation checkout <commit>`, then `npm ci` there.
-3. In that checkout, `make secrets`, then set in its `.env` (never in production's):
+1. Complete §15 steps 1–9. Do not start `prod`.
+2. Make a second checkout at the **same commit** in `/srv/jumptotech-validation` and run `npm ci` there.
+3. There, run `make secrets`, then set in **its** `.env`:
    ```
    COMPOSE_PROJECT_NAME=jtt-hostval
    RUNTIME_OWNER_ID=jtt-hostval
@@ -405,38 +371,27 @@ and `terminal` names. So it runs **before** the production stack is first starte
    DEV_STUDENT_HEADER_ENABLED=true
    NETWORK_POLICY_ATTESTATION_REQUIRED=true
    ```
-   and follow [five-student-beta-validation.md §1](../runbooks/five-student-beta-validation.md) steps 1–5 from that checkout (`npm run cluster:up` reuses the existing cluster and writes that checkout's kubeconfigs).
-4. In a second shell, from the production checkout:
+   and follow [five-student-beta-validation.md §1](../runbooks/five-student-beta-validation.md) steps 1–5 there.
+4. From the production checkout, in a second shell:
    `make host-capacity-sample ARGS="--out-dir /srv/jumptotech/evidence/capacity-synthetic --interval 15 --duration 2400 --kubeconfig infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml"`
-5. From the validation checkout: `make beta-validate ARGS="--report-dir /srv/jumptotech/evidence/beta-validate"`. Record RESULT and the report path.
-6. Stop the sampler (Ctrl-C prints the peaks) and keep both CSVs.
-7. Tear the validation stack down **without** `-v`: from the validation checkout,
+5. From the validation checkout: `make beta-validate ARGS="--report-dir /srv/jumptotech/evidence/beta-validate"`.
+6. Stop the sampler with Ctrl-C; keep both CSVs and the report.
+7. Stop the validation stack **without** removing volumes: from its checkout,
    `docker compose -f docker-compose.yml -f docker-compose.runtime.yml -f docker-compose.observability.yml -f docker-compose.production-observability.yml --profile observability down`.
-   Then list what it left: `docker volume ls --filter name=jtt-hostval` and remove
-   only those synthetic volumes, by exact name, after reading the list. Confirm no
-   container carries the validation owner:
-   `docker ps -a --filter label=jumptotech.io/managed=true`.
-8. The validation run rewrote the cluster's NetworkPolicy attestation for its own
-   environment. §15 step 12 writes the production one; preflight
-   `k8s.attestation-digest` must PASS before `prod up`.
+   List `docker volume ls --filter name=jtt-hostval`; remove only those synthetic
+   volumes, by exact name, after reading the list.
+8. The run rewrote the cluster attestation for its own environment. §15 step 12
+   must write the production one, and preflight `k8s.attestation-digest` must PASS.
 
-### 13.2 B — five-person rehearsal on the production stack, before students
+### 13.2 B — five-person rehearsal on the production stack
 
-After §15 is complete and the smoke passes, five operators or trusted testers
-with beta accounts:
-
-1. Start the sampler as in A step 4 (`--out-dir …/capacity-rehearsal`).
-2. Note the time. Everyone presses Start within the same minute, one each on
-   LINUX-001, DOCKER-001, K8S-001, ANSIBLE-001, TF-001 (the harness's lab mix).
-3. Each types in the terminal for 10 minutes, including one heavy step (DOCKER-001
-   `docker build`, TF-001 `terraform apply`, ANSIBLE-001 a playbook), and records
-   whether echo ever felt delayed (seconds, by hand).
-4. Each presses Check Solution, then Reset once, then End Lab.
-5. Record, for the window: the two `histogram_quantile` queries above, the
-   restart counts, `sum by (outcome) (increase(jtt_lab_start_outcome_total[1h]))`,
-   the alerts that fired (`alerts`), and the sampler peaks.
-6. After End: `q 'sum(jtt_sessions_active)'` is 0 and
-   `docker ps --filter label=jumptotech.io/managed=true` lists nothing.
+After §15 and a passing smoke, five operators or trusted testers with beta accounts:
+start the sampler (`capacity-rehearsal`); press Start within one minute on
+LINUX-001, DOCKER-001, K8S-001, ANSIBLE-001 and TF-001; work for 10 minutes,
+including one heavy step each (`docker build`, `terraform apply`, a playbook),
+noting any echo delay; Check Solution, Reset once, End Lab. Then record the PromQL
+above, restart counts, alerts fired and the sampler peaks, and confirm active
+sessions and managed containers return to zero.
 
 ## 14. Preflight procedure
 
@@ -445,314 +400,305 @@ cd /srv/jumptotech-labs
 make production-preflight ARGS="--backup-dir /srv/jumptotech/backups/postgres --report /srv/jumptotech/evidence/preflight-$(date -u +%Y%m%dT%H%M%SZ).txt"
 ```
 
-- Exit `0` means no FAIL. Every `MANUAL CHECK REQUIRED` line still needs a person.
-- Run it before the first start, after any change to `.env`, the certificate, the
-  cluster, the host or the commit, and before every beta week.
-- It checks: host OS/arch/memory/clock; tool versions against CI pins; Docker
-  daemon, rootful, compose, socket and its group; disk against the alert
-  thresholds; git commit and cleanliness; checkout and bind-mount permissions;
-  `.env` mode, every required name (present/MISSING, never values), shell
-  overrides; TLS files, key mode and `tls:check --offline`; scrape token
-  readability and match (by hash); alert destination file; kind cluster,
-  network, kubeconfigs, nodes, `seccompDefault`, admission policies; the
-  NetworkPolicy attestation's verdict, cluster UID, age **and digest against what
-  this `.env` will demand**; sandbox images; ports 80/443; other public
-  listeners; backup directories, overlap, filesystem and schedule;
-  `make secrets-check`; `npm run production:config-check`.
-- It changes nothing and prints no secret (`scripts/test-production-host-scripts.sh`
-  asserts both).
+- Exit `0` means no FAIL; every `MANUAL CHECK REQUIRED` still needs a person. WARN
+  means "allowed, but not the proven configuration"; FAIL means "do not start".
+- Non-destructive and repeatable: it only reads (the test harness fails on any
+  docker or kubectl verb that is not read-only); the only file it writes is `--report`.
+- Bounded: docker/kubectl/kind calls time out after `JTT_COMMAND_TIMEOUT` (60 s)
+  and `npx` after `JTT_TOOL_TIMEOUT` (300 s); a timeout is a FAIL.
+- Secret-safe: `.env` is parsed as data, never sourced; secrets print as
+  `NAME: present`/`MISSING`; the scrape token is compared by hash; the config check
+  redacts loader and compose messages.
+- Checks: OS/arch; memory and disk against alert thresholds (sizes INFO only);
+  clock; tool versions against CI pins; Docker daemon, rootful, Compose, socket,
+  group; git commit; checkout and bind-mount readability; `.env` mode, required
+  names, shell overrides; TLS files, key mode, `tls:check --offline`; scrape token
+  mode and match; alert destination file; kind cluster, network, kubeconfigs,
+  nodes, `seccompDefault`, admission policies; the attestation's verdict, cluster,
+  age and digest against this `.env`; sandbox images; ports 80/443; other public
+  listeners; backup directories, overlap, filesystem, schedule;
+  `make secrets-check`; `make production-config-check` (rendering, exposure,
+  persistence, restart policy, capacity, OIDC/TLS gates, observability).
 
 ## 15. Deployment procedure
 
-Each step says what proves it. Stop at the first FAIL. Placeholders:
-`<host>` is the approved public host name, `<commit>` the approved release commit
-or tag, `<public-ip>` the host's address.
+Stop at the first FAIL. Placeholders: `<host>`, `<commit>`, `<public-ip>`.
 
-**1. Provision host prerequisites** (§5.1). Install Docker Engine with the compose
-plugin, Node 22, kind v0.31.0, kubectl v1.34.2, git, openssl, curl, iproute2.
-Enable NTP. Create the operator account and add it to `docker`:
-`sudo useradd -m jtt-ops && sudo usermod -aG docker jtt-ops`. Log in again as `jtt-ops`.
-
-**2. Firewall.** Allow inbound 80 and 443, and SSH only from operator addresses,
-in the provider firewall or `DOCKER-USER` (not only ufw). Everything else closed.
-
-**3. Clone and choose the release.**
-```bash
-sudo install -d -m 0750 -o jtt-ops -g jtt-ops /srv/jumptotech-labs
-umask 022
-git clone https://github.com/jumptotechschooldevops/jumptotech-labs.git /srv/jumptotech-labs   # or the approved mirror
-cd /srv/jumptotech-labs
-git checkout <commit>
-git rev-parse HEAD          # record in §20
-npm ci
-```
-
-**4. Filesystem layout** (§5.4).
-```bash
-sudo install -d -m 0700 -o jtt-ops -g jtt-ops /srv/jumptotech/backups/postgres /srv/jumptotech/evidence
-sudo install -d -m 0755 -o jtt-ops -g jtt-ops /srv/jumptotech/backups/status /var/log/jumptotech
-```
-
-**5. Environment and secrets.** `make secrets` creates `.env` from
-`.env.example` (mode `0600`) and generates every platform secret; it never
-prints a value. Then edit `.env` (with an editor, not `echo`, so values stay out
-of shell history) to set the §6 list:
-```
-PUBLIC_ORIGIN=https://<host>
-ALLOWED_ORIGINS=https://<host>
-RUNTIME_OWNER_ID=jtt-production
-MAX_ACTIVE_SESSIONS=5
-MAX_ACTIVE_SESSIONS_PER_STUDENT=1
-BACKUP_STATUS_DIR=/srv/jumptotech/backups/status
-DOCKER_SOCKET_GID=<output of: stat -c %g /var/run/docker.sock>
-JTT_COMMIT=<git rev-parse HEAD>
-JTT_VERSION=<release tag>
-```
-Leave `AUTH_MODE` and `DEV_STUDENT_HEADER_ENABLED` alone: production pins the
-first, and the second must stay `false`.
-
-**6. OIDC** (REQUIRES EXTERNAL DECISION D1/D3). At the chosen provider, register a
-confidential web client with redirect URI `https://<host>/auth/callback`, restrict
-it to the beta students (§8), then set `OIDC_ISSUER` (exactly the discovery
-`issuer`), `OIDC_CLIENT_ID`, `OIDC_AUDIENCE`, `OIDC_CLIENT_SECRET`.
-
-**7. Kubernetes substrate.** `npm run cluster:up`. It must print
-`Kubelet seccompDefault is on`; a warning instead means recreate the cluster.
-
-**8. Images.** `make sandbox-build`, then `docker pull docker:27-dind`.
-
-**9. TLS** (REQUIRES EXTERNAL DECISION D4/D5). DNS `A` record for `<host>` →
-`<public-ip>`; confirm from outside with `dig +short <host>`. Obtain the first
-certificate with the stack down ([production-tls.md §3](../runbooks/production-tls.md)),
-then `make tls-install CERT=/path/fullchain.pem KEY=/path/privkey.pem`.
-
-**10. Monitoring files.** `make observability-token`. If D6 is decided, install
-the alert destination (§12.1 step 1).
-
-**11. Backups.** Nothing to start yet; the first backup needs the database (step 16).
-
-**12. NetworkPolicy attestation** — measured against exactly the contract this
-`.env` produces:
-```bash
-npm run -s production:config-check -- --print-network-env > /srv/jumptotech/evidence/network-contract.env
-KUBECONFIG=infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml \
-  env $(cat /srv/jumptotech/evidence/network-contract.env) \
-  npm run verify:network-policy -- --write-attestation --json /srv/jumptotech/evidence/network-probe.json
-```
-`VERDICT: PASS` is required. The file holds CIDRs and booleans only.
-
-**13. Validate configuration.**
-```bash
-make secrets-check
-make production-config-check        # 0 FAIL; the restart-policy WARN is expected on main
-```
-
-**14. Preflight** (§14). `RESULT: PASS`. Resolve every MANUAL line you can now
-(DNS, firewall, admission); record the rest.
-
-**15. Start and wait for health.**
-```bash
-prod up -d --build --wait --wait-timeout 900
-prod ps
-```
-(`prod`, `q`, `ready` and `alerts` are defined in
-[private-beta-operations.md §1](../runbooks/private-beta-operations.md).) If `web`
-exits, `prod logs web | grep jtt-tls-preflight` names the refusal; if `api` exits,
-`prod logs api | tail -30` names the variable.
-
-**16. First backup and schedule.**
-```bash
-export BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status
-scripts/db-backup.sh --label first-deploy                  # prints the archive path
-scripts/db-restore.sh --verify-only <printed path>         # records the verification where the api reads it
-```
-Install `/etc/cron.d/jumptotech-db` from the runbook §1.2 (add
-`BACKUP_COPY_HOOK=…` once D7 is decided). Then a restore beside production:
-`scripts/db-restore.sh --into jumptotech_labs_check_<date> <archive>` and
-[postgres-backup-restore.md §6.3](../runbooks/postgres-backup-restore.md) (it
-creates a separate database; it does not touch production's).
-
-**17. Verify public and private exposure.**
-```bash
-make private-beta-smoke ARGS="--public-ip <public-ip> --report-dir /srv/jumptotech/evidence"
-```
-Then from a machine **outside** the host's network:
-```bash
-nc -zv -w3 <public-ip> 80 443            # open
-nc -zv -w3 <public-ip> 3001 4000 4001 4002 5432 9090 9093 9400 9401 9402 16443   # all refused/filtered
-npm run tls:check -- --origin https://<host> --expect-acme                        # from a checkout there; exit 0
-```
-
-**18. Verify authentication.** Sign in with a beta account (succeeds). Sign in
-with a non-beta account (refused by the provider). Sign out; the old cookie is
-refused (`/auth/session` → `authenticated:false`).
-
-**19. Test student session.** As a beta account: start LINUX-001, run `whoami`
-and a file write in the terminal, Check Solution (incomplete, then solve and
-PASS), Reset, End. Repeat quickly for K8S-001 and DOCKER-001. Afterwards
-`q 'sum(jtt_sessions_active)'` is 0.
-
-**20. Terminal/runtime.** `ready terminal 9401`, `ready sandboxd 9402`; smoke
-`runtime.provider-*` all PASS (AWS is INFO by design).
-
-**21. Verification.** Step 19's Check results; `VerificationSlow` not firing.
-
-**22. Observability.** `ssh -L 3001:127.0.0.1:3001 jtt-ops@<host>`, sign in to
-Grafana, open **JTT — Private Beta Operations**; smoke `observability.*` PASS.
-
-**23. Alerts.** §12.1 drill (after D6). Until then this step is **blocked**.
-
-**24. Backup verified.** Smoke `backup.recent` PASS; `backup.offhost` PASS
-(after D7 — **blocked** until then).
-
-**25. Restart and recovery.** §17 drills, before students.
-
-**26. Record evidence.** Fill the checklist (§20) from the files in
-`/srv/jumptotech/evidence`. The deployment is not "done" until every row has a
-result.
+1. **Host prerequisites** (§5.1). `sudo useradd -m jtt-ops && sudo usermod -aG docker jtt-ops`; log in as `jtt-ops`.
+2. **Firewall** (§7.1), in the provider firewall or `DOCKER-USER`.
+3. **Clone the release.**
+   ```bash
+   sudo install -d -m 0750 -o jtt-ops -g jtt-ops /srv/jumptotech-labs
+   umask 022
+   git clone https://github.com/jumptotechschooldevops/jumptotech-labs.git /srv/jumptotech-labs
+   cd /srv/jumptotech-labs && git checkout <commit> && git rev-parse HEAD && npm ci
+   ```
+4. **Layout.**
+   ```bash
+   sudo install -d -m 0700 -o jtt-ops -g jtt-ops /srv/jumptotech/backups/postgres /srv/jumptotech/evidence
+   sudo install -d -m 0755 -o jtt-ops -g jtt-ops /srv/jumptotech/backups/status /var/log/jumptotech
+   ```
+5. **Environment.** Run `make secrets`: it creates `.env` with mode `0600`, generates
+   the platform secrets and prints none of them. Edit `.env` in an editor to set the
+   §6 list, including `DOCKER_SOCKET_GID` = the output of `stat -c %g /var/run/docker.sock`.
+   Keep a `0600` copy as `.env.previous` before later edits.
+6. **Identity provider** (D1, D3). Register the client with redirect
+   `https://<host>/auth/callback`, **restrict it to the beta accounts** (§8), and set the
+   `OIDC_*` values.
+7. **Kubernetes.** `npm run cluster:up`; it must report `seccompDefault is on`.
+8. **Images.** `make sandbox-build`; `docker pull docker:27-dind`.
+9. **TLS** (D4, D5). Create the DNS `A` record; confirm from outside with `dig +short <host>`;
+   obtain the first certificate ([production-tls.md §3](../runbooks/production-tls.md));
+   `make tls-install CERT=… KEY=…`.
+10. **Monitoring files.** `make observability-token`; install the alert destination if D6 is decided.
+11. **Backups.** The directories exist (step 4); the first backup is step 16.
+12. **NetworkPolicy attestation**, for exactly this `.env`:
+    ```bash
+    npm run -s production:config-check -- --print-network-env > /srv/jumptotech/evidence/network-contract.env
+    KUBECONFIG=infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml \
+      env $(cat /srv/jumptotech/evidence/network-contract.env) \
+      npm run verify:network-policy -- --write-attestation --json /srv/jumptotech/evidence/network-probe.json
+    ```
+    `VERDICT: PASS` is required.
+13. **Configuration.** `make secrets-check`; `make production-config-check` (0 FAIL).
+14. **Preflight** (§14): `RESULT: PASS`.
+15. **Five-student synthetic gate** (§13.1), before the production stack starts.
+16. **Start.** `prod up -d --build --wait --wait-timeout 900`; `prod ps`. Then:
+    ```bash
+    export BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status
+    scripts/db-backup.sh --label first-deploy
+    scripts/db-restore.sh --verify-only <printed path>
+    ```
+    Install `/etc/cron.d/jumptotech-db` (runbook §1.2). Restore beside production:
+    `scripts/db-restore.sh --into jumptotech_labs_check_<date> <archive>`, and validate it
+    ([postgres-backup-restore.md §6.3](../runbooks/postgres-backup-restore.md)).
+17. **Smoke** (§16): `make private-beta-smoke ARGS="--public-ip <public-ip> --report-dir /srv/jumptotech/evidence"`.
+18. **External checks, from another network:**
+    ```bash
+    nc -zv -w3 <public-ip> 80 443
+    nc -zv -w3 <public-ip> 3001 4000 4001 4002 5432 9090 9093 9400 9401 9402 16443   # must all fail
+    npm run tls:check -- --origin https://<host> --expect-acme                        # exit 0
+    ```
+19. **Identity.** A beta account signs in; a non-beta account is refused at the
+    provider; sign-out invalidates the cookie.
+20. **Student session.** LINUX-001, K8S-001 and DOCKER-001: start, terminal, Check,
+    Reset, End; active sessions return to 0.
+21. **Observability.** Grafana through the tunnel; smoke `observability.*` PASS.
+22. **Alerts.** The §12.1 drill — blocked until D6.
+23. **Off-host backup.** Smoke `backup.offhost` PASS and one restore from the copy — blocked until D7.
+24. **Rehearsal** (§13.2) and capacity acceptance — blocked until D8.
+25. **Recovery drills** (§17), with no students active.
+26. **Evidence.** Fill [production-host-evidence-template.md](../releases/production-host-evidence-template.md) on the host.
 
 ## 16. Smoke test procedure
 
 ```bash
 make private-beta-smoke ARGS="--public-ip <public-ip> --report-dir /srv/jumptotech/evidence"
-# before DNS is live:  ARGS="--connect <public-ip> ..."
+# before DNS is live: ARGS="--connect <public-ip> ..."
 ```
 
-Run after every start, restart, upgrade and incident. It is read-only (it never
-signs in, starts, stops or restarts anything) and reads only `PUBLIC_ORIGIN` from
-`.env`.
+The smoke is read-only: it never signs in, starts, stops or restarts anything, and
+makes one unauthenticated POST to an unrouted path. It reads only `PUBLIC_ORIGIN`.
+curl is bounded by `--max-time 15`; docker and npx are bounded as in §14. Each
+section header names its proof class:
 
-| Group | Automated checks |
+| Proof class | Checks |
 |---|---|
-| stack | every service running; healthy where it has a health check; Docker restart count; restart policy |
-| readiness | api, terminal, sandboxd `/readyz` |
-| runtime | labs loaded; PostgreSQL progress store durable; `maxActive` 5; each provider available (AWS informational) |
-| database | `pg_isready` |
-| public edge | HTTPS 200 with a trusted chain; HSTS; `http://` → 301 same path; `tls:check --expect-acme` |
-| authentication | `/auth/config` oidc + sign-in available; `/api/me`, `/api/labs`, `/api/sessions` → 401; `Authorization: Developer` and `x-dev-student-id` → 401; `/auth/login` → 302 to the provider |
-| private paths | `/internal/…` not routed; `/metrics`, `/readyz`, `/health` not routed |
-| exposure | only 443/80/loopback Grafana published; postgres on internal networks only; optional `--public-ip` probe of forbidden ports from the host |
-| observability | all targets up; firing alerts named; Alertmanager and Grafana answer; deployed limits 5/1; attestation valid; certificate days left |
-| backups | last backup ≤ 24 h; verification ≤ 8 d; off-host copy recorded |
-| MANUAL CHECK REQUIRED | external port scan; restore beside production; student flow; admission refusal; alert delivery; Grafana through the tunnel |
+| **LOCAL ENDPOINT PROOF** (127.0.0.1 inside containers) | `/readyz` of api, terminal, sandboxd; api `/health`: labs loaded, durable PostgreSQL progress store, `maxActive` 5, providers available (AWS informational); `pg_isready`; Prometheus targets up; firing alerts; Alertmanager and Grafana answer; deployed 5/1 gauges; attestation valid; certificate days left; backup age, verification age, off-host copy |
+| **HOST-LOCAL PROOF** (Docker on this host) | every service running and healthy; Docker restart counts (WARN); restart policy exactly `unless-stopped` (FAIL otherwise); only 443/80/loopback Grafana published; postgres only on internal networks; optional `--public-ip` probe of forbidden ports **from the host** |
+| **PUBLIC-ENDPOINT PROOF, from this host** | HTTPS 200 with a trusted chain; HSTS; `http://` → 301 to the same path; `tls:check --expect-acme`; `/auth/config` reports oidc with sign-in; `/api/me`, `/api/labs`, `/api/sessions` → 401; `Authorization: Developer` and `x-dev-student-id` → 401; `/auth/login` → 302 to the provider; `/internal`, `/metrics`, `/readyz`, `/health` not routed. **These requests may never leave the host; they do not prove internet reachability.** |
+| **EXTERNAL-INFRASTRUCTURE / PERSON** (always MANUAL CHECK REQUIRED) | scan from another network; restore beside production; a real student flow; a non-beta account refused; an alert received by a person; Grafana through the tunnel |
 
-## 17. Recovery procedure and drills
+Authentication-protected endpoints are probed only unauthenticated, where 401 is
+the correct answer; the smoke never holds a session.
 
-Behaviour on `main` today, from the runbooks. Run each drill **before students
-are invited**, with no sessions active, and re-run the smoke afterwards. None
-deletes data.
+## 17. Recovery procedures and drills
 
-| Drill | Command | Expected | Evidence on main |
+Run the drills before students, with no sessions active, then re-run the smoke.
+None of them deletes data.
+
+| Scenario | Action | Expected on current main | Status |
 |---|---|---|---|
-| api restart | `prod restart api` | sessions survive (durable in PostgreSQL); in-flight requests fail; reaper resumes | PROVEN LOCALLY (five-student gate phase "api-restart recovery") |
-| terminal restart | `prod restart terminal` | every open shell drops; students reload; sessions intact | runbook [§6](../runbooks/private-beta-operations.md); NOT PROVEN on a host |
-| sandboxd restart | `prod restart sandboxd` | every container-track shell drops; sandboxes remain; Kubernetes labs unaffected | [RB-01 §3](../runbooks/RB-01-service-down.md); NOT PROVEN on a host |
-| web restart | `prod restart web` | site gone for seconds; certificate gate re-runs | runbook §6; NOT PROVEN on a host |
-| postgres restart | `prod restart postgres` | api not ready until postgres healthy, then recovers | runbook §6; NOT PROVEN on a host |
-| monitoring restart | `prod restart prometheus alertmanager grafana` | nothing student-visible | runbook §6 |
-| interrupted Reset/End | restart api mid-Reset | reaper: ENDING resumed at 5 min; RESETTING → DEGRADED at 10 min | PROVEN IN CI (P0-007 suites); [RB-17](../runbooks/RB-17-session-lifecycle.md) |
-| Docker daemon restart | `sudo systemctl restart docker` (maintenance window only) | **on `main`, no service has a restart policy: the platform stays down** until `prod up -d`. Record whether the kind node container came back (`docker inspect -f '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' jumptotech-labs-control-plane`) and whether `kubectl get nodes` is Ready | NOT PROVEN |
-| host reboot | `sudo reboot` (maintenance window only) | as above, plus: Docker starts at boot? kind node Ready? attestation still valid (same cluster UID)? | NOT PROVEN |
-| backup verify | `make db-backup-verify FILE=<newest>` | checksum and read-back OK | PROVEN IN CI |
-| restore beside production | `scripts/db-restore.sh --into <name> <archive>` | new database, validated; production untouched | PROVEN IN CI |
-| restore over production | [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (`--replace` renames, never drops) | **only in a real recovery or a dedicated rehearsal host** | PROVEN IN CI; never on a host |
+| Service crash | none (Docker restarts it: `unless-stopped`) | returns by itself; `ServiceRestartLoop` fires if it keeps dying; RB-01 | policy PROVEN LOCALLY (PR #34); REQUIRES PRODUCTION HOST |
+| api restart | `prod restart api` | sessions survive; in-flight requests fail; reaper resumes | PROVEN LOCALLY at `c8eb2c6` (harness) |
+| terminal restart | `prod restart terminal` | open shells drop; students reload | REQUIRES PRODUCTION HOST |
+| sandboxd restart | `prod restart sandboxd` | container-track shells drop; sandboxes remain | REQUIRES PRODUCTION HOST |
+| database restart | `prod restart postgres` | api not ready until postgres is healthy, then recovers | REQUIRES PRODUCTION HOST |
+| interrupted Reset/End | restart the api mid-operation | ENDING resumed at 5 min; RESETTING → DEGRADED at 10 min ([RB-17](../runbooks/RB-17-session-lifecycle.md)) | PROVEN IN CI |
+| Docker daemon restart / host reboot (maintenance window) | `sudo systemctl restart docker` / `sudo reboot` | platform containers return (`unless-stopped`) unless an operator had stopped them. **Unmeasured:** whether the kind node container returns and becomes Ready, and whether the attestation still validates. Record `docker inspect -f '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' jumptotech-labs-control-plane` | NOT PROVEN |
+| Certificate failure | [RB-15](../runbooks/RB-15-tls-edge.md), [production-tls.md §7](../runbooks/production-tls.md); `tls-install.sh` refuses bad renewals and rolls back | web restarts in a loop until a valid certificate is installed (runbook §6.1) | PROVEN IN CI (edge suite) |
+| Failed deployment | §21 | — | PROCEDURE READY |
+| Backup restore | `--verify-only`, `--into`; `--replace` only in a real recovery ([§6.4](../runbooks/postgres-backup-restore.md)) | — | PROVEN IN CI; never on a host |
+| Disk pressure | [RB-19](../runbooks/RB-19-host-pressure.md); stop launches (runbook §3) | `HostDiskSpaceLow/Critical` fire | rules PROVEN IN CI; REQUIRES PRODUCTION HOST |
 
-Recovery after a daemon restart or reboot on `main`:
+If the kind node does not return after a reboot:
 ```bash
-cd /srv/jumptotech-labs
-kind get clusters && KUBECONFIG=infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml kubectl get nodes
-docker start jumptotech-labs-control-plane     # only if the kind node is stopped
+docker start jumptotech-labs-control-plane
+KUBECONFIG=infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml kubectl get nodes
 prod up -d --wait --wait-timeout 900
 make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence"
 ```
-A restart policy for the production overlays is being added on another branch
-(`feat/beta-overnight-hardening`); once merged, the preflight's
-`durability.restart-policy` WARN becomes a PASS and the drills above must be
-re-run to record the new behaviour.
 
-**Never** `prod down -v` (it deletes the PostgreSQL volume). `prod down` keeps
-volumes; take a backup first anyway.
+**Never** `prod down -v`: it deletes the PostgreSQL volume.
 
-## 18. Security findings
+## 18. Security findings and audits
 
-| # | Finding | Severity for a public host | Action |
+### 18.1 Scrape-token permissions (fixed on this branch)
+
+- **Original problem.** `make observability-token` wrote
+  `infrastructure/observability/secrets/scrape-token` as `0600`, owned by the
+  operator. Prometheus runs as uid 65534 and reads it through a bind mount, which
+  keeps host ownership on Linux.
+- **Impact.** Operational, not a leak: on a Linux host every scrape fails
+  (`unable to read authorization credentials … permission denied`), every target
+  is down, `ServiceDown` fires for api/terminal/sandboxd, and the dashboard is
+  blind. Docker Desktop's file sharing hides it, and no CI job runs Prometheus with the token.
+- **Reproduction.** `prom/prometheus:v2.54.1` as uid 65534, against a volume holding
+  the token with Linux ownership (uid 1000): `0600` → `down`, permission denied;
+  `0644` → `up`. A `0700` directory also fails; `0711` and `0755` work.
+- **Fix.** The token is written under `umask 077` and then set to `0644`; the
+  directory is set to `0711` (traversable, not listable). The README says the same.
+- **Why it is safe.** The token authorizes only `GET /metrics` on three internal
+  listeners that are never published and not routed by nginx, and metrics carry no
+  secret or personal labels (label-policy tests). `0644` exposes it only to local
+  accounts that can traverse the checkout, which the `0750` checkout mode prevents
+  (§5.2, preflight `checkout.mode`). The alertmanager `webhook-url` already follows
+  the same rule.
+- **Tests.** `production-host-contract.test.ts` asserts the target writes `0644` in
+  a `0711` directory, never `0600`, for the uid Prometheus runs as, and that the
+  README agrees (confirmed failing on the old mode). The preflight's
+  `observability.scrape-token-mode` and `-match` checks have harness cases for a
+  `0600` file, a `0700` directory and a stale value.
+- **Where the value can appear:**
+  - *Logs:* the services' log redactor recognises the generated hex shape, and each
+    service refuses to start with a secret it could not redact
+    (`assertSecretsAreRedactable`). Prometheus reads it from a file and does not log it.
+  - *Rendered Compose:* **yes — as `OBSERVABILITY_SCRAPE_TOKEN` in the api, terminal
+    and sandboxd environment**, like every environment secret. `docker compose config`
+    and `docker inspect` output therefore contain secrets and must not be pasted
+    anywhere. `check-secret-distribution.mjs` and the config check keep that output
+    in memory and never print it.
+  - *Process arguments:* no. It travels as an environment variable and a file;
+    `make observability-token` moves it through a pipe, not an argument; the
+    preflight compares hashes.
+  - *Prometheus, Grafana, API:* Prometheus's config page shows only the
+    `credentials_file` path; Grafana never holds the token; the api does not expose
+    its environment.
+- **Rotation.** Put a new value in `.env`, run `make observability-token`, then
+  `prod up -d api terminal sandboxd` (their environment changes, so they are
+  re-created). Prometheus reads the credentials file on each scrape; expect scrape
+  failures only between the two steps.
+- **Overlap with main.** None: PR #34 did not touch the Makefile or the token.
+
+### 18.2 Findings
+
+| # | Finding | Severity (public host) | State |
 |---|---|---|---|
-| S1 | **Scrape token unreadable by Prometheus on Linux** (`make observability-token` wrote `0600`, operator-owned; Prometheus is uid 65534). Every target down on a real host; hidden by Docker Desktop | High (monitoring blind; every `ServiceDown` fires) | **Fixed**: `0644` file in a `0711` directory; `services/observability/test/production-host-contract.test.ts` pins it; preflight `observability.scrape-token-mode`; README corrected. Reproduced and fix verified with `prom/prometheus:v2.54.1` under Linux ownership |
-| S2 | **OIDC admits any account the issuer authenticates** | **Blocker** with a public identity provider (anyone gets a privileged DinD sandbox) | Documented (§8); REQUIRES EXTERNAL DECISION; smoke/preflight MANUAL checks. Not implemented here: the mechanism is provider-specific and authentication.md §4.7 leaves it open |
-| S3 | `MAX_ACTIVE_SESSIONS` defaults to **20** in compose; the proven contract is 5 | Medium (capacity never validated above 5) | `production:config-check` and smoke FAIL unless 5/1 |
-| S4 | `DOCKER_SOCKET_GID` defaults to `0`; on a Linux host sandboxd cannot use the socket | Medium (six tracks unavailable) | preflight FAIL on mismatch |
-| S5 | kind kubeconfigs are `0644` (cluster-admin) and the scrape token is `0644`, by necessity; the kind API server listens on `127.0.0.1:16443` | Medium on a multi-user host; low on a dedicated one | Recommend a dedicated operator-only host and checkout `0750`; preflight `checkout.mode` |
-| S6 | A checkout made under `umask 077` makes every bind-mounted config unreadable (labs, Prometheus, Grafana, nginx) | Availability | preflight `checkout.bind-mounts` |
-| S7 | Docker-published ports bypass host `INPUT` firewall rules | High if relied on | procedure §15 step 2; smoke external scan (MANUAL) |
+| S1 | Scrape token unreadable on Linux | High (monitoring blind) | **Fixed**, §18.1 |
+| S2 | Any account the identity provider authenticates is admitted | **Blocker** with a public provider | **REQUIRES EXTERNAL DECISION**, §8 — not fixed |
+| S3 | `MAX_ACTIVE_SESSIONS` compose default is 20 | Medium | config-check and smoke FAIL; PR #34's runbook §2 reads the gauge |
+| S4 | `DOCKER_SOCKET_GID` default 0 | Medium (six tracks unavailable) | preflight FAIL on mismatch |
+| S5 | kind kubeconfigs and scrape token are `0644`; kind API on `127.0.0.1:16443` | Medium on a shared host | dedicated host, checkout `0750`; preflight WARN |
+| S6 | A checkout made under `umask 077` breaks bind-mounted configs | Availability | preflight FAIL |
+| S7 | Docker-published ports bypass host `INPUT` rules | High if relied upon | §7; external scan MANUAL |
 | S8 | `.env` holds every secret | High if readable | preflight FAIL unless no group/other bits |
-| S9 | Backups unencrypted and on the same host | High (data loss / exposure) | REQUIRES EXTERNAL DECISION; smoke FAIL until an off-host copy is recorded |
-| S10 | No restart policy on `main` | Availability after reboot | WARN; fixed on another branch; drill §17 |
-| S11 | Known, unchanged: shared uid 1001 lets one container/Kubernetes-track student read another's per-session credential; privileged DinD; plaintext on the internal database bridge; Grafana login page reachable from other containers; terminal not `read_only` | Accepted for trusted students only (release gate §6) | none here |
-| S12 | Pod-to-node traffic (kubelet 10250, metadata) is not governed by NetworkPolicy on kind | Medium on a cloud host with an instance metadata service | host firewall / IMDS hardening, P0-015 D3 |
+| S9 | Backups unencrypted and on-host only | High | REQUIRES EXTERNAL DECISION; smoke FAIL |
+| S10 | `docker compose config` / `docker inspect` output contains secrets | Medium (operator habit) | documented in §18.1; the tooling never prints it |
+| S11 | Compose quotes `.env` values back in its parse errors | Medium | the config check redacts them (self-test scenario) |
+| S13 | `cmd \| grep -q` under `set -o pipefail` can report a miss for text that matched (the writer dies of SIGPIPE when grep exits early); seen once in six Linux runs of the harness, and present in the preflight's `ss`, `configz` and admission-policy checks and several smoke checks | Medium (spurious FAIL on a host with large output; one case could hide a FAIL) | **Fixed** before merge: `jtt_contains` matches captured text; harness assertions use here-strings; 5/5 clean Linux runs afterwards |
+| S12 | Known and unchanged: shared uid 1001 credential read, privileged DinD, plaintext on the internal database bridge, Grafana login page reachable from other containers, terminal not `read_only` | trusted students only (release gate §6, §11.4) | none here |
 
-Reviewed and unchanged: only sandboxd holds the Docker socket; no compose service
-is privileged or on the host network; production refuses development auth,
-plaintext origins, insecure cookies, waived attestation, placeholder/short/shared
-secrets and plaintext broker transport off-host (all proven by the self-test
-against the real merge). No change in this branch broadens a privilege.
+This branch does not broaden any privilege, publish any port, add a socket mount,
+weaken OIDC or TLS, enable development authentication, generate default
+credentials, or delete or overwrite data.
 
 ## 19. External decisions required
 
 | # | Decision | Blocks |
 |---|---|---|
-| D1 | **Identity provider** and tenant | §15 step 6, sign-in |
-| D2 | **Hosting provider, host, and Kubernetes substrate** (kind on the host, or another) + CNI | everything; P0-015 D1/D2 |
-| D3 | **Who may sign in**, and how the provider enforces it | inviting anyone (S2) |
-| D4 | **Public hostname and DNS provider** | TLS, OIDC redirect |
-| D5 | **CA and ACME client**, renewal scheduler | TLS |
-| D6 | **Alert destination and on-call** | alert delivery (§12.1) |
-| D7 | **Off-host backup destination, encryption, retention, restore rights** | DR (§11) |
-| D8 | **Acceptance thresholds** for start/Check latency and host headroom at five students | declaring capacity acceptable (§13) |
+| D1 | Identity provider and tenant | sign-in |
+| D2 | Hosting provider, host, Kubernetes substrate (kind on the host, or other) and CNI | everything |
+| D3 | **Who may sign in, and how the provider enforces it** | inviting anyone |
+| D4 | Public hostname and DNS provider | TLS, OIDC redirect |
+| D5 | CA and ACME client; renewal schedule | TLS |
+| D6 | Alert destination and on-call | human alert delivery |
+| D7 | Off-host backup destination, encryption, retention, restore rights | disaster recovery |
+| D8 | Capacity acceptance thresholds at five students | declaring capacity acceptable |
 | D9 | Where `.env` and the TLS key are recoverable from | host replacement |
-| D10 | Operator access path (SSH keys, bastion) and who holds `docker` | operations |
-| D11 | Attestation re-probe cadence (7-day max age) | Kubernetes labs after a week |
+| D10 | Operator access (SSH keys, bastion) and who holds `docker` | operations |
+| D11 | Attestation re-probe cadence (7-day maximum age) | Kubernetes labs after a week |
 | D12 | Metric/log retention; external uptime check; host exporter | operations |
-| D13 | Federated logout and idle timeout | sign-out behaviour |
+| D13 | Federated logout; idle timeout | sign-out behaviour |
 | D14 | IPv6, HSTS preload, CAA | DNS/TLS |
 
-## 20. Production-host evidence checklist
+## 20. Evidence for this branch
 
-Copy [production-host-evidence-template.md](../releases/production-host-evidence-template.md)
-into `/srv/jumptotech/evidence/` for each deployment and fill every row with a
-**result from that host** and the file that proves it. A row copied from this
-document, from CI or from a laptop is not evidence.
+Run on this branch after rebasing onto `0f33b1f`, on a development machine and in
+a local Linux container. **None of it is host evidence.**
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | PASS |
+| `npm test` | PASS |
+| `npm run build` | PASS |
+| `npm run test:composition` | PASS |
+| `node scripts/check-secret-distribution.mjs` | PASS |
+| `bash scripts/check-observability.sh` | PASS |
+| `bash scripts/test-db-backup-restore.sh` | PASS |
+| `npm run production:config-check -- --self-test` | PASS, 20 scenarios |
+| `bash scripts/test-production-host-scripts.sh` | PASS on macOS; PASS 5/5 consecutive runs in `node:22-bookworm-slim` after the S13 fix (includes the hung-daemon timeout case) |
+
+CI `gates` runs the same on a pull request; until then these are PROVEN LOCALLY.
 
 ## 21. Rollback procedure
 
 | Situation | Rollback |
 |---|---|
-| Configuration change broke startup | restore the previous `.env` (keep `cp -p .env .env.previous` before editing; both `0600`), then `prod up -d --wait`; preflight |
-| Certificate renewal refused | `tls-install.sh` changes nothing when it refuses and rolls back itself ([production-tls.md §4.3](../runbooks/production-tls.md)) |
-| New release misbehaves, **no new migration** | `git checkout <previous commit>`, `npm ci`, `prod up -d --build --wait`; preflight and smoke |
-| New release applied a migration | migrations are forward-only. Take `scripts/db-backup.sh --label pre-upgrade` **before** every upgrade; to roll back, check out the previous commit and restore that archive per [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (renames, never drops; its own rollback is §6.6) |
-| Security incident / stop everything | `prod stop web` takes the site down; running labs are reclaimed by idle expiry. [private-beta-operations.md §3](../runbooks/private-beta-operations.md) |
-| Stop launches only | there is no switch; tell the cohort; `MAX_ACTIVE_SESSIONS=1` reduces launches (runbook §3) |
+| A configuration change broke startup | restore `.env.previous` (`0600`), `prod up -d --wait`, preflight |
+| Certificate renewal refused | `tls-install.sh` changes nothing when it refuses, and rolls back itself |
+| New release misbehaves, no new migration | `git checkout <previous commit>`, `npm ci`, `prod up -d --build --wait`, preflight, smoke |
+| New release applied a migration | migrations are forward-only: always take `scripts/db-backup.sh --label pre-upgrade` first; roll back by checking out the previous commit and restoring that archive per [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (renames, never drops; its own rollback is §6.6) |
+| Security incident | `prod stop web` (stays stopped across reboots with `unless-stopped`); running labs are reclaimed by idle expiry |
+| Stop launches only | no switch exists; tell the cohort; `MAX_ACTIVE_SESSIONS=1` reduces launches (runbook §3) |
 
-Never `prod down -v`, never `docker volume rm` a `jumptotech-labs-*` volume, and
-never edit `lab_sessions` by hand.
+Never `prod down -v`, never remove a `jumptotech-labs-*` volume, and never edit
+`lab_sessions` by hand.
 
 ## 22. Remaining blockers
 
-Before students are invited to a production host, all of these must be closed and
-recorded in §20:
+For the pull request: none known beyond review and CI running the new steps.
 
-1. **D3 — admission restricted to the beta students** (S2). Software blocker in
-   the absence of a provider-side restriction.
-2. **D2 — a host exists**, and preflight, smoke and the five-student host
-   validation (§13 A and B) pass **on it**.
-3. **D7 — off-host backup copy with encryption**, and one restore proven from it.
-4. **D6 — alert destination**, and the §12.1 drill received by a person.
-5. **D4/D5 — hostname, DNS and a real certificate**; external `tls:check` exit 0.
-6. **D8 — capacity acceptance** from the §13 measurements.
-7. `make beta-validate` re-run on the exact commit being deployed (release-gate
-   evidence is from `c8eb2c6`).
-8. Recovery after a Docker restart and a reboot drilled and recorded (§17), with
-   or without the restart-policy change from the other branch.
+For student access: every unchecked line of §23.
 
-Not blockers for five **trusted** students (release gate §6), and blockers for any
-untrusted cohort: the shared-uid credential read; privileged DinD.
+## 23. FIRST REAL HOST — REQUIRED BEFORE STUDENT ACCESS
+
+Record every line in the deployment's copy of
+[production-host-evidence-template.md](../releases/production-host-evidence-template.md).
+Nothing below is done.
+
+### 23.1 External decisions and actions (a person must do these; no script can)
+
+- [ ] **D2** Host provisioned; substrate chosen and recorded.
+- [ ] **D1/D3** Identity provider client created **and restricted to the five beta accounts**; self-service sign-up off.
+- [ ] **D3 proof** A non-beta account is refused at the provider.
+- [ ] **D4** Hostname chosen; the DNS `A` record resolves to the host from another network.
+- [ ] **D5** Certificate issued by the chosen CA; renewal scheduled.
+- [ ] **Firewall** Provider firewall / `DOCKER-USER` admits only 80, 443 and operator SSH; a scan from another network confirms it.
+- [ ] **D6** Alert destination installed; the §12.1 drill received by a named person.
+- [ ] **D7** Off-host, encrypted backup copy configured; one restore from that copy validated.
+- [ ] **D8** Capacity thresholds decided; the §13 measurements judged against them.
+- [ ] **D9/D10** Secret and key recovery location, and operator access, recorded.
+- [ ] Five-person rehearsal (§13.2) completed.
+- [ ] Docker restart and host reboot drills (§17) completed; kind node behaviour recorded.
+
+### 23.2 Automatically verifiable on the host (the command's own result is the evidence)
+
+- [ ] `make production-config-check` — 0 FAIL.
+- [ ] `npm run verify:network-policy -- --write-attestation` with the printed network environment — `VERDICT: PASS`.
+- [ ] `make production-preflight` — `RESULT: PASS`.
+- [ ] `make beta-validate` on the deployed commit, on this host (§13.1) — `RESULT: PASS`.
+- [ ] `host-capacity-sample.sh` CSVs from the synthetic run and the rehearsal saved.
+- [ ] `prod up -d --build --wait` succeeded.
+- [ ] `scripts/db-backup.sh` and `db-restore.sh --verify-only` succeeded; the `--into` restore validated.
+- [ ] `make private-beta-smoke` — `RESULT: PASS` (which requires `backup.offhost`, i.e. D7).
+- [ ] External `npm run tls:check -- --origin https://<host> --expect-acme` from another network — exit 0.
