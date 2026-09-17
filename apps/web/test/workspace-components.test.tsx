@@ -12,7 +12,7 @@ import { useState } from 'react';
 import { ConfirmDialog } from '../src/components/ConfirmDialog';
 import { PageErrorBoundary } from '../src/components/PageErrorBoundary';
 import { VerificationPanel } from '../src/components/VerificationPanel';
-import { verification } from './api-mock';
+import { attemptSummary, verification } from './api-mock';
 
 function Harness({ busy = false, onConfirm = () => undefined }: { busy?: boolean; onConfirm?: () => void }) {
   const [open, setOpen] = useState(false);
@@ -145,6 +145,22 @@ describe('VerificationPanel', () => {
     expect(screen.getByText('Lab passed — every check passes')).toBeTruthy();
     expect(screen.getByText(/Saved to your progress/)).toBeTruthy();
     expect(screen.queryByText('What to look at next')).toBeNull();
+  });
+
+  it('says a repeated pass is already recorded only when the api returned the recorded attempt', () => {
+    const result = verification(true, { attempt: attemptSummary({ status: 'PASSED' }) });
+    render(<VerificationPanel state={{ kind: 'result', result, newlyCompleted: false }} />);
+    expect(screen.getByText(/already recorded as completed/)).toBeTruthy();
+  });
+
+  it('does not claim a pass was saved when the progress store could not record it', () => {
+    // The api's `record()` swallows a failed write so the check still answers;
+    // the response then carries no attempt. "Already recorded" would send the
+    // student off to end a lab whose completion was never stored.
+    render(<VerificationPanel state={{ kind: 'result', result: verification(true), newlyCompleted: false }} />);
+    expect(screen.getByText('Lab passed — every check passes')).toBeTruthy();
+    expect(screen.queryByText(/already recorded|Saved to your progress/)).toBeNull();
+    expect(screen.getByText(/could not be saved/)).toBeTruthy();
   });
 
   it('reports a failure check by check, with what the verifier saw and where to look next', () => {
