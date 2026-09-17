@@ -99,6 +99,10 @@ write_env() {
     echo "POSTGRES_PORT=${POSTGRES_PORT}"
     echo "E2E_OIDC_PORT=${OIDC_PORT}"
     echo "E2E_LINUX_SANDBOX_IMAGE=${LINUX_IMAGE}"
+    # The private-beta capacity contract, so the five-student spec meets the
+    # real ceiling rather than compose's general default of 20.
+    echo "MAX_ACTIVE_SESSIONS=5"
+    echo "MAX_ACTIVE_SESSIONS_PER_STUDENT=1"
     echo "POSTGRES_PASSWORD=$(secret)"
     echo "TERMINAL_SESSION_SECRET=$(secret)"
     echo "INTERNAL_SERVICE_SECRET=$(secret)"
