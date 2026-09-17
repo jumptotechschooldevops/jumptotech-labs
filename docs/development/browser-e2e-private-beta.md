@@ -763,3 +763,28 @@ Recommended next steps:
 4. Extend Tier B with a Kubernetes lab (kind in the job) and a Terraform lab.
 5. Point the suite at a staging host with the production overlay and a real IdP
    test tenant as the first Tier C evidence.
+
+## 18. Launch-readiness pass — 2026-09-17
+
+On `feat/private-beta-launch-readiness`
+([report](private-beta-launch-readiness-2026-09-17.md)). §1–§17 are left as
+recorded.
+
+| Change | Why |
+|---|---|
+| **Reset test types once, with no retry**, as soon as the confirm dialog closes | §17 step 3. The first line after Reset was lost because the browser dropped keys typed before the new socket's `ready`, not because of a double attach. Against the previous bundle 0/3 (a truncated command, then nothing); with the fix 5/5 |
+| **New: PostgreSQL stopped under a signed-in student** (`failure-paths.spec.ts`) | With the database down, `/auth/session` and `/api` answer 503 `AUTH_UNAVAILABLE`, the cookie is not cleared, a tab re-check keeps the app signed in, and the same cookie works when PostgreSQL returns. Fails on the previous api (signed out) |
+| `stack.sh service stop|start postgres` | for the test above; the volume is kept |
+
+**Found by the suite:** the five-student test failed once on a loaded machine
+with `SESSION_PROVISION_FAILED` — a sandbox's first `docker exec` hit a 15 s
+limit after a 38 s container create, reported as a broken image. Fixed in the
+runtime (report §1 #10). The start response was read from the Playwright trace
+(`resources/*.json`), since `stack.sh run` discards service logs at teardown.
+
+§17 updated: "Remove the double terminal attach after Reset, then drop the E2E
+retype loop" — **done** (there was no double attach; the loop is gone).
+
+Results on this branch (isolated project `jtt-e2e-launch`, development machine, load 14–16):
+first full run 14/15 (the five-student failure above); after the fix, **15/15**
+in 6.4 min on a clean stack, 0 containers left. Not yet in CI.

@@ -511,3 +511,64 @@ withdrawn; see the readiness report §4. Students can retype.
 
 **Verdict unchanged in kind:** software ready for a real-host deployment test;
 **not ready for student access** until §13.2 is done on a host.
+
+## 15. Private-beta launch-readiness pass — 2026-09-17
+
+Added by `feat/private-beta-launch-readiness`, on `main` at `bf712a8`, which
+also carries §14's branch (`fb94cf5`, not merged before). §1–§14 are left as
+recorded. Details and evidence:
+[private-beta-launch-readiness-2026-09-17.md](../development/private-beta-launch-readiness-2026-09-17.md).
+
+**No production host, DNS name, public certificate, identity provider, alert
+receiver or off-host backup was exercised.** Nothing here changes §13.2.
+
+### 15.1 Defects fixed
+
+| Defect | Evidence |
+|---|---|
+| **§14's open Reset issue, root-caused:** keys typed while the terminal connects were dropped by the browser (not a double attach) — after Reset, and on every reconnect | frame-level browser probe; component tests; browser Reset test types once: 0/3 before, 5/5 after |
+| A paste over 8 KB was refused and lost | component test |
+| A database blip signed students out for good (401 for a store failure, then `/auth/session` cleared the cookie) | `test:security` cases; browser test with PostgreSQL stopped fails on the old api |
+| Reset showed "The shell exited." with Reconnect for its whole duration | component test |
+| An unknown session status blanked the app | routed-app test |
+| After End, the next lab's page said the ended lab "is still running … end it" | measured in the browser; component test |
+| A busy host failed Start as "rebuild the sandbox image"; exec timeouts were never detected as timeouts | found by the five-student browser test; provider and runtime tests |
+| Smoke `--public-ip` reported open ports as closed; several smoke/preflight checks printed PASS when they could not run; preflight could exit with no RESULT or report | host-script harness (12 assertions fail on the old scripts), macOS and Linux bash |
+| The §15 host procedure started production with the validation attestation, and could not pass step 17 before D7 | documentation |
+
+### 15.2 Status changes against earlier sections
+
+- **§14.3 "open: after Reset … the first command typed is often lost"** — closed.
+- **§14 `feat/private-beta-readiness` "not merged"** — its commits are on this branch.
+- **Operator evidence (§13):** the exposure probe and the checks above now fail
+  rather than pass when they cannot prove their claim. Still local only; the
+  host run is §13.2.
+
+### 15.3 Classification of the gate, as of this branch
+
+| Gate | Classification |
+|---|---|
+| Production auth fails closed; ownership on every session route and attach | **PROVEN BY AUTOMATED TEST** (CI on main); the 503-on-store-failure change **PROVEN LOCALLY ONLY** |
+| Only beta students can sign in | **REQUIRES EXTERNAL CONFIGURATION** (D3, identity provider) — the api admits any account the issuer authenticates |
+| Student journey in a browser (sign-in → path → lab → terminal → Verify → progress → Reset → End → next lab) | **PROVEN LOCALLY ONLY** (Linux sandboxes); CI ran the §12 subset on PR #37 |
+| Five students at once, sixth refused, release | **PROVEN LOCALLY ONLY** in a browser; **REQUIRES REAL PRODUCTION HOST** for capacity (D8) |
+| Restart of api / terminal / PostgreSQL under a running lab | **PROVEN LOCALLY ONLY**; on a host **REQUIRES REAL PRODUCTION HOST** |
+| Reboot, Docker daemon restart | **REQUIRES REAL PRODUCTION HOST** |
+| Backup and restore mechanics | **PROVEN BY AUTOMATED TEST** (restore drill in CI); off-host encrypted copy **REQUIRES EXTERNAL CONFIGURATION** (D7) |
+| Alert rules | **PROVEN BY AUTOMATED TEST**; delivery to a person **REQUIRES EXTERNAL CONFIGURATION** (D6); watchdog for the monitoring stack and host **NOT IMPLEMENTED** (needs an external service, D6/D12) |
+| TLS edge | **PROVEN BY AUTOMATED TEST** with test certificates; public certificate **REQUIRES EXTERNAL CONFIGURATION** (D4/D5) |
+| NetworkPolicy / Pod Security | **PROVEN BY AUTOMATED TEST** on kind; on the host's substrate **REQUIRES REAL PRODUCTION HOST** (D2) |
+| Production preflight, smoke, capacity sampler | **PROVEN LOCALLY ONLY** (harness); their real run **REQUIRES REAL PRODUCTION HOST** |
+| `make beta-validate` on the current tree | **NOT RE-RUN** (§11.2, §14.2) |
+
+### 15.4 Local validation on this branch (not CI, not a host)
+
+`npm test` 4,896 passed / 0 failed; `npm run test:security` 803 passed;
+typecheck; build; `validate:labs` 117/0/0; host-script harness 44/0;
+config self-test; secret distribution; composition; observability checks;
+browser E2E **15/15** on a clean isolated stack (the first full run was 14/15
+and found §15.1's busy-host defect, fixed before the final run).
+`make beta-validate` was not re-run.
+
+**Verdict unchanged in kind:** software ready for a real-host deployment test;
+**not ready for student access** until §13.2 is done on a host.

@@ -165,7 +165,10 @@ student; each is recorded for a later pass.
 
 - A paste over the 8 KB frame limit is refused and shown as a red line; the
   pasted text is lost (the reconnect side of this is fixed, #7).
-- **Open, the most visible remaining student issue: after Reset on a
+- **Superseded later the same day:** the mechanism described in this bullet
+  was wrong, and the issue is fixed — see
+  [private-beta-launch-readiness-2026-09-17.md §2](private-beta-launch-readiness-2026-09-17.md#2-the-reset-double-attach-was-not-the-cause).
+  As first recorded: **Open, the most visible remaining student issue: after Reset on a
   container lab, the first command typed is often lost or garbled.** The api
   awaits the terminal service's reattach (a fresh shell on the same socket),
   and the web app then also reconnects the socket because the reset answer

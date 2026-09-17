@@ -882,3 +882,20 @@ not CI). No finding in §3's register changes severity. The rate-limit residual
 (§26 item 8) gains a deployment note: limits key on `X-Forwarded-For` behind
 exactly one proxy (`trust proxy 1`), so a load balancer added in front of nginx
 would make every student one address for the per-address limits.
+
+## 30. Addendum — 2026-09-17 launch-readiness pass
+
+§1–§29 are the audit as recorded. This reviews the changes on
+`feat/private-beta-launch-readiness`
+([private-beta-launch-readiness-2026-09-17.md](private-beta-launch-readiness-2026-09-17.md))
+against its controls.
+
+| Change | Security effect |
+|---|---|
+| The authenticate middleware and `GET /auth/session` answer a **non-`AuthError`** (the session store or user repository threw; the provider's keys could not be fetched) with `503 AUTH_UNAVAILABLE` instead of `401 AUTH_INVALID_TOKEN` / "signed out" | **Still fail closed**: `next()` runs only after an identity resolved, so nothing is served. Every `AuthError` (expired, forged, unknown user, bad token) is still 401, and `/auth/session` still clears such a cookie; a forged cookie is pinned 401/signed-out by a new case. The 503 body is fixed text: no host, port, driver message or error name (asserted). The only new signal a caller gets is "the platform could not check", which a caller cannot provoke with a credential of its choosing — a malformed cookie is looked up by hash, and a bad token is an `AuthError`. The failure is still audited as `unauthenticated`, counted in `jtt_auth_attempts_total{outcome="AUTH_UNAVAILABLE"}` (bounded label; `AuthFailureSpike` still sees it) and logged as `authn.failed` server-side. `Retry-After: 5` is set; no rate limit changed |
+| `LabTerminal` holds keystrokes typed before `ready` (at most 4 KB) and sends input in frames of at most 2,048 UTF-16 units | Nothing but `auth` is sent before `ready`, as before; held keys go only to the attempt they were typed for and are discarded with an attempt that is refused or closes, so nothing is replayed into another connection. Input is not logged or stored (it lives in a closure). The service's own `MAX_INPUT_CHARS` (8 KB per frame) and frame limit are unchanged; splitting a paste into frames the service accepts is not a bypass, since the limit bounds a frame, not a paste |
+| Next-lab page re-reads `GET /api/sessions` every 3 s while the student's previous session is `ENDING`/`EXPIRING` | The student's own list, authenticated as every other call; stops once the slot frees. Not a rate-limited route; one request per 3 s per open page |
+| Operator scripts: smoke exposure probe measures `time_connect`; checks that could not run are FAIL, not PASS; preflight report includes the config-check lines | Strictly more conservative evidence. The config-check lines copied into `--report` were already printed to the terminal and are secret-free by that tool's own redaction (unchanged). Compose calls get `/dev/null` as stdin |
+
+`npm run test:security`: 800 passed (797 + the three auth cases), locally, not
+CI. No finding in §3's register changes severity.
