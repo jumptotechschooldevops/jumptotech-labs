@@ -34,6 +34,25 @@ describe('LabTimer', () => {
     expect(screen.getByText('00:00')).toBeDefined();
   });
 
+  it('fires onWarning once when five minutes are left, and not for a lab that is already over', () => {
+    const onWarning = vi.fn();
+    render(<LabTimer startedAt={Date.now()} durationSeconds={302} onExpire={vi.fn()} onWarning={onWarning} />);
+    expect(onWarning).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(onWarning).toHaveBeenCalledTimes(1);
+
+    const late = vi.fn();
+    render(<LabTimer startedAt={Date.now()} durationSeconds={0} onExpire={vi.fn()} onWarning={late} />);
+    expect(late).not.toHaveBeenCalled();
+  });
+
   it('never renders a negative time', () => {
     render(<LabTimer startedAt={Date.now()} durationSeconds={1} onExpire={vi.fn()} />);
 

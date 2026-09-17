@@ -626,6 +626,23 @@ describe('the time limit', () => {
     },
   );
 
+  it('warns once, in words, when five minutes are left, and says to verify now', async () => {
+    const session = sessionInfo({ secondsRemaining: 240 });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session, labTitle: 'Files and Directories' }]));
+    apiMock.getSession.mockResolvedValue({ session, environment: null });
+    await renderConnected();
+
+    const heading = await screen.findByText(/minutes left in this lab/);
+    const banner = heading.closest('[role="status"]');
+    expect(banner).toBeTruthy();
+    expect(banner!.textContent).toMatch(/Press Verify now/);
+  });
+
+  it('does not warn while plenty of time is left', async () => {
+    await renderConnected();
+    expect(screen.queryByText(/minutes left in this lab/)).toBeNull();
+  });
+
   it('still says time is up when an active lab reaches its limit', async () => {
     const session = sessionInfo({ secondsRemaining: 1 });
     apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session, labTitle: 'Files and Directories' }]));

@@ -239,6 +239,8 @@ export function WorkspacePage({ labId }: { labId: string }) {
   // Seeded now when the session is already known at mount; otherwise when it arrives.
   const [timerSeed, setTimerSeed] = useState<number | null>(() => (entry ? Date.now() : null));
   const [timeExpired, setTimeExpired] = useState(false);
+  /** Five minutes or less are left; shown once per session, until time is up. */
+  const [timeLow, setTimeLow] = useState(false);
 
   const [verify, setVerify] = useState<VerifyState>({ kind: 'idle' });
   const [lastChecks, setLastChecks] = useState<CheckResult[] | undefined>();
@@ -291,6 +293,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     setAttempt(entry.attempt ?? null);
     setTimerSeed(Date.now());
     setTimeExpired(false);
+    setTimeLow(false);
     setGone(false);
     setVerify({ kind: 'idle' });
     setLastChecks(undefined);
@@ -559,6 +562,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
   );
 
   const handleExpire = useCallback(() => setTimeExpired(true), []);
+  const handleTimeLow = useCallback(() => setTimeLow(true), []);
 
   const environment = useMemo(() => (lab ? describeProvider(lab.environment.provider) : null), [lab]);
   const startReport = active.lastStart?.sessionId === sessionId ? active.lastStart : null;
@@ -795,7 +799,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
         {live && session && countsDown(session.status) ? (
           <div className="workspace__timer">
             <span className="workspace__timer-label">Time left</span>
-            <LabTimer startedAt={timerSeed ?? Date.now()} durationSeconds={session.secondsRemaining} onExpire={handleExpire} />
+            <LabTimer startedAt={timerSeed ?? Date.now()} durationSeconds={session.secondsRemaining} onExpire={handleExpire} onWarning={handleTimeLow} />
           </div>
         ) : null}
 
@@ -816,6 +820,15 @@ export function WorkspacePage({ labId }: { labId: string }) {
 
       {session?.idleWarning && status === 'ACTIVE' ? (
         <IdleWarning secondsUntilIdle={session.secondsUntilIdle} busy={continuing} onContinue={() => void handleStayActive()} />
+      ) : null}
+
+      {timeLow && !timeExpired && live && status === 'ACTIVE' ? (
+        <div className="banner banner--warning" role="status">
+          <p className="banner__text">
+            <strong>A few minutes left in this lab.</strong> Press Verify now if you have not: when the time is up the
+            environment is removed. Anything already verified stays in your progress.
+          </p>
+        </div>
       ) : null}
 
       {timeExpired && live ? (
