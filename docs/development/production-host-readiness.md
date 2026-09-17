@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Branch** | `feat/production-host-readiness`, rebased onto `origin/main` at `fa6f109` (PR #34, PR #35 and PR #36, the security audit, merged); pull request #38 |
+| **Branch** | `feat/production-host-readiness`, rebased onto `origin/main` at `c00ec48` (PR #34, PR #35, PR #36 — the security audit — and PR #37 — browser E2E — merged); pull request #38 |
 | **Date** | 2026-09-16 |
 | **Audience** | the operator who deploys JumpToTech Labs on its first real host, for about five trusted students |
 | **Production host deployed?** | **No.** Nothing in this document ran on a production host. No host, DNS record, public certificate, identity provider, firewall or backup destination exists. |
@@ -79,7 +79,7 @@ D2, not a default.
 | Claim | Status | Evidence |
 |---|---|---|
 | Five students: capacity 5/1 refusals, isolation, reset, soak, api restart, cleanup | PROVEN LOCALLY at `c8eb2c6` only | `make beta-validate`, release gate §4; **not re-run since** (§11.2) |
-| Unit/contract suites, typecheck, build | PROVEN IN CI at `c8eb2c6` and on PR #35 (base `0f33b1f`, `gates` passed); PROVEN LOCALLY on this branch at `9a0e22e` (§20) | `npm test`, `npm run typecheck`, `npm run build` |
+| Unit/contract suites, typecheck, build | PROVEN IN CI at `c8eb2c6`, on PR #35 (base `0f33b1f`) and on PR #38 at `5d486ef` (base `fa6f109`); PROVEN LOCALLY on this branch at base `c00ec48` (§20) | `npm test`, `npm run typecheck`, `npm run build` |
 | Lab catalog validation (PR #35) still passes with this branch's changes | PROVEN IN CI on PR #35 without them; PROVEN LOCALLY with them (§20) | `npm run validate:labs` |
 | Production renders with 443/80 public, loopback Grafana, postgres internal, per-service secrets | PROVEN IN CI + PROVEN LOCALLY | `check-secret-distribution.mjs`, `compose-secret-distribution.test.ts` |
 | `restart: unless-stopped` on every production service; `ServiceRestartLoop` | PROVEN IN CI (PR #35's `gates` job ran them on a tree containing PR #34) and PROVEN LOCALLY; on a host: REQUIRES PRODUCTION HOST | `private-beta-operations.test.ts`, `service-restart-alerts.test.yml` |
@@ -87,7 +87,7 @@ D2, not a default.
 | Backup → destroy → restore → identical fingerprint | PROVEN IN CI | `make db-restore-drill` |
 | NetworkPolicy enforcement, negative controls | PROVEN IN CI on kind, one node | `kind-integration` |
 | Rules, alerts, Alertmanager config, dashboards | PROVEN IN CI | `scripts/check-observability.sh`, promtool tests |
-| Production config gates fail closed against the real files and loaders (20 scenarios) | PROVEN IN CI (`gates` on PR #38 at `bc74c29`, base `9a0e22e`) and PROVEN LOCALLY at base `fa6f109` | `npm run production:config-check -- --self-test` |
+| Production config gates fail closed against the real files and loaders (20 scenarios) | PROVEN IN CI (`gates` on PR #38 at `5d486ef`, base `fa6f109`) and PROVEN LOCALLY at base `c00ec48` | `npm run production:config-check -- --self-test` |
 | Preflight, smoke and sampler decisions; no secret printed; only read-only docker/kubectl verbs; a hung daemon ends as a FAIL | PROVEN LOCALLY on macOS bash 3.2 and in a Linux container (bash 5.2, GNU coreutils) | `bash scripts/test-production-host-scripts.sh` |
 | Scrape token readable by Prometheus under Linux ownership | PROVEN LOCALLY with the real image | §18.1 |
 
@@ -106,7 +106,7 @@ D2, not a default.
 | Provider firewall admitting only 80/443/SSH | REQUIRES PRODUCTION HOST |
 | Unattended recovery after a Docker restart or reboot | NOT PROVEN on a host (the policy exists; the kind node's behaviour is unmeasured) |
 | NetworkPolicy enforcement on the host's substrate | REQUIRES PRODUCTION HOST (probe must PASS there) |
-| The new CI steps on GitHub after the rebase onto `fa6f109` | NOT PROVEN until PR #38's CI runs again (they passed in `gates` at `bc74c29`, before it) |
+| The new CI steps on GitHub after the rebase onto `c00ec48` | NOT PROVEN until PR #38's CI runs again (they passed in `gates` at `5d486ef`, base `fa6f109`) |
 
 ## 5. Host prerequisites
 
@@ -634,29 +634,35 @@ credentials, or delete or overwrite data.
 
 ## 20. Evidence for this branch
 
-Run on this branch after rebasing onto `fa6f109` (PR #36: the post-beta security
-audit), on a development machine. **None of it is host evidence.**
+Run on this branch after rebasing onto `c00ec48` (PR #37: browser E2E, merged
+after PR #36's post-beta security audit), on a development machine shared with
+other stacks (load average 20–37 on 10 cores). **None of it is host evidence.**
 
-The rebase had no conflicts. PR #36 and this branch share one file,
-`package.json`, where PR #36 adds `test:security` and this branch adds
-`production:config-check` in a different hunk. `git diff` of the branch against
-its base is byte-identical before and after the rebase apart from that file's
-index line, so no security change from PR #36 is touched: this branch changes no
-file under `apps/` or `services/*/src`, no verifier, sandbox, terminal or
-Kubernetes code.
+The rebase had one conflict, in `docs/releases/private-beta-release-gate.md`:
+PR #37 and this branch had each appended a §12. PR #37's browser E2E section
+keeps §12; this branch's production-host section is now §13. Two other files are
+shared and merged without conflict: `package.json` (separate script hunks) and
+`.github/workflows/quality-gates.yml` (this branch's two `gates` steps; PR #37's
+browser-e2e job). This branch's earlier cherry-pick of the web page-title race fix
+was dropped as already applied: the identical change is on `main` from PR #37, so
+the branch no longer touches `apps/web`. The test CA's DER serial fix (§20.1) is
+now on `main` as well. This branch still changes no file under `apps/` or
+`services/*/src`, and no verifier, sandbox, terminal or Kubernetes code.
 
 | Command | Result |
 |---|---|
 | `npm run validate:labs` | PASS — 117 labs, 0 errors, 0 warnings |
-| `npm run typecheck` | PASS |
-| `npm test` | PASS, every workspace (includes `production-host-contract.test.ts` and PR #36's security suites) |
+| `npm run typecheck` | PASS (after `npm ci`, which installed PR #37's new `e2e` workspace dependencies) |
+| `npm test` | PASS, every workspace, on the second run. The first run failed three `apps/api` `catalog-api.test.ts` tests on the 5 s test timeout and one `services/observability` `redact.test.ts` linear-time bound (129 ms against 50 ms) at load 36; both files pass alone and are unchanged by this branch and by PR #37 |
+| `npm run test:security` | PASS |
 | `npm run build` | PASS |
 | `node scripts/check-secret-distribution.mjs` | PASS |
 | `bash scripts/check-observability.sh` | PASS |
 | `npm run production:config-check -- --self-test` | PASS, 20 scenarios |
 | `bash scripts/test-production-host-scripts.sh` | PASS, 41 cases |
 | `production-host-contract.test.ts` | PASS, 52 tests |
-| TLS edge suite (`tls-edge-integration.test.ts`), with the §20.1 fix | four full local runs; see §20.1 |
+| `make test-tls-edge` (`tls-edge-integration.test.ts`, with the §20.1 fix) | PASS, 36/36 |
+| `bash e2e/stack.sh run` (PR #37's browser suite, own compose project and ports) | PASS, 7/7; stack and sandboxes removed |
 
 ### 20.1 The `tls-edge-integration` failure on PR #38
 
@@ -676,10 +682,10 @@ The same unchanged test passed on `main` at `fa6f109` in CI. The product path wa
 already right: `scripts/tls-install.sh` polls the health check for up to ten
 seconds after a reload, and the compose health check retries.
 
-It is **not** the test CA's DER serial defect (fixed by `9c86bb0` on PR #37). The
+It is **not** the test CA's DER serial defect (fixed on PR #37, on `main` as `ad3e1fc`). The
 assertions before the reload passed: OpenSSL 3 in the web image read the drift
 certificate, and Node read both certificates, which a non-minimal serial would
-have made impossible. `9c86bb0` is not part of this branch.
+have made impossible. That fix reached this branch only with the rebase onto `c00ec48`.
 
 **Fix.** The test now polls the same health check after the reload, bounded at
 20 s, reports the check's own message when it fails, and then also proves that
@@ -693,7 +699,8 @@ other stacks (load average above 20 on 10 cores): the drift test passed in every
 run. One run failed a different test, "refuses TLS 1.1 and a CBC suite …", by
 hitting its 180 s timeout. That test takes about 3 s in CI and about 50 s on this
 machine when it passes, so the timeout is local Docker contention, not this change.
-The fix is not CI evidence until PR #38's CI runs on the rebased branch.
+With the fix, `tls-edge-integration` passed in PR #38's CI at `5d486ef` (base
+`fa6f109`); on `c00ec48` it has passed locally (§20) and awaits PR #38's CI.
 
 ## 21. Rollback procedure
 
