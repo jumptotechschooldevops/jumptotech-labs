@@ -21,6 +21,12 @@ import '@xterm/xterm/css/xterm.css';
 import { codeForClose } from '../lib/terminal';
 import type { TerminalGrant } from '../lib/types';
 
+/**
+ * Terminal service error codes sent on a socket it keeps open
+ * (services/terminal/src/server.ts, protocol.ts). Anything else precedes a close.
+ */
+const ADVISORY_ERROR_CODES = new Set(['FRAME_TOO_LARGE', 'MALFORMED', 'MALFORMED_FRAME', 'ALREADY_AUTHENTICATED']);
+
 export type TerminalStatus = 'idle' | 'connecting' | 'connected' | 'disconnected';
 
 export interface TerminalEvent {
@@ -245,15 +251,20 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
             break;
 
           case 'error': {
-            serverCode = typeof msg.code === 'string' ? msg.code : serverCode;
+            const code = typeof msg.code === 'string' ? msg.code : undefined;
             serverMessage = String(msg.message ?? 'Terminal error');
+            // Some refusals leave the socket open (a paste over the frame limit,
+            // a malformed frame). They are shown, but they are not why a later
+            // close happened: remembering one would label a real network drop
+            // FRAME_TOO_LARGE and stop the automatic reconnect.
+            if (code && !ADVISORY_ERROR_CODES.has(code)) serverCode = code;
             // SESSION_ENDED is also what the terminal service sends this socket
             // when the same session's terminal is opened in another tab — one
             // shell per session. Its "the lab has ended" text would be false
             // then, so the workspace works out which case it is from the
             // session state and says so in the terminal bar.
             term.writeln(
-              `\r\n\x1b[31m${serverCode === 'SESSION_ENDED' ? 'The terminal was disconnected.' : serverMessage}\x1b[0m`,
+              `\r\n\x1b[31m${code === 'SESSION_ENDED' ? 'The terminal was disconnected.' : serverMessage}\x1b[0m`,
             );
             break;
           }

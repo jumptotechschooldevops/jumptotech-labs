@@ -168,3 +168,29 @@ describe('LabTerminal handshake', () => {
     expect(socket.sent.at(-1)).toEqual({ type: 'resize', cols: 90, rows: 28 });
   });
 });
+
+describe('LabTerminal close reasons', () => {
+  it('does not blame a later network drop on a refusal that left the socket open', () => {
+    const { socket, onEvent } = mount();
+    act(() => socket.serverOpens());
+    act(() => socket.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+
+    // A paste over the frame limit: shown, and the socket stays open.
+    act(() => socket.serverSends({ type: 'error', code: 'FRAME_TOO_LARGE', message: 'input payload is too large' }));
+    // Later the network drops.
+    act(() => socket.onclose?.({ code: 1006 }));
+
+    expect(onEvent).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+  });
+
+  it('still reports the code the service named before it closed', () => {
+    const { socket, onEvent } = mount();
+    act(() => socket.serverOpens());
+    act(() => socket.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+    act(() => socket.serverSends({ type: 'error', code: 'FRAME_TOO_LARGE', message: 'input payload is too large' }));
+    act(() => socket.serverSends({ type: 'error', code: 'SESSION_ENDED', message: 'ended' }));
+    act(() => socket.onclose?.({ code: 4410 }));
+
+    expect(onEvent).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'disconnected', code: 'SESSION_ENDED' }));
+  });
+});
