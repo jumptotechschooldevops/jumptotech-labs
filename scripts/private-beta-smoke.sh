@@ -70,7 +70,8 @@ Options:
   --connect IP       connect to this address instead of DNS (before DNS is live); the Host/SNI stay the origin's
   --public-ip IP     also probe this host's public address for ports that must be closed (from the host itself)
   --report-dir DIR   write the evidence file there (no secrets)
-  --env-file FILE    default: <checkout>/.env
+  --env-file FILE    where PUBLIC_ORIGIN is read (default: <checkout>/.env); the
+                     stack itself always runs with <checkout>/.env
 USAGE
 }
 

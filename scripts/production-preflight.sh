@@ -55,7 +55,9 @@ usage() {
   sed -n '3,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   cat <<'USAGE'
 Options:
-  --env-file FILE        the .env the stack starts with (default: <checkout>/.env)
+  --env-file FILE        the .env to check (default: <checkout>/.env). `prod up` always
+                         reads <checkout>/.env: checking another file proves nothing
+                         about what starts
   --backup-dir DIR       the BACKUP_DIR the backup job uses (default: $BACKUP_DIR or /srv/jumptotech/backups/postgres)
   --report FILE          also write the result lines to FILE (no secrets)
   --skip-config-check    do not run scripts/production-config-check.ts (the result is then a FAIL)

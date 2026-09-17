@@ -423,7 +423,11 @@ make production-preflight ARGS="--backup-dir /srv/jumptotech/backups/postgres --
 
 ## 15. Deployment procedure
 
-Stop at the first FAIL. Placeholders: `<host>`, `<commit>`, `<public-ip>`.
+Stop at the first FAIL, with one named exception: the smoke's `backup.offhost`
+stays FAIL (and so its `RESULT: FAIL`) until D7 is decided and step 23 proves an
+off-host copy. Steps 18–22 continue past that one line; every other smoke line
+must PASS, and no student is invited while it stands. Placeholders: `<host>`,
+`<commit>`, `<public-ip>`.
 
 1. **Host prerequisites** (§5.1). `sudo useradd -m jtt-ops && sudo usermod -aG docker jtt-ops`; log in as `jtt-ops`.
 2. **Firewall** (§7.1), in the provider firewall or `DOCKER-USER`.
@@ -464,6 +468,9 @@ Stop at the first FAIL. Placeholders: `<host>`, `<commit>`, `<public-ip>`.
 13. **Configuration.** `make secrets-check`; `make production-config-check` (0 FAIL).
 14. **Preflight** (§14): `RESULT: PASS`.
 15. **Five-student synthetic gate** (§13.1), before the production stack starts.
+    It rewrites the cluster's NetworkPolicy attestation for the validation `.env`
+    (§13.1 step 8), so **repeat steps 12–14** afterwards: without that the
+    production api refuses every Kubernetes lab and the smoke fails `k8s.attestation`.
 16. **Start.** `prod up -d --build --wait --wait-timeout 900`; `prod ps`. Then:
     ```bash
     export BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status
@@ -474,6 +481,7 @@ Stop at the first FAIL. Placeholders: `<host>`, `<commit>`, `<public-ip>`.
     `scripts/db-restore.sh --into jumptotech_labs_check_<date> <archive>`, and validate it
     ([postgres-backup-restore.md §6.3](../runbooks/postgres-backup-restore.md)).
 17. **Smoke** (§16): `make private-beta-smoke ARGS="--public-ip <public-ip> --report-dir /srv/jumptotech/evidence"`.
+    Every line PASS except `backup.offhost` until D7 (see the exception above).
 18. **External checks, from another network:**
     ```bash
     nc -zv -w3 <public-ip> 80 443
