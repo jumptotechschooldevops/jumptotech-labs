@@ -37,11 +37,15 @@ new feature and has tests of its own).
 | 6 | **No stop-launches switch** (documented follow-up) | operators | `LAB_LAUNCHES_PAUSED=true` refuses Start Lab with 503 before anything is written; running labs untouched (`30756e5`) | `launch-pause.test.ts`, web mapping test, runbook §3 |
 | 7 | **A refusal that left the terminal socket open became the reason for a later close**: after a paste over 8 KB (`FRAME_TOO_LARGE`), a real network drop was not auto-reconnected | any student who pastes a large block | advisory codes are shown but not recorded as the close reason (`a8c66af`) | component test fails on the old component |
 | 8 | **A failed Reset was worded as a Verify problem** ("Try Verify again" while Verify is disabled) | a student whose reset cannot reach the sandbox | reset-specific wording (`f08c6a1`) | mapping test |
+| 9 | **A reload during Start Lab said "LINUX-001 is not running" for good** while the server went on building the lab, which held the student's only slot. The reload cancels the browser's POST, not the server's work; the workspace read the session list once, too early | any student who reloads, or whose tab restores, during a start | the workspace re-reads the session list every 3 s, at most 10 times, while it has no session for its lab (`681891d`) | found by a new browser test (4 min on "not running", trace shows the POST cancelled and the session existing); passes 2/2 after; component test fails on the old page |
 
-Browser E2E gained a Reset test, a five-student test and three tests that
-take real services away:
-- Reset: same session, fresh sandbox (files gone), terminal
-  reconnects without a click, Completed kept, Verify grades the fresh sandbox;
+Browser E2E gained Reset, reload-during-start, second-tab takeover and
+five-student tests, and three tests that take real services away:
+- second tab (`fc916f2`): the second tab's terminal works, the first says it
+  was opened in another tab while the lab stays Ready, Reconnect takes it back;
+- Reset: same session, fresh sandbox (files gone), terminal usable, Completed
+  kept, Verify grades the fresh sandbox. The first line typed after Reset is
+  often lost (§4); the test retypes, as a student would;
 - five students in five browsers at once (`c6ef9a6`): simultaneous Launch,
   five connected terminals on five sandboxes, five simultaneous Verify with
   per-student results, a sixth student refused with `LAB_CAPACITY_REACHED`,
@@ -77,19 +81,35 @@ request exists for this branch.**
 
 | Command | Result |
 |---|---|
-| `npm test` (every workspace) | **PASS** — 4,875 passed, 0 failed, 333 skipped (environment-gated integration suites) |
+| `npm test` (every workspace) | **PASS** — 4,877 passed, 0 failed, 333 skipped (environment-gated integration suites) |
 | `npm run test:security` | **PASS** — 47 files, 797 tests |
 | `npm run typecheck` | **PASS** |
 | `npm run validate:labs` | **PASS** — 117 labs, 0 errors, 0 warnings |
 | `npm run production:config-check -- --self-test` (PR #38) | **PASS** — the production gates fail closed |
 | `bash scripts/test-production-host-scripts.sh` (PR #38) | **PASS** — 41 cases |
-| `bash e2e/stack.sh run` (isolated project `jtt-e2e-bro`), final | **PASS 12/12** in 6.6 min; teardown left 0 containers. Earlier runs on the way: 8/8, 9/9, 10/10, and one 11/12 where the new Reset test typed before the fresh shell's prompt (test fixed to wait for it; see §4) |
+| `bash e2e/stack.sh run` (isolated project `jtt-e2e-bro`), final | see §2.1 |
 | `bash scripts/test-db-backup-restore.sh` | **PASS** — 117 passed, 0 failed |
 | `make db-restore-drill` | **PASS** in 16 s — source destroyed, restored to an identical fingerprint (9 tables, schema, sequences, ledger), migrations current, application read and write; 0 containers left |
 | `node scripts/check-secret-distribution.mjs`, `bash scripts/check-observability.sh`, `npm run build`, `npm run test:composition` | **PASS** (composition 25) |
 | New E2E test against the old auth gate (negative control) | **FAILS** as expected — no banner; the app is replaced by the full-screen error |
 | `tls-edge-integration` (real web image), full suite with fix 1 | 36/37; the one failure ("refuses a private key inside fullchain.pem") hit its 60 s `docker run` budget at load ~40 and passed alone in 3.4 s, before nginx loads `locations.conf` |
 | Same suite, selected tests including fixes 1 and 2 | **PASS** |
+
+### 2.1 Final state of the branch
+
+On the final tree (the last code change is `7e497e3`):
+
+| Command | Result |
+|---|---|
+| `bash e2e/stack.sh run` | **PASS 14/14** in 6.4 min; 0 containers left |
+| `npm test` | **PASS** — 4,877 passed, 0 failed, 333 skipped |
+| `npm run test:security` | **PASS** — 797 |
+| `npm run typecheck`, `npm run build`, `npm run validate:labs` (117/0/0), `git diff --check` | **PASS** |
+
+The browser suite on the way there: 8/8, 9/9, 10/10, 12/12, then 11/12 twice
+and 13/14 once on the Reset race in §4, and 14/14 once the Reset test
+retypes like a student. Every browser run used Linux sandboxes on a
+development machine.
 
 Flaky under load, not product defects, not changed: `redact.test.ts` "stays
 linear on adversarial input #2" (a 50 ms wall-clock bound; failed once in a
@@ -145,10 +165,22 @@ student; each is recorded for a later pass.
 
 - A paste over the 8 KB frame limit is refused and shown as a red line; the
   pasted text is lost (the reconnect side of this is fixed, #7).
-- Right after a Reset (and in principle any attach), "Terminal: Connected"
-  appears a moment before bash prints its prompt; keys typed in that instant
-  can interleave with the prompt and garble the line. Seen once by the browser
-  suite under load; a student would retype. Not changed.
+- **Open, the most visible remaining student issue: after Reset on a
+  container lab, the first command typed is often lost or garbled.** The api
+  awaits the terminal service's reattach (a fresh shell on the same socket),
+  and the web app then also reconnects the socket because the reset answer
+  says `reconnectTerminal`, killing that shell and attaching another. Lines
+  typed across the switch came out truncated and repeated ("… bash: syntax
+  error"). Evidence: the browser Reset test failed in two full runs; with a
+  Ctrl-C-and-retype loop it passes 4/4 but takes 34–60 s instead of 19 s,
+  because the first attempt usually fails. Two web fixes were tried tonight
+  (skip the page's reconnect when a reattach arrived; then wait 2 s for one)
+  and **withdrawn** (`d5ec1bc`, `37a40aa`): with them the terminal showed a
+  fresh prompt but nothing typed afterwards appeared, 4 of 4, and the cause
+  could not be seen without the terminal service's logs. Next step: reproduce
+  with `E2E_KEEP_STACK=1`, read the terminal and sandboxd logs for the
+  reattach, and choose one mechanism (server reattach or client reconnect),
+  not both. Workaround for students: press Enter, retype.
 - A session stuck in `ENDING` blocks every other lab behind a spinner with no
   explanation (`SessionTeardownStuck` alerts the operator after 20 min).
 - An unknown session status string would throw in `AppShell`, outside the
@@ -196,3 +228,9 @@ Nothing below can be done in this repository.
 | `c6ef9a6` | test(e2e): five students in five browsers; E2E stack pinned to 5/1 |
 | `5ec620d` | test(e2e): PostgreSQL restarted under a running lab |
 | `b1b7100`, `81e6097` | test(e2e): Reset in the browser; wait for the fresh prompt after Reset |
+| `82cc51e` | docs(beta): final evidence (first pass) |
+| `681891d` | fix(web): reload during Start no longer says "not running" |
+| `fc916f2` | test(e2e): reload during Start; second-tab takeover |
+| `4a372e3`, `4fdb653` | fix(web): Reset reattach attempts — **withdrawn** by `37a40aa`, `d5ec1bc` (§4) |
+| `287b6f5` | test(web): wait for the terminal to mount (flaky test from `93c5cd1`, 1 in ~5 runs) |
+| `7e497e3` | test(e2e): retype after Reset, and record why |

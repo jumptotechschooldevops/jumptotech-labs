@@ -481,6 +481,7 @@ receiver or off-host backup was exercised.** Nothing here changes §13.2.
 | No stop-launches switch (§6's follow-up) | `LAB_LAUNCHES_PAUSED`; api and web tests; runbook §3 |
 | After a refused oversized paste, a real terminal drop was not auto-reconnected | component test |
 | A failed Reset was worded as a Verify problem | mapping test |
+| A reload during Start Lab showed "not running" for good while the lab was being built | component test; browser test found it |
 
 ### 14.2 Status changes against earlier sections
 
@@ -496,11 +497,17 @@ receiver or off-host backup was exercised.** Nothing here changes §13.2.
 
 ### 14.3 Local validation on this branch (not CI, not a host)
 
-`npm test` 4,875 passed / 0 failed; `npm run test:security` 797 passed;
+`npm test` 4,877 passed / 0 failed; `npm run test:security` 797 passed;
 typecheck; `validate:labs` 117/0/0; PR #38's config self-test and host-script
 tests; `make db-restore-drill` and the backup refusal tests; browser E2E
-12/12, now including Reset, five students in five browsers with a sixth
-refused, and real api, terminal and database restarts.
+14/14, now including Reset, reload during Start, a second tab, five students
+in five browsers with a sixth refused, and real api, terminal and database
+restarts.
+
+One student-visible issue found tonight is **open**: after Reset on a
+container lab the first command typed is often lost (the terminal is
+reattached by the service and reconnected by the page). A fix was tried and
+withdrawn; see the readiness report §4. Students can retype.
 
 **Verdict unchanged in kind:** software ready for a real-host deployment test;
 **not ready for student access** until §13.2 is done on a host.

@@ -685,8 +685,14 @@ B's progress is 0, and B's own terminal and sandbox work.
   reconnect code, so it is a guard, not a regression test) and "database
   restarted mid-lab" (the api's pool recovers; a passing Verify is saved).
 - "Reset gives a student a fresh environment…": same session, files gone,
-  terminal reconnects by itself, Completed kept.
-- Final full run on the branch: **12 passed** (6.6 min), 0 containers left.
+  terminal usable, Completed kept. The first line typed after Reset is often
+  lost (reattach plus reconnect; open, see the readiness report §4), so the
+  test presses Ctrl-C and retypes.
+- "reloading while the lab is still being created…": found a defect (the
+  workspace said "not running" while the lab was being built), fixed in
+  `681891d`.
+- "opening the lab in a second tab…": the documented one-terminal-per-session
+  takeover, and Reconnect taking it back.
 - Not yet run in CI (no pull request for the branch). On a 2-core runner six
   Linux sandboxes at once are unmeasured.
 
@@ -738,8 +744,8 @@ B's progress is 0, and B's own terminal and sandbox work.
 | Kubernetes real-runtime browser E2E | **OPEN** |
 | Terraform browser E2E | **OPEN** |
 | Reset flow | **Covered locally** (§14.4, Linux) |
-| Second-tab terminal takeover | **OPEN** |
-| Reload during session startup (CREATING) | **OPEN** |
+| Second-tab terminal takeover | **Covered locally** (§14.4) |
+| Reload during session startup (CREATING) | **Covered locally** (§14.4); found and fixed a defect |
 | Production overlay | **OPEN** |
 | Real external OIDC/IdP | **OPEN** |
 | Production TLS / public host | **OPEN** |
@@ -753,7 +759,7 @@ Recommended next steps:
 1. Run §14.4's api-outage test in CI (it needs a pull request).
 2. Separate retryable from permanent `CREDENTIALS_UNAVAILABLE` on the server,
    so the browser's bounded retry (§15) never retries a permanent refusal.
-3. Browser coverage for second-tab takeover and reload during CREATING.
+3. Remove the double terminal attach after Reset (readiness report §4), then drop the E2E retype loop.
 4. Extend Tier B with a Kubernetes lab (kind in the job) and a Terraform lab.
 5. Point the suite at a staging host with the production overlay and a real IdP
    test tenant as the first Tier C evidence.
