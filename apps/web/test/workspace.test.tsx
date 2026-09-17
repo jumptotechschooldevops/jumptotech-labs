@@ -287,31 +287,6 @@ describe('Reset', () => {
     expect(screen.getByText(/Not verified yet/)).toBeTruthy();
   });
 
-  it('does not reconnect a terminal the service already reattached to the fresh sandbox during the reset', async () => {
-    let answer!: (value: unknown) => void;
-    apiMock.resetLab.mockReturnValue(new Promise((resolve) => (answer = resolve)));
-    await renderConnected();
-
-    fireEvent.click(button('Reset'));
-    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Reset lab' }));
-    // The api has the terminal service open a fresh shell on this socket before it answers.
-    act(() => terminal.last!.onEvent({ status: 'connected', reattached: true }));
-    answer({
-      message: 'Lab reset successfully.',
-      removed: ['container/lab-sbx-test'],
-      restored: [],
-      steps: [],
-      environment: { environmentId: 'e', provider: 'docker-linux', phase: 'ready', namespace: '' },
-      session: sessionInfo(),
-      clearTerminal: true,
-      reconnectTerminal: true,
-    });
-
-    expect(await screen.findByText('Your environment was reset to its starting state.')).toBeTruthy();
-    // The socket that already has the fresh shell is kept.
-    expect(screen.getByTestId('terminal').getAttribute('data-connect-key')).toBe('0');
-  });
-
   it('shows a failed reset as an environment that needs another reset — with only Reset and End offered', async () => {
     apiMock.resetLab.mockRejectedValue(
       new ApiRequestError(503, {

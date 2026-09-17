@@ -256,8 +256,6 @@ export function WorkspacePage({ labId }: { labId: string }) {
     reconnectTimer.current = null;
   }, []);
   useEffect(() => cancelAutoReconnect, [cancelAutoReconnect]);
-  /** Set when the terminal service reattached this socket to a fresh shell during a reset. */
-  const reattachedDuringReset = useRef(false);
 
   /** Take a newer copy of the session, and share it with the rest of the app. */
   const updateSession = useCallback(
@@ -391,7 +389,6 @@ export function WorkspacePage({ labId }: { labId: string }) {
         setEverConnected(true);
         autoReconnects.current = 0;
         refreshedToken.current = false;
-        if (event.reattached) reattachedDuringReset.current = true;
         return;
       }
       if (event.status !== 'disconnected') return;
@@ -470,28 +467,20 @@ export function WorkspacePage({ labId }: { labId: string }) {
     setResetting(true);
     setActionError(null);
     setNotice(null);
-    reattachedDuringReset.current = false;
     try {
       const response = await api.resetLab(sessionId);
       setResetOpen(false);
-      /*
-       * A container-backed reset replaces the sandbox, so the shell attached to
-       * the old one is gone. The api asks the terminal service to open a fresh
-       * shell on this same socket before it answers (a `reattached` frame). Only
-       * when that did not happen does the page reconnect itself: reconnecting
-       * after a reattach closed the fresh shell and opened another, and whatever
-       * the student had started typing in between was lost or garbled.
-       */
-      const reconnect = response.reconnectTerminal === true && !reattachedDuringReset.current;
       if (response.clearTerminal) {
         terminalRef.current?.clear();
         terminalRef.current?.writeNotice(
-          reconnect
+          response.reconnectTerminal
             ? 'Lab reset. Connecting to your fresh environment…'
             : 'Lab reset. Press Enter for a fresh prompt.',
         );
       }
-      if (reconnect) setConnectKey((n) => n + 1);
+      // A container-backed reset replaces the sandbox, so the shell attached to
+      // the old one is gone. Reattach with the same session.
+      if (response.reconnectTerminal) setConnectKey((n) => n + 1);
       setVerify({ kind: 'idle' });
       setLastChecks(undefined);
       setNotice('Your environment was reset to its starting state.');
