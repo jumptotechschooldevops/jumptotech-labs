@@ -364,8 +364,17 @@ failed 1/7. Its trace showed the cause: the terminal service's 10 s auth grace
 timer closed a socket that had already sent a valid token, because attaching
 took longer than 10 s. Students saw "Connection to the terminal was lost."
 That is fixed on the branch (`0553cf1`, with a regression test), and two
-later clean cycles passed 7/7 at lower load. No run leaked a sandbox. The
-suite has not yet run on a CI runner.
+later clean cycles passed 7/7 at lower load. No run leaked a sandbox.
+
+After main's security audit (PR #36, `fa6f109`) the branch was rebased without
+conflicts; no PR #36 control changed. PR #37's first CI run (`9c86bb0`) failed
+6/7: the web terminal could send `resize` before `auth`, and the terminal
+service correctly closed that socket 4401 as unauthenticated, which left a
+student re-opening a workspace on "Connection to the terminal was lost." The
+trace's WebSocket frames showed the order. Fixed on the branch (`0689589`
+web, `415b547` terminal; the pre-token refusal is unchanged). On `415b547`
+locally: isolation 5/5 repeated, full suite 7/7 twice. The suite has not yet
+passed on a CI runner.
 
 | Tier | Status |
 |---|---|
@@ -386,16 +395,18 @@ suite has not yet run on a CI runner.
 | Sign-out revokes server-side; forged cookie anonymous | **PROVEN** (local) | |
 | Clear UI on API/terminal failure | **PARTIALLY PROVEN** | injected in the browser; a real api stop showed ~39 s before the error |
 | Test IdP cannot reach production | **PROVEN** (repository) | `browser-e2e-overlay.test.ts` (api refuses under production) + `[guard]` spec |
-| Browser E2E in CI | **NOT PROVEN** | job configured, never executed |
+| Browser E2E in CI | **NOT PROVEN** | ran once on PR #37: 6/7, handshake race since fixed; not yet passed |
 | Kubernetes / Docker / Terraform / Ansible / CI/CD in a browser | **NOT PROVEN** | not exercised |
 | Reset, second-tab takeover, reload during start | **NOT PROVEN** | not exercised |
 | Production overlay, TLS, `wss://`, Secure cookies, real IdP, host | **NOT PROVEN** | unchanged; §2, §7, §11.5 still apply |
 
-No new release blocker. One defect fixed on the branch, and two non-blocking
+No new release blocker. Two defects fixed on the branch, and two non-blocking
 resilience findings:
 
 - **Fixed:** a slow attach (over 10 s) closed an authenticated terminal socket
   with a false "No session token received".
+- **Fixed:** the web terminal could send `resize` before `auth`, so the socket
+  was closed 4401 and the terminal stayed "lost" (the PR #37 CI failure).
 - **Non-blocking:** a real API outage shows ~39 s of "Checking your
   session…" before the error.
 - **Non-blocking:** an API slower than the terminal's 10 s credentials budget

@@ -1,8 +1,9 @@
 # Browser E2E for the private beta
 
-**Branch** `feat/browser-e2e-beta`, rebased onto `origin/main` at `9a0e22e`
-(PR #35, catalog quality validation; previously on `0f33b1f`, PR #34).
-**Date** 2026-09-16. Results on this base: §14.2.
+**Branch** `feat/browser-e2e-beta` (PR #37), rebased onto `origin/main` at
+`fa6f109` (PR #36, post-beta security audit; previously on `9a0e22e`, PR #35,
+and `0f33b1f`, PR #34).
+**Date** 2026-09-16. Results on this base: §14.3.
 
 ## 1. Executive summary
 
@@ -80,6 +81,23 @@ At `cb7804a`, before this branch:
 | `catalog-starter-state.test.ts` (no lab passes Verify on untouched starter files) | Consistent with E2E: LINUX-001's live Verify starts at 1 of 5. |
 | TF-026 starter file mode | Not exercised (Terraform disabled in the E2E stack). |
 | `package.json` `validate:labs` script | Merged beside this branch's `e2e` workspace and `test:e2e` scripts; no conflict. |
+
+**Changes on main from PR #36 (`fa6f109`, security audit) and their effect here:**
+
+The rebase had no conflicts. Only three files were changed by both, in
+separate hunks: `.gitignore`, `package.json` (`test:security` beside
+`test:e2e`) and `services/terminal/src/server.ts` (output flow control on
+shell start and close, beside this branch's auth-timer and attach changes).
+No PR #36 control was changed.
+
+| Change on main | Affects E2E? |
+|---|---|
+| Terminal output backpressure (`output-flow.ts`) | Exercised on every terminal in the suite; none of its limits is reached by LINUX-001 commands. Unchanged. |
+| `SANDBOX_WRITE_RATE_LIMIT` (20 start/reset per minute per user) | Not reached: each test student starts at most one lab. Unchanged, not raised for E2E. |
+| Check single-flight (409 `CHECK_IN_PROGRESS`) | Not reached: the suite clicks Verify once and waits. Unchanged. |
+| Request-body errors as 400/413/415 | Not exercised by the browser. Unchanged. |
+| Lab-asset symlink refusal, verifier linear parsers, container ceilings, `service_http` redirects | Not reached by LINUX-001 in a browser; covered by `npm run test:security`. Unchanged. |
+| `.dockerignore` secret exclusions | Extended by this branch with `e2e/.stack/`, where `stack.sh` writes each run's generated secrets before it builds images. No Dockerfile copies `e2e/`, so no image held them, but they were sent to the builder. `build-context-secrets.test.ts` now asserts the rule. |
 
 ## 4. Browser framework decision
 
@@ -395,13 +413,11 @@ The `browser-e2e` job in `.github/workflows/quality-gates.yml`:
 | No conflict with other jobs | own runner (fresh daemon), `needs: gates`, run-scoped project and owner, unique job name; shares the workflow's concurrency group like every other job |
 | Coexists with the catalog gate (PR #35) | `gates` now runs `npm run validate:labs`; `browser-e2e` depends on `gates`, so a catalog defect stops it before the stack starts. No gate was removed, relaxed or made optional, and `browser-e2e` does not use `continue-on-error` |
 
-**Not observed on a runner yet.** The workflow triggers on `pull_request` and
-on `push` to `main`, and no PR exists. Linux-runner-specific risks remain
-unproven:
-
-- the Docker socket GID (taken from `stat` on the socket);
-- registry pulls of `node:22-bookworm-slim` and `postgres:16-alpine`;
-- build time within 45 minutes.
+**Observed on a runner once (PR #37, run `35161066075`, commit `9c86bb0`).**
+The stack built and became healthy on `ubuntu-latest` (socket GID, registry
+pulls and image builds all worked; the job took 4 min 36 s), and the suite
+ran **6 passed, 1 failed**. The failure was a product race in the web terminal
+handshake, diagnosed and fixed in §14.3. The job has not yet passed in CI.
 
 ## 12. Cleanup and concurrency
 
@@ -562,6 +578,90 @@ No assertion, timeout, retry or sleep in the browser suite was changed.
   auto-retry that code; the student presses Try again or Reconnect. See §15.
 - CI has still never run the suite.
 
+### 14.3 Results after rebasing onto `fa6f109` (PR #36), with the handshake race fixed
+
+**The CI failure.** PR #37's first CI run (`35161066075`, `9c86bb0`) failed
+`student-isolation.spec.ts:105`: student A re-opened the workspace of a lab
+that was still running, and the terminal stayed "Connection to the terminal
+was lost." for the full 120 s. Student B's terminal attached and worked;
+every B-to-A request in the same run was refused as intended.
+
+**Root cause, from the trace's WebSocket frames** (`trace.zip`, frames of the
+failing socket, in order):
+
+```
+send     {"type":"resize","cols":102,"rows":23}
+send     {"type":"auth","token":"…","cols":102,"rows":23}      +0.46 ms
+receive  {"type":"error","code":"UNAUTHENTICATED","message":"First message must be an auth frame."}
+```
+
+- `LabTerminal`'s `onopen` called `fit()` before sending `auth`. When the
+  layout had not settled (a re-open with a cached grant opens the socket
+  quickly), `fit()` changed the size and xterm fired `onResize`
+  synchronously. The resize handler wrote to `socketRef`, which already held
+  the open socket, so `resize` went out first.
+- The terminal service correctly refuses any first frame that is not `auth`
+  and closed 4401. It then verified the `auth` that followed, logged
+  "attaching", found the socket closed and returned without a log line.
+- The web app has no text or retry for `UNAUTHENTICATED`, so the state was
+  permanent.
+
+**Classification:** product bug — a client-side ordering race in the web
+terminal handshake. Not a test bug and not the CI environment: the runner
+only made the timing likely. On this laptop the unfixed isolation spec passed
+3/3 (the timing did not occur), so the deterministic reproductions are the
+CI frames, a component test, and a raw-socket probe against the real stack.
+
+**Fix (two commits):**
+
+| Commit | Change | Fails without it |
+|---|---|---|
+| `0689589` fix(web) | `socketRef` is set only on `ready`, so `auth` is always the first frame; a re-fit held back meanwhile is sent as one `resize` after `ready` | `apps/web/test/LabTerminal.test.tsx`: frames `[resize, auth]` instead of `[auth]` |
+| `415b547` fix(terminal) | After a token is **verified** and while its attach is in flight, a `resize` is kept (applied when the shell opens) and anything else is dropped instead of closing the socket; a socket that closed during the broker attach no longer leaves a shell and a capacity slot behind | 4 of 5 new `broker-attach.test.ts` cases |
+
+The server change is defence in depth for frames after a verified token. It
+does not accept any frame before one: "still refuses a socket whose first
+frame is not auth" passes with and without the change, and a resize after a
+token the API rejects is still refused. Resize sizes are clamped by the
+protocol parser before they are kept. Input sent before the shell exists is
+never delivered.
+
+Raw-socket probe on the real stack (3 sockets each; run by the session that
+investigated the failure, load 16–31):
+
+| Frames | Before (`e176273`) | After (`415b547`) |
+|---|---|---|
+| `resize` → `auth` | 4401 `UNAUTHENTICATED` | 4401 `UNAUTHENTICATED` (unchanged, by design) |
+| `auth` → `resize` at once | 4401 `UNAUTHENTICATED` | `ready`, shell sized 132×40 |
+
+**Runs on `415b547`** (`fa6f109` + this branch), same laptop, other worktrees'
+clusters still running:
+
+| Run | Load average | Result |
+|---|---|---|
+| Fresh stack, `student-isolation.spec.ts --repeat-each=5` | 21–25 | **5 passed, 0 failed** (8.5 min) |
+| Full suite, same stack | 19–22 | **7 passed** (3.2 min) |
+| Full suite, same stack | 18–21 | **7 passed** (3.0 min) |
+| Teardown | — | 0 `jtt-e2e` containers, 0 networks |
+| `npm test` | 10–29 | all workspaces pass, 0 failed (api 601, web 198, terminal 163, orchestrator 1331, observability 1569, others) |
+| `npm run test:security` | 29 | pass, 0 failed |
+| `npm run validate:labs` | — | 117 labs, 0 errors, 0 warnings |
+| `npm run typecheck`, `npm run build`, `git diff --check` | — | pass / pass / clean |
+
+Isolation assertions are unchanged by the fix: no assertion, timeout, retry
+or sleep in `e2e/` was modified. Every run proved again that B gets 404
+`SESSION_NOT_FOUND` on all six of A's session routes, B's own-token probe
+attaches while B's token re-pointed at A's session closes 4401 `UNAUTHORIZED`,
+B's sandbox has none of A's files, B's Verify reports 1 of 5 while A passed,
+B's progress is 0, and B's own terminal and sandbox work.
+
+**What this does not settle:**
+
+- The suite has not yet passed in CI; the next PR #37 run is the evidence.
+- The other session's gate run on the same commit once saw an api
+  `process-environ-api` "socket hang up" under file-parallel load; it passed
+  alone and did not recur in the run above. Recorded, not fixed.
+
 ## 15. Findings
 
 - **A real API outage shows "Checking your session…" for ~39 s** before
@@ -571,7 +671,19 @@ No assertion, timeout, retry or sleep in the browser suite was changed.
   - The session fetch has no client timeout.
   - Not fixed here.
 - **Fixed: a slow attach closed an authenticated terminal socket** with a
-  false "No session token received" (§14.2, `0553cf1`).
+  false "No session token received" (§14.2, `0553cf1`, now `041f415`).
+- **Fixed: the web terminal could send `resize` before `auth`**, and the
+  service closed the socket 4401 for good (§14.3, `0689589`). The CI failure
+  on PR #37.
+- **Fixed: a browser leaving during the broker attach left an orphan shell**
+  holding a sandbox PTY and a capacity slot (§14.3, `415b547`).
+- **Open, outside this branch: `sandboxd.Dockerfile` is not hermetic.** It
+  copies `services/observability` with whatever `node_modules` the host has
+  and runs `npm ci` only for sandboxd, so a checkout without a root `npm ci`
+  builds an image that fails with `ERR_MODULE_NOT_FOUND` (`prom-client`).
+  CI runs `npm ci` first, so the job is not affected.
+- **Minor: the web app has no text for `UNAUTHENTICATED`** either; after the
+  fix the web app no longer triggers it.
 - **Open, non-blocking: the credentials fetch has a fixed 10 s budget and the
   browser does not retry `CREDENTIALS_UNAVAILABLE`.** An API slower than that
   shows "The terminal could not attach to your environment." with a manual
@@ -597,7 +709,7 @@ No assertion, timeout, retry or sleep in the browser suite was changed.
 | **B** | real browser + actual sandbox/runtime | **PARTIALLY PROVEN** | Linux provider only: launch, real WebSocket terminal, real verifier, End lab, container removal, two-student isolation incl. WebSocket refusal. Heavy host load exposed a terminal defect, now fixed (§14.2); stability under that load after the fix is not yet measured. Kubernetes, Docker-daemon, Terraform, Ansible, CI/CD: not exercised |
 | **C** | production-host smoke | **NOT PROVEN** | nothing ran on a host, domain, TLS edge, production overlay or real IdP. Local Docker Compose is not Tier C |
 
-**CI:** not proven (never executed).
+**CI:** not proven. One run on PR #37 failed 6/7 on the race fixed in §14.3; not yet passed.
 
 ## 17. Remaining gaps and next steps
 
@@ -611,15 +723,14 @@ No assertion, timeout, retry or sleep in the browser suite was changed.
 | Production overlay | **OPEN** |
 | Real external OIDC/IdP | **OPEN** |
 | Production TLS / public host | **OPEN** |
-| Browser E2E observed in CI | **OPEN** |
+| Browser E2E passing in CI | **OPEN** (ran once, 6/7; fix pending a CI run) |
 | Real (non-injected) API/terminal outage tests | **OPEN** |
 | More than two concurrent browser students | **OPEN** (API-level five-student gate exists) |
 | Progress across API/DB restart | **OPEN** |
 
 Recommended next steps:
 
-1. Open the PR to get the first `browser-e2e` CI run on a clean runner (lower
-   contention than this laptop), and fix what it reveals.
+1. Get a passing `browser-e2e` run on PR #37 with the §14.3 fix.
 2. Decide on credentials-fetch resilience under API latency: separate
    retryable from permanent `CREDENTIALS_UNAVAILABLE`, then retry the
    retryable case (§15).
