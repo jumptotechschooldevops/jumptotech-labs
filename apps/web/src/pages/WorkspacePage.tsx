@@ -56,8 +56,42 @@ import { Badge, EmptyState, LoadingState } from '../components/ui';
 
 export const STEADY_POLL_MS = 15_000;
 export const TRANSITION_POLL_MS = 3_000;
-/** Automatic reconnects after an abnormal drop, before asking the student. */
-const AUTO_RECONNECTS = [1_000, 3_000, 6_000];
+/**
+ * Automatic reconnects after an abnormal drop, before asking the student.
+ *
+ * About a minute in all: long enough to ride out a terminal or sandboxd
+ * container restart (`prod restart terminal`, or Docker's own restart policy),
+ * which takes longer than the ten seconds the first three steps cover.
+ */
+export const AUTO_RECONNECTS = [1_000, 3_000, 6_000, 10_000, 15_000, 25_000];
+
+/**
+ * Terminal refusals that describe the platform's plumbing rather than the
+ * session: a broker or API that is restarting, a shell that could not be
+ * spawned this time, an attach slower than the auth grace. The same bounded
+ * retry as a dropped connection.
+ */
+const TRANSIENT_TERMINAL_CODES = new Set([
+  'CONNECTION_LOST',
+  'BROKER_UNREACHABLE',
+  'PTY_SPAWN_FAILED',
+  'CREDENTIALS_UNAVAILABLE',
+  'SANDBOX_UNAVAILABLE',
+  'AUTH_TIMEOUT',
+]);
+
+/**
+ * Refusals that mean the session is not what this page thinks it is. They are
+ * never retried; the session is re-read so the page shows what it really is.
+ * SANDBOX_REF_MISMATCH is a security refusal and belongs here, not above.
+ */
+const SESSION_STATE_TERMINAL_CODES = new Set([
+  'SESSION_NOT_ACTIVE',
+  'SESSION_NOT_FOUND',
+  'SESSION_NOT_OWNED',
+  'INVALID_TERMINAL_CONTEXT',
+  'SANDBOX_REF_MISMATCH',
+]);
 
 const TERMINAL_TEXT: Record<string, string> = {
   // Shown only while the session is still ACTIVE: a lab that really ended moves
@@ -350,7 +384,12 @@ export function WorkspacePage({ labId }: { labId: string }) {
             refreshSession();
           }
           break;
-        case 'CONNECTION_LOST': {
+        default: {
+          if (event.code && SESSION_STATE_TERMINAL_CODES.has(event.code)) {
+            refreshSession();
+            break;
+          }
+          if (!event.code || !TRANSIENT_TERMINAL_CODES.has(event.code)) break;
           const delay = AUTO_RECONNECTS[autoReconnects.current];
           if (delay !== undefined) {
             autoReconnects.current += 1;
@@ -363,8 +402,6 @@ export function WorkspacePage({ labId }: { labId: string }) {
           refreshSession();
           break;
         }
-        default:
-          break;
       }
     },
     [reconnect, refreshSession, cancelAutoReconnect],
