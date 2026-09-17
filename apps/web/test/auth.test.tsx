@@ -15,7 +15,7 @@
  *      itself what one meant.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AuthGate } from '../src/components/AuthGate';
 import { UserMenu } from '../src/components/UserMenu';
 import { AuthProvider, useAuth } from '../src/lib/AuthContext';
@@ -113,6 +113,48 @@ describe('the sign-in gate', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('keeps a signed-in student\'s app mounted when a later re-check cannot reach the API', async () => {
+    let attempt = 0;
+    renderGate({
+      loadSession: () => {
+        attempt += 1;
+        if (attempt === 1) return Promise.resolve(SIGNED_IN);
+        if (attempt === 2) return Promise.reject(new Error('The API did not answer the session query within 15 seconds.'));
+        return Promise.resolve(SIGNED_IN);
+      },
+    });
+    expect(await screen.findByText('the catalog')).toBeTruthy();
+
+    // The tab comes back while the api is restarting.
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(await screen.findByText(/Cannot reach the labs API right now/)).toBeTruthy();
+    // The lab (and its terminal) is still there, and nobody is asked to sign in.
+    expect(screen.getByText('the catalog')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByText(/Cannot reach the labs API right now/)).toBeNull());
+    expect(screen.getByText('the catalog')).toBeTruthy();
+  });
+
+  it('still takes the app away when a re-check says the student is signed out', async () => {
+    let attempt = 0;
+    renderGate({
+      loadSession: () => {
+        attempt += 1;
+        return Promise.resolve(attempt === 1 ? SIGNED_IN : SIGNED_OUT);
+      },
+    });
+    expect(await screen.findByText('the catalog')).toBeTruthy();
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(screen.queryByText('the catalog')).toBeNull();
   });
 
   it('names the missing configuration when no identity provider is set up', async () => {
