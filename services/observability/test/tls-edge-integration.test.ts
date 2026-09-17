@@ -195,6 +195,19 @@ terminal.on('upgrade', (req, socket) => {
 }).listen(4001);
 `;
 
+async function startUpstreamStub(): Promise<void> {
+  const stub = `jtt-tls-${RUN}-upstream`;
+  containers.add(stub);
+  await mustDocker('run', '-d', '--name', stub, '--label', LABEL, '--network', NETWORK, '--network-alias', 'api', '--network-alias', 'terminal',
+    'node:22-bookworm-slim', 'node', '-e', UPSTREAM_STUB);
+  // The stub is a node process: wait until it listens, or the first proxied request races it.
+  const deadline = Date.now() + 30_000;
+  while ((await docker('exec', stub, 'node', '-e', "require('node:net').connect(4000, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))")).code !== 0) {
+    if (Date.now() > deadline) throw new Error('the upstream stub never listened on 4000');
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
 // --- running an edge ----------------------------------------------------------
 
 interface EdgeOptions {
@@ -467,10 +480,7 @@ describe.skipIf(!ENABLED)('the production TLS edge, in the real web image (BETA-
     await mustDocker('build', '-q', '--target', 'edge', '-t', IMAGE, '-f', path.join(REPO_ROOT, 'infrastructure/docker/web.Dockerfile'), REPO_ROOT);
     await docker('network', 'rm', NETWORK);
     await mustDocker('network', 'create', '--label', LABEL, NETWORK);
-    const stub = `jtt-tls-${RUN}-upstream`;
-    containers.add(stub);
-    await mustDocker('run', '-d', '--name', stub, '--label', LABEL, '--network', NETWORK, '--network-alias', 'api', '--network-alias', 'terminal',
-      'node:22-bookworm-slim', 'node', '-e', UPSTREAM_STUB);
+    await startUpstreamStub();
 
     liveDir = pairDir('live', chain(identities.live!), identities.live!.key);
     edge = await startEdge('live', { certDir: liveDir });
@@ -511,6 +521,36 @@ describe.skipIf(!ENABLED)('the production TLS edge, in the real web image (BETA-
       const response = await httpsGet(edge.httpsPort, '/api/health?probe=p0017');
       expect(JSON.parse(response.body)).toEqual({ upstream: 'api', url: '/api/health?probe=p0017', proto: 'https', host: HOST });
     }, 60_000);
+
+    it('keeps proxying the API after the upstream container is re-created at a different address', async () => {
+      // `prod up -d` re-creates api or terminal after an image or .env change
+      // and leaves web running. With the name resolved only when nginx loaded,
+      // the edge answered 502 until web itself was restarted.
+      const stub = `jtt-tls-${RUN}-upstream`;
+      const address = async (name: string): Promise<string> =>
+        (await mustDocker('inspect', '-f', `{{(index .NetworkSettings.Networks "${NETWORK}").IPAddress}}`, name)).trim();
+      const before = await address(stub);
+      expect(JSON.parse((await httpsGet(edge.httpsPort, '/api/before')).body).upstream).toBe('api');
+
+      await mustDocker('rm', '-f', stub);
+      // Take the freed address first (Docker hands out the lowest free one), so
+      // the replacement cannot be given it back.
+      const squatter = `jtt-tls-${RUN}-squatter`;
+      containers.add(squatter);
+      await mustDocker('run', '-d', '--name', squatter, '--label', LABEL, '--network', NETWORK, 'node:22-bookworm-slim', 'sleep', '600');
+      await startUpstreamStub();
+      expect(await address(stub)).not.toBe(before);
+
+      const deadline = Date.now() + 30_000;
+      let last = '';
+      for (;;) {
+        const response = await httpsGet(edge.httpsPort, '/api/after-recreate');
+        last = `${response.status} ${response.body.slice(0, 120)}`;
+        if (response.status === 200 && JSON.parse(response.body).url === '/api/after-recreate') break;
+        if (Date.now() > deadline) throw new Error(`the edge never reached the re-created api: ${last}`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }, 120_000);
 
     it('negotiates TLS 1.3, and TLS 1.2 only with a forward-secret AEAD suite', async () => {
       expect((await httpsGet(edge.httpsPort, '/')).protocol).toBe('TLSv1.3');
