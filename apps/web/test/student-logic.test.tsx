@@ -91,6 +91,15 @@ describe('what an API error means to a student', () => {
     expect(described.retryable).toBe(true);
   });
 
+  it('words an unreachable environment for the action that failed', () => {
+    const error = { code: 'ENVIRONMENT_UNREACHABLE', message: 'The sandbox could not be reached.' };
+    expect(describeError(error, 'verify').title).toBe('Verification could not run');
+    const reset = describeError(error, 'reset');
+    expect(reset.title).toBe('The reset could not reach your environment');
+    expect(`${reset.message} ${reset.guidance}`).not.toMatch(/verif/i);
+    expect(reset.reference).toBe('ENVIRONMENT_UNREACHABLE');
+  });
+
   it('points a student at their running lab instead of suggesting another start', () => {
     const described = describeError(
       { code: 'STUDENT_SESSION_LIMIT_REACHED', message: 'x', details: { maxActiveSessionsPerStudent: 1 } },

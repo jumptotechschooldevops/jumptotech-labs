@@ -193,6 +193,17 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
         retryable: true,
       };
     case 'ENVIRONMENT_UNREACHABLE':
+      // Providers report it for Reset too, when the sandbox cannot be reached.
+      if (context === 'reset') {
+        return {
+          kind: 'environment',
+          title: 'The reset could not reach your environment',
+          message:
+            'Your lab environment could not be reached, so it was not reset. This is a platform problem, not a mistake in your work.',
+          guidance: 'Try Reset again in a moment. If it keeps happening, end the lab and start it again, or let your instructor know.',
+          retryable: true,
+        };
+      }
       return {
         kind: 'environment',
         title: 'Verification could not run',
