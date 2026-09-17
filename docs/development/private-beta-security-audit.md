@@ -853,3 +853,32 @@ proves the properties those tests exercise and nothing more. The overall verdict
 for the trusted private beta stays **GO (conditional)**: the conditions are the
 §25 deployment decisions, and a per-student shell uid is required before any
 untrusted cohort.
+
+---
+
+## 29. Addendum — 2026-09-17 readiness pass
+
+§1–§28 are the audit as recorded. This records what changed after it, on
+`feat/private-beta-readiness`
+([private-beta-readiness-2026-09-17.md](private-beta-readiness-2026-09-17.md)).
+
+**§28 "Any of the above in CI: NOT PROVEN" is superseded.** The audit merged as
+PR #36 (`fa6f109`, head `d19da1c`) with every CI job passing: `gates` (which
+runs `npm test`, including the security suites), postgres, kind, sandbox,
+docker, terminal, sandboxd, networking and tls-edge.
+
+Changes reviewed against this audit's controls:
+
+| Change | Security effect |
+|---|---|
+| nginx resolves `api` and `terminal` per request through `resolver 127.0.0.11` | Same trust as before, looked up later. Docker's embedded DNS answers only for containers on web's own compose network (api, terminal, sandboxd, prometheus); no student sandbox is on it. No route, header or exposure changed. The BETA-P0-011 "no route to sandboxd" test follows the variable and is as strict as before (negative control: `$jtt_api` set to sandboxd fails it) |
+| `proxy_read_timeout 330s` on `/api/` | An upstream request may be held up to 330 s instead of 60 s. Start and Reset remain limited to 20/min per student and Check to one per session; with five students this is bounded. Recorded, not a finding |
+| The web app stays mounted when a session re-check fails | No access is granted: every API request and terminal attach is still authenticated server-side; only a definite signed-out answer changed what renders before, and it still does |
+| Terminal auto-reconnect covers restart-time codes | `SANDBOX_REF_MISMATCH` (the API and broker disagree about the sandbox) is never retried; session-state refusals re-read the session. A retry is a new, fully authenticated attach |
+| `LAB_LAUNCHES_PAUSED` | Refuses before anything is written; no bypass by route, owner or role |
+
+`npm run test:security` on the branch: 47 files, 797 tests, 0 failed (local,
+not CI). No finding in §3's register changes severity. The rate-limit residual
+(§26 item 8) gains a deployment note: limits key on `X-Forwarded-For` behind
+exactly one proxy (`trust proxy 1`), so a load balancer added in front of nginx
+would make every student one address for the per-address limits.
