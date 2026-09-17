@@ -14,6 +14,6 @@
     "./production-host-contract": "./production-host-contract.ts"
   },
   "devDependencies": {
-    "vitest": "^3.2.6"
+    "vitest": "^5.0.1"
   }
 }
