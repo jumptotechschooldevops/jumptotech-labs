@@ -11,6 +11,8 @@
 #   bash e2e/stack.sh service stop|recreate api|terminal
 #                              stop one platform service, or re-create it the way
 #                              an operator's `up -d <service>` does (new container)
+#   bash e2e/stack.sh service restart postgres
+#                              restart the database container; its volume is kept
 #   bash e2e/stack.sh run [playwright args…]
 #                              up → playwright → down, always tearing down
 #                              (E2E_KEEP_STACK=1 leaves it running)
@@ -210,12 +212,14 @@ cmd_run() {
 # Used by the failure-path specs to take a real service away mid-session.
 cmd_service() {
   local action="${1:-}" service="${2:-}"
-  [[ "${service}" == "api" || "${service}" == "terminal" ]] || die "service must be api or terminal"
   [[ -f "${ENV_FILE}" ]] || die "no ${ENV_FILE}; the stack is not up"
-  case "${action}" in
-    stop) compose stop --timeout 10 "${service}" ;;
-    recreate) compose up -d --no-deps --force-recreate --wait --wait-timeout "${READY_TIMEOUT_SECONDS}" "${service}" ;;
-    *) die "service action must be stop or recreate" ;;
+  case "${action}:${service}" in
+    stop:api|stop:terminal) compose stop --timeout 10 "${service}" ;;
+    recreate:api|recreate:terminal)
+      compose up -d --no-deps --force-recreate --wait --wait-timeout "${READY_TIMEOUT_SECONDS}" "${service}" ;;
+    # restart, never down/rm: the named volume and its data stay.
+    restart:postgres) compose restart --timeout 20 postgres ;;
+    *) die "supported: stop|recreate api|terminal, restart postgres" ;;
   esac
 }
 
@@ -231,5 +235,5 @@ case "${1:-}" in
   down) cmd_down ;;
   service) shift; cmd_service "$@" ;;
   run) shift; cmd_run "$@" ;;
-  *) echo "usage: bash e2e/stack.sh up|wait|status|logs|config|down|service stop|recreate api|terminal|run [playwright args]" >&2; exit 2 ;;
+  *) echo "usage: bash e2e/stack.sh up|wait|status|logs|config|down|service stop|recreate api|terminal|restart postgres|run [playwright args]" >&2; exit 2 ;;
 esac

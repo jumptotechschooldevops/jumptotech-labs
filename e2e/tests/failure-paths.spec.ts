@@ -16,6 +16,7 @@ import {
   apiGet,
   apiSend,
   endAllSessions,
+  LINUX_001_SOLUTION,
   expectTerminalConnected,
   mySessions,
   runInTerminal,
@@ -130,7 +131,7 @@ test('[injected] terminal WebSocket refused: the workspace says it could not con
 });
 
 /** Stop or re-create a real platform service of this stack (e2e/stack.sh service). */
-function stackService(action: 'stop' | 'recreate', service: 'api' | 'terminal'): void {
+function stackService(action: 'stop' | 'recreate' | 'restart', service: 'api' | 'terminal' | 'postgres'): void {
   const stack = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../stack.sh');
   execFileSync('bash', [stack, 'service', action, service], { stdio: 'inherit', timeout: 420_000 });
 }
@@ -216,6 +217,44 @@ test('terminal service re-created mid-lab: the workspace reconnects by itself to
       await expect(page.getByRole('button', { name: 'Reconnect' })).toHaveCount(0);
       expect(await runInTerminal(page, 'cat ~/project/marker')).toBe('survived');
       expect(await mySessions(context)).toMatchObject([{ labId: LAB_ID, status: 'ACTIVE' }]);
+    });
+  } finally {
+    await endAllSessions(context);
+  }
+});
+
+test('database restarted mid-lab: the lab keeps running, and sessions and progress work again', async ({ page, context }) => {
+  test.setTimeout(600_000);
+  const student = uniqueStudent('dbrestart');
+  try {
+    await signIn(page, student);
+    await page.goto(`/#/labs/${LAB_ID}`);
+    await page.getByRole('button', { name: 'Launch lab' }).click();
+    await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 180_000 });
+    await expectTerminalConnected(page);
+    await runInTerminal(page, LINUX_001_SOLUTION);
+
+    await test.step('PostgreSQL restarts under the running platform', async () => {
+      stackService('restart', 'postgres');
+    });
+
+    await test.step('the terminal was not disturbed', async () => {
+      await expectTerminalConnected(page);
+      expect(await runInTerminal(page, 'ls ~/project/archive')).toBe('app.log');
+    });
+
+    await test.step('once the api reconnects, the session is read back and a passing Verify is saved', async () => {
+      // Bounded: the pool must recover on its own, without an api restart.
+      await expect.poll(async () => (await apiGet(context, '/api/sessions')).status(), { timeout: 90_000, intervals: [2_000] }).toBe(200);
+      expect(await mySessions(context)).toMatchObject([{ labId: LAB_ID, status: 'ACTIVE' }]);
+      await page.getByRole('button', { name: 'Verify', exact: true }).click();
+      await expect(page.locator('section.verify')).toContainText('Lab passed — every check passes', { timeout: 90_000 });
+      await expect(page.locator('section.verify')).toContainText('Saved to your progress');
+    });
+
+    await test.step('the saved result survives a reload', async () => {
+      await page.reload();
+      await expect(page.locator('.workspace__status')).toContainText('Completed', { timeout: 60_000 });
     });
   } finally {
     await endAllSessions(context);
