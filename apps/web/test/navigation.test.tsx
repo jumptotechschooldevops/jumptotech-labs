@@ -83,6 +83,19 @@ describe('navigation', () => {
     expect(indicator.getAttribute('href')).toBe('#/labs/LINUX-001/workspace');
   });
 
+  it('keeps the app on screen when the api names a session status this bundle does not know', async () => {
+    // A tab left open across a deployment that adds a status.
+    apiMock.listMySessions.mockResolvedValue(
+      sessionsResponse([
+        { session: sessionInfo({ labId: 'LINUX-001', status: 'MIGRATING' as never }), labTitle: 'Files and Directories' },
+      ]),
+    );
+    renderApp('#/help');
+
+    expect(await screen.findByRole('link', { name: /Active lab\s*LINUX-001\s*, Updating/ })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'How JumpToTech Labs works' })).toBeTruthy();
+  });
+
   it('shows nothing about a lab when none is running', async () => {
     renderApp('#/help');
     await waitFor(() => expect(apiMock.listMySessions).toHaveBeenCalled());

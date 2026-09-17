@@ -21,7 +21,7 @@ import { useCatalog } from '../lib/CatalogContext';
 import { api } from '../lib/api';
 import { describeError, toApiError } from '../lib/errors';
 import { describeProvider, trackNote } from '../lib/environmentInfo';
-import { SESSION_STATUS_TEXT, formatMinutes, plural } from '../lib/format';
+import { formatMinutes, plural, sessionStatusText } from '../lib/format';
 import { hrefFor, navigate, usePageTitle } from '../lib/router';
 import type { ApiError, LabDetail } from '../lib/types';
 import { ErrorNotice } from '../components/ErrorNotice';
@@ -50,7 +50,7 @@ function LaunchPanel({ lab }: { lab: LabDetail }) {
       <>
         <p className="launch__status">
           <Badge tone={running.session.status === 'ACTIVE' ? 'success' : 'warning'}>
-            {SESSION_STATUS_TEXT[running.session.status].label}
+            {sessionStatusText(running.session.status).label}
           </Badge>{' '}
           This lab is running for you.
         </p>

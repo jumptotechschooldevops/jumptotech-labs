@@ -287,6 +287,36 @@ describe('Reset', () => {
     expect(screen.getByText(/Not verified yet/)).toBeTruthy();
   });
 
+  it('while the reset runs, the old shell dying reads as the reset, not as "The shell exited."', async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    apiMock.resetLab.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    await renderConnected();
+
+    fireEvent.click(button('Reset'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Reset lab' }));
+    // Measured: the container is removed about a second into the reset and the
+    // service closes the socket with `exit 137` long before the reset answers.
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'SHELL_EXITED' }));
+
+    expect(await screen.findByText('Terminal: Resetting your environment…')).toBeTruthy();
+    expect(screen.queryByText('Terminal: The shell exited.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+
+    await act(async () => {
+      answer({
+        message: 'Lab reset successfully.',
+        removed: [],
+        restored: [],
+        steps: [],
+        environment: { environmentId: 'e', provider: 'docker-linux', phase: 'ready', namespace: '' },
+        session: sessionInfo(),
+        clearTerminal: true,
+        reconnectTerminal: true,
+      });
+    });
+    expect(await screen.findByText('Terminal: Connected')).toBeTruthy();
+  });
+
   it('shows a failed reset as an environment that needs another reset — with only Reset and End offered', async () => {
     apiMock.resetLab.mockRejectedValue(
       new ApiRequestError(503, {

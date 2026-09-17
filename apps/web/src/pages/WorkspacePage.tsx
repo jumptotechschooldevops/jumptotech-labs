@@ -34,7 +34,7 @@ import { useCatalog } from '../lib/CatalogContext';
 import { ApiRequestError, api } from '../lib/api';
 import { describeError, toApiError } from '../lib/errors';
 import { RESET_KEEPS, describeProvider, describeReset } from '../lib/environmentInfo';
-import { SESSION_STATUS_TEXT, formatMinutes, isLiveStatus, isTransitionalStatus } from '../lib/format';
+import { SESSION_STATUS_TEXT, formatMinutes, isLiveStatus, isTransitionalStatus, sessionStatusText } from '../lib/format';
 import { hrefFor, usePageTitle } from '../lib/router';
 import type {
   ApiError,
@@ -723,18 +723,24 @@ export function WorkspacePage({ labId }: { labId: string }) {
     }
   }
 
+  // A container Reset removes the sandbox about a second in, and the shell with
+  // it: the socket closes as "shell exited" long before the reset answers. That
+  // is the reset working, and the page reconnects when it answers.
+  const resetInFlight = resetting && terminal.status === 'disconnected';
   const terminalLabel =
     terminal.status === 'connected'
       ? 'Connected'
       : terminal.status === 'connecting'
         ? 'Connecting…'
-        : terminal.status === 'disconnected'
-          ? (TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST)
-          : 'Not connected';
+        : resetInFlight
+          ? 'Resetting your environment…'
+          : terminal.status === 'disconnected'
+            ? (TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST)
+            : 'Not connected';
   const showReconnect =
     // Including SESSION_ENDED: while the session is still ACTIVE that means another
     // tab took the terminal over, and Reconnect is how this tab takes it back.
-    status === 'ACTIVE' && everConnected && terminal.status === 'disconnected';
+    status === 'ACTIVE' && everConnected && terminal.status === 'disconnected' && !resetInFlight;
 
   return (
     <div className="workspace">
@@ -751,7 +757,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
         <div className="workspace__status" role="status" aria-live="polite">
           {session && !relaunching ? (
             <Badge tone={gone ? 'neutral' : statusTone(session.status)}>
-              {gone ? 'Gone' : SESSION_STATUS_TEXT[session.status].label}
+              {gone ? 'Gone' : sessionStatusText(session.status).label}
             </Badge>
           ) : (
             <Badge tone="warning">Preparing</Badge>
@@ -940,7 +946,7 @@ function FinalSummary({
   const description = gone
     ? 'It was ended or cleaned up. Your saved progress is not affected.'
     : session
-      ? SESSION_STATUS_TEXT[session.status].description
+      ? sessionStatusText(session.status).description
       : '';
 
   return (

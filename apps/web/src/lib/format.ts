@@ -101,6 +101,23 @@ export const SESSION_STATUS_TEXT: Record<SessionStatus, { label: string; descrip
   FAILED: { label: 'Failed', description: 'This lab environment could not be created.' },
 };
 
+/**
+ * The text for a session status, including one this bundle does not know.
+ *
+ * A tab stays open across a deployment, so the api can name a status newer than
+ * the bundle running in it. Indexing the table directly then threw while
+ * rendering the app shell, outside every page's error boundary, and blanked the
+ * whole app for a student with a lab open.
+ */
+export function sessionStatusText(status: string): { label: string; description: string } {
+  return (
+    (SESSION_STATUS_TEXT as Record<string, { label: string; description: string } | undefined>)[status] ?? {
+      label: 'Updating',
+      description: 'This lab changed in a way this page does not show yet. Reload the page to see it.',
+    }
+  );
+}
+
 /** States in which a session still holds an environment the student can come back to. */
 export function isLiveStatus(status: SessionStatus): boolean {
   return status !== 'ENDED' && status !== 'EXPIRED' && status !== 'FAILED';
