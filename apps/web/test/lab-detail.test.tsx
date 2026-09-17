@@ -123,6 +123,23 @@ describe('before launch', () => {
     expect(apiMock.listMySessions).toHaveBeenCalledTimes(2);
   });
 
+  it('finds the lab a start created when the response itself was lost (a proxy timeout)', async () => {
+    // nginx gave up before a slow provision answered; the api went on and built the lab.
+    apiMock.startLab.mockRejectedValue(
+      new ApiRequestError(504, { code: 'BAD_RESPONSE', message: 'The API returned a non-JSON response (HTTP 504).' }),
+    );
+    await renderDetail();
+    apiMock.listMySessions.mockResolvedValue(
+      sessionsResponse([{ session: sessionInfo({ status: 'CREATING' }), labTitle: 'Files and Directories' }], 1),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Launch lab' }));
+
+    expect(await screen.findByRole('link', { name: 'Continue lab' })).toBeTruthy();
+    expect(apiMock.listMySessions).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('button', { name: 'Launch lab' })).toBeNull();
+  });
+
   it('explains global capacity plainly, keeps the code as a reference, and lets the student retry', async () => {
     apiMock.startLab.mockRejectedValueOnce(
       new ApiRequestError(503, {

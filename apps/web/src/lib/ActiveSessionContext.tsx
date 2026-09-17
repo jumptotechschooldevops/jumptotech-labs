@@ -198,9 +198,12 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
         .catch((cause: unknown) => {
           const apiError = toApiError(cause);
           setLaunchError({ labId, error: apiError });
-          // The server's answer names a session this page does not know about:
-          // fetch it, so the page can offer Continue instead of a dead end.
-          if (apiError.code === 'STUDENT_SESSION_LIMIT_REACHED') void refresh();
+          // Re-read the student's sessions after any failed start. A refusal can
+          // name a session this page does not know about, and a start that timed
+          // out or lost its response (a proxy error, a dropped connection) may
+          // still have created one: either way the page can offer Continue
+          // instead of a Try again that is refused as a second lab.
+          void refresh();
           return null;
         })
         .finally(() => {

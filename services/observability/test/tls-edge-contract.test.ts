@@ -178,6 +178,15 @@ describe('nginx: upstreams survive a re-created api or terminal container', () =
     expect(locations).not.toMatch(/proxy_pass\s+https?:\/\//);
   });
 
+  it('waits longer for the api than the slowest provisioning, so a slow Start is not a 504', () => {
+    // Start Lab and Reset answer only when the sandbox is ready: Docker's
+    // readiness wait is 180 s and provisioning is measured up to 300 s.
+    const api = proxied.find((m) => m[1] === '/api/')![2]!;
+    const seconds = Number(/proxy_read_timeout\s+(\d+)s;/.exec(api)?.[1]);
+    expect(seconds).toBeGreaterThan(300);
+    expect(seconds).toBeLessThanOrEqual(600);
+  });
+
   it("asks only Docker's embedded DNS, and caches an answer briefly", () => {
     const resolvers = [...locations.matchAll(/^resolver\s+([^;]+);$/gm)].map((m) => m[1]!.split(/\s+/));
     expect(resolvers).toHaveLength(1);
