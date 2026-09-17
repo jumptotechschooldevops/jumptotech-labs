@@ -34,7 +34,7 @@ import { useCatalog } from '../lib/CatalogContext';
 import { ApiRequestError, api } from '../lib/api';
 import { describeError, toApiError } from '../lib/errors';
 import { RESET_KEEPS, describeProvider, describeReset } from '../lib/environmentInfo';
-import { SESSION_STATUS_TEXT, formatMinutes, isLiveStatus, isTransitionalStatus, sessionStatusText } from '../lib/format';
+import { SESSION_STATUS_TEXT, formatMinutes, isLiveStatus, isTransitionalStatus, removedForInactivity, sessionStatusText } from '../lib/format';
 import { hrefFor, usePageTitle } from '../lib/router';
 import type {
   ApiError,
@@ -273,7 +273,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
     (next: SessionInfo, nextAttempt?: AttemptSummary | null) => {
       setSession(next);
       setTimerSeed(Date.now());
-      setTimeExpired(next.status === 'EXPIRING' || (countsDown(next.status) && next.secondsRemaining <= 0));
+      setTimeExpired(
+        (next.status === 'EXPIRING' && !removedForInactivity(next)) ||
+          (countsDown(next.status) && next.secondsRemaining <= 0),
+      );
       if (nextAttempt) setAttempt(nextAttempt);
       adoptSession(next, nextAttempt ?? null);
     },
@@ -691,7 +694,16 @@ export function WorkspacePage({ labId }: { labId: string }) {
       );
     } else if (ending || status === 'ENDING' || status === 'EXPIRING') {
       overlay = (
-        <Overlay title={status === 'EXPIRING' ? 'Time is up — removing your environment…' : 'Shutting down your lab environment…'} busy>
+        <Overlay
+          title={
+            status === 'EXPIRING'
+              ? session && removedForInactivity(session)
+                ? 'Removing your environment after inactivity…'
+                : 'Time is up — removing your environment…'
+              : 'Shutting down your lab environment…'
+          }
+          busy
+        >
           <p className="overlay__text">Cleanup continues automatically. You can leave this page.</p>
         </Overlay>
       );
@@ -949,16 +961,20 @@ function FinalSummary({
 }) {
   const title = gone
     ? 'This lab environment no longer exists'
-    : session?.status === 'EXPIRED'
+    : session && session.status === 'EXPIRED' && removedForInactivity(session)
+      ? 'Your lab environment was removed after inactivity'
+      : session?.status === 'EXPIRED'
       ? 'Your lab environment expired'
       : session?.status === 'FAILED'
         ? 'Your lab environment failed'
         : 'Lab ended';
   const description = gone
     ? 'It was ended or cleaned up. Your saved progress is not affected.'
-    : session
-      ? sessionStatusText(session.status).description
-      : '';
+    : session && removedForInactivity(session)
+      ? 'Nobody used it for a while, so it was removed to free the space for others. Your saved progress is not affected.'
+      : session
+        ? sessionStatusText(session.status).description
+        : '';
 
   return (
     <div className="workspace__final">

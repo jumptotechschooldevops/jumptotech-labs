@@ -635,3 +635,40 @@ describe('the time limit', () => {
     expect(await screen.findByText(/Time is up/, undefined, { timeout: 5_000 })).toBeTruthy();
   });
 });
+
+describe('a lab the platform removed', () => {
+  /*
+   * The reaper removes an idle lab through the same EXPIRING → EXPIRED path as
+   * the time limit, with statusReason "idle for more than 1200s". The page read
+   * only the status and told a student who had stepped away for twenty minutes
+   * of a sixty-minute lab that its time ran out.
+   */
+  async function renderRemoved(statusReason: string) {
+    apiMock.getSession.mockResolvedValue({
+      session: sessionInfo({ status: 'EXPIRED', statusReason, secondsRemaining: 0 }),
+      environment: null,
+    });
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+  }
+
+  it('says a lab removed for inactivity was removed for inactivity', async () => {
+    await renderRemoved('idle for more than 1200s');
+    expect(await screen.findByRole('heading', { name: 'Your lab environment was removed after inactivity' })).toBeTruthy();
+    expect(screen.queryByText(/time ran out/)).toBeNull();
+  });
+
+  it('does not say "Time is up" while a lab is being removed for inactivity', async () => {
+    apiMock.getSession.mockResolvedValue({
+      session: sessionInfo({ status: 'EXPIRING', statusReason: 'idle for more than 1200s', secondsRemaining: 0 }),
+      environment: null,
+    });
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    expect(await screen.findByText('Removing your environment after inactivity…')).toBeTruthy();
+    expect(screen.queryByText(/Time is up/)).toBeNull();
+  });
+
+  it('still says a lab that reached its time limit expired', async () => {
+    await renderRemoved('absolute session lifetime reached');
+    expect(await screen.findByRole('heading', { name: 'Your lab environment expired' })).toBeTruthy();
+  });
+});
