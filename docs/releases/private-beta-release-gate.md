@@ -457,3 +457,45 @@ Every row below is open. Each is also item-for-item in the readiness document's
 | Off-host, encrypted backup, and one restore from it | **REQUIRES EXTERNAL DECISION** |
 | An alert delivered to a person | **REQUIRES EXTERNAL DECISION** |
 | Unattended recovery after a Docker restart and a host reboot, with the §11.3 restart policy | **NOT PROVEN** on a host |
+
+---
+
+## 14. Private-beta readiness pass — 2026-09-17
+
+Added by `feat/private-beta-readiness`, on PR #38 (`fbe490d`, base `c00ec48`).
+§1–§13 are left as recorded. Details, evidence and the full requirement audit:
+[private-beta-readiness-2026-09-17.md](../development/private-beta-readiness-2026-09-17.md).
+
+**No production host, DNS name, public certificate, identity provider, alert
+receiver or off-host backup was exercised.** Nothing here changes §13.2.
+
+### 14.1 Defects fixed
+
+| Defect | Evidence |
+|---|---|
+| nginx resolved `api`/`terminal` once: after `prod up -d api` (or an upgrade or rollback) re-created a container at a new address, every request was 502 until web restarted | reproduced; real-image edge test fails without the fix |
+| `/api/` used nginx's 60 s read timeout while Start Lab waits for provisioning (Docker up to 180 s): a slow start was a 504 and a confusing retry | old config 504 at 60.08 s, new 200 at 70.20 s |
+| A failed session re-check unmounted a signed-in student's app and closed their terminal | component and browser tests fail on the old code |
+| The session query had no time limit | component test |
+| Terminal auto-reconnect stopped after ~10 s and ignored restart-time codes | component tests |
+| No stop-launches switch (§6's follow-up) | `LAB_LAUNCHES_PAUSED`; api and web tests; runbook §3 |
+
+### 14.2 Status changes against earlier sections
+
+- **§6 "No maintenance-mode / stop-launches switch"** — closed by
+  `LAB_LAUNCHES_PAUSED` (proven locally; not yet in CI).
+- **§12 "Browser E2E in CI: NOT PROVEN"** — superseded: `browser-e2e` passed on
+  PR #37 (run `35182078014`, head `591fc9e`), which was then merged.
+- **§12 "Real (non-injected) API outage"** — a real api stop and re-create is
+  now a browser test, passing 8/8 locally; not yet in CI.
+- **§11.2 `make beta-validate` on the current tree** — still **not re-run**. The
+  development machine could not host a sixth kind cluster safely.
+
+### 14.3 Local validation on this branch (not CI, not a host)
+
+`npm test` 4,872 passed / 0 failed; `npm run test:security` 797 passed;
+typecheck; `validate:labs` 117/0/0; PR #38's config self-test and host-script
+tests; browser E2E 8/8.
+
+**Verdict unchanged in kind:** software ready for a real-host deployment test;
+**not ready for student access** until §13.2 is done on a host.
