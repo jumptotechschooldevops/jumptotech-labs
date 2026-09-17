@@ -417,8 +417,8 @@ resilience findings:
 
 ## 12. Production-host readiness — 2026-09-16
 
-Added by `feat/production-host-readiness`, rebased onto `main` at `9a0e22e`
-(after §11, and after PR #35's catalog validation). §1–§11 are left as
+Added by `feat/production-host-readiness`, rebased onto `main` at `fa6f109`
+(after §11, PR #35's catalog validation and PR #36's security audit). §1–§11 are left as
 recorded. The full procedure, audits and evidence are in
 [production-host-readiness.md](../development/production-host-readiness.md).
 
@@ -433,7 +433,7 @@ filled on that host, records it.
 | Addition | Status |
 |---|---|
 | `make observability-token` wrote the scrape token `0600`; Prometheus (uid 65534) cannot read that on a Linux host, so every target would be down. Fixed (`0644` in a `0711` directory) and regression-tested | Defect reproduced and fix verified with the real Prometheus image under Linux ownership: **PROVEN LOCALLY**. On a host: **REQUIRES PRODUCTION HOST** |
-| `npm run production:config-check`: the five production files rendered with the operator's `.env`, checked against a host contract, and read by the real api/terminal/sandboxd config loaders; `--self-test` covers 20 fail-closed scenarios | **PROVEN LOCALLY**; added to CI `gates`, which has not run it yet (no pull request) |
+| `npm run production:config-check`: the five production files rendered with the operator's `.env`, checked against a host contract, and read by the real api/terminal/sandboxd config loaders; `--self-test` covers 20 fail-closed scenarios | **PROVEN LOCALLY**; passed in CI `gates` on PR #38 before the rebase onto `fa6f109` |
 | `make production-preflight`, `make private-beta-smoke`, `scripts/host-capacity-sample.sh`, and their fake-infrastructure test (`scripts/test-production-host-scripts.sh`) | **PROVEN LOCALLY** (macOS and a Linux container); **PROCEDURE READY** for a host |
 | Deployment, five-student host validation, alert drill, recovery drills, rollback, evidence template | **PROCEDURE READY** |
 

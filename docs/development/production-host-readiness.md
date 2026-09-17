@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Branch** | `feat/production-host-readiness`, rebased onto `origin/main` at `9a0e22e` (PR #34 and PR #35 merged) |
+| **Branch** | `feat/production-host-readiness`, rebased onto `origin/main` at `fa6f109` (PR #34, PR #35 and PR #36, the security audit, merged); pull request #38 |
 | **Date** | 2026-09-16 |
 | **Audience** | the operator who deploys JumpToTech Labs on its first real host, for about five trusted students |
 | **Production host deployed?** | **No.** Nothing in this document ran on a production host. No host, DNS record, public certificate, identity provider, firewall or backup destination exists. |
@@ -87,7 +87,7 @@ D2, not a default.
 | Backup → destroy → restore → identical fingerprint | PROVEN IN CI | `make db-restore-drill` |
 | NetworkPolicy enforcement, negative controls | PROVEN IN CI on kind, one node | `kind-integration` |
 | Rules, alerts, Alertmanager config, dashboards | PROVEN IN CI | `scripts/check-observability.sh`, promtool tests |
-| Production config gates fail closed against the real files and loaders (20 scenarios) | PROVEN LOCALLY | `npm run production:config-check -- --self-test`; in CI `gates`, not yet run on GitHub |
+| Production config gates fail closed against the real files and loaders (20 scenarios) | PROVEN IN CI (`gates` on PR #38 at `bc74c29`, base `9a0e22e`) and PROVEN LOCALLY at base `fa6f109` | `npm run production:config-check -- --self-test` |
 | Preflight, smoke and sampler decisions; no secret printed; only read-only docker/kubectl verbs; a hung daemon ends as a FAIL | PROVEN LOCALLY on macOS bash 3.2 and in a Linux container (bash 5.2, GNU coreutils) | `bash scripts/test-production-host-scripts.sh` |
 | Scrape token readable by Prometheus under Linux ownership | PROVEN LOCALLY with the real image | §18.1 |
 
@@ -106,7 +106,7 @@ D2, not a default.
 | Provider firewall admitting only 80/443/SSH | REQUIRES PRODUCTION HOST |
 | Unattended recovery after a Docker restart or reboot | NOT PROVEN on a host (the policy exists; the kind node's behaviour is unmeasured) |
 | NetworkPolicy enforcement on the host's substrate | REQUIRES PRODUCTION HOST (probe must PASS there) |
-| The new CI steps on GitHub | NOT PROVEN until a pull request runs them |
+| The new CI steps on GitHub after the rebase onto `fa6f109` | NOT PROVEN until PR #38's CI runs again (they passed in `gates` at `bc74c29`, before it) |
 
 ## 5. Host prerequisites
 
@@ -634,29 +634,66 @@ credentials, or delete or overwrite data.
 
 ## 20. Evidence for this branch
 
-Run on this branch after rebasing onto `9a0e22e` (PR #35: catalog validation and
-its CI step), on a development machine and in a local Linux container. The
-rebase had no conflicts, and `git range-diff` shows every commit's change
-unchanged except one line of `package.json` context (`validate:labs` next to
-`production:config-check`). **None of it is host evidence.**
+Run on this branch after rebasing onto `fa6f109` (PR #36: the post-beta security
+audit), on a development machine. **None of it is host evidence.**
+
+The rebase had no conflicts. PR #36 and this branch share one file,
+`package.json`, where PR #36 adds `test:security` and this branch adds
+`production:config-check` in a different hunk. `git diff` of the branch against
+its base is byte-identical before and after the rebase apart from that file's
+index line, so no security change from PR #36 is touched: this branch changes no
+file under `apps/` or `services/*/src`, no verifier, sandbox, terminal or
+Kubernetes code.
 
 | Command | Result |
 |---|---|
 | `npm run validate:labs` | PASS — 117 labs, 0 errors, 0 warnings |
 | `npm run typecheck` | PASS |
-| `npm test` | PASS (includes `production-host-contract.test.ts`, `catalog-validation.test.ts`, `catalog-starter-state.test.ts`) |
+| `npm test` | PASS, every workspace (includes `production-host-contract.test.ts` and PR #36's security suites) |
 | `npm run build` | PASS |
 | `node scripts/check-secret-distribution.mjs` | PASS |
 | `bash scripts/check-observability.sh` | PASS |
 | `npm run production:config-check -- --self-test` | PASS, 20 scenarios |
-| `bash scripts/test-production-host-scripts.sh` | PASS on macOS (bash 3.2) and in `node:22-bookworm-slim` (bash 5.2), 41 cases each; before this rebase also 5/5 consecutive Linux runs after the S13 fix |
+| `bash scripts/test-production-host-scripts.sh` | PASS, 41 cases |
+| `production-host-contract.test.ts` | PASS, 52 tests |
+| TLS edge suite (`tls-edge-integration.test.ts`), with the §20.1 fix | four full local runs; see §20.1 |
 
-In CI the two production-host steps sit in `gates` after PR #35's
-`Lab catalog validation` step and after `npm test`; they replace no existing step.
-PR #35's `gates` job took 3 min 50 s of its 20-minute limit, and the two steps
-take about one minute locally. They need no credentials and no Docker daemon
-beyond what `gates` already has. Until a pull request runs them on GitHub they
-are PROVEN LOCALLY, not PROVEN IN CI.
+### 20.1 The `tls-edge-integration` failure on PR #38
+
+PR #38's first CI run (at `bc74c29`, base `9a0e22e`) passed every job except
+`tls-edge-integration`: 35 of 36 tests passed, and "notices a certificate
+installed without a reload" received exit 1 from the health check it expected to
+pass after `nginx -s reload`.
+
+**Cause: a timing race in the test, not in the edge or this branch.** The test
+reloaded nginx, slept a fixed 1500 ms, and ran the health check once.
+`nginx -s reload` only signals the master and returns; the old workers keep
+accepting connections, with the old certificate, until the master has re-read the
+configuration, started new workers and retired the old ones. Measured inside the
+container, from the reload returning to the served certificate changing: 170–700
+ms on an unconstrained edge, and up to 1970 ms with the edge limited to one CPU.
+The same unchanged test passed on `main` at `fa6f109` in CI. The product path was
+already right: `scripts/tls-install.sh` polls the health check for up to ten
+seconds after a reload, and the compose health check retries.
+
+It is **not** the test CA's DER serial defect (fixed by `9c86bb0` on PR #37). The
+assertions before the reload passed: OpenSSL 3 in the web image read the drift
+certificate, and Node read both certificates, which a non-minimal serial would
+have made impossible. `9c86bb0` is not part of this branch.
+
+**Fix.** The test now polls the same health check after the reload, bounded at
+20 s, reports the check's own message when it fails, and then also proves that
+the Node client sees the new certificate and that `scripts/tls-check.ts` no
+longer reports `served_differs_from_installed`. Negative control: with the reload
+removed, the test fails with `the served certificate is not the installed one`.
+Drift detection, the health check and the TLS validation are unchanged.
+
+Local runs of the whole suite with the fix, on a Docker Desktop VM shared with
+other stacks (load average above 20 on 10 cores): the drift test passed in every
+run. One run failed a different test, "refuses TLS 1.1 and a CBC suite …", by
+hitting its 180 s timeout. That test takes about 3 s in CI and about 50 s on this
+machine when it passes, so the timeout is local Docker contention, not this change.
+The fix is not CI evidence until PR #38's CI runs on the rebased branch.
 
 ## 21. Rollback procedure
 
@@ -674,7 +711,7 @@ Never `prod down -v`, never remove a `jumptotech-labs-*` volume, and never edit
 
 ## 22. Remaining blockers
 
-For the pull request: none known beyond review and CI running the new steps.
+For the pull request: review, and a fresh CI run on the rebased branch.
 
 For student access: every unchecked line of §23.
 
