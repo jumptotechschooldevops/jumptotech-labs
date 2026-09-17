@@ -500,6 +500,8 @@ describe('the terminal connection', () => {
     terminal.autoConnect = false;
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
     await screen.findByText('Connecting to your terminal…');
+    // The status line can render before the terminal component has mounted.
+    await waitFor(() => expect(terminal.last).not.toBeNull());
     const key = () => Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
 
     // Each attempt is refused while the service is down, with a mix of codes a restart produces.
