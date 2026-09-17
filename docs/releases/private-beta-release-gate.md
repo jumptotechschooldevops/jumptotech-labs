@@ -535,6 +535,10 @@ receiver or off-host backup was exercised.** Nothing here changes §13.2.
 | A busy host failed Start as "rebuild the sandbox image"; exec timeouts were never detected as timeouts | found by the five-student browser test; provider and runtime tests |
 | Smoke `--public-ip` reported open ports as closed; several smoke/preflight checks printed PASS when they could not run; preflight could exit with no RESULT or report | host-script harness (12 assertions fail on the old scripts), macOS and Linux bash |
 | The §15 host procedure started production with the validation attestation, and could not pass step 17 before D7 | documentation |
+| "Time is up" and 00:00 on a lab that was preparing, needed a reset or was ending | component tests |
+| A passing Verify whose save failed said it was recorded | component test |
+| A lab removed for inactivity said its time ran out; no warning before the time limit | component tests |
+| A completed lab's summary did not lead to the next lab | component test |
 
 ### 15.2 Status changes against earlier sections
 
@@ -563,12 +567,16 @@ receiver or off-host backup was exercised.** Nothing here changes §13.2.
 
 ### 15.4 Local validation on this branch (not CI, not a host)
 
-`npm test` 4,896 passed / 0 failed; `npm run test:security` 803 passed;
+`npm test` 4,909 passed / 0 failed; `npm run test:security` 803 passed;
 typecheck; build; `validate:labs` 117/0/0; host-script harness 44/0;
 config self-test; secret distribution; composition; observability checks;
-browser E2E **15/15** on a clean isolated stack (the first full run was 14/15
-and found §15.1's busy-host defect, fixed before the final run).
-`make beta-validate` was not re-run.
+real-Docker sandbox integration 13/13. Browser E2E **15/15** on a clean
+isolated stack at `e93e2e9` (the first full run was 14/15 and found the
+busy-host defect). On the final tree, whose later commits are web-only, two
+runs at load 18–20 failed the five-student and isolation tests because the
+Docker VM starved PostgreSQL (`db.down`, connection timeouts; other
+worktrees' kind clusters at ~500% CPU) — recorded in the report §3, not
+re-run on a quiet machine. `make beta-validate` was not re-run.
 
 **Verdict unchanged in kind:** software ready for a real-host deployment test;
 **not ready for student access** until §13.2 is done on a host.

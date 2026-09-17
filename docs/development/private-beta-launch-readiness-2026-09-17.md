@@ -31,6 +31,14 @@ test that fails without it.
 | 8 | **Operator checks reported PASS for what they could not prove**: smoke `edge.internal-not-routed` / `edge.not-routed/*` on a failed request, `observability.alerts` "no alert is firing" when Prometheus did not answer; preflight `backup.schedule` on a cron file with every job commented out; preflight stopped with no RESULT line and no report when the config check printed nothing (pipefail); `--report` omitted the FAIL lines its summary pointed at; systemd-resolved's `127.0.0.53%lo:53` reported as a public listener; config check exit 1 instead of 2 when docker cannot run (`e6c3a56`) | the operator deploying the first host | as listed | `test-production-host-scripts.sh` 44 cases, 0 failed on macOS bash 3.2 and Linux bash 5.2; 12 assertions fail against the previous scripts |
 | 9 | **The first-host procedure could not be followed in order**: the synthetic five-student gate (§15 step 15) rewrites the NetworkPolicy attestation, and the procedure went straight to `prod up` (every Kubernetes lab refused); "stop at the first FAIL" could never pass step 17 while `backup.offhost` is FAIL by design until D7; the evidence template's step numbers were one behind from step 15 (`66bf2cf`) | the operator | repeat steps 12–14 after the gate; the one named exception; template renumbered with the missing rows; `--env-file` usage says `prod up` always reads the checkout's `.env`; compose calls get `/dev/null` stdin | documentation; harness still 44/0 |
 | 10 | **A busy host failed Start as a broken sandbox image.** Five simultaneous starts on a loaded machine: container creation took 38 s, then the first `docker exec` (the identity probe) was killed at its 15 s limit and the start failed with "Rebuild the sandbox image". Underneath, the Docker runtime never recognised a timeout at all: Node reports a killed command as `killed: true, code: null`, and the runner looked only for `code === 'ETIMEDOUT'`, so every "did not finish in time" branch (seed scripts, verifier command and script checks) was unreachable | any student starting a lab while others do, on a busy host | `execFileOutcome` reads `killed` (as the Docker CLI client already did), for the container runtime and the kind provider; tooling probes get 60 s like other runtime operations; a probe timeout says the host is busy and to try again (`e93e2e9`) | found by the five-student browser test (start response in the trace); provider and helper tests fail on the old code |
+| 11 | **"Time is up … being removed" and a red 00:00 on a lab that still had its hour.** The api sends `secondsRemaining: 0` for every status but ACTIVE/RESETTING; the workspace read 0 as the time limit for a CREATING lab (a reload during Start), a DEGRADED one ("needs a reset") and an ENDING one | a student whose reset failed could give up on a usable lab | the countdown and "time is up" apply to ACTIVE/RESETTING, or a session really EXPIRING (`2b90831`) | three status cases fail on the old page |
+| 12 | **A passing Verify whose save failed said "This lab is already recorded as completed".** The check route swallows a failed progress write and returns no attempt | a student verifying during a database blip, who then ends the lab | "already recorded" only with a PASSED attempt; otherwise "could not be saved — press Verify again before you end the lab" (`e25082d`) | component test fails on the old panel |
+| 13 | **A lab removed for inactivity said its time ran out** ("Time is up", "expired", "removed when its time ran out") | a student away for 20 minutes of a 60-minute lab | `statusReason` ("idle for more than …") read the way the orchestrator's `endReasonFor` reads it; overlay, summary and banner word it apart; EXPIRING badge neutral (`dd9f123`) | tests fail on the old page |
+| 14 | **No warning before the 60-minute limit**, only the timer turning amber (`aria-live="off"`) | any student working near the limit | one `role=status` banner at five minutes: press Verify now (`514e5e7`) | timer and workspace tests fail on the old components |
+| 15 | **The summary of a completed lab did not lead anywhere** (primary action "Launch again") | every student finishing a lab | primary action "Continue the learning path" (`0fde5a7`) | test fails on the old summary |
+
+Items 11–15 came from a second read-only audit (session expiry, idle, Verify,
+progress, next lab). Its other findings are recorded in §4.
 
 Items 7–9 came from a read-only audit of the production-host tooling; its
 backup/restore review found no defect (0600 archives, `pg_restore --list`
@@ -73,17 +81,21 @@ On a development machine shared with other worktrees' stacks and kind clusters
 | Baseline at `c937ef6`: `npm test` | 4,876 passed, 1 failed — `process-environ-api` "socket hang up", a known load flake; passed 5/5 alone |
 | Baseline: `npm run typecheck` | failed: `@playwright/test` missing — this worktree's `node_modules` predated the e2e workspace (**local environment**); PASS after `npm ci` |
 | Baseline: `validate:labs`, `build`, `test:security` | PASS (117/0/0; 797) |
-| Final tree (`e93e2e9`): `npm test` | **PASS** — 4,896 passed, 0 failed (api 606, web 220, lab-orchestrator 1,337, terminal 767, sandboxd 96, verifier 138, progress 163, observability 1,569) |
+| At `e93e2e9`: `npm test` | **PASS** — 4,896 passed, 0 failed |
+| Final tree (`0fde5a7`): `npm test` | **PASS** — 4,909 passed, 0 failed (api 606, web 233, lab-orchestrator 1,337, terminal 767, sandboxd 96, verifier 138, progress 163, observability 1,569) |
 | `npm run test:security` | **PASS** — 803 (797 + 3 auth store-outage cases + 3 exec-timeout cases) |
 | `npm run typecheck`, `npm run build`, `npm run validate:labs` | **PASS** (117 labs, 0 errors, 0 warnings) |
 | `bash scripts/test-production-host-scripts.sh` | **PASS** — 44 cases, 0 failed (macOS bash 3.2; Linux bash 5.2 in `node:22-bookworm-slim` at `66bf2cf`) |
 | `npm run production:config-check -- --self-test` | **PASS** |
 | `node scripts/check-secret-distribution.mjs`, `npm run test:composition` (25), `bash scripts/check-observability.sh` | **PASS** |
 | `bash e2e/stack.sh run` (isolated project `jtt-e2e-launch`), first full run at `5d26a70` | 14/15 — five students: one start `SESSION_PROVISION_FAILED` on a busy host; root-caused and fixed (`e93e2e9`, §1 #10) |
-| `bash e2e/stack.sh run`, final tree, clean stack | **PASS 15/15** in 6.4 min at load ~16; 0 containers left |
+| `bash e2e/stack.sh run` at `e93e2e9` (+ docs), clean stack | **PASS 15/15** in 6.4 min at load ~16; 0 containers left |
+| `bash e2e/stack.sh run` on the final tree (`0fde5a7`, web-only changes since), clean stack | **13/15** at load ~18: five-students (a terminal "connection lost") and isolation (student A's lab page: 503 `AUTH_UNAVAILABLE`). Re-run of those two with the stack kept: **0/2** at load 18–20, and the kept logs show the cause — the api's own probe reported `db.down` ("Connection terminated due to connection timeout") while PostgreSQL was up, and sandbox starts took 210–304 s. `docker stats`: five idle kind control planes from other worktrees used ~500% CPU of the Docker VM. **Local environment**, not these commits: every commit since the 15/15 run is web-only or documentation, and every test exercising the changed web code (critical path, Reset, reload, second tab, failure paths including database down) passed in the 13/15 run. Not re-run on a quiet machine |
+| `RUN_INTEGRATION_TESTS=1 vitest run test/sandbox-integration.test.ts --root apps/api` (real Docker) | **PASS** 13/13 (Linux and Terraform sandboxes, Reset/End, isolation, expiry reclaim, five students and a sixth refused) |
+| `npm run test:integration:sandboxd` | 7 passed; its PTY cases skip on this host (node-pty `posix_spawnp failed`, local environment) |
 | Browser Reset test alone | 0/3 against the previous bundle; 5/5 with the fix |
 | Browser database-down test | fails against the previous api; 2/2 with the fix, then in both full runs |
-| Not run | `make beta-validate` (a sixth kind cluster on an 8 GiB VM already holding several would put other worktrees' clusters at risk); kind/sandbox/docker/terminal/sandboxd/tls-edge/postgres integration suites (unchanged areas, except the container runtime, whose change is covered by unit tests and the browser suite) |
+| Not run | `make beta-validate` (a sixth kind cluster on an 8 GiB VM already holding several would put other worktrees' clusters at risk); kind/docker/terminal/tls-edge/postgres integration suites (unchanged areas) |
 
 ## 4. Remaining student-journey findings (not fixed)
 
@@ -92,6 +104,11 @@ On a development machine shared with other worktrees' stacks and kind clusters
   report §4), unchanged.
 - The service-side reattach after a container Reset never runs in practice (§2).
   Harmless; a candidate for removal once a host confirms the same timing.
+- Verify pressed after cleanup has started (EXPIRING/ENDING) is refused
+  `SESSION_NOT_ACTIVE` and worded "wait until it shows as Ready", under an
+  overlay that says the lab is being removed. Minor; not changed.
+- A DEGRADED lab gets no idle warning before the reaper removes it (20 min). The
+  environment is already unusable and progress is kept; not changed.
 - A session stuck in `ENDING` for longer than a teardown should take still
   blocks the student's next lab, now with "is shutting down" rather than a
   wrong instruction. `SessionTeardownStuck` alerts the operator after 20 min.
@@ -131,3 +148,9 @@ Unchanged by this pass, and none of it can be done in this repository:
 | `cc3e864` | test(web): a paste over one input frame arrives whole |
 | `5d26a70` | fix(web): the next lab's page says the ended lab is shutting down |
 | `e93e2e9` | fix(runtime): a busy host no longer fails Start as a broken sandbox image |
+| `626644d` | docs(beta): this report, release gate §15, security §30, browser E2E §18 |
+| `2b90831` | fix(web): no "time is up" while the lab is preparing, needs a reset or is ending |
+| `e25082d` | fix(web): a passing Verify that could not be saved no longer says it is recorded |
+| `dd9f123` | fix(web): a lab removed for inactivity says so |
+| `514e5e7` | fix(web): warn in words five minutes before the time limit |
+| `0fde5a7` | fix(web): a completed lab's summary leads on to the learning path |

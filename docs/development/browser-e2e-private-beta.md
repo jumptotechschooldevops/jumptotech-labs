@@ -787,4 +787,7 @@ retype loop" — **done** (there was no double attach; the loop is gone).
 
 Results on this branch (isolated project `jtt-e2e-launch`, development machine, load 14–16):
 first full run 14/15 (the five-student failure above); after the fix, **15/15**
-in 6.4 min on a clean stack, 0 containers left. Not yet in CI.
+in 6.4 min on a clean stack, 0 containers left. After later web-only commits,
+13/15 and then 0/2 (five-students, isolation) at load 18–20, with the kept
+stack's logs showing PostgreSQL connection timeouts (`db.down`) caused by the
+shared Docker VM, not the change (report §3). Not yet in CI.
