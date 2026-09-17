@@ -8,6 +8,9 @@
  * the real stack refusing something for real.
  */
 import { expect, test } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   LAB_ID,
   apiGet,
@@ -15,6 +18,7 @@ import {
   endAllSessions,
   expectTerminalConnected,
   mySessions,
+  runInTerminal,
   signIn,
   uniqueStudent,
 } from './support/student.js';
@@ -121,6 +125,73 @@ test('[injected] terminal WebSocket refused: the workspace says it could not con
     await page.getByRole('button', { name: 'Try again' }).click();
     await expectTerminalConnected(page, 60_000);
   } finally {
+    await endAllSessions(context);
+  }
+});
+
+/** Stop or re-create a real platform service of this stack (e2e/stack.sh service). */
+function stackService(action: 'stop' | 'recreate', service: 'api' | 'terminal'): void {
+  const stack = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../stack.sh');
+  execFileSync('bash', [stack, 'service', action, service], { stdio: 'inherit', timeout: 420_000 });
+}
+
+function containerAddress(service: 'api'): string {
+  const project = process.env.E2E_PROJECT ?? 'jtt-e2e';
+  return execFileSync(
+    'docker',
+    ['ps', '-q', '--filter', `label=com.docker.compose.project=${project}`, '--filter', `label=com.docker.compose.service=${service}`],
+    { encoding: 'utf8', timeout: 15_000 },
+  )
+    .split('\n')
+    .filter(Boolean)
+    .map((id) => execFileSync('docker', ['inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}', id], { encoding: 'utf8' }).trim())
+    .join(',');
+}
+
+test('api stopped and re-created mid-lab (an operator `up -d api`): the lab stays open and works again', async ({ page, context }) => {
+  test.setTimeout(600_000);
+  const student = uniqueStudent('apirecreate');
+  let apiStopped = false;
+  try {
+    await signIn(page, student);
+    await page.goto(`/#/labs/${LAB_ID}`);
+    await page.getByRole('button', { name: 'Launch lab' }).click();
+    await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 180_000 });
+    await expectTerminalConnected(page);
+    await runInTerminal(page, 'mkdir -p ~/project && echo kept > ~/project/marker');
+    const before = containerAddress('api');
+
+    await test.step('the api goes away; the student returns to the tab', async () => {
+      stackService('stop', 'api');
+      apiStopped = true;
+      // What a student switching back to this tab triggers: a session re-check.
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await expect(page.getByRole('status').filter({ hasText: 'Cannot reach the labs API right now' })).toBeVisible({ timeout: 30_000 });
+    });
+
+    await test.step('the workspace and its open terminal are still there', async () => {
+      await expect(page.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
+      await expect(page.locator('.workspace__status')).toContainText('Ready');
+      expect(await runInTerminal(page, 'cat ~/project/marker')).toBe('kept');
+    });
+
+    await test.step('the api is re-created; the edge routes to the new container and the banner clears', async () => {
+      stackService('recreate', 'api');
+      apiStopped = false;
+      console.log(`api address before ${before}, after ${containerAddress('api')}`);
+      await page.getByRole('status').filter({ hasText: 'Cannot reach the labs API right now' }).getByRole('button', { name: 'Try again' }).click();
+      await expect(page.getByText('Cannot reach the labs API right now')).toHaveCount(0, { timeout: 30_000 });
+    });
+
+    await test.step('server actions work again through the edge: Verify grades the same sandbox', async () => {
+      await page.getByRole('button', { name: 'Verify', exact: true }).click();
+      // Only the project directory exists; the other creation checks still fail.
+      await expect(page.locator('section.verify')).toContainText(/Not complete yet — \d of 5 checks passing/, { timeout: 90_000 });
+      expect(await runInTerminal(page, 'cat ~/project/marker')).toBe('kept');
+      expect(await mySessions(context)).toMatchObject([{ labId: LAB_ID, status: 'ACTIVE' }]);
+    });
+  } finally {
+    if (apiStopped) stackService('recreate', 'api');
     await endAllSessions(context);
   }
 });
