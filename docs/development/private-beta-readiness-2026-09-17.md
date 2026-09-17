@@ -34,11 +34,19 @@ test that fails without it.
 | 4 | **The session query had no time limit**: "Checking your session…" for as long as the proxy allowed | first page load while the api hangs | 15 s bound (`7369727`) | component test fails without the signal |
 | 5 | **Terminal auto-reconnect gave up after ~10 s and only for `CONNECTION_LOST`**; a restart surfaces `BROKER_UNREACHABLE`, `PTY_SPAWN_FAILED`, `CREDENTIALS_UNAVAILABLE`, which fell through to "lost" | students during a terminal/sandboxd restart, or an API slower than the 10 s credentials budget | bounded retry for transient codes over ~60 s; session-state refusals re-read the session; `SANDBOX_REF_MISMATCH` is never retried (`93c5cd1`) | component tests |
 | 6 | **No stop-launches switch** (documented follow-up) | operators | `LAB_LAUNCHES_PAUSED=true` refuses Start Lab with 503 before anything is written; running labs untouched (`30756e5`) | `launch-pause.test.ts`, web mapping test, runbook §3 |
+| 7 | **A refusal that left the terminal socket open became the reason for a later close**: after a paste over 8 KB (`FRAME_TOO_LARGE`), a real network drop was not auto-reconnected | any student who pastes a large block | advisory codes are shown but not recorded as the close reason (`a8c66af`) | component test fails on the old component |
+| 8 | **A failed Reset was worded as a Verify problem** ("Try Verify again" while Verify is disabled) | a student whose reset cannot reach the sandbox | reset-specific wording (`f08c6a1`) | mapping test |
 
-Browser E2E gained a **real** (not injected) api outage test (`1490c72`): the
-api container is stopped while a student works, the student returns to the
-tab, the lab and terminal stay, the api is re-created with
-`--force-recreate`, and Verify grades the same sandbox through the edge.
+Browser E2E gained two tests that take real services away:
+- api stopped and re-created mid-lab (`1490c72`): the student returns to the
+  tab, the lab and terminal stay, the api is re-created with
+  `--force-recreate`, and Verify grades the same sandbox through the edge.
+  Fails against the previous auth gate.
+- terminal service re-created mid-lab (`be52f4b`): the workspace reconnects
+  without a click to the same sandbox. It **also passes against the previous
+  reconnect code**, because here the terminal is back within ten seconds; it
+  guards the student-visible behaviour, and fix 5's regression tests are the
+  component tests.
 
 `0c61729` repairs a BETA-P0-011 test that compared nginx targets literally; it
 now follows the variable to its one value and is exactly as strict.
@@ -63,7 +71,7 @@ request exists for this branch.**
 | `npm run validate:labs` | **PASS** — 117 labs, 0 errors, 0 warnings |
 | `npm run production:config-check -- --self-test` (PR #38) | **PASS** — the production gates fail closed |
 | `bash scripts/test-production-host-scripts.sh` (PR #38) | **PASS** — 41 cases |
-| `bash e2e/stack.sh run` (isolated project `jtt-e2e-bro`) | **PASS 8/8** in 1.6 min, including the new api stop/re-create test; teardown left 0 containers |
+| `bash e2e/stack.sh run` (isolated project `jtt-e2e-bro`) | **PASS 8/8** in 1.6 min, then **9/9** in 2.6 min after the terminal test was added (on PR #38's base); teardown left 0 containers both times |
 | New E2E test against the old auth gate (negative control) | **FAILS** as expected — no banner; the app is replaced by the full-screen error |
 | `tls-edge-integration` (real web image), full suite with fix 1 | 36/37; the one failure ("refuses a private key inside fullchain.pem") hit its 60 s `docker run` budget at load ~40 and passed alone in 3.4 s, before nginx loads `locations.conf` |
 | Same suite, selected tests including fixes 1 and 2 | **PASS** |
@@ -118,18 +126,17 @@ was asked to examine, classified against the current tree.
 From a read of the web app against the API and terminal codes. None stops a
 student; each is recorded for a later pass.
 
-- An error frame that does not close the socket (a paste over 8 KB,
-  `FRAME_TOO_LARGE`) is remembered, so a later real drop is labelled with it
-  and not auto-retried (`LabTerminal.tsx`).
-- A failed **Reset** reporting `ENVIRONMENT_UNREACHABLE` is worded as a
-  Verify problem (`errors.ts` ignores the action).
+- A paste over the 8 KB frame limit is refused and shown as a red line; the
+  pasted text is lost (the reconnect side of this is fixed, #7).
 - A session stuck in `ENDING` blocks every other lab behind a spinner with no
   explanation (`SessionTeardownStuck` alerts the operator after 20 min).
 - An unknown session status string would throw in `AppShell`, outside the
   page error boundary. The web and orchestrator status lists match today.
-- The terminal service does not close an older socket when a second tab
-  attaches, so End closes only the newest one (the sandbox is destroyed
-  either way).
+- One terminal per session is enforced when an attach starts
+  (`closeSession` before the credentials fetch), as documented in
+  student-experience.md. Two attaches for the same session that are *both*
+  in flight at the same moment can each register; the later one wins the
+  session map. Narrow, not reproduced, not changed.
 
 ## 5. What still blocks student access
 
@@ -159,3 +166,8 @@ Nothing below can be done in this repository.
 | `1490c72` | test(e2e): stop and re-create the real api mid-lab |
 | `0c61729` | test(api): follow nginx upstream variables in the no-route check |
 | `30756e5` | feat(operations): stop-launches switch |
+| `2cfd3e2` | docs(beta): this report; release gate §14; host and browser E2E docs |
+| `ec1e301` | docs(security): audit addendum §29 |
+| `be52f4b` | test(e2e): re-create the terminal service mid-lab |
+| `a8c66af` | fix(web): advisory terminal refusals are not the close reason |
+| `f08c6a1` | fix(web): reset-specific wording for an unreachable environment |
