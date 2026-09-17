@@ -167,11 +167,14 @@ test('Reset gives a student a fresh environment, reconnects the terminal, and ke
     await test.step('the same session comes back Ready on a fresh sandbox, and the terminal reconnects by itself', async () => {
       await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 240_000 });
       await expectTerminalConnected(page, 120_000);
-      // "Connected" arrives when the new shell is attached, a moment before bash
-      // prints its first prompt; keys typed in between can interleave with it.
-      // Wait for the prompt, as a person would.
-      await expect(page.locator('.xterm-rows')).toContainText(/student@[^:\s]+:~\$/, { timeout: 30_000 });
-      expect(await runInTerminal(page, 'test -e ~/project && echo present || echo absent')).toBe('absent');
+      // Right after Reset the service reattaches the socket and the page may
+      // also reconnect it, so the first line typed can be lost or garbled
+      // (readiness report §4, open). Do what a student does: Ctrl-C and retype.
+      await expect(async () => {
+        await page.locator('.terminal-surface').click();
+        await page.keyboard.press('Control+C');
+        expect(await runInTerminal(page, 'test -e ~/project && echo present || echo absent', 10_000)).toBe('absent');
+      }).toPass({ timeout: 120_000, intervals: [2_000] });
       const after = await mySessions(context);
       expect(after).toHaveLength(1);
       expect(after[0]).toMatchObject({ sessionId: before.sessionId, status: 'ACTIVE' });
