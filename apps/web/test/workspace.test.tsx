@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { ApiRequestError } from '../src/lib/api';
-import { WorkspacePage } from '../src/pages/WorkspacePage';
+import { AUTO_RECONNECTS, WorkspacePage } from '../src/pages/WorkspacePage';
 import type { TerminalEvent } from '../src/components/LabTerminal';
 import type { TerminalGrant } from '../src/lib/types';
 import { renderWithProviders } from './app-harness';
@@ -465,6 +465,42 @@ describe('the terminal connection', () => {
     unmount();
 
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rides out a terminal restart: retries a dropped or broker-refused terminal for about a minute, then asks', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    terminal.autoConnect = false;
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByText('Connecting to your terminal…');
+    const key = () => Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
+
+    // Each attempt is refused while the service is down, with a mix of codes a restart produces.
+    const codes = ['CONNECTION_LOST', 'BROKER_UNREACHABLE', 'CONNECTION_LOST', 'CREDENTIALS_UNAVAILABLE', 'PTY_SPAWN_FAILED', 'CONNECTION_LOST'];
+    for (const [i, code] of codes.entries()) {
+      const before = key();
+      act(() => terminal.last!.onEvent({ status: 'disconnected', code }));
+      await act(() => vi.advanceTimersByTimeAsync(AUTO_RECONNECTS[i]! + 50));
+      expect(key(), `attempt ${i + 1} after ${code}`).toBe(before + 1);
+    }
+    // Out of automatic attempts: the next drop waits for the student.
+    const before = key();
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(key()).toBe(before);
+    expect(AUTO_RECONNECTS.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(45_000);
+  });
+
+  it('never retries a sandbox mismatch; it re-reads the session instead', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    const before = Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
+    const reads = apiMock.getSession.mock.calls.length;
+
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'SANDBOX_REF_MISMATCH' }));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+
+    expect(Number(screen.getByTestId('terminal').getAttribute('data-connect-key'))).toBe(before);
+    expect(apiMock.getSession.mock.calls.length).toBeGreaterThan(reads);
   });
 
   it('mints one new token when the old one is refused', async () => {
