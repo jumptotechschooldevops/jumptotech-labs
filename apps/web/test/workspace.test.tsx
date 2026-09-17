@@ -601,3 +601,37 @@ describe('inactivity', () => {
     expect(apiMock.recordActivity).toHaveBeenCalledWith(SESSION_ID);
   });
 });
+
+describe('the time limit', () => {
+  /*
+   * The api sends `secondsRemaining: 0` for every status but ACTIVE and
+   * RESETTING (SessionManager.view). The page counted that as time running out:
+   * a lab that still had most of its hour showed "Time is up … being removed"
+   * and a red 00:00 while it was being prepared, needed a reset, or was ending.
+   */
+  it.each(['CREATING', 'DEGRADED', 'ENDING'] as const)(
+    'does not say time is up for a %s lab that still has time',
+    async (status) => {
+      const session = sessionInfo({ status, secondsRemaining: 0, secondsUntilIdle: 0 });
+      apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session, labTitle: 'Files and Directories' }]));
+      apiMock.getSession.mockResolvedValue({ session, environment: null });
+      renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+      await waitFor(() => expect(apiMock.getSession).toHaveBeenCalled());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1_200));
+      });
+
+      expect(screen.queryByText(/Time is up/)).toBeNull();
+      expect(screen.queryByText('00:00')).toBeNull();
+    },
+  );
+
+  it('still says time is up when an active lab reaches its limit', async () => {
+    const session = sessionInfo({ secondsRemaining: 1 });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session, labTitle: 'Files and Directories' }]));
+    apiMock.getSession.mockResolvedValue({ session, environment: null });
+    await renderConnected();
+
+    expect(await screen.findByText(/Time is up/, undefined, { timeout: 5_000 })).toBeTruthy();
+  });
+});

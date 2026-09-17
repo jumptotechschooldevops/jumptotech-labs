@@ -108,6 +108,17 @@ const TERMINAL_TEXT: Record<string, string> = {
   CONNECTION_LOST: 'Connection to the terminal was lost.',
 };
 
+/**
+ * Whether `secondsRemaining` is a real countdown for this status.
+ *
+ * The api sends 0 for every status but ACTIVE and RESETTING (SessionManager.view),
+ * so reading 0 as "time is up" told a student whose lab was being prepared,
+ * needed a reset, or was ending that it had run out of time.
+ */
+function countsDown(status: SessionInfo['status']): boolean {
+  return status === 'ACTIVE' || status === 'RESETTING';
+}
+
 function statusTone(status: SessionInfo['status']) {
   if (status === 'ACTIVE') return 'success' as const;
   if (status === 'DEGRADED' || status === 'FAILED') return 'danger' as const;
@@ -262,7 +273,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     (next: SessionInfo, nextAttempt?: AttemptSummary | null) => {
       setSession(next);
       setTimerSeed(Date.now());
-      setTimeExpired(next.secondsRemaining <= 0 && isLiveStatus(next.status));
+      setTimeExpired(next.status === 'EXPIRING' || (countsDown(next.status) && next.secondsRemaining <= 0));
       if (nextAttempt) setAttempt(nextAttempt);
       adoptSession(next, nextAttempt ?? null);
     },
@@ -769,7 +780,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
           ) : null}
         </div>
 
-        {live && session ? (
+        {live && session && countsDown(session.status) ? (
           <div className="workspace__timer">
             <span className="workspace__timer-label">Time left</span>
             <LabTimer startedAt={timerSeed ?? Date.now()} durationSeconds={session.secondsRemaining} onExpire={handleExpire} />
