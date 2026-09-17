@@ -58,8 +58,6 @@ export const STEADY_POLL_MS = 15_000;
 export const TRANSITION_POLL_MS = 3_000;
 /** How many times a workspace with no session for its lab looks again (≈30 s). */
 export const NOT_RUNNING_RECHECKS = 10;
-/** How long after a container reset answers to wait for the service's own reattach. */
-export const REATTACH_GRACE_MS = 2_000;
 /**
  * Automatic reconnects after an abnormal drop, before asking the student.
  *
@@ -260,13 +258,6 @@ export function WorkspacePage({ labId }: { labId: string }) {
   useEffect(() => cancelAutoReconnect, [cancelAutoReconnect]);
   /** Set when the terminal service reattached this socket to a fresh shell during a reset. */
   const reattachedDuringReset = useRef(false);
-  const reattachFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (reattachFallback.current) clearTimeout(reattachFallback.current);
-    },
-    [],
-  );
 
   /** Take a newer copy of the session, and share it with the rest of the app. */
   const updateSession = useCallback(
@@ -491,25 +482,16 @@ export function WorkspacePage({ labId }: { labId: string }) {
        * after a reattach closed the fresh shell and opened another, and whatever
        * the student had started typing in between was lost or garbled.
        */
-      const awaitingShell = response.reconnectTerminal === true && !reattachedDuringReset.current;
+      const reconnect = response.reconnectTerminal === true && !reattachedDuringReset.current;
       if (response.clearTerminal) {
         terminalRef.current?.clear();
         terminalRef.current?.writeNotice(
-          awaitingShell
+          reconnect
             ? 'Lab reset. Connecting to your fresh environment…'
             : 'Lab reset. Press Enter for a fresh prompt.',
         );
       }
-      // The frame and this response travel on different connections, so the
-      // frame can arrive a moment after the answer. Wait briefly before
-      // falling back to a reconnect of our own.
-      if (awaitingShell) {
-        if (reattachFallback.current) clearTimeout(reattachFallback.current);
-        reattachFallback.current = setTimeout(() => {
-          reattachFallback.current = null;
-          if (!reattachedDuringReset.current) setConnectKey((n) => n + 1);
-        }, REATTACH_GRACE_MS);
-      }
+      if (reconnect) setConnectKey((n) => n + 1);
       setVerify({ kind: 'idle' });
       setLastChecks(undefined);
       setNotice('Your environment was reset to its starting state.');

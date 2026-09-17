@@ -262,7 +262,6 @@ describe('Reset', () => {
   });
 
   it('resets, reconnects the terminal to the new container, and clears the old verdict', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     apiMock.checkSolution.mockResolvedValue(verification(false, { session: sessionInfo() }));
     apiMock.resetLab.mockResolvedValue({
       message: 'Lab reset successfully.',
@@ -283,39 +282,12 @@ describe('Reset', () => {
 
     expect(await screen.findByText('Your environment was reset to its starting state.')).toBeTruthy();
     expect(apiMock.resetLab).toHaveBeenCalledWith(SESSION_ID);
-    // No reattach from the service within the grace period: the page reconnects itself.
-    await act(() => vi.advanceTimersByTimeAsync(2_100));
     expect(screen.getByTestId('terminal').getAttribute('data-connect-key')).toBe('1');
     expect(screen.queryByText(/Not complete yet/)).toBeNull();
     expect(screen.getByText(/Not verified yet/)).toBeTruthy();
   });
 
-  it('keeps the socket when the service reattaches it just after the reset answer arrives', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    apiMock.resetLab.mockResolvedValue({
-      message: 'Lab reset successfully.',
-      removed: ['container/lab-sbx-test'],
-      restored: [],
-      steps: [],
-      environment: { environmentId: 'e', provider: 'docker-linux', phase: 'ready', namespace: '' },
-      session: sessionInfo(),
-      clearTerminal: true,
-      reconnectTerminal: true,
-    });
-    await renderConnected();
-    fireEvent.click(button('Reset'));
-    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Reset lab' }));
-    expect(await screen.findByText('Your environment was reset to its starting state.')).toBeTruthy();
-
-    // The frame loses the race with the HTTP answer by a few milliseconds.
-    await act(() => vi.advanceTimersByTimeAsync(50));
-    act(() => terminal.last!.onEvent({ status: 'connected', reattached: true }));
-    await act(() => vi.advanceTimersByTimeAsync(5_000));
-    expect(screen.getByTestId('terminal').getAttribute('data-connect-key')).toBe('0');
-  });
-
   it('does not reconnect a terminal the service already reattached to the fresh sandbox during the reset', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     let answer!: (value: unknown) => void;
     apiMock.resetLab.mockReturnValue(new Promise((resolve) => (answer = resolve)));
     await renderConnected();
@@ -337,7 +309,6 @@ describe('Reset', () => {
 
     expect(await screen.findByText('Your environment was reset to its starting state.')).toBeTruthy();
     // The socket that already has the fresh shell is kept.
-    await act(() => vi.advanceTimersByTimeAsync(5_000));
     expect(screen.getByTestId('terminal').getAttribute('data-connect-key')).toBe('0');
   });
 
@@ -554,8 +525,6 @@ describe('the terminal connection', () => {
     terminal.autoConnect = false;
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
     await screen.findByText('Connecting to your terminal…');
-    // The status line can render before the terminal component has mounted.
-    await waitFor(() => expect(terminal.last).not.toBeNull());
     const key = () => Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
 
     // Each attempt is refused while the service is down, with a mix of codes a restart produces.
