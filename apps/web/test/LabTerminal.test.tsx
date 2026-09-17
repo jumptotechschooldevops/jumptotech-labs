@@ -291,6 +291,21 @@ describe('LabTerminal input typed while connecting', () => {
     expect(term.written.join('\n')).toMatch(/not sent/);
   });
 
+  it('delivers a paste larger than one input frame whole, once connected', () => {
+    // The service refuses an `input` frame over 8 KB (FRAME_TOO_LARGE), which
+    // used to lose a pasted block outright.
+    const { socket, term } = mount();
+    act(() => socket.serverOpens());
+    act(() => socket.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+    const paste = 'line of a pasted config file\n'.repeat(1_000);
+    act(() => term.type(paste));
+
+    const frames = socket.sent.filter((frame) => frame.type === 'input');
+    expect(frames.length).toBeGreaterThan(1);
+    for (const frame of frames) expect((frame.data as string).length).toBeLessThanOrEqual(8 * 1024);
+    expect(inputs(socket)).toBe(paste);
+  });
+
   it('never splits an emoji across input frames or at the bound', () => {
     const { socket, term } = mount();
     act(() => socket.serverOpens());
