@@ -364,13 +364,19 @@ export function createApp(deps: CreateAppDeps): Express {
     users,
     cookieName: deps.config.auth.cookie.name,
   });
-  const authenticated = authenticate(identity, audit, browser, ({ source, outcome }) => {
-    observability.metrics.auth.attempts.inc({
-      mode: deps.config.auth.mode,
-      source,
-      outcome,
-    });
-  });
+  const authenticated = authenticate(
+    identity,
+    audit,
+    browser,
+    ({ source, outcome }) => {
+      observability.metrics.auth.attempts.inc({
+        mode: deps.config.auth.mode,
+        source,
+        outcome,
+      });
+    },
+    (error) => observability.logger.error('authn.failed', { outcome: 'AUTH_UNAVAILABLE', err: error }),
+  );
   const sessionGuard = createSessionGuard(deps.sessions, audit);
 
   /*

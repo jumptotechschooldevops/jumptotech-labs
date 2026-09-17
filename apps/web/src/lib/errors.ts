@@ -80,6 +80,17 @@ const FALLBACK_TITLE: Record<ErrorContext, string> = {
 type Known = Omit<StudentError, 'reference'>;
 
 function known(code: string, error: ApiError, context: ErrorContext): Known | null {
+  // The api could not *check* the sign-in (its session store was unreachable).
+  // The cookie is intact; telling the student to sign in again would be wrong.
+  if (code === 'AUTH_UNAVAILABLE') {
+    return {
+      kind: 'unavailable',
+      title: 'The platform is busy for a moment',
+      message: 'Your sign-in could not be checked just now. You are still signed in, and your lab keeps running.',
+      guidance: 'Try again in a few seconds.',
+      retryable: true,
+    };
+  }
   if (code.startsWith('AUTH_')) {
     return {
       kind: 'auth',

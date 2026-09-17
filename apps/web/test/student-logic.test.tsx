@@ -91,6 +91,18 @@ describe('what an API error means to a student', () => {
     expect(described.retryable).toBe(true);
   });
 
+  it('does not tell a signed-in student to sign in again when the api could not check the sign-in', () => {
+    const described = describeError(
+      { code: 'AUTH_UNAVAILABLE', message: 'Your sign-in could not be checked right now.' },
+      'verify',
+    );
+    expect(described.kind).not.toBe('auth');
+    expect(described.retryable).toBe(true);
+    expect(`${described.title} ${described.message} ${described.guidance ?? ''}`).not.toMatch(/expired|sign in again/i);
+    // A real refusal still is one.
+    expect(describeError({ code: 'AUTH_EXPIRED', message: 'Your session has expired.' }, 'verify').kind).toBe('auth');
+  });
+
   it('words an unreachable environment for the action that failed', () => {
     const error = { code: 'ENVIRONMENT_UNREACHABLE', message: 'The sandbox could not be reached.' };
     expect(describeError(error, 'verify').title).toBe('Verification could not run');

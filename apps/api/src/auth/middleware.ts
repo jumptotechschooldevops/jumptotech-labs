@@ -71,6 +71,8 @@ export function authenticate(
    * because the message is the part that never says which check failed.
    */
   onAttempt: (event: { source: string; outcome: string }) => void = () => {},
+  /** A credential could not be checked at all (store or provider unreachable). Server-side only. */
+  onUnavailable: (error: unknown) => void = () => {},
 ) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const source = req.get('cookie') ? 'cookie' : req.get('authorization') ? 'header' : 'none';
@@ -80,10 +82,35 @@ export function authenticate(
       onAttempt({ source, outcome: 'success' });
       next();
     } catch (error) {
-      const authError =
-        error instanceof AuthError
-          ? error
-          : new AuthError('AUTH_INVALID_TOKEN', 'The credentials supplied are not valid.');
+      /*
+       * A lookup that could not run is not a refusal of the credential.
+       *
+       * Only an AuthError says something about what the caller presented. Any
+       * other failure is the platform's (the session store's pool timed out
+       * during a PostgreSQL restart, the provider's keys could not be fetched),
+       * and answering it 401 told the browser its sign-in was gone, which sent
+       * it to /auth/session to find out. Still fail closed: nothing is served,
+       * and the caller learns only that it should try again, never why.
+       */
+      if (!(error instanceof AuthError)) {
+        onAttempt({ source, outcome: 'AUTH_UNAVAILABLE' });
+        onUnavailable(error);
+        audit({
+          requestId: requestId(req),
+          authenticatedUserId: null,
+          action: `${req.method} ${req.path}`,
+          authorizationResult: 'unauthenticated',
+          timestamp: new Date().toISOString(),
+        });
+        res.setHeader('retry-after', '5');
+        sendError(res, 503, {
+          code: 'AUTH_UNAVAILABLE',
+          message: 'Your sign-in could not be checked right now.',
+          remediation: 'Try again in a moment. You are still signed in.',
+        });
+        return;
+      }
+      const authError = error;
 
       onAttempt({ source, outcome: authError.code });
 
