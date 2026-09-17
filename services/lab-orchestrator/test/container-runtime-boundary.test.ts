@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ContainerRuntimeError,
   DockerCliRuntime,
+  execFileOutcome,
   type ContainerSpec,
 } from '../src/providers/container/runtime.js';
 
@@ -104,5 +105,24 @@ describe('container runtime create — resource ceilings', () => {
     expect(run[run.indexOf('--memory') + 1]).toBe('2g');
     expect(run[run.indexOf('--pids-limit') + 1]).toBe('512');
     expect(run).toContain('--cap-drop');
+  });
+});
+
+describe('execFileOutcome — how a runner reads a finished child process', () => {
+  // Node's shape for a command killed at its `timeout` (measured, Node 22):
+  // { code: null, killed: true, signal: 'SIGTERM', message: 'Command failed: …' }.
+  it('reports a command killed at its time limit as timed out', () => {
+    expect(execFileOutcome(Object.assign(new Error('Command failed: docker exec'), { code: null, killed: true, signal: 'SIGTERM' }))).toEqual({
+      exitCode: 1,
+      timedOut: true,
+    });
+  });
+
+  it('keeps a real exit code, and does not call it a timeout', () => {
+    expect(execFileOutcome(Object.assign(new Error('Command failed'), { code: 126, killed: false }))).toEqual({ exitCode: 126, timedOut: false });
+  });
+
+  it('reports success as exit 0', () => {
+    expect(execFileOutcome(null)).toEqual({ exitCode: 0, timedOut: false });
   });
 });

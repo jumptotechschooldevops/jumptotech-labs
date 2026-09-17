@@ -258,6 +258,17 @@ export interface ContainerProviderOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/** Budget for each command that proves a new sandbox is usable; the same as other runtime operations. */
+const TOOLING_PROBE_TIMEOUT_MS = 60_000;
+
+/** A new sandbox did not run a probe command in time: a busy host, not a broken image. */
+class SandboxNotAnsweringError extends Error {
+  constructor(timeoutMs: number) {
+    super(`the new sandbox did not answer within ${Math.round(timeoutMs / 1000)} s`);
+    this.name = 'SandboxNotAnsweringError';
+  }
+}
+
 export class ContainerLabProvider implements LabProvider {
   readonly id: LabProviderId;
   readonly name: string;
@@ -506,7 +517,10 @@ export class ContainerLabProvider implements LabProvider {
         environment: this.#environment(context, 'degraded', { message: toolingStep.detail }),
         steps,
         error: this.#toLabError(toolingStep.error, 'PROVISION_FAILED', {
-          remediation: `Rebuild the sandbox image: npm run sandbox:build`,
+          remediation:
+            toolingStep.error instanceof SandboxNotAnsweringError
+              ? 'The host is busy. Try again in a minute; if it keeps happening, the host is overloaded.'
+              : `Rebuild the sandbox image: npm run sandbox:build`,
         }),
       };
     }
@@ -1329,12 +1343,19 @@ export class ContainerLabProvider implements LabProvider {
 
   /** Confirm the tools this provider's labs assume are genuinely present. */
   async #checkTooling(ref: string, context: LabSessionContext): Promise<string> {
+    /*
+     * The first `docker exec` into a container that has just started is the
+     * slowest one a busy daemon serves. It had 15 s while creating the
+     * container may take 40 (measured with five simultaneous starts on a
+     * loaded machine), and a killed probe was reported as a broken image.
+     */
     const identity = await this.#runtime.exec(ref, {
       argv: ['/usr/bin/id', '-un'],
       user: context.policy.sandbox.user,
       workdir: this.#home,
-      timeoutMs: 15_000,
+      timeoutMs: TOOLING_PROBE_TIMEOUT_MS,
     });
+    if (identity.timedOut) throw new SandboxNotAnsweringError(TOOLING_PROBE_TIMEOUT_MS);
     if (identity.exitCode !== 0) {
       throw new Error(identity.stderr.trim() || 'could not run a command inside the sandbox');
     }
@@ -1349,8 +1370,9 @@ export class ContainerLabProvider implements LabProvider {
         argv: ['/usr/bin/env', binary, versionFlagFor(binary)],
         user: context.policy.sandbox.user,
         workdir: this.#home,
-        timeoutMs: 30_000,
+        timeoutMs: TOOLING_PROBE_TIMEOUT_MS,
       });
+      if (probe.timedOut) throw new SandboxNotAnsweringError(TOOLING_PROBE_TIMEOUT_MS);
       if (probe.exitCode !== 0) {
         throw new Error(
           `'${binary}' is not usable inside ${this.#image}: ${probe.stderr.trim() || `exit ${probe.exitCode}`}`,

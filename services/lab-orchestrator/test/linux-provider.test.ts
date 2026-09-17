@@ -81,6 +81,61 @@ describe('the Linux sandbox', () => {
     expect(availability.reason).toMatch(/no container runtime is reachable/);
   });
 
+  /*
+   * Measured in the five-student browser run (2026-09-17, a loaded development
+   * machine): creating the container took 38 s, then the first `docker exec`
+   * into it — the identity probe — was killed at its 15 s limit. The start
+   * failed with "Rebuild the sandbox image", which was wrong: the image was
+   * fine and the host was busy.
+   */
+  it('gives the first command in a new sandbox the same time as any other runtime operation', async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+
+    const result = await provider.create(contextFor(lab));
+
+    expect(result.ok).toBe(true);
+    const identity = runtime.execs.find((e) => e.request.argv[0] === '/usr/bin/id')!;
+    expect(identity.request.timeoutMs).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it('reports a sandbox that did not answer in time as a busy host to retry, not an image to rebuild', async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const exec = runtime.exec.bind(runtime);
+    runtime.exec = async (name, request) =>
+      request.argv[0] === '/usr/bin/id'
+        ? { exitCode: 1, stdout: '', stderr: 'Command failed: docker exec … /usr/bin/id -un', timedOut: true }
+        : exec(name, request);
+    const provider = new LinuxLabProvider({ runtime });
+
+    const result = await provider.create(contextFor(lab));
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toMatch(/did not answer within 60 s/);
+    expect(result.error?.remediation ?? '').not.toMatch(/sandbox:build|[Rr]ebuild/);
+    expect(result.error?.remediation).toMatch(/[Tt]ry again/);
+    // Nothing is left behind for the retry to collide with.
+    expect(runtime.containers.has(SANDBOX_A)).toBe(false);
+  });
+
+  it('still says to rebuild the image when a command really fails inside it', async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const exec = runtime.exec.bind(runtime);
+    runtime.exec = async (name, request) =>
+      request.argv[0] === '/usr/bin/id'
+        ? { exitCode: 126, stdout: '', stderr: 'OCI runtime exec failed: /usr/bin/id: no such file', timedOut: false }
+        : exec(name, request);
+    const provider = new LinuxLabProvider({ runtime });
+
+    const result = await provider.create(contextFor(lab));
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.remediation).toMatch(/sandbox:build/);
+  });
+
   it('grants back only the capabilities an administration lab needs', async () => {
     const lab = await loadLabDefinition(LINUX_001);
     const runtime = new FakeContainerRuntime();
