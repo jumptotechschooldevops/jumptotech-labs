@@ -217,6 +217,9 @@ services:
       MAX_ACTIVE_SESSIONS: ${MAX_ACTIVE_SESSIONS:-20}
       # Private beta policy: one live lab per student — see .env.example.
       MAX_ACTIVE_SESSIONS_PER_STUDENT: ${MAX_ACTIVE_SESSIONS_PER_STUDENT:-1}
+      # The stop-launches switch: true refuses every Start Lab, running labs keep
+      # working. `prod up -d api` after changing it (operations runbook §3).
+      LAB_LAUNCHES_PAUSED: ${LAB_LAUNCHES_PAUSED:-false}
       CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-60}
       SESSION_RETENTION_MINUTES: ${SESSION_RETENTION_MINUTES:-15}
       # --- per-session guardrails ---

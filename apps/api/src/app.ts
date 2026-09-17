@@ -336,6 +336,7 @@ export function createApp(deps: CreateAppDeps): Express {
         // lie. A negative count is unmistakably "not known".
         active: await safely(() => deps.sessions.activeCount(), -1),
         maxActive: deps.sessions.lifetimes.maxActiveSessions,
+        launchesPaused: deps.config.launchesPaused === true,
       },
       progress: {
         store: store.store,

@@ -99,6 +99,15 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
         guidance: 'Please try again in a few minutes.',
         retryable: true,
       };
+    case 'LAB_LAUNCHES_PAUSED':
+      return {
+        kind: 'capacity',
+        title: 'New labs are paused',
+        message:
+          'Starting new labs is paused for maintenance. Labs that are already running keep working.',
+        guidance: 'Please try again later.',
+        retryable: true,
+      };
     case 'STUDENT_SESSION_LIMIT_REACHED': {
       const limit = (error.details as { maxActiveSessionsPerStudent?: unknown } | undefined)
         ?.maxActiveSessionsPerStudent;
