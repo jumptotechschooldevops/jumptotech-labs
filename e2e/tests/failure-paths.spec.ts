@@ -131,7 +131,7 @@ test('[injected] terminal WebSocket refused: the workspace says it could not con
 });
 
 /** Stop or re-create a real platform service of this stack (e2e/stack.sh service). */
-function stackService(action: 'stop' | 'recreate' | 'restart', service: 'api' | 'terminal' | 'postgres'): void {
+function stackService(action: 'stop' | 'start' | 'recreate' | 'restart', service: 'api' | 'terminal' | 'postgres'): void {
   const stack = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../stack.sh');
   execFileSync('bash', [stack, 'service', action, service], { stdio: 'inherit', timeout: 420_000 });
 }
@@ -257,6 +257,55 @@ test('database restarted mid-lab: the lab keeps running, and sessions and progre
       await expect(page.locator('.workspace__status')).toContainText('Completed', { timeout: 60_000 });
     });
   } finally {
+    await endAllSessions(context);
+  }
+});
+
+test('database down while a student is signed in: the sign-in is not thrown away, and works again with the same cookie', async ({ page, context }) => {
+  test.setTimeout(600_000);
+  const student = uniqueStudent('dbdown');
+  let stopped = false;
+  try {
+    await signIn(page, student);
+    await page.goto('/#/help');
+    await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+    const cookieBefore = (await context.cookies()).find((c) => c.name === 'jtt_session')?.value;
+    expect(cookieBefore).toBeTruthy();
+
+    await test.step('PostgreSQL stops', async () => {
+      stackService('stop', 'postgres');
+      stopped = true;
+    });
+
+    await test.step('the session check says it could not check, and does not clear the cookie', async () => {
+      const response = await apiGet(context, '/auth/session');
+      expect(response.status()).toBe(503);
+      expect((await response.json()).error.code).toBe('AUTH_UNAVAILABLE');
+      expect(response.headers()['set-cookie'] ?? '').not.toMatch(/jtt_session=;/);
+      const api = await apiGet(context, '/api/sessions');
+      expect(api.status()).toBe(503);
+    });
+
+    await test.step('the tab coming back re-checks the sign-in, and the app stays signed in', async () => {
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+      // The re-check has failed at least once by now; a sign-in screen would have replaced the app.
+      await page.waitForTimeout(8_000);
+      await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'E2E test identity provider' })).toHaveCount(0);
+      expect((await context.cookies()).find((c) => c.name === 'jtt_session')?.value).toBe(cookieBefore);
+    });
+
+    await test.step('PostgreSQL returns: the same cookie works, with no new sign-in', async () => {
+      stackService('start', 'postgres');
+      stopped = false;
+      await expect.poll(async () => (await apiGet(context, '/api/sessions')).status(), { timeout: 120_000, intervals: [2_000] }).toBe(200);
+      const session = await apiGet(context, '/auth/session');
+      expect((await session.json()).data.authenticated).toBe(true);
+      expect((await context.cookies()).find((c) => c.name === 'jtt_session')?.value).toBe(cookieBefore);
+    });
+  } finally {
+    if (stopped) stackService('start', 'postgres');
     await endAllSessions(context);
   }
 });

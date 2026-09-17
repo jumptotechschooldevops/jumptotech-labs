@@ -11,8 +11,8 @@
 #   bash e2e/stack.sh service stop|recreate api|terminal
 #                              stop one platform service, or re-create it the way
 #                              an operator's `up -d <service>` does (new container)
-#   bash e2e/stack.sh service restart postgres
-#                              restart the database container; its volume is kept
+#   bash e2e/stack.sh service restart|stop|start postgres
+#                              restart, stop or start the database container; its volume is kept
 #   bash e2e/stack.sh run [playwright args…]
 #                              up → playwright → down, always tearing down
 #                              (E2E_KEEP_STACK=1 leaves it running)
@@ -219,7 +219,10 @@ cmd_service() {
       compose up -d --no-deps --force-recreate --wait --wait-timeout "${READY_TIMEOUT_SECONDS}" "${service}" ;;
     # restart, never down/rm: the named volume and its data stay.
     restart:postgres) compose restart --timeout 20 postgres ;;
-    *) die "supported: stop|recreate api|terminal, restart postgres" ;;
+    # stop/start, never down/rm: the named volume and its data stay.
+    stop:postgres) compose stop --timeout 20 postgres ;;
+    start:postgres) compose start postgres && compose up -d --no-deps --wait --wait-timeout "${READY_TIMEOUT_SECONDS}" postgres ;;
+    *) die "supported: stop|recreate api|terminal, restart|stop|start postgres" ;;
   esac
 }
 
@@ -235,5 +238,5 @@ case "${1:-}" in
   down) cmd_down ;;
   service) shift; cmd_service "$@" ;;
   run) shift; cmd_run "$@" ;;
-  *) echo "usage: bash e2e/stack.sh up|wait|status|logs|config|down|service stop|recreate api|terminal|restart postgres|run [playwright args]" >&2; exit 2 ;;
+  *) echo "usage: bash e2e/stack.sh up|wait|status|logs|config|down|service stop|recreate api|terminal|restart|stop|start postgres|run [playwright args]" >&2; exit 2 ;;
 esac
