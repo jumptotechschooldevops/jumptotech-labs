@@ -8,6 +8,9 @@
 #   bash e2e/stack.sh logs     recent logs of every E2E service (diagnostics)
 #   bash e2e/stack.sh config   resolve the merged compose model; starts nothing
 #   bash e2e/stack.sh down     stop, delete volumes, remove this owner's sandboxes
+#   bash e2e/stack.sh service stop|recreate api|terminal
+#                              stop one platform service, or re-create it the way
+#                              an operator's `up -d <service>` does (new container)
 #   bash e2e/stack.sh run [playwright args…]
 #                              up → playwright → down, always tearing down
 #                              (E2E_KEEP_STACK=1 leaves it running)
@@ -200,6 +203,18 @@ cmd_run() {
   return "${status}"
 }
 
+# Used by the failure-path specs to take a real service away mid-session.
+cmd_service() {
+  local action="${1:-}" service="${2:-}"
+  [[ "${service}" == "api" || "${service}" == "terminal" ]] || die "service must be api or terminal"
+  [[ -f "${ENV_FILE}" ]] || die "no ${ENV_FILE}; the stack is not up"
+  case "${action}" in
+    stop) compose stop --timeout 10 "${service}" ;;
+    recreate) compose up -d --no-deps --force-recreate --wait --wait-timeout "${READY_TIMEOUT_SECONDS}" "${service}" ;;
+    *) die "service action must be stop or recreate" ;;
+  esac
+}
+
 case "${1:-}" in
   up) cmd_up ;;
   wait) wait_ready ;;
@@ -210,6 +225,7 @@ case "${1:-}" in
     [[ -f "${ENV_FILE}" ]] || write_env
     compose config --quiet && log "compose model resolves" ;;
   down) cmd_down ;;
+  service) shift; cmd_service "$@" ;;
   run) shift; cmd_run "$@" ;;
-  *) echo "usage: bash e2e/stack.sh up|wait|status|logs|config|down|run [playwright args]" >&2; exit 2 ;;
+  *) echo "usage: bash e2e/stack.sh up|wait|status|logs|config|down|service stop|recreate api|terminal|run [playwright args]" >&2; exit 2 ;;
 esac
