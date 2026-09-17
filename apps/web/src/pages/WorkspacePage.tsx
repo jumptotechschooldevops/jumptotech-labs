@@ -50,6 +50,7 @@ import { ErrorNotice } from '../components/ErrorNotice';
 import { IdleWarning } from '../components/IdleWarning';
 import { LabBrief } from '../components/LabBrief';
 import { LabTerminal, type LabTerminalHandle, type TerminalEvent } from '../components/LabTerminal';
+import { FLAGSHIP_PATH_ID } from '../lib/learningPath';
 import { LabTimer } from '../components/LabTimer';
 import { VerificationPanel, type VerifyState } from '../components/VerificationPanel';
 import { Badge, EmptyState, LoadingState } from '../components/ui';
@@ -1012,9 +1013,19 @@ function FinalSummary({
             <a className="btn btn--primary" href={hrefFor({ name: 'workspace', labId: otherRunning })}>
               Continue {otherRunning}
             </a>
+          ) : attempt?.status === 'PASSED' ? (
+            <>
+              {/* A completed lab leads on: the path page names the next lab. */}
+              <a className="btn btn--primary" href={hrefFor({ name: 'path', pathId: FLAGSHIP_PATH_ID })}>
+                Continue the learning path
+              </a>
+              <button type="button" className="btn btn--secondary" onClick={onLaunchAgain} disabled={launching}>
+                Launch again
+              </button>
+            </>
           ) : (
             <button type="button" className="btn btn--primary" onClick={onLaunchAgain} disabled={launching}>
-              {attempt?.status === 'PASSED' ? 'Launch again' : 'Launch a fresh environment'}
+              Launch a fresh environment
             </button>
           )}
           <a className="btn btn--secondary" href={hrefFor({ name: 'labs' })}>

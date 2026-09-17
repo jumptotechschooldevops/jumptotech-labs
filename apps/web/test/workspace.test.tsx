@@ -419,6 +419,25 @@ describe('after the lab has ended', () => {
     expect(button('Verify').disabled).toBe(false);
   });
 
+  it('after a completed lab, leads on to the learning path rather than back into the same lab', async () => {
+    apiMock.endLab.mockResolvedValue({
+      message: 'Lab environment released.',
+      session: sessionInfo({ status: 'ENDED' }),
+      attempt: attemptSummary({ status: 'PASSED' }),
+      steps: [],
+    });
+    await renderConnected();
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    fireEvent.click(button('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+
+    const next = screen.getByRole('link', { name: 'Continue the learning path' });
+    expect(next.getAttribute('href')).toBe('#/paths/devops-engineer');
+    expect(next.className).toMatch(/btn--primary/);
+    expect(screen.getByRole('button', { name: 'Launch again' }).className).not.toMatch(/btn--primary/);
+  });
+
   it('explains a relaunch the platform refused, on the summary', async () => {
     await endLab();
     apiMock.startLab.mockRejectedValue(
