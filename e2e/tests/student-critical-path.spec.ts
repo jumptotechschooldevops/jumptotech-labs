@@ -142,3 +142,43 @@ test('a student signs in, completes LINUX-001 in the browser terminal, and the r
     await endAllSessions(context);
   }
 });
+
+test('Reset gives a student a fresh environment, reconnects the terminal, and keeps a completed result', async ({ page, context }) => {
+  test.setTimeout(600_000);
+  const student = uniqueStudent('reset');
+  try {
+    await signIn(page, student);
+    await page.goto(`/#/labs/${LAB_ID}`);
+    await page.getByRole('button', { name: 'Launch lab' }).click();
+    await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 180_000 });
+    await expectTerminalConnected(page);
+    await runInTerminal(page, LINUX_001_SOLUTION);
+    await page.getByRole('button', { name: 'Verify', exact: true }).click();
+    await expect(page.locator('section.verify')).toContainText('Lab passed — every check passes', { timeout: 60_000 });
+    const before = (await mySessions(context))[0]!;
+
+    await test.step('the student confirms Reset', async () => {
+      await page.getByRole('group', { name: 'Lab actions' }).getByRole('button', { name: 'Reset', exact: true }).click();
+      const dialog = page.getByRole('alertdialog');
+      await expect(dialog).toContainText('Files, running processes and shell history are lost.');
+      await dialog.getByRole('button', { name: 'Reset lab' }).click();
+    });
+
+    await test.step('the same session comes back Ready on a fresh sandbox, and the terminal reconnects by itself', async () => {
+      await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 240_000 });
+      await expectTerminalConnected(page, 120_000);
+      expect(await runInTerminal(page, 'test -e ~/project && echo present || echo absent')).toBe('absent');
+      const after = await mySessions(context);
+      expect(after).toHaveLength(1);
+      expect(after[0]).toMatchObject({ sessionId: before.sessionId, status: 'ACTIVE' });
+    });
+
+    await test.step('the completed result is kept; Verify grades the fresh sandbox', async () => {
+      await expect(page.locator('.workspace__status')).toContainText('Completed');
+      await page.getByRole('button', { name: 'Verify', exact: true }).click();
+      await expect(page.locator('section.verify')).toContainText('Not complete yet — 1 of 5 checks passing', { timeout: 60_000 });
+    });
+  } finally {
+    await endAllSessions(context);
+  }
+});
