@@ -678,8 +678,21 @@ describe.skipIf(!ENABLED)('the production TLS edge, in the real web image (BETA-
       expect(check.stdout + check.stderr).toContain('served_differs_from_installed');
 
       expect((await docker('exec', drifting.name, 'nginx', '-s', 'reload')).code).toBe(0);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      expect((await docker('exec', drifting.name, ...web.healthcheck.test.slice(1))).code).toBe(0);
+      // `nginx -s reload` only signals the master and returns. The old workers keep
+      // accepting, with the old certificate, until the master has re-read the
+      // configuration, started new workers and retired them: measured at up to ~2 s
+      // on a CPU-limited edge. Wait for the health check itself, as
+      // scripts/tls-install.sh does, instead of guessing a delay.
+      let reloaded = await docker('exec', drifting.name, ...web.healthcheck.test.slice(1));
+      for (const deadline = Date.now() + 20_000; reloaded.code !== 0 && Date.now() < deadline; ) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        reloaded = await docker('exec', drifting.name, ...web.healthcheck.test.slice(1));
+      }
+      expect(reloaded.code, reloaded.stderr).toBe(0);
+      expect((await httpsGet(drifting.httpsPort, '/')).fingerprint).toBe(fingerprint(identities.drift!.cert));
+      const healed = await tlsCheck(drifting, ['--cert-dir', tlsDir]);
+      expect(healed.code, healed.stdout + healed.stderr).toBe(0);
+      expect(healed.stdout + healed.stderr).not.toContain('served_differs_from_installed');
     }, 300_000);
 
     it('warns through the operator check inside the renewal window', async () => {
