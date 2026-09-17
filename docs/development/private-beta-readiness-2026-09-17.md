@@ -106,8 +106,8 @@ On the final tree (the last code change is `7e497e3`):
 | `npm run test:security` | **PASS** — 797 |
 | `npm run typecheck`, `npm run build`, `npm run validate:labs` (117/0/0), `git diff --check` | **PASS** |
 
-The browser suite on the way there: 8/8, 9/9, 10/10, 12/12, then 11/12 twice
-and 13/14 once on the Reset race in §4, and 14/14 once the Reset test
+The browser suite on the way there: 8/8, 9/9, 10/10, 11/12 and 12/12, then 13/14 twice
+on the Reset race in §4 (once with a withdrawn fix in), and 14/14 once the Reset test
 retypes like a student. Every browser run used Linux sandboxes on a
 development machine.
 
