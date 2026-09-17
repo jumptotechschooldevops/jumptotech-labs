@@ -113,6 +113,34 @@ describe('finding the running lab', () => {
     expect(setItem).not.toHaveBeenCalled();
   });
 
+  it('finds a lab that appears after the page loaded (a reload during Start)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    expect(await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' })).toBeTruthy();
+
+    // The start the reload cancelled in the browser reaches the server.
+    apiMock.listMySessions.mockResolvedValue(
+      sessionsResponse([{ session: sessionInfo({ status: 'CREATING' }), labTitle: 'Files and Directories' }]),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(3_100));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'LINUX-001 is not running' })).toBeNull());
+    // The workspace for that session, not an empty state.
+    expect(await screen.findByRole('group', { name: 'Lab actions' })).toBeTruthy();
+  });
+
+  it('stops re-checking a lab that is really not running', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' });
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    const calls = apiMock.listMySessions.mock.calls.length;
+    expect(calls).toBeLessThanOrEqual(1 + 10 + 1);
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(apiMock.listMySessions.mock.calls.length).toBe(calls);
+  });
+
   it('says a lab is not running, and points at the lab page, when there is no session for it', async () => {
     apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
