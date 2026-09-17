@@ -28,6 +28,9 @@ import { ErrorNotice } from '../components/ErrorNotice';
 import { LabBrief } from '../components/LabBrief';
 import { Badge, DifficultyBadge, LoadingState, PageHeader, ProgressBadge } from '../components/ui';
 
+/** How often a lab page re-reads the session list while the student's previous lab shuts down. */
+const SHUTDOWN_RECHECK_MS = 3_000;
+
 function LaunchPanel({ lab }: { lab: LabDetail }) {
   const sessions = useActiveSession();
   const { sessionForLab, entries, launching, launchError, limit, launch } = sessions;
@@ -35,6 +38,16 @@ function LaunchPanel({ lab }: { lab: LabDetail }) {
   const running = sessionForLab(lab.id);
   const other = entries.find((entry) => entry.session.labId !== lab.id);
   const atLimit = !running && limit !== null && entries.length >= limit && other !== undefined;
+  // End is asynchronous: the lab a student just ended can still hold their slot
+  // for a few seconds (longer for a Kubernetes namespace). Nothing else on this
+  // page reads the session list again, so it is re-read until the slot is free.
+  const otherShuttingDown = atLimit && (other?.session.status === 'ENDING' || other?.session.status === 'EXPIRING');
+  const { refresh } = sessions;
+  useEffect(() => {
+    if (!otherShuttingDown) return;
+    const timer = setInterval(() => void refresh(), SHUTDOWN_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [otherShuttingDown, refresh]);
   const unavailable = lab.availability?.available === false;
   const error = launchError?.labId === lab.id ? launchError.error : null;
 
@@ -80,6 +93,18 @@ function LaunchPanel({ lab }: { lab: LabDetail }) {
           </button>
         </>
       );
+  } else if (otherShuttingDown && other) {
+    body = (
+      <>
+        <p className="launch__status" role="status">
+          <span className="mono-id">{other.session.labId}</span> is shutting down. You can launch this lab as soon
+          as it has finished — this page updates by itself.
+        </p>
+        <button type="button" className="btn btn--primary btn--lg btn--block" disabled>
+          Launch lab
+        </button>
+      </>
+    );
   } else if (atLimit && other) {
     body = (
       <div className="notice notice--info">

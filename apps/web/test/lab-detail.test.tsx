@@ -103,6 +103,25 @@ describe('before launch', () => {
     expect(screen.queryByText(/start another/i)).toBeNull();
   });
 
+  it('says a lab that is shutting down is shutting down, and offers Launch by itself once it is gone', async () => {
+    // End is asynchronous: a student who ends K8S-001 and opens the next lab at
+    // once was told K8S-001 "is still running" and to end it, which they had
+    // just done, and nothing on this page ever read the list again.
+    const ending = sessionInfo({ labId: 'K8S-001', sessionId: 'sess-00000000000000aa', status: 'ENDING' });
+    apiMock.listMySessions
+      .mockResolvedValueOnce(sessionsResponse([{ session: ending, labTitle: 'Create Your First Pod' }], 1))
+      .mockResolvedValue(sessionsResponse([], 1));
+    await renderDetail();
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('status').some((node) => /K8S-001 is shutting down/.test(node.textContent ?? ''))).toBe(true),
+    );
+    expect(screen.queryByText('You already have a lab running')).toBeNull();
+    expect(screen.queryByText(/end it from its workspace/)).toBeNull();
+
+    expect(await screen.findByRole('button', { name: 'Launch lab' }, { timeout: 8_000 })).toBeTruthy();
+  });
+
   it('turns a per-student refusal it did not foresee into Continue, not a dead end', async () => {
     apiMock.startLab.mockRejectedValue(
       new ApiRequestError(429, {
