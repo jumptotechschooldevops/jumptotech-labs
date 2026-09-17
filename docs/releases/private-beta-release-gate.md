@@ -479,6 +479,8 @@ receiver or off-host backup was exercised.** Nothing here changes §13.2.
 | The session query had no time limit | component test |
 | Terminal auto-reconnect stopped after ~10 s and ignored restart-time codes | component tests |
 | No stop-launches switch (§6's follow-up) | `LAB_LAUNCHES_PAUSED`; api and web tests; runbook §3 |
+| After a refused oversized paste, a real terminal drop was not auto-reconnected | component test |
+| A failed Reset was worded as a Verify problem | mapping test |
 
 ### 14.2 Status changes against earlier sections
 
@@ -495,7 +497,7 @@ receiver or off-host backup was exercised.** Nothing here changes §13.2.
 
 `npm test` 4,872 passed / 0 failed; `npm run test:security` 797 passed;
 typecheck; `validate:labs` 117/0/0; PR #38's config self-test and host-script
-tests; browser E2E 8/8.
+tests; browser E2E 9/9 (including a real api and a real terminal re-create).
 
 **Verdict unchanged in kind:** software ready for a real-host deployment test;
 **not ready for student access** until §13.2 is done on a host.
