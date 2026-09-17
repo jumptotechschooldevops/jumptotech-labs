@@ -56,6 +56,8 @@ import { Badge, EmptyState, LoadingState } from '../components/ui';
 
 export const STEADY_POLL_MS = 15_000;
 export const TRANSITION_POLL_MS = 3_000;
+/** How many times a workspace with no session for its lab looks again (≈30 s). */
+export const NOT_RUNNING_RECHECKS = 10;
 /**
  * Automatic reconnects after an abnormal drop, before asking the student.
  *
@@ -197,6 +199,28 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const entry = active.sessionForLab(labId);
   const launchingHere = active.launching?.labId === labId;
   const launchError = active.launchError?.labId === labId ? active.launchError.error : null;
+
+  /*
+   * Nothing for this lab yet: look again for a while before settling on "not
+   * running". A reload while Start Lab is in flight cancels the browser's
+   * request but not the server's work, and the lab appears in the list a moment
+   * after this page first read it. Without this the page said "not running" for
+   * a lab that was being built and held the student's only slot.
+   */
+  const notFoundYet = !entry && !launchingHere && !launchError && active.status === 'ready';
+  useEffect(() => {
+    if (!notFoundYet) return;
+    let checks = 0;
+    const timer = setInterval(() => {
+      checks += 1;
+      if (checks > NOT_RUNNING_RECHECKS) {
+        clearInterval(timer);
+        return;
+      }
+      void refreshSessionList();
+    }, TRANSITION_POLL_MS);
+    return () => clearInterval(timer);
+  }, [notFoundYet, refreshSessionList]);
 
   const [session, setSession] = useState<SessionInfo | null>(entry?.session ?? null);
   const [attempt, setAttempt] = useState<AttemptSummary | null>(entry?.attempt ?? null);
