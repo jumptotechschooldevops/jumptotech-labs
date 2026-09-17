@@ -488,16 +488,19 @@ receiver or off-host backup was exercised.** Nothing here changes §13.2.
   `LAB_LAUNCHES_PAUSED` (proven locally; not yet in CI).
 - **§12 "Browser E2E in CI: NOT PROVEN"** — superseded: `browser-e2e` passed on
   PR #37 (run `35182078014`, head `591fc9e`), which was then merged.
-- **§12 "Real (non-injected) API outage"** — a real api stop and re-create is
-  now a browser test, passing 8/8 locally; not yet in CI.
+- **§12 "Real (non-injected) API outage", "Reset flow", "more than two
+  concurrent browser students", "progress across API/DB restart"** — now
+  browser tests, passing locally; not yet in CI.
 - **§11.2 `make beta-validate` on the current tree** — still **not re-run**. The
   development machine could not host a sixth kind cluster safely.
 
 ### 14.3 Local validation on this branch (not CI, not a host)
 
-`npm test` 4,872 passed / 0 failed; `npm run test:security` 797 passed;
+`npm test` 4,875 passed / 0 failed; `npm run test:security` 797 passed;
 typecheck; `validate:labs` 117/0/0; PR #38's config self-test and host-script
-tests; browser E2E 9/9 (including a real api and a real terminal re-create).
+tests; `make db-restore-drill` and the backup refusal tests; browser E2E
+12/12, now including Reset, five students in five browsers with a sixth
+refused, and real api, terminal and database restarts.
 
 **Verdict unchanged in kind:** software ready for a real-host deployment test;
 **not ready for student access** until §13.2 is done on a host.

@@ -676,7 +676,19 @@ B's progress is 0, and B's own terminal and sandbox work.
   (1.6 min), 0 containers left. The new test **fails** against the previous
   auth gate. Docker gave the re-created api its previous addresses in that
   run, so the address change is proven by the real-image edge test instead.
-- Not yet run in CI (no pull request for the branch).
+- `five-students.spec.ts`: five browser contexts launch LINUX-001 together,
+  work in five terminals, verify together (three pass, two see 1 of 5), a
+  sixth is refused with `LAB_CAPACITY_REACHED`, and after the five end the
+  sixth's Try again gets a Ready lab. `e2e/stack.sh` now writes
+  `MAX_ACTIVE_SESSIONS=5` and `MAX_ACTIVE_SESSIONS_PER_STUDENT=1`.
+- "terminal service re-created mid-lab" (it also passes on the previous
+  reconnect code, so it is a guard, not a regression test) and "database
+  restarted mid-lab" (the api's pool recovers; a passing Verify is saved).
+- "Reset gives a student a fresh environment…": same session, files gone,
+  terminal reconnects by itself, Completed kept.
+- Final full run on the branch: **12 passed** (6.6 min), 0 containers left.
+- Not yet run in CI (no pull request for the branch). On a 2-core runner six
+  Linux sandboxes at once are unmeasured.
 
 ## 15. Findings
 
@@ -725,24 +737,23 @@ B's progress is 0, and B's own terminal and sandbox work.
 |---|---|
 | Kubernetes real-runtime browser E2E | **OPEN** |
 | Terraform browser E2E | **OPEN** |
-| Reset flow | **OPEN** |
+| Reset flow | **Covered locally** (§14.4, Linux) |
 | Second-tab terminal takeover | **OPEN** |
 | Reload during session startup (CREATING) | **OPEN** |
 | Production overlay | **OPEN** |
 | Real external OIDC/IdP | **OPEN** |
 | Production TLS / public host | **OPEN** |
 | Browser E2E passing in CI | **DONE** on PR #37 (run `35182078014`) |
-| Real (non-injected) API/terminal outage tests | **API: covered locally** (§14.4); terminal: **OPEN** |
-| More than two concurrent browser students | **OPEN** (API-level five-student gate exists) |
-| Progress across API/DB restart | **OPEN** |
+| Real (non-injected) API/terminal/database outage tests | **Covered locally** (§14.4) |
+| More than two concurrent browser students | **Five: covered locally** (§14.4) |
+| Progress across API/DB restart | **Covered locally** (§14.4: api re-create, database restart) |
 
 Recommended next steps:
 
 1. Run §14.4's api-outage test in CI (it needs a pull request).
 2. Separate retryable from permanent `CREDENTIALS_UNAVAILABLE` on the server,
    so the browser's bounded retry (§15) never retries a permanent refusal.
-3. Browser coverage for reset, second-tab takeover, reload during CREATING and
-   a terminal-service restart.
+3. Browser coverage for second-tab takeover and reload during CREATING.
 4. Extend Tier B with a Kubernetes lab (kind in the job) and a Terraform lab.
 5. Point the suite at a staging host with the production overlay and a real IdP
    test tenant as the first Tier C evidence.

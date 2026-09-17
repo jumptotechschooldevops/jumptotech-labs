@@ -23,8 +23,9 @@ Evidence words used below:
 
 The pass audited the student journey against the running stack and the code,
 looking for what would stop a real student in a real deployment rather than in
-the test harness. Every defect below was reproduced before it was fixed, and each fix has a
-test that fails without it.
+the test harness. Each defect below was reproduced or traced in the code
+before it was fixed, and each fix has a test that fails without it (#6 is a
+new feature and has tests of its own).
 
 | # | Defect | Who hits it | Fix | Evidence |
 |---|---|---|---|---|
@@ -37,7 +38,18 @@ test that fails without it.
 | 7 | **A refusal that left the terminal socket open became the reason for a later close**: after a paste over 8 KB (`FRAME_TOO_LARGE`), a real network drop was not auto-reconnected | any student who pastes a large block | advisory codes are shown but not recorded as the close reason (`a8c66af`) | component test fails on the old component |
 | 8 | **A failed Reset was worded as a Verify problem** ("Try Verify again" while Verify is disabled) | a student whose reset cannot reach the sandbox | reset-specific wording (`f08c6a1`) | mapping test |
 
-Browser E2E gained two tests that take real services away:
+Browser E2E gained a Reset test, a five-student test and three tests that
+take real services away:
+- Reset: same session, fresh sandbox (files gone), terminal
+  reconnects without a click, Completed kept, Verify grades the fresh sandbox;
+- five students in five browsers at once (`c6ef9a6`): simultaneous Launch,
+  five connected terminals on five sandboxes, five simultaneous Verify with
+  per-student results, a sixth student refused with `LAB_CAPACITY_REACHED`,
+  and after the five end, the sixth's Try again gets a Ready lab. The E2E
+  stack now runs the beta contract (`MAX_ACTIVE_SESSIONS=5`, 1 per student);
+- PostgreSQL restarted under a running lab (`5ec620d`): terminal undisturbed,
+  the api's pool recovers without a restart, and a passing Verify is saved
+  and survives a reload;
 - api stopped and re-created mid-lab (`1490c72`): the student returns to the
   tab, the lab and terminal stay, the api is re-created with
   `--force-recreate`, and Verify grades the same sandbox through the edge.
@@ -65,13 +77,16 @@ request exists for this branch.**
 
 | Command | Result |
 |---|---|
-| `npm test` (every workspace) | **PASS** — 4,872 passed, 0 failed, 333 skipped (environment-gated integration suites) |
+| `npm test` (every workspace) | **PASS** — 4,875 passed, 0 failed, 333 skipped (environment-gated integration suites) |
 | `npm run test:security` | **PASS** — 47 files, 797 tests |
 | `npm run typecheck` | **PASS** |
 | `npm run validate:labs` | **PASS** — 117 labs, 0 errors, 0 warnings |
 | `npm run production:config-check -- --self-test` (PR #38) | **PASS** — the production gates fail closed |
 | `bash scripts/test-production-host-scripts.sh` (PR #38) | **PASS** — 41 cases |
-| `bash e2e/stack.sh run` (isolated project `jtt-e2e-bro`) | **PASS 8/8** in 1.6 min, then **9/9** in 2.6 min after the terminal test was added (on PR #38's base); teardown left 0 containers both times |
+| `bash e2e/stack.sh run` (isolated project `jtt-e2e-bro`), final | **PASS 12/12** in 6.6 min; teardown left 0 containers. Earlier runs on the way: 8/8, 9/9, 10/10, and one 11/12 where the new Reset test typed before the fresh shell's prompt (test fixed to wait for it; see §4) |
+| `bash scripts/test-db-backup-restore.sh` | **PASS** — 117 passed, 0 failed |
+| `make db-restore-drill` | **PASS** in 16 s — source destroyed, restored to an identical fingerprint (9 tables, schema, sequences, ledger), migrations current, application read and write; 0 containers left |
+| `node scripts/check-secret-distribution.mjs`, `bash scripts/check-observability.sh`, `npm run build`, `npm run test:composition` | **PASS** (composition 25) |
 | New E2E test against the old auth gate (negative control) | **FAILS** as expected — no banner; the app is replaced by the full-screen error |
 | `tls-edge-integration` (real web image), full suite with fix 1 | 36/37; the one failure ("refuses a private key inside fullchain.pem") hit its 60 s `docker run` budget at load ~40 and passed alone in 3.4 s, before nginx loads `locations.conf` |
 | Same suite, selected tests including fixes 1 and 2 | **PASS** |
@@ -113,9 +128,11 @@ was asked to examine, classified against the current tree.
 | Observability on the host | **REQUIRES REAL PRODUCTION HOST** | PR #38 smoke `observability.*` |
 | Restart: api re-created (`prod up -d api`) | **PROVEN LOCALLY ONLY** (new) | fix 1 + fix 3; E2E and real-image edge test |
 | Restart: terminal / sandboxd | web reconnect **PROVEN LOCALLY ONLY** (component tests, fix 5); on a host **REQUIRES REAL PRODUCTION HOST** | |
+| Restart: PostgreSQL | **PROVEN LOCALLY ONLY** (new browser test: pool recovers, progress saved); on a host **REQUIRES REAL PRODUCTION HOST** | |
 | Restart policy `unless-stopped` | **PROVEN IN REPOSITORY** | PR #34 contract |
 | Reboot / Docker daemon restart | **REQUIRES REAL PRODUCTION HOST** | the kind node container is `on-failure:1` (measured with kind v0.31.0), not `unless-stopped`; whether it returns is unmeasured |
 | Capacity limits 5 / 1, atomic | **PROVEN BY AUTOMATED TEST** | unit + CI integration |
+| Five students through the real browser UI (launch, terminals, verify, 6th refused, release) | **PROVEN LOCALLY ONLY** (new, Linux sandboxes) | not a capacity measurement |
 | Five-student gate (`make beta-validate`) on the current tree | **NOT RE-RUN** — last **PROVEN LOCALLY ONLY** at `c8eb2c6` | not run tonight: the Docker VM (8 GiB) already held five kind clusters and a full stack from other worktrees; a sixth cluster and a 30-minute soak would have put them at risk |
 | Five students on the host, against thresholds | **REQUIRES REAL PRODUCTION HOST**; thresholds **BLOCKED BY HUMAN DECISION** (D8) | PR #38 §13 procedure |
 | Stop launches without taking the site down | **PROVEN BY AUTOMATED TEST** locally (new, fix 6); not in CI yet | |
@@ -128,6 +145,10 @@ student; each is recorded for a later pass.
 
 - A paste over the 8 KB frame limit is refused and shown as a red line; the
   pasted text is lost (the reconnect side of this is fixed, #7).
+- Right after a Reset (and in principle any attach), "Terminal: Connected"
+  appears a moment before bash prints its prompt; keys typed in that instant
+  can interleave with the prompt and garble the line. Seen once by the browser
+  suite under load; a student would retype. Not changed.
 - A session stuck in `ENDING` blocks every other lab behind a spinner with no
   explanation (`SessionTeardownStuck` alerts the operator after 20 min).
 - An unknown session status string would throw in `AppShell`, outside the
@@ -171,3 +192,7 @@ Nothing below can be done in this repository.
 | `be52f4b` | test(e2e): re-create the terminal service mid-lab |
 | `a8c66af` | fix(web): advisory terminal refusals are not the close reason |
 | `f08c6a1` | fix(web): reset-specific wording for an unreachable environment |
+| `28b91df` | docs(beta): later fixes in this report |
+| `c6ef9a6` | test(e2e): five students in five browsers; E2E stack pinned to 5/1 |
+| `5ec620d` | test(e2e): PostgreSQL restarted under a running lab |
+| `b1b7100`, `81e6097` | test(e2e): Reset in the browser; wait for the fresh prompt after Reset |
