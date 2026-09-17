@@ -19,7 +19,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AuthGate } from '../src/components/AuthGate';
 import { UserMenu } from '../src/components/UserMenu';
 import { AuthProvider, useAuth } from '../src/lib/AuthContext';
-import { AUTH_EXPIRED_EVENT, announceAuthExpired, type AuthSession } from '../src/lib/auth';
+import { AUTH_EXPIRED_EVENT, announceAuthExpired, fetchAuthSession, type AuthSession } from '../src/lib/auth';
 
 const SIGNED_IN: AuthSession = {
   authenticated: true,
@@ -92,6 +92,27 @@ describe('the sign-in gate', () => {
     // Crucially not a sign-in button: the problem is not that nobody signed in.
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+
+  it('gives up on an API that accepts the session query and never answers', async () => {
+    // A hung api behind nginx: the connection is open, no response ever comes.
+    // Only the request's own signal can end the wait.
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      renderGate({ loadSession: () => fetchAuthSession(50) });
+
+      expect(await screen.findByText(/Cannot reach the labs API/)).toBeTruthy();
+      expect(screen.getByText(/did not answer the session query within/)).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+      expect(fetchMock.mock.calls[0]![1]?.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('names the missing configuration when no identity provider is set up', async () => {
