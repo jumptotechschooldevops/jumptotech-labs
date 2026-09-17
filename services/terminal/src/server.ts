@@ -606,6 +606,8 @@ export function createTerminalServer(
 
     let authenticated = false;
     let authenticating = false;
+    /** The latest size the browser asked for while its attach was in flight. */
+    let pendingSize: { cols: number; rows: number } | undefined;
 
     // A socket that never sends a valid token is dropped quickly.
     const authTimer = setTimeout(() => {
@@ -633,6 +635,20 @@ export function createTerminalServer(
       }
 
       if (!authenticated) {
+        /*
+         * A token has been *verified* and its attach is in flight. A client
+         * that re-fits its terminal now sends `resize` before `ready`, and a
+         * duplicate `auth` can land here too; closing such a socket as
+         * unauthenticated would drop a student who did everything in order.
+         * This is defence for frames *after* a verified token only: a frame
+         * before one is still refused just below, and that refusal is the
+         * boundary. Nothing reaches a shell before one exists. The size is
+         * kept for the shell being opened; anything else is dropped.
+         */
+        if (authenticating) {
+          if (message.type === 'resize') pendingSize = { cols: message.cols, rows: message.rows };
+          return;
+        }
         if (message.type !== 'auth') {
           send(ws, {
             type: 'error',
@@ -643,10 +659,6 @@ export function createTerminalServer(
           ws.close(4401, 'unauthenticated');
           return;
         }
-        // Credential fetch is asynchronous; ignore duplicate auth frames that
-        // arrive while it is in flight rather than starting a second PTY.
-        if (authenticating) return;
-
         let claims: TerminalSessionClaims;
         try {
           claims = verifySessionToken(message.token, config.sessionSecret);
@@ -682,7 +694,11 @@ export function createTerminalServer(
         const rows = message.rows ?? 24;
         void startSession(ws, claims, cols, rows)
           .then((started) => {
-            if (started) authenticated = true;
+            if (!started) return;
+            authenticated = true;
+            const session = sessions.get(ws);
+            if (session && pendingSize) applySize(session, pendingSize.cols, pendingSize.rows);
+            pendingSize = undefined;
           })
           .finally(() => {
             authenticating = false;
@@ -705,15 +721,7 @@ export function createTerminalServer(
           break;
         case 'resize':
           touch(session);
-          // Remembered as well as applied, so a shell replaced by
-          // `reattachSession` opens at the size the browser is actually showing.
-          session.cols = message.cols;
-          session.rows = message.rows;
-          try {
-            session.term.resize(message.cols, message.rows);
-          } catch {
-            /* the PTY may have already exited; harmless */
-          }
+          applySize(session, message.cols, message.rows);
           break;
         case 'ping':
           touch(session);
@@ -910,6 +918,15 @@ export function createTerminalServer(
       return false;
     }
 
+    // The browser can leave while the broker attaches. Its `close` handler has
+    // already run and found no session to end, so a shell registered now would
+    // hold a sandbox PTY and a capacity slot for a socket nobody reads.
+    if (ws.readyState !== ws.OPEN) {
+      term.kill();
+      await discardCredentials();
+      return false;
+    }
+
     const session: Session = {
       claims,
       sandboxRef: plan.sandboxRef,
@@ -956,6 +973,18 @@ export function createTerminalServer(
       `session ${claims.sid} started (lab=${claims.labId} ${plan.sandboxKind}=${plan.sandboxRef})`,
     );
     return true;
+  }
+
+  function applySize(session: Session, cols: number, rows: number): void {
+    // Remembered as well as applied, so a shell replaced by `reattachSession`
+    // opens at the size the browser is actually showing.
+    session.cols = cols;
+    session.rows = rows;
+    try {
+      session.term.resize(cols, rows);
+    } catch {
+      /* the PTY may have already exited; harmless */
+    }
   }
 
   function touch(session: Session): void {

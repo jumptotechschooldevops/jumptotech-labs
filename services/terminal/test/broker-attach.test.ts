@@ -64,15 +64,23 @@ function snapshot(sessionId: string): SandboxSnapshot {
   };
 }
 
-function fakePty(): BrokerPty & { written: string[]; killed: boolean; emit(d: string): void } {
+function fakePty(): BrokerPty & {
+  written: string[];
+  resizes: [number, number][];
+  killed: boolean;
+  emit(d: string): void;
+} {
   let onData: (d: string) => void = () => undefined;
   return {
     written: [],
+    resizes: [],
     killed: false,
     write(data) {
       this.written.push(data);
     },
-    resize() {},
+    resize(cols, rows) {
+      this.resizes.push([cols, rows]);
+    },
     kill() {
       this.killed = true;
     },
@@ -372,4 +380,92 @@ describe('the auth grace period bounds the wait for a token, not the attach', ()
     expect(await closed).toBe(4401);
     expect(stack.ptys).toHaveLength(0);
   }, 30_000);
+});
+
+describe('frames that arrive while a signed token is still attaching', () => {
+  /*
+   * PR #37 CI, student-isolation.spec.ts: a browser re-opening a workspace sent
+   * `resize` *before* `auth` (LabTerminal fitted in `onopen`, and xterm's
+   * resize handler wrote to the open socket). The service rightly refused it,
+   * 4401 "First message must be an auth frame"; the fix for that is in the web
+   * client (apps/web/test/LabTerminal.test.tsx). These tests pin the other side
+   * of the boundary: frames after a *verified* token, while it attaches, keep
+   * the socket and reach no shell; a frame before any token is still refused;
+   * and a browser that leaves mid-attach leaves no shell behind.
+   */
+
+  it('keeps the socket, and opens the shell at the size the browser settled on', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiMs: 400 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const first = frame(ws, ['ready', 'error']);
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+    ws.send(JSON.stringify({ type: 'resize', cols: 132, rows: 40 }));
+    ws.send(JSON.stringify({ type: 'ping' }));
+
+    expect(await first).toMatchObject({ type: 'ready', sandboxRef: refFor(SESSION_A) });
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    expect(stack.ptys).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(stack.ptys[0]!.resizes.at(-1)).toEqual([132, 40]);
+  });
+
+  it('never delivers input typed before the shell exists', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiMs: 400 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const first = frame(ws, ['ready', 'error']);
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+    ws.send(JSON.stringify({ type: 'input', data: 'early\r' }));
+
+    expect(await first).toMatchObject({ type: 'ready' });
+    ws.send(JSON.stringify({ type: 'input', data: 'after\r' }));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(stack.ptys[0]!.written).toEqual(['after\r']);
+  });
+
+  it('still refuses a socket whose first frame is not auth', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+    const error = frame(ws, ['error']);
+    ws.send(JSON.stringify({ type: 'resize', cols: 132, rows: 40 }));
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+
+    expect(await error).toMatchObject({ code: 'UNAUTHENTICATED' });
+    expect(await closed).toBe(4401);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stack.ptys).toHaveLength(0);
+  });
+
+  it('still refuses a resize that follows a token the API rejects', async () => {
+    // B's signed token re-used on A's session: the resize rides along and must
+    // neither open a shell nor keep the socket.
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiMs: 200 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+    const first = frame(ws, ['ready', 'error']);
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_B), cols: 80, rows: 24 }));
+    ws.send(JSON.stringify({ type: 'resize', cols: 132, rows: 40 }));
+
+    expect(await first).toMatchObject({ type: 'error' });
+    expect(await closed).toBe(4403);
+    expect(stack.ptys).toHaveLength(0);
+  });
+
+  it('leaves no shell behind when the browser leaves during the broker attach', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { inspectMs: 400 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+    // Past the credentials fetch, inside the broker's inspect.
+    await new Promise((r) => setTimeout(r, 150));
+    ws.close(1000, 'navigated away');
+
+    await new Promise((r) => setTimeout(r, 900));
+    expect(stack.ptys).toHaveLength(1);
+    expect(stack.ptys[0]!.killed).toBe(true);
+  });
 });
