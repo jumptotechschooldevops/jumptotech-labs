@@ -155,6 +155,13 @@ export interface ApiConfig {
    */
   progress: ProgressConfig & { databaseTransport: DatabaseTransportMode | null };
   reaperIntervalSeconds: number;
+  /**
+   * The stop-launches switch (`LAB_LAUNCHES_PAUSED`). While true, Start Lab is
+   * refused with 503 `LAB_LAUNCHES_PAUSED`; running labs, their terminals,
+   * Verify, Reset and End are untouched. For maintenance and incidents, where
+   * the only earlier options were telling the cohort or taking the site down.
+   */
+  launchesPaused?: boolean;
   sessionRetentionMinutes: number;
   nodeEnv: string;
   /**
@@ -987,6 +994,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     },
     progress: { ...progress, databaseTransport },
     reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
+    launchesPaused: boolFromEnv(env, 'LAB_LAUNCHES_PAUSED', false),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',
     dockerEnabled,

@@ -76,6 +76,21 @@ describe('what an API error means to a student', () => {
     expect(described.retryable).toBe(true);
   });
 
+  it('says new labs are paused, that running labs keep working, and keeps the code', () => {
+    const described = describeError(
+      {
+        code: 'LAB_LAUNCHES_PAUSED',
+        message: 'Starting new labs is paused for maintenance.',
+        remediation: 'Labs that are already running keep working. Try again later.',
+      },
+      'launch',
+    );
+    expect(described.title).toBe('New labs are paused');
+    expect(described.message).toMatch(/already running keep working/);
+    expect(described.reference).toBe('LAB_LAUNCHES_PAUSED');
+    expect(described.retryable).toBe(true);
+  });
+
   it('points a student at their running lab instead of suggesting another start', () => {
     const described = describeError(
       { code: 'STUDENT_SESSION_LIMIT_REACHED', message: 'x', details: { maxActiveSessionsPerStudent: 1 } },

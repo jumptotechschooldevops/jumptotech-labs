@@ -32,6 +32,7 @@ export const LOG_EVENTS = [
 
   // --- lab sessions ----------------------------------------------------------
   'lab.start.attempted',
+  'lab.start.paused',
   'lab.start.succeeded',
   'lab.start.failed',
   'lab.reset.succeeded',
