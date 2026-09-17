@@ -83,9 +83,21 @@ export function AuthProvider({
       setError(null);
     } catch (cause) {
       if (generation.current !== mine) return;
-      setSession(null);
-      setStatus('unavailable');
       setError(cause instanceof Error ? cause.message : 'Could not reach the API.');
+      /*
+       * A failed *re*-check is not a sign-out.
+       *
+       * This runs again whenever the tab becomes visible and after any 401. If
+       * the API is restarting at that moment (`prod up -d api` changes the
+       * capacity ceiling during a class), unmounting the app would close the
+       * student's terminal socket and throw away a workspace that does not
+       * depend on the API while it is open. So a signed-in browser stays
+       * mounted, with the error shown by the gate as a banner; only a definite
+       * "signed out" answer takes the app away. Nothing is granted by staying
+       * mounted: every request is still authenticated by the server.
+       */
+      setStatus((current) => (current === 'authenticated' ? 'authenticated' : 'unavailable'));
+      setSession((current) => (current?.authenticated ? current : null));
     }
   }, [loadSession]);
 

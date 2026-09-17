@@ -2619,3 +2619,7 @@ main:focus {
     grid-row: auto;
   }
 }
+
+.auth-gate__banner {
+  margin: 0.75rem 1rem 0;
+}
