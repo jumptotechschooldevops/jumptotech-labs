@@ -214,6 +214,20 @@ jobs:
       - name: Backup and restore scripts refuse unsafe states
         run: bash scripts/test-db-backup-restore.sh
 
+      # Production-host readiness. The real compose files resolved with sentinel
+      # environments and read by the real api/terminal/sandboxd config loaders:
+      # a complete 5/1-capacity beta configuration passes, and each unsafe variation
+      # (capacity default, development identity, plaintext origin, waived
+      # attestation, placeholder or shared secrets, socket group) is refused.
+      # Then the preflight, smoke and capacity scripts against fakes: every unsafe
+      # host state is a FAIL, no secret is printed, and only read-only docker and
+      # kubectl verbs are ever called. None of this is evidence about a real host.
+      - name: Production configuration gates fail closed
+        run: npm run --silent production:config-check -- --self-test
+
+      - name: Production-host scripts fail closed and change nothing
+        run: bash scripts/test-production-host-scripts.sh
+
       # An archive holds every student's data. .gitignore keeps the default names
       # out; this catches one committed under any name or path.
       - name: No database archive is committed

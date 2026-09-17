@@ -184,7 +184,7 @@ make db-backup
 On a host:
 
 ```bash
-cd /opt/jumptotech-labs
+cd /srv/jumptotech-labs
 BACKUP_DIR=/srv/jumptotech/backups/postgres scripts/db-backup.sh
 ```
 
@@ -221,7 +221,7 @@ Cron example:
 
 ```cron
 # /etc/cron.d/jumptotech-db-backup — daily, 03:17 UTC
-17 3 * * *  jtt-ops  cd /opt/jumptotech-labs && BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status BACKUP_COPY_HOOK=/usr/local/sbin/jtt-copy-backup-offhost scripts/db-backup.sh >>/var/log/jumptotech/db-backup.log 2>&1
+17 3 * * *  jtt-ops  cd /srv/jumptotech-labs && BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status BACKUP_COPY_HOOK=/usr/local/sbin/jtt-copy-backup-offhost scripts/db-backup.sh >>/var/log/jumptotech/db-backup.log 2>&1
 ```
 
 - `jtt-ops` must be able to run `docker`. That is root-equivalent, so choose the

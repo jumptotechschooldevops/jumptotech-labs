@@ -412,3 +412,48 @@ resilience findings:
 - **Non-blocking:** an API slower than the terminal's 10 s credentials budget
   still fails the attach. The browser does not auto-retry
   `CREDENTIALS_UNAVAILABLE`; the student presses Try again.
+
+---
+
+## 13. Production-host readiness — 2026-09-16
+
+Added by `feat/production-host-readiness`, rebased onto `main` at `c00ec48`
+(after §11, PR #35's catalog validation, PR #36's security audit and PR #37's
+browser E2E, §12). §1–§12 are left as recorded. The full procedure, audits and
+evidence are in
+[production-host-readiness.md](../development/production-host-readiness.md).
+
+**No production host has been deployed.** Nothing in §1–§12 or here is evidence
+about a host: every result is from a development machine or a CI runner. An item
+becomes host evidence only when the deployment's own copy of
+[production-host-evidence-template.md](production-host-evidence-template.md),
+filled on that host, records it.
+
+### 13.1 What this adds
+
+| Addition | Status |
+|---|---|
+| `make observability-token` wrote the scrape token `0600`; Prometheus (uid 65534) cannot read that on a Linux host, so every target would be down. Fixed (`0644` in a `0711` directory) and regression-tested | Defect reproduced and fix verified with the real Prometheus image under Linux ownership: **PROVEN LOCALLY**. On a host: **REQUIRES PRODUCTION HOST** |
+| `npm run production:config-check`: the five production files rendered with the operator's `.env`, checked against a host contract, and read by the real api/terminal/sandboxd config loaders; `--self-test` covers 20 fail-closed scenarios | **PROVEN LOCALLY**; passed in CI `gates` on PR #38 at `5d486ef` (base `fa6f109`); not yet re-run in CI on `c00ec48` |
+| `make production-preflight`, `make private-beta-smoke`, `scripts/host-capacity-sample.sh`, and their fake-infrastructure test (`scripts/test-production-host-scripts.sh`) | **PROVEN LOCALLY** (macOS and a Linux container); **PROCEDURE READY** for a host |
+| Deployment, five-student host validation, alert drill, recovery drills, rollback, evidence template | **PROCEDURE READY** |
+
+### 13.2 Before five students receive access
+
+Every row below is open. Each is also item-for-item in the readiness document's
+"FIRST REAL HOST — REQUIRED BEFORE STUDENT ACCESS" checklist.
+
+| Item | Status |
+|---|---|
+| A host exists; `make production-preflight` passes on it | **REQUIRES PRODUCTION HOST** |
+| `make production-config-check` passes with the production `.env` | **REQUIRES PRODUCTION HOST** |
+| `make private-beta-smoke` passes on the running stack | **REQUIRES PRODUCTION HOST** |
+| Only 80 and 443 (and operator SSH) reachable from outside | **REQUIRES PRODUCTION HOST** — a scan from another network |
+| Hostname, DNS and a certificate from a real CA | **REQUIRES EXTERNAL DECISION** |
+| Sign-in through the real identity provider | **REQUIRES EXTERNAL DECISION** |
+| **Only the beta students can sign in.** The api provisions any account the configured issuer authenticates (authentication.md §4.7); nothing in the application restricts it | **REQUIRES EXTERNAL DECISION** — not fixed by documentation |
+| `make beta-validate` on the commit being deployed, on the host (§11.2's gap) | **NOT PROVEN** |
+| Five-student capacity measured on the host and accepted against defined thresholds | **NOT PROVEN** (no thresholds are defined) |
+| Off-host, encrypted backup, and one restore from it | **REQUIRES EXTERNAL DECISION** |
+| An alert delivered to a person | **REQUIRES EXTERNAL DECISION** |
+| Unattended recovery after a Docker restart and a host reboot, with the §11.3 restart policy | **NOT PROVEN** on a host |

@@ -54,6 +54,13 @@ use `exec` rather than a URL.
 
 ### 1.1 First start
 
+> **On a new host, do not start from this list.** Follow the full host procedure
+> in [production-host-readiness.md §15](../development/production-host-readiness.md):
+> it adds what this list assumes — host prerequisites, `DOCKER_SOCKET_GID`, the
+> NetworkPolicy attestation for this `.env`, `make production-preflight` before
+> the first start and `make private-beta-smoke` after it. This list is the
+> short form for a host that has already passed that procedure.
+
 1. `.env` holds the production values: `PUBLIC_ORIGIN`, the OIDC settings,
    every secret (`make secrets` generates missing ones, including
    `OBSERVABILITY_SCRAPE_TOKEN` and `GRAFANA_ADMIN_PASSWORD`), `RUNTIME_OWNER_ID`,
@@ -310,6 +317,8 @@ that is the incident.
 | **Off-host backup destination and encryption** (P0-013) | `jtt_backup_last_success_offhost` reads 0 and the dashboard says NO |
 | **CA / ACME client** (P0-017) | Manual renewal before `TlsCertificateRenewalDue` |
 | **Long-term metric and log retention** | 15 days of Prometheus data; logs are container stdout |
+| **Who may sign in** — the api admits any account the OIDC issuer authenticates ([authentication.md §4.7](../authentication.md)) | The identity provider itself must admit only the beta students. Blocks inviting anyone to a public host ([production-host-readiness.md §8](../development/production-host-readiness.md)) |
+| **Production host sizing and capacity acceptance** | Nothing is proven about any server. Measure with the five-student host procedure ([production-host-readiness.md §13](../development/production-host-readiness.md)) |
 
 ## 9. Limitations
 
