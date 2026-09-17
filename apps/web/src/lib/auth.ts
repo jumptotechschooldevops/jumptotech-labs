@@ -70,19 +70,38 @@ export function announceAuthExpired(): void {
 }
 
 /**
+ * How long the first screen may say "Checking your session…".
+ *
+ * The session query is the cheapest request the API answers, and every page
+ * waits on it. Without a bound, an API that accepts the connection and never
+ * answers holds a student on that line for as long as the proxy allows (60 s in
+ * nginx), instead of showing "Cannot reach the labs API" and a Try again button.
+ */
+export const SESSION_QUERY_TIMEOUT_MS = 15_000;
+
+/**
  * Ask the API who this browser is.
  *
  * Never throws for "signed out" — that is a successful answer. It throws only
  * when the API cannot be reached at all, which the caller renders differently:
  * "sign in" and "the server is down" are not the same problem.
  */
-export async function fetchAuthSession(): Promise<AuthSession> {
-  const response = await fetch(`${API_URL}/auth/session`, {
-    // Without this the cookie is not sent cross-origin, and the API would
-    // correctly answer "signed out" to a browser that is signed in.
-    credentials: 'include',
-    headers: { accept: 'application/json' },
-  });
+export async function fetchAuthSession(timeoutMs: number = SESSION_QUERY_TIMEOUT_MS): Promise<AuthSession> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/auth/session`, {
+      // Without this the cookie is not sent cross-origin, and the API would
+      // correctly answer "signed out" to a browser that is signed in.
+      credentials: 'include',
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (cause) {
+    if (cause instanceof DOMException && (cause.name === 'TimeoutError' || cause.name === 'AbortError')) {
+      throw new Error(`The API did not answer the session query within ${Math.round(timeoutMs / 1000)} seconds.`);
+    }
+    throw cause;
+  }
 
   const body = (await response.json().catch(() => null)) as AuthEnvelope<AuthSession> | null;
   if (!body?.ok || !body.data) {
