@@ -164,17 +164,16 @@ test('Reset gives a student a fresh environment, reconnects the terminal, and ke
       await dialog.getByRole('button', { name: 'Reset lab' }).click();
     });
 
-    await test.step('the same session comes back Ready on a fresh sandbox, and the terminal reconnects by itself', async () => {
-      await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 240_000 });
-      await expectTerminalConnected(page, 120_000);
-      // Right after Reset the service reattaches the socket and the page may
-      // also reconnect it, so the first line typed can be lost or garbled
-      // (readiness report §4, open). Do what a student does: Ctrl-C and retype.
-      await expect(async () => {
-        await page.locator('.terminal-surface').click();
-        await page.keyboard.press('Control+C');
-        expect(await runInTerminal(page, 'test -e ~/project && echo present || echo absent', 10_000)).toBe('absent');
-      }).toPass({ timeout: 120_000, intervals: [2_000] });
+    await test.step('the same session comes back Ready on a fresh sandbox, and what the student types at once reaches the fresh shell', async () => {
+      // The dialog stays open until the reset has answered; the page then
+      // reconnects the terminal. A student starts typing as soon as the dialog
+      // is gone, while that connection is still being set up. Those keys used
+      // to be dropped before the shell was ready (a command arrived truncated,
+      // or not at all), so this types exactly once, with no retry.
+      await expect(page.getByRole('alertdialog')).toBeHidden({ timeout: 240_000 });
+      expect(await runInTerminal(page, 'test -e ~/project && echo present || echo absent', 60_000)).toBe('absent');
+      await expectTerminalConnected(page);
+      await expect(page.locator('.workspace__status')).toContainText('Ready');
       const after = await mySessions(context);
       expect(after).toHaveLength(1);
       expect(after[0]).toMatchObject({ sessionId: before.sessionId, status: 'ACTIVE' });
