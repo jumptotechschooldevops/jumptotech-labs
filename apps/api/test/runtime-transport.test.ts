@@ -246,7 +246,20 @@ describe('the shipped configuration', () => {
       .split('\n')
       .filter((line) => !/^\s*#/.test(line))
       .join('\n');
-    const targets = [...code.matchAll(/proxy_pass\s+([^;]+);/g)].map((match) => match[1]!.trim());
+    // Upstreams are resolved per request (`set $jtt_api http://api:4000;` then
+    // `proxy_pass $jtt_api;`), so a variable target is followed to the one value
+    // it is set to. An unset or multiply-set variable is not allowed.
+    const variables = new Map<string, string[]>();
+    for (const match of code.matchAll(/^\s*set\s+(\$\w+)\s+([^;]+);/gm)) {
+      variables.set(match[1]!, [...(variables.get(match[1]!) ?? []), match[2]!.trim()]);
+    }
+    const targets = [...code.matchAll(/proxy_pass\s+([^;]+);/g)].map((match) => {
+      const target = match[1]!.trim();
+      if (!target.startsWith('$')) return target;
+      const values = variables.get(target) ?? [];
+      expect(values, `${target} is set exactly once`).toHaveLength(1);
+      return values[0]!;
+    });
     expect(targets.length).toBeGreaterThan(0);
     for (const target of targets) expect(['http://api:4000', 'http://terminal:4001']).toContain(target);
     expect(code).not.toMatch(/sandboxd|:4002|:940[0-2]/);
