@@ -195,3 +195,29 @@ test('api stopped and re-created mid-lab (an operator `up -d api`): the lab stay
     await endAllSessions(context);
   }
 });
+
+test('terminal service re-created mid-lab: the workspace reconnects by itself to the same sandbox', async ({ page, context }) => {
+  test.setTimeout(600_000);
+  const student = uniqueStudent('termrecreate');
+  try {
+    await signIn(page, student);
+    await page.goto(`/#/labs/${LAB_ID}`);
+    await page.getByRole('button', { name: 'Launch lab' }).click();
+    await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 180_000 });
+    await expectTerminalConnected(page);
+    await runInTerminal(page, 'mkdir -p ~/project && echo survived > ~/project/marker');
+
+    await test.step('the terminal container is replaced while the socket is open', async () => {
+      stackService('recreate', 'terminal');
+    });
+
+    await test.step('without a click, the terminal connects again and the sandbox still has the file', async () => {
+      await expectTerminalConnected(page, 120_000);
+      await expect(page.getByRole('button', { name: 'Reconnect' })).toHaveCount(0);
+      expect(await runInTerminal(page, 'cat ~/project/marker')).toBe('survived');
+      expect(await mySessions(context)).toMatchObject([{ labId: LAB_ID, status: 'ACTIVE' }]);
+    });
+  } finally {
+    await endAllSessions(context);
+  }
+});
