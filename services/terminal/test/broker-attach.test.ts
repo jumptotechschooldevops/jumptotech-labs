@@ -64,15 +64,23 @@ function snapshot(sessionId: string): SandboxSnapshot {
   };
 }
 
-function fakePty(): BrokerPty & { written: string[]; killed: boolean; emit(d: string): void } {
+function fakePty(): BrokerPty & {
+  written: string[];
+  resizes: [number, number][];
+  killed: boolean;
+  emit(d: string): void;
+} {
   let onData: (d: string) => void = () => undefined;
   return {
     written: [],
+    resizes: [],
     killed: false,
     write(data) {
       this.written.push(data);
     },
-    resize() {},
+    resize(cols, rows) {
+      this.resizes.push([cols, rows]);
+    },
     kill() {
       this.killed = true;
     },
@@ -115,7 +123,11 @@ interface Stack {
  * enforces the same ownership rule the real one does — that is the check the
  * cross-user tests below are exercising.
  */
-async function bringUpStack(containers: Record<string, SandboxSnapshot>): Promise<Stack> {
+async function bringUpStack(
+  containers: Record<string, SandboxSnapshot>,
+  /** Latency to add, each kept inside that step's own timeout. */
+  delays: { apiMs?: number; inspectMs?: number } = {},
+): Promise<Stack> {
   const owners = new Map<string, string>([
     [SESSION_A, OWNER_A],
     [SESSION_B, OWNER_B],
@@ -134,7 +146,8 @@ async function bringUpStack(containers: Record<string, SandboxSnapshot>): Promis
     const sessionId = match[1]!;
     let body = '';
     req.on('data', (c) => (body += c));
-    req.on('end', () => {
+    req.on('end', async () => {
+      if (delays.apiMs) await new Promise((r) => setTimeout(r, delays.apiMs));
       const claimed = (JSON.parse(body || '{}') as { ownerUserId?: string }).ownerUserId;
       if (!claimed || owners.get(sessionId) !== claimed) {
         res
@@ -179,7 +192,12 @@ async function bringUpStack(containers: Record<string, SandboxSnapshot>): Promis
   };
   const broker = createSandboxd({
     config: brokerConfig,
-    inspector: { inspect: async (ref) => containers[ref] ?? null },
+    inspector: {
+      inspect: async (ref) => {
+        if (delays.inspectMs) await new Promise((r) => setTimeout(r, delays.inspectMs));
+        return containers[ref] ?? null;
+      },
+    },
     spawn: (_cmd, args) => {
       argvs.push(args);
       const p = fakePty();
@@ -225,9 +243,9 @@ function open(url: string): WebSocket {
   return ws;
 }
 
-function frame(ws: WebSocket, types: string[]): Promise<Record<string, unknown>> {
+function frame(ws: WebSocket, types: string[], timeoutMs = 5000): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`no ${types.join('/')} frame`)), 5000);
+    const timer = setTimeout(() => reject(new Error(`no ${types.join('/')} frame`)), timeoutMs);
     ws.on('message', (raw) => {
       const msg = JSON.parse(String(raw)) as Record<string, unknown>;
       if (!types.includes(String(msg.type))) return;
@@ -329,5 +347,125 @@ describe('a container-backed lab gets a shell without this process holding a run
     const { first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
     expect(first).toMatchObject({ type: 'error' });
     expect(stack.ptys).toHaveLength(0);
+  });
+});
+
+describe('the auth grace period bounds the wait for a token, not the attach', () => {
+  // Both tests run on the real 10 s grace period, so each takes over 10 s.
+
+  it('gives a shell to a client that sent its token at once, however long the attach then takes', async () => {
+    // 6 s for credentials plus 6 s for the broker's inspect: past the grace
+    // period, each within its own step's timeout. An API this slow was
+    // measured on a loaded host (docs/development/browser-e2e-private-beta.md).
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiMs: 6_000, inspectMs: 6_000 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const started = Date.now();
+    const first = frame(ws, ['ready', 'error'], 25_000);
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+
+    expect(await first).toMatchObject({ type: 'ready', sandboxRef: refFor(SESSION_A) });
+    expect(Date.now() - started).toBeGreaterThan(10_000);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    expect(stack.ptys).toHaveLength(1);
+  }, 30_000);
+
+  it('still drops a socket that never sends a token', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+
+    expect(await frame(ws, ['error'], 15_000)).toMatchObject({ code: 'AUTH_TIMEOUT' });
+    expect(await closed).toBe(4401);
+    expect(stack.ptys).toHaveLength(0);
+  }, 30_000);
+});
+
+describe('frames that arrive while a signed token is still attaching', () => {
+  /*
+   * PR #37 CI, student-isolation.spec.ts: a browser re-opening a workspace sent
+   * `resize` *before* `auth` (LabTerminal fitted in `onopen`, and xterm's
+   * resize handler wrote to the open socket). The service rightly refused it,
+   * 4401 "First message must be an auth frame"; the fix for that is in the web
+   * client (apps/web/test/LabTerminal.test.tsx). These tests pin the other side
+   * of the boundary: frames after a *verified* token, while it attaches, keep
+   * the socket and reach no shell; a frame before any token is still refused;
+   * and a browser that leaves mid-attach leaves no shell behind.
+   */
+
+  it('keeps the socket, and opens the shell at the size the browser settled on', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiMs: 400 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const first = frame(ws, ['ready', 'error']);
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+    ws.send(JSON.stringify({ type: 'resize', cols: 132, rows: 40 }));
+    ws.send(JSON.stringify({ type: 'ping' }));
+
+    expect(await first).toMatchObject({ type: 'ready', sandboxRef: refFor(SESSION_A) });
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    expect(stack.ptys).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(stack.ptys[0]!.resizes.at(-1)).toEqual([132, 40]);
+  });
+
+  it('never delivers input typed before the shell exists', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiMs: 400 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const first = frame(ws, ['ready', 'error']);
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+    ws.send(JSON.stringify({ type: 'input', data: 'early\r' }));
+
+    expect(await first).toMatchObject({ type: 'ready' });
+    ws.send(JSON.stringify({ type: 'input', data: 'after\r' }));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(stack.ptys[0]!.written).toEqual(['after\r']);
+  });
+
+  it('still refuses a socket whose first frame is not auth', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+    const error = frame(ws, ['error']);
+    ws.send(JSON.stringify({ type: 'resize', cols: 132, rows: 40 }));
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+
+    expect(await error).toMatchObject({ code: 'UNAUTHENTICATED' });
+    expect(await closed).toBe(4401);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stack.ptys).toHaveLength(0);
+  });
+
+  it('still refuses a resize that follows a token the API rejects', async () => {
+    // B's signed token re-used on A's session: the resize rides along and must
+    // neither open a shell nor keep the socket.
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiMs: 200 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+    const first = frame(ws, ['ready', 'error']);
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_B), cols: 80, rows: 24 }));
+    ws.send(JSON.stringify({ type: 'resize', cols: 132, rows: 40 }));
+
+    expect(await first).toMatchObject({ type: 'error' });
+    expect(await closed).toBe(4403);
+    expect(stack.ptys).toHaveLength(0);
+  });
+
+  it('leaves no shell behind when the browser leaves during the broker attach', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { inspectMs: 400 });
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+    // Past the credentials fetch, inside the broker's inspect.
+    await new Promise((r) => setTimeout(r, 150));
+    ws.close(1000, 'navigated away');
+
+    await new Promise((r) => setTimeout(r, 900));
+    expect(stack.ptys).toHaveLength(1);
+    expect(stack.ptys[0]!.killed).toBe(true);
   });
 });

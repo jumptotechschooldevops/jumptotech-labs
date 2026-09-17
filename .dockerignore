@@ -20,3 +20,5 @@ infrastructure/kind/generated/
 infrastructure/observability/secrets/
 infrastructure/observability/alertmanager/secrets/
 backups/
+# Per-run secrets e2e/stack.sh generates for the browser E2E stack.
+e2e/.stack/

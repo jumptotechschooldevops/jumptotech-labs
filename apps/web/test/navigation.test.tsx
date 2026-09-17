@@ -40,12 +40,14 @@ describe('navigation', () => {
       'Help',
     ]);
     expect(current()).toEqual(['Dashboard']);
-    expect(document.title).toBe('Dashboard · JumpToTech Labs');
+    // The title is set by the page's effect, which React may run in a later task
+    // than the commit that put the heading on screen: wait for it, don't race it.
+    await waitFor(() => expect(document.title).toBe('Dashboard · JumpToTech Labs'));
 
     act(() => go('#/labs'));
     await screen.findByRole('heading', { level: 1, name: 'Lab catalog' });
     expect(current()).toEqual(['Labs']);
-    expect(document.title).toBe('Lab catalog · JumpToTech Labs');
+    await waitFor(() => expect(document.title).toBe('Lab catalog · JumpToTech Labs'));
 
     act(() => go('#/labs/LINUX-001'));
     await screen.findByRole('heading', { level: 1, name: 'Files and Directories' });
@@ -60,7 +62,7 @@ describe('navigation', () => {
     act(() => go('#/paths/devops-engineer/stages/linux'));
     await screen.findByRole('heading', { level: 1, name: 'Linux' });
     expect(current()).toEqual(['Learning Path']);
-    expect(document.title).toBe('Linux · JumpToTech Labs');
+    await waitFor(() => expect(document.title).toBe('Linux · JumpToTech Labs'));
   });
 
   it('moves focus to the new page on navigation, for keyboard and screen-reader users', async () => {

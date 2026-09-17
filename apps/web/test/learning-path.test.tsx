@@ -160,7 +160,8 @@ describe('a stage page', () => {
     renderApp('#/paths/devops-engineer/stages/linux');
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Linux' })).toBeTruthy();
-    expect(document.title).toBe('Linux · JumpToTech Labs');
+    // Set in an effect that can land a task after the heading's commit.
+    await waitFor(() => expect(document.title).toBe('Linux · JumpToTech Labs'));
     expect(screen.getByText('Stage 1 of 3')).toBeTruthy();
     const breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
     expect(within(breadcrumb).getByRole('link', { name: 'DevOps Engineer path' }).getAttribute('href')).toBe('#/paths/devops-engineer');

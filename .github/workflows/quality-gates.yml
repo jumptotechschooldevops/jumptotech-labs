@@ -37,11 +37,15 @@
 #
 # ## What holds the Docker socket
 #
-# One job — `sandboxd-integration` — mounts `/var/run/docker.sock`, because the
-# suite under test *is* the broker that holds it: proving sandboxd's refusals
-# against a real daemon is the entire point, and a fake daemon proves nothing.
-# It is mounted into the throwaway test image, never into a lab sandbox and
-# never into a service that faces a student. No other job mounts it.
+# One job — `sandboxd-integration` — mounts `/var/run/docker.sock` into a test
+# image, because the suite under test *is* the broker that holds it: proving
+# sandboxd's refusals against a real daemon is the entire point, and a fake
+# daemon proves nothing. It is mounted into the throwaway test image, never
+# into a lab sandbox and never into a service that faces a student.
+#
+# `browser-e2e` runs the composed stack, so its `sandboxd` service holds the
+# socket exactly as docker-compose.runtime.yml gives it in every deployment —
+# the same single holder, not a second one. No other job mounts it.
 #
 # NET_RAW is not something a runner grants. It reaches a container only through
 # the provider's capability gate (linux provider + `network: link` + an explicit
@@ -767,3 +771,73 @@ jobs:
         run: |
           docker ps -aq --filter label=jumptotech.io/tls-edge-test | xargs -r docker rm -f || true
           docker network ls -q --filter label=jumptotech.io/tls-edge-test | xargs -r docker network rm || true
+
+  # --- Real-browser E2E (Playwright) -----------------------------------------
+  #
+  # The only job that drives the product through a real browser. It starts the
+  # composed stack — base + runtime overlay + e2e/docker-compose.e2e.yml — with
+  # the api in OIDC mode against a loopback test identity provider, then runs
+  # Chromium through sign-in, a learning path, a LINUX-001 session in a real
+  # sandbox container, the browser terminal, Verify, progress, End lab, and a
+  # second student's isolation. See docs/development/browser-e2e-private-beta.md.
+  #
+  # Not proven here: the production overlay, TLS, a real identity provider, the
+  # Kubernetes/Docker/Terraform/Ansible/CI-CD tracks, and any real host.
+  #
+  # Every secret is generated per run by e2e/stack.sh with openssl; none comes
+  # from repository or organisation secrets, and none is printed.
+  browser-e2e:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # Run-scoped, like every runtime job: it is the compose project and the
+      # RUNTIME_OWNER_ID every sandbox and cleanup filters on.
+      E2E_PROJECT: jtt-e2e-${{ github.run_id }}
+      CI: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Start the stack and wait until it is usable
+        run: bash e2e/stack.sh up
+
+      - name: Browser E2E suite
+        run: |
+          E2E_BASE_URL=http://127.0.0.1:33700 \
+          E2E_API_URL=http://127.0.0.1:34700 \
+          E2E_RUNTIME_OWNER_ID="$E2E_PROJECT" \
+            npx playwright test --config e2e/playwright.config.ts
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          bash e2e/stack.sh status || true
+          bash e2e/stack.sh logs || true
+          docker ps -a --filter label=jumptotech.io/managed=true || true
+
+      # Traces, screenshots and videos of test-only students on a throwaway stack.
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-${{ github.run_id }}
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        run: bash e2e/stack.sh down

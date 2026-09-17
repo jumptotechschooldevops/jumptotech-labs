@@ -184,7 +184,11 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
 
       eventRef.current({ status: 'connecting' });
       socket = new WebSocket(`${url.replace(/\/$/, '')}/terminal`);
-      socketRef.current = socket;
+      // `socketRef` is what xterm's resize handler writes to, so it is set only
+      // once the service says `ready`. Until then the only frame this socket
+      // may send is `auth`: a re-fit while the layout settles used to put a
+      // `resize` on the wire first, and the service closed it as unauthenticated.
+      let sentSize = { cols: 0, rows: 0 };
 
       socket.onopen = () => {
         try {
@@ -192,7 +196,8 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
         } catch {
           /* ignore */
         }
-        socket!.send(JSON.stringify({ type: 'auth', token, cols: term.cols, rows: term.rows }));
+        sentSize = { cols: term.cols, rows: term.rows };
+        socket!.send(JSON.stringify({ type: 'auth', token, ...sentSize }));
       };
 
       socket.onmessage = (event) => {
@@ -206,10 +211,15 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
 
         switch (msg.type) {
           case 'ready':
+            socketRef.current = socket;
             try {
               fitRef.current?.fit();
             } catch {
               /* ignore */
+            }
+            // Any re-fit between `auth` and now was held back; send where it landed.
+            if (term.cols !== sentSize.cols || term.rows !== sentSize.rows) {
+              socket!.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
             }
             inputDisposable?.dispose();
             inputDisposable = term.onData((data) => {

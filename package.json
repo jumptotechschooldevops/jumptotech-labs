@@ -11,7 +11,8 @@
   "workspaces": [
     "apps/*",
     "services/*",
-    "test-support"
+    "test-support",
+    "e2e"
   ],
   "scripts": {
     "cluster:up": "bash scripts/cluster-up.sh",
@@ -42,7 +43,11 @@
     "test:composition": "vitest run test/composition.test.ts --root apps/api",
     "test:security": "vitest run test/authentication.test.ts test/authorization.test.ts test/auth-security.test.ts test/oidc-ownership-e2e.test.ts test/oidc-flow-hardening.test.ts test/production-oidc-config.test.ts test/terminal-ownership.test.ts test/secret-boundaries.test.ts test/log-redaction.test.ts test/process-environ-api.test.ts test/runtime-transport.test.ts test/database-transport.test.ts test/student-session-limit.test.ts test/check-concurrency.test.ts test/sandbox-write-rate-limit.test.ts test/request-body-errors.test.ts --root apps/api --no-file-parallelism && vitest run test/terminal-ownership.test.ts test/secret-boundaries.test.ts test/protocol.test.ts test/spawn-plan.test.ts test/workspace.test.ts test/workspace-endpoints.test.ts test/output-backpressure.test.ts test/terminal-content-logging.test.ts --root services/terminal && vitest run test/scopes.test.ts test/attach.test.ts test/config-secrets.test.ts test/server.test.ts test/transport.test.ts --root services/sandboxd && vitest run test/identifiers.test.ts test/isolation.test.ts test/network-policy.test.ts test/pod-security.test.ts test/broker-transport.test.ts test/output-flow.test.ts test/container-runtime-boundary.test.ts test/service-http-probe.test.ts test/lab-asset-symlink.test.ts --root services/lab-orchestrator && vitest run test/line-value.test.ts --root services/verifier && vitest run test/secret-policy.test.ts test/redact.test.ts test/redact-configured-secrets.test.ts test/compose-secret-distribution.test.ts test/tls-edge-contract.test.ts test/build-context-secrets.test.ts --root services/observability && vitest run test/no-server-secrets.test.ts test/token-storage.test.tsx --root apps/web",
     "verify:api-image": "bash scripts/verify-api-image-composition.sh",
-    "test:integration:sandboxd": "RUN_INTEGRATION_TESTS=1 vitest run test/sandboxd-integration.test.ts --root services/sandboxd --testTimeout=300000 --hookTimeout=300000"
+    "test:integration:sandboxd": "RUN_INTEGRATION_TESTS=1 vitest run test/sandboxd-integration.test.ts --root services/sandboxd --testTimeout=300000 --hookTimeout=300000",
+    "e2e:up": "bash e2e/stack.sh up",
+    "e2e:down": "bash e2e/stack.sh down",
+    "test:e2e": "bash e2e/stack.sh run",
+    "test:e2e:running": "playwright test --config e2e/playwright.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

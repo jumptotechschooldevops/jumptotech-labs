@@ -339,3 +339,76 @@ human; AWS labs simulated. §7's decisions are all still open.
 **The next step before students**: bring up the production composition on the
 chosen host and run `make beta-validate` there, on the tree that ships. Until
 that run exists, the five-student evidence in §4 belongs to `c8eb2c6`.
+
+---
+
+## 12. Browser E2E evidence — 2026-09-16 (`feat/browser-e2e-beta`)
+
+Added after §11, on `main` at `0f33b1f` (which includes §11's pass). §1–§11 are
+left as dated records. This section does not change the verdict, and does not
+re-run `make beta-validate` (§11.2's gap is still open). Details:
+`docs/development/browser-e2e-private-beta.md`.
+
+§2's and §11.5's "no browser end-to-end" is now partially superseded. A real
+Chromium browser (Playwright, 7 tests: 6 browser, 1 guard) drove the composed
+development stack:
+
+- nginx web bundle;
+- the api in OIDC mode against a **test-only** identity provider;
+- PostgreSQL, terminal and sandboxd;
+- a real Linux sandbox container.
+
+On `0f33b1f` the final clean cycle passed 7/7, and an earlier one failed 2/7
+under heavy host load. After rebasing onto `9a0e22e` (PR #35), a load-24 cycle
+failed 1/7. Its trace showed the cause: the terminal service's 10 s auth grace
+timer closed a socket that had already sent a valid token, because attaching
+took longer than 10 s. Students saw "Connection to the terminal was lost."
+That is fixed on the branch (`0553cf1`, with a regression test), and two
+later clean cycles passed 7/7 at lower load. No run leaked a sandbox.
+
+After main's security audit (PR #36, `fa6f109`) the branch was rebased without
+conflicts; no PR #36 control changed. PR #37's first CI run (`9c86bb0`) failed
+6/7: the web terminal could send `resize` before `auth`, and the terminal
+service correctly closed that socket 4401 as unauthenticated, which left a
+student re-opening a workspace on "Connection to the terminal was lost." The
+trace's WebSocket frames showed the order. Fixed on the branch (`0689589`
+web, `415b547` terminal; the pre-token refusal is unchanged). On `415b547`
+locally: isolation 5/5 repeated, full suite 7/7 twice. The suite has not yet
+passed on a CI runner.
+
+| Tier | Status |
+|---|---|
+| A — real browser + web + API + deterministic dependencies | **PROVEN** (local) |
+| B — real browser + actual sandbox runtime | **PARTIALLY PROVEN** — Linux provider only; stability under heavy load after the fix not yet measured |
+| C — production-host smoke | **NOT PROVEN** |
+
+| Area | Status | Evidence / limit |
+|---|---|---|
+| App loads in a real browser | **PROVEN** (local) | critical path E2E-001 |
+| Browser sign-in (OIDC code flow → HttpOnly cookie) | **PARTIALLY PROVEN** | real API auth path; test-only IdP, `http:`, no real provider |
+| Dashboard, learning path, catalog | **PROVEN** (local) | E2E-003/004 |
+| Launch → real sandbox → real WebSocket terminal | **PARTIALLY PROVEN** | Linux only |
+| Verify grades live sandbox, fail → pass | **PARTIALLY PROVEN** | LINUX-001 requirement types only; negative control fails |
+| Progress persists across reload (PostgreSQL) | **PROVEN** (local) | not across API/DB restart |
+| End lab removes the sandbox | **PROVEN** (local) | container absent in Docker |
+| Two students: session routes, terminal WebSocket, filesystem, verification, progress | **PROVEN** (local, 2 students, Linux) | 6 routes 404; re-pointed token closed 4401; B's Verify 1/5 while A passed; B's progress 0 |
+| Sign-out revokes server-side; forged cookie anonymous | **PROVEN** (local) | |
+| Clear UI on API/terminal failure | **PARTIALLY PROVEN** | injected in the browser; a real api stop showed ~39 s before the error |
+| Test IdP cannot reach production | **PROVEN** (repository) | `browser-e2e-overlay.test.ts` (api refuses under production) + `[guard]` spec |
+| Browser E2E in CI | **NOT PROVEN** | ran once on PR #37: 6/7, handshake race since fixed; not yet passed |
+| Kubernetes / Docker / Terraform / Ansible / CI/CD in a browser | **NOT PROVEN** | not exercised |
+| Reset, second-tab takeover, reload during start | **NOT PROVEN** | not exercised |
+| Production overlay, TLS, `wss://`, Secure cookies, real IdP, host | **NOT PROVEN** | unchanged; §2, §7, §11.5 still apply |
+
+No new release blocker. Two defects fixed on the branch, and two non-blocking
+resilience findings:
+
+- **Fixed:** a slow attach (over 10 s) closed an authenticated terminal socket
+  with a false "No session token received".
+- **Fixed:** the web terminal could send `resize` before `auth`, so the socket
+  was closed 4401 and the terminal stayed "lost" (the PR #37 CI failure).
+- **Non-blocking:** a real API outage shows ~39 s of "Checking your
+  session…" before the error.
+- **Non-blocking:** an API slower than the terminal's 10 s credentials budget
+  still fails the attach. The browser does not auto-retry
+  `CREDENTIALS_UNAVAILABLE`; the student presses Try again.

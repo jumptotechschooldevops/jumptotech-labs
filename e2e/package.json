@@ -1,0 +1,15 @@
+{
+  "name": "@jumptotech/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Real-browser end-to-end tests for JumpToTech Labs (Playwright against the composed stack). Test-only.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
