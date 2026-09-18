@@ -83,3 +83,46 @@ describe('DOCKER-004 — build an image from a Dockerfile', () => {
     expect(await grade(lab)).toEqual(['The image contains the banner the RUN step produced']);
   });
 });
+
+// ------------------------------------------------------------------ NET-022
+
+describe('NET-022 — the recreated container keeps the deployment command', () => {
+  const COMMAND = [
+    'sh',
+    '-c',
+    "sed -i 's/listen       80;/listen       8080;/' /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'",
+  ];
+  const DIAGNOSIS = 'port: 8080\n';
+  const MODEL = 'mapping: 3000 -> 8080\ncarried_by: DNAT\n';
+
+  async function recreated(options: { command?: string[]; config: string }) {
+    const lab = await started('NET-022');
+    await lab.workspace.seed(SESSION, [
+      { path: 'diagnosis.txt', content: DIAGNOSIS },
+      { path: 'model.txt', content: MODEL },
+    ]);
+    await lab.daemon.removeContainer('payments-status');
+    await lab.daemon.runContainer({
+      name: 'payments-status',
+      image: 'nginx:1.27-alpine',
+      detach: true,
+      ...(options.command ? { command: options.command } : {}),
+      ports: [{ containerPort: 8080, hostPort: 3000 }],
+    });
+    lab.daemon.putFile('payments-status', '/etc/nginx/conf.d/default.conf', options.config);
+    return lab;
+  }
+
+  it('passes the container recreated with the corrected mapping and the same command', async () => {
+    const lab = await recreated({ command: COMMAND, config: 'server {\n    listen       8080;\n}\n' });
+    expect(await grade(lab)).toEqual([]);
+  });
+
+  it('fails the container recreated without the command, whose nginx is back on port 80', async () => {
+    // The mapping now points at 8080, and nothing listens there.
+    const lab = await recreated({ config: 'server {\n    listen       80;\n}\n' });
+    expect(await grade(lab)).toEqual([
+      'The recreated container still configures the application the way the deployment did',
+    ]);
+  });
+});
