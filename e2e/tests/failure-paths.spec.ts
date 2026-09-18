@@ -65,7 +65,21 @@ test('anonymous and forged sessions get nothing; sign-out revokes the cookie ser
     const cookie = (await context.cookies()).find((c) => c.name === 'jtt_session');
     expect(cookie).toBeDefined();
 
+    // Sign out also completes the identity provider's single logout: the page
+    // leaves for its end-session endpoint and is redirected back to the app.
+    // "Sign in" shows before that round trip starts, so waiting only for it let
+    // the `goto` below race the redirect ("interrupted by another navigation").
+    // Wait for the return itself — which also proves single logout happened.
+    const appOrigin = new URL(process.env.E2E_BASE_URL!).origin;
+    const backFromProvider = page.waitForResponse(
+      (response) =>
+        response.request().isNavigationRequest() &&
+        new URL(response.url()).origin === appOrigin &&
+        (response.request().redirectedFrom()?.url().includes('/end-session') ?? false),
+    );
     await page.getByRole('button', { name: 'Sign out' }).click();
+    await backFromProvider;
+    await page.waitForLoadState('load');
     await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
 
     // Put the pre-sign-out value back: the server must have destroyed it.
