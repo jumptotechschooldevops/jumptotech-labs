@@ -580,3 +580,44 @@ re-run on a quiet machine. `make beta-validate` was not re-run.
 
 **Verdict unchanged in kind:** software ready for a real-host deployment test;
 **not ready for student access** until §13.2 is done on a host.
+
+## 16. Private-beta engineering pass — 2026-09-18
+
+Added on `feat/private-beta-launch-readiness` after PR #39 merged (`origin/main`
+`aadce77`). §1–§15 are left as recorded. Details:
+[private-beta-engineering-2026-09-18.md](../development/private-beta-engineering-2026-09-18.md).
+
+**No production host, DNS name, public certificate, identity provider, alert
+receiver, heartbeat service or off-host backup was exercised.** Nothing here
+changes §13.2 in kind; it adds one open row (the heartbeat, below).
+
+### 16.1 What changed
+
+| Change | Classification |
+|---|---|
+| Terminal: overlapping attaches for one session leave exactly one shell; an attach in flight when the lab ends opens none; credential files per attach | **PROVEN BY AUTOMATED TEST** (real terminal + API + sandboxd, gated) |
+| Reset input fix: four more regression cases (disconnected, repeated Reset, sign-out, replaced session) | **PROVEN BY AUTOMATED TEST** |
+| Five signed-in students, three cycles of simultaneous Start/Verify/Reset/End, a sixth refused and later admitted, cross-student 404s | **LOCAL SOFTWARE EVIDENCE** (real API and OIDC, fake runtime) — **not** capacity evidence |
+| A browser sign-in that fails lands on the sign-in screen with a reason; a provider-refused account is told the beta is invitation-only | **PROVEN BY AUTOMATED TEST** (API, web) and **PROVEN LOCALLY ONLY** in the browser |
+| Log rotation on every production service; config check `durability.log-rotation`; preflight daemon default | **PROVEN BY AUTOMATED TEST**; on a host **REQUIRES REAL PRODUCTION HOST** |
+| Grafana admin password gate | **PROVEN BY AUTOMATED TEST** |
+| Backup hook time limit; lock liveness without procps | **PROVEN BY AUTOMATED TEST** (Linux) |
+| Watchdog → heartbeat receiver (dead man's switch seam), smoke/preflight checks, RB-20 | seam **PROVEN BY AUTOMATED TEST**; the service **REQUIRES EXTERNAL CONFIGURATION** (D6/D12) |
+| `make production-evidence-status`; the five-student report records its commit; preflight memory arithmetic, swap, kind node restart policy | **PROCEDURE READY** |
+
+### 16.2 Before five students receive access — one row added to §13.2
+
+| Item | Status |
+|---|---|
+| An external heartbeat service receives the Watchdog from this host, and a person is told when it stops | **REQUIRES EXTERNAL DECISION** (D6/D12) |
+
+Every other row of §13.2 is still open.
+
+### 16.3 Local validation (not CI, not a host)
+
+See the report §3. `make beta-validate` was **not** re-run. The browser suite
+was run once and starved at load 20–23 after its first five tests (the new
+refusal test passed); it was not re-run on a quiet machine.
+
+**Verdict unchanged in kind:** software ready for a real-host deployment test;
+**not ready for student access** until §13.2 (and §16.2) are done on a host.

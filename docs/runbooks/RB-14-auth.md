@@ -18,6 +18,11 @@ Callback outcomes: `verification_failed` (code exchange, ID-token signature,
 audience, nonce), `state_mismatch` and `no_transaction` (the browser round trip,
 often a cookie blocked or `OIDC_REDIRECT_URI` wrong), `provider_refused` (the
 user cancelled, or the provider refused), `no_code`, `not_configured`.
+While the beta is restricted at the identity provider (D3), `provider_refused`
+alone is usually an account that was not invited — or an invited student using
+another account — trying again: the student is shown "This beta is open only
+to invited students" (authentication.md §3.2), and nobody else is affected.
+Check whether the other outcomes rose with it before treating it as an outage.
 `JwksFetchFailing` now counts 3 failed key retrievals in 30 minutes.
 **Blast radius:** nobody can sign in. Existing browser sessions keep working
 until they expire (`AUTH_SESSION_TTL_SECONDS`, default 12h), so this often

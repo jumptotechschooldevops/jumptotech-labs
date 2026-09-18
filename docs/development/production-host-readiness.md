@@ -769,6 +769,7 @@ Nothing below is done.
 - [ ] **D5** Certificate issued by the chosen CA; renewal scheduled.
 - [ ] **Firewall** Provider firewall / `DOCKER-USER` admits only 80, 443 and operator SSH; a scan from another network confirms it.
 - [ ] **D6** Alert destination installed; the §12.1 drill received by a named person.
+- [ ] **D6/D12** Heartbeat destination (`heartbeat-url`) installed; the check-in service shows this host arriving every few minutes ([RB-20](../runbooks/RB-20-watchdog.md)).
 - [ ] **D7** Off-host, encrypted backup copy configured; one restore from that copy validated.
 - [ ] **D8** Capacity thresholds decided; the §13 measurements judged against them.
 - [ ] **D9/D10** Secret and key recovery location, and operator access, recorded.
@@ -787,3 +788,23 @@ Nothing below is done.
 - [ ] `make private-beta-smoke` — `RESULT: PASS` (which requires `backup.offhost`, i.e. D7).
 - [ ] External `npm run tls:check -- --origin https://<host> --expect-acme` from another network — exit 0.
 - [ ] `make production-evidence-status` at the deployed commit — `RESULT: AUTOMATED EVIDENCE COMPLETE AT THIS COMMIT` (its MANUAL lines still need their people).
+
+## 24. Additions of 2026-09-18
+
+From the [engineering pass](private-beta-engineering-2026-09-18.md). None of it
+ran on a production host; §23 is unchanged in kind, with these additions to
+what a host run now checks and records:
+
+| Addition | Where | Status |
+|---|---|---|
+| Every production service rotates its logs (5 × 20 MB); `durability.log-rotation` | compose overlays, config check | PROVEN BY AUTOMATED TEST (contract, self-test rendering); on a host REQUIRES PRODUCTION HOST |
+| Daemon default log rotation for the kind node and sandboxes (`docker.log-rotation` WARN); §5.2 row; §15 step 1 | preflight | PROCEDURE READY |
+| `host.capacity-memory` (arithmetic, WARN only), `host.swap`, `kind.node-restart-policy` | preflight | PROCEDURE READY — no sizing is claimed |
+| `secrets.grafana-admin` (22 self-test scenarios) | config check | PROVEN BY AUTOMATED TEST |
+| Watchdog → `heartbeat` receiver; smoke `observability.watchdog`, MANUAL `alerts.heartbeat`; preflight `observability.heartbeat(-mode)`; [RB-20](../runbooks/RB-20-watchdog.md) | alert rules, Alertmanager, smoke, preflight | rule and routing PROVEN BY AUTOMATED TEST; the check-in service REQUIRES EXTERNAL DECISION (D6/D12) |
+| `BACKUP_COPY_HOOK_TIMEOUT_SECONDS`; lock liveness without procps | `db-backup.sh` | PROVEN BY AUTOMATED TEST (Linux) |
+| `make production-evidence-status` (§15 step 26, §23.2) | evidence | PROCEDURE READY |
+| The five-student report records its commit | `beta-validate` | PROCEDURE READY |
+
+§23.1 gains one line in substance: **D6/D12** now also means installing
+`heartbeat-url` and seeing this host's check-ins arrive at the chosen service.

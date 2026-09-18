@@ -899,3 +899,22 @@ against its controls.
 
 `npm run test:security`: 800 passed (797 + the three auth cases), locally, not
 CI. No finding in §3's register changes severity.
+
+## 31. Addendum — 2026-09-18 engineering pass
+
+§1–§30 are the audit as recorded. This reviews the changes of
+[private-beta-engineering-2026-09-18.md](private-beta-engineering-2026-09-18.md)
+against its controls.
+
+| Change | Security effect |
+|---|---|
+| Terminal: `latestAttach` per session; a superseded attach kills its shell and closes `SESSION_ENDED` | **Tightens** one-shell-per-session: before, two overlapping attaches (same owner, verified tokens) could both hold a PTY, and an attach in flight when the lab ended registered a shell for an ended session. Ownership is unchanged — every attach still verifies its token and re-resolves its binding from the API with the token's `uid`; nothing a socket sends names a session |
+| Terminal credential files named per attach (`<sid>-<12 hex>.kubeconfig`, `.docker/`) | Same directory, same `0700`/`0600` modes, still removed when the shell ends. The random suffix is not a secret and not an authorisation; it only stops one attach's cleanup deleting another's live credentials. The session id is still re-sanitised before it shapes a path |
+| Auth: a browser whose sign-in fails is redirected to `<PUBLIC_ORIGIN>/?signin=<reason>` | The target is the configured app origin plus one of four fixed words, never a request value: **no open redirect**. The provider's `error`/`error_description` is logged (truncated) and never reflected. The transaction cookie is still cleared, no session is created, and the existing `state`/`nonce`/PKCE checks run exactly as before; only the body of a failure changed. The web reads only the four known words and ignores anything else in `signin` (tested with injected markup). JSON clients get the same statuses and codes as before |
+| `secrets.grafana-admin` | New refusal of a weak or reused Grafana admin password in production. The check prints names only |
+| Log rotation on production services | Bounds disk use; log content and redaction unchanged |
+| `Watchdog` → `heartbeat` receiver | A second notification destination, read from `secrets/heartbeat-url` (git-ignored, `0644` in a `0711` directory, Alertmanager only — the same treatment as `webhook-url`). The payload is Alertmanager's generic webhook JSON for one always-firing alert with no student or host data in its labels. The preflight never prints the URL (tested) |
+| `BACKUP_COPY_HOOK` under `timeout`; lock liveness | No change to what the hook receives or to its checks (absolute path, not world-writable) |
+| `production-evidence-status.sh` | Read-only; reads `.env` only for `JTT_COMMIT`, through the same line parser as the preflight; never sources it |
+
+No finding in §3's register changes severity.

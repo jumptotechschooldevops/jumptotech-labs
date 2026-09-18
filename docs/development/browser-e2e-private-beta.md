@@ -791,3 +791,20 @@ in 6.4 min on a clean stack, 0 containers left. After later web-only commits,
 13/15 and then 0/2 (five-students, isolation) at load 18–20, with the kept
 stack's logs showing PostgreSQL connection timeouts (`db.down`) caused by the
 shared Docker VM, not the change (report §3). Not yet in CI.
+
+## 19. Engineering pass — 2026-09-18
+
+([report](private-beta-engineering-2026-09-18.md)). §1–§18 are left as recorded.
+
+| Change | Why |
+|---|---|
+| **New: an account the identity provider refuses** (`failure-paths.spec.ts`). The test provider refuses usernames starting `not-invited-`, back to `/auth/callback` with `error=access_denied`, as a provider restricted to invited accounts does | That is how the private beta is restricted (D3). The page used to be the API's JSON error; it is now the sign-in screen saying the beta is invitation-only, with no session cookie and the reason removed from the address bar. **Passed** in the browser |
+| The database-down test waits for the failed `/auth/session` re-check (503) and the app's banner instead of a fixed 8 s sleep | the property is "after that answer, still signed in", so the test now waits for that answer |
+
+Result in this pass (isolated project `jtt-e2e-p3`, development machine at load
+20–23): tests 1–5 passed, including the new refusal test; from the api
+re-creation test on, the api went unhealthy after each re-creation (`/health` up
+to 17.8 s; five other worktrees' kind control planes at ~410% of the Docker VM)
+and every later test failed with it. **LOCAL ENVIRONMENT.** The run was
+stopped and its stack removed (0 containers left). Not re-run on a quiet
+machine; not yet in CI.
