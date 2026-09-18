@@ -208,6 +208,39 @@ describe('nginx: the development listener (web.conf) is unchanged', () => {
   });
 });
 
+describe('nginx: the edge access log never records a query string', () => {
+  /*
+   * The stock `main` format logs `$request` (path *and* query) and the Referer.
+   * The OIDC callback is `/auth/callback?code=…&state=…`, so every sign-in put a
+   * live authorization code into `docker logs web`. Both listeners log with
+   * `jtt_edge`, which records the path alone.
+   */
+  const FORBIDDEN = /\$(?:request|request_uri|args|query_string|is_args|http_referer|http_cookie|http_authorization|cookie_\w+|arg_\w+)\b/;
+
+  it.each(['infrastructure/docker/nginx/web.conf', 'infrastructure/docker/nginx/web-tls.conf'])('%s', (file) => {
+    const conf = code(read(file));
+    const format = /log_format\s+jtt_edge\s+((?:'[^']*'\s*)+);/.exec(conf);
+    expect(format, `${file} defines jtt_edge`).not.toBeNull();
+    expect(format![1]).toMatch(/\$uri\b/);
+    expect(format![1]).not.toMatch(FORBIDDEN);
+    expect(conf.match(/log_format/g)).toHaveLength(1);
+
+    const servers = conf.split(/^server \{$/m).slice(1);
+    expect(servers.length).toBeGreaterThan(0);
+    for (const server of servers) {
+      expect(server, `every server in ${file} logs with jtt_edge`).toMatch(
+        /^\s{4}access_log \/var\/log\/nginx\/access\.log jtt_edge;$/m,
+      );
+    }
+    // Nothing else may switch a location back to another format.
+    expect(conf.match(/access_log/g)).toHaveLength(servers.length);
+  });
+
+  it('adds no access_log to the shared locations, where it would override the servers', () => {
+    expect(code(read('infrastructure/docker/nginx/locations.conf'))).not.toMatch(/access_log|log_format/);
+  });
+});
+
 describe('the web image (web.Dockerfile)', () => {
   const dockerfile = code(read('infrastructure/docker/web.Dockerfile'));
 
