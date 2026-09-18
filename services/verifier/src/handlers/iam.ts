@@ -14,11 +14,13 @@
 import { fail, missingPath, pass, type HandlerOutcome, type SandboxVerifierHandler } from '../contract.js';
 import type { SandboxReader } from '../sandbox-reader.js';
 import {
+  IamConditionUnsupportedError,
   IamPolicyParseError,
   evaluateIamPolicy,
   findStatements,
   parseIamPolicy,
   wildcardStatements,
+  type IamDecision,
   type IamPolicy,
 } from '../iam-policy.js';
 
@@ -150,6 +152,34 @@ export const iamPolicyStatement: SandboxVerifierHandler<'iam_policy_statement'> 
   },
 };
 
+/**
+ * Evaluate the request a check describes, with its context when it has one.
+ *
+ * A condition operator the evaluator does not implement is reported as such
+ * rather than guessed at in either direction.
+ */
+function decide(
+  policy: IamPolicy,
+  requirement: { action: string; resource: string; context?: Record<string, string> },
+): IamDecision | 'unsupported' {
+  try {
+    return evaluateIamPolicy(policy, {
+      action: requirement.action,
+      resource: requirement.resource,
+      ...(requirement.context !== undefined ? { context: requirement.context } : {}),
+    });
+  } catch (error) {
+    if (error instanceof IamConditionUnsupportedError) return 'unsupported';
+    throw error;
+  }
+}
+
+function unsupported(path: string): HandlerOutcome {
+  return fail(
+    `'${path}' uses a Condition operator this check cannot evaluate; the IAM labs need only the String, Arn, Bool, Null, Numeric and IpAddress operators`,
+  );
+}
+
 export const iamPolicyAllows: SandboxVerifierHandler<'iam_policy_allows'> = {
   type: 'iam_policy_allows',
   label: (r) => `${r.path} permits ${r.action} on ${r.resource}`,
@@ -157,10 +187,8 @@ export const iamPolicyAllows: SandboxVerifierHandler<'iam_policy_allows'> = {
     const result = await readPolicy(reader, requirement.path);
     if ('outcome' in result) return result.outcome;
 
-    const decision = evaluateIamPolicy(result.policy, {
-      action: requirement.action,
-      resource: requirement.resource,
-    });
+    const decision = decide(result.policy, requirement);
+    if (decision === 'unsupported') return unsupported(requirement.path);
     if (decision === 'allow') return pass();
     return fail(
       decision === 'explicitDeny'
@@ -177,10 +205,8 @@ export const iamPolicyNotAllows: SandboxVerifierHandler<'iam_policy_not_allows'>
     const result = await readPolicy(reader, requirement.path);
     if ('outcome' in result) return result.outcome;
 
-    const decision = evaluateIamPolicy(result.policy, {
-      action: requirement.action,
-      resource: requirement.resource,
-    });
+    const decision = decide(result.policy, requirement);
+    if (decision === 'unsupported') return unsupported(requirement.path);
     if (decision !== 'allow') return pass();
     return fail(`'${requirement.path}' permits ${requirement.action} on that resource`);
   },
