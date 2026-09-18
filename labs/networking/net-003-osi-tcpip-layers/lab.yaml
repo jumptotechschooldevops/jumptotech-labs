@@ -149,66 +149,69 @@ requirements:
     label: The ledger API was actually contacted
 
   # --- the diagnosis --------------------------------------------------------
-  - type: file_content
+  #
+  # Each answer is graded as a whole line, given once: `refused_layer = L4 L3`
+  # and a second `refused_layer =` line are both a hedge, and fail, however
+  # the right value is placed among them.
+  - type: file_key_value
     path: /home/student/triage/triage.txt
-    contains: "refused_layer = L4"
+    key: refused_layer
+    equals: L4
     label: The refused connection is attributed to the correct layer
-  - type: file_content
+  - type: file_key_value
     path: /home/student/triage/triage.txt
-    contains: "unreachable_layer = L3"
+    key: unreachable_layer
+    equals: L3
     label: The unreachable network is attributed to the correct layer
-  - type: file_content
+  - type: file_key_value
     path: /home/student/triage/triage.txt
-    contains: "resolution_layer = L7"
+    key: resolution_layer
+    equals: L7
     label: The failed name lookup is attributed to the correct layer
-  - type: file_content
+  - type: file_key_value
     path: /home/student/triage/triage.txt
-    contains: "app_503_layer = L7"
+    key: app_503_layer
+    equals: L7
     label: The ledger API's refusal is attributed to the correct layer
-  - type: file_content
+  - type: file_key_value
     path: /home/student/triage/triage.txt
-    contains: "not_a_network_problem = app_503"
+    key: not_a_network_problem
+    equals: app_503
     label: The one failure that is not a network problem was identified
 
-  # --- one answer per line --------------------------------------------------
-  #
-  # Each check below names the same line with a *wrong* value on it. Listing
-  # every layer against a symptom would satisfy the checks above by accident;
-  # these make that fail, so the lab grades a diagnosis rather than a hedge.
-  - type: file_content_absent
-    path: /home/student/triage/triage.txt
-    contains: "refused_layer = L3"
-    label: The refused connection was diagnosed once, not hedged
-  - type: file_content_absent
-    path: /home/student/triage/triage.txt
-    contains: "unreachable_layer = L4"
-    label: The unreachable network was diagnosed once, not hedged
-  - type: file_content_absent
-    path: /home/student/triage/triage.txt
-    contains: "resolution_layer = L3"
-    label: The failed lookup was diagnosed once, not hedged
-  - type: file_content_absent
-    path: /home/student/triage/triage.txt
-    contains: "app_503_layer = L4"
-    label: The application refusal was diagnosed once, not hedged
-
   # --- the two models -------------------------------------------------------
-  - type: file_content
+  - type: file_key_value
     path: /home/student/triage/model.txt
-    contains: "L4_rfc1122_name = transport"
+    key: L4_rfc1122_name
+    equals: transport
     label: OSI layer 4 is mapped to the correct RFC 1122 name
-  - type: file_content
+  - type: file_key_value
     path: /home/student/triage/model.txt
-    contains: "L3_rfc1122_name = internet"
+    key: L3_rfc1122_name
+    equals: internet
     label: OSI layer 3 is mapped to the correct RFC 1122 name
-  - type: file_content_absent
+  # Every position is graded: checking one of the four let a student fill in
+  # a single line and leave the rest of the order blank.
+  - type: file_key_value
     path: /home/student/triage/model.txt
-    contains: "L3_rfc1122_name = link"
-    label: OSI layer 3 was not mapped to the wrong RFC 1122 name
-  - type: file_content
+    key: "1"
+    equals: request
+    label: Encapsulation position 1 is correct
+  - type: file_key_value
     path: /home/student/triage/model.txt
-    contains: "3 = packet"
-    label: Encapsulation was ordered correctly
+    key: "2"
+    equals: segment
+    label: Encapsulation position 2 is correct
+  - type: file_key_value
+    path: /home/student/triage/model.txt
+    key: "3"
+    equals: packet
+    label: Encapsulation position 3 is correct
+  - type: file_key_value
+    path: /home/student/triage/model.txt
+    key: "4"
+    equals: frame
+    label: Encapsulation position 4 is correct
 
 hints:
   - level: 1
