@@ -304,7 +304,7 @@ describe('NET-002 fails one wrong value at a time', () => {
     const failed = failures(result.checks);
 
     expect(failed).toHaveLength(1);
-    expect(failed[0]?.label).toBe('172.32.5.1 is outside the reserved 172.16.0.0/12 block');
+    expect(failed[0]?.label).toBe('The second address in classify.txt is classified correctly');
   });
 
   it('rejects a link-local address filed as private', async () => {
@@ -403,7 +403,22 @@ describe('NET-002 handles malformed and missing work honestly', () => {
     const result = await verifyLab({ lab, sandbox, namespace: NAMESPACE });
 
     expect(result.passed).toBe(false);
-    expect(failures(result.checks)).toHaveLength(4);
+    // Every one of the six classifications, and nothing else.
+    expect(failures(result.checks)).toHaveLength(6);
+  });
+
+  it('rejects one line per allowed value for an address', async () => {
+    const lab = await loadLabDefinition(NET_002);
+    const everyValue = ['private', 'public', 'loopback', 'link-local'].map((v) => `8.8.8.8 = ${v}`).join('\n');
+    const sandbox = solvedSandbox().put('/home/student/subnets/classify.txt', {
+      type: 'file',
+      content: SOLVED_CLASSIFY.replace('8.8.8.8 = public\n', `${everyValue}\n`),
+    });
+
+    const result = await verifyLab({ lab, sandbox, namespace: NAMESPACE });
+    expect(failures(result.checks).map((c) => c.label)).toEqual([
+      'The sixth address in classify.txt is classified correctly',
+    ]);
   });
 });
 
