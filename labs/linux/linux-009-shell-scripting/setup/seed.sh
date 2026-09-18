@@ -28,6 +28,22 @@ TXT
 
 chmod 0644 /srv/jumptotech/app/healthy.status /srv/jumptotech/app/degraded.status
 
+# Two more status files the task does not name. The script is graded on these
+# as well, so one that decides by *file name* (`case $1 in *healthy*`) rather
+# than by reading the file fails, as it would on a real host.
+install -d -o root -g root -m 0755 /srv/jumptotech/checks
+cat > /srv/jumptotech/checks/payments.status <<'TXT'
+service: payments
+state: healthy
+checked: 2026-08-16T06:05:00+00:00
+TXT
+cat > /srv/jumptotech/checks/reports.status <<'TXT'
+service: reports
+state: failing
+checked: 2026-08-16T06:05:00+00:00
+TXT
+chmod 0644 /srv/jumptotech/checks/payments.status /srv/jumptotech/checks/reports.status
+
 # /srv/jumptotech/app/missing.status is deliberately absent — the third case
 # the script has to handle is a status file that is not there at all.
 rm -f /srv/jumptotech/app/missing.status
