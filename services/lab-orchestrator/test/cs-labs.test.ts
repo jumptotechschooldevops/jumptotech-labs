@@ -152,6 +152,12 @@ describe('the CS track loads', () => {
       'script_executable',
       'script_runs',
       'command_output',
+      // Adopted afterwards, deliberately, to grade the findings sheets once per
+      // answer (2026-09, lab-quality pass): general filesystem checks every
+      // provider that reads files can use, not vocabulary made for this track.
+      'file_key_value',
+      'file_contains',
+      'yaml_valid',
     ]);
 
     for (const lab of await csLabs()) {
