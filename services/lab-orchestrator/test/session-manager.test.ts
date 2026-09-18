@@ -386,6 +386,16 @@ describe('failed provisioning', () => {
     expect(await failing.manager.activeCount()).toBe(0);
   });
 
+  it('after one failed provision, the next Start asks the substrate again instead of failing the same way', async () => {
+    expect((await failing.manager.providers.status('kubernetes')).available).toBe(true);
+    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
+
+    await expect(failing.manager.start('K8S-001')).rejects.toMatchObject({ code: 'SESSION_PROVISION_FAILED' });
+    // Within the same 30 s: no second failed provision, a clear refusal.
+    await expect(failing.manager.start('K8S-002')).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+    expect((await failing.manager.list()).filter((s) => s.status === 'FAILED')).toHaveLength(1);
+  });
+
   it('does not refuse on a stale "down": a substrate that just came back is asked again', async () => {
     failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
     expect((await failing.manager.providers.status('kubernetes')).available).toBe(false);

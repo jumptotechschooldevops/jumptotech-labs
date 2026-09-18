@@ -73,7 +73,7 @@ load average was 8–22 throughout because other stacks were running.
 | PostgreSQL stopped | `ops status`: database NOT READABLE, new labs NO; `/readyz` 503; students get 503 `AUTH_UNAVAILABLE` (sign-ins live in the database); the running sandbox kept running |
 | PostgreSQL started again | `/readyz` 200 with **no** api restart; the next start succeeded |
 | Terminal restarted under a live shell | the shell closed (1006) in 2 s; a new connection to the same session worked once healthy; the sandbox was untouched; the typed marker appeared in no service log |
-| sandboxd stopped | the open shell ended cleanly (exit frame, 1000); `ops status` NO, "no enabled sandbox provider"; Start `SESSION_PROVISION_FAILED` before fix 7, `PROVIDER_UNAVAILABLE` after; after restart the session's terminal reconnected |
+| sandboxd stopped | the open shell ended cleanly (exit frame, 1000); `ops status` NO, "no enabled sandbox provider"; before fix 7 every Start was `SESSION_PROVISION_FAILED` with "npm run sandbox:build"; after it (re-verified on the final code) the first Start inside the probe's 30 s window still fails as a provision, and the next is `PROVIDER_UNAVAILABLE` "This lab's environment cannot be created right now"; after restart the session's terminal reconnected |
 | Idle student | reclaimed at 20 minutes: `EXPIRED` "idle for more than 1200s", container gone, slot free |
 | Stop-launches switch | Start 503 `LAB_LAUNCHES_PAUSED`; Reset and the live terminal kept working; gauge 1; no start outcome counted; lifted with `up -d api` |
 | `docker stop` per service | sandboxd: exit 0, `process.stopping`. api: exit 143, no shutdown (fix 6), then exit 0. terminal: exit 1 with `kill EPERM` (§4) |

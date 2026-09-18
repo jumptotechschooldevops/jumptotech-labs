@@ -709,6 +709,11 @@ export class SessionManager {
     context: LabSessionContext,
     reason: string,
   ): Promise<void> {
+    // A failed provision is news about the substrate: forget the memoised
+    // "available", so the next Start (and the catalog) probes again instead of
+    // walking into the same failure for the rest of the 30 s.
+    this.#providers.invalidate(session.provider);
+
     /*
      * Best-effort teardown so a failed start does not leak a sandbox.
      *
