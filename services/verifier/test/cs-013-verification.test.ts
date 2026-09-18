@@ -130,6 +130,7 @@ function solved({
 }: World = {}): FakeWorld {
   const files: FakeWorld['files'] = {};
   if (source !== undefined) files[PROGRAM] = { content: source, mode };
+  if (writeup !== undefined) files[WRITEUP] = { content: writeup, mode: '644' };
   return { files, scripts, commands };
 }
 
@@ -171,6 +172,20 @@ describe('CS-013 when the counters are actually measured', () => {
 
     const result = await verify(solved({ scripts: bigHost }));
     expect(result.passed).toBe(true);
+  });
+});
+
+describe('CS-013 grades the reasoning, not the spelling', () => {
+  it('accepts the words from the task in any case', async () => {
+    // "GIL" is how the lock is usually written; the lab lists `gil` among the
+    // allowed values, and the case of an acronym is not the lesson.
+    const shouted = WRITTEN_UP.replace('=gil', '=GIL').replace('POOL_SIZE_SHOULD_FOLLOW=quota', 'POOL_SIZE_SHOULD_FOLLOW=Quota');
+    expect((await verify(solved({ writeup: shouted }))).passed).toBe(true);
+  });
+
+  it('still fails both reasons given together', async () => {
+    const hedged = WRITTEN_UP.replace('WHY_THREADS_DONT_HELP_CPU=gil', 'WHY_THREADS_DONT_HELP_CPU=gil quota');
+    expect((await verify(solved({ writeup: hedged }))).passed).toBe(false);
   });
 });
 
@@ -402,7 +417,7 @@ describe('CS-013 grading hygiene', () => {
     const sandbox = new FakeSandbox(solved());
     await verifyLab({ lab: await lab(), sandbox, namespace: SANDBOX });
 
-    expect(new Set(sandbox.reads)).toEqual(new Set([PROGRAM]));
+    expect(new Set(sandbox.reads)).toEqual(new Set([PROGRAM, WRITEUP]));
     for (const inspection of sandbox.inspections) {
       expect(inspection).toContain('/home/student/');
     }

@@ -151,7 +151,8 @@ task:
 
 
     `VERDICT` is `over` if the reported 640M exceeds the limit, and `within` if
-    it does not. Line order does not matter and extra lines are ignored.
+    it does not. Line order does not matter and extra lines are ignored, but each key is
+    answered once, on a line that holds only its value.
 
 setup:
   seed_scripts:
@@ -222,25 +223,30 @@ requirements:
   - type: file_exists
     path: /home/student/ops/units.txt
     label: The findings file exists
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/units.txt
-    contains: "LIMIT_BYTES=536870912"
+    key: LIMIT_BYTES
+    equals: "536870912"
     label: The findings record the limit as a decimal byte count
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/units.txt
-    contains: "TAG_HEX=4d69"
+    key: TAG_HEX
+    equals: 4d69
     label: The findings record the hexadecimal spelling of the two bytes
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/units.txt
-    contains: "SI=537M"
+    key: SI
+    equals: 537M
     label: The findings record the limit in SI units
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/units.txt
-    contains: "IEC=512M"
+    key: IEC
+    equals: 512M
     label: The findings record the same limit in IEC units
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/units.txt
-    contains: "VERDICT=over"
+    key: VERDICT
+    equals: over
     label: The findings settle whether the pod was over its limit
 
 hints:

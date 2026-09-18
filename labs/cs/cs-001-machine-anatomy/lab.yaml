@@ -132,7 +132,9 @@ task:
     run it, and `healthy` if it did not.
 
 
-    Line order does not matter and extra lines are ignored. The report is graded
+    Line order does not matter and extra lines are ignored, so put any notes on
+    lines of their own: a `KEY=` line holds the value and nothing else, and each
+    key is answered once. The report is graded
     on the values, never on how you arrived at them — every one of these can be
     reached with a pocket calculator or with a command, and both are correct.
 
@@ -176,37 +178,45 @@ requirements:
   - type: file_exists
     path: /home/student/ops/machine.txt
     label: The sizing report exists
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/machine.txt
-    contains: "HOSTNAME=jumptotech-lab"
+    key: HOSTNAME
+    equals: jumptotech-lab
     label: The report names the machine it was written on
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/machine.txt
-    contains: "MEMINFO_SCOPE=host"
+    key: MEMINFO_SCOPE
+    equals: host
     label: The report says which machine /proc/meminfo is describing
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/machine.txt
-    contains: "SCAN01_CPUS=8"
+    key: SCAN01_CPUS
+    equals: "8"
     label: The report records how many logical processors scan-01 had
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/machine.txt
-    contains: "SCAN01_MEM_MIB=15885"
+    key: SCAN01_MEM_MIB
+    equals: "15885"
     label: The report records scan-01's memory in MiB
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/machine.txt
-    contains: "SCAN01_MEM_MB=16656"
+    key: SCAN01_MEM_MB
+    equals: "16656"
     label: The report records the same memory in MB
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/machine.txt
-    contains: "SCAN01_LOAD_PER_CPU=3"
+    key: SCAN01_LOAD_PER_CPU
+    equals: "3"
     label: The report records scan-01's load per processor
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/machine.txt
-    contains: "SCAN01_FULL_MOUNT=/var"
+    key: SCAN01_FULL_MOUNT
+    equals: /var
     label: The report identifies the filesystem that had run out of space
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/machine.txt
-    contains: "VERDICT=saturated"
+    key: VERDICT
+    equals: saturated
     label: The report reaches a verdict on whether scan-01 was saturated
 
 hints:
