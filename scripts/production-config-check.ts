@@ -61,6 +61,7 @@ import {
 import { loadConfig, loadNetworkPolicyConfig } from '../apps/api/src/config.js';
 import { loadSandboxdConfig } from '../services/sandboxd/src/config.js';
 import { loadTerminalConfig } from '../services/terminal/src/config.js';
+import { secretWeakness } from '../services/observability/src/secret-policy.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distribution = JSON.parse(readFileSync(path.join(repoRoot, 'infrastructure/secret-distribution.json'), 'utf8')) as {
@@ -141,6 +142,33 @@ function apiEnvironment(config: ResolvedCompose): NodeJS.ProcessEnv {
   );
 }
 
+/**
+ * Grafana's admin password reaches no loader: compose only requires it to be
+ * non-empty, so `admin` or a value copied from another secret would start. It
+ * guards the operator dashboard, whose login page the other containers on the
+ * default network can reach. Judged with the platform's own secret policy.
+ */
+function evaluateGrafanaAdmin(config: ResolvedCompose): CheckResult {
+  const env = (service: string) => config.services?.[service]?.environment ?? {};
+  const password = env('grafana').GF_SECURITY_ADMIN_PASSWORD;
+  const value = password === null || password === undefined ? undefined : String(password);
+  const weakness = secretWeakness(value);
+  if (weakness) {
+    const why = { missing: 'is not set', placeholder: 'is a placeholder value', 'too-short': 'is shorter than 32 characters', 'low-entropy': 'has too little variety' }[weakness];
+    return { id: 'secrets.grafana-admin', status: 'FAIL', detail: `GRAFANA_ADMIN_PASSWORD ${why}: make secrets generates one` };
+  }
+  const others = ['api', 'terminal', 'sandboxd', 'postgres'].flatMap((service) =>
+    Object.entries(env(service))
+      .filter(([name, v]) => SECRET_NAMES.includes(name) && name !== 'GRAFANA_ADMIN_PASSWORD' && v !== null && v !== undefined)
+      .map(([name, v]) => [name, String(v)] as const),
+  );
+  const reused = [...new Set(others.filter(([, v]) => v === value).map(([name]) => name))];
+  if (reused.length) {
+    return { id: 'secrets.grafana-admin', status: 'FAIL', detail: `GRAFANA_ADMIN_PASSWORD is the same value as ${reused.join(', ')}` };
+  }
+  return { id: 'secrets.grafana-admin', status: 'PASS', detail: 'GRAFANA_ADMIN_PASSWORD is a generated-strength secret used nowhere else' };
+}
+
 /** Every check for one resolved configuration. */
 function evaluate(config: ResolvedCompose, dockerSocketGid: number | undefined): CheckResult[] {
   const results = [
@@ -149,6 +177,7 @@ function evaluate(config: ResolvedCompose, dockerSocketGid: number | undefined):
       ...(dockerSocketGid !== undefined ? { hostDockerSocketGid: dockerSocketGid } : {}),
     }),
     ...evaluateServiceLoaders(config, LOADERS, SECRET_NAMES),
+    evaluateGrafanaAdmin(config),
   ];
   try {
     const digest = networkPolicyContractDigest(loadNetworkPolicyConfig(apiEnvironment(config)));
@@ -232,6 +261,12 @@ function scenarios(base: Record<string, string>): Scenario[] {
       expectFail: ['loader.api', 'loader.terminal'],
     },
     { name: 'a weak broker secret is refused', change: { SANDBOXD_ATTACH_SECRET: 'short' }, expectFail: ['loader.terminal', 'loader.sandboxd'] },
+    { name: 'a guessable Grafana admin password is refused', change: { GRAFANA_ADMIN_PASSWORD: 'admin' }, expectFail: ['secrets.grafana-admin'] },
+    {
+      name: 'a Grafana admin password copied from the database password is refused',
+      change: { GRAFANA_ADMIN_PASSWORD: base.POSTGRES_PASSWORD! },
+      expectFail: ['secrets.grafana-admin'],
+    },
     { name: 'a missing runtime owner is refused by compose', change: { RUNTIME_OWNER_ID: null }, expectFail: ['compose'] },
     { name: 'a Docker socket group mismatch is refused', change: { DOCKER_SOCKET_GID: null }, dockerSocketGid: 998, expectFail: ['runtime.docker-socket-gid'] },
     {

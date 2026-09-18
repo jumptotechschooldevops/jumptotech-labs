@@ -87,7 +87,7 @@ D2, not a default.
 | Backup → destroy → restore → identical fingerprint | PROVEN IN CI | `make db-restore-drill` |
 | NetworkPolicy enforcement, negative controls | PROVEN IN CI on kind, one node | `kind-integration` |
 | Rules, alerts, Alertmanager config, dashboards | PROVEN IN CI | `scripts/check-observability.sh`, promtool tests |
-| Production config gates fail closed against the real files and loaders (20 scenarios) | PROVEN IN CI (`gates` on PR #38 at `5d486ef`, base `fa6f109`) and PROVEN LOCALLY at base `c00ec48` | `npm run production:config-check -- --self-test` |
+| Production config gates fail closed against the real files and loaders (20 scenarios at PR #38; 22 with the Grafana admin password gate, §24) | PROVEN IN CI (`gates` on PR #38 at `5d486ef`, base `fa6f109`) and PROVEN LOCALLY at base `c00ec48` | `npm run production:config-check -- --self-test` |
 | Preflight, smoke and sampler decisions; no secret printed; only read-only docker/kubectl verbs; a hung daemon ends as a FAIL | PROVEN LOCALLY on macOS bash 3.2 and in a Linux container (bash 5.2, GNU coreutils) | `bash scripts/test-production-host-scripts.sh` |
 | Scrape token readable by Prometheus under Linux ownership | PROVEN LOCALLY with the real image | §18.1 |
 
@@ -193,6 +193,7 @@ swap or the OOM killer. Above it proves nothing; §13 does.
 | `durability.restart-policy` | every service exactly `restart: unless-stopped` (PR #34); `always` is a FAIL because it would undo `prod stop web` |
 | `durability.log-rotation` | every service logs through `json-file` with a `max-size` (or `local`): at most five 20 MB files each. Docker's default keeps a container's output forever |
 | `backup.status-dir` | absolute host directory, read-only in the api; WARN on the in-checkout default |
+| `secrets.grafana-admin` | `GRAFANA_ADMIN_PASSWORD` passes the platform's secret policy (32+ characters, no placeholder, enough variety) and is not the value of any other platform secret. No loader reads it — compose only required it to be non-empty, so `admin` would have started |
 | `loader.api/terminal/sandboxd` | the real loaders accept the resolved environment (secrets present, strong, distinct; https OIDC; Secure cookie; https CORS including the origin; broker/database transport; runtime owner) |
 | `attestation.expected-digest` | INFO: the NetworkPolicy contract digest the api will demand |
 
