@@ -17,7 +17,12 @@
  *
  * WHAT IT IS NOT
  *
- * It authenticates nobody: any well-formed username is accepted. That is only
+ * It authenticates nobody: any well-formed username is accepted — except one
+ * starting `not-invited-`, which it refuses the way a provider restricted to the
+ * beta's invited accounts does (user assignment required): back to the client
+ * with `error=access_denied`. That is how the private beta is restricted (D3),
+ * so the browser suite needs an account that is turned away. Accepting anyone
+ * else is only
  * acceptable because it is never part of a shipped stack — it lives under e2e/,
  * is started only by e2e/docker-compose.e2e.yml, publishes on loopback only,
  * and refuses to start with NODE_ENV=production. The API independently refuses
@@ -228,6 +233,16 @@ const server = createServer(async (req, res) => {
 
       const username = (form.get('username') ?? '').trim();
       if (!USERNAME.test(username)) return sendError(res, 400, 'Invalid username.');
+
+      if (username.startsWith('not-invited-')) {
+        const refused = new URL(REDIRECT_URI);
+        refused.searchParams.set('error', 'access_denied');
+        refused.searchParams.set('error_description', 'The user is not assigned to this application.');
+        refused.searchParams.set('state', pending.state);
+        res.writeHead(302, { location: refused.href, 'cache-control': 'no-store' });
+        res.end();
+        return;
+      }
 
       const code = randomBytes(32).toString('base64url');
       codes.set(code, { ...pending, username, expiresAt: Date.now() + CODE_TTL_MS });

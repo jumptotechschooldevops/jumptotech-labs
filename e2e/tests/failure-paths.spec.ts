@@ -76,6 +76,28 @@ test('anonymous and forged sessions get nothing; sign-out revokes the cookie ser
   });
 });
 
+test('an account the identity provider refuses lands on the sign-in screen, told the beta is invitation-only', async ({ page, context }) => {
+  // How the private beta is restricted (D3): the provider turns a non-invited
+  // account away, back to /auth/callback with error=access_denied. That page
+  // used to be the API's JSON error body.
+  const base = new URL(process.env.E2E_BASE_URL!);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'E2E test identity provider' })).toBeVisible();
+  await page.getByLabel('Username').fill(uniqueStudent('not-invited'));
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  await page.waitForURL((url) => url.origin === base.origin && url.pathname === '/');
+  await expect(page.getByRole('alert')).toContainText('This beta is open only to invited students');
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toHaveCount(0);
+  // The reason is taken out of the address bar, and nothing was signed in.
+  await expect.poll(() => new URL(page.url()).search).toBe('');
+  expect((await context.cookies()).find((c) => c.name === 'jtt_session')).toBeUndefined();
+  expect((await apiGet(context, '/api/sessions')).status()).toBe(401);
+  expect(await page.content()).not.toContain('AUTH_REFUSED');
+});
+
 test('a second lab while one is running is refused clearly (one lab per student)', async ({ page, context }) => {
   const student = uniqueStudent('limit');
   try {
@@ -287,10 +309,14 @@ test('database down while a student is signed in: the sign-in is not thrown away
     });
 
     await test.step('the tab coming back re-checks the sign-in, and the app stays signed in', async () => {
+      // Wait for the re-check itself to come back refused, rather than for a
+      // fixed time: what matters is the app's state after that answer.
+      const recheck = page.waitForResponse((r) => new URL(r.url()).pathname === '/auth/session' && r.status() === 503, { timeout: 60_000 });
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-      await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
-      // The re-check has failed at least once by now; a sign-in screen would have replaced the app.
-      await page.waitForTimeout(8_000);
+      await recheck;
+      // The app has taken that answer in (its banner says so), and it stayed
+      // signed in: a sign-in screen would have replaced it instead.
+      await expect(page.getByText('Cannot reach the labs API right now.')).toBeVisible();
       await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
       await expect(page.getByRole('heading', { name: 'E2E test identity provider' })).toHaveCount(0);
       expect((await context.cookies()).find((c) => c.name === 'jtt_session')?.value).toBe(cookieBefore);
