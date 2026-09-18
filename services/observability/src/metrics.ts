@@ -1026,7 +1026,13 @@ export interface OperationsMetrics {
   networkAttestationVerifiedAt: Gauge;
   networkAttestationMaxAge: Gauge;
   networkAttestationChecks: Counter;
+  operatorActions: Counter;
 }
+
+/** What the api's operator socket can be asked to do. */
+export const OPERATOR_ACTIONS = ['status', 'sessions', 'session', 'end_session'] as const;
+/** How an operator request ended: served, refused (bad input, unknown session), or failed. */
+export const OPERATOR_OUTCOMES = ['ok', 'rejected', 'failed'] as const;
 
 /**
  * Operational facts about the deployment rather than the product — BETA-P0-018.
@@ -1182,6 +1188,25 @@ export function createOperationsMetrics(registry: Registry): OperationsMetrics {
       'result',
       NETWORK_ATTESTATION_RESULTS,
     ),
+
+    /*
+     * Requests served by the api's operator socket (apps/api/src/operator.ts),
+     * by action and outcome. The socket is reachable only through
+     * `docker exec`, so every increment is a person on the host; an
+     * `end_session` here is a student's lab ended by hand.
+     */
+    operatorActions: (() => {
+      const counter = new client.Counter({
+        name: 'jtt_operator_actions_total',
+        help: 'Requests served by the api operator socket, by action and outcome.',
+        labelNames: ['action', 'outcome'],
+        ...common,
+      });
+      for (const action of OPERATOR_ACTIONS) {
+        for (const outcome of OPERATOR_OUTCOMES) counter.inc({ action, outcome }, 0);
+      }
+      return counter;
+    })(),
   };
 }
 

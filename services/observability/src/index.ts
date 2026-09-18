@@ -78,6 +78,8 @@ export {
   TLS_EDGE_CHECKS,
   BACKUP_OPERATIONS,
   NETWORK_ATTESTATION_RESULTS,
+  OPERATOR_ACTIONS,
+  OPERATOR_OUTCOMES,
   createOperationsMetrics,
   type OperationsMetrics,
   createCommonMetrics,

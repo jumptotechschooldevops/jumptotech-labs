@@ -286,8 +286,12 @@ export interface SessionMetricsHooks {
  * So the *text* stays in the log line, where it is useful and bounded by
  * retention, and the *metric* gets one of four values.
  */
+/** The `statusReason` of a session an operator ended. */
+export const OPERATOR_END_REASON = 'ended by operator';
+
 function endReasonFor(done: 'ENDED' | 'EXPIRED', detail: string): string {
   if (done === 'ENDED') return 'student';
+  if (detail === OPERATOR_END_REASON) return 'operator';
   const lowered = detail.toLowerCase();
   if (lowered.includes('idle')) return 'idle';
   if (lowered.includes('lifetime') || lowered.includes('expired')) return 'expired';
@@ -1143,6 +1147,32 @@ export class SessionManager {
   async expire(sessionId: string, reason: string): Promise<TeardownResult> {
     const session = await this.require(sessionId);
     return this.#teardown(session, [...LIVE_STATUSES, 'EXPIRING'], 'EXPIRING', 'EXPIRED', reason);
+  }
+
+  /**
+   * An operator ended the session, from the api's operator socket.
+   *
+   * The same fenced teardown the reaper uses, recorded EXPIRED with the reason
+   * "ended by operator", so the student's page, the metrics and the audit line
+   * all say the platform ended it rather than the student. Nothing is skipped:
+   * the shell is closed, the provider's own session-scoped destroy re-checks
+   * the managed, owner and session labels, and the row stays EXPIRING — holding
+   * its slot — until the sandbox is verifiably gone.
+   *
+   * A session already ENDING is an End its student asked for: it is resumed as
+   * that End (`resumeAbandonedEnd`), never relabelled, exactly as the reaper
+   * does. A finished session is returned as it is.
+   */
+  async endByOperator(sessionId: string): Promise<TeardownResult> {
+    const session = await this.require(sessionId);
+    if (session.status === 'ENDING') return this.resumeAbandonedEnd(session.sessionId);
+    return this.#teardown(
+      session,
+      [...LIVE_STATUSES, 'EXPIRING'],
+      'EXPIRING',
+      'EXPIRED',
+      OPERATOR_END_REASON,
+    );
   }
 
   /**

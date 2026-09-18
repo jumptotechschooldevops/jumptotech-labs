@@ -222,6 +222,11 @@ services:
       LAB_LAUNCHES_PAUSED: ${LAB_LAUNCHES_PAUSED:-false}
       CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-60}
       SESSION_RETENTION_MINUTES: ${SESSION_RETENTION_MINUTES:-15}
+      # The operator socket (apps/api/src/operator.ts): `ops status`, `ops
+      # sessions`, `ops end <id> --yes` in the operations runbook. A Unix socket
+      # in a 0700 directory in this container's own /tmp — on no network, so
+      # reachable only through `docker exec` into this container. Not a secret.
+      OPERATOR_SOCKET_PATH: /tmp/jtt-operator/api.sock
       # --- per-session guardrails ---
       QUOTA_PODS: ${QUOTA_PODS:-15}
       QUOTA_SERVICES: ${QUOTA_SERVICES:-10}

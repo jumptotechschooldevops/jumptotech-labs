@@ -215,6 +215,13 @@ export interface OperationsConfig {
   backupStatusDir: string | undefined;
   /** Host memory, load and filesystem gauges, read from /proc and statfs. */
   hostMetrics: boolean;
+  /**
+   * Where the operator socket listens (`OPERATOR_SOCKET_PATH`), or undefined
+   * for none — `apps/api/src/operator.ts`. Unset by default: a laptop running
+   * several api processes must not have them race for one path. The compose
+   * files set it inside the container's own `/tmp`.
+   */
+  operatorSocketPath?: string | undefined;
 }
 
 export function loadOperationsConfig(env: NodeJS.ProcessEnv, publicOrigin: string | undefined): OperationsConfig {
@@ -240,6 +247,10 @@ export function loadOperationsConfig(env: NodeJS.ProcessEnv, publicOrigin: strin
   if (backupStatusDir && !path.isAbsolute(backupStatusDir)) {
     throw new Error('BACKUP_STATUS_DIR must be an absolute path inside this container.');
   }
+  const operatorSocketPath = env.OPERATOR_SOCKET_PATH?.trim() || undefined;
+  if (operatorSocketPath && !path.isAbsolute(operatorSocketPath)) {
+    throw new Error('OPERATOR_SOCKET_PATH must be an absolute path inside this container.');
+  }
   return {
     edgeProbe: {
       enabled,
@@ -251,6 +262,7 @@ export function loadOperationsConfig(env: NodeJS.ProcessEnv, publicOrigin: strin
     },
     backupStatusDir,
     hostMetrics: boolFromEnv(env, 'HOST_METRICS_ENABLED', true),
+    operatorSocketPath,
   };
 }
 

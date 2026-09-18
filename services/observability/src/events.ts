@@ -122,6 +122,11 @@ export const LOG_EVENTS = [
   'ops.tls_edge.checked',
   'ops.backup_status.unreadable',
   'ops.network_attestation.checked',
+  // The api's operator socket: its listener, and one line per request it serves.
+  'ops.operator_socket.started',
+  'ops.operator_socket.failed',
+  'ops.operator.request',
+  'ops.operator.session_ended',
 ] as const;
 
 export type LogEvent = (typeof LOG_EVENTS)[number];

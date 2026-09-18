@@ -201,6 +201,7 @@ export {
 export * from './session/manifests.js';
 export {
   SessionManager,
+  OPERATOR_END_REASON,
   type ActivityReason,
   type SessionClosedEvent,
   type SessionLifecycleListener,
