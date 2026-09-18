@@ -285,6 +285,35 @@ describe('verifier — Secret checks (test requirement 20)', () => {
     ).toBe(true);
   });
 
+  it('fails K8S-005 when the plaintext literal is left beside the Secret reference', async () => {
+    // Kubernetes accepts both; the lesson is that the literal leaves the
+    // manifest. Only the name is known to the check — no value is read.
+    const leftBehind = new FakeKubernetes({
+      secrets: { [NS]: [{ name: 'payments-api', namespace: NS, type: 'Opaque', keys: ['api-token'] }] },
+      deployments: {
+        [NS]: [
+          deploymentSnapshot({
+            name: 'payments',
+            desiredReplicas: 1,
+            selector: { app: 'payments' },
+            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env' }],
+            containers: [
+              { name: 'api', image: 'nginx:stable', ready: true, restartCount: 0, state: 'running', literalEnvNames: ['PAYMENTS_API_TOKEN'] },
+            ],
+          }),
+        ],
+      },
+    });
+    const result = await runLab(registry.get('K8S-005'), leftBehind);
+    const failing = result.checks.filter((c) => c.status !== 'pass');
+
+    expect(result.passed).toBe(false);
+    expect(failing.map((c) => c.label)).toEqual(['The token is no longer written into the Deployment']);
+    expect(failing[0]?.detail).toBe(
+      "container 'api' still sets PAYMENTS_API_TOKEN to a literal value, which overrides a reference",
+    );
+  });
+
   it('runs the shipped K8S-005 lab end to end', async () => {
     expect((await runLab(registry.get('K8S-005'), withSecret())).passed).toBe(true);
   });

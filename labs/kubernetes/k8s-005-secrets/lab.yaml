@@ -84,6 +84,13 @@ requirements:
     name: payments
     min_available: 1
     label: payments is still running after the change
+  # The lesson is that the plaintext leaves the manifest. A Secret reference
+  # added beside the literal passed before; the literal would still be in
+  # every copy of the Deployment.
+  - type: deployment_env_literal_absent
+    name: payments
+    env: PAYMENTS_API_TOKEN
+    label: The token is no longer written into the Deployment
 
 hints:
   - level: 1
