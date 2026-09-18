@@ -328,7 +328,7 @@ describe('the gates that prove this contract actually run', () => {
 
   it('offers every production-host script as a make target', () => {
     const makefile = read('Makefile');
-    for (const target of ['production-preflight', 'production-config-check', 'private-beta-smoke', 'host-capacity-sample', 'test-production-host']) {
+    for (const target of ['production-preflight', 'production-config-check', 'private-beta-smoke', 'host-capacity-sample', 'production-evidence-status', 'test-production-host']) {
       expect(makefile).toMatch(new RegExp(`^${target}: ## `, 'm'));
     }
     expect(read('package.json')).toContain('"production:config-check": "tsx scripts/production-config-check.ts"');

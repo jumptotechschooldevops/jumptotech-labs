@@ -509,7 +509,16 @@ must PASS, and no student is invited while it stands. Placeholders: `<host>`,
 23. **Off-host backup.** Smoke `backup.offhost` PASS and one restore from the copy — blocked until D7.
 24. **Rehearsal** (§13.2) and capacity acceptance — blocked until D8.
 25. **Recovery drills** (§17), with no students active.
-26. **Evidence.** Fill [production-host-evidence-template.md](../releases/production-host-evidence-template.md) on the host.
+26. **Evidence.** Fill [production-host-evidence-template.md](../releases/production-host-evidence-template.md) on the host,
+    saved in the evidence directory as `production-host-evidence-<date>.md`. Then
+    `make production-evidence-status ARGS="--evidence-dir /srv/jumptotech/evidence"`
+    lists every automated evidence file, whether it concluded PASS, and whether it
+    was produced at the checkout's commit. A file that is absent is `NOT RUN`, one
+    from another commit (or one that names none, like a five-student report from
+    before it recorded its commit) is a FAIL, and what the template records for
+    the person-only items is quoted under `MANUAL CHECK REQUIRED` — never counted.
+    It prints no verdict about students; the template's sign-off row is the
+    operator's.
 
 ## 16. Smoke test procedure
 
@@ -775,3 +784,4 @@ Nothing below is done.
 - [ ] `scripts/db-backup.sh` and `db-restore.sh --verify-only` succeeded; the `--into` restore validated.
 - [ ] `make private-beta-smoke` — `RESULT: PASS` (which requires `backup.offhost`, i.e. D7).
 - [ ] External `npm run tls:check -- --origin https://<host> --expect-acme` from another network — exit 0.
+- [ ] `make production-evidence-status` at the deployed commit — `RESULT: AUTOMATED EVIDENCE COMPLETE AT THIS COMMIT` (its MANUAL lines still need their people).

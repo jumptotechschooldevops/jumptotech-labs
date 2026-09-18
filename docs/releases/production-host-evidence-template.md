@@ -1,7 +1,9 @@
 # Production-host deployment evidence — TEMPLATE
 
 > **This file is a blank form.** Copy it to `/srv/jumptotech/evidence/` on the
-> host for each deployment and fill it there. A copy in the repository with
+> host for each deployment, as `production-host-evidence-<date>.md`, and fill it
+> there. `make production-evidence-status` reads that copy and the evidence files
+> beside it (readiness doc §15 step 26); it never fills a row in. A copy in the repository with
 > results in it would be a claim about a host the repository cannot see.
 >
 > Every result must come from **this host, this deployment**, with the evidence

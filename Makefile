@@ -15,7 +15,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate production-preflight production-config-check private-beta-smoke host-capacity-sample test-production-host typecheck check reset clean
+.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate production-preflight production-config-check private-beta-smoke host-capacity-sample production-evidence-status test-production-host typecheck check reset clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -215,6 +215,9 @@ private-beta-smoke: ## Is the running production stack serving the beta as prove
 
 host-capacity-sample: ## Record host CPU/memory/disk/containers/pods while students work (ARGS="--out-dir DIR --duration 3600")
 	@bash scripts/host-capacity-sample.sh $(ARGS)
+
+production-evidence-status: ## Which first-host evidence exists, passed, and is at this commit? Missing is NOT RUN, never PASS (ARGS="--evidence-dir DIR")
+	@bash scripts/production-evidence-status.sh $(ARGS)
 
 test-production-host: ## Prove the production-host scripts and the production config gates fail closed (no daemon for the scripts)
 	@bash scripts/test-production-host-scripts.sh

@@ -341,7 +341,8 @@ fixture() {
       "$root/repo/infrastructure/docker/nginx/tls" "$root/repo/infrastructure/docker/nginx/acme-webroot" \
       "$root/repo/infrastructure/kind/generated" "$root/docker-root" "$root/backups/postgres" "$root/backups/status" "$root/proc"
     cp "$source_repo/scripts/production-preflight.sh" "$source_repo/scripts/private-beta-smoke.sh" \
-      "$source_repo/scripts/host-capacity-sample.sh" "$source_repo/scripts/production-host-lib.sh" "$root/repo/scripts/"
+      "$source_repo/scripts/host-capacity-sample.sh" "$source_repo/scripts/production-evidence-status.sh" \
+      "$source_repo/scripts/production-host-lib.sh" "$root/repo/scripts/"
     printf '#!/bin/sh\nexit 0\n' >"$root/repo/node_modules/.bin/tsx"
     chmod +x "$root/repo/node_modules/.bin/tsx"
     echo 'id: LINUX-001' >"$root/repo/labs/linux/lab.yaml"
@@ -862,6 +863,90 @@ check 'only read-only calls' only_read_only_calls
 scenario 'sampler: usage errors exit 2'
 root=$(fixture samplerusage)
 run host-capacity-sample.sh "$root" --interval 0
+check 'exit 2' exit_is 2
+
+# --- production-evidence-status.sh ---------------------------------------------------------
+
+HEAD_SHA=0123456789abcdef0123456789abcdef01234567
+OTHER_SHA=fedcba9876543210fedcba9876543210fedcba98
+
+evidence_at() { # dir commit — a complete, passing evidence set recorded at `commit`
+  local dir=$1 at=$2
+  mkdir -p "$dir/beta-validate" "$dir/capacity-synthetic" "$dir/capacity-rehearsal"
+  printf '# production-preflight x\nINFO   git.head  %s\nPASS   host.os  Linux\nRESULT: PASS — no check failed\n' "$at" >"$dir/preflight-20260920T100000Z.txt"
+  printf '{"verdict":"PASS","finishedAt":"2026-09-20T10:05:00Z"}\n' >"$dir/network-probe.json"
+  printf '{"runId":"ab12","commit":"%s","passed":true}\n' "$at" >"$dir/beta-validate/five-student-ab12.json"
+  for kind in synthetic rehearsal; do
+    printf 'time,load1\n2026-09-20T10:10:00Z,0.5\n2026-09-20T10:10:15Z,0.7\n2026-09-20T10:10:30Z,0.9\n' >"$dir/capacity-$kind/host.csv"
+  done
+  printf '# private-beta-smoke x\n# checkout /srv\n# commit %s\nPASS   backup.offhost  copied\nRESULT: PASS — no automated check failed\n' "$at" >"$dir/private-beta-smoke-20260920T110000Z.txt"
+  cat >"$dir/production-host-evidence-2026-09-20.md" <<'MD'
+## 3. After start
+
+| Step (readiness §15) | Result | Evidence file / note |
+|---|---|---|
+| 19 **Non-beta account is refused** | PASS | refused at the provider |
+| 22 Alert delivery drill received by a person (readiness §12.1) | NOT DONE | |
+| 23 Off-host backup copy recorded | | |
+
+## 5. Recovery drills (readiness §17), no students active
+
+| Drill | Result | Time to smoke PASS |
+|---|---|---|
+| Docker daemon restart (kind node state recorded) | PASS | 4 min |
+| Host reboot | BLOCKED (decision D2) | |
+
+## 6. Sign-off
+
+| | |
+|---|---|
+| Students may be invited | NO |
+MD
+}
+
+scenario 'evidence status: nothing recorded is NOT RUN, never PASS'
+root=$(fixture evidence-empty)
+mkdir -p "$root/evidence"
+run production-evidence-status.sh "$root" --evidence-dir "$root/evidence"
+check 'exit 1' exit_is 1
+for item in preflight network-probe beta-validate capacity-synthetic capacity-rehearsal smoke template; do
+  check "$item is NOT RUN" has_line "^FAIL +evidence\.$item +NOT RUN"
+done
+check 'no evidence item passes' lacks_line '^PASS +evidence\.'
+check 'the person-only items stay manual' has_line '^MANUAL CHECK REQUIRED +person\.host-reboot +no filled template'
+check 'RESULT: INCOMPLETE' has_line '^RESULT: INCOMPLETE'
+check 'no secret value appears' no_secret_leaked
+
+scenario 'evidence status: a complete set at HEAD passes, and what people recorded is quoted, not counted'
+root=$(fixture evidence-complete)
+evidence_at "$root/evidence" "$HEAD_SHA"
+run production-evidence-status.sh "$root" --evidence-dir "$root/evidence"
+check 'exit 0' exit_is 0
+for item in preflight network-probe beta-validate capacity-synthetic capacity-rehearsal smoke; do
+  check "$item PASS" has_line "^PASS +evidence\.$item "
+done
+check 'the sample count and span come from the file' has_line '^PASS +evidence\.capacity-rehearsal +3 samples, 2026-09-20T10:10:00Z to 2026-09-20T10:10:30Z'
+check 'a recorded PASS is quoted under MANUAL' has_line '^MANUAL CHECK REQUIRED +person\.non-beta-account-is-refused +the template records: PASS$'
+check 'a blank row is quoted as nothing' has_line '^MANUAL CHECK REQUIRED +person\.off-host-backup-copy +the template records: nothing$'
+check 'open rows are counted' has_line '^INFO +evidence\.template .*: 3 row\(s\)'
+check 'the sign-off is the operator.s' has_line '^INFO +evidence\.sign-off +Students may be invited: NO'
+check 'the result never says students may be invited' lacks_line 'RESULT: .*(READY|may be invited)'
+
+scenario 'evidence status: evidence from another commit, or with no commit, is not evidence for this one'
+root=$(fixture evidence-stale)
+evidence_at "$root/evidence" "$OTHER_SHA"
+printf '{"runId":"ab12","passed":true}\n' >"$root/evidence/beta-validate/five-student-ab12.json"
+run production-evidence-status.sh "$root" --evidence-dir "$root/evidence"
+check 'exit 1' exit_is 1
+check 'preflight at another commit FAILs' has_line "^FAIL +evidence\.preflight +.* ran at $OTHER_SHA, not HEAD"
+check 'smoke at another commit FAILs' has_line "^FAIL +evidence\.smoke +.* ran at $OTHER_SHA, not HEAD"
+check 'a gate report with no commit FAILs' has_line '^FAIL +evidence\.beta-validate +.* does not record its commit'
+FAKE_GIT_DIRTY=' M apps/api/src/app.ts' run production-evidence-status.sh "$root" --evidence-dir "$root/evidence"
+check 'a modified checkout FAILs' has_fail 'release\.clean'
+
+scenario 'evidence status: usage errors exit 2'
+root=$(fixture evidence-usage)
+run production-evidence-status.sh "$root" --bogus
 check 'exit 2' exit_is 2
 
 printf '\n%d case(s), %d failed assertion(s)\n' "$cases" "$failures"
