@@ -14,6 +14,11 @@ the same registry and loaders the API uses, not from older summaries. Scripts
 were run against the real `labs/` directory; where a claim depends on a
 heuristic, the heuristic is stated.
 
+> **Follow-up (2026-09-18):** [`lab-quality-pass-2026-09-18.md`](lab-quality-pass-2026-09-18.md)
+> audits what this document could not — whether each lab grades its lesson —
+> and supersedes §8's coverage figure (now 51/117), closes LINUX-007 (§9, §13),
+> resolves NET-025's position (§14.2), and lists what remains open.
+
 **Static validation passing does not mean the labs teach well.** It means they
 are structurally sound: they load, reference files that exist, sit in a
 consistent order, and are placed in the path. Sections 9 and 13 list where
