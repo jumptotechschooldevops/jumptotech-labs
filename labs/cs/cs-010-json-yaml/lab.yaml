@@ -294,11 +294,11 @@ requirements:
   - type: file_content_absent
     path: /home/student/ops/depots.yaml
     contains: "country: no"
-    label: The country is quoted, so it stays a country and does not become false
+    label: The leeds country is quoted, so it stays the country code it was meant to be
   - type: file_content_absent
     path: /home/student/ops/depots.yaml
     contains: "version: 3.10"
-    label: The version is quoted, so it stays 3.10 and does not become 3.1
+    label: The leeds version is quoted, so it stays exactly as written
   # Removing traps is half the task; the file must still say what it meant.
   # Without this, a depots.yaml holding nothing but `leeds:` passed.
   - type: file_contains
