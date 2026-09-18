@@ -39,6 +39,23 @@ test — before it was changed.
 | 5 | **A slow api start was declared unhealthy**: 225 s to listen at load 20 against a 65 s (image) / 135 s (overlay) budget; `up --wait` failed and web/terminal, which wait for api health, were left uncreated | api re-create on the real stack | start period 300 s in both; a healthy start is reported as soon as before | the same re-create then passed `up --wait`; contract test |
 | 6 | **A stopped api was killed, never shut down**: `npx` received SIGTERM and exited without passing it on; the reaper, listeners and database pool were never closed | `docker stop` on the real stack: exit 143, 4 s, no `process.stopping` | `node …/tsx` as the entrypoint, as sandboxd does | after: exit 0 in 1 s with `process.stopping`; contract test |
 | 7 | **A Start while the substrate was down was a "failed provision"** that told the student to run `npm run sandbox:build`; the Kubernetes attestation refusal took the same path | stopping sandboxd on the real stack | `start()` consults the memoised availability probe first: `PROVIDER_UNAVAILABLE`, no row, no slot; the reason goes to the log | orchestrator and api tests |
+| 8 | **The README's cleanup commands deleted every worktree's (or every student's) sandboxes**: `kubectl delete ns -l …managed=true` and `docker rm -f $(… managed=true)` without the runtime owner | command-safety audit | owner selector / `npm run sandbox:clean`; the owner test now reads the README and runbooks | test found the second command |
+
+### 2.1 From an independent review of this branch
+
+A second reader reviewed the branch without being told what it did; every
+finding was reproduced before it was fixed.
+
+| # | Defect in this branch | Fix |
+|---|---|---|
+| R1 | **A mistyped request on the operator socket could crash the api**: `new URL` threw on targets like `http://[` outside the handler's `try`, an unhandled rejection that exits Node 22 | parse inside the `try` (400), final catch on the handler; raw-socket test |
+| R2 | **An end the operator did not do was logged as theirs**, and an idle expiry in flight was relabelled "ended by operator" | finished session: 409; teardown in flight keeps its reason and is reported as `existing_teardown` |
+| R3 | **The query-string stripper was quadratic** (1.2 s at 32k) and ran before any length cap | last-segment prefix (linear); 8192-character cap first |
+| R4 | **PostgreSQL's double-quoted values passed through** (`invalid input syntax …: "value"`) | only object names after their keyword are kept |
+| R5 | **A container re-created mid-collection aborted the bundle** under `pipefail` | noted as gone |
+| R6 | **`--out-dir` with `..` below a missing directory could land in the checkout** | refused |
+| R7 | **The pre-start availability probe had no deadline, and a cached "down" outlived recovery** | 5 s bound (go ahead without it); a negative answer is re-probed before refusing |
+| — | A malformed `%` escape in a session id was a 500 | 400 (found in self-review) |
 
 ## 3. Failure injection on a local stack — PROVEN LOCALLY ONLY
 

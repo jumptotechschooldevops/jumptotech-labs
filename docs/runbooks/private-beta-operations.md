@@ -389,8 +389,12 @@ The slot is free as soon as the sandbox is confirmed gone.
 - `NOT YET: … is EXPIRING` means the provider did not confirm the delete. The
   session keeps its slot and the reaper retries on every sweep. RB-17 §4 if it
   stays.
-- A session already `ENDING` (the student pressed End and it stalled) is
-  finished as the student's End, not relabelled.
+- A teardown already in flight is finished as what it is, not relabelled:
+  `ENDING` (the student pressed End and it stalled) as the student's End,
+  `EXPIRING` (idle or time limit) with its own reason. The CLI says
+  `finished: … was already being torn down`.
+- A session that has already finished is refused
+  (`SESSION_ALREADY_FINISHED`) and nothing is recorded as yours.
 - It is logged (`ops.operator.session_ended`) and counted
   (`jtt_operator_actions_total{action="end_session"}`,
   `jtt_lab_end_total{reason="operator"}`).
