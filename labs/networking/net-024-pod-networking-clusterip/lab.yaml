@@ -16,7 +16,11 @@ environment:
 # NET-023 is the designed curriculum prerequisite, but it is not implemented
 # yet. The registry refuses unresolved prerequisites, so this remains empty
 # until NET-023 lands.
-prerequisites: []
+# The lab creates a Service (K8S-003) and records its evidence in a ConfigMap
+# (K8S-004). Its networking prerequisite, NET-023, is not built yet.
+prerequisites:
+  - K8S-003
+  - K8S-004
 
 story: >
   A team hard-coded a ledger-api Pod IP into a ConfigMap. It worked for four

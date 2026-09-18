@@ -112,7 +112,7 @@ of writing; the API always reports live numbers.
 | 6 | CI/CD | CICD-001–010 | — | — |
 | 7 | Cloud & AWS (simulated) | AWS-001–009, -012, -018 | — | EC2, S3 |
 | 8 | Infrastructure as Code | TF-001–006, -011, -012 (core); -016, -017, -018, -025, -026 (extra) | — | modules, drift, troubleshooting |
-| 9 | Kubernetes | K8S-001–003, NET-024, NET-025, K8S-004, -005, -008–014, -016 (core); -006, -007, -015, -018, -019 (extra) | Containers & Docker | namespaces, Ingress, NetworkPolicy, PodDisruptionBudgets |
+| 9 | Kubernetes | K8S-001–005, NET-024, K8S-008, NET-025, K8S-009–014, -016 (core); -006, -007, -015, -018, -019 (extra) | Containers & Docker | namespaces, Ingress, NetworkPolicy, PodDisruptionBudgets |
 | 10 | Configuration Management | ANSIBLE-001–010 | Linux | — |
 | 11 | Helm & GitOps | *none* | Kubernetes | Helm charts, releases, GitOps, Argo CD |
 | 12 | Observability & SRE | K8S-017 | — | metrics, alerting, SLOs |
@@ -136,7 +136,9 @@ Seven placements cross track or provider lines, each from the lab's own content:
   provider, placed in Networking — two stages before Containers & Docker. See
   `docs/development/catalog-quality-audit.md` for why that ordering is flagged.
 - **NET-024** and **NET-025** are Networking-track labs about Services, placed in
-  Kubernetes straight after K8S-003.
+  Kubernetes. Both record their findings in a ConfigMap, so they follow K8S-004;
+  NET-025 reads EndpointSlices, which list only ready Pods, so it follows
+  K8S-008 (probes). Their `lab.yaml` prerequisites say the same.
 
 ## Stage model
 
