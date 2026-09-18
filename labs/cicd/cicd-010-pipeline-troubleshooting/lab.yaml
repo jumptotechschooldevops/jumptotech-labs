@@ -131,14 +131,24 @@ requirements:
   - type: github_workflow_step_exists
     path: .github/workflows/ci.yml
     job: build
+    run_contains:
+      - node --test
+    label: The job runs the test suite
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
     uses: actions/upload-artifact
     with_keys:
       - name
       - path
-    label: The job uploads the build output
+    with_contains:
+      path: dist
+      name: env.APP_VERSION
+    label: The job uploads the build output, named with APP_VERSION
   - type: environment_reference_exists
     path: .github/workflows/ci.yml
     name: APP_VERSION
+    via: workflow_env
     label: APP_VERSION is defined in the workflow
   - type: jenkinsfile_exists
     path: Jenkinsfile

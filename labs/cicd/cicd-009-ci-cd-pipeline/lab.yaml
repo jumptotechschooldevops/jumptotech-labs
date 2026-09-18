@@ -116,7 +116,8 @@ requirements:
     job: image
     run_contains:
       - docker build
-    label: The image job builds the container image
+      - IMAGE_TAG
+    label: The image job builds the container image, tagged from IMAGE_TAG
   - type: github_workflow_job_exists
     path: .github/workflows/ci.yml
     job: deploy
@@ -128,7 +129,8 @@ requirements:
     job: deploy
     run_contains:
       - deploy/app.yml
-    label: The deploy job updates the deployment manifest
+      - IMAGE_TAG
+    label: The deploy job writes the new tag into the deployment manifest
   - type: environment_reference_exists
     path: .github/workflows/ci.yml
     name: IMAGE_TAG

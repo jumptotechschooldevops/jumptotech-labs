@@ -98,7 +98,12 @@ requirements:
     with_keys:
       - name
       - path
-    label: A step uploads a named artifact from a path
+    # The path is the lesson: one that matches nothing uploads an empty
+    # artifact and leaves the run green. It must name the directory the build
+    # writes to.
+    with_contains:
+      path: dist
+    label: A step uploads a named artifact from the build output
   - type: project_builds
     produces: dist/build-info.json
     label: The build succeeds and writes its manifest
