@@ -88,6 +88,11 @@ export interface ContainerSnapshot {
   restartPolicy?: string;
   /** Probes declared on this container. Optional so older fixtures stay valid. */
   probes?: ProbeSnapshot[];
+  /**
+   * `spec.containers[].ports`. Read so a check can resolve a *named* port —
+   * `targetPort: http`, `port: http` on a probe — to the number it stands for.
+   */
+  ports?: Array<{ name?: string; containerPort: number; protocol?: string }>;
 }
 
 export interface ResourceRequirementsSnapshot {
