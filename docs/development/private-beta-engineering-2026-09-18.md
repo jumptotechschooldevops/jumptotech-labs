@@ -52,7 +52,7 @@ On a machine shared with other worktrees' stacks and five idle kind clusters
 | `npm run build` | PASS |
 | `npm run test:security` | **PASS** — 808 (803 + the five browser sign-in failure cases) |
 | `npm run production:config-check -- --self-test` | PASS — 22 scenarios |
-| `bash scripts/test-production-host-scripts.sh` | PASS — 52 cases, 0 failed (macOS bash 3.2); 46/0 on Linux bash 5.2 before the evidence-status and Watchdog cases were added |
+| `bash scripts/test-production-host-scripts.sh` | PASS — 52 cases, 0 failed, on macOS bash 3.2 and on Linux bash 5.2 (`node:22-bookworm-slim`) |
 | `bash scripts/test-db-backup-restore.sh` | PASS — 121/0 on Linux (non-root); 118/0 on macOS (hook-timeout case skipped: no coreutils `timeout`) |
 | `bash scripts/check-observability.sh` | PASS — 83 rules, 5 rule test files, `alertmanager.yml` valid |
 | `node scripts/check-secret-distribution.mjs`, `npm run test:composition` | PASS (25) |
