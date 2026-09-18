@@ -167,32 +167,59 @@ requirements:
     label: "Block D: the first assignable address"
 
   # --- plan.txt, part 2: the new allocation --------------------------------
-  - type: file_content
+  # Graded per line, given once: every value in the file used to be a
+  # substring match, so appending every candidate passed.
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "staging = 10.20.16.0/20"
+    key: "prod"
+    equals: 10.20.0.0/20
+    label: The production block starts the /16
+  - type: file_key_value
+    path: /home/student/subnets/plan.txt
+    key: "staging"
+    equals: 10.20.16.0/20
     label: The second /20 follows the first without overlapping it
-  - type: file_content
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "dev = 10.20.32.0/20"
+    key: "dev"
+    equals: 10.20.32.0/20
     label: The third /20 follows the second without overlapping it
 
   # --- classify.txt --------------------------------------------------------
-  - type: file_content
+  # Every address is graded, once per line — 192.168.100.79 and 8.8.8.8 were
+  # never checked, and one line per allowed value used to pass every check.
+  # Labels name positions, not addresses: 192.168.100.79 is also block D's
+  # broadcast, a graded answer in plan.txt, and a label is shown on every Check.
+  - type: file_key_value
     path: /home/student/subnets/classify.txt
-    contains: "10.20.31.254 = private"
-    label: An address inside 10.0.0.0/8 is private
-  - type: file_content
+    key: "10.20.31.254"
+    equals: private
+    label: The first address in classify.txt is classified correctly
+  - type: file_key_value
     path: /home/student/subnets/classify.txt
-    contains: "172.32.5.1 = public"
-    label: 172.32.5.1 is outside the reserved 172.16.0.0/12 block
-  - type: file_content
+    key: "172.32.5.1"
+    equals: public
+    label: The second address in classify.txt is classified correctly
+  - type: file_key_value
     path: /home/student/subnets/classify.txt
-    contains: "127.0.0.1 = loopback"
-    label: 127.0.0.1 is a loopback address
-  - type: file_content
+    key: "127.0.0.1"
+    equals: loopback
+    label: The fourth address in classify.txt is classified correctly
+  - type: file_key_value
     path: /home/student/subnets/classify.txt
-    contains: "169.254.10.5 = link-local"
-    label: 169.254.10.5 is link-local, not private
+    key: "169.254.10.5"
+    equals: link-local
+    label: The fifth address in classify.txt is classified correctly
+  - type: file_key_value
+    path: /home/student/subnets/classify.txt
+    key: "192.168.100.79"
+    equals: private
+    label: The third address in classify.txt is classified correctly
+  - type: file_key_value
+    path: /home/student/subnets/classify.txt
+    key: "8.8.8.8"
+    equals: public
+    label: The sixth address in classify.txt is classified correctly
 
   # --- kernel.txt: the live check ------------------------------------------
   - type: file_content

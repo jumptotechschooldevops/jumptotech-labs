@@ -26,6 +26,7 @@ import { readFile } from 'node:fs/promises';
 import {
   LabDefinitionError,
   LAB_PROVIDERS,
+  loadSetupFiles,
   MAX_SEED_SCRIPT_BYTES,
   OFFICIAL_DOC_HOSTS,
   PROVIDER_ISOLATION,
@@ -205,10 +206,15 @@ describe('NET-002 operands cannot become syntax', () => {
     const lab = await net002();
 
     for (const requirement of lab.requirements) {
-      const contains = (requirement as { contains?: string }).contains;
-      expect(typeof contains).toBe('string');
-      expect(contains).not.toMatch(/[;&|`$\\]/);
-      expect(contains).not.toContain('\n');
+      // A substring check carries `contains`; a worksheet answer carries a key
+      // and the value it must equal. Either way, literal text only.
+      const r = requirement as { contains?: string; key?: string; equals?: string };
+      const operands = r.contains !== undefined ? [r.contains] : [r.key, r.equals];
+      for (const operand of operands) {
+        expect(typeof operand).toBe('string');
+        expect(operand).not.toMatch(/[;&|`$\\]/);
+        expect(operand).not.toContain('\n');
+      }
     }
   });
 });
@@ -432,6 +438,29 @@ describe('every Networking lab keeps the track-wide boundary', () => {
               other.label?.includes(answer),
               `${lab.id}: label '${other.label}' contains the graded value '${answer}'`,
             ).not.toBe(true);
+          }
+        }
+
+        // A worksheet answer is compared whole, so it is looked for as a whole
+        // word; values shorter than three characters (`no`, `L4`) are left to
+        // the lab's own suite rather than matched inside ordinary words.
+        //
+        // The answer's own label may never name it: that pairs the key with
+        // its value, even when the value is one of the allowed words the
+        // worksheet prints. Another check's label may name it only when the
+        // student is handed that value anyway (NET-002's worksheet prints the
+        // existing blocks, and one of them is also the staging answer).
+        const seeded = (await loadSetupFiles(lab)).map((f) => f.content.toString()).join('\n');
+        const worksheet = requirement as { type: string; equals?: string };
+        if (worksheet.type === 'file_key_value' && (worksheet.equals ?? '').length >= 3) {
+          const escaped = worksheet.equals!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const word = new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}($|[^A-Za-z0-9_-])`, 'i');
+          for (const other of lab.requirements) {
+            if (other !== requirement && seeded.includes(worksheet.equals!)) continue;
+            expect(
+              word.test(other.label ?? ''),
+              `${lab.id}: label '${other.label}' names the worksheet answer '${worksheet.equals}'`,
+            ).toBe(false);
           }
         }
       }
