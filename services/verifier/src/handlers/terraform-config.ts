@@ -136,6 +136,45 @@ export const terraformResourceReferences: SandboxVerifierHandler<'terraform_reso
   },
 };
 
+// ======================================================= literals absent
+
+export const terraformResourceLiteralAbsent: SandboxVerifierHandler<'terraform_resource_literal_absent'> = {
+  type: 'terraform_resource_literal_absent',
+  label: (r) => `${r.resource_type}.${r.name} hard-codes none of the listed values`,
+  async run(requirement, reader) {
+    return withConfig(reader, requirement.dir, async (config) => {
+      const block = resourceBlock(config, requirement.resource_type, requirement.name, 'managed');
+      if (!block) {
+        return fail(
+          `No resource '${requirement.resource_type}.${requirement.name}' is declared (${await scanned(reader, requirement.dir)})`,
+        );
+      }
+
+      /*
+       * Only string tokens are compared, so a comment — in the file or inside
+       * a multi-line expression — neither satisfies nor fails this. The
+       * message names the argument and leaves the text out: the student can
+       * see their own file, and the list is the lab's to state.
+       */
+      const forbidden = requirement.literals.map((literal) => literal.toLowerCase());
+      const offending = block.arguments
+        .filter((argument) =>
+          argument.literals.some((literal) => {
+            const text = literal.toLowerCase();
+            return forbidden.some((needle) => text.includes(needle));
+          }),
+        )
+        .map((argument) => argument.name);
+      if (offending.length > 0) {
+        return fail(
+          `${requirement.resource_type}.${requirement.name} still hard-codes a value this lab asks it to take from input, in: ${offending.join(', ')}`,
+        );
+      }
+      return pass();
+    });
+  },
+};
+
 // ============================================================== variables
 
 export const terraformVariableDeclared: SandboxVerifierHandler<'terraform_variable_declared'> = {
