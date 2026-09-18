@@ -355,15 +355,34 @@ describe('failed provisioning', () => {
 
   beforeEach(async () => {
     failing = await harness();
-    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
   });
 
   it('marks the session FAILED, releases the slot, and does not leak a namespace', async () => {
-    await expect(failing.manager.start('K8S-001')).rejects.toBeInstanceOf(SessionError);
+    // The cluster answered the last availability probe and went away before
+    // this start reached it: the probe is memoised, so the start gets as far
+    // as provisioning and fails there.
+    expect((await failing.manager.providers.status('kubernetes')).available).toBe(true);
+    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
+
+    await expect(failing.manager.start('K8S-001')).rejects.toMatchObject({ code: 'SESSION_PROVISION_FAILED' });
 
     const sessions = await failing.manager.list();
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.status).toBe('FAILED');
+    expect(await failing.manager.activeCount()).toBe(0);
+  });
+
+  it('refuses a start as PROVIDER_UNAVAILABLE, holding no slot and writing no row, when the substrate is known to be down', async () => {
+    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
+
+    const refusal = await failing.manager.start('K8S-001').catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(SessionError);
+    expect(refusal).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', details: { provider: 'kubernetes' } });
+    expect((refusal as SessionError).message).toMatch(/cannot be created right now/);
+    // No developer command in what a student is shown.
+    expect(`${(refusal as SessionError).message} ${(refusal as SessionError).remediation ?? ''}`).not.toMatch(/npm run|sandbox:build/);
+
+    expect(await failing.manager.list()).toHaveLength(0);
     expect(await failing.manager.activeCount()).toBe(0);
   });
 });

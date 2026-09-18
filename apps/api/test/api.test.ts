@@ -253,12 +253,21 @@ describe('POST /api/labs/:id/start', () => {
 
   it('reports the real failure instead of pretending the lab is ready', async () => {
     const k8s = new FakeKubernetes({ unreachable: 'connect ECONNREFUSED 172.18.0.2:6443' });
+    const { app } = buildApp(k8s, registry);
 
-    const res = await request(buildApp(k8s, registry).app).post('/api/labs/K8S-001/start');
+    const res = await request(app).post('/api/labs/K8S-001/start');
 
     expect(res.status).toBe(503);
     expect(res.body.ok).toBe(false);
-    expect(res.body.error.message).toContain('ECONNREFUSED');
+    // The substrate is down: that is what the student is told, in words, and
+    // no internal address or operator command reaches them.
+    expect(res.body.error.code).toBe('PROVIDER_UNAVAILABLE');
+    expect(JSON.stringify(res.body)).not.toMatch(/172\.18\.0\.2|ECONNREFUSED|npm run/);
+    // The real cause is where the operator looks.
+    const health = await request(app).get('/health');
+    const kubernetes = health.body.data.providers.find((p: { provider: string }) => p.provider === 'kubernetes');
+    expect(kubernetes.available).toBe(false);
+    expect(kubernetes.reason).toContain('ECONNREFUSED');
   });
 });
 

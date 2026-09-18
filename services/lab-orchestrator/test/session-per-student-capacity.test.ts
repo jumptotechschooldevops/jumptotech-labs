@@ -382,12 +382,14 @@ export function perStudentCapacity(
       w.runtime.removeImage(IMAGE);
       const failed = await w.a.reset(session.sessionId);
       expect(failed.session.status).toBe('DEGRADED');
+      // The image is back: with it missing the provider is unavailable, and a
+      // Start is refused for that before any limit is counted.
+      w.runtime.addImage(IMAGE);
 
       // DEGRADED may still hold resources: it counts, once, against both limits.
       expect(await w.heldBy(ALICE)).toBe(1);
       expect(await w.a.activeCount()).toBe(1);
       await expect(w.b.start(LAB, ALICE)).rejects.toMatchObject({ code: 'STUDENT_SESSION_LIMIT_REACHED' });
-      w.runtime.addImage(IMAGE);
       await w.b.start(LAB, BOB);
       await expect(w.a.start(LAB, CAROL)).rejects.toMatchObject({ code: 'LAB_CAPACITY_REACHED' });
 

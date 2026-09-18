@@ -469,6 +469,31 @@ export class SessionManager {
     }
 
     /*
+     * Is the substrate up? The same memoised probe the catalog shows students
+     * (30 s), so a Start never disagrees with the page it was pressed on for
+     * longer than that. Without it a runtime that was down still reached
+     * `create`, failed there, and was reported as a failed *provision*: the
+     * operator was sent to RB-03 instead of the substrate, and the student
+     * was told to rebuild a sandbox image. Checked before capacity, like the
+     * registration check above, so a refused start holds no slot.
+     */
+    const availability = await this.#providers.status(lab.environment.provider);
+    if (!availability.available) {
+      // The probe's reason names hosts and addresses, and its remediation is
+      // an operator's command: both go to the log (and `ops status`), and the
+      // student gets words they can act on.
+      this.#log(
+        `start of ${lab.id} refused: provider ${lab.environment.provider} is unavailable — ${availability.reason ?? 'no reason given'}`,
+      );
+      throw new SessionError(
+        'PROVIDER_UNAVAILABLE',
+        "This lab's environment cannot be created right now.",
+        'Try again in a few minutes. If it keeps happening, tell your instructor.',
+        { provider: lab.environment.provider },
+      );
+    }
+
+    /*
      * Capacity is counted from durable state, and the count and the insert are
      * one step.
      *
