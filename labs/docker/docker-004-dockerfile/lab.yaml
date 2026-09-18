@@ -102,6 +102,17 @@ requirements:
   - type: docker_container_exists
     name: greeter
     label: Container greeter exists
+  - type: docker_container_image
+    name: greeter
+    image: jumptotech/greeter:1.0
+    label: Container greeter runs the image you built
+  # The RUN step's output. Read from the container's filesystem, which is
+  # still there after it exits.
+  - type: docker_container_file_content
+    container: greeter
+    path: /app/banner.txt
+    exists: true
+    label: The image contains the banner the RUN step produced
   - type: docker_container_exit_code
     name: greeter
     expected: 0
