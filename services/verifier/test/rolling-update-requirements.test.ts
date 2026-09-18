@@ -57,6 +57,8 @@ function initialState(overrides: Parameters<typeof deploymentSnapshot>[0] = {}) 
     selector: SELECTOR,
     podLabels: SELECTOR,
     containers: [{ name: 'api', image: OLD_IMAGE, ready: true, restartCount: 0, state: 'running' }],
+    // Applying the setup manifest creates revision 1.
+    annotations: { 'deployment.kubernetes.io/revision': '1' },
     ...overrides,
   });
 }
@@ -67,6 +69,8 @@ function solvedState(overrides: Parameters<typeof deploymentSnapshot>[0] = {}) {
     containers: [{ name: 'api', image: NEW_IMAGE, ready: true, restartCount: 0, state: 'running' }],
     generation: 2,
     observedGeneration: 2,
+    // A template change in place rolls out revision 2.
+    annotations: { 'deployment.kubernetes.io/revision': '2' },
     ...overrides,
   });
 }
@@ -91,6 +95,7 @@ describe('K8S-013 — the shipped lab', () => {
     expect(lab.requirements.map((r) => r.type)).toEqual([
       'deployment_exists',
       'deployment_selector',
+      'workload_annotation',
       'deployment_replicas',
       'deployment_image',
       'deployment_rollout_complete',
@@ -102,8 +107,10 @@ describe('K8S-013 — the shipped lab', () => {
     const result = await run(clusterWith(initialState()));
 
     expect(result.passed).toBe(false);
-    // Exactly one thing is wrong before the student starts, and it is the task.
+    // What is wrong before the student starts is the task: nothing has been
+    // rolled out yet, and the image is still the old one.
     expect(result.checks.filter((c) => c.status !== 'pass').map((c) => c.label)).toEqual([
+      'The original Deployment was updated, not replaced',
       'Image is now nginx:1.28-alpine',
     ]);
   });
@@ -202,9 +209,27 @@ describe('K8S-013 — the Deployment must be updated, not replaced', () => {
       podLabels: { app: 'payments-api' },
       generation: 1,
       observedGeneration: 1,
+      // A new object starts again at revision 1.
+      annotations: { 'deployment.kubernetes.io/revision': '1' },
     });
 
     expect(await failures(clusterWith(recreated))).toEqual([
+      'The Deployment still selects the payments-api Pods',
+      'The original Deployment was updated, not replaced',
+    ]);
+  });
+
+  it('rejects a Deployment deleted and re-applied from the same manifest', async () => {
+    // Before, only the selector stood for "not replaced", so re-applying the
+    // original manifest with the new image passed. The revision does not lie:
+    // a re-created object is back at 1.
+    const reapplied = solvedState({
+      generation: 1,
+      observedGeneration: 1,
+      annotations: { 'deployment.kubernetes.io/revision': '1' },
+    });
+
+    expect(await failures(clusterWith(reapplied))).toEqual([
       'The original Deployment was updated, not replaced',
     ]);
   });
@@ -216,7 +241,7 @@ describe('K8S-013 — the Deployment must be updated, not replaced', () => {
     });
 
     expect(await failures(clusterWith(drifted))).toEqual([
-      'The original Deployment was updated, not replaced',
+      'The Deployment still selects the payments-api Pods',
     ]);
   });
 
@@ -247,7 +272,10 @@ describe('K8S-013 — the right change to the wrong object does not pass', () =>
     const stale = initialState();
     const decoy = solvedState({ name: 'payments-api-new' });
 
-    expect(await failures(clusterWith(stale, decoy))).toEqual(['Image is now nginx:1.28-alpine']);
+    expect(await failures(clusterWith(stale, decoy))).toEqual([
+      'The original Deployment was updated, not replaced',
+      'Image is now nginx:1.28-alpine',
+    ]);
   });
 });
 

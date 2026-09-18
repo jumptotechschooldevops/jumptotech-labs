@@ -219,6 +219,11 @@ describe('deployment_strategy — maxSurge and maxUnavailable', () => {
 
 // ------------------------------------------------------------------- the lab
 
+// The Deployment controller's revision: 1 once the fixture is applied, 2 after
+// a template change rolls out in place.
+const REVISION_1 = { 'deployment.kubernetes.io/revision': '1' };
+const REVISION_2 = { 'deployment.kubernetes.io/revision': '2' };
+
 describe('K8S-015 — the shipped lab', () => {
   /** Both workloads exactly as the fixture leaves them: default strategy, old image. */
   function seeded(overrides: { ledger?: Partial<Parameters<typeof deploymentSnapshot>[0]>; checkout?: Partial<Parameters<typeof deploymentSnapshot>[0]> } = {}) {
@@ -238,6 +243,7 @@ describe('K8S-015 — the shipped lab', () => {
             podLabels: { app: 'ledger-writer', tier: 'data' },
             strategy: defaultStrategy,
             containers: [{ name: 'writer', image: OLD, ready: true, restartCount: 0, state: 'running' }],
+            annotations: REVISION_1,
             ...overrides.ledger,
           }),
           deploymentSnapshot({
@@ -252,6 +258,7 @@ describe('K8S-015 — the shipped lab', () => {
             podLabels: { app: 'checkout-api', tier: 'api' },
             strategy: defaultStrategy,
             containers: [{ name: 'api', image: OLD, ready: true, restartCount: 0, state: 'running' }],
+            annotations: REVISION_1,
             ...overrides.checkout,
           }),
         ],
@@ -264,11 +271,13 @@ describe('K8S-015 — the shipped lab', () => {
       ledger: {
         strategy: { type: 'Recreate' },
         containers: [{ name: 'writer', image: NEW, ready: true, restartCount: 0, state: 'running' }],
+        annotations: REVISION_2,
         ...over.ledger,
       },
       checkout: {
         strategy: { type: 'RollingUpdate', maxSurge: 1, maxUnavailable: 0 },
         containers: [{ name: 'api', image: NEW, ready: true, restartCount: 0, state: 'running' }],
+        annotations: REVISION_2,
         ...over.checkout,
       },
     });
@@ -283,6 +292,7 @@ describe('K8S-015 — the shipped lab', () => {
       new Set([
         'deployment_exists',
         'deployment_selector',
+        'workload_annotation',
         'deployment_strategy',
         'deployment_image',
         'deployment_available',
@@ -293,8 +303,10 @@ describe('K8S-015 — the shipped lab', () => {
 
   it('fails on the untouched fixture, on strategy and image for both services', async () => {
     expect(await failed(seeded())).toEqual([
+      'ledger-writer was reconfigured, not replaced',
       'ledger-writer never runs two versions at once',
       'ledger-writer was released to nginx:1.28-alpine',
+      'checkout-api was reconfigured, not replaced',
       'checkout-api keeps every replica serving and adds at most one',
       'checkout-api was released to nginx:1.28-alpine',
     ]);
@@ -336,15 +348,30 @@ describe('K8S-015 — the shipped lab', () => {
       ledger: { strategy: { type: 'Recreate' } },
       checkout: { strategy: { type: 'RollingUpdate', maxSurge: 1, maxUnavailable: 0 } },
     });
+    // The strategy is not part of the Pod template, so changing it alone rolls
+    // out no new revision: nothing has been released yet.
     expect(await failed(configuredOnly)).toEqual([
+      'ledger-writer was reconfigured, not replaced',
       'ledger-writer was released to nginx:1.28-alpine',
+      'checkout-api was reconfigured, not replaced',
       'checkout-api was released to nginx:1.28-alpine',
     ]);
   });
 
   it('still refuses a deleted-and-recreated Deployment', async () => {
-    const recreated = solved({ checkout: { selector: { app: 'checkout-api' }, podLabels: { app: 'checkout-api' } } });
-    expect(await failed(recreated)).toEqual(['checkout-api was reconfigured, not replaced']);
+    const recreated = solved({
+      checkout: { selector: { app: 'checkout-api' }, podLabels: { app: 'checkout-api' }, annotations: REVISION_1 },
+    });
+    expect(await failed(recreated)).toEqual([
+      'checkout-api still selects its own Pods',
+      'checkout-api was reconfigured, not replaced',
+    ]);
+  });
+
+  it('refuses a Deployment re-created from the fixture with the right settings', async () => {
+    // Same labels, same strategy, same image — and back at revision 1.
+    const reapplied = solved({ ledger: { annotations: REVISION_1 } });
+    expect(await failed(reapplied)).toEqual(['ledger-writer was reconfigured, not replaced']);
   });
 
   it('fails mid-rollout rather than on configuration alone', async () => {

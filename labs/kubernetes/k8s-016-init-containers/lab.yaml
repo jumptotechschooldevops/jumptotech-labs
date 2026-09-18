@@ -134,6 +134,14 @@ requirements:
     selector:
       app: reporting-api
       tier: api
+    label: The Deployment still selects the reporting-api Pods
+  # A Deployment deleted and re-created starts again at revision 1; one that
+  # was changed in place has rolled out at least one new revision.
+  - type: workload_annotation
+    kind: deployment
+    name: reporting-api
+    key: deployment.kubernetes.io/revision
+    min_int: 2
     label: The original Deployment was fixed, not replaced
   - type: workload_container
     kind: deployment
@@ -149,6 +157,25 @@ requirements:
     container: api
     image: nginx:1.28-alpine
     label: The application container is unchanged
+  # "Leave the application container as it is" covers what it serves and how
+  # it proves it is ready. Without these, a do-nothing init container passed
+  # once the app's volume mount was dropped (nginx then serves its own
+  # index.html) or its probe was swapped for a TCP check.
+  - type: workload_volume_mount
+    kind: deployment
+    name: reporting-api
+    container: api
+    volume: site
+    mountPath: /usr/share/nginx/html
+    source: emptyDir
+    label: The application still serves from the shared volume
+  - type: deployment_probe
+    name: reporting-api
+    container: api
+    probe: readiness
+    handler: httpGet
+    path: /index.html
+    label: The application still proves it is ready by fetching its index page
   - type: deployment_replicas
     name: reporting-api
     replicas: 2
