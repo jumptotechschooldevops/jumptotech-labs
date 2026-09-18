@@ -27,7 +27,7 @@ interface Harness {
   terminated: string[];
 }
 
-async function harness(overrides: { maxActiveSessions?: number; maxSessionSeconds?: number; idleTimeoutSeconds?: number } = {}): Promise<Harness> {
+async function harness(overrides: { maxActiveSessions?: number; maxSessionSeconds?: number; idleTimeoutSeconds?: number; availabilityCheckTimeoutMs?: number } = {}): Promise<Harness> {
   const registry = await realCatalog();
 
   const k8s = new FakeKubernetes();
@@ -48,6 +48,7 @@ async function harness(overrides: { maxActiveSessions?: number; maxSessionSecond
 
   const terminated: string[] = [];
   const manager = new SessionManager({
+    ...(overrides.availabilityCheckTimeoutMs !== undefined ? { availabilityCheckTimeoutMs: overrides.availabilityCheckTimeoutMs } : {}),
     registry,
     provider,
     store: new InMemorySessionStore(),
@@ -350,6 +351,19 @@ describe('expiry', () => {
   });
 });
 
+describe('the availability check before a start', () => {
+  it('goes ahead without it when the probe does not answer in time', async () => {
+    const h = await harness({ availabilityCheckTimeoutMs: 20 });
+    const provider = h.manager.providers.peek('kubernetes')!;
+    vi.spyOn(provider, 'availability').mockReturnValue(new Promise(() => undefined));
+
+    const started = Date.now();
+    const { session } = await h.manager.start('K8S-001');
+    expect(session.status).toBe('ACTIVE');
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
 describe('failed provisioning', () => {
   let failing: Harness;
 
@@ -370,6 +384,15 @@ describe('failed provisioning', () => {
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.status).toBe('FAILED');
     expect(await failing.manager.activeCount()).toBe(0);
+  });
+
+  it('does not refuse on a stale "down": a substrate that just came back is asked again', async () => {
+    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
+    expect((await failing.manager.providers.status('kubernetes')).available).toBe(false);
+    failing.k8s.unreachable = undefined;
+
+    const { session } = await failing.manager.start('K8S-001');
+    expect(session.status).toBe('ACTIVE');
   });
 
   it('refuses a start as PROVIDER_UNAVAILABLE, holding no slot and writing no row, when the substrate is known to be down', async () => {

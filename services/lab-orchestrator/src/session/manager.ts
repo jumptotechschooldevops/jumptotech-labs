@@ -234,6 +234,12 @@ export interface SessionManagerOptions {
   terminal?: TerminalTerminator;
   /** Told when a session finishes, so learning history can be closed off. */
   listener?: SessionLifecycleListener;
+  /**
+   * How long Start waits for a provider's availability probe before going
+   * ahead without it (default 5 s). A hung cluster API must not hang every
+   * Start; without an answer, provisioning tries and reports what it finds.
+   */
+  availabilityCheckTimeoutMs?: number;
   now?: () => number;
   logger?: (message: string) => void;
   /**
@@ -347,6 +353,7 @@ export class SessionManager {
   readonly #terminal: TerminalTerminator | undefined;
   readonly #listener: SessionLifecycleListener | undefined;
   readonly #now: () => number;
+  readonly #availabilityCheckTimeoutMs: number;
   readonly #log: (message: string) => void;
   readonly #metrics: SessionMetricsHooks;
 
@@ -372,6 +379,7 @@ export class SessionManager {
     this.#terminal = options.terminal;
     this.#listener = options.listener;
     this.#now = options.now ?? (() => Date.now());
+    this.#availabilityCheckTimeoutMs = options.availabilityCheckTimeoutMs ?? 5_000;
     this.#log = options.logger ?? (() => undefined);
     this.#metrics = options.metrics ?? {};
   }
@@ -469,16 +477,22 @@ export class SessionManager {
     }
 
     /*
-     * Is the substrate up? The same memoised probe the catalog shows students
-     * (30 s), so a Start never disagrees with the page it was pressed on for
-     * longer than that. Without it a runtime that was down still reached
+     * Is the substrate up? The same probe the catalog shows students, asked
+     * again fresh when its memoised answer is no, and bounded in time: a probe
+     * that does not answer lets the start go ahead. Without it a runtime that was down still reached
      * `create`, failed there, and was reported as a failed *provision*: the
      * operator was sent to RB-03 instead of the substrate, and the student
      * was told to rebuild a sandbox image. Checked before capacity, like the
      * registration check above, so a refused start holds no slot.
      */
-    const availability = await this.#providers.status(lab.environment.provider);
-    if (!availability.available) {
+    let availability = await this.#probe(lab.environment.provider);
+    if (availability && !availability.available) {
+      // Memoised for 30 s: a substrate that has just come back must not keep
+      // refusing starts. Ask again, now, before saying no.
+      this.#providers.invalidate(lab.environment.provider);
+      availability = await this.#probe(lab.environment.provider);
+    }
+    if (availability && !availability.available) {
       // The probe's reason names hosts and addresses, and its remediation is
       // an operator's command: both go to the log (and `ops status`), and the
       // student gets words they can act on.
@@ -566,6 +580,23 @@ export class SessionManager {
       environment: result.environment,
       steps: result.steps,
     };
+  }
+
+  /**
+   * The provider's availability, or null when the probe did not answer in time.
+   * `status()` never rejects: a failing probe is an unavailable provider.
+   */
+  async #probe(providerId: LabProviderId): Promise<Awaited<ReturnType<ProviderRegistry['status']>> | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), this.#availabilityCheckTimeoutMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([this.#providers.status(providerId), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
