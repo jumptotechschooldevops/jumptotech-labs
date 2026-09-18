@@ -2022,7 +2022,16 @@ const sandboxRequirementSchemas = {
     })
     .strict(),
 
-  /** The policy does **not** permit this action on this resource. */
+  /**
+   * The policy does **not** permit this action on this resource.
+   *
+   * `any_context: true` asks it for every possible request at once: an Allow
+   * counts whatever its `Condition` says, and only an unconditional Deny
+   * counts as protection. That is the reading for "this must never be
+   * possible" — a grant limited to some other service still fails it, and a
+   * Deny whose condition never fires does not rescue it. It cannot be combined
+   * with `context`, which asks about one particular request.
+   */
   iam_policy_not_allows: z
     .object({
       type: z.literal('iam_policy_not_allows'),
@@ -2030,9 +2039,14 @@ const sandboxRequirementSchemas = {
       action: iamAction,
       resource: iamResource,
       context: iamRequestContext,
+      any_context: z.literal(true).optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((r) => !(r.any_context === true && r.context !== undefined), {
+      message: 'any_context and context cannot be combined',
+      path: ['any_context'],
+    }),
 
   /**
    * No statement uses the bare `*` wildcard in the named field.

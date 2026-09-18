@@ -381,6 +381,124 @@ describe('AWS-005 — repairs that do not actually close the escalation', () => 
   });
 });
 
+describe('AWS-005 — the administrator roles, for any service (the review\'s context problem)', () => {
+  /*
+   * The admin checks once asked only about EC2. A grant of every role to a
+   * different service — the same escalation, through ECS or Lambda — then
+   * passed. They are asked of every request now.
+   */
+  const SCOPED_APP = JSON.parse(SOLVED).Statement[1];
+  const ADMIN_FAILS = [
+    'The pipeline can no longer attach the administrator role',
+    'The pipeline can no longer attach the finance batch role',
+  ];
+  const withExtra = (...extra: unknown[]) =>
+    JSON.stringify({ Version: '2012-10-17', Statement: [EC2_STATEMENT, SCOPED_APP, ...extra] });
+
+  it('fails every role handed to ECS beside a correct EC2 statement (the reproduction from the review)', async () => {
+    const result = await run(
+      withExtra({
+        Effect: 'Allow',
+        Action: 'iam:PassRole',
+        Resource: '*',
+        Condition: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+      }),
+    );
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks).sort()).toEqual(ADMIN_FAILS);
+  });
+
+  it('fails the administrator role alone handed to Lambda', async () => {
+    const result = await run(
+      withExtra({
+        Effect: 'Allow',
+        Action: 'iam:PassRole',
+        Resource: ROLE('PlatformAdminRole'),
+        Condition: { StringEquals: { 'iam:PassedToService': 'lambda.amazonaws.com' } },
+      }),
+    );
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual(['The pipeline can no longer attach the administrator role']);
+  });
+
+  it('fails the administrator roles handed to EC2 by name', async () => {
+    const result = await run(
+      withExtra({
+        Effect: 'Allow',
+        Action: 'iam:PassRole',
+        Resource: [ROLE('PlatformAdminRole'), ROLE('ReconciliationBatchRole')],
+        Condition: { StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } },
+      }),
+    );
+    expect(failed(result.checks).sort()).toEqual(ADMIN_FAILS);
+  });
+
+  it('fails role/* for "any service but Lambda", with a Deny on the admin roles that fires only for EC2', async () => {
+    // The app-role checks ask about Lambda, so this grant slips past them;
+    // the admin roles can still go to ECS, and only the any-request reading
+    // sees that.
+    const result = await run(
+      JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          EC2_STATEMENT,
+          SCOPED_APP,
+          {
+            Effect: 'Allow',
+            Action: 'iam:PassRole',
+            Resource: ROLE('*'),
+            Condition: { StringNotEquals: { 'iam:PassedToService': 'lambda.amazonaws.com' } },
+          },
+          {
+            Effect: 'Deny',
+            Action: 'iam:PassRole',
+            Resource: [ROLE('PlatformAdminRole'), ROLE('ReconciliationBatchRole')],
+            Condition: { StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } },
+          },
+        ],
+      }),
+    );
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks).sort()).toEqual(ADMIN_FAILS);
+  });
+
+  it('passes a scoped Allow with an unconditional Deny on the admin roles, and says nothing of the answer when it fails', async () => {
+    const passed = await run(
+      withExtra({
+        Effect: 'Deny',
+        Action: 'iam:PassRole',
+        Resource: [ROLE('PlatformAdminRole'), ROLE('ReconciliationBatchRole')],
+      }),
+    );
+    expect(failed(passed.checks)).toEqual([]);
+
+    const failing = await run(
+      withExtra({
+        Effect: 'Allow',
+        Action: 'iam:PassRole',
+        Resource: '*',
+        Condition: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+      }),
+    );
+    const blob = failing.checks.map((c) => `${c.label} ${c.detail ?? ''}`).join('\n');
+    expect(blob).not.toContain('iam:PassedToService');
+    expect(blob).not.toContain('ec2.amazonaws.com');
+    expect(blob).not.toContain('AppServerRole');
+  });
+
+  it('asks the admin checks of every request, and the app-role checks of a named one', async () => {
+    const lab = await loadLabDefinition(AWS_005);
+    const admin = lab.requirements.filter(
+      (r) => r.type === 'iam_policy_not_allows' && /Admin|Batch/.test(r.resource),
+    );
+    expect(admin).toHaveLength(2);
+    for (const rule of admin) {
+      expect(rule).toMatchObject({ any_context: true });
+      expect('context' in rule ? rule.context : undefined).toBeUndefined();
+    }
+  });
+});
+
 describe('AWS-005 — isolation and shortcuts', () => {
   it('is not passed by a solved copy in another file', async () => {
     const lab = await loadLabDefinition(AWS_005);

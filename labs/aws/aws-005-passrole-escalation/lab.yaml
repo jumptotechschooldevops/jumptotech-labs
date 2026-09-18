@@ -132,20 +132,21 @@ requirements:
     label: The pipeline can still attach the worker role
 
   # --- the escalation, closed ----------------------------------------------
+  # Asked of every possible request, not only EC2's: handing the administrator
+  # role to any service is the escalation, so an Allow counts whatever its
+  # Condition says, and only an unconditional Deny counts as closing it.
   - type: iam_policy_not_allows
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:PassRole
     resource: arn:aws:iam::123456789012:role/PlatformAdminRole
-    context:
-      iam:PassedToService: ec2.amazonaws.com
+    any_context: true
     label: The pipeline can no longer attach the administrator role
 
   - type: iam_policy_not_allows
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:PassRole
     resource: arn:aws:iam::123456789012:role/ReconciliationBatchRole
-    context:
-      iam:PassedToService: ec2.amazonaws.com
+    any_context: true
     label: The pipeline can no longer attach the finance batch role
 
   # --- and it may only hand roles to one service ---------------------------

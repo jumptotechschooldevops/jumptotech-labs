@@ -9,10 +9,12 @@
  * were ignored.
  */
 import { describe, expect, it } from 'vitest';
+import { requirementSchema } from '@jumptotech/lab-orchestrator';
 import {
   IamConditionUnsupportedError,
   conditionsHold,
   evaluateIamPolicy,
+  mayAllowInAnyContext,
   parseIamPolicy,
   type IamStatement,
 } from '../src/index.js';
@@ -115,5 +117,49 @@ describe('evaluateIamPolicy with a request context', () => {
     const get = { action: 's3:GetObject', resource: 'arn:aws:s3:::b/customer-exports/x.csv' };
     expect(evaluateIamPolicy(p, get)).toBe('explicitDeny');
     expect(evaluateIamPolicy(p, { ...get, context: { 'aws:SecureTransport': 'true' } })).toBe('allow');
+  });
+});
+
+describe('mayAllowInAnyContext — "could any request be allowed?"', () => {
+  const ADMIN = 'arn:aws:iam::123456789012:role/PlatformAdminRole';
+  const REQUEST = { action: 'iam:PassRole', resource: ADMIN };
+  const policy = (...statements: unknown[]) =>
+    parseIamPolicy(JSON.stringify({ Version: '2012-10-17', Statement: statements }));
+  const toService = (service: string) => ({ StringEquals: { 'iam:PassedToService': service } });
+
+  it('counts an Allow whatever its condition says', () => {
+    const p = policy({ Effect: 'Allow', Action: 'iam:PassRole', Resource: '*', Condition: toService('ecs-tasks.amazonaws.com') });
+    expect(mayAllowInAnyContext(p, REQUEST)).toBe(true);
+    // The EC2-only question this replaces said no.
+    expect(evaluateIamPolicy(p, { ...REQUEST, context: { 'iam:PassedToService': 'ec2.amazonaws.com' } })).toBe('implicitDeny');
+  });
+
+  it('counts a Deny only when it has no condition', () => {
+    const allow = { Effect: 'Allow', Action: 'iam:PassRole', Resource: '*' };
+    expect(mayAllowInAnyContext(policy(allow, { Effect: 'Deny', Action: 'iam:PassRole', Resource: ADMIN }), REQUEST)).toBe(false);
+    expect(
+      mayAllowInAnyContext(
+        policy(allow, { Effect: 'Deny', Action: 'iam:PassRole', Resource: ADMIN, Condition: toService('lambda.amazonaws.com') }),
+        REQUEST,
+      ),
+    ).toBe(true);
+  });
+
+  it('is false when nothing covers the resource, and true through a wildcard', () => {
+    const scoped = { Effect: 'Allow', Action: 'iam:PassRole', Resource: 'arn:aws:iam::123456789012:role/App*' };
+    expect(mayAllowInAnyContext(policy(scoped), REQUEST)).toBe(false);
+    expect(mayAllowInAnyContext(policy({ Effect: 'Allow', Action: 'iam:*', Resource: '*' }), REQUEST)).toBe(true);
+  });
+
+  it('needs no condition evaluation, so an unsupported operator cannot throw', () => {
+    const p = policy({ Effect: 'Allow', Action: 'iam:PassRole', Resource: '*', Condition: { DateGreaterThan: { 'aws:CurrentTime': '2020-01-01T00:00:00Z' } } });
+    expect(mayAllowInAnyContext(p, REQUEST)).toBe(true);
+  });
+
+  it('cannot be combined with a single request context in a requirement', () => {
+    const base = { type: 'iam_policy_not_allows', path: '/home/student/p.json', action: 'iam:PassRole', resource: ADMIN, label: 'x' };
+    expect(requirementSchema.safeParse({ ...base, any_context: true }).success).toBe(true);
+    expect(requirementSchema.safeParse({ ...base, any_context: true, context: { 'iam:PassedToService': 'ec2.amazonaws.com' } }).success).toBe(false);
+    expect(requirementSchema.safeParse({ ...base, any_context: false }).success).toBe(false);
   });
 });

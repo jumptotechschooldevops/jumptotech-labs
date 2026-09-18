@@ -632,6 +632,27 @@ export function evaluateIamPolicy(
 }
 
 /**
+ * Could *any* request for this action on this resource be allowed, whatever
+ * condition keys it carries?
+ *
+ * The worst case, read soundly without enumerating contexts: an `Allow` counts
+ * whatever its `Condition` says (some request may satisfy it), and a `Deny`
+ * counts only when it has no `Condition` (only then does it fire for every
+ * request). So a grant limited to another service still counts, and a Deny
+ * whose condition never fires is not protection. It can over-report — a
+ * conditional Deny that exactly mirrors a conditional Allow is not credited —
+ * which is the safe direction for a "must not be allowed" check.
+ */
+export function mayAllowInAnyContext(policy: IamPolicy, request: { action: string; resource: string }): boolean {
+  const covering = policy.statements.filter(
+    (statement) =>
+      statementCoversAction(statement, request.action) && statementCoversResource(statement, request.resource),
+  );
+  if (covering.some((statement) => statement.effect === 'Deny' && statement.conditions.length === 0)) return false;
+  return covering.some((statement) => statement.effect === 'Allow');
+}
+
+/**
  * Statements whose `Action`, `Resource` or `Principal` is the bare `*`.
  *
  * For `Principal` this is the anonymous-access form the documentation warns

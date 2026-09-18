@@ -17,6 +17,7 @@ import {
   IamConditionUnsupportedError,
   IamPolicyParseError,
   evaluateIamPolicy,
+  mayAllowInAnyContext,
   findStatements,
   parseIamPolicy,
   wildcardStatements,
@@ -213,6 +214,14 @@ export const iamPolicyNotAllows: SandboxVerifierHandler<'iam_policy_not_allows'>
   async run(requirement, reader) {
     const result = await readPolicy(reader, requirement.path);
     if ('outcome' in result) return result.outcome;
+
+    if (requirement.any_context === true) {
+      // Conditions are never evaluated here, so no operator can be unsupported.
+      if (!mayAllowInAnyContext(result.policy, requirement)) return pass();
+      return fail(
+        `'${requirement.path}' could permit ${requirement.action} on that resource: a statement allows it, and no unconditional Deny covers it`,
+      );
+    }
 
     const decision = decide(result.policy, requirement);
     if (decision === 'unsupported') return unsupported(requirement.path);
