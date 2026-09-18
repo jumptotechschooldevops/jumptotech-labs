@@ -255,9 +255,10 @@ export const fileMode: SandboxVerifierHandler<'file_mode'> = {
     const expected = normalizeMode(requirement.mode);
     const actual = normalizeMode(read.mode);
     if (actual !== expected) {
-      return fail(
-        `'${requirement.path}' has permissions ${actual}, expected ${expected}`,
-      );
+      // The observed mode, never the required one: working out the octal
+      // value is often the lesson itself (LINUX-011's setgid 2770, sticky
+      // 1777, a umask that yields 0640), and one Check would hand it over.
+      return fail(`'${requirement.path}' has permissions ${actual}, which is not what this lab requires`);
     }
     return pass();
   },
