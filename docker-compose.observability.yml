@@ -61,7 +61,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      # Long on purpose, as in api.Dockerfile: the api transpiles at start and
+      # took 225 s on a loaded host. web and terminal wait for this to be
+      # healthy, so a slow start declared unhealthy left them uncreated.
+      start_period: 300s
 
   terminal:
     environment:
