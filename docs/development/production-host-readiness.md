@@ -423,7 +423,11 @@ make production-preflight ARGS="--backup-dir /srv/jumptotech/backups/postgres --
 
 ## 15. Deployment procedure
 
-Stop at the first FAIL. Placeholders: `<host>`, `<commit>`, `<public-ip>`.
+Stop at the first FAIL, with one named exception: the smoke's `backup.offhost`
+stays FAIL (and so its `RESULT: FAIL`) until D7 is decided and step 23 proves an
+off-host copy. Steps 18–22 continue past that one line; every other smoke line
+must PASS, and no student is invited while it stands. Placeholders: `<host>`,
+`<commit>`, `<public-ip>`.
 
 1. **Host prerequisites** (§5.1). `sudo useradd -m jtt-ops && sudo usermod -aG docker jtt-ops`; log in as `jtt-ops`.
 2. **Firewall** (§7.1), in the provider firewall or `DOCKER-USER`.
@@ -464,6 +468,9 @@ Stop at the first FAIL. Placeholders: `<host>`, `<commit>`, `<public-ip>`.
 13. **Configuration.** `make secrets-check`; `make production-config-check` (0 FAIL).
 14. **Preflight** (§14): `RESULT: PASS`.
 15. **Five-student synthetic gate** (§13.1), before the production stack starts.
+    It rewrites the cluster's NetworkPolicy attestation for the validation `.env`
+    (§13.1 step 8), so **repeat steps 12–14** afterwards: without that the
+    production api refuses every Kubernetes lab and the smoke fails `k8s.attestation`.
 16. **Start.** `prod up -d --build --wait --wait-timeout 900`; `prod ps`. Then:
     ```bash
     export BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status
@@ -474,6 +481,7 @@ Stop at the first FAIL. Placeholders: `<host>`, `<commit>`, `<public-ip>`.
     `scripts/db-restore.sh --into jumptotech_labs_check_<date> <archive>`, and validate it
     ([postgres-backup-restore.md §6.3](../runbooks/postgres-backup-restore.md)).
 17. **Smoke** (§16): `make private-beta-smoke ARGS="--public-ip <public-ip> --report-dir /srv/jumptotech/evidence"`.
+    Every line PASS except `backup.offhost` until D7 (see the exception above).
 18. **External checks, from another network:**
     ```bash
     nc -zv -w3 <public-ip> 80 443
@@ -522,7 +530,8 @@ None of them deletes data.
 |---|---|---|---|
 | Service crash | none (Docker restarts it: `unless-stopped`) | returns by itself; `ServiceRestartLoop` fires if it keeps dying; RB-01 | policy PROVEN LOCALLY (PR #34); REQUIRES PRODUCTION HOST |
 | api restart | `prod restart api` | sessions survive; in-flight requests fail; reaper resumes | PROVEN LOCALLY at `c8eb2c6` (harness) |
-| terminal restart | `prod restart terminal` | open shells drop; students reload | REQUIRES PRODUCTION HOST |
+| api re-created | `prod up -d api` (a `.env` change, an upgrade, a rollback) | open workspaces and terminals stay, with a "Cannot reach the labs API right now" banner; the edge routes to the new container by itself (no `prod restart web`) | PROVEN LOCALLY (browser E2E, real-image edge test; [readiness pass](private-beta-readiness-2026-09-17.md)); REQUIRES PRODUCTION HOST |
+| terminal restart | `prod restart terminal` | open shells drop; the workspace reconnects by itself for about a minute, then offers Reconnect | web behaviour PROVEN LOCALLY (component tests); REQUIRES PRODUCTION HOST |
 | sandboxd restart | `prod restart sandboxd` | container-track shells drop; sandboxes remain | REQUIRES PRODUCTION HOST |
 | database restart | `prod restart postgres` | api not ready until postgres is healthy, then recovers | REQUIRES PRODUCTION HOST |
 | interrupted Reset/End | restart the api mid-operation | ENDING resumed at 5 min; RESETTING → DEGRADED at 10 min ([RB-17](../runbooks/RB-17-session-lifecycle.md)) | PROVEN IN CI |
@@ -711,7 +720,7 @@ With the fix, `tls-edge-integration` passed in PR #38's CI at `5d486ef` (base
 | New release misbehaves, no new migration | `git checkout <previous commit>`, `npm ci`, `prod up -d --build --wait`, preflight, smoke |
 | New release applied a migration | migrations are forward-only: always take `scripts/db-backup.sh --label pre-upgrade` first; roll back by checking out the previous commit and restoring that archive per [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (renames, never drops; its own rollback is §6.6) |
 | Security incident | `prod stop web` (stays stopped across reboots with `unless-stopped`); running labs are reclaimed by idle expiry |
-| Stop launches only | no switch exists; tell the cohort; `MAX_ACTIVE_SESSIONS=1` reduces launches (runbook §3) |
+| Stop launches only | tell the cohort; `LAB_LAUNCHES_PAUSED=true` and `prod up -d api` refuses every Start Lab and keeps running labs (runbook §3) |
 
 Never `prod down -v`, never remove a `jumptotech-labs-*` volume, and never edit
 `lab_sessions` by hand.

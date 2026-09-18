@@ -94,12 +94,41 @@ export const SESSION_STATUS_TEXT: Record<SessionStatus, { label: string; descrip
     label: 'Needs a reset',
     description: 'Your environment is not usable as it is. Reset the lab to rebuild it, or end it.',
   },
-  EXPIRING: { label: 'Time is up', description: 'This environment reached its time limit and is being removed…' },
+  // Neutral: EXPIRING is both the time limit and inactivity (see removedForInactivity).
+  EXPIRING: { label: 'Being removed', description: 'This environment is being removed…' },
   EXPIRED: { label: 'Expired', description: 'This environment was removed when its time ran out.' },
   ENDING: { label: 'Shutting down', description: 'Your lab environment is being removed…' },
   ENDED: { label: 'Ended', description: 'This lab environment has been removed.' },
   FAILED: { label: 'Failed', description: 'This lab environment could not be created.' },
 };
+
+/**
+ * The text for a session status, including one this bundle does not know.
+ *
+ * A tab stays open across a deployment, so the api can name a status newer than
+ * the bundle running in it. Indexing the table directly then threw while
+ * rendering the app shell, outside every page's error boundary, and blanked the
+ * whole app for a student with a lab open.
+ */
+export function sessionStatusText(status: string): { label: string; description: string } {
+  return (
+    (SESSION_STATUS_TEXT as Record<string, { label: string; description: string } | undefined>)[status] ?? {
+      label: 'Updating',
+      description: 'This lab changed in a way this page does not show yet. Reload the page to see it.',
+    }
+  );
+}
+
+/**
+ * Whether the platform removed (or is removing) a lab because nobody used it.
+ *
+ * The reaper tears an idle lab down through the same EXPIRING → EXPIRED path as
+ * the time limit, with the reason "idle for more than 1200s"; the orchestrator
+ * classifies it the same way (`endReasonFor` in session/manager.ts).
+ */
+export function removedForInactivity(session: { status: string; statusReason?: string }): boolean {
+  return (session.status === 'EXPIRING' || session.status === 'EXPIRED') && /idle/i.test(session.statusReason ?? '');
+}
 
 /** States in which a session still holds an environment the student can come back to. */
 export function isLiveStatus(status: SessionStatus): boolean {

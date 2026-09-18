@@ -19,6 +19,7 @@
  * lifecycle, including substrate creation, without any caller changing.
  */
 import { execFile } from 'node:child_process';
+import { execFileOutcome } from './container/runtime.js';
 import type {
   CreateResult,
   DestroyResult,
@@ -117,12 +118,7 @@ export const execFileExecRunner: ProviderExecRunner = (command, args, options) =
       args,
       { timeout: options.timeoutMs, env: options.env, maxBuffer: 1024 * 1024, shell: false },
       (error, stdout, stderr) => {
-        const timedOut = Boolean(error && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
-        let exitCode = 0;
-        if (error) {
-          const code = (error as { code?: unknown }).code;
-          exitCode = typeof code === 'number' ? code : 1;
-        }
+        const { exitCode, timedOut } = execFileOutcome(error);
         resolve({
           exitCode,
           stdout: String(stdout),

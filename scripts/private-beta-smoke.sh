@@ -70,7 +70,8 @@ Options:
   --connect IP       connect to this address instead of DNS (before DNS is live); the Host/SNI stay the origin's
   --public-ip IP     also probe this host's public address for ports that must be closed (from the host itself)
   --report-dir DIR   write the evidence file there (no secrets)
-  --env-file FILE    default: <checkout>/.env
+  --env-file FILE    where PUBLIC_ORIGIN is read (default: <checkout>/.env); the
+                     stack itself always runs with <checkout>/.env
 USAGE
 }
 
@@ -257,15 +258,19 @@ else
 fi
 
 section 'private paths through the edge — PUBLIC-ENDPOINT PROOF, from this host'
-internal=$(edge_curl -X POST -H 'content-type: application/json' --data '{}' "https://$host/internal/sessions/jtt-smoke/credentials" 2>/dev/null || true)
-if jtt_contains "$internal" 'internal service use only'; then
+# An empty body proves nothing when the request itself failed (edge down, TLS
+# refused): those are FAILs that say the check could not run, never PASSes.
+if ! internal=$(edge_curl -X POST -H 'content-type: application/json' --data '{}' "https://$host/internal/sessions/jtt-smoke/credentials" 2>/dev/null); then
+  fail edge.internal-not-routed 'could not check: the request to the edge failed (see edge.https)'
+elif jtt_contains "$internal" 'internal service use only'; then
   fail edge.internal-not-routed 'POST /internal/... reached the api through the public edge'
 else
   pass edge.internal-not-routed '/internal is not routed to the api'
 fi
 for path in /metrics /readyz /health; do
-  body=$(edge_curl "https://$host$path" 2>/dev/null || true)
-  if jtt_contains "$body" -E '^# (HELP|TYPE) |"service":"api"|jtt_'; then
+  if ! body=$(edge_curl "https://$host$path" 2>/dev/null); then
+    fail "edge.not-routed$path" 'could not check: the request to the edge failed (see edge.https)'
+  elif jtt_contains "$body" -E '^# (HELP|TYPE) |"service":"api"|jtt_'; then
     fail "edge.not-routed$path" "GET $path returned an api/metrics response through the public edge"
   else
     pass "edge.not-routed$path" "GET $path does not reach a service"
@@ -321,7 +326,12 @@ fi
 if [ -n "$public_ip" ]; then
   open=()
   for port in 22 3000 3001 4000 4001 4002 5432 6443 9090 9093 9400 9401 9402 16443; do
-    if curl -s --max-time 3 -o /dev/null "telnet://$public_ip:$port" </dev/null 2>/dev/null; then open+=("$port"); fi
+    # Open means the TCP handshake completed, not that curl exited 0: almost
+    # every port here (PostgreSQL, HTTP, TLS, SSH after its banner) waits for
+    # the client, so an open port ends in curl's time limit (28), exactly like
+    # a filtered one. time_connect is 0 unless a connection was made.
+    connected=$(curl -s --connect-timeout 3 --max-time 3 -o /dev/null -w '%{time_connect}' "telnet://$public_ip:$port" </dev/null 2>/dev/null || true)
+    if awk -v t="${connected:-0}" 'BEGIN { exit !(t + 0 > 0) }'; then open+=("$port"); fi
   done
   if [ ${#open[@]} -eq 0 ]; then
     pass exposure.public-ip "from this host, $public_ip refuses 22, 3000-3001, 4000-4002, 5432, 6443, 9090, 9093, 9400-9402, 16443"
@@ -348,7 +358,10 @@ else
   fi
 fi
 firing=$(q 'ALERTS{alertstate="firing"}' | sed -nE 's/.*alertname="([^"]+)".*/\1/p' | sort -u | tr '\n' ' ' || true)
-if [ -z "${firing// /}" ]; then
+if [ -z "$up" ]; then
+  # q prints nothing both for "no alert" and for "Prometheus did not answer".
+  fail observability.alerts 'could not check: Prometheus did not answer (see observability.targets)'
+elif [ -z "${firing// /}" ]; then
   pass observability.alerts 'no alert is firing'
 else
   warn observability.alerts "firing: ${firing% } (docs/runbooks/private-beta-operations.md §3 decides whether students may launch)"

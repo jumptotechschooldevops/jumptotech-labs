@@ -55,7 +55,9 @@ usage() {
   sed -n '3,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   cat <<'USAGE'
 Options:
-  --env-file FILE        the .env the stack starts with (default: <checkout>/.env)
+  --env-file FILE        the .env to check (default: <checkout>/.env). `prod up` always
+                         reads <checkout>/.env: checking another file proves nothing
+                         about what starts
   --backup-dir DIR       the BACKUP_DIR the backup job uses (default: $BACKUP_DIR or /srv/jumptotech/backups/postgres)
   --report FILE          also write the result lines to FILE (no secrets)
   --skip-config-check    do not run scripts/production-config-check.ts (the result is then a FAIL)
@@ -518,7 +520,7 @@ if have ss; then
       pass "exposure.port-$port" "port $port is free"
     fi
   done
-  others=$(printf '%s\n' "$listeners" | { grep -Ev '^(127\.[0-9.]+|\[::1\]|::1):[0-9]+$' || true; } | { grep -Ev '[:.](80|443)$' || true; } |
+  others=$(printf '%s\n' "$listeners" | { grep -Ev '^(127\.[0-9.]+|\[::1\]|::1)(%[^:]+)?:[0-9]+$' || true; } | { grep -Ev '[:.](80|443)$' || true; } |
     sed -E 's/.*[:.]([0-9]+)$/\1/' | sort -un | tr '\n' ' ')
   if [ -n "${others// /}" ]; then
     manual exposure.other-listeners "non-loopback TCP listeners besides 80/443: ${others% }. Confirm each is intended (SSH) and firewalled"
@@ -567,8 +569,17 @@ else
   fi
 fi
 if [ -f "$cron_file" ]; then
-  pass backup.schedule "$cron_file exists"
-  if grep -q BACKUP_COPY_HOOK "$cron_file"; then info backup.copy-hook 'the schedule names a BACKUP_COPY_HOOK'; fi
+  # A file that exists is not a schedule: every job line in it may be commented out.
+  cron_jobs=$(grep -Ev '^[[:space:]]*(#|$)' "$cron_file" 2>/dev/null || true)
+  if jtt_contains "$cron_jobs" 'db-backup\.sh'; then
+    pass backup.schedule "$cron_file schedules scripts/db-backup.sh"
+  else
+    manual backup.schedule "$cron_file exists but no uncommented line runs scripts/db-backup.sh: confirm backups are scheduled (private-beta-operations.md §1.2)"
+  fi
+  if ! jtt_contains "$cron_jobs" 'db-restore\.sh.*--verify-only'; then
+    manual backup.verify-schedule "$cron_file does not run db-restore.sh --verify-only: confirm the weekly archive verification is scheduled (private-beta-operations.md §1.2)"
+  fi
+  if jtt_contains "$cron_jobs" BACKUP_COPY_HOOK; then info backup.copy-hook 'the schedule names a BACKUP_COPY_HOOK'; fi
 else
   manual backup.schedule "$cron_file does not exist: confirm backups and weekly verification are scheduled some other way (private-beta-operations.md §1.2)"
 fi
@@ -585,8 +596,17 @@ if [ $env_ok -eq 1 ] && [ -x "$repo/node_modules/.bin/tsx" ] && [ $skip_config_c
   config_output=$(cd "$repo" && npx tsx scripts/production-config-check.ts --env-file "$env_file" ${socket_gid:+--docker-socket-gid "$socket_gid"} 2>&1)
   config_status=$?
   set -e
-  # Its lines are already secret-free; indent them under one result.
-  printf '%s\n' "$config_output" | grep -E '^(PASS|FAIL|WARN|INFO)' | sed 's/^/    /'
+  # Its lines are already secret-free; indent them under one result, on screen
+  # and in --report (the summary line below points at them). A check that died
+  # before printing any result line (a tsx crash, the tool timeout) must reach
+  # the "could not run" FAIL below rather than stop this script under pipefail.
+  config_lines=$(printf '%s\n' "$config_output" | { grep -E '^(PASS|FAIL|WARN|INFO)' || true; })
+  if [ -n "$config_lines" ]; then
+    while IFS= read -r config_line; do
+      printf '    %s\n' "$config_line"
+      jtt_lines+=("    $config_line")
+    done <<<"$config_lines"
+  fi
   expected_digest=$(printf '%s\n' "$config_output" | awk '$2 == "attestation.expected-digest" {print $3}')
   config_warnings=$(printf '%s\n' "$config_output" | grep -c '^WARN' || true)
   if [ "$config_warnings" -gt 0 ]; then

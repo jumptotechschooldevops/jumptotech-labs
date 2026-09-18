@@ -35,7 +35,8 @@
  * real loaders, that a complete beta configuration passes and that each unsafe
  * variation is refused.
  *
- * Exit: 0 no FAIL · 1 at least one FAIL · 2 could not run (usage, compose missing).
+ * Exit: 0 no FAIL · 1 at least one FAIL (including compose refusing the .env) ·
+ * 2 could not run (usage; the docker CLI missing or hung).
  */
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -87,6 +88,8 @@ export const NETWORK_CONTRACT_VARIABLES = [
 interface Resolution {
   config?: ResolvedCompose;
   error?: string;
+  /** The docker CLI could not be run at all (missing, hung): a tooling failure, not a refusal. */
+  toolFailure?: boolean;
 }
 
 /** `docker compose config` for the production stack. stdout (every secret) stays in memory. */
@@ -104,7 +107,7 @@ function resolveComposition(options: { envFile?: string; env: NodeJS.ProcessEnv 
   ];
   // Rendering needs no daemon; two minutes is a hung CLI, not a slow one.
   const result = spawnSync('docker', args, { env: options.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120_000 });
-  if (result.error) return { error: `could not run docker compose: ${result.error.message}` };
+  if (result.error) return { error: `could not run docker compose: ${result.error.message}`, toolFailure: true };
   if (result.status !== 0) {
     const message = result.stderr.trim().split('\n').slice(-3).join(' ') || `docker compose config exited ${result.status}`;
     return { error: redactComposeError(message, options.envFile ?? path.join(repoRoot, '.env')) };
@@ -327,6 +330,10 @@ function main(): number {
     env: process.env,
   });
   if (!resolution.config) {
+    if (resolution.toolFailure) {
+      console.error(`production-config-check: ${resolution.error}`);
+      return 2;
+    }
     console.error(`FAIL   compose.render  docker compose refused the production configuration: ${resolution.error}`);
     return values['print-network-env'] ? 2 : 1;
   }

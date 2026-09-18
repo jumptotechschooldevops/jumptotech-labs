@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useActiveSession } from '../lib/ActiveSessionContext';
-import { SESSION_STATUS_TEXT } from '../lib/format';
+import { sessionStatusText } from '../lib/format';
 import { FLAGSHIP_PATH_ID } from '../lib/learningPath';
 import { hrefFor, type Route } from '../lib/router';
 import { UserMenu } from './UserMenu';
@@ -50,7 +50,7 @@ function ActiveLabIndicator({ route }: { route: Route }) {
 
   const { session } = entry;
   const inWorkspace = route.name === 'workspace' && route.labId === session.labId;
-  const status = SESSION_STATUS_TEXT[session.status];
+  const status = sessionStatusText(session.status);
   return (
     <a
       className={`active-lab active-lab--${session.status.toLowerCase()}`}

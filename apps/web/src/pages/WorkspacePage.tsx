@@ -34,7 +34,7 @@ import { useCatalog } from '../lib/CatalogContext';
 import { ApiRequestError, api } from '../lib/api';
 import { describeError, toApiError } from '../lib/errors';
 import { RESET_KEEPS, describeProvider, describeReset } from '../lib/environmentInfo';
-import { SESSION_STATUS_TEXT, formatMinutes, isLiveStatus, isTransitionalStatus } from '../lib/format';
+import { SESSION_STATUS_TEXT, formatMinutes, isLiveStatus, isTransitionalStatus, removedForInactivity, sessionStatusText } from '../lib/format';
 import { hrefFor, usePageTitle } from '../lib/router';
 import type {
   ApiError,
@@ -50,14 +50,51 @@ import { ErrorNotice } from '../components/ErrorNotice';
 import { IdleWarning } from '../components/IdleWarning';
 import { LabBrief } from '../components/LabBrief';
 import { LabTerminal, type LabTerminalHandle, type TerminalEvent } from '../components/LabTerminal';
+import { FLAGSHIP_PATH_ID } from '../lib/learningPath';
 import { LabTimer } from '../components/LabTimer';
 import { VerificationPanel, type VerifyState } from '../components/VerificationPanel';
 import { Badge, EmptyState, LoadingState } from '../components/ui';
 
 export const STEADY_POLL_MS = 15_000;
 export const TRANSITION_POLL_MS = 3_000;
-/** Automatic reconnects after an abnormal drop, before asking the student. */
-const AUTO_RECONNECTS = [1_000, 3_000, 6_000];
+/** How many times a workspace with no session for its lab looks again (≈30 s). */
+export const NOT_RUNNING_RECHECKS = 10;
+/**
+ * Automatic reconnects after an abnormal drop, before asking the student.
+ *
+ * About a minute in all: long enough to ride out a terminal or sandboxd
+ * container restart (`prod restart terminal`, or Docker's own restart policy),
+ * which takes longer than the ten seconds the first three steps cover.
+ */
+export const AUTO_RECONNECTS = [1_000, 3_000, 6_000, 10_000, 15_000, 25_000];
+
+/**
+ * Terminal refusals that describe the platform's plumbing rather than the
+ * session: a broker or API that is restarting, a shell that could not be
+ * spawned this time, an attach slower than the auth grace. The same bounded
+ * retry as a dropped connection.
+ */
+const TRANSIENT_TERMINAL_CODES = new Set([
+  'CONNECTION_LOST',
+  'BROKER_UNREACHABLE',
+  'PTY_SPAWN_FAILED',
+  'CREDENTIALS_UNAVAILABLE',
+  'SANDBOX_UNAVAILABLE',
+  'AUTH_TIMEOUT',
+]);
+
+/**
+ * Refusals that mean the session is not what this page thinks it is. They are
+ * never retried; the session is re-read so the page shows what it really is.
+ * SANDBOX_REF_MISMATCH is a security refusal and belongs here, not above.
+ */
+const SESSION_STATE_TERMINAL_CODES = new Set([
+  'SESSION_NOT_ACTIVE',
+  'SESSION_NOT_FOUND',
+  'SESSION_NOT_OWNED',
+  'INVALID_TERMINAL_CONTEXT',
+  'SANDBOX_REF_MISMATCH',
+]);
 
 const TERMINAL_TEXT: Record<string, string> = {
   // Shown only while the session is still ACTIVE: a lab that really ended moves
@@ -71,6 +108,17 @@ const TERMINAL_TEXT: Record<string, string> = {
   CREDENTIALS_UNAVAILABLE: 'The terminal could not attach to your environment.',
   CONNECTION_LOST: 'Connection to the terminal was lost.',
 };
+
+/**
+ * Whether `secondsRemaining` is a real countdown for this status.
+ *
+ * The api sends 0 for every status but ACTIVE and RESETTING (SessionManager.view),
+ * so reading 0 as "time is up" told a student whose lab was being prepared,
+ * needed a reset, or was ending that it had run out of time.
+ */
+function countsDown(status: SessionInfo['status']): boolean {
+  return status === 'ACTIVE' || status === 'RESETTING';
+}
 
 function statusTone(status: SessionInfo['status']) {
   if (status === 'ACTIVE') return 'success' as const;
@@ -164,12 +212,36 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const launchingHere = active.launching?.labId === labId;
   const launchError = active.launchError?.labId === labId ? active.launchError.error : null;
 
+  /*
+   * Nothing for this lab yet: look again for a while before settling on "not
+   * running". A reload while Start Lab is in flight cancels the browser's
+   * request but not the server's work, and the lab appears in the list a moment
+   * after this page first read it. Without this the page said "not running" for
+   * a lab that was being built and held the student's only slot.
+   */
+  const notFoundYet = !entry && !launchingHere && !launchError && active.status === 'ready';
+  useEffect(() => {
+    if (!notFoundYet) return;
+    let checks = 0;
+    const timer = setInterval(() => {
+      checks += 1;
+      if (checks > NOT_RUNNING_RECHECKS) {
+        clearInterval(timer);
+        return;
+      }
+      void refreshSessionList();
+    }, TRANSITION_POLL_MS);
+    return () => clearInterval(timer);
+  }, [notFoundYet, refreshSessionList]);
+
   const [session, setSession] = useState<SessionInfo | null>(entry?.session ?? null);
   const [attempt, setAttempt] = useState<AttemptSummary | null>(entry?.attempt ?? null);
   const [gone, setGone] = useState(false);
   // Seeded now when the session is already known at mount; otherwise when it arrives.
   const [timerSeed, setTimerSeed] = useState<number | null>(() => (entry ? Date.now() : null));
   const [timeExpired, setTimeExpired] = useState(false);
+  /** Five minutes or less are left; shown once per session, until time is up. */
+  const [timeLow, setTimeLow] = useState(false);
 
   const [verify, setVerify] = useState<VerifyState>({ kind: 'idle' });
   const [lastChecks, setLastChecks] = useState<CheckResult[] | undefined>();
@@ -204,7 +276,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
     (next: SessionInfo, nextAttempt?: AttemptSummary | null) => {
       setSession(next);
       setTimerSeed(Date.now());
-      setTimeExpired(next.secondsRemaining <= 0 && isLiveStatus(next.status));
+      setTimeExpired(
+        (next.status === 'EXPIRING' && !removedForInactivity(next)) ||
+          (countsDown(next.status) && next.secondsRemaining <= 0),
+      );
       if (nextAttempt) setAttempt(nextAttempt);
       adoptSession(next, nextAttempt ?? null);
     },
@@ -219,6 +294,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     setAttempt(entry.attempt ?? null);
     setTimerSeed(Date.now());
     setTimeExpired(false);
+    setTimeLow(false);
     setGone(false);
     setVerify({ kind: 'idle' });
     setLastChecks(undefined);
@@ -350,7 +426,12 @@ export function WorkspacePage({ labId }: { labId: string }) {
             refreshSession();
           }
           break;
-        case 'CONNECTION_LOST': {
+        default: {
+          if (event.code && SESSION_STATE_TERMINAL_CODES.has(event.code)) {
+            refreshSession();
+            break;
+          }
+          if (!event.code || !TRANSIENT_TERMINAL_CODES.has(event.code)) break;
           const delay = AUTO_RECONNECTS[autoReconnects.current];
           if (delay !== undefined) {
             autoReconnects.current += 1;
@@ -363,8 +444,6 @@ export function WorkspacePage({ labId }: { labId: string }) {
           refreshSession();
           break;
         }
-        default:
-          break;
       }
     },
     [reconnect, refreshSession, cancelAutoReconnect],
@@ -484,6 +563,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
   );
 
   const handleExpire = useCallback(() => setTimeExpired(true), []);
+  const handleTimeLow = useCallback(() => setTimeLow(true), []);
 
   const environment = useMemo(() => (lab ? describeProvider(lab.environment.provider) : null), [lab]);
   const startReport = active.lastStart?.sessionId === sessionId ? active.lastStart : null;
@@ -619,7 +699,16 @@ export function WorkspacePage({ labId }: { labId: string }) {
       );
     } else if (ending || status === 'ENDING' || status === 'EXPIRING') {
       overlay = (
-        <Overlay title={status === 'EXPIRING' ? 'Time is up — removing your environment…' : 'Shutting down your lab environment…'} busy>
+        <Overlay
+          title={
+            status === 'EXPIRING'
+              ? session && removedForInactivity(session)
+                ? 'Removing your environment after inactivity…'
+                : 'Time is up — removing your environment…'
+              : 'Shutting down your lab environment…'
+          }
+          busy
+        >
           <p className="overlay__text">Cleanup continues automatically. You can leave this page.</p>
         </Overlay>
       );
@@ -662,18 +751,24 @@ export function WorkspacePage({ labId }: { labId: string }) {
     }
   }
 
+  // A container Reset removes the sandbox about a second in, and the shell with
+  // it: the socket closes as "shell exited" long before the reset answers. That
+  // is the reset working, and the page reconnects when it answers.
+  const resetInFlight = resetting && terminal.status === 'disconnected';
   const terminalLabel =
     terminal.status === 'connected'
       ? 'Connected'
       : terminal.status === 'connecting'
         ? 'Connecting…'
-        : terminal.status === 'disconnected'
-          ? (TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST)
-          : 'Not connected';
+        : resetInFlight
+          ? 'Resetting your environment…'
+          : terminal.status === 'disconnected'
+            ? (TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST)
+            : 'Not connected';
   const showReconnect =
     // Including SESSION_ENDED: while the session is still ACTIVE that means another
     // tab took the terminal over, and Reconnect is how this tab takes it back.
-    status === 'ACTIVE' && everConnected && terminal.status === 'disconnected';
+    status === 'ACTIVE' && everConnected && terminal.status === 'disconnected' && !resetInFlight;
 
   return (
     <div className="workspace">
@@ -690,7 +785,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
         <div className="workspace__status" role="status" aria-live="polite">
           {session && !relaunching ? (
             <Badge tone={gone ? 'neutral' : statusTone(session.status)}>
-              {gone ? 'Gone' : SESSION_STATUS_TEXT[session.status].label}
+              {gone ? 'Gone' : sessionStatusText(session.status).label}
             </Badge>
           ) : (
             <Badge tone="warning">Preparing</Badge>
@@ -702,10 +797,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
           ) : null}
         </div>
 
-        {live && session ? (
+        {live && session && countsDown(session.status) ? (
           <div className="workspace__timer">
             <span className="workspace__timer-label">Time left</span>
-            <LabTimer startedAt={timerSeed ?? Date.now()} durationSeconds={session.secondsRemaining} onExpire={handleExpire} />
+            <LabTimer startedAt={timerSeed ?? Date.now()} durationSeconds={session.secondsRemaining} onExpire={handleExpire} onWarning={handleTimeLow} />
           </div>
         ) : null}
 
@@ -726,6 +821,15 @@ export function WorkspacePage({ labId }: { labId: string }) {
 
       {session?.idleWarning && status === 'ACTIVE' ? (
         <IdleWarning secondsUntilIdle={session.secondsUntilIdle} busy={continuing} onContinue={() => void handleStayActive()} />
+      ) : null}
+
+      {timeLow && !timeExpired && live && status === 'ACTIVE' ? (
+        <div className="banner banner--warning" role="status">
+          <p className="banner__text">
+            <strong>A few minutes left in this lab.</strong> Press Verify now if you have not: when the time is up the
+            environment is removed. Anything already verified stays in your progress.
+          </p>
+        </div>
       ) : null}
 
       {timeExpired && live ? (
@@ -871,16 +975,20 @@ function FinalSummary({
 }) {
   const title = gone
     ? 'This lab environment no longer exists'
-    : session?.status === 'EXPIRED'
+    : session && session.status === 'EXPIRED' && removedForInactivity(session)
+      ? 'Your lab environment was removed after inactivity'
+      : session?.status === 'EXPIRED'
       ? 'Your lab environment expired'
       : session?.status === 'FAILED'
         ? 'Your lab environment failed'
         : 'Lab ended';
   const description = gone
     ? 'It was ended or cleaned up. Your saved progress is not affected.'
-    : session
-      ? SESSION_STATUS_TEXT[session.status].description
-      : '';
+    : session && removedForInactivity(session)
+      ? 'Nobody used it for a while, so it was removed to free the space for others. Your saved progress is not affected.'
+      : session
+        ? sessionStatusText(session.status).description
+        : '';
 
   return (
     <div className="workspace__final">
@@ -905,9 +1013,19 @@ function FinalSummary({
             <a className="btn btn--primary" href={hrefFor({ name: 'workspace', labId: otherRunning })}>
               Continue {otherRunning}
             </a>
+          ) : attempt?.status === 'PASSED' ? (
+            <>
+              {/* A completed lab leads on: the path page names the next lab. */}
+              <a className="btn btn--primary" href={hrefFor({ name: 'path', pathId: FLAGSHIP_PATH_ID })}>
+                Continue the learning path
+              </a>
+              <button type="button" className="btn btn--secondary" onClick={onLaunchAgain} disabled={launching}>
+                Launch again
+              </button>
+            </>
           ) : (
             <button type="button" className="btn btn--primary" onClick={onLaunchAgain} disabled={launching}>
-              {attempt?.status === 'PASSED' ? 'Launch again' : 'Launch a fresh environment'}
+              Launch a fresh environment
             </button>
           )}
           <a className="btn btn--secondary" href={hrefFor({ name: 'labs' })}>

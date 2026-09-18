@@ -99,7 +99,7 @@ describe('GET /health', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.data.labsLoaded).toBeGreaterThanOrEqual(1);
-    expect(res.body.data.sessions).toEqual({ active: 0, maxActive: 20 });
+    expect(res.body.data.sessions).toEqual({ active: 0, maxActive: 20, launchesPaused: false });
   });
 });
 

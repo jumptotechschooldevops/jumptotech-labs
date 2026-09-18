@@ -181,7 +181,24 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     let user: AuthenticatedUser | null = null;
     try {
       user = await deps.browser.authenticate(req.get('cookie'));
-    } catch {
+    } catch (error) {
+      if (!(error instanceof AuthError)) {
+        /*
+         * The store could not answer (a PostgreSQL restart, a pool timeout).
+         * That says nothing about the cookie, so it is neither "signed out" nor
+         * cleared: clearing it here signed a student with a lab open out for
+         * good over a database blip. The browser keeps its app mounted on a
+         * failed re-check and asks again later.
+         */
+        log(`session check could not reach the session store: ${error instanceof Error ? error.name : 'error'}`);
+        res.setHeader('retry-after', '5');
+        sendError(res, 503, {
+          code: 'AUTH_UNAVAILABLE',
+          message: 'Your sign-in could not be checked right now.',
+          remediation: 'Try again in a moment. You are still signed in.',
+        });
+        return;
+      }
       /*
        * An expired or unusable cookie is "signed out", not an error.
        *

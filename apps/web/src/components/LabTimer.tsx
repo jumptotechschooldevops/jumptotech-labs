@@ -17,7 +17,12 @@ interface LabTimerProps {
   startedAt: number | null;
   durationSeconds: number;
   onExpire: () => void;
+  /** Fired once when WARNING_SECONDS or fewer are left (never for a countdown that starts at 0). */
+  onWarning?: () => void;
 }
+
+/** When the countdown turns amber and the workspace tells the student to verify. */
+export const WARNING_SECONDS = 300;
 
 function format(totalSeconds: number): string {
   const clamped = Math.max(0, totalSeconds);
@@ -26,7 +31,7 @@ function format(totalSeconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-export function LabTimer({ startedAt, durationSeconds, onExpire }: LabTimerProps) {
+export function LabTimer({ startedAt, durationSeconds, onExpire, onWarning }: LabTimerProps) {
   const [remaining, setRemaining] = useState(durationSeconds);
 
   useEffect(() => {
@@ -36,10 +41,15 @@ export function LabTimer({ startedAt, durationSeconds, onExpire }: LabTimerProps
     }
 
     let expired = false;
+    let warned = false;
     const tick = () => {
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
       const left = durationSeconds - elapsed;
       setRemaining(left);
+      if (left > 0 && left <= WARNING_SECONDS && !warned) {
+        warned = true;
+        onWarning?.();
+      }
       if (left <= 0 && !expired) {
         expired = true;
         onExpire();
@@ -49,10 +59,10 @@ export function LabTimer({ startedAt, durationSeconds, onExpire }: LabTimerProps
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [startedAt, durationSeconds, onExpire]);
+  }, [startedAt, durationSeconds, onExpire, onWarning]);
 
   const running = startedAt !== null;
-  const warning = running && remaining <= 300 && remaining > 0;
+  const warning = running && remaining <= WARNING_SECONDS && remaining > 0;
   const expired = running && remaining <= 0;
 
   return (

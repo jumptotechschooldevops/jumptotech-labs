@@ -457,3 +457,126 @@ Every row below is open. Each is also item-for-item in the readiness document's
 | Off-host, encrypted backup, and one restore from it | **REQUIRES EXTERNAL DECISION** |
 | An alert delivered to a person | **REQUIRES EXTERNAL DECISION** |
 | Unattended recovery after a Docker restart and a host reboot, with the §11.3 restart policy | **NOT PROVEN** on a host |
+
+---
+
+## 14. Private-beta readiness pass — 2026-09-17
+
+Added by `feat/private-beta-readiness`, on PR #38 (`fbe490d`, base `c00ec48`).
+§1–§13 are left as recorded. Details, evidence and the full requirement audit:
+[private-beta-readiness-2026-09-17.md](../development/private-beta-readiness-2026-09-17.md).
+
+**No production host, DNS name, public certificate, identity provider, alert
+receiver or off-host backup was exercised.** Nothing here changes §13.2.
+
+### 14.1 Defects fixed
+
+| Defect | Evidence |
+|---|---|
+| nginx resolved `api`/`terminal` once: after `prod up -d api` (or an upgrade or rollback) re-created a container at a new address, every request was 502 until web restarted | reproduced; real-image edge test fails without the fix |
+| `/api/` used nginx's 60 s read timeout while Start Lab waits for provisioning (Docker up to 180 s): a slow start was a 504 and a confusing retry | old config 504 at 60.08 s, new 200 at 70.20 s |
+| A failed session re-check unmounted a signed-in student's app and closed their terminal | component and browser tests fail on the old code |
+| The session query had no time limit | component test |
+| Terminal auto-reconnect stopped after ~10 s and ignored restart-time codes | component tests |
+| No stop-launches switch (§6's follow-up) | `LAB_LAUNCHES_PAUSED`; api and web tests; runbook §3 |
+| After a refused oversized paste, a real terminal drop was not auto-reconnected | component test |
+| A failed Reset was worded as a Verify problem | mapping test |
+| A reload during Start Lab showed "not running" for good while the lab was being built | component test; browser test found it |
+
+### 14.2 Status changes against earlier sections
+
+- **§6 "No maintenance-mode / stop-launches switch"** — closed by
+  `LAB_LAUNCHES_PAUSED` (proven locally; not yet in CI).
+- **§12 "Browser E2E in CI: NOT PROVEN"** — superseded: `browser-e2e` passed on
+  PR #37 (run `35182078014`, head `591fc9e`), which was then merged.
+- **§12 "Real (non-injected) API outage", "Reset flow", "more than two
+  concurrent browser students", "progress across API/DB restart"** — now
+  browser tests, passing locally; not yet in CI.
+- **§11.2 `make beta-validate` on the current tree** — still **not re-run**. The
+  development machine could not host a sixth kind cluster safely.
+
+### 14.3 Local validation on this branch (not CI, not a host)
+
+`npm test` 4,877 passed / 0 failed; `npm run test:security` 797 passed;
+typecheck; `validate:labs` 117/0/0; PR #38's config self-test and host-script
+tests; `make db-restore-drill` and the backup refusal tests; browser E2E
+14/14, now including Reset, reload during Start, a second tab, five students
+in five browsers with a sixth refused, and real api, terminal and database
+restarts.
+
+One student-visible issue found tonight is **open**: after Reset on a
+container lab the first command typed is often lost (the terminal is
+reattached by the service and reconnected by the page). A fix was tried and
+withdrawn; see the readiness report §4. Students can retype.
+
+**Verdict unchanged in kind:** software ready for a real-host deployment test;
+**not ready for student access** until §13.2 is done on a host.
+
+## 15. Private-beta launch-readiness pass — 2026-09-17
+
+Added by `feat/private-beta-launch-readiness`, on `main` at `bf712a8`, which
+also carries §14's branch (`fb94cf5`, not merged before). §1–§14 are left as
+recorded. Details and evidence:
+[private-beta-launch-readiness-2026-09-17.md](../development/private-beta-launch-readiness-2026-09-17.md).
+
+**No production host, DNS name, public certificate, identity provider, alert
+receiver or off-host backup was exercised.** Nothing here changes §13.2.
+
+### 15.1 Defects fixed
+
+| Defect | Evidence |
+|---|---|
+| **§14's open Reset issue, root-caused:** keys typed while the terminal connects were dropped by the browser (not a double attach) — after Reset, and on every reconnect | frame-level browser probe; component tests; browser Reset test types once: 0/3 before, 5/5 after |
+| A paste over 8 KB was refused and lost | component test |
+| A database blip signed students out for good (401 for a store failure, then `/auth/session` cleared the cookie) | `test:security` cases; browser test with PostgreSQL stopped fails on the old api |
+| Reset showed "The shell exited." with Reconnect for its whole duration | component test |
+| An unknown session status blanked the app | routed-app test |
+| After End, the next lab's page said the ended lab "is still running … end it" | measured in the browser; component test |
+| A busy host failed Start as "rebuild the sandbox image"; exec timeouts were never detected as timeouts | found by the five-student browser test; provider and runtime tests |
+| Smoke `--public-ip` reported open ports as closed; several smoke/preflight checks printed PASS when they could not run; preflight could exit with no RESULT or report | host-script harness (12 assertions fail on the old scripts), macOS and Linux bash |
+| The §15 host procedure started production with the validation attestation, and could not pass step 17 before D7 | documentation |
+| "Time is up" and 00:00 on a lab that was preparing, needed a reset or was ending | component tests |
+| A passing Verify whose save failed said it was recorded | component test |
+| A lab removed for inactivity said its time ran out; no warning before the time limit | component tests |
+| A completed lab's summary did not lead to the next lab | component test |
+
+### 15.2 Status changes against earlier sections
+
+- **§14.3 "open: after Reset … the first command typed is often lost"** — closed.
+- **§14 `feat/private-beta-readiness` "not merged"** — its commits are on this branch.
+- **Operator evidence (§13):** the exposure probe and the checks above now fail
+  rather than pass when they cannot prove their claim. Still local only; the
+  host run is §13.2.
+
+### 15.3 Classification of the gate, as of this branch
+
+| Gate | Classification |
+|---|---|
+| Production auth fails closed; ownership on every session route and attach | **PROVEN BY AUTOMATED TEST** (CI on main); the 503-on-store-failure change **PROVEN LOCALLY ONLY** |
+| Only beta students can sign in | **REQUIRES EXTERNAL CONFIGURATION** (D3, identity provider) — the api admits any account the issuer authenticates |
+| Student journey in a browser (sign-in → path → lab → terminal → Verify → progress → Reset → End → next lab) | **PROVEN LOCALLY ONLY** (Linux sandboxes); CI ran the §12 subset on PR #37 |
+| Five students at once, sixth refused, release | **PROVEN LOCALLY ONLY** in a browser; **REQUIRES REAL PRODUCTION HOST** for capacity (D8) |
+| Restart of api / terminal / PostgreSQL under a running lab | **PROVEN LOCALLY ONLY**; on a host **REQUIRES REAL PRODUCTION HOST** |
+| Reboot, Docker daemon restart | **REQUIRES REAL PRODUCTION HOST** |
+| Backup and restore mechanics | **PROVEN BY AUTOMATED TEST** (restore drill in CI); off-host encrypted copy **REQUIRES EXTERNAL CONFIGURATION** (D7) |
+| Alert rules | **PROVEN BY AUTOMATED TEST**; delivery to a person **REQUIRES EXTERNAL CONFIGURATION** (D6); watchdog for the monitoring stack and host **NOT IMPLEMENTED** (needs an external service, D6/D12) |
+| TLS edge | **PROVEN BY AUTOMATED TEST** with test certificates; public certificate **REQUIRES EXTERNAL CONFIGURATION** (D4/D5) |
+| NetworkPolicy / Pod Security | **PROVEN BY AUTOMATED TEST** on kind; on the host's substrate **REQUIRES REAL PRODUCTION HOST** (D2) |
+| Production preflight, smoke, capacity sampler | **PROVEN LOCALLY ONLY** (harness); their real run **REQUIRES REAL PRODUCTION HOST** |
+| `make beta-validate` on the current tree | **NOT RE-RUN** (§11.2, §14.2) |
+
+### 15.4 Local validation on this branch (not CI, not a host)
+
+`npm test` 4,909 passed / 0 failed; `npm run test:security` 803 passed;
+typecheck; build; `validate:labs` 117/0/0; host-script harness 44/0;
+config self-test; secret distribution; composition; observability checks;
+real-Docker sandbox integration 13/13. Browser E2E **15/15** on a clean
+isolated stack at `e93e2e9` (the first full run was 14/15 and found the
+busy-host defect). On the final tree, whose later commits are web-only, two
+runs at load 18–20 failed the five-student and isolation tests because the
+Docker VM starved PostgreSQL (`db.down`, connection timeouts; other
+worktrees' kind clusters at ~500% CPU) — recorded in the report §3, not
+re-run on a quiet machine. `make beta-validate` was not re-run.
+
+**Verdict unchanged in kind:** software ready for a real-host deployment test;
+**not ready for student access** until §13.2 is done on a host.

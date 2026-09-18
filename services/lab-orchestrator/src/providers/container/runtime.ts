@@ -583,6 +583,24 @@ function daemonEnv(connection: DaemonConnection): Record<string, string> {
   };
 }
 
+/**
+ * Exit code and timeout of an `execFile` callback error.
+ *
+ * Node reports a command killed at its `timeout` as `killed: true` with
+ * `signal: 'SIGTERM'` and `code: null` — never `code: 'ETIMEDOUT'`, which is
+ * all this used to check. Every timeout therefore read as an ordinary failure
+ * (exit 1, stderr "Command failed: …"), and callers that say something
+ * different about a timeout never did.
+ */
+export function execFileOutcome(error: unknown): { exitCode: number; timedOut: boolean } {
+  if (!error) return { exitCode: 0, timedOut: false };
+  const { code, killed } = error as { code?: unknown; killed?: unknown };
+  return {
+    exitCode: typeof code === 'number' ? code : 1,
+    timedOut: killed === true || code === 'ETIMEDOUT',
+  };
+}
+
 function runProcess(
   binary: string,
   argv: string[],
@@ -604,12 +622,7 @@ function runProcess(
         },
       },
       (error, stdout, stderr) => {
-        const timedOut = Boolean(error && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
-        let exitCode = 0;
-        if (error) {
-          const code = (error as { code?: unknown }).code;
-          exitCode = typeof code === 'number' ? code : 1;
-        }
+        const { exitCode, timedOut } = execFileOutcome(error);
         resolve({
           exitCode,
           stdout: String(stdout),

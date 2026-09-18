@@ -103,6 +103,25 @@ describe('before launch', () => {
     expect(screen.queryByText(/start another/i)).toBeNull();
   });
 
+  it('says a lab that is shutting down is shutting down, and offers Launch by itself once it is gone', async () => {
+    // End is asynchronous: a student who ends K8S-001 and opens the next lab at
+    // once was told K8S-001 "is still running" and to end it, which they had
+    // just done, and nothing on this page ever read the list again.
+    const ending = sessionInfo({ labId: 'K8S-001', sessionId: 'sess-00000000000000aa', status: 'ENDING' });
+    apiMock.listMySessions
+      .mockResolvedValueOnce(sessionsResponse([{ session: ending, labTitle: 'Create Your First Pod' }], 1))
+      .mockResolvedValue(sessionsResponse([], 1));
+    await renderDetail();
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('status').some((node) => /K8S-001 is shutting down/.test(node.textContent ?? ''))).toBe(true),
+    );
+    expect(screen.queryByText('You already have a lab running')).toBeNull();
+    expect(screen.queryByText(/end it from its workspace/)).toBeNull();
+
+    expect(await screen.findByRole('button', { name: 'Launch lab' }, { timeout: 8_000 })).toBeTruthy();
+  });
+
   it('turns a per-student refusal it did not foresee into Continue, not a dead end', async () => {
     apiMock.startLab.mockRejectedValue(
       new ApiRequestError(429, {
@@ -121,6 +140,23 @@ describe('before launch', () => {
 
     expect(await screen.findByRole('link', { name: 'Continue K8S-001' })).toBeTruthy();
     expect(apiMock.listMySessions).toHaveBeenCalledTimes(2);
+  });
+
+  it('finds the lab a start created when the response itself was lost (a proxy timeout)', async () => {
+    // nginx gave up before a slow provision answered; the api went on and built the lab.
+    apiMock.startLab.mockRejectedValue(
+      new ApiRequestError(504, { code: 'BAD_RESPONSE', message: 'The API returned a non-JSON response (HTTP 504).' }),
+    );
+    await renderDetail();
+    apiMock.listMySessions.mockResolvedValue(
+      sessionsResponse([{ session: sessionInfo({ status: 'CREATING' }), labTitle: 'Files and Directories' }], 1),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Launch lab' }));
+
+    expect(await screen.findByRole('link', { name: 'Continue lab' })).toBeTruthy();
+    expect(apiMock.listMySessions).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('button', { name: 'Launch lab' })).toBeNull();
   });
 
   it('explains global capacity plainly, keeps the code as a reference, and lets the student retry', async () => {

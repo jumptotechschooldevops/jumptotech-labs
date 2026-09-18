@@ -853,3 +853,49 @@ proves the properties those tests exercise and nothing more. The overall verdict
 for the trusted private beta stays **GO (conditional)**: the conditions are the
 §25 deployment decisions, and a per-student shell uid is required before any
 untrusted cohort.
+
+---
+
+## 29. Addendum — 2026-09-17 readiness pass
+
+§1–§28 are the audit as recorded. This records what changed after it, on
+`feat/private-beta-readiness`
+([private-beta-readiness-2026-09-17.md](private-beta-readiness-2026-09-17.md)).
+
+**§28 "Any of the above in CI: NOT PROVEN" is superseded.** The audit merged as
+PR #36 (`fa6f109`, head `d19da1c`) with every CI job passing: `gates` (which
+runs `npm test`, including the security suites), postgres, kind, sandbox,
+docker, terminal, sandboxd, networking and tls-edge.
+
+Changes reviewed against this audit's controls:
+
+| Change | Security effect |
+|---|---|
+| nginx resolves `api` and `terminal` per request through `resolver 127.0.0.11` | Same trust as before, looked up later. Docker's embedded DNS answers only for containers on web's own compose network (api, terminal, sandboxd, prometheus); no student sandbox is on it. No route, header or exposure changed. The BETA-P0-011 "no route to sandboxd" test follows the variable and is as strict as before (negative control: `$jtt_api` set to sandboxd fails it) |
+| `proxy_read_timeout 330s` on `/api/` | An upstream request may be held up to 330 s instead of 60 s. Start and Reset remain limited to 20/min per student and Check to one per session; with five students this is bounded. Recorded, not a finding |
+| The web app stays mounted when a session re-check fails | No access is granted: every API request and terminal attach is still authenticated server-side; only a definite signed-out answer changed what renders before, and it still does |
+| Terminal auto-reconnect covers restart-time codes | `SANDBOX_REF_MISMATCH` (the API and broker disagree about the sandbox) is never retried; session-state refusals re-read the session. A retry is a new, fully authenticated attach |
+| `LAB_LAUNCHES_PAUSED` | Refuses before anything is written; no bypass by route, owner or role |
+
+`npm run test:security` on the branch: 47 files, 797 tests, 0 failed (local,
+not CI). No finding in §3's register changes severity. The rate-limit residual
+(§26 item 8) gains a deployment note: limits key on `X-Forwarded-For` behind
+exactly one proxy (`trust proxy 1`), so a load balancer added in front of nginx
+would make every student one address for the per-address limits.
+
+## 30. Addendum — 2026-09-17 launch-readiness pass
+
+§1–§29 are the audit as recorded. This reviews the changes on
+`feat/private-beta-launch-readiness`
+([private-beta-launch-readiness-2026-09-17.md](private-beta-launch-readiness-2026-09-17.md))
+against its controls.
+
+| Change | Security effect |
+|---|---|
+| The authenticate middleware and `GET /auth/session` answer a **non-`AuthError`** (the session store or user repository threw; the provider's keys could not be fetched) with `503 AUTH_UNAVAILABLE` instead of `401 AUTH_INVALID_TOKEN` / "signed out" | **Still fail closed**: `next()` runs only after an identity resolved, so nothing is served. Every `AuthError` (expired, forged, unknown user, bad token) is still 401, and `/auth/session` still clears such a cookie; a forged cookie is pinned 401/signed-out by a new case. The 503 body is fixed text: no host, port, driver message or error name (asserted). The only new signal a caller gets is "the platform could not check", which a caller cannot provoke with a credential of its choosing — a malformed cookie is looked up by hash, and a bad token is an `AuthError`. The failure is still audited as `unauthenticated`, counted in `jtt_auth_attempts_total{outcome="AUTH_UNAVAILABLE"}` (bounded label; `AuthFailureSpike` still sees it) and logged as `authn.failed` server-side. `Retry-After: 5` is set; no rate limit changed |
+| `LabTerminal` holds keystrokes typed before `ready` (at most 4 KB) and sends input in frames of at most 2,048 UTF-16 units | Nothing but `auth` is sent before `ready`, as before; held keys go only to the attempt they were typed for and are discarded with an attempt that is refused or closes, so nothing is replayed into another connection. Input is not logged or stored (it lives in a closure). The service's own `MAX_INPUT_CHARS` (8 KB per frame) and frame limit are unchanged; splitting a paste into frames the service accepts is not a bypass, since the limit bounds a frame, not a paste |
+| Next-lab page re-reads `GET /api/sessions` every 3 s while the student's previous session is `ENDING`/`EXPIRING` | The student's own list, authenticated as every other call; stops once the slot frees. Not a rate-limited route; one request per 3 s per open page |
+| Operator scripts: smoke exposure probe measures `time_connect`; checks that could not run are FAIL, not PASS; preflight report includes the config-check lines | Strictly more conservative evidence. The config-check lines copied into `--report` were already printed to the terminal and are secret-free by that tool's own redaction (unchanged). Compose calls get `/dev/null` as stdin |
+
+`npm run test:security`: 800 passed (797 + the three auth cases), locally, not
+CI. No finding in §3's register changes severity.

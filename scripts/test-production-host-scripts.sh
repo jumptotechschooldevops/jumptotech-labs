@@ -136,6 +136,7 @@ cat >"$fakebin/npx" <<'FAKE'
 { printf 'npx'; printf ' %s' "$@"; printf '\n'; } >>"$FAKE_LOG"
 case "${2:-}" in
   scripts/production-config-check.ts)
+    if [ -n "${FAKE_CONFIG_CRASH-}" ]; then echo 'Error: Cannot find module scripts/lib.ts' >&2; exit 124; fi
     echo 'PASS   compose.services  8 services'
     [ -z "${FAKE_CONFIG_FAIL-}" ] || echo 'FAIL   capacity.beta-contract  MAX_ACTIVE_SESSIONS resolves to 20, not the proven 5'
     [ -z "${FAKE_CONFIG_WARN-}" ] || echo 'WARN   backup.status-dir  BACKUP_STATUS_DIR is the in-checkout default'
@@ -167,7 +168,12 @@ code=200 location= body='<!doctype html><title>JumpToTech Labs</title>'
 case $url in
   telnet://*)
     port=${url##*:}
-    for open in ${FAKE_OPEN_PORTS-}; do [ "$open" = "$port" ] && exit 0; done
+    # Like real curl: an open port that waits for the client to speak runs into
+    # --max-time (28) after connecting; a refused one fails to connect (7).
+    for open in ${FAKE_OPEN_PORTS-}; do
+      if [ "$open" = "$port" ]; then [ -z "$write_out" ] || printf '0.000412'; exit 28; fi
+    done
+    [ -z "$write_out" ] || printf '0.000000'
     exit 7
     ;;
   http://labs.test.invalid/*) code=${FAKE_REDIRECT_CODE:-301}; location="https://labs.test.invalid${url#http://labs.test.invalid}" ;;
@@ -294,7 +300,7 @@ case ${1:-} in
         service=$1
         shift
         case "$service $*" in
-          'prometheus promtool query instant'*) promql "${!#}" ;;
+          'prometheus promtool query instant'*) [ -z "${FAKE_PROM_DOWN-}" ] || exit 1; promql "${!#}" ;;
           'prometheus wget'*) echo '{"commit":"x","database": "ok","version":"11.2.0"}' ;;
           'alertmanager amtool'*) exit 0 ;;
           'postgres sh'*) exit 0 ;;
@@ -351,7 +357,10 @@ fixture() {
     printf 'clusters: []\n' >"$root/repo/infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml"
     printf 'MemTotal: 16000000 kB\nMemAvailable: 12000000 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' >"$root/proc/meminfo"
     printf '0.50 0.40 0.30 1/200 999\n' >"$root/proc/loadavg"
-    echo '17 3 * * * jtt-ops BACKUP_COPY_HOOK=/usr/local/sbin/copy scripts/db-backup.sh' >"$root/cron"
+    {
+      echo '17 3 * * * jtt-ops BACKUP_COPY_HOOK=/usr/local/sbin/copy scripts/db-backup.sh'
+      echo '17 5 * * 0 jtt-ops scripts/db-restore.sh --verify-only /srv/backups/newest.dump'
+    } >"$root/cron"
   )
   chmod 750 "$root/repo"
   chmod 700 "$root/backups/postgres"
@@ -430,6 +439,7 @@ check() { # description condition-command...
 # SIGPIPE the writer and report a miss for a line that is there (seen on Linux).
 has_line() { grep -Eq "$1" <<<"$out"; }
 has_fail() { has_line "^FAIL +$1( |$)"; }
+lacks_line() { ! has_line "$1"; }
 exit_is() { [ "$status" -eq "$1" ]; }
 
 no_secret_leaked() {
@@ -613,6 +623,16 @@ root=$(fixture configwarn)
 FAKE_CONFIG_WARN=1 preflight "$root"
 check 'configuration warnings are counted' has_line '^WARN +config\.production-warnings +1 WARN'
 check 'a warning alone does not fail' exit_is 0
+root=$(fixture configreport)
+FAKE_CONFIG_FAIL=1 preflight "$root" --report "$root/preflight.txt"
+check 'the report holds the FAIL lines its summary points at' grep -Eq '^    FAIL +capacity\.beta-contract' "$root/preflight.txt"
+
+scenario 'preflight: a configuration check that dies without a result line still reports'
+root=$(fixture configcrash)
+FAKE_CONFIG_CRASH=1 preflight "$root" --report "$root/preflight.txt"
+check 'config.production FAIL says it could not run' has_line '^FAIL +config\.production +the configuration check could not run'
+check 'a RESULT line is still printed' has_line '^RESULT: FAIL'
+check 'the report is written' grep -q '^RESULT: FAIL' "$root/preflight.txt"
 
 scenario 'preflight: a checkout made under umask 077 fails'
 root=$(fixture umask)
@@ -639,6 +659,17 @@ check 'exposure.port-443 FAIL' has_fail 'exposure\.port-443'
 root=$(fixture listeners)
 FAKE_SS_EXTRA='LISTEN 0 511 0.0.0.0:5432 0.0.0.0:*' preflight "$root"
 check 'an extra public listener needs a person' has_line '^MANUAL CHECK REQUIRED +exposure\.other-listeners .*5432'
+root=$(fixture resolved)
+FAKE_SS_EXTRA='LISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*' FAKE_SS_NO_SSH=1 preflight "$root"
+check "systemd-resolved's loopback listener is not a public one" has_line '^PASS +exposure\.other-listeners'
+
+scenario 'preflight: a backup schedule that is only a file, with its jobs commented out, is not a PASS'
+root=$(fixture croncommented)
+sed -i.bak 's/^/# /' "$root/cron" && rm -f "$root/cron.bak"
+preflight "$root"
+check 'backup.schedule needs a person' has_line '^MANUAL CHECK REQUIRED +backup\.schedule '
+check 'the verification job is missing too' has_line '^MANUAL CHECK REQUIRED +backup\.verify-schedule '
+check 'no backup.schedule PASS' lacks_line '^PASS +backup\.schedule '
 
 scenario 'preflight: backup directories that overlap, or a missing status directory, fail'
 root=$(fixture overlap)
@@ -728,6 +759,14 @@ scenario 'smoke: a broken TLS chain, a missing redirect and missing HSTS fail'
 root=$(fixture edge)
 FAKE_TLS_BROKEN=1 smoke "$root"
 check 'edge.https FAIL' has_fail 'edge\.https'
+check 'an unreachable edge is not reported as /internal not routed' has_fail 'edge\.internal-not-routed'
+check 'an unreachable edge is not reported as /metrics not routed' has_fail 'edge\.not-routed/metrics'
+
+scenario 'smoke: a Prometheus that does not answer is not "no alert is firing"'
+root=$(fixture promdown)
+FAKE_PROM_DOWN=1 smoke "$root"
+check 'observability.targets FAIL' has_fail 'observability\.targets'
+check 'observability.alerts FAIL' has_fail 'observability\.alerts'
 root=$(fixture redirect)
 FAKE_REDIRECT_CODE=200 FAKE_NO_HSTS=1 smoke "$root"
 check 'edge.http-redirect FAIL' has_fail 'edge\.http-redirect'

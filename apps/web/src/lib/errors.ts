@@ -80,6 +80,17 @@ const FALLBACK_TITLE: Record<ErrorContext, string> = {
 type Known = Omit<StudentError, 'reference'>;
 
 function known(code: string, error: ApiError, context: ErrorContext): Known | null {
+  // The api could not *check* the sign-in (its session store was unreachable).
+  // The cookie is intact; telling the student to sign in again would be wrong.
+  if (code === 'AUTH_UNAVAILABLE') {
+    return {
+      kind: 'unavailable',
+      title: 'The platform is busy for a moment',
+      message: 'Your sign-in could not be checked just now. You are still signed in, and your lab keeps running.',
+      guidance: 'Try again in a few seconds.',
+      retryable: true,
+    };
+  }
   if (code.startsWith('AUTH_')) {
     return {
       kind: 'auth',
@@ -97,6 +108,15 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
         message:
           'Every lab environment on the platform is busy right now. One frees up as soon as another student finishes or goes idle.',
         guidance: 'Please try again in a few minutes.',
+        retryable: true,
+      };
+    case 'LAB_LAUNCHES_PAUSED':
+      return {
+        kind: 'capacity',
+        title: 'New labs are paused',
+        message:
+          'Starting new labs is paused for maintenance. Labs that are already running keep working.',
+        guidance: 'Please try again later.',
         retryable: true,
       };
     case 'STUDENT_SESSION_LIMIT_REACHED': {
@@ -184,6 +204,17 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
         retryable: true,
       };
     case 'ENVIRONMENT_UNREACHABLE':
+      // Providers report it for Reset too, when the sandbox cannot be reached.
+      if (context === 'reset') {
+        return {
+          kind: 'environment',
+          title: 'The reset could not reach your environment',
+          message:
+            'Your lab environment could not be reached, so it was not reset. This is a platform problem, not a mistake in your work.',
+          guidance: 'Try Reset again in a moment. If it keeps happening, end the lab and start it again, or let your instructor know.',
+          retryable: true,
+        };
+      }
       return {
         kind: 'environment',
         title: 'Verification could not run',

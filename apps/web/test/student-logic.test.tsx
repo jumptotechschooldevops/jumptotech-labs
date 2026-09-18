@@ -76,6 +76,42 @@ describe('what an API error means to a student', () => {
     expect(described.retryable).toBe(true);
   });
 
+  it('says new labs are paused, that running labs keep working, and keeps the code', () => {
+    const described = describeError(
+      {
+        code: 'LAB_LAUNCHES_PAUSED',
+        message: 'Starting new labs is paused for maintenance.',
+        remediation: 'Labs that are already running keep working. Try again later.',
+      },
+      'launch',
+    );
+    expect(described.title).toBe('New labs are paused');
+    expect(described.message).toMatch(/already running keep working/);
+    expect(described.reference).toBe('LAB_LAUNCHES_PAUSED');
+    expect(described.retryable).toBe(true);
+  });
+
+  it('does not tell a signed-in student to sign in again when the api could not check the sign-in', () => {
+    const described = describeError(
+      { code: 'AUTH_UNAVAILABLE', message: 'Your sign-in could not be checked right now.' },
+      'verify',
+    );
+    expect(described.kind).not.toBe('auth');
+    expect(described.retryable).toBe(true);
+    expect(`${described.title} ${described.message} ${described.guidance ?? ''}`).not.toMatch(/expired|sign in again/i);
+    // A real refusal still is one.
+    expect(describeError({ code: 'AUTH_EXPIRED', message: 'Your session has expired.' }, 'verify').kind).toBe('auth');
+  });
+
+  it('words an unreachable environment for the action that failed', () => {
+    const error = { code: 'ENVIRONMENT_UNREACHABLE', message: 'The sandbox could not be reached.' };
+    expect(describeError(error, 'verify').title).toBe('Verification could not run');
+    const reset = describeError(error, 'reset');
+    expect(reset.title).toBe('The reset could not reach your environment');
+    expect(`${reset.message} ${reset.guidance}`).not.toMatch(/verif/i);
+    expect(reset.reference).toBe('ENVIRONMENT_UNREACHABLE');
+  });
+
   it('points a student at their running lab instead of suggesting another start', () => {
     const described = describeError(
       { code: 'STUDENT_SESSION_LIMIT_REACHED', message: 'x', details: { maxActiveSessionsPerStudent: 1 } },

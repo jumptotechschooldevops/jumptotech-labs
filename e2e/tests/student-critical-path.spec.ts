@@ -142,3 +142,105 @@ test('a student signs in, completes LINUX-001 in the browser terminal, and the r
     await endAllSessions(context);
   }
 });
+
+test('Reset gives a student a fresh environment, reconnects the terminal, and keeps a completed result', async ({ page, context }) => {
+  test.setTimeout(600_000);
+  const student = uniqueStudent('reset');
+  try {
+    await signIn(page, student);
+    await page.goto(`/#/labs/${LAB_ID}`);
+    await page.getByRole('button', { name: 'Launch lab' }).click();
+    await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 180_000 });
+    await expectTerminalConnected(page);
+    await runInTerminal(page, LINUX_001_SOLUTION);
+    await page.getByRole('button', { name: 'Verify', exact: true }).click();
+    await expect(page.locator('section.verify')).toContainText('Lab passed — every check passes', { timeout: 60_000 });
+    const before = (await mySessions(context))[0]!;
+
+    await test.step('the student confirms Reset', async () => {
+      await page.getByRole('group', { name: 'Lab actions' }).getByRole('button', { name: 'Reset', exact: true }).click();
+      const dialog = page.getByRole('alertdialog');
+      await expect(dialog).toContainText('Files, running processes and shell history are lost.');
+      await dialog.getByRole('button', { name: 'Reset lab' }).click();
+    });
+
+    await test.step('the same session comes back Ready on a fresh sandbox, and what the student types at once reaches the fresh shell', async () => {
+      // The dialog stays open until the reset has answered; the page then
+      // reconnects the terminal. A student starts typing as soon as the dialog
+      // is gone, while that connection is still being set up. Those keys used
+      // to be dropped before the shell was ready (a command arrived truncated,
+      // or not at all), so this types exactly once, with no retry.
+      await expect(page.getByRole('alertdialog')).toBeHidden({ timeout: 240_000 });
+      expect(await runInTerminal(page, 'test -e ~/project && echo present || echo absent', 60_000)).toBe('absent');
+      await expectTerminalConnected(page);
+      await expect(page.locator('.workspace__status')).toContainText('Ready');
+      const after = await mySessions(context);
+      expect(after).toHaveLength(1);
+      expect(after[0]).toMatchObject({ sessionId: before.sessionId, status: 'ACTIVE' });
+    });
+
+    await test.step('the completed result is kept; Verify grades the fresh sandbox', async () => {
+      await expect(page.locator('.workspace__status')).toContainText('Completed');
+      await page.getByRole('button', { name: 'Verify', exact: true }).click();
+      await expect(page.locator('section.verify')).toContainText('Not complete yet — 1 of 5 checks passing', { timeout: 60_000 });
+    });
+  } finally {
+    await endAllSessions(context);
+  }
+});
+
+test('reloading while the lab is still being created finds it again and connects when it is ready', async ({ page, context }) => {
+  test.setTimeout(600_000);
+  const student = uniqueStudent('reload');
+  try {
+    await signIn(page, student);
+    await page.goto(`/#/labs/${LAB_ID}`);
+    await page.getByRole('button', { name: 'Launch lab' }).click();
+    await expect(page).toHaveURL(new RegExp(`#/labs/${LAB_ID}/workspace$`));
+    // Reload at once, before the start request can have answered.
+    await page.reload();
+
+    await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 240_000 });
+    await expectTerminalConnected(page, 120_000);
+    expect(await runInTerminal(page, 'whoami')).toBe('student');
+    const sessions = await mySessions(context);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ labId: LAB_ID, status: 'ACTIVE' });
+  } finally {
+    await endAllSessions(context);
+  }
+});
+
+test('opening the lab in a second tab takes the terminal over; Reconnect in the first takes it back', async ({ page, context }) => {
+  test.setTimeout(600_000);
+  const student = uniqueStudent('tabs');
+  try {
+    await signIn(page, student);
+    await page.goto(`/#/labs/${LAB_ID}`);
+    await page.getByRole('button', { name: 'Launch lab' }).click();
+    await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 180_000 });
+    await expectTerminalConnected(page);
+    await runInTerminal(page, 'echo first-tab > ~/tab.txt');
+
+    const second = await context.newPage();
+    await second.goto(`/#/labs/${LAB_ID}/workspace`);
+    await expectTerminalConnected(second);
+    expect(await runInTerminal(second, 'cat ~/tab.txt')).toBe('first-tab');
+
+    await test.step('the first tab says why it was disconnected, and does not claim the lab ended', async () => {
+      await expect(page.getByText('Disconnected — this terminal was opened in another tab or window.')).toBeVisible({ timeout: 60_000 });
+      await expect(page.locator('.workspace__status')).toContainText('Ready');
+    });
+
+    await test.step('Reconnect in the first tab takes the terminal back', async () => {
+      await page.getByRole('button', { name: 'Reconnect' }).click();
+      await expectTerminalConnected(page, 60_000);
+      await expect(page.locator('.xterm-rows')).toContainText(/student@[^:\s]+:~\$/, { timeout: 30_000 });
+      expect(await runInTerminal(page, 'cat ~/tab.txt')).toBe('first-tab');
+      await expect(second.getByText('Disconnected — this terminal was opened in another tab or window.')).toBeVisible({ timeout: 60_000 });
+    });
+    await second.close();
+  } finally {
+    await endAllSessions(context);
+  }
+});

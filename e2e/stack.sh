@@ -8,6 +8,11 @@
 #   bash e2e/stack.sh logs     recent logs of every E2E service (diagnostics)
 #   bash e2e/stack.sh config   resolve the merged compose model; starts nothing
 #   bash e2e/stack.sh down     stop, delete volumes, remove this owner's sandboxes
+#   bash e2e/stack.sh service stop|recreate api|terminal
+#                              stop one platform service, or re-create it the way
+#                              an operator's `up -d <service>` does (new container)
+#   bash e2e/stack.sh service restart|stop|start postgres
+#                              restart, stop or start the database container; its volume is kept
 #   bash e2e/stack.sh run [playwright args…]
 #                              up → playwright → down, always tearing down
 #                              (E2E_KEEP_STACK=1 leaves it running)
@@ -96,6 +101,10 @@ write_env() {
     echo "POSTGRES_PORT=${POSTGRES_PORT}"
     echo "E2E_OIDC_PORT=${OIDC_PORT}"
     echo "E2E_LINUX_SANDBOX_IMAGE=${LINUX_IMAGE}"
+    # The private-beta capacity contract, so the five-student spec meets the
+    # real ceiling rather than compose's general default of 20.
+    echo "MAX_ACTIVE_SESSIONS=5"
+    echo "MAX_ACTIVE_SESSIONS_PER_STUDENT=1"
     echo "POSTGRES_PASSWORD=$(secret)"
     echo "TERMINAL_SESSION_SECRET=$(secret)"
     echo "INTERNAL_SERVICE_SECRET=$(secret)"
@@ -200,6 +209,23 @@ cmd_run() {
   return "${status}"
 }
 
+# Used by the failure-path specs to take a real service away mid-session.
+cmd_service() {
+  local action="${1:-}" service="${2:-}"
+  [[ -f "${ENV_FILE}" ]] || die "no ${ENV_FILE}; the stack is not up"
+  case "${action}:${service}" in
+    stop:api|stop:terminal) compose stop --timeout 10 "${service}" ;;
+    recreate:api|recreate:terminal)
+      compose up -d --no-deps --force-recreate --wait --wait-timeout "${READY_TIMEOUT_SECONDS}" "${service}" ;;
+    # restart, never down/rm: the named volume and its data stay.
+    restart:postgres) compose restart --timeout 20 postgres ;;
+    # stop/start, never down/rm: the named volume and its data stay.
+    stop:postgres) compose stop --timeout 20 postgres ;;
+    start:postgres) compose start postgres && compose up -d --no-deps --wait --wait-timeout "${READY_TIMEOUT_SECONDS}" postgres ;;
+    *) die "supported: stop|recreate api|terminal, restart|stop|start postgres" ;;
+  esac
+}
+
 case "${1:-}" in
   up) cmd_up ;;
   wait) wait_ready ;;
@@ -210,6 +236,7 @@ case "${1:-}" in
     [[ -f "${ENV_FILE}" ]] || write_env
     compose config --quiet && log "compose model resolves" ;;
   down) cmd_down ;;
+  service) shift; cmd_service "$@" ;;
   run) shift; cmd_run "$@" ;;
-  *) echo "usage: bash e2e/stack.sh up|wait|status|logs|config|down|run [playwright args]" >&2; exit 2 ;;
+  *) echo "usage: bash e2e/stack.sh up|wait|status|logs|config|down|service stop|recreate api|terminal|restart|stop|start postgres|run [playwright args]" >&2; exit 2 ;;
 esac

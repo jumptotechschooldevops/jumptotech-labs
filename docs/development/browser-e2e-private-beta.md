@@ -662,14 +662,46 @@ B's progress is 0, and B's own terminal and sandbox work.
   `process-environ-api` "socket hang up" under file-parallel load; it passed
   alone and did not recur in the run above. Recorded, not fixed.
 
+### 14.4 CI, and a real api outage (2026-09-17, `feat/private-beta-readiness`)
+
+- **CI:** `browser-e2e` passed on PR #37 (run `35182078014`, head `591fc9e`)
+  before it merged. §14.3's "has not yet passed in CI" is superseded.
+- **New test** `failure-paths.spec.ts` "api stopped and re-created mid-lab":
+  the real api container is stopped while a student works, the tab becomes
+  visible again, the workspace and terminal stay (banner "Cannot reach the
+  labs API right now"), the api is re-created with `--force-recreate` through
+  `e2e/stack.sh service recreate api`, Try again clears the banner, and Verify
+  grades the same sandbox through nginx.
+- Full suite on the branch, isolated project `jtt-e2e-bro`: **8 passed**
+  (1.6 min), 0 containers left. The new test **fails** against the previous
+  auth gate. Docker gave the re-created api its previous addresses in that
+  run, so the address change is proven by the real-image edge test instead.
+- `five-students.spec.ts`: five browser contexts launch LINUX-001 together,
+  work in five terminals, verify together (three pass, two see 1 of 5), a
+  sixth is refused with `LAB_CAPACITY_REACHED`, and after the five end the
+  sixth's Try again gets a Ready lab. `e2e/stack.sh` now writes
+  `MAX_ACTIVE_SESSIONS=5` and `MAX_ACTIVE_SESSIONS_PER_STUDENT=1`.
+- "terminal service re-created mid-lab" (it also passes on the previous
+  reconnect code, so it is a guard, not a regression test) and "database
+  restarted mid-lab" (the api's pool recovers; a passing Verify is saved).
+- "Reset gives a student a fresh environment…": same session, files gone,
+  terminal usable, Completed kept. The first line typed after Reset is often
+  lost (reattach plus reconnect; open, see the readiness report §4), so the
+  test presses Ctrl-C and retypes.
+- "reloading while the lab is still being created…": found a defect (the
+  workspace said "not running" while the lab was being built), fixed in
+  `681891d`.
+- "opening the lab in a second tab…": the documented one-terminal-per-session
+  takeover, and Reconnect taking it back.
+- Not yet run in CI (no pull request for the branch). On a 2-core runner six
+  Linux sandboxes at once are unmeasured.
+
 ## 15. Findings
 
-- **A real API outage shows "Checking your session…" for ~39 s** before
-  "Cannot reach the labs API."
-  - nginx resolved `api` at start. The first proxied request to a stopped
-    container waited 38.9 s; later ones ~3 s.
-  - The session fetch has no client timeout.
-  - Not fixed here.
+- **Fixed (2026-09-17): a real API outage showed "Checking your session…"
+  for ~39 s.** nginx now resolves the api per request with a 5 s connect
+  timeout, so a stopped api is an immediate error, and the session query has
+  a 15 s bound ([readiness pass](private-beta-readiness-2026-09-17.md)).
 - **Fixed: a slow attach closed an authenticated terminal socket** with a
   false "No session token received" (§14.2, `0553cf1`, now `041f415`).
 - **Fixed: the web terminal could send `resize` before `auth`**, and the
@@ -684,22 +716,16 @@ B's progress is 0, and B's own terminal and sandbox work.
   CI runs `npm ci` first, so the job is not affected.
 - **Minor: the web app has no text for `UNAUTHENTICATED`** either; after the
   fix the web app no longer triggers it.
-- **Open, non-blocking: the credentials fetch has a fixed 10 s budget and the
-  browser does not retry `CREDENTIALS_UNAVAILABLE`.** An API slower than that
-  shows "The terminal could not attach to your environment." with a manual
-  Try again. Not changed here, for two reasons:
-  - the same code also carries permanent refusals, so an automatic retry
-    needs a retryable/permanent distinction first;
-  - the only credentials fetch measured over 10 s (10.5 s, §14) was on this
-    laptop at a load average of 23–27. No beta-host latency has been measured
-    either way.
+- **Partly addressed (2026-09-17): the credentials fetch has a fixed 10 s
+  budget.** The browser now retries `CREDENTIALS_UNAVAILABLE` (and the other
+  restart-time codes) automatically for about a minute before offering
+  Reconnect. The 10 s budget itself is unchanged.
 - **Minor: the web app has no text for `AUTH_TIMEOUT`** and shows the generic
   "Connection to the terminal was lost." After the fix, only a client that
   never sends a token reaches it, and the web app always sends one.
-- **nginx static upstream resolution** also means a *recreated* API container
-  with a new IP would stay 502 until web restarts (not measured; follows from
-  the same resolution behaviour). Relevant to main's `restart: unless-stopped`:
-  a *restart* keeps the container and normally its IP; a *re-create* does not.
+- **Fixed (2026-09-17): nginx static upstream resolution.** A re-created api
+  container at a new address was 502 until web restarted; reproduced, and
+  fixed with per-request resolution.
 
 ## 16. Tier status
 
@@ -709,7 +735,7 @@ B's progress is 0, and B's own terminal and sandbox work.
 | **B** | real browser + actual sandbox/runtime | **PARTIALLY PROVEN** | Linux provider only: launch, real WebSocket terminal, real verifier, End lab, container removal, two-student isolation incl. WebSocket refusal. Heavy host load exposed a terminal defect, now fixed (§14.2); stability under that load after the fix is not yet measured. Kubernetes, Docker-daemon, Terraform, Ansible, CI/CD: not exercised |
 | **C** | production-host smoke | **NOT PROVEN** | nothing ran on a host, domain, TLS edge, production overlay or real IdP. Local Docker Compose is not Tier C |
 
-**CI:** not proven. One run on PR #37 failed 6/7 on the race fixed in §14.3; not yet passed.
+**CI:** passed on PR #37 (run `35182078014`) after the §14.3 fix. §14.4's new api-outage test has not run in CI yet.
 
 ## 17. Remaining gaps and next steps
 
@@ -717,26 +743,51 @@ B's progress is 0, and B's own terminal and sandbox work.
 |---|---|
 | Kubernetes real-runtime browser E2E | **OPEN** |
 | Terraform browser E2E | **OPEN** |
-| Reset flow | **OPEN** |
-| Second-tab terminal takeover | **OPEN** |
-| Reload during session startup (CREATING) | **OPEN** |
+| Reset flow | **Covered locally** (§14.4, Linux) |
+| Second-tab terminal takeover | **Covered locally** (§14.4) |
+| Reload during session startup (CREATING) | **Covered locally** (§14.4); found and fixed a defect |
 | Production overlay | **OPEN** |
 | Real external OIDC/IdP | **OPEN** |
 | Production TLS / public host | **OPEN** |
-| Browser E2E passing in CI | **OPEN** (ran once, 6/7; fix pending a CI run) |
-| Real (non-injected) API/terminal outage tests | **OPEN** |
-| More than two concurrent browser students | **OPEN** (API-level five-student gate exists) |
-| Progress across API/DB restart | **OPEN** |
+| Browser E2E passing in CI | **DONE** on PR #37 (run `35182078014`) |
+| Real (non-injected) API/terminal/database outage tests | **Covered locally** (§14.4) |
+| More than two concurrent browser students | **Five: covered locally** (§14.4) |
+| Progress across API/DB restart | **Covered locally** (§14.4: api re-create, database restart) |
 
 Recommended next steps:
 
-1. Get a passing `browser-e2e` run on PR #37 with the §14.3 fix.
-2. Decide on credentials-fetch resilience under API latency: separate
-   retryable from permanent `CREDENTIALS_UNAVAILABLE`, then retry the
-   retryable case (§15).
-3. Bound the web app's session query and nginx `proxy_connect_timeout`, then
-   add a real api-stop browser test.
-4. Browser coverage for reset, second-tab takeover and reload during CREATING.
-5. Extend Tier B with a Kubernetes lab (kind in the job) and a Terraform lab.
-6. Point the suite at a staging host with the production overlay and a real IdP
+1. Run §14.4's api-outage test in CI (it needs a pull request).
+2. Separate retryable from permanent `CREDENTIALS_UNAVAILABLE` on the server,
+   so the browser's bounded retry (§15) never retries a permanent refusal.
+3. Remove the double terminal attach after Reset (readiness report §4), then drop the E2E retype loop.
+4. Extend Tier B with a Kubernetes lab (kind in the job) and a Terraform lab.
+5. Point the suite at a staging host with the production overlay and a real IdP
    test tenant as the first Tier C evidence.
+
+## 18. Launch-readiness pass — 2026-09-17
+
+On `feat/private-beta-launch-readiness`
+([report](private-beta-launch-readiness-2026-09-17.md)). §1–§17 are left as
+recorded.
+
+| Change | Why |
+|---|---|
+| **Reset test types once, with no retry**, as soon as the confirm dialog closes | §17 step 3. The first line after Reset was lost because the browser dropped keys typed before the new socket's `ready`, not because of a double attach. Against the previous bundle 0/3 (a truncated command, then nothing); with the fix 5/5 |
+| **New: PostgreSQL stopped under a signed-in student** (`failure-paths.spec.ts`) | With the database down, `/auth/session` and `/api` answer 503 `AUTH_UNAVAILABLE`, the cookie is not cleared, a tab re-check keeps the app signed in, and the same cookie works when PostgreSQL returns. Fails on the previous api (signed out) |
+| `stack.sh service stop|start postgres` | for the test above; the volume is kept |
+
+**Found by the suite:** the five-student test failed once on a loaded machine
+with `SESSION_PROVISION_FAILED` — a sandbox's first `docker exec` hit a 15 s
+limit after a 38 s container create, reported as a broken image. Fixed in the
+runtime (report §1 #10). The start response was read from the Playwright trace
+(`resources/*.json`), since `stack.sh run` discards service logs at teardown.
+
+§17 updated: "Remove the double terminal attach after Reset, then drop the E2E
+retype loop" — **done** (there was no double attach; the loop is gone).
+
+Results on this branch (isolated project `jtt-e2e-launch`, development machine, load 14–16):
+first full run 14/15 (the five-student failure above); after the fix, **15/15**
+in 6.4 min on a clean stack, 0 containers left. After later web-only commits,
+13/15 and then 0/2 (five-students, isolation) at load 18–20, with the kept
+stack's logs showing PostgreSQL connection timeouts (`db.down`) caused by the
+shared Docker VM, not the change (report §3). Not yet in CI.

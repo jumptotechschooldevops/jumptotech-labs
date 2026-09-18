@@ -148,11 +148,54 @@ describe('nginx: the TLS edge (web-tls.conf)', () => {
   it('keeps the WebSocket upgrade for the terminal in the shared routes', () => {
     const locations = code(read('infrastructure/docker/nginx/locations.conf'));
     const terminal = /location \/terminal \{([^}]*)\}/.exec(locations)?.[1] ?? '';
-    expect(terminal).toMatch(/proxy_pass http:\/\/terminal:4001;/);
+    expect(terminal).toMatch(/proxy_pass \$jtt_terminal;/);
     expect(terminal).toMatch(/proxy_http_version 1\.1;/);
     expect(terminal).toMatch(/proxy_set_header Upgrade \$http_upgrade;/);
     expect(terminal).toMatch(/proxy_set_header Connection "upgrade";/);
     expect(terminal).toMatch(/proxy_set_header X-Forwarded-Proto \$scheme;/);
+  });
+});
+
+describe('nginx: upstreams survive a re-created api or terminal container', () => {
+  // `proxy_pass http://api:4000;` is resolved once, when nginx loads. Compose
+  // re-creates api/terminal on `up -d` after an image or .env change, the new
+  // container can get a new address, and web then answered 502 until it was
+  // itself restarted. `tls-edge-integration.test.ts` proves the behaviour in the
+  // real image; this pins the configuration that produces it.
+  const locations = code(read('infrastructure/docker/nginx/locations.conf'));
+  const proxied = [...locations.matchAll(/location\s+([^{\s]+)\s*\{([^}]*)\}/g)].filter((m) => /proxy_pass/.test(m[2]!));
+
+  it('proxies every route through a variable, so the name is resolved per request', () => {
+    expect(proxied.map((m) => m[1]).sort()).toEqual(['/api/', '/auth/', '/terminal']);
+    for (const [, location, body] of proxied) {
+      const targets = [...body!.matchAll(/proxy_pass\s+([^;]+);/g)].map((m) => m[1]);
+      expect(targets, location).toHaveLength(1);
+      expect(targets[0], location).toMatch(/^\$jtt_(api|terminal)$/);
+      expect(body, location).toMatch(/proxy_connect_timeout\s+([1-9]|10)s;/);
+    }
+    expect(locations).toMatch(/^set \$jtt_api http:\/\/api:4000;$/m);
+    expect(locations).toMatch(/^set \$jtt_terminal http:\/\/terminal:4001;$/m);
+    expect(locations).not.toMatch(/proxy_pass\s+https?:\/\//);
+  });
+
+  it('waits longer for the api than the slowest provisioning, so a slow Start is not a 504', () => {
+    // Start Lab and Reset answer only when the sandbox is ready: Docker's
+    // readiness wait is 180 s and provisioning is measured up to 300 s.
+    const api = proxied.find((m) => m[1] === '/api/')![2]!;
+    const seconds = Number(/proxy_read_timeout\s+(\d+)s;/.exec(api)?.[1]);
+    expect(seconds).toBeGreaterThan(300);
+    expect(seconds).toBeLessThanOrEqual(600);
+  });
+
+  it("asks only Docker's embedded DNS, and caches an answer briefly", () => {
+    const resolvers = [...locations.matchAll(/^resolver\s+([^;]+);$/gm)].map((m) => m[1]!.split(/\s+/));
+    expect(resolvers).toHaveLength(1);
+    const [address, ...options] = resolvers[0]!;
+    expect(address).toBe('127.0.0.11');
+    const valid = options.find((option) => option.startsWith('valid='));
+    expect(valid).toMatch(/^valid=\d+s$/);
+    expect(Number(valid!.slice(6, -1))).toBeLessThanOrEqual(30);
+    expect(locations).toMatch(/^resolver_timeout\s+\d+s;$/m);
   });
 });
 

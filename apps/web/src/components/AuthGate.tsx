@@ -70,5 +70,23 @@ export function AuthGate({ children }: AuthGateProps) {
     );
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      {/* Signed in, but the last re-check could not reach the API: say so, keep the lab. */}
+      {auth.error ? (
+        <div className="notice notice--warning auth-gate__banner" role="status">
+          <p className="notice__message">
+            Cannot reach the labs API right now. Your lab keeps running; actions that need the
+            server may fail until it is back.
+          </p>
+          <div className="notice__actions">
+            <button type="button" className="btn btn--ghost" onClick={() => void auth.refresh()}>
+              Try again
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {children}
+    </>
+  );
 }

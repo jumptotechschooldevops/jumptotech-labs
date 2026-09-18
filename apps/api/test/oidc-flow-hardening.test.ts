@@ -11,7 +11,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
@@ -290,6 +290,59 @@ describe('logout', () => {
     const session = await request(harness.app).get('/auth/session').set('Cookie', cookie);
     expect(session.body.data.authenticated).toBe(false);
     expect(await harness.authSessions.countActive()).toBe(0);
+  });
+});
+
+describe('a session store that cannot answer is not a sign-out', () => {
+  /*
+   * A PostgreSQL restart or a saturated pool (connect timeout 5 s) makes the
+   * cookie lookup throw. That used to be answered as a bad credential: the api
+   * said 401 AUTH_INVALID_TOKEN, the browser re-checked /auth/session, and that
+   * route treated the same failure as "signed out" and CLEARED the cookie. A
+   * student with a lab open was signed out for good by a database blip.
+   *
+   * Still fail closed: nothing is served without a resolved identity. Only the
+   * status says what happened, and the cookie is kept for when the store is back.
+   */
+  const outage = () => new Error('timeout exceeded when trying to connect to 10.0.0.5:5432 as jtt');
+
+  it('answers 503 on the API, never 401, and serves nothing', async () => {
+    const cookie = await signIn(harness.app, 'p0014|store-down-api');
+    const spy = vi.spyOn(harness.authSessions, 'resolve').mockRejectedValue(outage());
+
+    const me = await request(harness.app).get('/api/me').set('Cookie', cookie);
+    expect(me.status).toBe(503);
+    expect(me.body.error.code).toBe('AUTH_UNAVAILABLE');
+    expect(me.text).not.toMatch(/5432|10\.0\.0\.5|timeout exceeded/);
+    expect(me.body.data).toBeUndefined();
+    const start = await request(harness.app).post('/api/labs/LINUX-001/start').set('Origin', APP_URL).set('Cookie', cookie);
+    expect(start.status).toBe(503);
+
+    spy.mockRestore();
+    expect((await request(harness.app).get('/api/me').set('Cookie', cookie)).status).toBe(200);
+  });
+
+  it('answers 503 on /auth/session and keeps the cookie, so the student is still signed in afterwards', async () => {
+    const cookie = await signIn(harness.app, 'p0014|store-down-session');
+    const spy = vi.spyOn(harness.authSessions, 'resolve').mockRejectedValue(outage());
+
+    const during = await request(harness.app).get('/auth/session').set('Cookie', cookie);
+    expect(during.status).toBe(503);
+    expect(during.body.error.code).toBe('AUTH_UNAVAILABLE');
+    expect(cookieHeader(during, 'jtt_session')).toBeUndefined();
+    expect(during.text).not.toMatch(/5432|timeout exceeded/);
+
+    spy.mockRestore();
+    const after = await request(harness.app).get('/auth/session').set('Cookie', cookie);
+    expect(after.body.data.authenticated).toBe(true);
+  });
+
+  it('still signs out, and clears, a cookie the store answers for as unknown', async () => {
+    const session = await request(harness.app).get('/auth/session').set('Cookie', 'jtt_session=forged-value-that-was-never-issued');
+    expect(session.status).toBe(200);
+    expect(session.body.data.authenticated).toBe(false);
+    expect(cookieHeader(session, 'jtt_session')).toMatch(/^jtt_session=; .*Max-Age=0/);
+    expect((await request(harness.app).get('/api/me').set('Cookie', 'jtt_session=forged-value-that-was-never-issued')).status).toBe(401);
   });
 });
 

@@ -496,7 +496,8 @@ async function main(): Promise<void> {
       { reason: 'session_lifetimes' },
       `sessions: max=${config.lifetimes.maxActiveSessions} ` +
         `per_student=${config.lifetimes.maxActiveSessionsPerStudent ?? 'unlimited'} lifetime=${config.lifetimes.maxSessionSeconds / 60}m ` +
-        `idle=${config.lifetimes.idleTimeoutSeconds / 60}m warn=${config.lifetimes.warningSeconds / 60}m`,
+        `idle=${config.lifetimes.idleTimeoutSeconds / 60}m warn=${config.lifetimes.warningSeconds / 60}m` +
+        (config.launchesPaused ? ' launches=PAUSED (LAB_LAUNCHES_PAUSED)' : ''),
     );
 
     logger.info(

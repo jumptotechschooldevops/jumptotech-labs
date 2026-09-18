@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { ApiRequestError } from '../src/lib/api';
-import { WorkspacePage } from '../src/pages/WorkspacePage';
+import { AUTO_RECONNECTS, WorkspacePage } from '../src/pages/WorkspacePage';
 import type { TerminalEvent } from '../src/components/LabTerminal';
 import type { TerminalGrant } from '../src/lib/types';
 import { renderWithProviders } from './app-harness';
@@ -111,6 +111,34 @@ describe('finding the running lab', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Files and Directories' })).toBeTruthy();
     expect(button('Verify').disabled).toBe(false);
     expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it('finds a lab that appears after the page loaded (a reload during Start)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    expect(await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' })).toBeTruthy();
+
+    // The start the reload cancelled in the browser reaches the server.
+    apiMock.listMySessions.mockResolvedValue(
+      sessionsResponse([{ session: sessionInfo({ status: 'CREATING' }), labTitle: 'Files and Directories' }]),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(3_100));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'LINUX-001 is not running' })).toBeNull());
+    // The workspace for that session, not an empty state.
+    expect(await screen.findByRole('group', { name: 'Lab actions' })).toBeTruthy();
+  });
+
+  it('stops re-checking a lab that is really not running', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' });
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    const calls = apiMock.listMySessions.mock.calls.length;
+    expect(calls).toBeLessThanOrEqual(1 + 10 + 1);
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(apiMock.listMySessions.mock.calls.length).toBe(calls);
   });
 
   it('says a lab is not running, and points at the lab page, when there is no session for it', async () => {
@@ -259,6 +287,36 @@ describe('Reset', () => {
     expect(screen.getByText(/Not verified yet/)).toBeTruthy();
   });
 
+  it('while the reset runs, the old shell dying reads as the reset, not as "The shell exited."', async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    apiMock.resetLab.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    await renderConnected();
+
+    fireEvent.click(button('Reset'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Reset lab' }));
+    // Measured: the container is removed about a second into the reset and the
+    // service closes the socket with `exit 137` long before the reset answers.
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'SHELL_EXITED' }));
+
+    expect(await screen.findByText('Terminal: Resetting your environment…')).toBeTruthy();
+    expect(screen.queryByText('Terminal: The shell exited.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+
+    await act(async () => {
+      answer({
+        message: 'Lab reset successfully.',
+        removed: [],
+        restored: [],
+        steps: [],
+        environment: { environmentId: 'e', provider: 'docker-linux', phase: 'ready', namespace: '' },
+        session: sessionInfo(),
+        clearTerminal: true,
+        reconnectTerminal: true,
+      });
+    });
+    expect(await screen.findByText('Terminal: Connected')).toBeTruthy();
+  });
+
   it('shows a failed reset as an environment that needs another reset — with only Reset and End offered', async () => {
     apiMock.resetLab.mockRejectedValue(
       new ApiRequestError(503, {
@@ -359,6 +417,25 @@ describe('after the lab has ended', () => {
     );
     await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('second-start'));
     expect(button('Verify').disabled).toBe(false);
+  });
+
+  it('after a completed lab, leads on to the learning path rather than back into the same lab', async () => {
+    apiMock.endLab.mockResolvedValue({
+      message: 'Lab environment released.',
+      session: sessionInfo({ status: 'ENDED' }),
+      attempt: attemptSummary({ status: 'PASSED' }),
+      steps: [],
+    });
+    await renderConnected();
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    fireEvent.click(button('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+
+    const next = screen.getByRole('link', { name: 'Continue the learning path' });
+    expect(next.getAttribute('href')).toBe('#/paths/devops-engineer');
+    expect(next.className).toMatch(/btn--primary/);
+    expect(screen.getByRole('button', { name: 'Launch again' }).className).not.toMatch(/btn--primary/);
   });
 
   it('explains a relaunch the platform refused, on the summary', async () => {
@@ -467,6 +544,44 @@ describe('the terminal connection', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('rides out a terminal restart: retries a dropped or broker-refused terminal for about a minute, then asks', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    terminal.autoConnect = false;
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByText('Connecting to your terminal…');
+    // The status line can render before the terminal component has mounted.
+    await waitFor(() => expect(terminal.last).not.toBeNull());
+    const key = () => Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
+
+    // Each attempt is refused while the service is down, with a mix of codes a restart produces.
+    const codes = ['CONNECTION_LOST', 'BROKER_UNREACHABLE', 'CONNECTION_LOST', 'CREDENTIALS_UNAVAILABLE', 'PTY_SPAWN_FAILED', 'CONNECTION_LOST'];
+    for (const [i, code] of codes.entries()) {
+      const before = key();
+      act(() => terminal.last!.onEvent({ status: 'disconnected', code }));
+      await act(() => vi.advanceTimersByTimeAsync(AUTO_RECONNECTS[i]! + 50));
+      expect(key(), `attempt ${i + 1} after ${code}`).toBe(before + 1);
+    }
+    // Out of automatic attempts: the next drop waits for the student.
+    const before = key();
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(key()).toBe(before);
+    expect(AUTO_RECONNECTS.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(45_000);
+  });
+
+  it('never retries a sandbox mismatch; it re-reads the session instead', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    const before = Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
+    const reads = apiMock.getSession.mock.calls.length;
+
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'SANDBOX_REF_MISMATCH' }));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+
+    expect(Number(screen.getByTestId('terminal').getAttribute('data-connect-key'))).toBe(before);
+    expect(apiMock.getSession.mock.calls.length).toBeGreaterThan(reads);
+  });
+
   it('mints one new token when the old one is refused', async () => {
     await renderConnected();
     apiMock.issueTerminal.mockResolvedValue({ session: sessionInfo(), terminal: { url: 'ws://terminal', token: 'renewed' } });
@@ -503,5 +618,93 @@ describe('inactivity', () => {
 
     await waitFor(() => expect(screen.queryByText(/Are you still working/)).toBeNull());
     expect(apiMock.recordActivity).toHaveBeenCalledWith(SESSION_ID);
+  });
+});
+
+describe('the time limit', () => {
+  /*
+   * The api sends `secondsRemaining: 0` for every status but ACTIVE and
+   * RESETTING (SessionManager.view). The page counted that as time running out:
+   * a lab that still had most of its hour showed "Time is up … being removed"
+   * and a red 00:00 while it was being prepared, needed a reset, or was ending.
+   */
+  it.each(['CREATING', 'DEGRADED', 'ENDING'] as const)(
+    'does not say time is up for a %s lab that still has time',
+    async (status) => {
+      const session = sessionInfo({ status, secondsRemaining: 0, secondsUntilIdle: 0 });
+      apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session, labTitle: 'Files and Directories' }]));
+      apiMock.getSession.mockResolvedValue({ session, environment: null });
+      renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+      await waitFor(() => expect(apiMock.getSession).toHaveBeenCalled());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1_200));
+      });
+
+      expect(screen.queryByText(/Time is up/)).toBeNull();
+      expect(screen.queryByText('00:00')).toBeNull();
+    },
+  );
+
+  it('warns once, in words, when five minutes are left, and says to verify now', async () => {
+    const session = sessionInfo({ secondsRemaining: 240 });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session, labTitle: 'Files and Directories' }]));
+    apiMock.getSession.mockResolvedValue({ session, environment: null });
+    await renderConnected();
+
+    const heading = await screen.findByText(/minutes left in this lab/);
+    const banner = heading.closest('[role="status"]');
+    expect(banner).toBeTruthy();
+    expect(banner!.textContent).toMatch(/Press Verify now/);
+  });
+
+  it('does not warn while plenty of time is left', async () => {
+    await renderConnected();
+    expect(screen.queryByText(/minutes left in this lab/)).toBeNull();
+  });
+
+  it('still says time is up when an active lab reaches its limit', async () => {
+    const session = sessionInfo({ secondsRemaining: 1 });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session, labTitle: 'Files and Directories' }]));
+    apiMock.getSession.mockResolvedValue({ session, environment: null });
+    await renderConnected();
+
+    expect(await screen.findByText(/Time is up/, undefined, { timeout: 5_000 })).toBeTruthy();
+  });
+});
+
+describe('a lab the platform removed', () => {
+  /*
+   * The reaper removes an idle lab through the same EXPIRING → EXPIRED path as
+   * the time limit, with statusReason "idle for more than 1200s". The page read
+   * only the status and told a student who had stepped away for twenty minutes
+   * of a sixty-minute lab that its time ran out.
+   */
+  async function renderRemoved(statusReason: string) {
+    apiMock.getSession.mockResolvedValue({
+      session: sessionInfo({ status: 'EXPIRED', statusReason, secondsRemaining: 0 }),
+      environment: null,
+    });
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+  }
+
+  it('says a lab removed for inactivity was removed for inactivity', async () => {
+    await renderRemoved('idle for more than 1200s');
+    expect(await screen.findByRole('heading', { name: 'Your lab environment was removed after inactivity' })).toBeTruthy();
+    expect(screen.queryByText(/time ran out/)).toBeNull();
+  });
+
+  it('does not say "Time is up" while a lab is being removed for inactivity', async () => {
+    apiMock.getSession.mockResolvedValue({
+      session: sessionInfo({ status: 'EXPIRING', statusReason: 'idle for more than 1200s', secondsRemaining: 0 }),
+      environment: null,
+    });
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    expect(await screen.findByText('Removing your environment after inactivity…')).toBeTruthy();
+    expect(screen.queryByText(/Time is up/)).toBeNull();
+  });
+
+  it('still says a lab that reached its time limit expired', async () => {
+    await renderRemoved('absolute session lifetime reached');
+    expect(await screen.findByRole('heading', { name: 'Your lab environment expired' })).toBeTruthy();
   });
 });

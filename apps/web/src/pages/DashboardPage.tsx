@@ -21,7 +21,7 @@ import { displayNameFor } from '../lib/auth';
 import { useCatalog } from '../lib/CatalogContext';
 import { api } from '../lib/api';
 import { describeError, toApiError } from '../lib/errors';
-import { ATTEMPT_LABEL, SESSION_STATUS_TEXT, formatMoment, plural } from '../lib/format';
+import { ATTEMPT_LABEL, formatMoment, plural, sessionStatusText } from '../lib/format';
 import { hrefFor, usePageTitle } from '../lib/router';
 import { FLAGSHIP_PATH_ID, useLearningPath } from '../lib/learningPath';
 import type { ApiError, AttemptSummary } from '../lib/types';
@@ -86,14 +86,14 @@ function ActiveLabPanel() {
           You have a lab running
         </h2>
         <Badge tone={session.status === 'ACTIVE' ? 'success' : 'warning'}>
-          {SESSION_STATUS_TEXT[session.status].label}
+          {sessionStatusText(session.status).label}
         </Badge>
       </div>
       <p className="panel__lead">
         <span className="mono-id">{session.labId}</span> {entry.labTitle}
       </p>
       <p className="panel__text">
-        {SESSION_STATUS_TEXT[session.status].description}
+        {sessionStatusText(session.status).description}
         {left !== null ? ` About ${plural(left, 'minute')} left before it is removed.` : ''}
       </p>
       <a className="btn btn--primary" href={hrefFor({ name: 'workspace', labId: session.labId })}>

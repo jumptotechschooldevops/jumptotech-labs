@@ -185,24 +185,33 @@ platform allows (below), when any of these is true:
 Keep going, and fix it today, for: `BackupStale`, `BackupLastRunFailed`,
 `TlsCertificateRenewalDue`, the stuck-session warnings, `HostDiskSpaceLow`.
 
-### Reducing new launches — there is no stop-launches switch
+### Stopping new launches
 
-**The platform has no maintenance mode.** Nothing refuses every Start Lab while
-leaving running labs alone. A real maintenance-mode launch gate is a
-**post-P0-018 follow-up** (§8). What exists today only reduces launches:
+**The stop-launches switch** refuses every Start Lab and leaves running labs
+alone: their terminals, Verify, Reset and End keep working.
 
-1. **Tell the cohort.** Always first, and today the only way to stop launches
-   without taking the site down.
-2. **Reduce new launch capacity to one:** set `MAX_ACTIVE_SESSIONS=1` in `.env`
-   and `prod up -d api`. This **reduces** new launch capacity; it **does not
-   disable** new launches. Running labs and their shells continue (sessions are
-   durable). While at least one session is live, a Start is refused with
-   `LAB_CAPACITY_REACHED`; as soon as none is live, the next Start succeeds —
-   and that student then holds the only slot. (`MAX_ACTIVE_SESSIONS=0` is
-   refused at startup: it must be a positive integer.) Restore `5` and
-   `prod up -d api` afterwards.
-3. **Docker track only:** `DOCKER_TRACK_ENABLED=false` in `.env`, then
-   `prod up -d api`. The other tracks still launch.
+1. **Tell the cohort.** Always first.
+2. **Pause launches:** set `LAB_LAUNCHES_PAUSED=true` in `.env`, then
+   `prod up -d api`. Every Start Lab is answered `503 LAB_LAUNCHES_PAUSED`, and
+   the student sees "New labs are paused". Nothing is written or counted for a
+   refused start. Confirm it took effect:
+   ```bash
+   prod exec -T api node -e "fetch('http://127.0.0.1:4000/health').then(r=>r.json()).then(b=>console.log(b.data.sessions))"
+   ```
+   `launchesPaused: true`. The api logs `lab.start.paused` for each refusal.
+   Undo with `LAB_LAUNCHES_PAUSED=false` (or remove the line) and
+   `prod up -d api`.
+
+   `prod up -d api` re-creates the api container. Students with a lab open keep
+   their workspace and terminal while it restarts (the web app shows "Cannot
+   reach the labs API right now" until it is back), and the edge finds the new
+   container by itself; `prod restart web` is **not** needed.
+3. **Reduce, rather than stop, new launches:** set `MAX_ACTIVE_SESSIONS=1` in
+   `.env` and `prod up -d api`. While at least one session is live a Start is
+   refused with `LAB_CAPACITY_REACHED`; as soon as none is live, the next Start
+   succeeds. (`MAX_ACTIVE_SESSIONS=0` is refused at startup.) Restore `5` and
+   `prod up -d api` afterwards. **Docker track only:** `DOCKER_TRACK_ENABLED=false`
+   the same way; the other tracks still launch.
 4. **Take the site down:** `prod stop web`. This is not a launch gate: every
    student loses the site, running labs included (they are reclaimed later by
    idle expiry). Use it only for §3's security rows.
@@ -312,7 +321,6 @@ that is the incident.
 | **Where alerts are delivered** (a webhook, chat, paging, mail) and who is on call during the beta | Alerts are visible in Grafana and `amtool` only. The seam: `infrastructure/observability/alertmanager/secrets/webhook-url` |
 | **An external reachability check** from outside the host (DNS, firewall, public route) | Only the in-host edge check runs. P0-017's `npm run tls:check` from another machine is the ready-made probe |
 | **Host-level exporter** (node_exporter or similar) for per-disk, per-process and network detail | The API's `/proc` and statfs gauges cover memory, load, Docker's filesystem and the backup filesystem only. A node exporter needs the host root filesystem mounted into a container, which this story deliberately did not do |
-| **A maintenance-mode launch gate** that refuses every Start Lab but keeps running labs — **post-P0-018 follow-up**, not built | None. §3's `MAX_ACTIVE_SESSIONS=1` only reduces new launches to one slot; it does not disable them |
 | **Attestation re-probe cadence** and who runs it (P0-015 D5) | Manual, before `NetworkIsolationAttestationAging` |
 | **Off-host backup destination and encryption** (P0-013) | `jtt_backup_last_success_offhost` reads 0 and the dashboard says NO |
 | **CA / ACME client** (P0-017) | Manual renewal before `TlsCertificateRenewalDue` |

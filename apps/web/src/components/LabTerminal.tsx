@@ -21,6 +21,24 @@ import '@xterm/xterm/css/xterm.css';
 import { codeForClose } from '../lib/terminal';
 import type { TerminalGrant } from '../lib/types';
 
+/**
+ * Terminal service error codes sent on a socket it keeps open
+ * (services/terminal/src/server.ts, protocol.ts). Anything else precedes a close.
+ */
+const ADVISORY_ERROR_CODES = new Set(['FRAME_TOO_LARGE', 'MALFORMED', 'MALFORMED_FRAME', 'ALREADY_AUTHENTICATED']);
+
+/**
+ * Keystrokes typed while a connection attempt is still being set up are held
+ * and sent once the shell is `ready`. This bounds how much is held; a paste
+ * bigger than this is cut and the terminal says so.
+ */
+export const MAX_PENDING_INPUT_CHARS = 4 * 1024;
+
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+
+/** Per `input` frame. The service refuses more than 8 KB (terminal protocol.ts MAX_INPUT_CHARS). */
+const INPUT_FRAME_CHARS = 2 * 1024;
+
 export type TerminalStatus = 'idle' | 'connecting' | 'connected' | 'disconnected';
 
 export interface TerminalEvent {
@@ -183,7 +201,45 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
       }
 
       eventRef.current({ status: 'connecting' });
-      socket = new WebSocket(`${url.replace(/\/$/, '')}/terminal`);
+      const attempt = new WebSocket(`${url.replace(/\/$/, '')}/terminal`);
+      socket = attempt;
+
+      /*
+       * Keystrokes are taken from the moment this attempt starts, not from
+       * `ready`. The workspace reconnects right after a container Reset, on a
+       * Reconnect click and on an automatic retry, and a student who types in
+       * that second or two used to lose every key before `ready` without a
+       * trace: in the browser, `echo EARLY…-$((6*7))` reached the new shell as
+       * `((6*7))`. Held keys go to this attempt's shell once it is ready and
+       * are dropped with the attempt if it never gets there: they were typed
+       * for the shell being opened, never for one that refused or went away.
+       * Nothing but `auth` is sent before `ready` either way.
+       */
+      let ready = false;
+      let pendingInput = '';
+      let droppedInput = false;
+      const sendInput = (data: string) => {
+        for (let i = 0; i < data.length; ) {
+          let end = Math.min(i + INPUT_FRAME_CHARS, data.length);
+          // Never split a surrogate pair: half an emoji in each frame reaches the shell as two U+FFFD.
+          if (end < data.length && isHighSurrogate(data.charCodeAt(end - 1))) end -= 1;
+          attempt.send(JSON.stringify({ type: 'input', data: data.slice(i, end) }));
+          i = end;
+        }
+      };
+      inputDisposable?.dispose();
+      inputDisposable = term.onData((data) => {
+        if (ready) {
+          if (attempt.readyState === WebSocket.OPEN) sendInput(data);
+          return;
+        }
+        let room = Math.max(0, MAX_PENDING_INPUT_CHARS - pendingInput.length);
+        if (data.length > room) {
+          droppedInput = true;
+          if (room > 0 && isHighSurrogate(data.charCodeAt(room - 1))) room -= 1;
+        }
+        pendingInput += data.slice(0, room);
+      });
       // `socketRef` is what xterm's resize handler writes to, so it is set only
       // once the service says `ready`. Until then the only frame this socket
       // may send is `auth`: a re-fit while the layout settles used to put a
@@ -221,12 +277,13 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
             if (term.cols !== sentSize.cols || term.rows !== sentSize.rows) {
               socket!.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
             }
-            inputDisposable?.dispose();
-            inputDisposable = term.onData((data) => {
-              if (socket!.readyState === WebSocket.OPEN) {
-                socket!.send(JSON.stringify({ type: 'input', data }));
-              }
-            });
+            ready = true;
+            if (pendingInput) sendInput(pendingInput);
+            pendingInput = '';
+            if (droppedInput) {
+              term.writeln('\r\n\x1b[33mSome of what you typed while connecting was not sent.\x1b[0m');
+              droppedInput = false;
+            }
             if (keepAlive) clearInterval(keepAlive);
             keepAlive = setInterval(() => {
               if (socket!.readyState === WebSocket.OPEN) socket!.send(JSON.stringify({ type: 'ping' }));
@@ -245,15 +302,20 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
             break;
 
           case 'error': {
-            serverCode = typeof msg.code === 'string' ? msg.code : serverCode;
+            const code = typeof msg.code === 'string' ? msg.code : undefined;
             serverMessage = String(msg.message ?? 'Terminal error');
+            // Some refusals leave the socket open (a paste over the frame limit,
+            // a malformed frame). They are shown, but they are not why a later
+            // close happened: remembering one would label a real network drop
+            // FRAME_TOO_LARGE and stop the automatic reconnect.
+            if (code && !ADVISORY_ERROR_CODES.has(code)) serverCode = code;
             // SESSION_ENDED is also what the terminal service sends this socket
             // when the same session's terminal is opened in another tab — one
             // shell per session. Its "the lab has ended" text would be false
             // then, so the workspace works out which case it is from the
             // session state and says so in the terminal bar.
             term.writeln(
-              `\r\n\x1b[31m${serverCode === 'SESSION_ENDED' ? 'The terminal was disconnected.' : serverMessage}\x1b[0m`,
+              `\r\n\x1b[31m${code === 'SESSION_ENDED' ? 'The terminal was disconnected.' : serverMessage}\x1b[0m`,
             );
             break;
           }

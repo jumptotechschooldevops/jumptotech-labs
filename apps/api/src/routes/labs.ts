@@ -288,6 +288,21 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
     if (!def) return;
 
     /*
+     * The stop-launches switch. Refused before an attempt is opened or capacity
+     * is counted, so a paused platform writes nothing and creates nothing; every
+     * route that acts on a running session is unaffected.
+     */
+    if (deps.config.launchesPaused) {
+      deps.obs?.info('lab.start.paused', { labId: def.id, code: 'LAB_LAUNCHES_PAUSED' });
+      sendError(res, 503, {
+        code: 'LAB_LAUNCHES_PAUSED',
+        message: 'Starting new labs is paused for maintenance.',
+        remediation: 'Labs that are already running keep working. Try again later.',
+      });
+      return;
+    }
+
+    /*
      * The attempt is opened *before* the sandbox exists.
      *
      * That order is the architecture rule made executable: the attempt is the

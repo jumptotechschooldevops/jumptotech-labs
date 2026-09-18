@@ -126,5 +126,7 @@ JTT_PRODUCTION_COMPOSE_FILES=(
 jtt_prod() {
   local args=() file
   for file in "${JTT_PRODUCTION_COMPOSE_FILES[@]}"; do args+=(-f "$file"); done
-  (cd "$jtt_repo" && docker compose "${args[@]}" --profile observability "$@")
+  # stdin is never needed, and `exec -T` still attaches it: run from an SSH
+  # terminal under `timeout`, compose could stop on a TTY read in the background.
+  (cd "$jtt_repo" && docker compose "${args[@]}" --profile observability "$@" </dev/null)
 }
