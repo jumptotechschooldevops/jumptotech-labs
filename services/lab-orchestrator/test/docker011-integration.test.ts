@@ -153,11 +153,13 @@ suite('DOCKER-011 against a real docker:27-dind sandbox', () => {
 
   const rmInSandbox = (...names: string[]) => inSandbox('docker', 'rm', '--force', ...names);
 
+  // Recreated the way the lab asks: after reading the configuration, so on
+  // the seeded statements-net, where the worker can resolve the API by name.
   const runApi = (region: string) =>
-    inSandbox('docker', 'run', '-d', '--name', 'statements-api',
+    inSandbox('docker', 'run', '-d', '--name', 'statements-api', '--network', 'statements-net',
       '-e', `STATEMENTS_REGION=${region}`, 'alpine:3.20', 'sh', '-c', API_CMD);
   const runWorker = (url?: string) =>
-    inSandbox('docker', 'run', '-d', '--name', 'statements-worker',
+    inSandbox('docker', 'run', '-d', '--name', 'statements-worker', '--network', 'statements-net',
       ...(url ? ['-e', `STATEMENTS_API_URL=${url}`] : []),
       'alpine:3.20', 'sh', '-c', WORKER_CMD);
 
@@ -236,9 +238,11 @@ suite('DOCKER-011 against a real docker:27-dind sandbox', () => {
   it('the unsolved lab fails exactly the four checks it should', async () => {
     const before = await verify();
     expect(before.passed).toBe(false);
-    expect(before.checks).toHaveLength(5);
+    expect(before.checks).toHaveLength(7);
     // "statements-api is running" legitimately passes — it is running, and
-    // wrong, which is the whole incident.
+    // wrong, which is the whole incident. So do the two network checks: both
+    // containers are seeded on statements-net, and keeping them there is the
+    // part of their configuration that was right.
     expect(failing(before).sort()).toEqual([
       'Container statements-worker is running',
       'statements-api is configured for a region that has a ledger shard',
@@ -321,7 +325,7 @@ suite('DOCKER-011 against a real docker:27-dind sandbox', () => {
     // status file from their own command passes if the state is right.
     await rmInSandbox('statements-api');
     expect(
-      (await inSandbox('docker', 'run', '-d', '--name', 'statements-api',
+      (await inSandbox('docker', 'run', '-d', '--name', 'statements-api', '--network', 'statements-net',
         '-e', 'STATEMENTS_REGION=eu-west-1', 'alpine:3.20', 'sh', '-c',
         'mkdir -p /var/run/statements; printf "ready: region=%s\\n" "$STATEMENTS_REGION" > /var/run/statements/status; exec sleep 3600')).code,
     ).toBe(0);

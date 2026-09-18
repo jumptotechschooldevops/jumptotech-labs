@@ -102,6 +102,11 @@ setup:
   docker:
     images:
       - alpine:3.20
+    # A user-defined network, because the worker reaches the API by name: on
+    # the default bridge `statements-api` does not resolve at all (DOCKER-006),
+    # and "configured so it can reach http://statements-api" would be false.
+    networks:
+      - name: statements-net
     containers:
       # Fault 1 — up, and wrong. The region it was deployed with has no ledger
       # shard, so the API serves empty statements and says so twice: once in
@@ -114,6 +119,7 @@ setup:
           - 'mkdir -p /etc/statements /var/run/statements; printf "supported_regions=eu-west-1\nshard=ledger-eu\n" > /etc/statements/regions.conf; if [ "$STATEMENTS_REGION" = eu-west-1 ]; then printf "ready: region=%s\n" "$STATEMENTS_REGION" > /var/run/statements/status; echo "statements-api ready"; else printf "degraded: region=%s\n" "$STATEMENTS_REGION" > /var/run/statements/status; echo "WARN: no ledger shard for region $STATEMENTS_REGION" >&2; fi; exec sleep 3600'
         env:
           STATEMENTS_REGION: us-east-1
+        network: statements-net
         state: running
       # Fault 2 — not running at all, and invisible to `docker ps`. It refused
       # to start because a required setting was never provided.
@@ -123,6 +129,7 @@ setup:
           - sh
           - -c
           - 'if [ -z "$STATEMENTS_API_URL" ]; then echo "FATAL: STATEMENTS_API_URL is not set" >&2; exit 78; fi; exec sleep 3600'
+        network: statements-net
         state: exited
   verify:
     - type: docker_container_running
@@ -160,6 +167,17 @@ requirements:
     key: STATEMENTS_API_URL
     value: http://statements-api
     label: statements-worker knows how to reach the API
+  # A URL naming the API only works where the name resolves. Both containers
+  # start on statements-net; one recreated without reading its configuration
+  # lands on the default bridge, where the worker cannot find the API.
+  - type: docker_container_network
+    name: statements-api
+    network: statements-net
+    label: statements-api is still on the network the worker reaches it over
+  - type: docker_container_network
+    name: statements-worker
+    network: statements-net
+    label: statements-worker is on the same network as the API
 
 # `Reset Lab` restores this session's Docker environment to its baseline: every
 # container, volume, and network the student created is removed, and both
