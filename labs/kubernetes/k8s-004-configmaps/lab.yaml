@@ -93,6 +93,16 @@ requirements:
     configmap: statements-config
     key: RETENTION_DAYS
     label: Deployment statements reads RETENTION_DAYS from the ConfigMap
+  # A literal `env` entry left beside the reference overrides `envFrom`, so
+  # the ConfigMap would have no effect at all.
+  - type: deployment_env_literal_absent
+    name: statements
+    env: STATEMENT_FORMAT
+    label: STATEMENT_FORMAT is no longer typed into the Deployment
+  - type: deployment_env_literal_absent
+    name: statements
+    env: RETENTION_DAYS
+    label: RETENTION_DAYS is no longer typed into the Deployment
   - type: deployment_available
     name: statements
     min_available: 1
