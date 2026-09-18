@@ -22,6 +22,7 @@ set +x
 
 source_repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 work=$(mktemp -d "${TMPDIR:-/tmp}/jtt-diagnostics-test.XXXXXX")
+work=$(cd "$work" && pwd -P) # macOS: /var is /private/var, and the script resolves paths
 if [ "${JTT_TEST_KEEP:-}" = 1 ]; then trap 'echo "kept $work"' EXIT; else trap 'rm -rf "$work"' EXIT; fi
 
 failures=0
@@ -179,7 +180,7 @@ grep -q 'CapacityExhausted' "$extract"/*/60-alerts.txt && pass 'firing alerts ar
 grep -q 'restarts=2' "$extract"/*/30-services.txt && pass 'restart counts are recorded' || fail 'restarts missing'
 
 # Read-only: every docker and kubectl call is one of these shapes.
-bad_calls=$(grep -vE '^(docker (version|compose version --short|info|system df|network ls|ps|inspect --format)|docker compose .* (ps|logs --no-color|exec -T (api|terminal|sandboxd) node -e|exec -T api npx tsx apps/api/src/operator-cli\.ts (status|sessions --recent --json)|exec -T prometheus promtool query instant|exec -T alertmanager amtool alert query)|kubectl (version --client|--kubeconfig [^ ]+ get )|kind (version|get clusters))' "$calls" || true)
+bad_calls=$(grep -vE '^(docker (version|compose version --short|info|system df|network ls|ps|inspect --format)|docker compose .* (ps|logs --no-color|exec -T (api|terminal|sandboxd) node -e|exec -T api node /app/node_modules/\.bin/tsx apps/api/src/operator-cli\.ts (status|sessions --recent --json)|exec -T prometheus promtool query instant|exec -T alertmanager amtool alert query)|kubectl (version --client|--kubeconfig [^ ]+ get )|kind (version|get clusters))' "$calls" || true)
 if [ -z "$bad_calls" ]; then pass 'every docker, kubectl and kind call is read-only'; else fail "unexpected calls: $bad_calls"; fi
 if grep -qE ' config( |$)| inspect [^-]| (rm|stop|restart|down|kill|delete|end) ' "$calls"; then fail 'a mutating or env-revealing verb ran'; else pass 'no config, bare inspect, rm, stop, restart, down, kill, delete or end'; fi
 
@@ -190,6 +191,16 @@ if [ "$status" -eq 1 ]; then pass 'exits 1'; else fail "exit $status"; fi
 if [ -z "$(ls -A "$case_dir/out")" ]; then pass 'no bundle directory or archive left behind'; else fail "left: $(ls "$case_dir/out")"; fi
 if grep -qF "$S_POSTGRES" "$case_dir/output"; then fail 'the leaked value was printed'; else pass 'the value is not printed, only the file and kind'; fi
 grep -q 'LEAK 20-host.txt: configured-secret' "$case_dir/output" && pass 'names the file and the kind' || fail 'no LEAK line'
+
+echo
+echo 'private-beta-diagnostics: a second stack on the host, with its own env file'
+S_ALT=altpass0ddba110ddba110ddba110ddba110ddba11
+printf 'POSTGRES_PASSWORD=%s\nRUNTIME_OWNER_ID=beta-host-2\nCOMPOSE_PROJECT_NAME=jtt-second\n' "$S_ALT" >"$work/alt.env"
+: >"$work/alt-compose.yml"
+run_case altenv FAKE_SYSTEM_DF_EXTRA="Images 1 1 $S_ALT" -- --stack development --env-file "$work/alt.env" --compose-file "$work/alt-compose.yml"
+if [ "$status" -eq 1 ] && grep -q 'LEAK 20-host.txt: configured-secret' "$case_dir/output"; then pass "the leak scan reads the stack's own env file"; else fail "alt env scan: exit $status"; fi
+if grep -q -- "--env-file $work/alt.env" "$calls" && grep -q -- "-f $work/alt-compose.yml" "$calls"; then pass 'compose is pointed at that stack'; else fail 'compose did not get --env-file / -f'; fi
+if grep -q 'label=jumptotech.io/runtime-owner=beta-host-2' "$calls"; then pass "sandboxes are filtered by that stack's runtime owner"; else fail 'owner filter not from the env file'; fi
 
 echo
 echo 'private-beta-diagnostics: refusals'

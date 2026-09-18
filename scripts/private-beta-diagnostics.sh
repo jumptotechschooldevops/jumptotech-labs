@@ -5,6 +5,7 @@
 #
 #   scripts/private-beta-diagnostics.sh [--out-dir DIR] [--since 30m] [--max-lines 300]
 #                                       [--stack production|development] [--no-logs]
+#                                       [--env-file FILE] [--compose-file FILE]...
 #   make private-beta-diagnostics ARGS="--since 2h"
 #
 # Run on the host, from the checkout the stack was started from, as the account
@@ -69,6 +70,7 @@ max_lines=300
 stack=production
 collect_logs=1
 env_file=$repo/.env
+compose_extra=()
 
 usage() {
   sed -n '3,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -81,6 +83,11 @@ while [ $# -gt 0 ]; do
     --max-lines) [ $# -ge 2 ] || { usage >&2; exit 2; }; max_lines=$2; shift 2 ;;
     --stack) [ $# -ge 2 ] || { usage >&2; exit 2; }; stack=$2; shift 2 ;;
     --no-logs) collect_logs=0; shift ;;
+    # A stack started with another env file or an extra override (a second
+    # stack on one machine). The env file is also where RUNTIME_OWNER_ID and
+    # the secret values to search for are read from.
+    --env-file) [ $# -ge 2 ] || { usage >&2; exit 2; }; env_file=$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2"); compose_extra+=(--env-file "$env_file"); shift 2 ;;
+    --compose-file) [ $# -ge 2 ] || { usage >&2; exit 2; }; compose_extra+=(-f "$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"); shift 2 ;;
     -h | --help) usage; exit 0 ;;
     *) echo "private-beta-diagnostics: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -112,9 +119,9 @@ esac
 # or `make up`'s files for a development stack.
 compose() {
   if [ "$stack" = production ]; then
-    jtt_prod "$@"
+    jtt_prod ${compose_extra[@]+"${compose_extra[@]}"} "$@"
   else
-    (cd "$jtt_repo" && docker compose -f docker-compose.yml -f docker-compose.runtime.yml "$@" </dev/null)
+    (cd "$jtt_repo" && docker compose -f docker-compose.yml -f docker-compose.runtime.yml ${compose_extra[@]+"${compose_extra[@]}"} "$@" </dev/null)
   fi
 }
 
@@ -221,9 +228,9 @@ drop_owners() {
   fi
 }
 {
-  run 'operator status' compose exec -T api npx tsx apps/api/src/operator-cli.ts status
+  run 'operator status' compose exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts status
   printf '\n## sessions (live and recently finished; owner ids removed)\n'
-  sessions=$(compose exec -T api npx tsx apps/api/src/operator-cli.ts sessions --recent --json 2>&1) || true
+  sessions=$(compose exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts sessions --recent --json 2>&1) || true
   printf '%s\n' "$sessions" | drop_owners
 } >"$bundle/40-sessions.txt"
 
