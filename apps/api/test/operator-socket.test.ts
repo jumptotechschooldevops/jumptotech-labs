@@ -284,6 +284,7 @@ describe('operator socket — reading', () => {
   it('refuses malformed ids, unknown sessions, unknown paths and wrong methods', async () => {
     const { call } = await compose();
     expect((await call('GET', '/v1/sessions/..%2F..%2Fetc')).status).toBe(400);
+    expect((await call('GET', '/v1/sessions/%E0%A4%A')).status).toBe(400);
     expect((await call('GET', '/v1/sessions/sess-0000000000000000')).status).toBe(404);
     expect((await call('GET', '/v1/sessions/sess-0000000000000000/end')).status).toBe(404);
     expect((await call('POST', '/v1/status')).status).toBe(404);

@@ -106,14 +106,24 @@ case $stack in production | development) ;; *)
   ;;
 esac
 
-# The bundle must never be written where `git add` could pick it up.
-mkdir -p "$out_dir"
-out_dir=$(cd "$out_dir" && pwd -P)
+# The bundle must never be written where `git add` could pick it up. The path
+# is resolved through its nearest existing ancestor before anything is created,
+# so a refused --out-dir leaves nothing behind in the checkout.
+resolve_path() {
+  local target=$1 rest=
+  while [ ! -d "$target" ]; do
+    rest=/$(basename "$target")$rest
+    target=$(dirname "$target")
+  done
+  printf '%s%s' "$(cd "$target" && pwd -P)" "$rest"
+}
+out_dir=$(resolve_path "$out_dir")
 case $out_dir/ in "$repo"/*)
   echo "private-beta-diagnostics: --out-dir must be outside the checkout ($repo)" >&2
   exit 2
   ;;
 esac
+mkdir -p "$out_dir"
 
 # The compose command for the chosen stack: `prod` from the operations runbook,
 # or `make up`'s files for a development stack.

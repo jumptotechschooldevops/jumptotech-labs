@@ -311,7 +311,12 @@ export function createOperatorHandler(deps: OperatorDeps): (req: IncomingMessage
             return;
           }
           action = isEnd ? 'end_session' : 'session';
-          const candidate = decodeURIComponent(parts[2] ?? '');
+          let candidate = '';
+          try {
+            candidate = decodeURIComponent(parts[2] ?? '');
+          } catch {
+            // A malformed escape is a bad id, not a failure of the api.
+          }
           if (!SESSION_ID_SHAPE.test(candidate)) {
             count(action, 'rejected');
             send(res, 400, { ok: false, error: { code: 'INVALID_SESSION_ID', message: 'that is not a session id' } });

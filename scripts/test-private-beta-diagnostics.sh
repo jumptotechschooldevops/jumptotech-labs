@@ -204,9 +204,8 @@ if grep -q 'label=jumptotech.io/runtime-owner=beta-host-2' "$calls"; then pass "
 
 echo
 echo 'private-beta-diagnostics: refusals'
-run_case inside -- --stack production --out-dir "$fixture/diagnostics"
-if [ "$status" -eq 2 ] && [ ! -e "$fixture/diagnostics/jtt-diagnostics-"* ]; then pass 'refuses to write inside the checkout'; else fail "inside checkout: exit $status"; fi
-rm -rf "$fixture/diagnostics"
+run_case inside -- --stack production --out-dir "$fixture/diagnostics/new"
+if [ "$status" -eq 2 ] && [ ! -e "$fixture/diagnostics" ]; then pass 'refuses to write inside the checkout, and creates nothing there'; else fail "inside checkout: exit $status"; fi
 run_case badsince -- --since '1; rm -rf /'
 if [ "$status" -eq 2 ]; then pass 'refuses a --since that is not a duration'; else fail "--since: exit $status"; fi
 
