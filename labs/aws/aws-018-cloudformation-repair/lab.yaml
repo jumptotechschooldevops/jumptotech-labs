@@ -168,9 +168,14 @@ requirements:
     logical_id: ExportRolePolicy
     property: PolicyDocument.Statement.0.Resource
     references: ExportBucket
-    via: GetAtt
+    # s3:GetObject acts on objects, whose ARNs are the bucket's ARN plus
+    # `/<key>`. `!GetAtt ExportBucket.Arn` alone names the bucket and grants
+    # nothing on what is in it, so the policy builds `${ExportBucket.Arn}/*`
+    # with Fn::Sub. (A Sub that leaves off the `/*` is not caught here: no
+    # requirement type reads the text around a Sub variable.)
+    via: Sub
     attribute: Arn
-    label: The policy takes the bucket's ARN from the bucket resource
+    label: The policy grants access to the objects, using the bucket's ARN from the bucket resource
 
   # --- nothing dangles ------------------------------------------------------
   - type: cfn_references_resolve
@@ -213,8 +218,10 @@ hints:
       and `${Env}` should be the parameter the template actually declares. A
       list entry that must point at a resource needs `!Ref`, not the bare name.
       An ARN is an attribute, so it comes from `!GetAtt <resource>.Arn`. The
-      missing output takes the role's ARN the same way, and the trust document
-      belongs under the role's `Properties`.
+      bucket's ARN names the bucket, not the objects in it, and `s3:GetObject`
+      acts on objects: the policy needs `!Sub '${ExportBucket.Arn}/*'`. The
+      missing output takes the role's ARN with `!GetAtt`, and the trust
+      document belongs under the role's `Properties`.
 
 references:
   - title: AWS CloudFormation — Template sections

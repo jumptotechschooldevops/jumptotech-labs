@@ -104,7 +104,7 @@ Resources:
           - Effect: Allow
             Action:
               - s3:GetObject
-            Resource: !GetAtt ExportBucket.Arn
+            Resource: !Sub '\${ExportBucket.Arn}/*'
 
 Outputs:
   ExportBucketName:
@@ -140,7 +140,7 @@ describe('AWS-018 — the seeded template does not pass', () => {
     expect(failed(result.checks).sort()).toEqual([
       "Every reference in the template resolves to something it declares",
       "The policy attaches to the role by referring to it",
-      "The policy takes the bucket's ARN from the bucket resource",
+      "The policy grants access to the objects, using the bucket's ARN from the bucket resource",
       "The role trusts the service the export instances run on",
       "The role's trust document allows rather than denies",
       "The role's trust document allows the role to be assumed",
@@ -186,7 +186,7 @@ describe('AWS-018 — a correct repair passes however it is written', () => {
 
   it('passes the same template written with long-form intrinsics', async () => {
     const longForm = SOLVED
-      .replace("Resource: !GetAtt ExportBucket.Arn", "Resource:\n              Fn::GetAtt: [ExportBucket, Arn]")
+      .replace("Resource: !Sub '${ExportBucket.Arn}/*'", "Resource:\n              Fn::Sub: '${ExportBucket.Arn}/*'")
       .replace("- !Ref ExportRole", "- Ref: ExportRole")
       .replace("Value: !GetAtt ExportRole.Arn", "Value:\n      Fn::GetAtt: [ExportRole, Arn]")
       .replace("Value: !Ref ExportBucket", "Value:\n      Ref: ExportBucket");
@@ -206,7 +206,7 @@ describe('AWS-018 — a correct repair passes however it is written', () => {
             Roles: [{ Ref: 'ExportRole' }],
             PolicyDocument: {
               Version: '2012-10-17',
-              Statement: [{ Effect: 'Allow', Action: ['s3:GetObject'], Resource: { 'Fn::GetAtt': ['ExportBucket', 'Arn'] } }],
+              Statement: [{ Effect: 'Allow', Action: ['s3:GetObject'], Resource: { 'Fn::Sub': '${ExportBucket.Arn}/*' } }],
             },
           },
         },
@@ -236,7 +236,7 @@ describe('AWS-018 — a correct repair passes however it is written', () => {
     Properties:
       PolicyDocument:
         Statement:
-          - Resource: !GetAtt ExportBucket.Arn
+          - Resource: !Sub '\${ExportBucket.Arn}/*'
             Action: [s3:GetObject]
             Effect: Allow
         Version: '2012-10-17'
@@ -279,19 +279,31 @@ describe('AWS-018 — templates that look repaired but are not', () => {
   });
 
   it('fails when Ref is used where an attribute is required', async () => {
-    const wrongIntrinsic = SOLVED.replace('Resource: !GetAtt ExportBucket.Arn', 'Resource: !Ref ExportBucket');
+    const wrongIntrinsic = SOLVED.replace("Resource: !Sub '${ExportBucket.Arn}/*'", 'Resource: !Ref ExportBucket');
     const result = await run(wrongIntrinsic);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toEqual(["The policy takes the bucket's ARN from the bucket resource"]);
+    expect(failed(result.checks)).toEqual(["The policy grants access to the objects, using the bucket's ARN from the bucket resource"]);
   });
 
-  it('fails when GetAtt names the wrong attribute', async () => {
-    const wrongAttribute = SOLVED.replace('!GetAtt ExportBucket.Arn', '!GetAtt ExportBucket.DomainName');
+  it('fails the bucket ARN alone, which grants s3:GetObject on no object at all', async () => {
+    // What this lab used to accept as the answer. GetObject is authorised
+    // against arn:aws:s3:::bucket/key; the bare bucket ARN matches no key.
+    const bucketOnly = SOLVED.replace("Resource: !Sub '${ExportBucket.Arn}/*'", 'Resource: !GetAtt ExportBucket.Arn');
+    const result = await run(bucketOnly);
+
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual([
+      "The policy grants access to the objects, using the bucket's ARN from the bucket resource",
+    ]);
+  });
+
+  it('fails when the Sub names the wrong attribute', async () => {
+    const wrongAttribute = SOLVED.replace('${ExportBucket.Arn}/*', '${ExportBucket.DomainName}/*');
     const result = await run(wrongAttribute);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toContain("The policy takes the bucket's ARN from the bucket resource");
+    expect(failed(result.checks)).toContain("The policy grants access to the objects, using the bucket's ARN from the bucket resource");
   });
 
   it('fails when the logical ID is right but the resource type is wrong', async () => {
