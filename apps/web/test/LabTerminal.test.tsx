@@ -23,6 +23,7 @@ const xterm = vi.hoisted(() => ({
     resizeListeners: ((size: { cols: number; rows: number }) => void)[];
     setSize(cols: number, rows: number): void;
     type(data: string): void;
+    dataListeners: Set<(data: string) => void>;
     written: string[];
   }[],
   /** The size the next `fit()` settles on. */
@@ -269,6 +270,83 @@ describe('LabTerminal input typed while connecting', () => {
     const second = reconnect(1);
     act(() => second.serverOpens());
     act(() => second.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+
+    expect(inputs(first)).toBe('');
+    expect(inputs(second)).toBe('');
+  });
+
+  it('does not replay keys typed while nothing was connected into the next attempt', () => {
+    const { socket: first, term, reconnect } = mount();
+    act(() => first.serverOpens());
+    act(() => first.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+    act(() => first.onclose?.({ code: 1006 }));
+    // Disconnected: the bar offers Reconnect. Whatever is typed now has no shell.
+    act(() => term.type('sudo reboot\r'));
+
+    const second = reconnect(1);
+    act(() => second.serverOpens());
+    act(() => second.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+    act(() => term.type('pwd\r'));
+
+    expect(inputs(first)).toBe('');
+    expect(inputs(second)).toBe('pwd\r');
+  });
+
+  it('gives each key to exactly one attempt across repeated Resets, and a superseded attempt never sends', () => {
+    const { socket: first, term, reconnect } = mount();
+    act(() => first.serverOpens());
+    act(() => term.type('one'));
+    // A second Reset before the first reconnect was ready.
+    const second = reconnect(1);
+    act(() => second.serverOpens());
+    act(() => term.type('two'));
+    const third = reconnect(2);
+    act(() => third.serverOpens());
+    act(() => term.type('three\r'));
+    // The superseded attempts answer late; the component has let them go.
+    act(() => first.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+    act(() => second.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+    act(() => third.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+    act(() => term.type('x'));
+
+    expect(inputs(first)).toBe('');
+    expect(inputs(second)).toBe('');
+    expect(inputs(third)).toBe('three\rx');
+    expect(term.dataListeners.size).toBe(1);
+  });
+
+  it('sends nothing it held once the student signs out or the grant goes away', () => {
+    const onEvent = vi.fn();
+    const view = render(<LabTerminal grant={GRANT} onEvent={onEvent} />);
+    const socket = FakeSocket.all.at(-1)!;
+    const term = xterm.terms.at(-1)!;
+    act(() => socket.serverOpens());
+    act(() => term.type('cat ~/.ssh/id_ed25519\r'));
+
+    view.rerender(<LabTerminal grant={null} onEvent={onEvent} />);
+    act(() => socket.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+    act(() => term.type('ls\r'));
+
+    expect(inputs(socket)).toBe('');
+    expect(term.dataListeners.size).toBe(0);
+    expect(FakeSocket.all).toHaveLength(1);
+  });
+
+  it('does not carry keys held for one session into a replacement session', () => {
+    const onEvent = vi.fn();
+    const view = render(<LabTerminal grant={GRANT} onEvent={onEvent} />);
+    const first = FakeSocket.all.at(-1)!;
+    const term = xterm.terms.at(-1)!;
+    act(() => first.serverOpens());
+    act(() => term.type('for-the-old-lab\r'));
+
+    view.rerender(<LabTerminal grant={{ url: GRANT.url, token: 'another.token' }} onEvent={onEvent} />);
+    const second = FakeSocket.all.at(-1)!;
+    expect(second).not.toBe(first);
+    act(() => second.serverOpens());
+    expect(second.sent[0]).toMatchObject({ type: 'auth', token: 'another.token' });
+    act(() => second.serverSends({ type: 'ready', sessionId: 'sess-b' }));
+    act(() => first.serverSends({ type: 'ready', sessionId: 'sess-a' }));
 
     expect(inputs(first)).toBe('');
     expect(inputs(second)).toBe('');
