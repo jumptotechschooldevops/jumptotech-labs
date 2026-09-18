@@ -123,6 +123,23 @@ than the task claims; **P3** wording.
 | NET-002 | Classify labels stated the answers. | a29b4c3 |
 | Path | NET-024 and NET-025 create ConfigMaps before K8S-004 teaches them; NET-025 (EndpointSlices/readiness) before K8S-008. | fa39a2d |
 
+### 3.3a Blockers found by the final integration review, fixed
+
+The review found three defects introduced by this branch itself.
+
+| Lab | Defect | Fix |
+|---|---|---|
+| TF-002 | The new `file_content_absent production` check read `main.tf` as text. The seeded header comment says "There is a production copy of this file…", so every correct solution that kept the comment failed, and a comment could never be told from a value. | `terraform_resource_literal_absent` on `local_file.service_config` for `staging`/`production`: graded on the resource's string literals, and comments are ignored. The task text now says the resource must not spell out an environment, and that comments are not graded. A `validation` block listing both environments passes. |
+| AWS-005 | Adding an EC2 `context` to the administrator and finance-role `not_allows` checks meant that they asked only about EC2. `Allow iam:PassRole on * when PassedToService = ecs-tasks` passed the lab, and that is the same escalation. | Those two checks are context-free again, with `any_context: true`, so an Allow for any service fails and a Deny whose condition never fires does not rescue it. The app-role checks keep their contexts. |
+| AWS-018 | `via: Sub` accepted only `!Sub '${ExportBucket.Arn}/*'`. A list that also named the bucket, `!Join` of the GetAtt and `/*`, and a Sub variable map all failed. `cfn_references_resolve` also reported a Sub map's own variable as dangling. | `cfn_property_resolves_to` with `${ExportBucket.Arn}/*`. The equivalent forms pass. The bucket ARN alone, a Sub without `/*`, a hand-written ARN string, the bucket name, and a narrower prefix all fail. That also closes the old "Sub without `/*`" gap. Sub-map variables are no longer counted as template references. |
+
+Regression tests: `services/verifier/test/tf-002-verification.test.ts`,
+the new describe blocks in `aws-005-verification.test.ts` and
+`aws-018-verification.test.ts`, plus unit tests in `terraform-hcl.test.ts`,
+`iam-condition.test.ts` and `cloudformation.test.ts`. Each lab's new tests
+fail against its previous `lab.yaml`. I checked this for AWS-005 (4 failures)
+and AWS-018 (8 failures).
+
 ### 3.4 New automated gates
 
 | Gate | File | Proves |
@@ -154,6 +171,18 @@ tests, and changes no production architecture.
 5. **`deployment_env_literal_absent`**: no container sets a named variable to a
    literal. Snapshots record literal env *names* only — never values.
 
+6. **`terraform_resource_literal_absent`** (terraform family): no string
+   literal among a resource's own arguments contains a listed value. The HCL
+   scanner now records each argument's string literals from its tokens, so
+   comments are never literals, and cannot hide one that follows them.
+7. **`any_context: true`** on `iam_policy_not_allows`: asked of every possible
+   request. An Allow counts whatever its `Condition` says, and only an
+   unconditional Deny counts as protection.
+8. **`cfn_property_resolves_to`** (cloudformation family): a property, or any
+   entry of a list property, evaluates to one of the given `Fn::Sub`
+   templates. GetAtt, Ref, Join and Sub variable maps are normalised to one
+   form, and a plain string never matches a template containing a reference.
+
 Also: `systemd_unit_directive` compares `…Sec` directives as systemd time
 spans (`5`, `5s`, `5sec`, `5000ms`), so LINUX-017 accepts the documented
 spelling.
@@ -184,7 +213,6 @@ in a real container in this pass; that harness is not part of `npm test`.
 |---|---|---|
 | K8S-014 | Revision ≥ 3 is reachable with two `kubectl rollout restart`s, without the broken release or a rollback. | No requirement type reads ReplicaSet history or the template's restart annotation. |
 | K8S-012 | A binding to the group `system:serviceaccounts:<ns>` is invisible: the SubjectAccessReview carries no groups. | Handler change in the reader. |
-| AWS-018 | `!Sub '${ExportBucket.Arn}'` without `/*` still passes. | No type reads the text around a Sub variable. |
 | AWS-012 | `ServiceName` checked for presence only. | The idiom is a `!Sub`, which `equals` cannot compare. |
 | AWS-008 | "Do not move deployed subnets" unchecked. | Lab is at the 20-requirement cap. |
 | AWS-009 | A default route to the IGW on the private route table passes. | No absence check for CloudFormation properties. |
