@@ -215,6 +215,11 @@ describe('observability and output helpers', () => {
     expect([...EXPECTED_WORKLOAD_ALERTS].sort()).toEqual(['CapacityExhausted', 'CapacityNearExhausted']);
   });
 
+  it('never counts the always-firing Watchdog as unexpected, even when it starts firing mid-run', () => {
+    expect(unexpectedAlerts(['Watchdog'], [])).toEqual([]);
+    expect(unexpectedAlerts(['Watchdog', 'SessionStuckProvisioning'], ['Watchdog'])).toEqual(['SessionStuckProvisioning']);
+  });
+
   it('excuses deployment-environment alerts even when they ignite after the pre-run snapshot', () => {
     // BETA-P0-020 regression. The gate runs the dev + observability stack, where
     // there is no TLS certificate and no backup job, so these fire on their own
