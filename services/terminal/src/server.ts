@@ -85,6 +85,8 @@ interface Session {
   maxTimer: NodeJS.Timeout;
   /** When this socket last reported lab-session activity; unset until it types. */
   activityReportedAt: number | undefined;
+  /** The attach that opened this shell — see `latestAttach`. */
+  attach: number;
 }
 
 /**
@@ -129,6 +131,17 @@ export function createTerminalServer(
   const sessions = new Map<WebSocket, Session>();
   /** sessionId → socket, so the API can close one specific student's shell. */
   const bySessionId = new Map<string, WebSocket>();
+  /**
+   * sessionId → the newest attach started for it, registered or still in
+   * flight. `startSession` awaits the API and the broker, and `closeSession`
+   * can only close a socket that is already registered: without this, two
+   * overlapping attaches (two tabs opening together, a reconnect overlapping an
+   * older attempt) each registered a shell, and an attach in flight when the
+   * lab ended registered afterwards. An attach that is no longer the newest
+   * when it finishes gives its shell up instead of registering it.
+   */
+  const latestAttach = new Map<string, number>();
+  let attachSeq = 0;
   /** The output flow control for each socket's current shell. */
   const outputFlows = new Map<WebSocket, OutputFlow>();
   const workspaces = new SessionWorkspaces({
@@ -386,16 +399,22 @@ export function createTerminalServer(
 
   /** Close the shell belonging to one session. Idempotent. */
   function closeSession(sessionId: string): boolean {
+    // Any attach still in flight for this session is now superseded too.
+    const inFlight = latestAttach.delete(sessionId);
     const ws = bySessionId.get(sessionId);
-    if (!ws) return false;
+    if (!ws) return inFlight;
+    sessionEnded(ws);
+    endSession(ws);
+    if (ws.readyState === ws.OPEN) ws.close(4410, 'session ended');
+    return true;
+  }
+
+  function sessionEnded(ws: WebSocket): void {
     send(ws, {
       type: 'error',
       code: 'SESSION_ENDED',
       message: 'This lab session has ended. The environment has been released.',
     });
-    endSession(ws);
-    if (ws.readyState === ws.OPEN) ws.close(4410, 'session ended');
-    return true;
   }
 
   /**
@@ -757,8 +776,22 @@ export function createTerminalServer(
     rows: number,
   ): Promise<boolean> {
     // One shell per session. A second connection for the same session replaces
-    // the first rather than running two shells against one sandbox.
+    // the first rather than running two shells against one sandbox — whether
+    // the first is registered already or still attaching (`latestAttach`).
     closeSession(claims.sid);
+    const attach = ++attachSeq;
+    latestAttach.set(claims.sid, attach);
+    const superseded = () => latestAttach.get(claims.sid) !== attach;
+    /** A newer attach, or the lab ending, overtook this one: it opens nothing. */
+    const giveWay = (): false => {
+      sessionEnded(ws);
+      if (ws.readyState === ws.OPEN) ws.close(4410, 'session ended');
+      return false;
+    };
+    /** This attempt is over without a shell; stop naming it the newest. */
+    const forget = () => {
+      if (!superseded()) latestAttach.delete(claims.sid);
+    };
 
     /*
      * Resolve *what this socket attaches to* from the API, keyed by the session
@@ -851,6 +884,7 @@ export function createTerminalServer(
         err: error,
       });
       await discardCredentials();
+      forget();
       send(ws, { type: 'error', code, message: msg });
       ws.close(4403, 'no credentials');
       return false;
@@ -858,7 +892,12 @@ export function createTerminalServer(
 
     if (ws.readyState !== ws.OPEN) {
       await discardCredentials();
+      forget();
       return false;
+    }
+    if (superseded()) {
+      await discardCredentials();
+      return giveWay();
     }
 
     let term: Shell;
@@ -903,6 +942,7 @@ export function createTerminalServer(
       const message = error instanceof Error ? error.message : String(error);
       log(`failed to start shell for ${claims.sid}: ${code} — ${message}`);
       await discardCredentials();
+      forget();
       send(ws, {
         type: 'error',
         code,
@@ -924,7 +964,13 @@ export function createTerminalServer(
     if (ws.readyState !== ws.OPEN) {
       term.kill();
       await discardCredentials();
+      forget();
       return false;
+    }
+    if (superseded()) {
+      term.kill();
+      await discardCredentials();
+      return giveWay();
     }
 
     const session: Session = {
@@ -945,6 +991,7 @@ export function createTerminalServer(
         config.maxSessionMs,
       ),
       activityReportedAt: undefined,
+      attach,
     };
     sessions.set(ws, session);
     bySessionId.set(claims.sid, ws);
@@ -1047,6 +1094,7 @@ export function createTerminalServer(
     terminalMetrics?.connectionsOpen.set(sessions.size);
     terminalMetrics?.closes.inc({ code: String(ws.readyState === ws.OPEN ? 'server' : 'client') });
     if (bySessionId.get(session.claims.sid) === ws) bySessionId.delete(session.claims.sid);
+    if (latestAttach.get(session.claims.sid) === session.attach) latestAttach.delete(session.claims.sid);
     outputFlows.get(ws)?.dispose();
     outputFlows.delete(ws);
     clearTimeout(session.idleTimer);

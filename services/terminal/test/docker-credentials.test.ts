@@ -182,7 +182,7 @@ describe('writeSessionDockerCerts', () => {
     const certDir = await writeSessionDockerCerts(dir, '../../etc/passwd', DOCKER_CREDENTIALS);
 
     expect(path.dirname(certDir)).toBe(dir);
-    expect(path.basename(certDir)).toBe('etcpasswd.docker');
+    expect(path.basename(certDir)).toMatch(/^etcpasswd-[0-9a-f]{12}\.docker$/);
   });
 
   it('refuses a session id with nothing usable in it', async () => {

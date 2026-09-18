@@ -18,6 +18,7 @@
  *   - the kubeconfig body is never logged, never echoed to the socket, and
  *     never returned to the browser.
  */
+import { randomBytes } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -232,22 +233,30 @@ async function fetchInternal(options: FetchOptions): Promise<Record<string, unkn
 }
 
 /**
- * Write a kubeconfig for one session and return its path.
+ * The file name stem for one attach's credential material.
  *
- * The filename is derived from the session id, which is already constrained to
- * `sess-<hex>` by the API; it is re-sanitised here anyway so that no value
- * arriving over the network can ever shape a path.
+ * Derived from the session id, which is already constrained to `sess-<hex>` by
+ * the API; it is re-sanitised here anyway so that no value arriving over the
+ * network can ever shape a path. The random suffix makes it one attach's own:
+ * two attaches for the same session can overlap (a second tab, a reconnect),
+ * and the one that gives way removes its files — which, under a name shared
+ * per session, were the files the surviving shell was reading.
  */
+function credentialStem(sessionId: string): string {
+  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (safe.length === 0) throw new Error('refusing to write credentials for an unnamed session');
+  return `${safe}-${randomBytes(6).toString('hex')}`;
+}
+
+/** Write a kubeconfig for one attach of a session and return its path. */
 export async function writeSessionKubeconfig(
   dir: string,
   sessionId: string,
   kubeconfig: string,
 ): Promise<string> {
-  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
-  if (safe.length === 0) throw new Error('refusing to write credentials for an unnamed session');
-
+  const stem = credentialStem(sessionId);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const file = path.join(dir, `${safe}.kubeconfig`);
+  const file = path.join(dir, `${stem}.kubeconfig`);
   await writeFile(file, kubeconfig, { mode: 0o600 });
   return file;
 }
@@ -262,7 +271,7 @@ export async function removeSessionKubeconfig(file: string | undefined): Promise
  * Write a session's Docker client certificates and return the directory.
  *
  * `DOCKER_CERT_PATH` expects a directory containing exactly `ca.pem`,
- * `cert.pem`, and `key.pem`, so this creates one per session. The directory is
+ * `cert.pem`, and `key.pem`, so this creates one per attach. The directory is
  * 0700 and the key is 0600; both are removed when the shell ends.
  *
  * As with the kubeconfig, the material is never logged and never sent to the
@@ -274,10 +283,7 @@ export async function writeSessionDockerCerts(
   sessionId: string,
   credentials: Pick<DockerCredentialsResponse, 'ca' | 'clientCert' | 'clientKey'>,
 ): Promise<string> {
-  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
-  if (safe.length === 0) throw new Error('refusing to write credentials for an unnamed session');
-
-  const certDir = path.join(dir, `${safe}.docker`);
+  const certDir = path.join(dir, `${credentialStem(sessionId)}.docker`);
   await mkdir(certDir, { recursive: true, mode: 0o700 });
   await writeFile(path.join(certDir, 'ca.pem'), credentials.ca, { mode: 0o600 });
   await writeFile(path.join(certDir, 'cert.pem'), credentials.clientCert, { mode: 0o600 });

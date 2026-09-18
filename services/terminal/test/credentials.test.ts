@@ -156,7 +156,7 @@ describe('writeSessionKubeconfig', () => {
     const file = await writeSessionKubeconfig(dir, '../../etc/passwd', KUBECONFIG);
 
     expect(path.dirname(file)).toBe(dir);
-    expect(path.basename(file)).toBe('etcpasswd.kubeconfig');
+    expect(path.basename(file)).toMatch(/^etcpasswd-[0-9a-f]{12}\.kubeconfig$/);
   });
 
   it('refuses a session id with nothing usable in it', async () => {
@@ -165,6 +165,20 @@ describe('writeSessionKubeconfig', () => {
     await expect(writeSessionKubeconfig(dir, '///', KUBECONFIG)).rejects.toThrow(
       /unnamed session/,
     );
+  });
+
+  it('gives each attach of one session its own file, so removing one leaves the other', async () => {
+    // Two attaches for one session can overlap (a second tab, a reconnect); the
+    // one that gives way removes its credentials, and must not remove the
+    // file the surviving shell's KUBECONFIG names.
+    const dir = await scratch();
+    const first = await writeSessionKubeconfig(dir, 'sess-000000000000000a', KUBECONFIG);
+    const second = await writeSessionKubeconfig(dir, 'sess-000000000000000a', KUBECONFIG);
+
+    expect(second).not.toBe(first);
+    expect(path.basename(first)).toMatch(/^sess-000000000000000a-[0-9a-f]{12}\.kubeconfig$/);
+    await removeSessionKubeconfig(first);
+    expect(await readFile(second, 'utf8')).toBe(KUBECONFIG);
   });
 
   it('removes the credential file, and tolerates removing it twice', async () => {
