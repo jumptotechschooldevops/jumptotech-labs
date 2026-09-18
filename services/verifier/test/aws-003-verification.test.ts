@@ -208,6 +208,37 @@ describe('AWS-003 — equivalent policies are graded equivalently', () => {
 // -------------------------------------------------------------- adversarial
 
 describe('AWS-003 — adversarial attempts', () => {
+  const withDeny = (deny: Record<string, unknown>) =>
+    JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        { Sid: 'List', Effect: 'Allow', Action: 's3:ListBucket', Resource: BUCKET },
+        { Sid: 'ReadWriteAll', Effect: 'Allow', Action: ['s3:GetObject', 's3:PutObject'], Resource: `${BUCKET}/*` },
+        { Sid: 'ProtectCustomerExports', Effect: 'Deny', Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'], ...deny },
+      ],
+    });
+
+  it('fails a Deny that names only the one export the ticket sampled', async () => {
+    const result = await run(withDeny({ Resource: `${BUCKET}/customer-exports/2026-07-balances.csv` }));
+
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual([
+      'No other customer export can be read either',
+      'Customer exports are protected by an explicit Deny, not merely by omission',
+    ]);
+  });
+
+  it('fails a Deny that only fires for requests made without TLS', async () => {
+    const result = await run(withDeny({ Resource: EXPORTS, Condition: { Bool: { 'aws:SecureTransport': 'false' } } }));
+
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual([
+      'Customer exports cannot be read',
+      'Customer exports cannot be overwritten',
+      'No other customer export can be read either',
+    ]);
+  });
+
   it('1. adding an Allow while leaving the conflicting Deny does not pass', async () => {
     const result = await run(JSON.stringify({
       Version: '2012-10-17',

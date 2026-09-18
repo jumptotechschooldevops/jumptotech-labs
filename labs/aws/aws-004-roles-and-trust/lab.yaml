@@ -110,7 +110,10 @@ requirements:
     principals:
       - type: Service
         id: ec2.amazonaws.com
-    label: The EC2 service is allowed to assume the role
+    # Only EC2. One statement naming EC2 *and* the contractor's role keeps the
+    # trust the finding asks to remove.
+    exact_principals: true
+    label: The EC2 service, and nothing else, is allowed to assume the role
 
   - type: iam_policy_no_wildcard
     path: /home/student/role-setup/trust-policy.json
@@ -141,6 +144,12 @@ requirements:
     action: s3:DeleteObject
     resource: arn:aws:s3:::jumptotech-reconciliation/inputs/2026-08-24.csv
     label: The role still cannot delete reconciliation inputs
+
+  - type: iam_policy_not_allows
+    path: /home/student/role-setup/permissions-policy.json
+    action: s3:PutObject
+    resource: arn:aws:s3:::jumptotech-reconciliation/inputs/2026-08-24.csv
+    label: The role still cannot overwrite reconciliation inputs
 
   - type: iam_policy_no_wildcard
     path: /home/student/role-setup/permissions-policy.json
