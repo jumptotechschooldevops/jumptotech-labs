@@ -422,7 +422,7 @@ tests:
             exp_annotations:
               summary: 'new lab launches have been paused for at least 30 minutes'
               description: 'LAB_LAUNCHES_PAUSED=true on the running api, so every Start Lab is refused. Running labs are unaffected. Lift it when the maintenance is over, or say in the incident channel why it stays.'
-              runbook_url: docs/runbooks/RB-20-launches-paused.md
+              runbook_url: docs/runbooks/RB-21-launches-paused.md
 
   # ------------------------------------------ 8. lab starts at beta volume
   - interval: 15s

@@ -53,7 +53,7 @@ diagnosis, and the alerts that look alike are known in advance.
 | [RB-17 Session lifecycle](RB-17-session-lifecycle.md) | `LabResetsFailing`, `SessionStuckProvisioning`, `SessionResetStuck`, `SessionTeardownStuck`, `SessionDegradedNotReclaimed` |
 | [RB-18 Network isolation](RB-18-network-isolation.md) | `NetworkIsolationNotAttested`, `NetworkIsolationAttestationAging` |
 | [RB-19 Host pressure](RB-19-host-pressure.md) | `HostMemoryPressure`, `HostMemoryCritical`, `HostDiskSpaceLow`, `HostDiskSpaceCritical`, `HostCpuSaturated` |
-| [RB-20 Launches paused](RB-20-launches-paused.md) | `LabLaunchesPaused` |
+| [RB-21 Launches paused](RB-21-launches-paused.md) | `LabLaunchesPaused` |
 
 `ReaperSweepErrorsPersisting` is in RB-05.
 

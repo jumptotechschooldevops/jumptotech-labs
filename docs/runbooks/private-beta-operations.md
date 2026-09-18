@@ -2,7 +2,7 @@
 
 **BETA-P0-018.** How to run JumpToTech Labs for the private beta, about five
 concurrent students, and how to tell when it is unhealthy. Start here. The
-alert runbooks (RB-01…RB-20) go deeper on one alert each. When something is
+alert runbooks (RB-01…RB-21) go deeper on one alert each. When something is
 already wrong, go to [private-beta-incident-response.md](private-beta-incident-response.md),
 which is organised by what you see (A–U).
 
@@ -183,7 +183,7 @@ questions:
 | When | Do | You are looking for |
 |---|---|---|
 | **Daily** (any time) | §2 without the dashboard; `q 'jtt:backup_age:seconds / 3600'` | Backup under 24 h old, no firing alert, disk (`q 'jtt:host_filesystem_available:ratio'`) above 0.2 |
-| **Before class** (30 minutes before) | All of §2 and the dashboard; `ops sessions` | `new labs: YES`; no leftover sessions from yesterday (a session older than `MAX_SESSION_MINUTES` is a stuck teardown: RB-17); launches not paused (RB-20) |
+| **Before class** (30 minutes before) | All of §2 and the dashboard; `ops sessions` | `new labs: YES`; no leftover sessions from yesterday (a session older than `MAX_SESSION_MINUTES` is a stuck teardown: RB-17); launches not paused (RB-21) |
 | **During class** | Keep `alerts` and the dashboard open. Run `ops status` when a student reports a problem | Capacity (`slots`), `DEGRADED` sessions, the first failing component |
 | **A student reports a problem** | [incident-response §2.T](private-beta-incident-response.md) | Their session in `ops sessions`, by lab and start time |
 | **Several students report problems** | [incident-response §2.U](private-beta-incident-response.md) | The first red item in §2 |
@@ -232,7 +232,7 @@ alone: their terminals, Verify, Reset and End keep working.
    `launchesPaused: true`. The api logs `lab.start.paused` for each refusal.
    `ops status` then reads `launches paused: YES` and `new labs: NO`. The
    gauge `jtt_lab_launches_paused` is 1, and `LabLaunchesPaused` fires after
-   30 minutes so that a pause cannot be forgotten (RB-20).
+   30 minutes so that a pause cannot be forgotten (RB-21).
 
    `prod up -d api` re-creates the api container. Students with a lab open keep
    their workspace and terminal while it restarts (the web app shows "Cannot
@@ -353,7 +353,7 @@ down, `prod down` — and take a backup first
 | Symptom | Runbook |
 |---|---|
 | Sessions stuck in a status, resets failing | [RB-17](RB-17-session-lifecycle.md) |
-| Launches paused and nobody lifted it | [RB-20](RB-20-launches-paused.md) |
+| Launches paused and nobody lifted it | [RB-21](RB-21-launches-paused.md) |
 | Anything a student or you can see going wrong | [incident response](private-beta-incident-response.md) |
 | Cleanup stalled or erroring, leaks | [RB-05](RB-05-cleanup-and-leaks.md) |
 | Sandbox runtime unhealthy | [RB-06](RB-06-sandboxd.md) |

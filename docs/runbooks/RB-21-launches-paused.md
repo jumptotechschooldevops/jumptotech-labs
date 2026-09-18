@@ -1,4 +1,4 @@
-# RB-20 — New lab launches are paused
+# RB-21 — New lab launches are paused
 
 **Alert:** `LabLaunchesPaused` (warning)
 **Source:** `jtt_lab_launches_paused`, set by the running api from `LAB_LAUNCHES_PAUSED`.

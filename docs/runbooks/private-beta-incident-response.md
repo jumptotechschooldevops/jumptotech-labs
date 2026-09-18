@@ -1,7 +1,7 @@
 # Private beta incident response
 
 What to do when something goes wrong during the private beta (about five
-trusted students). Organised by **what you see**. The alert runbooks (RB-01…RB-20)
+trusted students). Organised by **what you see**. The alert runbooks (RB-01…RB-21)
 are organised by **which alert fired**, and every incident below links to the
 right one.
 
@@ -131,7 +131,7 @@ instead of trying the next step.
   | `provider_unavailable` | That track's substrate is down. `ops status` names the provider and why. The student is told the kind of lab is unavailable and other tracks may work | RB-09; container tracks RB-06; Kubernetes RB-18 first |
   | `provision_failed` | The substrate is up but creation failed | RB-03, E |
   | `platform_error` | The start failed before the substrate was asked, usually the database | N, then RB-11. The log line's `code` names it |
-  | *(503 `LAB_LAUNCHES_PAUSED`)* | An operator paused launches (not counted as a failure) | RB-20 |
+  | *(503 `LAB_LAUNCHES_PAUSED`)* | An operator paused launches (not counted as a failure) | RB-21 |
   | `unauthorized` | Not signed in | B |
 
 - **Recovery.** Follow the row that matches.

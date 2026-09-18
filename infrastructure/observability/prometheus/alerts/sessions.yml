@@ -114,7 +114,7 @@ groups:
             LAB_LAUNCHES_PAUSED=true on the running api, so every Start Lab is
             refused. Running labs are unaffected. Lift it when the maintenance
             is over, or say in the incident channel why it stays.
-          runbook_url: docs/runbooks/RB-20-launches-paused.md
+          runbook_url: docs/runbooks/RB-21-launches-paused.md
 
       # --- lifecycle (BETA-P0-018) ------------------------------------------
       #

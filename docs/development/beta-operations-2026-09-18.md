@@ -21,7 +21,7 @@ instructor running five students has to answer:
 | Who has a lab, which lab, since when, is it healthy? | Hand-written SQL against `lab_sessions` (RB-17) | `ops sessions` / `ops session <id>` |
 | How many slots are used; can a new lab start? | Three PromQL queries; no single verdict | `ops status`: slots by status, and YES / DEGRADED / NO with every reason |
 | Recover one broken student's lab | "The student presses End, or wait 20 minutes"; editing the row forbidden | `ops end <id> --yes`: the reaper's fenced teardown, recorded "ended by operator" |
-| Stop new launches without killing labs | `LAB_LAUNCHES_PAUSED` existed; nothing reported a pause that was never lifted | plus `jtt_lab_launches_paused` and `LabLaunchesPaused` (RB-20) |
+| Stop new launches without killing labs | `LAB_LAUNCHES_PAUSED` existed; nothing reported a pause that was never lifted | plus `jtt_lab_launches_paused` and `LabLaunchesPaused` (RB-21) |
 | Collect evidence without leaking secrets | Nothing; `docker logs` and `.env` were the evidence | `make private-beta-diagnostics`: one sanitized, self-checked archive |
 | What to do, by symptom | Runbooks by alert (RB-01…RB-19) and an operations guide | plus [private-beta-incident-response.md](../runbooks/private-beta-incident-response.md), incidents A–U |
 
@@ -33,7 +33,7 @@ test — before it was changed.
 | # | Defect | Found by | Fix | Evidence |
 |---|---|---|---|---|
 | 1 | **A start that died on the database was counted `provision_failed`**, so `LabStartsFailingHard` sent the operator to RB-03 (the sandbox substrate) for a PostgreSQL outage | reading the route | non-`SessionError` failures are `platform_error`; the log keeps the driver's code | api test fails on the old route |
-| 2 | **A pause nobody lifted was a silent outage**: refused starts are deliberately not failures, so nothing fired | audit of the stop-launches switch | `jtt_lab_launches_paused`, `LabLaunchesPaused` (30 min), RB-20 | promtool: 20-min pause quiet, 31-min fires; api test reads the gauge |
+| 2 | **A pause nobody lifted was a silent outage**: refused starts are deliberately not failures, so nothing fired | audit of the stop-launches switch | `jtt_lab_launches_paused`, `LabLaunchesPaused` (30 min), RB-21 | promtool: 20-min pause quiet, 31-min fires; api test reads the gauge |
 | 3 | **The OIDC authorization code was written to the edge access log** on every sign-in (`$request` and `$http_referer` in nginx's stock format) | logging audit | `jtt_edge` log format: path without query, no referrer; every server block | `nginx -t` for both files in nginx:1.27-alpine; runtime: a `?code=` request logs as `GET /index.html`; contract test |
 | 4 | **Tracks switched off by configuration made the operator verdict permanently DEGRADED** (AWS is off everywhere) | `ops status` on the real stack | the registry marks `enabled: false` as `disabled`; only enabled providers count | provider-registry and operator tests |
 | 5 | **A slow api start was declared unhealthy**: 225 s to listen at load 20 against a 65 s (image) / 135 s (overlay) budget; `up --wait` failed and web/terminal, which wait for api health, were left uncreated | api re-create on the real stack | start period 300 s in both; a healthy start is reported as soon as before | the same re-create then passed `up --wait`; contract test |
