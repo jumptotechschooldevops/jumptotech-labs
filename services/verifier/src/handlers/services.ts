@@ -45,12 +45,32 @@ export const servicePort: VerifierHandler<'service_port'> = {
       return fail(`Service does not expose port ${r.port} — it exposes ${observed}`);
     }
 
+    // A named targetPort (`http`) means whichever container port carries that
+    // name on the Pods the Service selects — as valid as the number, and what
+    // the lab fixtures' own `name: http` invites. Resolved against those Pods.
+    const selected = Object.entries(service.selector);
+    const pods =
+      selected.length === 0
+        ? []
+        : (await reader.pods(selected.map(([k, v]) => `${k}=${v}`).join(','))).filter((pod) =>
+            selected.every(([k, v]) => pod.labels[k] === v),
+          );
+    const resolves = (name: string, wanted: string) =>
+      pods.some((pod) =>
+        pod.containers.some((c) =>
+          (c.ports ?? []).some((cp) => cp.name === name && String(cp.containerPort) === wanted),
+        ),
+      );
+
     const match = onPort.find((p) => {
       if (r.protocol && p.protocol !== r.protocol) return false;
       if (r.target_port !== undefined) {
         // An omitted targetPort defaults to the Service port.
         const target = p.targetPort ?? p.port;
-        if (String(target) !== String(r.target_port)) return false;
+        const wanted = String(r.target_port);
+        if (String(target) === wanted) return true;
+        if (typeof target === 'string' && !/^\d+$/.test(target) && resolves(target, wanted)) return true;
+        return false;
       }
       return true;
     });

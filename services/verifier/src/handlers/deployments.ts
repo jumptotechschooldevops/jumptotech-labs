@@ -289,7 +289,16 @@ export const deploymentProbe: VerifierHandler<'deployment_probe'> = {
     // A probe may name a port either numerically or by container-port name, and
     // both are correct Kubernetes; compare as strings so neither form is
     // arbitrarily rejected.
-    if (r.port !== undefined && String(probe.port ?? '') !== String(r.port)) {
+    // A name resolves through the container's own declared ports, in either
+    // direction: `port: http` satisfies an expected 80 when `http` is 80.
+    const asNumber = (value: number | string | undefined): string | undefined => {
+      if (value === undefined) return undefined;
+      const text = String(value);
+      if (/^\d+$/.test(text)) return text;
+      const named = (container.ports ?? []).find((p) => p.name === text);
+      return named ? String(named.containerPort) : text;
+    };
+    if (r.port !== undefined && String(probe.port ?? '') !== String(r.port) && asNumber(probe.port) !== asNumber(r.port)) {
       problems.push(`probe port is '${probe.port ?? 'unset'}', expected '${r.port}'`);
     }
 

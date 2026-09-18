@@ -730,3 +730,55 @@ describe('verifier — registry completeness', () => {
     expect(registeredRequirementTypes().length).toBeGreaterThanOrEqual(80);
   });
 });
+
+// ------------------------------------------------------------- named ports
+
+describe('verifier — a named port means the number the container gives it', () => {
+  const pod = (ports: Array<{ name?: string; containerPort: number }>) =>
+    podSnapshot({
+      name: 'accounts-1',
+      labels: { app: 'accounts' },
+      containers: [{ name: 'web', image: 'nginx:stable', ready: true, restartCount: 0, state: 'running', ports }],
+    });
+  const cluster = (targetPort: number | string, ports: Array<{ name?: string; containerPort: number }>) =>
+    new FakeKubernetes({
+      services: {
+        [NS]: [{ name: 'accounts', namespace: NS, type: 'ClusterIP', selector: { app: 'accounts' }, ports: [{ port: 80, targetPort, protocol: 'TCP' }] }],
+      },
+      pods: { [NS]: [pod(ports)] },
+    });
+  const req = { type: 'service_port', name: 'accounts', port: 80, target_port: 80 } as Requirement;
+
+  it('accepts targetPort: http when the selected Pods name port 80 http', async () => {
+    expect(passed(await check(cluster('http', [{ name: 'http', containerPort: 80 }]), req))).toBe(true);
+    expect(passed(await check(cluster(80, [{ name: 'http', containerPort: 80 }]), req))).toBe(true);
+  });
+
+  it('refuses a name that resolves to another port, or to nothing', async () => {
+    expect(passed(await check(cluster('http', [{ name: 'http', containerPort: 8080 }]), req))).toBe(false);
+    expect(passed(await check(cluster('web', [{ name: 'http', containerPort: 80 }]), req))).toBe(false);
+  });
+
+  it('resolves a probe port name through the container', async () => {
+    const k8s = new FakeKubernetes({
+      deployments: {
+        [NS]: [
+          deploymentSnapshot({
+            name: 'notifications',
+            containers: [
+              {
+                name: 'web', image: 'nginx:stable', ready: true, restartCount: 0, state: 'running',
+                ports: [{ name: 'http', containerPort: 80 }],
+                probes: [{ kind: 'readiness', handler: 'httpGet', path: '/', port: 'http' }],
+              },
+            ],
+          }),
+        ],
+      },
+    });
+    const probe = (port: number) =>
+      check(k8s, { type: 'deployment_probe', name: 'notifications', probe: 'readiness', handler: 'httpGet', path: '/', port } as Requirement);
+    expect(passed(await probe(80))).toBe(true);
+    expect(passed(await probe(8080))).toBe(false);
+  });
+});

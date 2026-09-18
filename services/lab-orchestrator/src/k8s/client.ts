@@ -1305,6 +1305,15 @@ function toContainerSnapshots(
           }
         : {}),
       ...(probes.length > 0 ? { probes } : {}),
+      ...(container.ports?.length
+        ? {
+            ports: container.ports.map((p) => ({
+              ...(p.name ? { name: p.name } : {}),
+              containerPort: p.containerPort,
+              ...(p.protocol ? { protocol: p.protocol } : {}),
+            })),
+          }
+        : {}),
     };
   });
 }
