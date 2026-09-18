@@ -20,6 +20,7 @@
  *
  * Written from the IAM JSON policy reference and the ARN reference.
  */
+import { cidrContains, parseIpv4Cidr } from './cidr.js';
 
 /** One condition entry: an operator, a condition key, and its accepted values. */
 export interface IamCondition {
@@ -453,22 +454,169 @@ export function findStatements(policy: IamPolicy, selector: StatementSelector): 
 
 export type IamDecision = 'allow' | 'explicitDeny' | 'implicitDeny';
 
+/** A policy's Condition uses an operator this evaluator does not implement. */
+export class IamConditionUnsupportedError extends Error {
+  constructor(readonly operator: string) {
+    super(`condition operator '${operator}' cannot be evaluated here`);
+    this.name = 'IamConditionUnsupportedError';
+  }
+}
+
+/**
+ * Does one statement's `Condition` block hold for a request context?
+ *
+ * The documented rules, and only the operators the AWS labs meet:
+ *
+ *   · every operator, and every key under it, must hold (AND); the values
+ *     listed for one key are alternatives (OR) — for a negated operator the
+ *     context value must match none of them;
+ *   · a key missing from the context makes a positive operator false and a
+ *     negated one (`StringNotEquals`, `ArnNotLike`, `NotIpAddress`, …) true;
+ *   · `…IfExists` is true when the key is missing; `Null` tests presence;
+ *   · a context value is single-valued, so `ForAnyValue:` behaves as the base
+ *     operator and `ForAllValues:` is true for a missing key.
+ *
+ * Keys are compared without regard to case, as AWS does. Anything else — date
+ * operators, binary, policy variables — raises `IamConditionUnsupportedError`
+ * rather than being guessed at.
+ */
+export function conditionsHold(
+  statement: IamStatement,
+  context: Readonly<Record<string, string>>,
+): boolean {
+  const byKey = new Map(Object.entries(context).map(([k, v]) => [k.toLowerCase(), v]));
+  return statement.conditions.every((condition) =>
+    conditionHolds(condition.operator, byKey.get(condition.key.toLowerCase()), condition.values),
+  );
+}
+
+/** Operators that hold when the key is absent from the request. */
+const NEGATED = new Set([
+  'stringnotequals',
+  'stringnotequalsignorecase',
+  'stringnotlike',
+  'arnnotequals',
+  'arnnotlike',
+  'numericnotequals',
+  'notipaddress',
+]);
+
+const NUMERIC = new Set([
+  'numericequals',
+  'numericnotequals',
+  'numericlessthan',
+  'numericlessthanequals',
+  'numericgreaterthan',
+  'numericgreaterthanequals',
+]);
+
+function conditionHolds(rawOperator: string, value: string | undefined, expected: readonly string[]): boolean {
+  let operator = rawOperator;
+  let setQualifier: 'any' | 'all' | undefined;
+  if (/^ForAnyValue:/i.test(operator)) {
+    setQualifier = 'any';
+    operator = operator.slice('ForAnyValue:'.length);
+  } else if (/^ForAllValues:/i.test(operator)) {
+    setQualifier = 'all';
+    operator = operator.slice('ForAllValues:'.length);
+  }
+  let ifExists = false;
+  if (/IfExists$/i.test(operator)) {
+    ifExists = true;
+    operator = operator.slice(0, -'IfExists'.length);
+  }
+  const op = operator.toLowerCase();
+  if (op !== 'null' && !KNOWN.has(op)) throw new IamConditionUnsupportedError(rawOperator);
+
+  if (op === 'null') {
+    const wantMissing = expected.some((v) => v.toLowerCase() === 'true');
+    return wantMissing ? value === undefined : value !== undefined;
+  }
+  if (value === undefined) {
+    if (ifExists || setQualifier === 'all') return true;
+    return NEGATED.has(op);
+  }
+
+  const any = (test: (candidate: string) => boolean) => expected.some(test);
+  if (NUMERIC.has(op)) {
+    const actual = Number(value);
+    const compare = (v: string): boolean => {
+      const bound = Number(v);
+      if (!Number.isFinite(actual) || !Number.isFinite(bound)) return false;
+      if (op === 'numericequals') return actual === bound;
+      if (op === 'numericnotequals') return actual !== bound;
+      if (op === 'numericlessthan') return actual < bound;
+      if (op === 'numericlessthanequals') return actual <= bound;
+      if (op === 'numericgreaterthan') return actual > bound;
+      return actual >= bound;
+    };
+    return op === 'numericnotequals' ? expected.every(compare) : any(compare);
+  }
+  switch (op) {
+    case 'stringequals':
+    case 'arnequals':
+      return any((v) => v === value);
+    case 'stringnotequals':
+    case 'arnnotequals':
+      return !any((v) => v === value);
+    case 'stringequalsignorecase':
+      return any((v) => v.toLowerCase() === value.toLowerCase());
+    case 'stringnotequalsignorecase':
+      return !any((v) => v.toLowerCase() === value.toLowerCase());
+    case 'stringlike':
+    case 'arnlike':
+      return any((v) => matchesIamPattern(v, value, { caseSensitive: true }));
+    case 'stringnotlike':
+    case 'arnnotlike':
+      return !any((v) => matchesIamPattern(v, value, { caseSensitive: true }));
+    case 'bool':
+      return any((v) => v.toLowerCase() === value.toLowerCase());
+    default: {
+      // ipaddress / notipaddress
+      const address = parseIpv4Cidr(value.includes('/') ? value : `${value}/32`);
+      const inside = any((v) => {
+        const block = parseIpv4Cidr(v.includes('/') ? v : `${v}/32`);
+        return block !== null && address !== null && cidrContains(block, address);
+      });
+      return op === 'ipaddress' ? inside : !inside;
+    }
+  }
+}
+
+const KNOWN = new Set([
+  ...NEGATED,
+  ...NUMERIC,
+  'stringequals',
+  'stringequalsignorecase',
+  'stringlike',
+  'arnequals',
+  'arnlike',
+  'bool',
+  'ipaddress',
+]);
+
 /**
  * Evaluate one identity policy for one action on one resource.
  *
  * The documented rule, and only that rule: an explicit `Deny` wins, otherwise a
  * matching `Allow` grants, otherwise the request is implicitly denied.
+ *
+ * Without a `context`, a statement's `Condition` is not evaluated: every
+ * statement that covers the action and resource applies. With one, a statement
+ * applies only when its conditions hold for that request — which is what lets
+ * a lab ask "may this upload happen *without* KMS?", and what stops a Deny that
+ * never fires from counting as protection.
  */
 export function evaluateIamPolicy(
   policy: IamPolicy,
-  request: { action: string; resource: string },
+  request: { action: string; resource: string; context?: Readonly<Record<string, string>> },
 ): IamDecision {
   const matching = policy.statements.filter(
     (statement) =>
       statementCoversAction(statement, request.action) &&
-      statementCoversResource(statement, request.resource),
+      statementCoversResource(statement, request.resource) &&
+      (request.context === undefined || conditionsHold(statement, request.context)),
   );
-
   if (matching.some((statement) => statement.effect === 'Deny')) return 'explicitDeny';
   if (matching.some((statement) => statement.effect === 'Allow')) return 'allow';
   return 'implicitDeny';

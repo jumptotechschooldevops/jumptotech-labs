@@ -58,7 +58,9 @@ export {
 } from './sandbox-reader.js';
 export { normalizeMode } from './handlers/filesystem.js';
 export {
+  IamConditionUnsupportedError,
   IamPolicyParseError,
+  conditionsHold,
   evaluateIamPolicy,
   findStatements,
   IAM_PRINCIPAL_TYPES,

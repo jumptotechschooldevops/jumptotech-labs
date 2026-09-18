@@ -321,6 +321,23 @@ const processPattern = z
   .regex(/^[A-Za-z0-9._\-/ :=@,+]+$/, 'must be a plain command-line fragment');
 
 /** Literal text a file or command output must contain. */
+/**
+ * The request an IAM check asks about, as condition keys and their values
+ * (`aws:SecureTransport: "true"`, `s3:x-amz-server-side-encryption: aws:kms`).
+ *
+ * With a context, a statement applies only when its `Condition` holds for it;
+ * without one, conditions are not evaluated and every covering statement
+ * applies. A key left out is a key the request does not carry — which is how a
+ * lab asks about an upload *without* encryption.
+ */
+const iamRequestContext = z
+  .record(
+    z.string().min(1).max(128).regex(/^[A-Za-z0-9:._/-]+$/, 'must be an IAM condition key'),
+    z.string().max(512).refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' }),
+  )
+  .refine((m) => Object.keys(m).length <= 10, { message: 'must name at most 10 keys' })
+  .optional();
+
 const literalText = z
   .string()
   .min(1)
@@ -1943,6 +1960,7 @@ const sandboxRequirementSchemas = {
       path: sandboxPath,
       action: iamAction,
       resource: iamResource,
+      context: iamRequestContext,
       ...common,
     })
     .strict(),
@@ -1954,6 +1972,7 @@ const sandboxRequirementSchemas = {
       path: sandboxPath,
       action: iamAction,
       resource: iamResource,
+      context: iamRequestContext,
       ...common,
     })
     .strict(),
