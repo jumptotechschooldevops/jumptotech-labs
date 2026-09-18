@@ -157,7 +157,7 @@ if [ -z "$file" ]; then
   fail evidence.smoke 'NOT RUN — no private-beta-smoke-*.txt (make private-beta-smoke ARGS="--report-dir …", §16)'
 else
   ran_at=$(awk '$1 == "#" && $2 == "commit" {print $3; exit}' "$file")
-  offhost=$(grep -E '^(PASS|FAIL|WARN) +backup\.offhost ' "$file" | awk '{print $1}' | head -1)
+  offhost=$(awk '($1 == "PASS" || $1 == "FAIL" || $1 == "WARN") && $2 == "backup.offhost" {print $1; exit}' "$file")
   if ! matches_head "$ran_at"; then
     fail evidence.smoke "$(basename "$file") ran at ${ran_at:-an unrecorded commit}, not HEAD"
   elif grep -q '^RESULT: PASS' "$file"; then
@@ -171,7 +171,7 @@ section 'evidence only a person can give'
 template=$(newest 'production-host-evidence*.md')
 if [ -z "$template" ]; then
   fail evidence.template 'NOT RUN — no filled copy of docs/releases/production-host-evidence-template.md in the evidence directory (§15 step 26)'
-  for item in 'Non-beta account is refused' 'Alert delivery drill' 'Off-host backup copy' 'Docker daemon restart' 'Host reboot'; do
+  for item in 'Non-beta account is refused' 'Alert delivery drill' 'Heartbeat check-ins' 'Off-host backup copy' 'Docker daemon restart' 'Host reboot'; do
     manual "person.$(printf '%s' "$item" | tr 'A-Z ' 'a-z-')" 'no filled template: nothing recorded'
   done
 else
@@ -186,7 +186,7 @@ else
       if (r == "" || r ~ /^(NOT DONE|BLOCKED|FAIL)/) n++
     } END {print n+0}' "$template")
   info evidence.template "$(basename "$template"): $open_rows row(s) in §2, §3 and §5 are blank, NOT DONE, BLOCKED or FAIL"
-  for item in 'Non-beta account is refused' 'Alert delivery drill' 'Off-host backup copy' 'Docker daemon restart' 'Host reboot'; do
+  for item in 'Non-beta account is refused' 'Alert delivery drill' 'Heartbeat check-ins' 'Off-host backup copy' 'Docker daemon restart' 'Host reboot'; do
     recorded=$(result_of "$item")
     manual "person.$(printf '%s' "$item" | tr 'A-Z ' 'a-z-')" "the template records: ${recorded:-nothing}"
   done

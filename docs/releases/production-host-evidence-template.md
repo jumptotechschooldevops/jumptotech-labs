@@ -74,6 +74,7 @@ Result values: `PASS`, `FAIL`, `NOT DONE`, `BLOCKED (decision D#)`.
 | 20 LINUX-001, K8S-001, DOCKER-001: start, terminal, check, reset, end | | times |
 | 21 Grafana through the SSH tunnel; smoke `observability.*` PASS | | |
 | 22 Alert delivery drill received by a person (readiness §12.1) | | who, sent/received times |
+| 22 Heartbeat check-ins arrive at the external service (RB-20) | | service type (never the URL), last check-in time |
 | 23 Off-host backup copy recorded (`backup.offhost` PASS, smoke RESULT: PASS) and one restore from it | | |
 
 ## 4. Five-person rehearsal (readiness §13.2)

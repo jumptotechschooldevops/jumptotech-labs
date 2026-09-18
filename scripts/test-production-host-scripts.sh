@@ -975,6 +975,10 @@ check 'exit 1' exit_is 1
 check 'preflight at another commit FAILs' has_line "^FAIL +evidence\.preflight +.* ran at $OTHER_SHA, not HEAD"
 check 'smoke at another commit FAILs' has_line "^FAIL +evidence\.smoke +.* ran at $OTHER_SHA, not HEAD"
 check 'a gate report with no commit FAILs' has_line '^FAIL +evidence\.beta-validate +.* does not record its commit'
+printf '# private-beta-smoke x\n# commit %s\nFAIL   stack.running  api\nRESULT: FAIL — do not invite\n' "$HEAD_SHA" >"$root/evidence/private-beta-smoke-20260920T120000Z.txt"
+run production-evidence-status.sh "$root" --evidence-dir "$root/evidence"
+check 'a failed smoke with no backup.offhost line is reported, not a crash' has_line '^FAIL +evidence\.smoke +private-beta-smoke-20260920T120000Z\.txt did not conclude PASS \(1 FAIL line\(s\); backup\.offhost not recorded\)'
+check 'the run still ends with its RESULT line' has_line '^RESULT: INCOMPLETE'
 FAKE_GIT_DIRTY=' M apps/api/src/app.ts' run production-evidence-status.sh "$root" --evidence-dir "$root/evidence"
 check 'a modified checkout FAILs' has_fail 'release\.clean'
 
