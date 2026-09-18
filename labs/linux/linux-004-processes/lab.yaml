@@ -73,16 +73,21 @@ requirements:
   - type: process_not_running
     pattern: /usr/local/bin/stale-batch-job
     label: The leftover batch job is no longer running
+  # The script is run by a shell — by its own `#!/bin/bash` line, or by `bash`
+  # or `sh` — so its command line reads `…sh /usr/local/bin/ledger-sync`. The
+  # bare path also matched `tail -f` or `less` on the file, which run nothing.
   - type: process_running
-    pattern: /usr/local/bin/ledger-sync
+    pattern: sh /usr/local/bin/ledger-sync
     label: The ledger sync job is running
   - type: file_exists
     path: /home/student/ops/running.txt
     label: The evidence file exists
   - type: file_content
     path: /home/student/ops/running.txt
-    contains: ledger-sync
-    label: The evidence file names the running job
+    # A process-table line carries the interpreter and the path; the bare word
+    # `ledger-sync` could be echoed without looking at anything.
+    contains: sh /usr/local/bin/ledger-sync
+    label: The evidence file holds the running job's command line
 
 hints:
   - level: 1
