@@ -429,6 +429,8 @@ export interface StatementSelector {
   condition?: ConditionSelector;
   /** Every principal listed must appear in the statement's `Principal`. */
   principals?: IamPrincipal[];
+  /** With `principals`: the statement names no other principal. */
+  exactPrincipals?: boolean;
   /** Every principal listed must appear in the statement's `NotPrincipal`. */
   notPrincipals?: IamPrincipal[];
   sid?: string;
@@ -447,6 +449,13 @@ export function findStatements(policy: IamPolicy, selector: StatementSelector): 
       return false;
     }
     if (selector.principals?.some((p) => !statementHasPrincipal(statement, p))) return false;
+    if (
+      selector.exactPrincipals &&
+      selector.principals !== undefined &&
+      statement.principals.some((own) => !selector.principals!.some((wanted) => principalMatches(own, wanted)))
+    ) {
+      return false;
+    }
     if (selector.notPrincipals?.some((p) => !statementHasNotPrincipal(statement, p))) return false;
     return true;
   });

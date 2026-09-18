@@ -1942,6 +1942,12 @@ const sandboxRequirementSchemas = {
       condition: iamConditionSelector.optional(),
       /** Every principal listed must appear in the statement's `Principal`. */
       principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
+      /**
+       * With `principals`: the statement's `Principal` names those and nothing
+       * else. A trust statement that lets the right service in *and* keeps the
+       * principal it was meant to remove is not the statement asked for.
+       */
+      exact_principals: z.boolean().optional(),
       /** Every principal listed must appear in the statement's `NotPrincipal`. */
       not_principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
       ...common,
