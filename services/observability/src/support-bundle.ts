@@ -70,13 +70,24 @@ const LIFECYCLE_EVENTS = new Set([
   'observability.listener.started',
 ]);
 
-/** `/path?anything` → `/path?[query removed]`, wherever a URL appears in free text. */
+/** Longest text any value is scanned at: the redactor's own bound. */
+const MAX_SCANNED = 8192;
+
+/**
+ * `/path?anything` → `/path?[query removed]`, wherever a URL appears in free text.
+ *
+ * The prefix is the last path segment only (`[^…/]`), which keeps this linear:
+ * an earlier `(\/[^\s?"']*)` could restart at every `/` of a long run and
+ * backtrack over the rest, quadratic on a student-supplied path (1.2 s at 32k
+ * characters).
+ */
 export function stripQueryStrings(text: string): string {
-  return text.replace(/(\/[^\s?"']*)\?[^\s"']*/g, '$1?[query removed]');
+  return text.replace(/(\/[^\s?"'/]*)\?[^\s"']*/g, '$1?[query removed]');
 }
 
 function clean(text: string): string {
-  const once = redactString(stripQueryStrings(text));
+  const bounded = text.length > MAX_SCANNED ? text.slice(0, MAX_SCANNED) : text;
+  const once = redactString(stripQueryStrings(bounded));
   return once.length > MAX_TEXT ? `${once.slice(0, MAX_TEXT)}…[truncated]` : once;
 }
 
@@ -127,13 +138,29 @@ const POSTGRES_LIFECYCLE =
   /\b(?:database system is (?:ready to accept connections|shut down|starting up|in recovery mode)|received (?:fast|smart|immediate) shutdown request|starting PostgreSQL|terminating any other active server processes|server process \(PID \d+\) was terminated|checkpoint starting: (?:shutdown|end-of-recovery)|could not (?:write|extend|open))/;
 const POSTGRES_CONTINUATION = /\b(?:STATEMENT|DETAIL|QUERY|CONTEXT|HINT|LOCATION):\s/;
 
+/**
+ * Object names PostgreSQL quotes after a keyword — `constraint "users_email_key"`,
+ * `role "jumptotech"` — are what make an error line useful, and are kept. Every
+ * other quoted text is treated as data: an ERROR quotes the value it could not
+ * parse (`invalid input syntax for type uuid: "…"`, `near "…"`), in double
+ * quotes as often as in single ones.
+ */
+const POSTGRES_NAMED = /\b(constraint|relation|column|role|database|table|index|schema|function|sequence|extension|type|user)\s+"([^"]{0,128})"/gi;
+
 function sanitizePostgres(line: string): string | null {
   if (POSTGRES_CONTINUATION.test(line)) return '';
   if (POSTGRES_SEVERITY.test(line) || POSTGRES_LIFECYCLE.test(line)) {
-    // A quoted literal can be a value from a row ("Key (email)=(…)" is a DETAIL,
-    // but an ERROR can quote one too). Names in PostgreSQL messages are quoted
-    // with double quotes; single-quoted text is data.
-    return clean(line.replace(/'[^']*'/g, "'[value removed]'"));
+    const bounded = line.length > MAX_SCANNED ? line.slice(0, MAX_SCANNED) : line;
+    const names: string[] = [];
+    const shielded = bounded.replace(POSTGRES_NAMED, (_whole, keyword: string, name: string) => {
+      names.push(`${keyword} "${name}"`);
+      return `\u0000${names.length - 1}\u0000`;
+    });
+    const scrubbed = shielded
+      .replace(/'[^']*'/g, "'[value removed]'")
+      .replace(/"[^"]*"/g, '"[value removed]"')
+      .replace(/\u0000(\d+)\u0000/g, (_m, index: string) => names[Number(index)] ?? '');
+    return clean(scrubbed);
   }
   return null;
 }

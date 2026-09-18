@@ -118,6 +118,13 @@ resolve_path() {
   printf '%s%s' "$(cd "$target" && pwd -P)" "$rest"
 }
 out_dir=$(resolve_path "$out_dir")
+# `..` below a directory that does not exist yet is not resolved above, and
+# could climb back into the checkout.
+case /$out_dir/ in */../* | */./*)
+  echo 'private-beta-diagnostics: --out-dir may not contain . or .. below a directory that does not exist yet' >&2
+  exit 2
+  ;;
+esac
 case $out_dir/ in "$repo"/*)
   echo "private-beta-diagnostics: --out-dir must be outside the checkout ($repo)" >&2
   exit 2
@@ -212,7 +219,10 @@ docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)
   printf '\n## restarts, OOM kills, exit codes\n'
   ids=$(compose ps -aq 2>/dev/null || true)
   for id in $ids; do
-    docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}	restarts={{.RestartCount}}	oom_killed={{.State.OOMKilled}}	exit={{.State.ExitCode}}	started={{.State.StartedAt}}' "$id" 2>&1 | head -1
+    # A container re-created between the listing and here is normal during an
+    # incident; it must not abort the collection.
+    docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}	restarts={{.RestartCount}}	oom_killed={{.State.OOMKilled}}	exit={{.State.ExitCode}}	started={{.State.StartedAt}}' "$id" 2>/dev/null | head -1 ||
+      printf '%s\t(gone before it could be inspected)\n' "$id"
   done
   run 'api /health' in_container_get api http://127.0.0.1:4000/health
   run 'api /readyz' in_container_get api http://127.0.0.1:9400/readyz

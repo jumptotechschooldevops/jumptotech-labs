@@ -71,7 +71,7 @@ case \$args in
   *' info '*) echo /var/lib/docker; exit 0 ;;
   *' system df '*) echo 'TYPE TOTAL ACTIVE SIZE'; echo "\${FAKE_SYSTEM_DF_EXTRA:-Images 12 9 8.1GB}"; exit 0 ;;
   *' network ls '*) echo jumptotech-sandboxes; exit 0 ;;
-  *' inspect '*) printf 'api\trestarts=2\toom_killed=false\texit=0\tstarted=2026-09-18T05:00:00Z\n'; exit 0 ;;
+  *' inspect '*) [ -n "\${FAKE_INSPECT_GONE:-}" ] && { echo 'Error: No such object: c0ffee01' >&2; exit 1; }; printf 'api\trestarts=2\toom_killed=false\texit=0\tstarted=2026-09-18T05:00:00Z\n'; exit 0 ;;
 esac
 if [ "\$1" = ps ]; then echo 'running'; echo 'jtt-lab-3f9a2c1b77e0	running	12 minutes ago	linux'; exit 0; fi
 if [ "\$1" = compose ]; then
@@ -206,6 +206,10 @@ echo
 echo 'private-beta-diagnostics: refusals'
 run_case inside -- --stack production --out-dir "$fixture/diagnostics/new"
 if [ "$status" -eq 2 ] && [ ! -e "$fixture/diagnostics" ]; then pass 'refuses to write inside the checkout, and creates nothing there'; else fail "inside checkout: exit $status"; fi
+run_case climb -- --stack production --out-dir "$work/missing/../../$(basename "$work")/checkout/diagnostics"
+if [ "$status" -eq 2 ] && [ ! -e "$fixture/diagnostics" ]; then pass 'refuses .. below a directory that does not exist'; else fail "climbing --out-dir: exit $status"; fi
+run_case vanished FAKE_INSPECT_GONE=1 -- --stack production
+if [ "$status" -eq 0 ] && grep -rq 'gone before it could be inspected' "$case_dir/out"/*/30-services.txt; then pass 'a container that vanished mid-collection is noted, not fatal'; else fail "vanished container: exit $status"; fi
 run_case badsince -- --since '1; rm -rf /'
 if [ "$status" -eq 2 ]; then pass 'refuses a --since that is not a duration'; else fail "--since: exit $status"; fi
 

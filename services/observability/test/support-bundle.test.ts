@@ -133,6 +133,26 @@ describe('PostgreSQL lines', () => {
   });
 });
 
+describe('PostgreSQL values in double quotes', () => {
+  it('keeps object names after their keyword and removes every other quoted value', () => {
+    const result = sanitizeLogLines(
+      [
+        '2026-09-18 06:00:03.000 UTC [44] ERROR:  invalid input syntax for type uuid: "row-value-sentinel"',
+        '2026-09-18 06:00:04.000 UTC [45] ERROR:  syntax error at or near "student-typed-token"',
+        '2026-09-18 06:00:05.000 UTC [46] FATAL:  role "jumptotech" does not exist',
+        '2026-09-18 06:00:06.000 UTC [47] ERROR:  duplicate key value violates unique constraint "users_email_key"',
+        '2026-09-18 06:00:07.000 UTC [48] ERROR:  invalid input value for enum session_status: "SENTINEL_ENUM"',
+      ],
+      { source: 'postgres', maxLines: 10 },
+    );
+    const text = result.lines.join('\n');
+    expect(text).not.toMatch(/row-value-sentinel|student-typed-token|SENTINEL_ENUM/);
+    expect(text).toContain('role "jumptotech" does not exist');
+    expect(text).toContain('unique constraint "users_email_key"');
+    expect(text).toContain('"[value removed]"');
+  });
+});
+
 describe('nginx lines', () => {
   it('keeps error-log entries without their query strings, referrers or hosts', () => {
     const [line] = sanitizeLogLines(
@@ -176,6 +196,23 @@ describe('nginx lines', () => {
 });
 
 describe('stripQueryStrings', () => {
+  it('stays linear on a long run of slashes with no query (a student-supplied path)', () => {
+    const started = Date.now();
+    stripQueryStrings('/'.repeat(64_000));
+    stripQueryStrings('/a'.repeat(32_000));
+    expect(Date.now() - started).toBeLessThan(250);
+  });
+
+  it('bounds the work per value before any pattern runs', () => {
+    const started = Date.now();
+    const result = sanitizeLogLines(
+      [JSON.stringify({ ts: 't', level: 'warn', service: 'api', event: 'lab.start.failed', msg: '/'.repeat(200_000) })],
+      { source: 'structured', maxLines: 1 },
+    );
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(result.lines).toHaveLength(1);
+  });
+
   it('removes the query from every URL-shaped path in a line', () => {
     expect(stripQueryStrings('a /x?y=1 b "/z?q=2" https://h/p?k=v')).toBe(
       'a /x?[query removed] b "/z?[query removed]" https://h/p?[query removed]',
