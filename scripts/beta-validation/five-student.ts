@@ -23,6 +23,7 @@
  * with live sessions, and leftovers already carrying the runtime owner.
  * Exit: 0 PASS · 1 FAIL · 2 refused or could not run.
  */
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -91,6 +92,23 @@ const scrapeToken = readFileSync(args['scrape-token-file'], 'utf8').trim();
 const secrets: string[] = [scrapeToken];
 const kube = new rt.Kube(args.kubeconfig);
 const started = Date.now();
+
+/**
+ * The commit this run validated, so the report can be matched to a deployment
+ * (the evidence template asks for the gate "on the deployed commit"). Read from
+ * the checkout, not taken from the environment; `null` when it cannot be read,
+ * never guessed.
+ */
+function checkoutCommit(): { commit: string | null; clean: boolean | null } {
+  try {
+    const commit = execFileSync('git', ['-C', REPO_ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const dirty = execFileSync('git', ['-C', REPO_ROOT, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+    return { commit: /^[0-9a-f]{40}$/.test(commit) ? commit : null, clean: dirty.length === 0 };
+  } catch {
+    return { commit: null, clean: null };
+  }
+}
+const validated = checkoutCommit();
 
 const report = new ValidationReport((line) => console.log(redact(line, secrets)));
 
@@ -1103,7 +1121,7 @@ mkdirSync(args['report-dir']!, { recursive: true });
 const file = path.join(args['report-dir']!, `five-student-${runId}.json`);
 writeFileSync(
   file,
-  redact(JSON.stringify({ runId, startedAt: new Date(started).toISOString(), durationSeconds: Math.round((Date.now() - started) / 1000), passed: code === 0, findings: report.findings, observations: report.observations }, null, 2), secrets),
+  redact(JSON.stringify({ runId, commit: validated.commit, trackedFilesClean: validated.clean, startedAt: new Date(started).toISOString(), durationSeconds: Math.round((Date.now() - started) / 1000), passed: code === 0, findings: report.findings, observations: report.observations }, null, 2), secrets),
 );
 const failed = report.failed;
 console.log(`\n${'='.repeat(78)}`);
