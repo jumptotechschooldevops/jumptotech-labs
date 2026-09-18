@@ -48,7 +48,13 @@ export {
 } from './terraform/references.js';
 
 export { buildStudentKubeconfig, type StudentKubeconfigInput } from './k8s/student-kubeconfig.js';
-export { KubernetesClient, toPodSnapshot, toDeploymentSnapshot } from './k8s/client.js';
+export {
+  KubernetesClient,
+  toPodSnapshot,
+  toDeploymentSnapshot,
+  toServiceSnapshot,
+  toPersistentVolumeClaimSnapshot,
+} from './k8s/client.js';
 export {
   KindLabProvider,
   execFileExecRunner,

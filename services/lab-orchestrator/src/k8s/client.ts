@@ -664,20 +664,7 @@ export class KubernetesClient implements KubernetesPort {
       if (statusCodeOf(error) === 404) return null;
       asUnreachable(`reading service ${namespace}/${name}`, error);
     }
-    return {
-      name: service.metadata?.name ?? name,
-      namespace: service.metadata?.namespace ?? namespace,
-      type: service.spec?.type ?? 'ClusterIP',
-      ...(service.spec?.clusterIP ? { clusterIP: service.spec.clusterIP } : {}),
-      selector: service.spec?.selector ?? {},
-      ports: (service.spec?.ports ?? []).map((port) => ({
-        ...(port.name ? { name: port.name } : {}),
-        port: port.port,
-        ...(port.targetPort !== undefined ? { targetPort: port.targetPort as number | string } : {}),
-        protocol: port.protocol ?? 'TCP',
-        ...(port.nodePort !== undefined ? { nodePort: port.nodePort } : {}),
-      })),
-    };
+    return toServiceSnapshot(service, namespace, name);
   }
 
   /**
@@ -1604,7 +1591,28 @@ function toRoleBindingSnapshot(
   };
 }
 
-function toPersistentVolumeClaimSnapshot(
+export function toServiceSnapshot(
+  service: k8s.V1Service,
+  namespace: string,
+  name: string,
+): ServiceSnapshot {
+  return {
+    name: service.metadata?.name ?? name,
+    namespace: service.metadata?.namespace ?? namespace,
+    type: service.spec?.type ?? 'ClusterIP',
+    ...(service.spec?.clusterIP ? { clusterIP: service.spec.clusterIP } : {}),
+    selector: service.spec?.selector ?? {},
+    ports: (service.spec?.ports ?? []).map((port) => ({
+      ...(port.name ? { name: port.name } : {}),
+      port: port.port,
+      ...(port.targetPort !== undefined ? { targetPort: port.targetPort as number | string } : {}),
+      protocol: port.protocol ?? 'TCP',
+      ...(port.nodePort !== undefined ? { nodePort: port.nodePort } : {}),
+    })),
+  };
+}
+
+export function toPersistentVolumeClaimSnapshot(
   pvc: k8s.V1PersistentVolumeClaim,
   namespace: string,
   name: string,
