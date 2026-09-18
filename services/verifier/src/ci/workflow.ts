@@ -28,6 +28,11 @@ export interface WorkflowStep {
   run?: string;
   /** Keys of the step's `with:` mapping. */
   withKeys: string[];
+  /**
+   * The step's `with:` values that are scalars, as their YAML text. A mapping
+   * or list value is absent here rather than stringified.
+   */
+  withValues: Record<string, string>;
   /** `env:` entries declared on the step. */
   env: WorkflowAssignment[];
 }
@@ -186,7 +191,7 @@ function readSteps(raw: unknown, jobId: string, assignments: WorkflowAssignment[
   return raw.map((entry, i): WorkflowStep => {
     const index = i + 1;
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-      return { index, withKeys: [], env: [] };
+      return { index, withKeys: [], withValues: {}, env: [] };
     }
     const step = entry as Record<string, unknown>;
     const withMap =
@@ -210,6 +215,7 @@ function readSteps(raw: unknown, jobId: string, assignments: WorkflowAssignment[
       ...(typeof step.uses === 'string' ? { uses: step.uses } : {}),
       ...(typeof step.run === 'string' ? { run: step.run } : {}),
       withKeys: Object.keys(withMap),
+      withValues: scalarValues(withMap),
       env: readAssignments(step.env, `jobs.${jobId}.steps[${index}].env`, assignments),
     };
   });
@@ -228,6 +234,15 @@ function readAssignments(
   }));
   sink.push(...entries);
   return entries;
+}
+
+function scalarValues(map: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(map)) {
+    if (typeof value === 'string') out[key] = value;
+    else if (typeof value === 'number' || typeof value === 'boolean') out[key] = String(value);
+  }
+  return out;
 }
 
 function toStringList(raw: unknown): string[] {
