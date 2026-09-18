@@ -262,10 +262,14 @@ function walk(value: unknown, where: string, into: CfnReference[]): void {
   }
   const sub = object['Fn::Sub'];
   if (sub !== undefined) {
-    // `Fn::Sub` is either a string, or [string, {vars}] — only the string half
-    // carries references to the rest of the template.
+    // `Fn::Sub` is either a string, or [string, {vars}]. A `${Name}` the
+    // variable map defines is local to this Sub, not a reference to the
+    // template; the map's values are where its references are.
     const body = Array.isArray(sub) ? sub[0] : sub;
-    if (typeof body === 'string') into.push(...subVariables(body, where));
+    const local = new Set(Array.isArray(sub) ? Object.keys(asObject(sub[1]) ?? {}) : []);
+    if (typeof body === 'string') {
+      into.push(...subVariables(body, where).filter((reference) => reference.attribute !== undefined || !local.has(reference.target)));
+    }
     if (Array.isArray(sub) && sub[1] !== undefined) walk(sub[1], where, into);
     return;
   }
@@ -310,6 +314,65 @@ export function referenceAt(
   const found: CfnReference[] = [];
   walk(value, `Resources.${logicalId}.Properties.${path}`, found);
   return found[0] ?? null;
+}
+
+/**
+ * A value as the `Fn::Sub` template that would produce it, or `null` when it
+ * uses anything that cannot be written that way.
+ *
+ * `!GetAtt X.Attr` is `${X.Attr}`, `!Ref X` is `${X}`, an `Fn::Join` is its
+ * parts joined, and an `Fn::Sub` with a variable map has each mapped variable
+ * replaced by its own value's template. So `!Sub '${ExportBucket.Arn}/*'`,
+ * `!Join ['', [!GetAtt ExportBucket.Arn, '/*']]` and
+ * `!Sub ['${B}/*', {B: !GetAtt ExportBucket.Arn}]` all come out identical.
+ *
+ * A literal string keeps its text, but any `${` in it is escaped the way Sub
+ * escapes it (`${!`), so a plain string that merely looks like a template
+ * never equals one: text is not a reference.
+ */
+export function asSubTemplate(value: unknown, depth = 0): string | null {
+  if (depth > 16) return null;
+  if (typeof value === 'string') return value.replaceAll('${', '${!');
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  const object = asObject(value);
+  if (!object || Object.keys(object).length !== 1) return null;
+
+  if (typeof object.Ref === 'string') return `\${${object.Ref}}`;
+
+  const getAtt = object['Fn::GetAtt'];
+  if (getAtt !== undefined) {
+    const parts = Array.isArray(getAtt) ? getAtt : [getAtt];
+    if (parts.length === 0 || !parts.every((part) => typeof part === 'string')) return null;
+    return `\${${(parts as string[]).join('.')}}`;
+  }
+
+  const join = object['Fn::Join'];
+  if (join !== undefined) {
+    if (!Array.isArray(join) || join.length !== 2 || typeof join[0] !== 'string' || !Array.isArray(join[1])) {
+      return null;
+    }
+    const parts = join[1].map((part) => asSubTemplate(part, depth + 1));
+    if (parts.some((part) => part === null)) return null;
+    return parts.join(join[0].replaceAll('${', '${!'));
+  }
+
+  const sub = object['Fn::Sub'];
+  if (sub !== undefined) {
+    if (typeof sub === 'string') return sub;
+    if (!Array.isArray(sub) || sub.length !== 2 || typeof sub[0] !== 'string') return null;
+    const variables = asObject(sub[1]);
+    if (!variables) return null;
+    const resolved = new Map<string, string>();
+    for (const [name, entry] of Object.entries(variables)) {
+      const template = asSubTemplate(entry, depth + 1);
+      if (template === null) return null;
+      resolved.set(name, template);
+    }
+    return sub[0].replace(/\$\{([^}]*)\}/g, (whole, name: string) =>
+      name.startsWith('!') ? whole : (resolved.get(name) ?? whole),
+    );
+  }
+  return null;
 }
 
 /** The reference an output's `Value` makes, if any. */

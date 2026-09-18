@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  asSubTemplate,
   CloudFormationParseError,
   collectReferences,
   outputReference,
@@ -372,5 +373,47 @@ describe('the handlers grade through the same model', () => {
     expect(result.status).toBe('fail');
     expect(result.detail!.length).toBeLessThan(200);
     expect(result.detail).not.toContain('AWSTemplateFormatVersion');
+  });
+});
+
+describe('asSubTemplate — a value as the Sub template that would produce it', () => {
+  it('writes GetAtt, Ref, Join and a Sub variable map the same way', () => {
+    expect(asSubTemplate({ 'Fn::GetAtt': ['Bucket', 'Arn'] })).toBe('${Bucket.Arn}');
+    expect(asSubTemplate({ 'Fn::GetAtt': 'Bucket.Arn' })).toBe('${Bucket.Arn}');
+    expect(asSubTemplate({ Ref: 'Bucket' })).toBe('${Bucket}');
+    expect(asSubTemplate({ 'Fn::Join': ['', [{ 'Fn::GetAtt': ['Bucket', 'Arn'] }, '/*']] })).toBe('${Bucket.Arn}/*');
+    expect(asSubTemplate({ 'Fn::Sub': ['${B}/*', { B: { 'Fn::GetAtt': ['Bucket', 'Arn'] } }] })).toBe('${Bucket.Arn}/*');
+    expect(asSubTemplate({ 'Fn::Sub': '${Bucket.Arn}/*' })).toBe('${Bucket.Arn}/*');
+  });
+
+  it('never lets a plain string equal a template with a reference in it', () => {
+    expect(asSubTemplate('${Bucket.Arn}/*')).toBe('${!Bucket.Arn}/*');
+    expect(asSubTemplate({ 'Fn::Join': ['', ['${Bucket.Arn}', '/*']] })).toBe('${!Bucket.Arn}/*');
+    // An escaped Sub variable stays escaped, even when the map defines it.
+    expect(asSubTemplate({ 'Fn::Sub': ['${!B}/*', { B: { Ref: 'Bucket' } }] })).toBe('${!B}/*');
+  });
+
+  it('gives up on anything it cannot write as a template', () => {
+    expect(asSubTemplate({ 'Fn::Select': [0, ['a']] })).toBeNull();
+    expect(asSubTemplate({ 'Fn::Join': ['', 'not-a-list'] })).toBeNull();
+    expect(asSubTemplate({ 'Fn::Sub': ['${B}', { B: { 'Fn::Select': [0, ['a']] } }] })).toBeNull();
+    expect(asSubTemplate({ Ref: 'A', Other: 1 })).toBeNull();
+    expect(asSubTemplate(['${Bucket.Arn}'])).toBeNull();
+  });
+});
+
+describe('a Sub variable map defines local names, not references', () => {
+  it('does not report a mapped variable as dangling, but still checks the map values', () => {
+    const template = parseCloudFormationTemplate(`Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+  Policy:
+    Type: AWS::IAM::Policy
+    Properties:
+      Resource: !Sub ['\${B}/*', {B: !GetAtt Bucket.Arn}]
+      Other: !Sub ['\${C}/*', {C: !GetAtt Missing.Arn}]
+      Unmapped: !Sub ['\${D}/*', {E: x}]
+`);
+    expect(unresolvedReferences(template).map((r) => r.target).sort()).toEqual(['D', 'Missing']);
   });
 });

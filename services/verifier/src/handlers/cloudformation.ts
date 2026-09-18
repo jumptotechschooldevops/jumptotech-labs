@@ -28,6 +28,7 @@ import {
 import type { SandboxReader } from '../sandbox-reader.js';
 import {
   CloudFormationParseError,
+  asSubTemplate,
   outputReference,
   parseCloudFormationTemplate,
   readPath,
@@ -166,6 +167,35 @@ export const cfnResourceReference: SandboxVerifierHandler<'cfn_resource_referenc
       );
     }
     return pass();
+  },
+};
+
+export const cfnPropertyResolvesTo: SandboxVerifierHandler<'cfn_property_resolves_to'> = {
+  type: 'cfn_property_resolves_to',
+  label: (r) => `${r.logical_id}.${r.property} resolves to the required value`,
+  async run(requirement, reader) {
+    const result = await readTemplate(reader, requirement.path);
+    if ('outcome' in result) return result.outcome;
+
+    const resource = result.template.resources[requirement.logical_id];
+    if (!resource) return fail(`no resource named '${requirement.logical_id}' in '${requirement.path}'`);
+
+    const value = readPath(resource.properties, requirement.property);
+    if (value === undefined || value === null) {
+      return fail(`'${requirement.logical_id}' has no ${requirement.property}`);
+    }
+
+    // A list passes when any entry resolves: a policy may name the bucket and
+    // its objects side by side.
+    const entries = Array.isArray(value) ? value : [value];
+    const wanted = new Set(requirement.any_of);
+    if (entries.some((entry) => wanted.has(asSubTemplate(entry) ?? ''))) return pass();
+
+    // Never the expected value: it is the answer.
+    const shape = Array.isArray(value) ? `a list of ${value.length}, none of which does` : 'it does not';
+    return fail(
+      `'${requirement.logical_id}'.${requirement.property} does not resolve to what the task asks for (${shape})`,
+    );
   },
 };
 

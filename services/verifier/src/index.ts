@@ -85,6 +85,7 @@ export {
 export {
   CFN_PSEUDO_PARAMETERS,
   CloudFormationParseError,
+  asSubTemplate,
   collectReferences,
   outputReference,
   parseCloudFormationTemplate,

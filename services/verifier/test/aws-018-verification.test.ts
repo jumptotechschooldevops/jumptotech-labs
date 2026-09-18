@@ -400,6 +400,61 @@ Outputs:`,
 
 // --------------------------------------------------------------- isolation
 
+describe('AWS-018 — the object ARN, graded on its value rather than its spelling', () => {
+  const OBJECTS = "The policy grants access to the objects, using the bucket's ARN from the bucket resource";
+  const LINE = "Resource: !Sub '${ExportBucket.Arn}/*'";
+  const withResource = (yaml: string) => {
+    expect(SOLVED).toContain(LINE);
+    return SOLVED.replace(LINE, yaml);
+  };
+
+  const equivalent: Array<[string, string]> = [
+    ['a list naming the bucket and its objects', "Resource:\n              - !GetAtt ExportBucket.Arn\n              - !Sub '${ExportBucket.Arn}/*'"],
+    ['a list with the objects first', "Resource:\n              - !Sub '${ExportBucket.Arn}/*'\n              - !GetAtt ExportBucket.Arn"],
+    ['Fn::Join of the GetAtt and /*', "Resource: !Join ['', [!GetAtt ExportBucket.Arn, '/*']]"],
+    ['Fn::Join with the separator doing the work', "Resource: !Join ['/', [!GetAtt ExportBucket.Arn, '*']]"],
+    ['a Sub variable map bound to the GetAtt', "Resource: !Sub ['${B}/*', {B: !GetAtt ExportBucket.Arn}]"],
+    ['long-form Fn::Sub', "Resource:\n              Fn::Sub: '${ExportBucket.Arn}/*'"],
+    ['long-form Fn::Join with a list-form GetAtt', "Resource:\n              Fn::Join: ['', [{'Fn::GetAtt': [ExportBucket, Arn]}, '/*']]"],
+  ];
+  for (const [name, yaml] of equivalent) {
+    it(`passes ${name}`, async () => {
+      const result = await run(withResource(yaml));
+      expect(failed(result.checks)).toEqual([]);
+      expect(result.passed).toBe(true);
+    });
+  }
+
+  const wrong: Array<[string, string]> = [
+    ['a Sub that leaves off the /*', "Resource: !Sub '${ExportBucket.Arn}'"],
+    ['a Join that leaves off the /*', "Resource: !Join ['', [!GetAtt ExportBucket.Arn]]"],
+    ['a list naming only the bucket', 'Resource:\n              - !GetAtt ExportBucket.Arn'],
+    ['a hand-written ARN string', "Resource: 'arn:aws:s3:::staging-payments-exports/*'"],
+    ['the template text as a plain string, not a Sub', "Resource: '${ExportBucket.Arn}/*'"],
+    ['the bucket name where the ARN belongs', "Resource: !Join ['', [!Ref ExportBucket, '/*']]"],
+    ['a Sub variable bound to the bucket name', "Resource: !Sub ['${B}/*', {B: !Ref ExportBucket}]"],
+    ['a Sub variable left unbound', "Resource: !Sub ['${B}/*', {C: !GetAtt ExportBucket.Arn}]"],
+    ['a narrower prefix than the task asks for', "Resource: !Sub '${ExportBucket.Arn}/exports/*'"],
+    ['every resource in the account', "Resource: '*'"],
+  ];
+  for (const [name, yaml] of wrong) {
+    it(`fails ${name}`, async () => {
+      const result = await run(withResource(yaml));
+      expect(result.passed).toBe(false);
+      expect(failed(result.checks)).toContain(OBJECTS);
+    });
+  }
+
+  it('says what failed without handing over the value', async () => {
+    const result = await run(withResource('Resource: !GetAtt ExportBucket.Arn'));
+    const detail = result.checks.find((c) => c.label === OBJECTS)?.detail ?? '';
+    expect(detail).toContain('PolicyDocument.Statement.0.Resource');
+    expect(detail).not.toContain('/*');
+    expect(detail).not.toContain('ExportBucket.Arn');
+    expect(detail).not.toContain('Sub');
+  });
+});
+
 describe('AWS-018 — isolation', () => {
   it('is not passed by another session having solved it', async () => {
     const lab = await loadLabDefinition(AWS_018);
