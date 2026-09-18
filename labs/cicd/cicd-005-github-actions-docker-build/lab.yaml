@@ -116,7 +116,8 @@ requirements:
     job: image
     run_contains:
       - docker build
-    label: A step builds the container image
+      - IMAGE_NAME
+    label: A step builds the container image, named from IMAGE_NAME
   - type: environment_reference_exists
     path: .github/workflows/ci.yml
     name: IMAGE_NAME
