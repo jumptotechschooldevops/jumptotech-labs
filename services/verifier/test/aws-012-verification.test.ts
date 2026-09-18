@@ -119,8 +119,8 @@ describe('AWS-012 — the seeded state does not pass', () => {
     const result = await run(BASE, SEEDED_FINDINGS);
 
     expect(result.passed).toBe(false);
-    // 8 endpoint checks + 5 findings + the placeholder check.
-    expect(failed(result.checks)).toHaveLength(14);
+    // 9 endpoint checks + 5 findings + the placeholder check.
+    expect(failed(result.checks)).toHaveLength(15);
   });
 
   it('still passes what already worked', async () => {
