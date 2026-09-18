@@ -481,6 +481,17 @@ if have kind && jtt_contains "$(kind get clusters 2>/dev/null || true)" -x "$clu
 else
   fail kind.cluster "$cluster does not exist: npm run cluster:up (docs/runbooks/private-beta-operations.md §1)"
 fi
+# What brings the node back after a daemon restart or a reboot is its own
+# restart policy, set by kind, not by compose. Recorded for the reboot drill
+# (readiness doc §17), whose outcome is still unmeasured.
+if [ $docker_ok -eq 1 ] && [ $cluster_ok -eq 1 ]; then
+  node_policy=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$cluster-control-plane" 2>/dev/null || true)
+  case $node_policy in
+    '') warn kind.node-restart-policy "could not read the restart policy of $cluster-control-plane" ;;
+    no) warn kind.node-restart-policy "$cluster-control-plane has restart policy 'no': after a reboot it stays stopped until \`docker start $cluster-control-plane\` (readiness doc §17)" ;;
+    *) info kind.node-restart-policy "$cluster-control-plane: $node_policy (whether it returns Ready after a reboot is measured by the §17 drill, not assumed)" ;;
+  esac
+fi
 if [ $docker_ok -eq 1 ] && docker network inspect kind >/dev/null 2>&1; then
   pass kind.network "the external 'kind' network exists"
 else

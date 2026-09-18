@@ -265,6 +265,7 @@ case ${1:-} in
   inspect)
     case "$*" in
       *RestartCount*) echo "${FAKE_RESTARTS:-0} ${FAKE_RESTART_POLICY:-unless-stopped}" ;;
+      *RestartPolicy.Name*control-plane) echo "${FAKE_NODE_RESTART_POLICY:-on-failure}" ;;
       *'{{.Name}}'*) echo "/jumptotech-labs-${!##id-}-1" ;;
       *Networks*) echo 'jumptotech-labs-database ' ;;
       *) exit 1 ;;
@@ -502,6 +503,7 @@ check 'secret reported by name only' has_line '^PASS +env\.present +OIDC_CLIENT_
 check 'the admission decision is surfaced' has_line '^MANUAL CHECK REQUIRED +auth\.admission '
 check 'the firewall cannot be proven from the host' has_line '^MANUAL CHECK REQUIRED +exposure\.firewall '
 check 'off-host backup is a manual check' has_line '^MANUAL CHECK REQUIRED +backup\.offhost '
+check 'the kind node restart policy is recorded' has_line '^INFO +kind\.node-restart-policy +jumptotech-labs-control-plane: on-failure'
 check 'no heartbeat destination is a manual check, not a pass' has_line '^MANUAL CHECK REQUIRED +observability\.heartbeat +no heartbeat destination'
 check 'the attestation digest is compared' has_line '^PASS +k8s\.attestation-digest '
 check 'the configuration check receives the socket group' grep -q 'production-config-check.ts --env-file .* --docker-socket-gid ' "$root/log"
@@ -568,6 +570,12 @@ root=$(fixture tokendir)
 chmod 700 "$root/repo/infrastructure/observability/secrets"
 preflight "$root"
 check 'scrape-token-mode FAIL' has_fail 'observability\.scrape-token-mode'
+
+scenario 'preflight: a kind node that will not restart after a reboot is warned about'
+root=$(fixture nodepolicy)
+FAKE_NODE_RESTART_POLICY=no preflight "$root"
+check 'kind.node-restart-policy WARN' has_line "^WARN +kind\.node-restart-policy +jumptotech-labs-control-plane has restart policy 'no'"
+common_properties
 
 scenario 'preflight: a heartbeat destination Alertmanager cannot read fails'
 root=$(fixture heartbeat)
