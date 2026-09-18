@@ -459,6 +459,16 @@ if [ -s "$webhook_dir/webhook-url" ]; then
 else
   manual observability.alert-delivery 'no alert destination is installed (DECISION REQUIRED): alerts reach nobody until one is'
 fi
+if [ -s "$webhook_dir/heartbeat-url" ]; then
+  if other_can_read "$webhook_dir/heartbeat-url" && other_can_enter "$webhook_dir"; then
+    pass observability.heartbeat-mode 'heartbeat-url is readable by Alertmanager (uid 65534)'
+  else
+    fail observability.heartbeat-mode 'heartbeat-url is not readable by Alertmanager (uid 65534): chmod 0644 the file and 0711 the directory'
+  fi
+  manual observability.heartbeat 'a heartbeat destination is installed; confirm the external service shows this host checking in (RB-20)'
+else
+  manual observability.heartbeat 'no heartbeat destination is installed (DECISION REQUIRED, RB-20): a dead host, Docker or monitoring stack alerts nobody'
+fi
 
 section 'kubernetes (kind)'
 cluster=$(env_or LAB_CLUSTER_NAME jumptotech-labs)

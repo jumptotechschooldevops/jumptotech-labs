@@ -317,6 +317,7 @@ No provider is chosen here. The smoke's `backup.offhost` is a FAIL until
 | Scrape token readable by Prometheus on Linux | PROVEN LOCALLY (§18.1); REQUIRES PRODUCTION HOST (smoke `observability.targets`) |
 | Targets up; dashboard renders through the tunnel; host gauges on the right filesystems | REQUIRES PRODUCTION HOST |
 | **Human delivery** — any destination configured, any alert received by a person | **NOT PROVEN / REQUIRES EXTERNAL DECISION** (D6) |
+| **Dead man's switch** — the always-firing `Watchdog` routed alone to the `heartbeat` receiver (`secrets/heartbeat-url`), so an external check-in service can tell a person when this host goes quiet; smoke `observability.watchdog` proves rules are evaluated | rule, route and unit test PROVEN LOCALLY (promtool, amtool, tests); the external service **REQUIRES EXTERNAL DECISION** (D6/D12); preflight/smoke `observability.heartbeat` stay MANUAL until a person sees check-ins ([RB-20](../runbooks/RB-20-watchdog.md)) |
 
 ### 12.1 Alert delivery drill (after D6)
 

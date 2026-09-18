@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# Watchdog fires from the first evaluation, with nothing scraped at all.
+#
+# It must not depend on any series: an alert that needs a target to exist is
+# silent in exactly the outage it is for.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../alerts/watchdog.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series: []
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+              service: monitoring
+            exp_annotations:
+              summary: 'the alerting pipeline is alive (always firing)'
+              description: >-
+                Always firing, on purpose. Its arrival every few minutes at the
+                external heartbeat service is the signal; its absence there means
+                this host, Docker, Prometheus or Alertmanager has stopped.
+              runbook_url: docs/runbooks/RB-20-watchdog.md
+      - eval_time: 3h
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+              service: monitoring
+            exp_annotations:
+              summary: 'the alerting pipeline is alive (always firing)'
+              description: >-
+                Always firing, on purpose. Its arrival every few minutes at the
+                external heartbeat service is the signal; its absence there means
+                this host, Docker, Prometheus or Alertmanager has stopped.
+              runbook_url: docs/runbooks/RB-20-watchdog.md

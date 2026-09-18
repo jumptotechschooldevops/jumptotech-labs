@@ -20,7 +20,7 @@
  *   · the new metrics carry no identifying or secret label.
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -344,6 +344,21 @@ describe('monitoring joins production without becoming reachable', () => {
     expect(alertmanager).toContain('url_file: /etc/alertmanager/secrets/webhook-url');
     expect(alertmanager).not.toMatch(/^\s*-?\s*url:/m);
     expect(read('infrastructure/observability/alertmanager/secrets/.gitignore').split('\n')).toContain('*');
+  });
+
+  it('sends the always-firing Watchdog only to the heartbeat receiver, ahead of every other route', () => {
+    // A dead host sends nothing; only an external service that notices the
+    // heartbeat stop can report it (RB-20). The Watchdog must never page a
+    // person through the default receiver, and nothing may catch it first.
+    const alertmanager = withoutComments(read('infrastructure/observability/alertmanager/alertmanager.yml'));
+    const routes = alertmanager.slice(alertmanager.indexOf('  routes:'), alertmanager.indexOf('receivers:'));
+    const first = routes.split(/\n    - /)[1]!;
+    expect(first).toMatch(/^matchers: \[alertname="Watchdog"\]\n\s+receiver: heartbeat\n/);
+    expect(first).not.toMatch(/continue: true/);
+    expect(alertmanager).toContain('url_file: /etc/alertmanager/secrets/heartbeat-url');
+    const rule = read('infrastructure/observability/prometheus/alerts/watchdog.yml');
+    expect(rule).toMatch(/- alert: Watchdog\n\s+expr: vector\(1\)\n/);
+    expect(existsSync(path.join(REPO_ROOT, 'docs/runbooks/RB-20-watchdog.md'))).toBe(true);
   });
 });
 

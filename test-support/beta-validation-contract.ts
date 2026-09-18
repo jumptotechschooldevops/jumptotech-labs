@@ -374,6 +374,9 @@ export function unexpectedAlerts(firingNow: readonly string[], firingBefore: rea
   const before = new Set(firingBefore);
   return [...new Set(firingNow)].filter(
     (name) =>
+      // The dead man's switch fires always (RB-20); on a fresh stack it may not
+      // have fired yet when the "before" snapshot is taken.
+      name !== 'Watchdog' &&
       !EXPECTED_WORKLOAD_ALERTS.has(name) &&
       !ENVIRONMENT_ALERTS.has(name) &&
       !(name in PROVOKED_ALERT_GUARDS) &&

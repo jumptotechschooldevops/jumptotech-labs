@@ -320,6 +320,7 @@ that is the incident.
 |---|---|
 | **Where alerts are delivered** (a webhook, chat, paging, mail) and who is on call during the beta | Alerts are visible in Grafana and `amtool` only. The seam: `infrastructure/observability/alertmanager/secrets/webhook-url` |
 | **An external reachability check** from outside the host (DNS, firewall, public route) | Only the in-host edge check runs. P0-017's `npm run tls:check` from another machine is the ready-made probe |
+| **An external heartbeat ("dead man's switch") service** | The always-firing `Watchdog` is routed to `secrets/heartbeat-url` and nowhere else; until that file names a check-in service, a dead host, Docker daemon or monitoring stack alerts nobody ([RB-20](RB-20-watchdog.md)) |
 | **Host-level exporter** (node_exporter or similar) for per-disk, per-process and network detail | The API's `/proc` and statfs gauges cover memory, load, Docker's filesystem and the backup filesystem only. A node exporter needs the host root filesystem mounted into a container, which this story deliberately did not do |
 | **Attestation re-probe cadence** and who runs it (P0-015 D5) | Manual, before `NetworkIsolationAttestationAging` |
 | **Off-host backup destination and encryption** (P0-013) | `jtt_backup_last_success_offhost` reads 0 and the dashboard says NO |

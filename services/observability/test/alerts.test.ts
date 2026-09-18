@@ -229,7 +229,10 @@ describe.each(rules.map((r): [string, Rule] => [r.alert, r]))('%s', (_name, rule
   });
 
   it('declares a severity the routing understands', () => {
-    expect(['critical', 'warning']).toContain(rule.severity);
+    // The dead man's switch alone is `none`: alertmanager.yml routes it by name
+    // to the heartbeat receiver, never to a person (RB-20).
+    if (rule.alert === 'Watchdog') expect(rule.severity).toBe('none');
+    else expect(['critical', 'warning']).toContain(rule.severity);
   });
 
   it('says what happened', () => {
@@ -264,7 +267,8 @@ describe('thresholds are sane', () => {
       'MetricsScrapeDenied',
     ];
     for (const rule of rules) {
-      if (ZERO_TOLERANCE.includes(rule.alert)) continue;
+      // Watchdog fires always, from the first evaluation: that is its signal.
+      if (ZERO_TOLERANCE.includes(rule.alert) || rule.alert === 'Watchdog') continue;
       expect(rule.for, `${rule.alert} has no 'for' and would fire on one scrape`).toBeTruthy();
       expect(rule.for).not.toBe('0m');
     }

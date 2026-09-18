@@ -24,6 +24,15 @@ route:
   # not need repeating every hour and becomes noise if it does.
   repeat_interval: 4h
   routes:
+    # The dead man's switch (prometheus/alerts/watchdog.yml, RB-20). Always
+    # firing, sent every five minutes to an external check-in service that tells
+    # a person when the posts stop — the one failure no other alert can report.
+    # First, and not continued: it never reaches the default receiver.
+    - matchers: [alertname="Watchdog"]
+      receiver: heartbeat
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
     - matchers: [severity="critical"]
       receiver: default
       repeat_interval: 1h
@@ -36,6 +45,13 @@ receivers:
       # its credential in the same secrets directory.
       - url_file: /etc/alertmanager/secrets/webhook-url
         send_resolved: true
+  # The check-in URL of the external heartbeat service (DECISION REQUIRED,
+  # D6/D12). Like webhook-url, read from the secrets directory and never
+  # committed; until it exists the Watchdog's notifications fail and are logged.
+  - name: heartbeat
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/heartbeat-url
+        send_resolved: false
 
 # One root cause, one page.
 #

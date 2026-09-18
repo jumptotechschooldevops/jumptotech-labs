@@ -218,7 +218,10 @@ promql() {
         echo "up{instance=\"$job:9400\", job=\"$job\"} => $value @[1726488000]"
       done
       ;;
-    'ALERTS{alertstate="firing"}') [ -z "${FAKE_FIRING-}" ] || echo "ALERTS{alertname=\"$FAKE_FIRING\", alertstate=\"firing\"} => 1 @[1]" ;;
+    'ALERTS{alertstate="firing"}')
+      [ -n "${FAKE_NO_WATCHDOG-}" ] || echo 'ALERTS{alertname="Watchdog", alertstate="firing", severity="none"} => 1 @[1]'
+      [ -z "${FAKE_FIRING-}" ] || echo "ALERTS{alertname=\"$FAKE_FIRING\", alertstate=\"firing\"} => 1 @[1]"
+      ;;
     jtt_sessions_capacity_limit) echo "jtt_sessions_capacity_limit{service=\"api\"} => ${FAKE_CAPACITY:-5} @[1]" ;;
     jtt_sessions_per_student_limit) echo 'jtt_sessions_per_student_limit{service="api"} => 1 @[1]' ;;
     'sum(jtt_sessions_active)') echo '{} => 0 @[1]' ;;
@@ -499,6 +502,7 @@ check 'secret reported by name only' has_line '^PASS +env\.present +OIDC_CLIENT_
 check 'the admission decision is surfaced' has_line '^MANUAL CHECK REQUIRED +auth\.admission '
 check 'the firewall cannot be proven from the host' has_line '^MANUAL CHECK REQUIRED +exposure\.firewall '
 check 'off-host backup is a manual check' has_line '^MANUAL CHECK REQUIRED +backup\.offhost '
+check 'no heartbeat destination is a manual check, not a pass' has_line '^MANUAL CHECK REQUIRED +observability\.heartbeat +no heartbeat destination'
 check 'the attestation digest is compared' has_line '^PASS +k8s\.attestation-digest '
 check 'the configuration check receives the socket group' grep -q 'production-config-check.ts --env-file .* --docker-socket-gid ' "$root/log"
 check 'the report is written' grep -q '^RESULT: PASS' "$root/preflight.txt"
@@ -564,6 +568,19 @@ root=$(fixture tokendir)
 chmod 700 "$root/repo/infrastructure/observability/secrets"
 preflight "$root"
 check 'scrape-token-mode FAIL' has_fail 'observability\.scrape-token-mode'
+
+scenario 'preflight: a heartbeat destination Alertmanager cannot read fails'
+root=$(fixture heartbeat)
+printf 'https://heartbeat.test.invalid/ping/abc' >"$root/repo/infrastructure/observability/alertmanager/secrets/heartbeat-url"
+chmod 600 "$root/repo/infrastructure/observability/alertmanager/secrets/heartbeat-url"
+preflight "$root"
+check 'heartbeat-mode FAIL' has_fail 'observability\.heartbeat-mode'
+chmod 644 "$root/repo/infrastructure/observability/alertmanager/secrets/heartbeat-url"
+preflight "$root"
+check 'readable: PASS, and still a manual check that the service hears it' has_line '^PASS +observability\.heartbeat-mode '
+check 'the manual heartbeat check remains' has_line '^MANUAL CHECK REQUIRED +observability\.heartbeat +a heartbeat destination is installed'
+check 'the URL is never printed' lacks_line 'heartbeat\.test\.invalid'
+common_properties
 
 scenario 'preflight: a stale scrape token fails, compared without printing either value'
 root=$(fixture tokenstale)
@@ -740,6 +757,9 @@ check 'the development student header is refused' has_line '^PASS +auth\.dev-ide
 check 'the api requires a session' has_line '^PASS +auth\.required/api/sessions '
 check 'a student flow is a manual check' has_line '^MANUAL CHECK REQUIRED +student\.flow '
 check 'alert delivery is a manual check' has_line '^MANUAL CHECK REQUIRED +alerts\.delivery '
+check 'the external heartbeat is a manual check' has_line '^MANUAL CHECK REQUIRED +alerts\.heartbeat '
+check 'the always-firing Watchdog proves rules are evaluated' has_line '^PASS +observability\.watchdog '
+check 'the Watchdog is not reported as an incident' has_line '^PASS +observability\.alerts +no alert is firing'
 check 'the external scan is a manual check' has_line '^MANUAL CHECK REQUIRED +exposure\.external '
 check 'an evidence file is written' bash -c 'ls "$1"/evidence/private-beta-smoke-*.txt >/dev/null' _ "$root"
 check 'the evidence says which host it proves' bash -c 'grep -q "proves nothing about any other host" "$1"/evidence/private-beta-smoke-*.txt' _ "$root"
@@ -797,6 +817,12 @@ root=$(fixture promdown)
 FAKE_PROM_DOWN=1 smoke "$root"
 check 'observability.targets FAIL' has_fail 'observability\.targets'
 check 'observability.alerts FAIL' has_fail 'observability\.alerts'
+check 'observability.watchdog FAIL' has_fail 'observability\.watchdog'
+root=$(fixture nowatchdog)
+FAKE_NO_WATCHDOG=1 smoke "$root"
+check 'no Watchdog firing: rules are not being evaluated, a FAIL' has_line '^FAIL +observability\.watchdog +Watchdog is not firing'
+FAKE_FIRING=HostDiskSpaceLow smoke "$root"
+check 'a real alert beside the Watchdog is named without it' has_line '^WARN +observability\.alerts +firing: HostDiskSpaceLow \('
 root=$(fixture redirect)
 FAKE_REDIRECT_CODE=200 FAKE_NO_HSTS=1 smoke "$root"
 check 'edge.http-redirect FAIL' has_fail 'edge\.http-redirect'

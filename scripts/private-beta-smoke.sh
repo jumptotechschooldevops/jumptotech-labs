@@ -357,10 +357,22 @@ else
     fail observability.targets "targets down: ${down% }"
   fi
 fi
-firing=$(q 'ALERTS{alertstate="firing"}' | sed -nE 's/.*alertname="([^"]+)".*/\1/p' | sort -u | tr '\n' ' ' || true)
+firing_all=$(q 'ALERTS{alertstate="firing"}' | sed -nE 's/.*alertname="([^"]+)".*/\1/p' | sort -u || true)
+# The dead man's switch fires always (RB-20): it is evidence, not an incident.
+firing=$(printf '%s\n' "$firing_all" | { grep -vx Watchdog || true; } | tr '\n' ' ')
 if [ -z "$up" ]; then
   # q prints nothing both for "no alert" and for "Prometheus did not answer".
   fail observability.alerts 'could not check: Prometheus did not answer (see observability.targets)'
+  fail observability.watchdog 'could not check: Prometheus did not answer'
+else
+  if jtt_contains "$firing_all" -x Watchdog; then
+    pass observability.watchdog 'Watchdog is firing: Prometheus is evaluating the alert rules'
+  else
+    fail observability.watchdog 'Watchdog is not firing: Prometheus is not evaluating the alert rules, so no alert can fire (RB-20)'
+  fi
+fi
+if [ -z "$up" ]; then
+  :
 elif [ -z "${firing// /}" ]; then
   pass observability.alerts 'no alert is firing'
 else
@@ -429,6 +441,7 @@ section 'EXTERNAL-INFRASTRUCTURE and PERSON — no script on this host can prove
 manual student.flow 'sign in at the public origin as a beta account; start LINUX-001; type in the terminal; Check Solution; Reset; End Lab. Record times (readiness doc §16)'
 manual auth.admission 'sign in with an account that is NOT on the beta list: it must be refused by the identity provider. The platform admits any account the issuer authenticates'
 manual alerts.delivery 'fire the drill alert (readiness doc §12) and confirm a person received it; record who, where and when'
+manual alerts.heartbeat 'confirm the external heartbeat service shows check-ins from this host every few minutes (RB-20). Without heartbeat-url, a dead host or monitoring stack alerts nobody'
 manual operator.grafana 'open Grafana through ssh -L 3001:127.0.0.1:3001 and sign in; confirm the private-beta dashboard renders'
 
 printf '\n%s\n' "$(jtt_summary_line)"

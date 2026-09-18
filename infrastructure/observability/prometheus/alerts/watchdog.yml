@@ -1,0 +1,31 @@
+# The dead man's switch.
+#
+# Every other alert here is sent by the thing it would report on: a host that
+# lost power, a Docker daemon that stopped, a Prometheus or Alertmanager that
+# died, a full disk that took them down — each of those sends nothing, and a
+# silent pipeline looks exactly like a healthy one. Watchdog fires always. It is
+# routed (alertmanager.yml) to its own receiver, `heartbeat`, whose destination
+# is an external check-in service that expects to hear from this host every few
+# minutes and tells a person when it stops. Which service is DECISION REQUIRED
+# (D6/D12); until `alertmanager/secrets/heartbeat-url` exists, nothing outside
+# the host notices this host going quiet.
+#
+# `severity: none`: it is never a page by itself, the dashboards' firing-alert
+# counts (warning, critical) leave it out, and the smoke reads it as proof that
+# rules are being evaluated rather than as an incident.
+
+groups:
+  - name: watchdog
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+          service: monitoring
+        annotations:
+          summary: 'the alerting pipeline is alive (always firing)'
+          description: >-
+            Always firing, on purpose. Its arrival every few minutes at the
+            external heartbeat service is the signal; its absence there means
+            this host, Docker, Prometheus or Alertmanager has stopped.
+          runbook_url: docs/runbooks/RB-20-watchdog.md
