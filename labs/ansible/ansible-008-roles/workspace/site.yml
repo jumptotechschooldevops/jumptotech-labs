@@ -2,7 +2,7 @@
 # The ledger service playbook — everything in one file.
 #
 # It works. It is also the fourth playbook this team has written that contains
-# these same four tasks, and when the log directory moved last month it had to
+# these same three tasks, and when the log directory moved last month it had to
 # be fixed in all four. That is the problem a role solves.
 - name: Configure the ledger service
   hosts: web

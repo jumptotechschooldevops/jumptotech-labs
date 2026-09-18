@@ -5,13 +5,15 @@
 # Deployment — the shape that looks fine in review and fails in production.
 # Three things are wrong and they fail in three different ways: Pod names are
 # random so no client can address a replica; both replicas share one
-# ReadWriteOnce claim so the second cannot attach it; and the Service has a
-# virtual IP so "give me replica 0" is unanswerable.
+# ReadWriteOnce claim, so two database processes write the same files; and the
+# Service has a virtual IP so "give me replica 0" is unanswerable.
 #
-# The fixture is left at 1/2 available on purpose. That is not a contrived
-# break — it is precisely what a shared RWO claim produces — and it is the
-# symptom that sends a student looking for a different controller rather than
-# for a typo.
+# ReadWriteOnce is a per-*node* restriction. The platform's cluster has one
+# node, so both replicas mount the claim and report Ready — which is also what
+# happens in production whenever the scheduler puts them on the same node. The
+# lab therefore does not promise a stuck replica: the evidence the student
+# finds is two healthy-looking Pods writing one volume, which is the more
+# dangerous failure because nothing reports it.
 #
 # ---------------------------------------------------------------------------
 # ONE COHERENT WORKLOAD, NOT SIX INDEPENDENT CHECKS
@@ -88,18 +90,21 @@ prerequisites:
   - K8S-018
 
 story: >
-  `ledger-db` has been stuck at one replica out of two for a week.
+  `ledger-db` reports two of two replicas Ready, and last night's consistency
+  check found the same ledger page written twice with different contents.
 
   It was written as a Deployment, because that is what everything else at the
-  bank is. Both replicas mount the same PersistentVolumeClaim, and the second
-  one has never started — the volume is already attached to the first, and a
-  ReadWriteOnce claim will not attach twice.
+  bank is. Both replicas mount the same PersistentVolumeClaim. It is
+  ReadWriteOnce, which sounds like "one writer" and means "one node": on a
+  single node both Pods mount it happily, and two database processes write the
+  same files. On a bigger cluster the second replica would instead sit
+  unscheduled on whichever node could not attach it.
 
   The team's proposed fix is to give the second replica its own claim by hand.
-  That would start the Pod, and it would still leave them unable to answer the
-  question the ledger client actually asks: "connect me to replica 0". A
-  Deployment's Pods are named at random and sit behind one virtual IP, so there
-  is no such thing as replica 0.
+  That would separate the files, and it would still leave them unable to
+  answer the question the ledger client actually asks: "connect me to replica
+  0". A Deployment's Pods are named at random and sit behind one virtual IP, so
+  there is no such thing as replica 0.
 
   This workload needs a controller that treats replicas as individuals.
 
@@ -112,9 +117,9 @@ objectives:
 task:
   summary: Replace the ledger-db Deployment with a StatefulSet that has stable identity, its own governing Service, and per-replica storage.
   description: >
-    Start by confirming the diagnosis rather than trusting it. Look at how many
-    replicas are available and why the missing one is not starting, at what the
-    running Pods are called, and at what the current Service resolves to.
+    Start by confirming the diagnosis rather than trusting it. Look at which
+    claim each running Pod mounts, at what the Pods are called, and at what the
+    current Service resolves to.
 
     Then rebuild `ledger-db` as the controller meant for workloads whose
     replicas are not interchangeable. It must:

@@ -54,8 +54,9 @@ story: >
   interrupt it.
 
   Last night an engineer tried to deploy the statements front end onto the same
-  host. It never came up. They left the container behind, went home, and the
-  deployment ticket says only "port issue?".
+  host. It is not running, and starting it again fails. They left the
+  container behind, went home, and the deployment ticket says only "port
+  issue?".
 
   Both applications are ordinary web servers. Both listen on port 80 inside
   their own container. Only one of them is currently reachable from outside.
@@ -82,8 +83,8 @@ task:
     When you need more detail than the PORTS column gives you, `docker port
     <name>` prints a container's published mappings, and `docker inspect
     <name>` shows the full configuration — including the port bindings a
-    container was *created* with, which is worth knowing for one that has never
-    successfully run.
+    container was *created* with, which is worth knowing for one that is not
+    running.
 
     Two ideas are worth being clear about before you change anything. A
     container port and a host port are different numbers on different network
@@ -210,9 +211,10 @@ hints:
       already using it.
   - level: 2
     text: >
-      A container that has never run successfully still remembers the
-      configuration it was created with. `docker inspect` will show you the
-      port bindings the engineer asked for, even though nothing was ever bound.
+      A stopped container still remembers the configuration it was created
+      with. `docker inspect` will show you the port bindings the engineer asked
+      for, even though nothing holds them now. `docker start` on it will tell
+      you, in its own words, why it cannot hold them.
       Compare those against what the running container currently holds.
 
       Two containers can both listen on port 80 inside themselves without any
@@ -223,7 +225,7 @@ hints:
       `docker port <name>` prints the published mappings of a container, and
       `docker inspect <name> --format '{{json .HostConfig.PortBindings}}'`
       shows what it was created with — which is the one that still works for a
-      container that never started.
+      container that is not running.
 
       Port bindings are fixed at creation, so the failed container cannot be
       repaired by starting it differently: remove it and create it again with
