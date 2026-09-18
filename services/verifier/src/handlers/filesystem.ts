@@ -185,6 +185,66 @@ export const fileContent: SandboxVerifierHandler<'file_content'> = {
   },
 };
 
+/**
+ * One `KEY = value` answer, given once, with exactly the expected value.
+ *
+ * See `file_key_value` in requirements.ts for the grading rules. Linear in the
+ * file's size: one split, and a scan of each line for its first separator.
+ */
+export const fileKeyValue: SandboxVerifierHandler<'file_key_value'> = {
+  type: 'file_key_value',
+  label: (r) => `${r.path} answers ${r.key}`,
+  async run(requirement, reader) {
+    const read = await reader.path(requirement.path);
+    if (!read) return missingPath('file', requirement.path);
+    if (read.type !== 'file') {
+      return fail(`'${requirement.path}' is ${describeType(read)}, not a regular file`);
+    }
+    if (read.content === undefined) return fail(`'${requirement.path}' could not be read`);
+    // A truncated read cannot prove the key is answered only once.
+    if (read.truncated) return fail(`'${requirement.path}' is larger than this check can read`);
+
+    const answers = keyValues(read.content, requirement.key, requirement.separator);
+    if (answers.length === 0) {
+      return fail(`'${requirement.path}' has no answer for ${requirement.key}`);
+    }
+    if (answers.length > 1) {
+      return fail(
+        `'${requirement.path}' answers ${requirement.key} ${answers.length} times — give one answer`,
+      );
+    }
+    const fold = (text: string) => (requirement.ignore_case ? text.toLowerCase() : text);
+    return fold(answers[0]!) === fold(requirement.equals.trim())
+      ? pass()
+      : fail(`'${requirement.path}' has the wrong value for ${requirement.key}`);
+  },
+};
+
+/**
+ * Every non-empty value given to `key` in a `KEY<sep>value` text.
+ *
+ * Comment lines (`#`) are skipped, a leading `export ` on the key is dropped
+ * (an env file may use it), and a value wrapped in one pair of matching quotes
+ * is unwrapped. An empty value is a placeholder, not an answer.
+ */
+export function keyValues(text: string, key: string, separator: '=' | ':'): string[] {
+  const values: string[] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    const at = line.indexOf(separator);
+    if (at <= 0) continue;
+    const name = line.slice(0, at).trim().replace(/^export\s+/, '');
+    if (name !== key) continue;
+    let value = line.slice(at + 1).trim();
+    if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.endsWith(value[0]!)) {
+      value = value.slice(1, -1).trim();
+    }
+    if (value !== '') values.push(value);
+  }
+  return values;
+}
+
 export const fileMode: SandboxVerifierHandler<'file_mode'> = {
   type: 'file_mode',
   label: (r) => `${r.path} has permissions ${normalizeMode(r.mode)}`,

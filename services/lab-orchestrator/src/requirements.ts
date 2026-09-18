@@ -1552,6 +1552,46 @@ const sandboxRequirementSchemas = {
       message: 'must specify equals, contains, or both',
     }),
 
+  /**
+   * One answer on a worksheet: the line `KEY = value` holds exactly this value.
+   *
+   * The form a findings or triage file is written in (`VERDICT=exceeds`,
+   * `refused_layer = L4`), graded the way a person marking it would:
+   *
+   *   · the key must be answered **once** — a second line for the same key is
+   *     a hedge, not an answer, and fails even if one of them is right;
+   *   · the value is compared **whole** (surrounding whitespace and one pair
+   *     of matching quotes removed), so `L4 L3` is not `L4`;
+   *   · other lines are ignored, as are `#` comment lines and a seeded
+   *     placeholder the student left blank (`KEY =`).
+   *
+   * `file_content contains` cannot say any of that: every value listed on its
+   * own line satisfied it. The expected value is never echoed; a failure says
+   * whether the key is unanswered, answered more than once, or wrong.
+   *
+   * Parsing is plain string splitting — no pattern from lab.yaml reaches a
+   * regular-expression engine.
+   */
+  file_key_value: z
+    .object({
+      type: z.literal('file_key_value'),
+      path: sandboxPath,
+      key: z
+        .string()
+        .min(1)
+        .max(128)
+        .refine((v) => v.trim() === v && !/[=:\n\r#]/.test(v), {
+          message: 'must be a bare key: no separators, comment marks, newlines or surrounding spaces',
+        }),
+      equals: literalText,
+      /** What separates key from value. */
+      separator: z.enum(['=', ':']).default('='),
+      /** Compare the value case-insensitively (the key is always exact). */
+      ignore_case: z.boolean().default(false),
+      ...common,
+    })
+    .strict(),
+
   file_mode: z
     .object({ type: z.literal('file_mode'), path: sandboxPath, mode: fileMode, ...common })
     .strict(),
@@ -3823,6 +3863,7 @@ export const REQUIREMENT_FAMILIES = {
   file_exists: 'filesystem',
   directory_exists: 'filesystem',
   file_content: 'filesystem',
+  file_key_value: 'filesystem',
   file_mode: 'filesystem',
   file_owner: 'filesystem',
   file_group: 'filesystem',
