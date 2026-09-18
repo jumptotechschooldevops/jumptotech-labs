@@ -400,6 +400,30 @@ tests:
               description: 'MAX_ACTIVE_SESSIONS has been reached and Start Lab is returning LAB_CAPACITY_REACHED. There is no queue past the cap.'
               runbook_url: docs/runbooks/RB-04-capacity.md
 
+  # --------------------------------------- 7b. a pause nobody lifted
+  # A deliberate pause is quiet for half an hour; a forgotten one is not.
+  - interval: 1m
+    name: a pause left on for 30 minutes warns; a short one never does
+    input_series:
+      - series: 'jtt_lab_launches_paused{instance="api:9400"}'
+        values: '0x5 1x20 0x5 1x45'    # paused 6–26m (20 min), then again from 33m
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LabLaunchesPaused
+        exp_alerts: []
+      - eval_time: 62m
+        alertname: LabLaunchesPaused
+        exp_alerts: []
+      - eval_time: 64m
+        alertname: LabLaunchesPaused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'new lab launches have been paused for at least 30 minutes'
+              description: 'LAB_LAUNCHES_PAUSED=true on the running api, so every Start Lab is refused. Running labs are unaffected. Lift it when the maintenance is over, or say in the incident channel why it stays.'
+              runbook_url: docs/runbooks/RB-20-launches-paused.md
+
   # ------------------------------------------ 8. lab starts at beta volume
   - interval: 15s
     name: three failed starts out of five pages; two out of five only warns

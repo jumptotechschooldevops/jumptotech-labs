@@ -219,6 +219,10 @@ export function createApp(deps: CreateAppDeps): Express {
 
   app.use(express.json({ limit: '16kb' }));
 
+  // The stop-launches switch as this process runs it, for `LabLaunchesPaused`:
+  // a pause nobody lifts must not become an outage nobody can explain.
+  observability.metrics.sessions.launchesPaused.set(deps.config.launchesPaused === true ? 1 : 0);
+
   // CORS covers the browser-facing surface only. `/internal` is deliberately
   // registered outside it: no browser should be able to reach that router at
   // all, and it additionally requires the shared service secret.

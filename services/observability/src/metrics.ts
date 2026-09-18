@@ -219,6 +219,7 @@ export interface SessionMetrics {
   oldestInStatus: Gauge;
   capacityLimit: Gauge;
   perStudentLimit: Gauge;
+  launchesPaused: Gauge;
   capacityRejections: Counter;
   studentLimitRejections: Counter;
   sessionLifetime: Histogram;
@@ -382,6 +383,18 @@ export function createSessionMetrics(registry: Registry): SessionMetrics {
     perStudentLimit: new client.Gauge({
       name: 'jtt_sessions_per_student_limit',
       help: 'MAX_ACTIVE_SESSIONS_PER_STUDENT, the configured per-student ceiling.',
+      ...common,
+    }),
+
+    /*
+     * The stop-launches switch, as deployed. A pause is an operator decision
+     * that refuses every Start Lab; read back from the running api, it cannot
+     * outlive the maintenance it was set for without an alert saying so
+     * (`LabLaunchesPaused`).
+     */
+    launchesPaused: new client.Gauge({
+      name: 'jtt_lab_launches_paused',
+      help: 'LAB_LAUNCHES_PAUSED as deployed: 1 while every Start Lab is refused for maintenance.',
       ...common,
     }),
 

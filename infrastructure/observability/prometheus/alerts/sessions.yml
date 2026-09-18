@@ -95,6 +95,27 @@ groups:
           summary: 'sandbox capacity is above 85% ({{ $value | humanizePercentage }})'
           runbook_url: docs/runbooks/RB-04-capacity.md
 
+      # --- the stop-launches switch ----------------------------------------
+      #
+      # LAB_LAUNCHES_PAUSED refuses every Start Lab, on purpose, and only a
+      # person lifts it. A refused start is deliberately not a failed start, so
+      # nothing else ever fires on a pause: left on after the maintenance it
+      # was set for, it is an outage with no alert and no explanation. Thirty
+      # minutes is longer than a planned restart and short enough that a
+      # forgotten pause is found the same class period.
+      - alert: LabLaunchesPaused
+        expr: max(jtt_lab_launches_paused) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'new lab launches have been paused for at least 30 minutes'
+          description: >-
+            LAB_LAUNCHES_PAUSED=true on the running api, so every Start Lab is
+            refused. Running labs are unaffected. Lift it when the maintenance
+            is over, or say in the incident channel why it stays.
+          runbook_url: docs/runbooks/RB-20-launches-paused.md
+
       # --- lifecycle (BETA-P0-018) ------------------------------------------
       #
       # A reset that runs and does not finish leaves the session DEGRADED. One
