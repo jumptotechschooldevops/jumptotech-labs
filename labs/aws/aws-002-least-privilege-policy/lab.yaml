@@ -116,7 +116,19 @@ requirements:
     path: /home/student/aws-iam/policy.json
     action: s3:PutObject
     resource: arn:aws:s3:::jumptotech-ledger-exports/*
-    label: The job may upload objects to the bucket
+    context:
+      s3:x-amz-server-side-encryption: aws:kms
+    label: The job may upload objects to the bucket when they are KMS-encrypted
+
+  # The same upload with no encryption header. Having *a* conditional
+  # statement is not enough: an unconditional Allow beside it still lets
+  # unencrypted uploads through.
+  - type: iam_policy_not_allows
+    path: /home/student/aws-iam/policy.json
+    action: s3:PutObject
+    resource: arn:aws:s3:::jumptotech-ledger-exports/*
+    context: {}
+    label: The job may not upload objects without KMS encryption
 
   - type: iam_policy_statement
     path: /home/student/aws-iam/policy.json

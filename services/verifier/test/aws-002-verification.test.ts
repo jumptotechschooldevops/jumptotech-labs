@@ -73,6 +73,7 @@ describe('AWS-002 — the seeded policy does not pass', () => {
         'No Allow statement uses "*" as its Resource',
         'The job cannot reach the payroll bucket',
         'The job may not delete objects',
+        'The job may not upload objects without KMS encryption',
         'The upload permission is conditional on KMS server-side encryption',
       ].sort(),
     );
@@ -325,7 +326,30 @@ describe('AWS-002 — adversarial attempts', () => {
     const result = await run(inverted);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toContain('The job may upload objects to the bucket');
+    expect(failed(result.checks)).toContain('The job may upload objects to the bucket when they are KMS-encrypted');
+  });
+
+  it('fails an unconditional upload grant kept beside the conditional one', async () => {
+    // The audit's shortcut: the KMS-conditioned statement exists, so the
+    // statement check is satisfied, while an unconditional Allow for Get and
+    // Put still lets unencrypted uploads through.
+    const both = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        { Effect: 'Allow', Action: 's3:ListBucket', Resource: BUCKET },
+        { Effect: 'Allow', Action: ['s3:GetObject', 's3:PutObject'], Resource: OBJECTS },
+        {
+          Effect: 'Allow',
+          Action: 's3:PutObject',
+          Resource: OBJECTS,
+          Condition: { StringEquals: { 's3:x-amz-server-side-encryption': 'aws:kms' } },
+        },
+      ],
+    });
+    const result = await run(both);
+
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual(['The job may not upload objects without KMS encryption']);
   });
 
   it('fails when the right policy is written to the wrong file', async () => {
@@ -337,7 +361,7 @@ describe('AWS-002 — adversarial attempts', () => {
     const result = await verifyLab({ lab, sandbox, namespace: 'jtt-lab-000000000002' });
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toHaveLength(9);
+    expect(failed(result.checks)).toHaveLength(10);
   });
 
   it('refuses a symlink standing in for the policy file', async () => {

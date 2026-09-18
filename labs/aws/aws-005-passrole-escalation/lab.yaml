@@ -119,12 +119,16 @@ requirements:
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:PassRole
     resource: arn:aws:iam::123456789012:role/AppServerRole
+    context:
+      iam:PassedToService: ec2.amazonaws.com
     label: The pipeline can still attach the application server role
 
   - type: iam_policy_allows
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:PassRole
     resource: arn:aws:iam::123456789012:role/AppWorkerRole
+    context:
+      iam:PassedToService: ec2.amazonaws.com
     label: The pipeline can still attach the worker role
 
   # --- the escalation, closed ----------------------------------------------
@@ -132,12 +136,16 @@ requirements:
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:PassRole
     resource: arn:aws:iam::123456789012:role/PlatformAdminRole
+    context:
+      iam:PassedToService: ec2.amazonaws.com
     label: The pipeline can no longer attach the administrator role
 
   - type: iam_policy_not_allows
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:PassRole
     resource: arn:aws:iam::123456789012:role/ReconciliationBatchRole
+    context:
+      iam:PassedToService: ec2.amazonaws.com
     label: The pipeline can no longer attach the finance batch role
 
   # --- and it may only hand roles to one service ---------------------------
@@ -151,6 +159,25 @@ requirements:
       key: iam:PassedToService
       value: ec2.amazonaws.com
     label: Handing a role over is restricted to the EC2 service
+
+  # The restriction has to cover the roles the pipeline actually hands over,
+  # however the statements are split: asked as "could this role go to a
+  # different service?". A condition parked on some other statement, beside an
+  # unconditional grant for the app roles, fails here.
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:PassRole
+    resource: arn:aws:iam::123456789012:role/AppServerRole
+    context:
+      iam:PassedToService: lambda.amazonaws.com
+    label: The application server role can only be handed to EC2
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:PassRole
+    resource: arn:aws:iam::123456789012:role/AppWorkerRole
+    context:
+      iam:PassedToService: lambda.amazonaws.com
+    label: The worker role can only be handed to EC2
 
   # --- and the fix must not be "grant more IAM" -----------------------------
   - type: iam_policy_not_allows

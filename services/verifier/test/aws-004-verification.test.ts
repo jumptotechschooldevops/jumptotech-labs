@@ -65,7 +65,7 @@ describe('AWS-004 — the seeded trust policy is the finding', () => {
     expect(result.passed).toBe(false);
     expect(failed(result.checks).sort()).toEqual([
       'No statement trusts every principal',
-      'The EC2 service is allowed to assume the role',
+      'The EC2 service, and nothing else, is allowed to assume the role',
       'The trust policy is a valid document with exactly one statement',
     ]);
   });
@@ -118,6 +118,27 @@ describe('AWS-004 — a correct trust policy passes however it is written', () =
 });
 
 describe('AWS-004 — trust policies that look right but are not', () => {
+  it('fails one statement that trusts EC2 and keeps the contractor beside it', async () => {
+    // Passed before: the statement check only required EC2 to be *among* the
+    // principals, and statement_count: 1 was satisfied by merging the two.
+    const merged = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Principal: { Service: 'ec2.amazonaws.com', AWS: 'arn:aws:iam::210987654321:role/contractor-build' },
+          Action: 'sts:AssumeRole',
+        },
+      ],
+    });
+    const result = await run(merged);
+
+    expect(result.passed).toBe(false);
+    const failures = result.checks.filter((c) => c.status !== 'pass');
+    expect(failures.map((c) => c.label)).toEqual(['The EC2 service, and nothing else, is allowed to assume the role']);
+    expect(failures[0]?.detail).toContain('also names a principal that should not be trusted');
+  });
+
   it('fails when the wildcard principal is kept alongside a correct statement', async () => {
     const both = JSON.stringify({
       Version: '2012-10-17',
@@ -158,7 +179,7 @@ describe('AWS-004 — trust policies that look right but are not', () => {
       });
       const result = await run(policy);
       expect(result.passed, JSON.stringify(wrong)).toBe(false);
-      expect(failed(result.checks)).toContain('The EC2 service is allowed to assume the role');
+      expect(failed(result.checks)).toContain('The EC2 service, and nothing else, is allowed to assume the role');
     }
   });
 
