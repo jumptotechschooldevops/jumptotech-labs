@@ -135,6 +135,7 @@ D2, not a default.
 | Checkout directory `0750`, owned by the operator | keeps other local accounts away from those files; containers are unaffected |
 | `BACKUP_DIR` on a different disk from Docker's data | [postgres-backup-restore.md §5.5](../runbooks/postgres-backup-restore.md) |
 | Pre-pull `docker:27-dind` | the first Docker-track start otherwise depends on Docker Hub |
+| Daemon log rotation: `"log-opts": {"max-size": "20m", "max-file": "5"}` in `/etc/docker/daemon.json` (then restart Docker, before the stack exists) | the eight compose services rotate their own logs (`durability.log-rotation`), but the kind node — which runs for the whole beta — and every sandbox are created outside compose and get the daemon's default, which for `json-file` never rotates. Preflight `docker.log-rotation` WARNs until it is set |
 
 ### 5.3 UNKNOWN — MEASURE ON HOST
 
@@ -149,6 +150,13 @@ D2, not a default.
 The preflight judges memory and disk **only** against the repository's alert
 thresholds (memory < 10 % / 5 % available, disk < 15 % / 8 % free). Those are
 pressure alarms, not sizing: a host that passes them may still be too small.
+
+One more line is arithmetic on the `.env`, not sizing: `host.capacity-memory`
+WARNs when total memory is below `MAX_ACTIVE_SESSIONS` × the largest sandbox
+memory cap (`DOCKER_SANDBOX_MEMORY`, default 2 GiB) + 2 GiB for the platform and
+kind node (the laptop's measured ~0.7 GiB each, rounded up) — 12 GiB at the
+defaults. Below it, five Docker-track students at once could push the host into
+swap or the OOM killer. Above it proves nothing; §13 does.
 
 ### 5.4 Filesystem layout
 
@@ -183,6 +191,7 @@ pressure alarms, not sizing: a host that passes them may still be too small.
 | `durability.volumes` | named volumes for postgres, prometheus, alertmanager, grafana |
 | `durability.healthchecks` | postgres, api, terminal, web |
 | `durability.restart-policy` | every service exactly `restart: unless-stopped` (PR #34); `always` is a FAIL because it would undo `prod stop web` |
+| `durability.log-rotation` | every service logs through `json-file` with a `max-size` (or `local`): at most five 20 MB files each. Docker's default keeps a container's output forever |
 | `backup.status-dir` | absolute host directory, read-only in the api; WARN on the in-checkout default |
 | `loader.api/terminal/sandboxd` | the real loaders accept the resolved environment (secrets present, strong, distinct; https OIDC; Secure cookie; https CORS including the origin; broker/database transport; runtime owner) |
 | `attestation.expected-digest` | INFO: the NetworkPolicy contract digest the api will demand |
@@ -411,6 +420,8 @@ make production-preflight ARGS="--backup-dir /srv/jumptotech/backups/postgres --
   `NAME: present`/`MISSING`; the scrape token is compared by hash; the config check
   redacts loader and compose messages.
 - Checks: OS/arch; memory and disk against alert thresholds (sizes INFO only);
+  swap (INFO); total memory against five seats of the largest sandbox cap (WARN);
+  the Docker daemon's default log rotation (WARN);
   clock; tool versions against CI pins; Docker daemon, rootful, Compose, socket,
   group; git commit; checkout and bind-mount readability; `.env` mode, required
   names, shell overrides; TLS files, key mode, `tls:check --offline`; scrape token
@@ -430,6 +441,7 @@ must PASS, and no student is invited while it stands. Placeholders: `<host>`,
 `<commit>`, `<public-ip>`.
 
 1. **Host prerequisites** (§5.1). `sudo useradd -m jtt-ops && sudo usermod -aG docker jtt-ops`; log in as `jtt-ops`.
+   Set the daemon's log rotation (§5.2) and restart Docker now, while nothing runs on it.
 2. **Firewall** (§7.1), in the provider firewall or `DOCKER-USER`.
 3. **Clone the release.**
    ```bash

@@ -69,17 +69,35 @@
 # (`make secrets-check`, CI `gates`) and from the text of this file by
 # services/observability/test/compose-secret-distribution.test.ts and
 # tls-edge-contract.test.ts. See docs/runtime-architecture.md §11 and §12.
+#
+# ## Log rotation
+#
+# Docker's default json-file driver keeps a container's output forever, in one
+# file per container under the data root. On a host that runs for a whole beta,
+# the api's request log, nginx's access log and every restart's output would
+# grow until the disk alarm fired, and past it. Each production service keeps at
+# most five 20 MB files (100 MB). `docker compose logs` and `docker logs` read
+# them as before. Sandboxes are not compose services: they get the daemon's
+# default, which the preflight reports (docs/development/production-host-readiness.md §5).
 # ---------------------------------------------------------------------------
+
+x-rotated-logs: &rotated-logs
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "5"
 
 services:
   postgres:
     restart: unless-stopped
+    logging: *rotated-logs
     # The development loopback port goes. The api reaches `postgres:5432` on
     # the internal `database` network; nothing on the host needs to.
     ports: !reset []
 
   api:
     restart: unless-stopped
+    logging: *rotated-logs
     environment:
       # Pinned, so every production gate — owner, secrets, broker transport and
       # database transport — runs. `.env` cannot turn them back off.
@@ -94,10 +112,12 @@ services:
 
   terminal:
     restart: unless-stopped
+    logging: *rotated-logs
     ports: !reset []
 
   web:
     restart: unless-stopped
+    logging: *rotated-logs
     environment:
       # Pinned: the certificate gate runs, and a failure stops the container.
       WEB_TLS: required
@@ -139,6 +159,7 @@ services:
   # published them.
   sandboxd:
     restart: unless-stopped
+    logging: *rotated-logs
 
 networks:
   # No route off the host for PostgreSQL, and no published port can reach it.

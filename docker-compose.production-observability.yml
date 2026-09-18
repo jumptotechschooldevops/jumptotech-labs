@@ -63,6 +63,13 @@
 # *restart*. Re-creating Prometheus (`up -d --build`) still means restarting all
 # three together, which is what runbook §6 says.
 
+# The same rotation the platform services get in docker-compose.production.yml.
+x-rotated-logs: &rotated-logs
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "5"
+
 services:
   # The observability overlay published sandboxd's metrics listener on loopback
   # for development. Prometheus reaches it by service name; the host does not.
@@ -90,6 +97,7 @@ services:
 
   prometheus:
     restart: unless-stopped
+    logging: *rotated-logs
     # The whole command, replaced: loopback inside the namespace, and no
     # --web.enable-lifecycle. Reload rules with `kill -s HUP` (runbook §6).
     command:
@@ -103,6 +111,7 @@ services:
 
   alertmanager:
     restart: unless-stopped
+    logging: *rotated-logs
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
@@ -111,6 +120,7 @@ services:
 
   grafana:
     restart: unless-stopped
+    logging: *rotated-logs
     environment:
       # The HTTP API with a password is not needed by an operator using the UI,
       # and is the easier surface to guess against.

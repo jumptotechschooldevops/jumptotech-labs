@@ -101,6 +101,7 @@ export interface ResolvedService {
   healthcheck?: { test?: string[] | string; disable?: boolean };
   command?: string[] | string;
   group_add?: Array<string | number>;
+  logging?: { driver?: string; options?: Record<string, string | number | null> };
 }
 
 export interface ResolvedCompose {
@@ -363,6 +364,26 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
           ]
         : [],
       `every service is restart: ${PRODUCTION_RESTART_POLICY}`,
+    ),
+  );
+
+  // Docker's default json-file driver never rotates: a service's output would
+  // grow for the life of the host (docker-compose.production.yml, "Log rotation").
+  const unrotated = Object.entries(services)
+    .filter(([, service]) => {
+      const driver = service.logging?.driver;
+      if (driver === 'local') return false;
+      return driver !== 'json-file' || !service.logging?.options?.['max-size'];
+    })
+    .map(([name, service]) => `${name} (${service.logging?.driver ?? 'daemon default'})`)
+    .sort();
+  results.push(
+    one(
+      'durability.log-rotation',
+      unrotated.length
+        ? [`${unrotated.join(', ')}: no bounded log rotation — the service's output would grow until the disk fills`]
+        : [],
+      'every service rotates its logs (json-file with max-size, or local)',
     ),
   );
 

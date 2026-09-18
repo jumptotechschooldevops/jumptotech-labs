@@ -50,6 +50,7 @@ skip_config_check=0
 proc_root=${JTT_PROC_ROOT:-/proc}
 docker_socket=${JTT_DOCKER_SOCKET:-/var/run/docker.sock}
 cron_file=${JTT_BACKUP_CRON_FILE:-/etc/cron.d/jumptotech-db}
+daemon_json=${JTT_DOCKER_DAEMON_JSON:-/etc/docker/daemon.json}
 
 usage() {
   sed -n '3,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -137,6 +138,22 @@ if [ -r "$proc_root/meminfo" ]; then
 else
   fail host.memory-available "$proc_root/meminfo is not readable"
 fi
+swap_total=$(awk '/^SwapTotal:/ {print $2}' "$proc_root/meminfo" 2>/dev/null || true)
+if [ -n "$swap_total" ]; then info host.swap "$((swap_total / 1024)) MiB (recorded; no value is proven)"; fi
+
+# A docker memory size (512m, 2g, 1024k, bytes) in MiB; empty when unparseable.
+to_mib() {
+  local value
+  value=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+  value=${value%b}
+  case $value in
+    *[!0-9kmg]* | '') return 0 ;;
+    *g) printf '%s' "$((${value%g} * 1024))" ;;
+    *m) printf '%s' "${value%m}" ;;
+    *k) printf '%s' "$((${value%k} / 1024))" ;;
+    *) printf '%s' "$((value / 1048576))" ;;
+  esac
+}
 for knob in max_user_watches max_user_instances; do
   if [ -r "$proc_root/sys/fs/inotify/$knob" ]; then
     info "host.inotify-$knob" "$(cat "$proc_root/sys/fs/inotify/$knob") (kind runs a whole node on this kernel; no value is proven — see readiness doc §5)"
@@ -255,6 +272,52 @@ disk_check() { # id path what
 }
 if [ $docker_ok -eq 1 ]; then
   disk_check disk.docker-root "$docker_root" "Docker data root"
+fi
+
+# Compose services rotate their own logs (docker-compose.production.yml). The
+# kind node and every sandbox are created outside compose and get the daemon's
+# default, which for json-file is to keep everything.
+if [ $docker_ok -eq 1 ]; then
+  log_driver=$(docker info -f '{{.LoggingDriver}}' 2>/dev/null || echo unknown)
+  case $log_driver in
+    local | journald)
+      pass docker.log-rotation "daemon default log driver $log_driver rotates (the kind node and sandboxes use it)"
+      ;;
+    json-file)
+      if [ -r "$daemon_json" ] && jtt_contains "$(cat "$daemon_json")" '"max-size"'; then
+        pass docker.log-rotation "daemon default json-file with max-size in $daemon_json (the kind node and sandboxes use it)"
+      else
+        warn docker.log-rotation "the daemon's default json-file driver has no max-size in $daemon_json: the kind node, which runs for the whole beta, and every sandbox keep unbounded logs. Set \"log-opts\": {\"max-size\": \"20m\", \"max-file\": \"5\"} there and restart Docker in a maintenance window (readiness doc §5.2)"
+      fi
+      ;;
+    *) warn docker.log-rotation "daemon default log driver is $log_driver: confirm the kind node's and sandboxes' logs are bounded" ;;
+  esac
+fi
+
+# Not sizing — no host size is proven (readiness doc §13) — but arithmetic on
+# this .env: what the sandbox memory caps add up to with every seat taken by
+# the largest sandbox, plus the laptop's measured platform and kind-node idle
+# (about 0.7 GiB each, release gate §8), rounded up to 2 GiB. A host below it
+# is short before anything else runs; a host above it is not thereby proven.
+seats=$(env_value MAX_ACTIVE_SESSIONS 2>/dev/null || true)
+docker_cap=$(to_mib "$(env_or DOCKER_SANDBOX_MEMORY 2g)")
+linux_cap=$(to_mib "$(env_or SANDBOX_MEMORY 512m)")
+if [[ ${seats:-} =~ ^[0-9]+$ ]] && [ -n "$docker_cap" ] && [ -n "$linux_cap" ] && [ -n "${mem_total:-}" ]; then
+  largest=$docker_cap
+  [ "$linux_cap" -gt "$largest" ] && largest=$linux_cap
+  demand=$((seats * largest + 2048))
+  have_mib=$((mem_total / 1024))
+  if [ "$have_mib" -lt "$demand" ]; then
+    warn host.capacity-memory "$have_mib MiB total, below $demand MiB: $seats seats at the largest sandbox cap ($largest MiB, DOCKER_SANDBOX_MEMORY) plus about 2 GiB for the platform and kind node. Five Docker-track students at once could push the host into swap or the OOM killer"
+  else
+    pass host.capacity-memory "$have_mib MiB total covers $seats seats at the largest sandbox cap ($largest MiB) plus about 2 GiB of platform — arithmetic only; the five-student measurement (§13) is what proves a size"
+  fi
+  if have nproc; then
+    cpu_caps=$(env_or DOCKER_SANDBOX_CPUS 2)
+    info host.capacity-cpu "$(nproc) CPUs; the Docker-track sandbox CPU cap is $cpu_caps each, $seats seats. CPU is shared, not reserved: judge it from the five-student measurement"
+  fi
+else
+  info host.capacity-memory 'not computed: MAX_ACTIVE_SESSIONS, the sandbox memory caps or MemTotal could not be read'
 fi
 
 section 'checkout'

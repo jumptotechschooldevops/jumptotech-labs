@@ -101,7 +101,10 @@ function shipped(): ResolvedCompose {
       volumes: [{ type: 'volume', source: 'grafana-data', target: '/var/lib/grafana' }],
     },
   };
-  for (const service of Object.values(services)) service.restart = 'unless-stopped';
+  for (const service of Object.values(services)) {
+    service.restart = 'unless-stopped';
+    service.logging = { driver: 'json-file', options: { 'max-size': '20m', 'max-file': '5' } };
+  }
   return { services, networks: { database: { internal: true }, default: {}, kind: { external: true }, sandboxes: {} } };
 }
 
@@ -160,6 +163,8 @@ describe('each unsafe variation is a FAIL', () => {
     ['a service with no restart policy', 'durability.restart-policy', (c) => delete c.services!.sandboxd!.restart],
     ['restart: always, which undoes prod stop web', 'durability.restart-policy', (c) => (c.services!.web!.restart = 'always')],
     ['restart: on-failure', 'durability.restart-policy', (c) => (c.services!.grafana!.restart = 'on-failure')],
+    ['a service on the daemon default log driver, which never rotates', 'durability.log-rotation', (c) => delete c.services!.api!.logging],
+    ['json-file with no size bound', 'durability.log-rotation', (c) => (c.services!.web!.logging = { driver: 'json-file', options: { 'max-file': '5' } })],
     ['no backup status mount', 'backup.status-dir', (c) => (c.services!.api!.volumes = c.services!.api!.volumes!.filter((v) => !v.target.includes('backup')))],
     ['a writable backup status mount', 'backup.status-dir', (c) => (c.services!.api!.volumes![1]!.read_only = false)],
   ];
@@ -268,6 +273,19 @@ describe('the contract restates declarations it does not own', () => {
     for (const file of ['docker-compose.production.yml', 'docker-compose.production-observability.yml']) {
       expect(read(file)).toContain(`restart: ${PRODUCTION_RESTART_POLICY}`);
     }
+  });
+
+  it('bounds every production service log in the overlays that start it', () => {
+    for (const file of ['docker-compose.production.yml', 'docker-compose.production-observability.yml']) {
+      const text = read(file);
+      expect(text).toMatch(/x-rotated-logs: &rotated-logs\n  driver: json-file\n  options:\n    max-size: 20m\n    max-file: "5"/);
+      const restarts = text.match(/^    restart: unless-stopped$/gm) ?? [];
+      const rotated = text.match(/^    logging: \*rotated-logs$/gm) ?? [];
+      expect(rotated.length, file).toBe(restarts.length);
+    }
+    const rotatedLocally = evaluateProductionComposition(shipped(), { repoRoot: '/repo' }).find((r) => r.id === 'durability.log-rotation');
+    expect(rotatedLocally?.status).toBe('PASS');
+    expect(statusOf(mutate((c) => (c.services!.grafana!.logging = { driver: 'local' })), 'durability.log-rotation')).toBe('PASS');
   });
 
   it('holds the beta capacity contract the five-student gate proved', async () => {

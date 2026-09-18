@@ -240,6 +240,7 @@ case ${1:-} in
       *SecurityOptions*) echo '["name=apparmor","name=seccomp,profile=builtin"]' ;;
       *DockerRootDir*) echo "$FAKE_DOCKER_ROOT" ;;
       *NCPU*) echo 8 ;;
+      *LoggingDriver*) echo "${FAKE_LOG_DRIVER:-json-file}" ;;
     esac
     ;;
   version) echo 28.4.0 ;;
@@ -357,6 +358,7 @@ fixture() {
     printf 'clusters: []\n' >"$root/repo/infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml"
     printf 'MemTotal: 16000000 kB\nMemAvailable: 12000000 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' >"$root/proc/meminfo"
     printf '0.50 0.40 0.30 1/200 999\n' >"$root/proc/loadavg"
+    printf '{"log-driver": "json-file", "log-opts": {"max-size": "20m", "max-file": "5"}}\n' >"$root/daemon.json"
     {
       echo '17 3 * * * jtt-ops BACKUP_COPY_HOOK=/usr/local/sbin/copy scripts/db-backup.sh'
       echo '17 5 * * 0 jtt-ops scripts/db-restore.sh --verify-only /srv/backups/newest.dump'
@@ -418,7 +420,7 @@ run() { # script case-root args...
   set +e
   out=$(env -i PATH="$fakebin:/usr/bin:/bin" HOME="$root" TMPDIR="$work" REAL_NODE="$real_node" \
     FAKE_LOG="$root/log" FAKE_DOCKER_ROOT="$root/docker-root" JTT_PROC_ROOT="$root/proc" \
-    JTT_DOCKER_SOCKET="$root/docker.sock" JTT_BACKUP_CRON_FILE="$root/cron" \
+    JTT_DOCKER_SOCKET="$root/docker.sock" JTT_BACKUP_CRON_FILE="$root/cron" JTT_DOCKER_DAEMON_JSON="$root/daemon.json" \
     JTT_COMMAND_TIMEOUT="${JTT_COMMAND_TIMEOUT_FOR_TEST:-60}" \
     ${fakes[@]+"${fakes[@]}"} \
     bash "$root/repo/scripts/$script" "$@" 2>&1)
@@ -499,6 +501,33 @@ check 'off-host backup is a manual check' has_line '^MANUAL CHECK REQUIRED +back
 check 'the attestation digest is compared' has_line '^PASS +k8s\.attestation-digest '
 check 'the configuration check receives the socket group' grep -q 'production-config-check.ts --env-file .* --docker-socket-gid ' "$root/log"
 check 'the report is written' grep -q '^RESULT: PASS' "$root/preflight.txt"
+check 'the daemon default rotates logs' has_line '^PASS +docker\.log-rotation '
+check 'memory covers five seats at the largest sandbox cap' has_line '^PASS +host\.capacity-memory +15625 MiB total covers 5 seats at the largest sandbox cap \(2048 MiB\)'
+check 'swap is recorded' has_line '^INFO +host\.swap +0 MiB'
+common_properties
+
+scenario 'preflight: unbounded daemon logs are a WARN, not a pass and not a FAIL'
+root=$(fixture daemonlogs)
+printf '{"features": {"buildkit": true}}\n' >"$root/daemon.json"
+preflight "$root"
+check 'docker.log-rotation WARN' has_line '^WARN +docker\.log-rotation +the daemon.s default json-file driver has no max-size'
+check 'exit 0' exit_is 0
+rm -f "$root/daemon.json"
+preflight "$root"
+check 'a missing daemon.json is the same WARN' has_line '^WARN +docker\.log-rotation '
+FAKE_LOG_DRIVER=local preflight "$root"
+check 'the local driver rotates by itself' has_line '^PASS +docker\.log-rotation +daemon default log driver local rotates'
+common_properties
+
+scenario 'preflight: a host smaller than five seats of the largest sandbox cap is warned about'
+root=$(fixture smallhost)
+printf 'MemTotal: 8000000 kB\nMemAvailable: 7000000 kB\nSwapTotal: 2097152 kB\nSwapFree: 2097152 kB\n' >"$root/proc/meminfo"
+preflight "$root"
+check 'host.capacity-memory WARN with the arithmetic' has_line '^WARN +host\.capacity-memory +7812 MiB total, below 12288 MiB: 5 seats at the largest sandbox cap \(2048 MiB'
+check 'still no FAIL for it' lacks_line '^FAIL +host\.capacity-memory'
+echo 'DOCKER_SANDBOX_MEMORY=1g' >>"$root/repo/.env"
+preflight "$root"
+check 'the cap is read from .env' has_line '^PASS +host\.capacity-memory +7812 MiB total covers 5 seats at the largest sandbox cap \(1024 MiB\)'
 common_properties
 
 scenario 'preflight: usage errors exit 2'
