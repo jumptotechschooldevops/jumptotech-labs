@@ -218,13 +218,25 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
   }));
 
   // GET /auth/login --------------------------------------------------------
+  /** Answer a failed sign-in step: the app's sign-in screen for a browser, the JSON error otherwise. */
+  const signInFailed = (req: Request, res: Response, reason: SignInFailureReason, json: () => void): void => {
+    if (!isBrowserNavigation(req)) {
+      json();
+      return;
+    }
+    res.setHeader('cache-control', 'no-store');
+    res.redirect(302, `${deps.appUrl}/?signin=${reason}`);
+  };
+
   router.get('/login', asyncRoute(async (req, res) => {
     if (!deps.client) {
-      sendError(res, 503, {
-        code: 'AUTH_NOT_CONFIGURED',
-        message: 'This deployment has no identity provider configured.',
-        remediation: 'Set OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET and OIDC_AUDIENCE.',
-      });
+      signInFailed(req, res, 'unavailable', () =>
+        sendError(res, 503, {
+          code: 'AUTH_NOT_CONFIGURED',
+          message: 'This deployment has no identity provider configured.',
+          remediation: 'Set OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET and OIDC_AUDIENCE.',
+        }),
+      );
       return;
     }
 
@@ -232,7 +244,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     try {
       request = await deps.client.authorizationRequest();
     } catch (error) {
-      authErrorResponse(res, error, 'start sign-in');
+      signInFailed(req, res, reasonFor(error), () => authErrorResponse(res, error, 'start sign-in'));
       return;
     }
 
@@ -270,10 +282,12 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
 
     if (!deps.client || !deps.idTokenVerifier) {
       outcome('not_configured');
-      sendError(res, 503, {
-        code: 'AUTH_NOT_CONFIGURED',
-        message: 'This deployment has no identity provider configured.',
-      });
+      signInFailed(req, res, 'unavailable', () =>
+        sendError(res, 503, {
+          code: 'AUTH_NOT_CONFIGURED',
+          message: 'This deployment has no identity provider configured.',
+        }),
+      );
       return;
     }
 
@@ -290,11 +304,13 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
       log(`sign-in refused by the identity provider: ${String(req.query.error).slice(0, 200)}`);
       outcome('provider_refused');
       res.setHeader('set-cookie', clearTx);
-      sendError(res, 401, {
-        code: 'AUTH_REFUSED',
-        message: 'The identity provider did not complete sign-in.',
-        remediation: 'Try signing in again.',
-      });
+      signInFailed(req, res, 'refused', () =>
+        sendError(res, 401, {
+          code: 'AUTH_REFUSED',
+          message: 'The identity provider did not complete sign-in.',
+          remediation: 'Try signing in again.',
+        }),
+      );
       return;
     }
 
@@ -302,11 +318,13 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     if (!transaction) {
       outcome('no_transaction');
       res.setHeader('set-cookie', clearTx);
-      sendError(res, 400, {
-        code: 'AUTH_NO_TRANSACTION',
-        message: 'This sign-in could not be matched to a request from this browser.',
-        remediation: 'Start sign-in again from the application.',
-      });
+      signInFailed(req, res, 'expired', () =>
+        sendError(res, 400, {
+          code: 'AUTH_NO_TRANSACTION',
+          message: 'This sign-in could not be matched to a request from this browser.',
+          remediation: 'Start sign-in again from the application.',
+        }),
+      );
       return;
     }
 
@@ -314,11 +332,13 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     if (!safeEquals(req.query.state, transaction.state)) {
       outcome('state_mismatch');
       res.setHeader('set-cookie', clearTx);
-      sendError(res, 400, {
-        code: 'AUTH_STATE_MISMATCH',
-        message: 'This sign-in could not be matched to a request from this browser.',
-        remediation: 'Start sign-in again from the application.',
-      });
+      signInFailed(req, res, 'expired', () =>
+        sendError(res, 400, {
+          code: 'AUTH_STATE_MISMATCH',
+          message: 'This sign-in could not be matched to a request from this browser.',
+          remediation: 'Start sign-in again from the application.',
+        }),
+      );
       return;
     }
 
@@ -326,10 +346,12 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     if (typeof code !== 'string' || code.length === 0 || code.length > 4096) {
       outcome('no_code');
       res.setHeader('set-cookie', clearTx);
-      sendError(res, 400, {
-        code: 'AUTH_NO_CODE',
-        message: 'The identity provider returned no authorization code.',
-      });
+      signInFailed(req, res, 'failed', () =>
+        sendError(res, 400, {
+          code: 'AUTH_NO_CODE',
+          message: 'The identity provider returned no authorization code.',
+        }),
+      );
       return;
     }
 
@@ -345,7 +367,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     } catch (error) {
       outcome('verification_failed');
       res.setHeader('set-cookie', clearTx);
-      authErrorResponse(res, error, 'complete sign-in');
+      signInFailed(req, res, reasonFor(error), () => authErrorResponse(res, error, 'complete sign-in'));
       return;
     }
 
@@ -427,6 +449,28 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
  * Coarse on purpose, exactly as `oidc.ts` is: an unauthenticated caller learning
  * *which* step failed learns something about the configuration.
  */
+/**
+ * Why a browser's sign-in did not complete, as the app's sign-in screen words it.
+ *
+ * `/auth/login` and `/auth/callback` are top-level navigations. A JSON error
+ * body there is what the browser *displays*: a beta student the identity
+ * provider refused (the way the private beta is restricted, D3), a student who
+ * pressed Back after signing in, or anyone during a provider outage was left
+ * reading `{"ok":false,"error":…}`. A navigation is sent back to the app with
+ * one of these fixed words instead; the provider's own text is never carried.
+ */
+export const SIGN_IN_FAILURE_REASONS = ['refused', 'expired', 'unavailable', 'failed'] as const;
+export type SignInFailureReason = (typeof SIGN_IN_FAILURE_REASONS)[number];
+
+/** A browser navigating (Accept prefers HTML), as opposed to an API client or a script. */
+function isBrowserNavigation(req: Request): boolean {
+  return req.accepts(['json', 'html']) === 'html';
+}
+
+function reasonFor(error: unknown): SignInFailureReason {
+  return error instanceof AuthError && error.code === 'AUTH_MISCONFIGURED' ? 'unavailable' : 'failed';
+}
+
 function authErrorResponse(res: Response, error: unknown, what: string): void {
   if (error instanceof AuthError) {
     const status = error.code === 'AUTH_MISCONFIGURED' ? 503 : 401;

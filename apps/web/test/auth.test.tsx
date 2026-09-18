@@ -339,3 +339,47 @@ describe('the user menu', () => {
     expect(await screen.findByText('alice@example.test')).toBeTruthy();
   });
 });
+
+// ------------------------------------------------ a sign-in the API sent back
+
+describe('a sign-in that did not finish', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('tells a refused account that the beta is invitation-only, and takes the reason out of the address bar', async () => {
+    window.history.replaceState(null, '', '/?signin=refused#/labs');
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_OUT) });
+
+    expect((await screen.findByRole('alert')).textContent).toMatch(/refused\. This beta is open only to invited students/);
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    await waitFor(() => expect(window.location.search).toBe(''));
+    expect(window.location.hash).toBe('#/labs');
+  });
+
+  it.each([
+    ['expired', /did not finish/],
+    ['unavailable', /identity provider could not be reached/],
+    ['failed', /could not be completed/],
+  ])('words %s', async (reason, text) => {
+    window.history.replaceState(null, '', `/?signin=${reason}`);
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_OUT) });
+    expect((await screen.findByRole('alert')).textContent).toMatch(text);
+  });
+
+  it('shows nothing for a reason it does not know, and never the parameter itself', async () => {
+    window.history.replaceState(null, '', '/?signin=%3Cb%3Eyour%20account%20is%20locked%3C%2Fb%3E');
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_OUT) });
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(document.body.textContent).not.toContain('locked');
+  });
+
+  it('says nothing to a student who is signed in (Back after sign-in lands here as "expired")', async () => {
+    window.history.replaceState(null, '', '/?signin=expired');
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_IN) });
+    expect(await screen.findByText('the catalog')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    await waitFor(() => expect(window.location.search).toBe(''));
+  });
+});

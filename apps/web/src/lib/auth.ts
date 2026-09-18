@@ -117,6 +117,30 @@ function currentReturnTo(): string {
   return `${pathname}${search}${hash}` || '/';
 }
 
+/**
+ * Why the last sign-in did not complete, when the API sent the browser back
+ * with `?signin=<reason>` (apps/api/src/routes/auth.ts, SIGN_IN_FAILURE_REASONS).
+ * Only these four words are ever read: the parameter is attacker-controllable,
+ * so anything else is ignored rather than displayed.
+ */
+export type SignInFailure = 'refused' | 'expired' | 'unavailable' | 'failed';
+const SIGN_IN_FAILURES: readonly SignInFailure[] = ['refused', 'expired', 'unavailable', 'failed'];
+
+export function readSignInFailure(): SignInFailure | null {
+  if (typeof window === 'undefined') return null;
+  const value = new URLSearchParams(window.location.search).get('signin');
+  return SIGN_IN_FAILURES.find((reason) => reason === value) ?? null;
+}
+
+/** Take `signin` out of the address bar, so a reload or a shared link does not repeat the message. */
+export function clearSignInFailure(): void {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has('signin')) return;
+  url.searchParams.delete('signin');
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
 export function signIn(returnTo: string = currentReturnTo()): void {
   if (typeof window === 'undefined') return;
   const target = `${API_URL}/auth/login?returnTo=${encodeURIComponent(returnTo)}`;

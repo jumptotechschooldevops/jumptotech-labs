@@ -651,3 +651,86 @@ describe('state-changing requests must come from an allowed origin', () => {
     expect(res.status).toBe(200);
   });
 });
+
+// ------------------------------------------------ a failed sign-in, in a browser
+
+/*
+ * `/auth/login` and `/auth/callback` are top-level navigations, so what they
+ * answer is what the browser shows. The private beta is restricted at the
+ * identity provider (D3): a non-beta account comes back with `?error=…`. A
+ * student pressing Back after signing in replays a spent callback. Either used
+ * to leave the browser displaying a JSON error body.
+ */
+describe('a sign-in that fails in a browser goes back to the app, with a reason and nothing else', () => {
+  const HTML = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+
+  it('sends an account the provider refused to the sign-in screen, never reflecting the provider text', async () => {
+    const flow = await beginLogin(harness.app);
+    const res = await request(harness.app)
+      .get('/auth/callback')
+      .query({ error: 'access_denied', error_description: '<script>alert(1)</script> https://evil.example', state: flow.state })
+      .set('Cookie', flow.tx)
+      .set('Accept', HTML);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(`${APP_URL}/?signin=refused`);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(cookieHeader(res, 'jtt_session_tx')).toMatch(/^jtt_session_tx=;/);
+    expect(cookieValue(res, 'jtt_session')).toBeUndefined();
+    expect(await harness.authSessions.countActive()).toBe(0);
+  });
+
+  it('treats Back after sign-in (a spent or unmatched callback) as an expired sign-in', async () => {
+    idp.signInAs({ subject: 'nav|back' });
+    const flow = await beginLogin(harness.app);
+    const first = await callback(harness.app, flow).set('Accept', HTML);
+    expect(first.status).toBe(302);
+    expect(first.headers.location).toBe(`${APP_URL}/`);
+    const session = `jtt_session=${cookieValue(first, 'jtt_session')!}`;
+
+    // Back: the same callback URL, the transaction cookie already cleared.
+    const replay = await request(harness.app)
+      .get('/auth/callback')
+      .query({ code: flow.code, state: flow.state })
+      .set('Cookie', session)
+      .set('Accept', HTML);
+    expect(replay.status).toBe(302);
+    expect(replay.headers.location).toBe(`${APP_URL}/?signin=expired`);
+    // A spent callback signs nobody out.
+    expect((await request(harness.app).get('/auth/session').set('Cookie', session)).body.data.authenticated).toBe(true);
+
+    const forged = await callback(harness.app, { ...(await beginLogin(harness.app)), state: 'forged' }).set('Accept', HTML);
+    expect(forged.headers.location).toBe(`${APP_URL}/?signin=expired`);
+  });
+
+  it('says the provider is unavailable when it cannot be reached, at login and at the callback', async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+    const port = (closed.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    const unreachable = buildApp({ OIDC_ISSUER: `http://127.0.0.1:${port}` });
+
+    const login = await request(unreachable.app).get('/auth/login').set('Accept', HTML);
+    expect(login.status).toBe(302);
+    expect(login.headers.location).toBe(`${APP_URL}/?signin=unavailable`);
+    // An API client still gets the JSON answer it can act on.
+    const json = await request(unreachable.app).get('/auth/login');
+    expect(json.status).toBe(503);
+    expect(json.body.error.code).toBe('AUTH_MISCONFIGURED');
+  });
+
+  it('calls any other verification failure a failed sign-in', async () => {
+    const mine = await beginLogin(harness.app);
+    const theirs = await beginLogin(harness.app);
+    const res = await callback(harness.app, { ...mine, code: theirs.code }).set('Accept', HTML);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(`${APP_URL}/?signin=failed`);
+    expect(await harness.authSessions.countActive()).toBe(0);
+  });
+
+  it('keeps the JSON errors for anything that is not a browser navigation', async () => {
+    const res = await request(harness.app).get('/auth/callback').query({ error: 'access_denied' }).set('Accept', 'application/json');
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('AUTH_REFUSED');
+    expect(JSON.stringify(res.body)).not.toContain('access_denied');
+  });
+});

@@ -5,15 +5,32 @@
  * sign-in button on a deployment that cannot complete a sign-in, and its mirror
  * image: "please sign in" shown when the real problem is that the API is down.
  */
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from '../lib/AuthContext';
+import { clearSignInFailure, readSignInFailure, type SignInFailure } from '../lib/auth';
 
 export interface AuthGateProps {
   children: ReactNode;
 }
 
+/**
+ * What to tell a student the API sent back from a sign-in that did not finish.
+ * The private beta admits only invited accounts, and the identity provider is
+ * what refuses the rest — so "refused" has to say that, not "try again".
+ */
+const SIGN_IN_FAILURE_TEXT: Readonly<Record<SignInFailure, string>> = {
+  refused:
+    'Your sign-in was refused. This beta is open only to invited students: sign in with the account you were invited with, or ask your instructor to add yours.',
+  expired: 'That sign-in did not finish — it may have expired or been started in another tab. Sign in again.',
+  unavailable: 'Sign-in is unavailable right now: the identity provider could not be reached. Try again in a few minutes.',
+  failed: 'Sign-in could not be completed. Sign in again; if it keeps failing, tell your instructor.',
+};
+
 export function AuthGate({ children }: AuthGateProps) {
   const auth = useAuth();
+  // Read once, then taken out of the address bar: a reload must not repeat it.
+  const [signInFailure] = useState(readSignInFailure);
+  useEffect(() => clearSignInFailure(), []);
 
   if (auth.status === 'loading') {
     return (
@@ -47,6 +64,12 @@ export function AuthGate({ children }: AuthGateProps) {
           Sign in to start a lab. Every sandbox belongs to one student, and your progress
           follows your account.
         </p>
+
+        {signInFailure ? (
+          <p className="auth-gate__status auth-gate__status--error" role="alert">
+            {SIGN_IN_FAILURE_TEXT[signInFailure]}
+          </p>
+        ) : null}
 
         {auth.signInAvailable ? (
           <button type="button" className="btn btn--primary btn--lg" onClick={() => auth.signIn()}>

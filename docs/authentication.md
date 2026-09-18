@@ -165,6 +165,23 @@ The cookie value is random and opaque. **Only its SHA-256 hash is stored**, so a
 database read does not yield usable cookies. `Secure` is set whenever the
 deployment is not plain-HTTP localhost.
 
+**When a sign-in does not finish.** `/auth/login` and `/auth/callback` are
+top-level navigations, so their answer is what the browser displays. A request
+that prefers HTML (`Accept: text/html`, which every browser navigation sends) is
+redirected to `<app>/?signin=<reason>` with one of four fixed words; the sign-in
+screen words it and removes the parameter from the address bar. API clients and
+scripts keep the JSON errors (`AUTH_REFUSED`, `AUTH_NO_TRANSACTION`, …).
+
+| Cause | Reason | What the student reads |
+|---|---|---|
+| The provider sent `?error=` (for the private beta: an account the provider does not admit) | `refused` | the beta is open only to invited students; use the invited account or ask the instructor |
+| No or unmatched transaction: Back after signing in, a sign-in older than 10 minutes, another tab | `expired` | the sign-in did not finish; sign in again (a signed-in student sees nothing) |
+| The provider could not be reached, or answered nonsense | `unavailable` | sign-in is unavailable; try again in a few minutes |
+| Any other failure: no code, a refused code exchange, an ID token that fails verification | `failed` | sign-in could not be completed |
+
+The provider's `error_description` is logged, never carried into the redirect or
+displayed.
+
 ### 3.3 Every subsequent request
 
 ```text
@@ -411,6 +428,9 @@ reachable once `NODE_ENV=production`.
   authenticates is admitted and provisioned as `STUDENT`. For a private beta,
   restricting admission (a group/role claim, an email-domain rule, or an
   invitation table) has to be chosen; it is not provider-neutral to guess.
+  Until then the restriction lives in the identity provider, and an account it
+  refuses reaches the app's sign-in screen as `refused` (§3.2) — worded for a
+  student who was not invited, not as a generic error.
 - **Durable sessions in production — resolved.** Production OIDC requires a
   PostgreSQL database and refuses to start without one (§4.2); there is no
   in-memory fallback for a private beta, where a restart would sign every
