@@ -17,7 +17,7 @@ prerequisites:
 
 story: >
   There are now four playbooks in the JumpToTech Bank repository that configure
-  a web tier, and they contain the same four tasks with slightly different
+  a web tier, and they contain the same three tasks with slightly different
   spellings. When the log directory moved last month it was fixed in three of
   them.
 
@@ -51,7 +51,7 @@ task:
     `tasks/main.yml`, `handlers/main.yml`, `templates/`, and
     `defaults/main.yml`.
 
-    The four tasks and the `reload ledger` handler currently in `site.yml` live
+    The three tasks and the `reload ledger` handler currently in `site.yml` live
     in the role. `app.conf.j2` moves into the role's own `templates/`
     directory.
 
