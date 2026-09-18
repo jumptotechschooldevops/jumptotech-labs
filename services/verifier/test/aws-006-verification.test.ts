@@ -77,6 +77,7 @@ async function run(findings: string | null) {
 }
 const failed = (c: Array<{ status: string; label: string }>) => c.filter((x) => x.status === 'fail').map((x) => x.label);
 
+
 // -------------------------------------------------------- starting state
 
 describe('AWS-006 — the untouched sheet does not pass', () => {
@@ -223,6 +224,28 @@ describe('AWS-006 — plausible misreadings of the trail fail', () => {
 // ------------------------------------------------------ shortcuts and gaps
 
 describe('AWS-006 — shortcuts and missing work', () => {
+  it('fails the shotgun: every candidate from the export listed against its key', async () => {
+    // Before, each key was matched as a substring, so grepping every value out
+    // of the export and writing them all down passed 13/13.
+    const decoys = [
+      'AFFECTED_SECURITY_GROUP=sg-0fedcba987654321',
+      'OUTCOME=failure',
+      'PRINCIPAL_ARN=arn:aws:iam::123456789012:user/priya.raman',
+      'AWS_REGION=us-east-1',
+      'EVENT_TIME=2026-08-25T03:02:10Z',
+    ];
+    const result = await run(`${sheet()}${decoys.join('\n')}\n`);
+
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual([
+      'The time of the call is recorded exactly as CloudTrail has it',
+      'The Region the call was made to is identified',
+      'The security group that was changed is identified',
+      'The principal that made the call is identified by its full ARN',
+      'The call is correctly reported as having succeeded',
+    ]);
+  });
+
   it('fails when the findings sheet is missing entirely', async () => {
     const result = await run(null);
     expect(result.passed).toBe(false);
