@@ -97,6 +97,22 @@ requirements:
     apiGroup: ""
     name: inventory-config
     label: inventory-sync cannot delete ConfigMap inventory-config
+  # Read access to ConfigMaps is the whole grant. A Role that also reaches
+  # Secrets, or lets the client rewrite the configuration it reads, is wider
+  # than the task asks for.
+  - type: auth_forbidden
+    serviceAccount: inventory-sync
+    verb: update
+    resource: configmaps
+    apiGroup: ""
+    name: inventory-config
+    label: inventory-sync cannot rewrite ConfigMap inventory-config
+  - type: auth_forbidden
+    serviceAccount: inventory-sync
+    verb: get
+    resource: secrets
+    apiGroup: ""
+    label: inventory-sync cannot read Secrets
   - type: deployment_available
     name: inventory-sync
     min_available: 1

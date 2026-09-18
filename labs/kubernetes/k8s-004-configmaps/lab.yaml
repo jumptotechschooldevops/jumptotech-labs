@@ -80,10 +80,19 @@ requirements:
     key: RETENTION_DAYS
     value: "90"
     label: ConfigMap sets RETENTION_DAYS=90
+  # Both settings, not one: referencing a single key and leaving the other
+  # typed into the Deployment passed a check that named no key. (envFrom and a
+  # volume reference the whole ConfigMap, which includes both.)
   - type: deployment_uses_configmap
     name: statements
     configmap: statements-config
-    label: Deployment statements reads its configuration from the ConfigMap
+    key: STATEMENT_FORMAT
+    label: Deployment statements reads STATEMENT_FORMAT from the ConfigMap
+  - type: deployment_uses_configmap
+    name: statements
+    configmap: statements-config
+    key: RETENTION_DAYS
+    label: Deployment statements reads RETENTION_DAYS from the ConfigMap
   - type: deployment_available
     name: statements
     min_available: 1

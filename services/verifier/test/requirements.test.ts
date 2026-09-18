@@ -233,6 +233,16 @@ describe('verifier — ConfigMap checks (test requirement 19)', () => {
   it('runs the shipped K8S-004 lab end to end', async () => {
     expect((await runLab(registry.get('K8S-004'), withConfig())).passed).toBe(true);
   });
+
+  it('fails K8S-004 when only one of the two settings moved into the ConfigMap', async () => {
+    const oneKey = withConfig([{ source: 'configmap', name: 'statements-config', via: 'env', key: 'STATEMENT_FORMAT' }]);
+    const result = await runLab(registry.get('K8S-004'), oneKey);
+
+    expect(result.passed).toBe(false);
+    expect(result.checks.filter((c) => c.status !== 'pass').map((c) => c.label)).toEqual([
+      'Deployment statements reads RETENTION_DAYS from the ConfigMap',
+    ]);
+  });
 });
 
 // -------------------------------------------------------------- 20. Secrets
