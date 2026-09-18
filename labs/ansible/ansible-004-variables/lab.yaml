@@ -72,6 +72,18 @@ requirements:
   - type: yaml_valid
     path: group_vars/web.yml
     label: The group variables file is valid YAML
+  # The values live in the variables files and the playbook refers to them.
+  # Empty vars files beside a playbook that still spells out the values, or
+  # nodes edited by hand, used to pass.
+  - type: file_contains
+    path: group_vars/web.yml
+    contains: [app_port, "8080", app_release, "2.4.1"]
+    label: The web group's variables hold the port and the release
+  - type: file_contains
+    path: site.yml
+    contains: [app_port, app_release, node_role, "register:", stdout]
+    absent: ["8080", "2.4.1", "=primary", "=replica"]
+    label: The playbook uses the variables and a registered result instead of literal values
   - type: file_exists
     path: host_vars/node1.yml
     label: Host variables exist for node1

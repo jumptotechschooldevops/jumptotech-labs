@@ -74,6 +74,17 @@ requirements:
   - type: ansible_playbook_valid
     playbook: site.yml
     label: Ansible accepts the playbook
+  # Before the state checks, on purpose: the directory and file are cleared on
+  # both nodes, the playbook is run twice, and only then is the state read. So
+  # what the checks below see is what the playbook made — a node fixed by hand
+  # with ad-hoc commands and an empty play no longer passes.
+  - type: ansible_idempotent
+    playbook: site.yml
+    require_initial_change: true
+    reset_paths:
+      - /opt/jumptotech/app
+      - /etc/jumptotech/app.conf
+    label: From a clean node the playbook creates the state, and a second run changes nothing
   - type: managed_file_exists
     path: /opt/jumptotech/app
     kind: directory
