@@ -307,7 +307,7 @@ describe('CS-010 rejects a YAML repair that is not a repair', () => {
     const result = await verify(solved({ yaml: unquoted }));
     expect(result.passed).toBe(false);
     expect(failed(result.checks)).toEqual([
-      'The country is quoted, so it stays a country and does not become false',
+      'The leeds country is quoted, so it stays the country code it was meant to be',
     ]);
   });
 
@@ -317,7 +317,7 @@ describe('CS-010 rejects a YAML repair that is not a repair', () => {
     const result = await verify(solved({ yaml: unquoted }));
     expect(result.passed).toBe(false);
     expect(failed(result.checks)).toEqual([
-      'The version is quoted, so it stays 3.10 and does not become 3.1',
+      'The leeds version is quoted, so it stays exactly as written',
     ]);
   });
 
