@@ -142,6 +142,14 @@ requirements:
     selector:
       app: audit-api
       tier: api
+    label: The Deployment still selects the audit-api Pods
+  # A Deployment deleted and re-created starts again at revision 1; one that
+  # was changed in place has rolled out at least one new revision.
+  - type: workload_annotation
+    kind: deployment
+    name: audit-api
+    key: deployment.kubernetes.io/revision
+    min_int: 2
     label: The original Deployment was extended, not replaced
   - type: workload_container
     kind: deployment

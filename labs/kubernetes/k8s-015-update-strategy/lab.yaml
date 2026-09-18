@@ -141,6 +141,14 @@ requirements:
     selector:
       app: ledger-writer
       tier: data
+    label: ledger-writer still selects its own Pods
+  # A Deployment deleted and re-created starts again at revision 1; one that
+  # was changed in place has rolled out at least one new revision.
+  - type: workload_annotation
+    kind: deployment
+    name: ledger-writer
+    key: deployment.kubernetes.io/revision
+    min_int: 2
     label: ledger-writer was reconfigured, not replaced
   - type: deployment_strategy
     name: ledger-writer
@@ -162,6 +170,14 @@ requirements:
     selector:
       app: checkout-api
       tier: api
+    label: checkout-api still selects its own Pods
+  # A Deployment deleted and re-created starts again at revision 1; one that
+  # was changed in place has rolled out at least one new revision.
+  - type: workload_annotation
+    kind: deployment
+    name: checkout-api
+    key: deployment.kubernetes.io/revision
+    min_int: 2
     label: checkout-api was reconfigured, not replaced
   - type: deployment_strategy
     name: checkout-api

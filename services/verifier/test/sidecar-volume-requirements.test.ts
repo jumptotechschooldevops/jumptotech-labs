@@ -258,6 +258,8 @@ describe('K8S-017 — the shipped lab', () => {
             updatedReplicas: 2, currentReplicas: 2,
             selector: SELECTOR, podLabels: SELECTOR,
             containers: [app()],
+            // Revision 1 once the fixture is applied.
+            annotations: { 'deployment.kubernetes.io/revision': '1' },
             ...over,
           }),
         ],
@@ -270,6 +272,8 @@ describe('K8S-017 — the shipped lab', () => {
       initContainers: [shipper({ volumeMounts: mount })],
       volumes: [emptyDirVol()],
       generation: 2, observedGeneration: 2,
+      // A template change in place rolls out revision 2.
+      annotations: { 'deployment.kubernetes.io/revision': '2' },
       ...over,
     });
 
@@ -283,6 +287,7 @@ describe('K8S-017 — the shipped lab', () => {
       new Set([
         'deployment_exists',
         'deployment_selector',
+        'workload_annotation',
         'workload_container',
         'workload_volume_mount',
         'deployment_rollout_complete',
@@ -295,6 +300,7 @@ describe('K8S-017 — the shipped lab', () => {
     // Availability passes: the point is that a healthy workload can still be
     // wrong, which is what this lab teaches.
     expect(await failed(seeded())).toEqual([
+      'The original Deployment was extended, not replaced',
       'log-shipper runs for the whole life of the Pod, as a sidecar',
       'The application writes into a shared volume',
       'log-shipper reads the same shared volume',
@@ -362,9 +368,20 @@ describe('K8S-017 — the shipped lab', () => {
   });
 
   it('still refuses a deleted-and-recreated Deployment', async () => {
-    expect(await failed(solved({ selector: { app: 'audit-api' }, podLabels: { app: 'audit-api' } }))).toEqual([
+    const recreated = solved({
+      selector: { app: 'audit-api' },
+      podLabels: { app: 'audit-api' },
+      annotations: { 'deployment.kubernetes.io/revision': '1' },
+    });
+    expect(await failed(recreated)).toEqual([
+      'The Deployment still selects the audit-api Pods',
       'The original Deployment was extended, not replaced',
     ]);
+  });
+
+  it('refuses the fixture deleted and re-applied with the sidecar added', async () => {
+    const reapplied = solved({ annotations: { 'deployment.kubernetes.io/revision': '1' } });
+    expect(await failed(reapplied)).toEqual(['The original Deployment was extended, not replaced']);
   });
 
   it('does not pass on another session"s solved namespace', async () => {

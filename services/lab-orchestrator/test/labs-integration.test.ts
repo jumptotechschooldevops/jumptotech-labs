@@ -357,7 +357,9 @@ spec:
     expect(before.passed).toBe(false);
     const beforeByLabel = Object.fromEntries(before.checks.map((c) => [c.label, c.status]));
     expect(beforeByLabel['Deployment payments-api still exists']).toBe('pass');
-    expect(beforeByLabel['The original Deployment was updated, not replaced']).toBe('pass');
+    expect(beforeByLabel['The Deployment still selects the payments-api Pods']).toBe('pass');
+    // Revision 1: nothing has been rolled out yet.
+    expect(beforeByLabel['The original Deployment was updated, not replaced']).toBe('fail');
     expect(beforeByLabel['Three replicas are still requested']).toBe('pass');
     expect(beforeByLabel['Image is now nginx:1.28-alpine']).toBe('fail');
     expect(beforeByLabel['Rollout finished — no replica from the old version remains']).toBe('pass');
@@ -442,7 +444,9 @@ spec:
 
     const result = await checkUntilPassed(session, 60_000);
     expect(result.passed).toBe(false);
+    // The re-created object has a one-label selector and is back at revision 1.
     expect(result.checks.filter((c) => c.status !== 'pass').map((c) => c.label)).toEqual([
+      'The Deployment still selects the payments-api Pods',
       'The original Deployment was updated, not replaced',
     ]);
 
