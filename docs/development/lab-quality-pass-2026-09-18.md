@@ -9,8 +9,10 @@ lesson it teaches?**
 Every claim below was checked against the repository, and where it says
 "measured" it was run: in a `jumptotech/lab-linux` container with the lab's
 real seed scripts, with the lab image's Terraform, against Docker Engine on
-this host, or through the real verifier with in-memory readers. Where a fix was
-not run against a live substrate (Ansible, the Kubernetes cluster), it says so.
+this host (including a real two-node Ansible topology and a real DinD sandbox),
+or through the real verifier with in-memory readers. The Kubernetes changes
+were not run against a live cluster: the kind clusters on this host belong to
+other stacks.
 
 ## 1. Summary
 
@@ -24,10 +26,12 @@ not run against a live substrate (Ansible, the Kubernetes cluster), it says so.
   changed.
 - **Five verifier capabilities added**, each because it closed a defect in
   several labs at once (§4).
-- **Five verifier defects fixed** that were not specific to one lab: answer
-  disclosure in two handlers, a comment- and `via`-blind pipeline fallback,
-  Terraform checks reading subdirectories Terraform never loads, and named
-  ports compared by spelling (§3.1).
+- **Six platform defects fixed** that were not specific to one lab: the
+  Ansible image had lost the callback every idempotency check reads (so
+  ANSIBLE-006–010 could never pass), answer disclosure in two handlers, a
+  comment- and `via`-blind pipeline fallback, Terraform checks reading
+  subdirectories Terraform never loads, and named ports compared by spelling
+  (§3.1).
 - **Starter-state guard: 15 → 51 labs** proven, in `npm test`, to fail Verify
   on their untouched starting state (§5).
 - **A catalog-wide label guard**: no check label may name the answer it grades
@@ -61,6 +65,7 @@ than the task claims; **P3** wording.
 
 | Defect | Labs affected | Fix |
 |---|---|---|
+| The Ansible sandbox image had no `jtt_stats` callback: it shipped with the original Ansible branch (f6ffd7e) and was lost when the track was ported to main (5d2673b). Every `ansible_idempotent` run reported "did not complete". | ANSIBLE-006, -007, -008, -009, -010 (and -003 now) | 3609da1 — measured on a private image tag with a real topology |
 | `workspace_file_exists` failure listed the missing graded values — one Check on a blank worksheet printed DOCKER-009's `137`/`OOMKilled` and NET-022's answers. Fixed on an unmerged networking branch, never on `main`. | DOCKER-009, NET-022 | Cherry-picked `330a709` (c944748) |
 | `environment_reference_exists` fell back to a text search that ignored comments and `via`: `sh 'echo $REGISTRY_PASSWORD \| docker login …'` passed "bound from the credential store"; a comment passed; a variable's own use passed "defined". `workflow_env` accepted a `with:` input. `jenkins_stage_exists` counted `// docker push`. | CICD-005, -008, -009, -010 | 0d2409c |
 | Terraform configuration checks scanned `.tf` files four directories deep; Terraform loads only the root module. A decoy `terraform/x/decoy.tf` satisfied every configuration check. | TF-002, -005, -006, -011, -016, -017, -018, -025, -026 | 698e7f0 |
@@ -89,8 +94,8 @@ than the task claims; **P3** wording.
 | AWS-003 | Deny on the one sampled file; Deny only for non-TLS | Deny covers `customer-exports/*`; asked of a TLS request | d5e723d |
 | AWS-004 | one statement trusting EC2 **and** the contractor | `exact_principals` | d5e723d |
 | AWS-005 | condition parked elsewhere; never-firing Deny beside `role/*` | app roles not passable to other services; asked of an EC2 launch | d5e723d |
-| ANSIBLE-003, -009 | state made ad hoc + empty/debug playbook | cleared baseline, playbook must create it (not run live) | 929bd10 |
-| ANSIBLE-004 | empty vars files + literal playbook | vars files hold the values; playbook uses them | 929bd10 |
+| ANSIBLE-003, -009 | state made ad hoc + empty/debug playbook | cleared baseline, playbook must create it (live: shortcut fails; real playbook 6/6 and 7/7) | 929bd10 |
+| ANSIBLE-004 | empty vars files + literal playbook | vars files hold the values; playbook uses them (live: 10/10; literal playbook 6/10) | 929bd10 |
 | NET-022 | recreated without the command (nginx back on 80) | nginx config from the container must carry the listener | b27ed51 |
 | NET-002 | one line per value; two addresses and `prod` never graded | `file_key_value`, all graded | a29b4c3 |
 | LINUX-009 | a script that dispatched on the file *name* | also graded on two status files it has not seen (measured 5/7 → 7/7) | df79a5c |
@@ -222,6 +227,6 @@ Kubernetes stage only (§3.3), which no open networking branch touches.
 3. First labs for the empty Git and Helm/GitOps stages.
 4. A Compose-label check (DOCKER-008) and image-history inspection
    (DOCKER-003, DOCKER-013).
-5. Run the gated Kubernetes and Ansible live suites against this branch
-   before merging (not run here: the kind clusters on this host belong to
-   other stacks).
+5. Rebuild `jumptotech/lab-ansible` from this branch before the Ansible
+   labs are used anywhere, and run the gated Kubernetes suites against it
+   (not run here: the kind clusters on this host belong to other stacks).
