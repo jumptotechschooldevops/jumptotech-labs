@@ -299,8 +299,8 @@ suite('DOCKER-014 against a real docker:27-dind sandbox', () => {
 
     const before = await verify();
     expect(before.passed).toBe(false);
-    expect(before.checks).toHaveLength(8);
-    expect(failing(before)).toHaveLength(8);
+    expect(before.checks).toHaveLength(10);
+    expect(failing(before)).toHaveLength(10);
   }, 900_000);
 
   // -------------------------------------------------- STUDENT WORK -> PASS
@@ -360,7 +360,7 @@ suite('DOCKER-014 against a real docker:27-dind sandbox', () => {
 
     const after = await verify();
     expect(after.passed).toBe(false);
-    expect(failing(after)).toHaveLength(8);
+    expect(failing(after)).toHaveLength(10);
   }, 900_000);
 
   // ------------------------------------------------- SOLVE AGAIN -> PASS

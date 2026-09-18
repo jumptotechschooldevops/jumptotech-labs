@@ -179,6 +179,12 @@ requirements:
     label: The image runs the script directly, with --dry-run as its default mode
 
   # --- run with no arguments: the default applies --------------------------
+  # From the image built here: an alpine container given the same entrypoint
+  # by hand would otherwise satisfy the command checks.
+  - type: docker_container_image
+    name: batch-default
+    image: jumptotech/batch:1.0
+    label: batch-default runs the image you built
   - type: docker_container_command
     name: batch-default
     entrypoint:
@@ -192,6 +198,10 @@ requirements:
     label: batch-default completed successfully
 
   # --- run with an argument: it replaces the command, not the program ------
+  - type: docker_container_image
+    name: batch-override
+    image: jumptotech/batch:1.0
+    label: batch-override runs the image you built
   - type: docker_container_command
     name: batch-override
     entrypoint:
