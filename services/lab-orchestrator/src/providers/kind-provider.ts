@@ -263,12 +263,14 @@ export class KindLabProvider implements LabProvider {
           return unavailable(
             `network isolation is not proven on this cluster: ${decision.reason}`,
             NETWORK_ATTESTATION_REMEDIATION,
+            'network isolation is not proven on this cluster',
           );
         }
       } catch (error) {
         return unavailable(
           `the NetworkPolicy enforcement attestation could not be read (${describe(error)})`,
           NETWORK_ATTESTATION_REMEDIATION,
+          'network isolation is not proven on this cluster',
         );
       }
     }

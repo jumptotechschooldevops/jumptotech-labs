@@ -501,7 +501,11 @@ export class SessionManager {
       );
       throw new SessionError(
         'PROVIDER_UNAVAILABLE',
-        "This lab's environment cannot be created right now.",
+        // A security refusal says it is one (the network-isolation gate);
+        // anything else stays generic.
+        availability.studentReason
+          ? `This lab's environment cannot be created right now: ${availability.studentReason}.`
+          : "This lab's environment cannot be created right now.",
         'Try again in a few minutes. If it keeps happening, tell your instructor.',
         { provider: lab.environment.provider },
       );
