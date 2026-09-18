@@ -42,6 +42,17 @@ beforeAll(async () => {
   labs = await realCatalog();
 });
 
+/** A session store whose database has gone away. */
+class UnreachableStore extends InMemorySessionStore {
+  unreachable = false;
+  override async createWithinLimits(...args: Parameters<InMemorySessionStore['createWithinLimits']>) {
+    if (this.unreachable) {
+      throw Object.assign(new Error('connect ECONNREFUSED 172.18.0.2:5432'), { code: 'ECONNREFUSED' });
+    }
+    return super.createWithinLimits(...args);
+  }
+}
+
 function compose() {
   const registry = createRegistry({ service: 'api', defaultMetrics: false });
   const lines: string[] = [];
@@ -71,10 +82,11 @@ function compose() {
     timedOut: false,
   });
 
+  const store = new UnreachableStore();
   const sessions = new SessionManager({
     registry: labs,
     provider,
-    store: new InMemorySessionStore(),
+    store,
     policy: DEFAULT_SESSION_POLICY,
     lifetimes: config.lifetimes,
     namespaceSecret: config.namespaceSecret,
@@ -106,7 +118,7 @@ function compose() {
       .reduce((sum, v) => sum + v.value, 0);
   };
 
-  return { app, lines, counter };
+  return { app, lines, counter, store };
 }
 
 const as = (student: string) => ({ Authorization: `Developer ${student}` });
@@ -157,6 +169,35 @@ describe('Reset Lab and End Lab outcomes', () => {
     for (const name of ['jtt_lab_reset_outcome_total', 'jtt_lab_end_outcome_total']) {
       expect(await counter(name), name).toBe(0);
     }
+  });
+});
+
+describe('Start Lab outcomes', () => {
+  /*
+   * A start that died on the session store never reached the sandbox
+   * substrate. Counting it `provision_failed` sent the operator to RB-03 for
+   * what is a database outage; it is `platform_error`, and the log keeps the
+   * driver's code for the operator. The student still sees nothing internal.
+   */
+  it('counts a start that failed on the database as platform_error, not provision_failed', async () => {
+    const { app, counter, lines, store } = compose();
+    store.unreachable = true;
+
+    const reply = await request(app).post('/api/labs/K8S-001/start').set(as('alice'));
+    expect(reply.status).toBe(500);
+    expect(reply.body.error.code).toBe('INTERNAL_ERROR');
+    expect(JSON.stringify(reply.body)).not.toMatch(/ECONNREFUSED|5432/);
+
+    expect(await counter('jtt_lab_start_outcome_total', { outcome: 'platform_error' })).toBe(1);
+    expect(await counter('jtt_lab_start_outcome_total', { outcome: 'provision_failed' })).toBe(0);
+    const failed = lines.find((line) => line.includes('"event":"lab.start.failed"'));
+    expect(failed).toContain('"outcome":"platform_error"');
+    expect(failed).toContain('"code":"ECONNREFUSED"');
+
+    store.unreachable = false;
+    const recovered = await request(app).post('/api/labs/K8S-001/start').set(as('alice'));
+    expect(recovered.status).toBe(200);
+    expect(await counter('jtt_lab_start_outcome_total', { outcome: 'success' })).toBe(1);
   });
 });
 

@@ -17,6 +17,7 @@ import { Router, type Request, type Response } from 'express';
 import {
   InvalidLabIdError,
   LabNotFoundError,
+  SessionError,
   assertValidLabId,
   titleCase,
   type LabRegistry,
@@ -363,8 +364,16 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
         error && typeof error === 'object' && 'code' in error
           ? String((error as { code: unknown }).code)
           : 'unknown';
-      const outcome =
-        code === 'LAB_CAPACITY_REACHED'
+      /*
+       * Anything that is not a session-domain refusal — the session store
+       * throwing because PostgreSQL is gone, most of all — is `platform_error`,
+       * not `provision_failed`: the sandbox substrate was never asked, and
+       * sending the operator to RB-03 for a database outage costs the incident
+       * its first ten minutes. The log line keeps the underlying `code`.
+       */
+      const outcome = !(error instanceof SessionError)
+        ? 'platform_error'
+        : code === 'LAB_CAPACITY_REACHED'
           ? 'capacity_reached'
           : code === 'STUDENT_SESSION_LIMIT_REACHED'
             ? 'student_limit_reached'

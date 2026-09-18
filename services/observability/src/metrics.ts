@@ -177,6 +177,11 @@ export const LAB_START_OUTCOMES = [
   'provider_unavailable',
   'provision_failed',
   'unauthorized',
+  // The start failed on something that is not a session-domain refusal — the
+  // database, a bug, an unexpected throw. Kept apart from `provision_failed`,
+  // whose runbook (RB-03) sends an operator to the sandbox substrate: a start
+  // that died on the session store is RB-02, and the log line's `code` says so.
+  'platform_error',
 ] as const;
 
 /**
