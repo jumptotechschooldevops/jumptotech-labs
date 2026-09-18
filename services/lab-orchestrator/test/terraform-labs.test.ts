@@ -687,9 +687,11 @@ describe('TF-002 — Variables and Input Values', () => {
   });
 
   it('proves an override happened, without looking for a tfvars file', async () => {
-    // Two required values differ from the defaults the lab asks for, so
-    // reaching them is only possible by supplying a value — whichever
-    // documented mechanism the student picks. Nothing pins a filename.
+    // Two required values differ from the defaults the lab asks for, so the
+    // task has the student supply them — by whichever documented mechanism
+    // they pick. Nothing pins the mechanism: no tfvars file, no variables file.
+    // (Editing the defaults instead reaches the same applied state and is not
+    // caught; no requirement type reads a default's value.)
     const contents = (await tf002()).requirements
       .filter((r) => r.type === 'file_content' && 'contains' in r)
       .map((r) => ('contains' in r ? String(r.contains) : ''));
@@ -700,7 +702,14 @@ describe('TF-002 — Variables and Input Values', () => {
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tfvars'))).toBe(false);
-    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+    // The one configuration file a check names is main.tf, and only to hold
+    // the task's own rule that it names no environment.
+    const tfPaths = (await tf002()).requirements.filter(
+      (r) => 'path' in r && String(r.path).endsWith('.tf'),
+    );
+    expect(tfPaths.map((r) => [r.type, 'path' in r ? r.path : ''])).toEqual([
+      ['file_content_absent', 'terraform/main.tf'],
+    ]);
   });
 });
 

@@ -30,8 +30,10 @@
 #
 # Precedence is graded semantically rather than by looking for a file: two of
 # the variables carry defaults, and the required final values are *not* those
-# defaults. The only way to reach them is to override, whichever documented
-# mechanism the student chooses.
+# defaults, so the task asks the student to override them, by whichever
+# documented mechanism they choose. What is graded is the applied result; a
+# student who edits the defaults to 4 and false instead reaches the same state
+# and is not caught — no requirement type reads a variable's default value.
 #
 # Content is written from the official HashiCorp Terraform documentation.
 # Verified: 2026-08-25
@@ -192,6 +194,12 @@ requirements:
     name: service_config
     label: The configuration resource was applied
 
+  # The task: "If the word `production` appears anywhere in `main.tf`, the
+  # file is still an environment-specific copy."
+  - type: file_content_absent
+    path: terraform/main.tf
+    contains: production
+    label: main.tf names no particular environment
   - type: file_exists
     path: terraform/build/production.json
     label: The production configuration was written
