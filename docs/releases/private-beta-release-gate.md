@@ -615,9 +615,11 @@ Every other row of §13.2 is still open.
 
 ### 16.3 Local validation (not CI, not a host)
 
-See the report §3. `make beta-validate` was **not** re-run. The browser suite
-was run once and starved at load 20–23 after its first five tests (the new
-refusal test passed); it was not re-run on a quiet machine.
+See the report §3: `npm test` 4,938/0, `test:security` 808, typecheck, build,
+`validate:labs` 117/0/0, terminal (real kind, real PTY) 20/20, sandbox (real
+Docker) 13/13, host scripts 52/0 on macOS and Linux. Browser suite **15/16**, the
+sixteenth (isolation) passing alone after a 70 s verification timed it out at
+load ~20. `make beta-validate` was **not** re-run.
 
 **Verdict unchanged in kind:** software ready for a real-host deployment test;
 **not ready for student access** until §13.2 (and §16.2) are done on a host.

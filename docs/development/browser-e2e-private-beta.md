@@ -806,5 +806,15 @@ Result in this pass (isolated project `jtt-e2e-p3`, development machine at load
 re-creation test on, the api went unhealthy after each re-creation (`/health` up
 to 17.8 s; five other worktrees' kind control planes at ~410% of the Docker VM)
 and every later test failed with it. **LOCAL ENVIRONMENT.** The run was
-stopped and its stack removed (0 containers left). Not re-run on a quiet
-machine; not yet in CI.
+stopped and its stack removed (0 containers left).
+
+Second run (`jtt-e2e-p4`, load ~15–20): **15/16 passed** in 13.2 min — every
+failure path (api, terminal and database re-created or stopped, the new
+refusal test, the de-slept database-down test), five students with a sixth
+refused, the critical path, Reset typed once, reload during Start and the
+second-tab takeover (which exercises the terminal attach change). The one
+failure, student isolation, timed out waiting for student A's Verify: the trace
+shows `POST …/check` answered **200 after 70.2 s**, past the test's 60 s wait —
+a slow verification on the loaded machine (**LOCAL ENVIRONMENT**), not a
+refusal. Re-run alone on a fresh stack (`jtt-e2e-p5`): **passed** in 28 s. All
+stacks removed, 0 containers left. Not yet in CI.

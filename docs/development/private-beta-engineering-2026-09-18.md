@@ -61,16 +61,15 @@ On a machine shared with other worktrees' stacks and five idle kind clusters
 | `npm run test:integration:sandboxd` | 7 passed (PTY cases skip on this host, as before) |
 | `concurrent-attach.test.ts` + `session-activity.test.ts` | 10/10, five runs in a row |
 | `five-student-stress.test.ts` | 1/1, five runs in a row |
-| `bash e2e/stack.sh run` (`jtt-e2e-p3`) | 5 passed (incl. the new refusal test), then starved at load 20–23 — §4 |
+| `bash e2e/stack.sh run` (`jtt-e2e-p3`) | 5 passed (incl. the new refusal test), then starved at load 20–23 |
+| `bash e2e/stack.sh run` (`jtt-e2e-p4`) | **15/16**; student isolation timed out on a Verify that answered 200 after 70.2 s (trace) — re-run alone (`jtt-e2e-p5`): **passed** |
 | `make beta-validate` | **not run** (§4) |
 
 ## 4. Still open
 
-- Browser E2E on the final tree: the run in this pass passed its first five
-  tests (including the new refusal test) and then starved (load 20–23: five
-  other worktrees' kind control planes at ~410% of the Docker VM; the e2e api's
-  `/health` took up to 17.8 s, and it went unhealthy after being re-created).
-  **LOCAL ENVIRONMENT**; not re-run on a quiet machine.
+- Browser E2E: 15/16 on the final code, the remaining test passing alone (§3).
+  Verification took 70 s once at load ~20 — a host-sizing signal for §13, not a
+  defect. Not yet in CI.
 - `make beta-validate` on the current tree: still not re-run (a sixth kind
   cluster on this VM would endanger other worktrees' clusters).
 - Unchanged minor findings from the 2026-09-17 report §4 (Verify after cleanup
