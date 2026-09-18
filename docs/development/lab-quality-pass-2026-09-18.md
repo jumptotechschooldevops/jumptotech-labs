@@ -21,7 +21,7 @@ other stacks.
 - Every lab was audited against the handler code of the checks it uses —
   what `service_port`, `file_content`, `environment_reference_exists` and the
   rest *actually* accept — not against their labels.
-- **57 labs changed**, all to grade more precisely or to describe their
+- **59 labs changed**, all to grade more precisely or to describe their
   starting state truthfully. No lab was added or removed; no lab's topic
   changed.
 - **Five verifier capabilities added**, each because it closed a defect in
@@ -65,7 +65,7 @@ than the task claims; **P3** wording.
 
 | Defect | Labs affected | Fix |
 |---|---|---|
-| The Ansible sandbox image had no `jtt_stats` callback: it shipped with the original Ansible branch (f6ffd7e) and was lost when the track was ported to main (5d2673b). Every `ansible_idempotent` run reported "did not complete". | ANSIBLE-006, -007, -008, -009, -010 (and -003 now) | 3609da1 — measured on a private image tag with a real topology |
+| The Ansible sandbox image had no `jtt_stats` callback: it shipped with the original Ansible branch (f6ffd7e) and was lost when the track was ported to main (5d2673b). Every `ansible_idempotent` run reported "did not complete". | ANSIBLE-006, -007, -008, -009, -010 (and -003 now) | 3609da1 — measured on a private image tag with a real topology; ANSIBLE-006 then passes 5/5 |
 | `workspace_file_exists` failure listed the missing graded values — one Check on a blank worksheet printed DOCKER-009's `137`/`OOMKilled` and NET-022's answers. Fixed on an unmerged networking branch, never on `main`. | DOCKER-009, NET-022 | Cherry-picked `330a709` (c944748) |
 | `environment_reference_exists` fell back to a text search that ignored comments and `via`: `sh 'echo $REGISTRY_PASSWORD \| docker login …'` passed "bound from the credential store"; a comment passed; a variable's own use passed "defined". `workflow_env` accepted a `with:` input. `jenkins_stage_exists` counted `// docker push`. | CICD-005, -008, -009, -010 | 0d2409c |
 | Terraform configuration checks scanned `.tf` files four directories deep; Terraform loads only the root module. A decoy `terraform/x/decoy.tf` satisfied every configuration check. | TF-002, -005, -006, -011, -016, -017, -018, -025, -026 | 698e7f0 |
@@ -103,6 +103,7 @@ than the task claims; **P3** wording.
 | K8S-004 | one of the two settings moved | each key referenced | f85b2d0 |
 | K8S-012 | Role also allowing ConfigMap update or Secret reads | both refused via SubjectAccessReview | f85b2d0 |
 | DOCKER-011 | worker "configured to reach http://statements-api" on the default bridge, where the name never resolves | seeded on `statements-net`; both must stay on it (live DinD suite 12/12) | 5d6a889 |
+| DOCKER-002, -014 | containers run from any image | image checked (live DinD: DOCKER-014 7/7) | 8f98587 |
 
 ### 3.3 Labs that taught or described the wrong thing (P1)
 
