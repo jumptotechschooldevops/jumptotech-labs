@@ -166,6 +166,10 @@ requirements:
     name: platform
     mode: data
     condition: postcondition
+    # "Inside a postcondition you refer to what was read as `self`": a
+    # postcondition that never mentions self asserts nothing about the read.
+    condition_mentions:
+      - self
     label: The data source asserts what it actually read
 
   - type: terraform_check_declared

@@ -585,7 +585,7 @@ describe('TF-005 — Multiple Resources and Dependencies', () => {
     const references = (await tf005()).requirements.filter(
       (r) => r.type === 'terraform_resource_references',
     ) as Array<Record<string, unknown>>;
-    expect(references).toHaveLength(2);
+    expect(references).toHaveLength(3);
 
     const integrity = references.find((r) => r.name === 'integrity_record');
     expect(integrity).toMatchObject({
@@ -594,11 +594,23 @@ describe('TF-005 — Multiple Resources and Dependencies', () => {
       referenced_attribute: 'content_sha256',
     });
 
-    const manifest = references.find((r) => r.name === 'deploy_manifest');
-    expect(manifest).toMatchObject({
-      attribute: 'content',
-      references: 'local_file.integrity_record',
-    });
+    // The manifest takes both of its values from resources: the record's
+    // path, and the same checksum the record carries.
+    const manifest = references.filter((r) => r.name === 'deploy_manifest');
+    expect(manifest).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attribute: 'content',
+          references: 'local_file.integrity_record',
+          referenced_attribute: 'filename',
+        }),
+        expect.objectContaining({
+          attribute: 'content',
+          references: 'local_file.service_config',
+          referenced_attribute: 'content_sha256',
+        }),
+      ]),
+    );
 
     // Still graded from applied state as well — the configuration checks were
     // added alongside, not instead.
@@ -1054,7 +1066,9 @@ describe('TF-025 — Custom Conditions', () => {
         ? (r.condition_mentions as string[])
         : [],
     );
-    expect(mentioned.sort()).toEqual(['environment', 'replicas']);
+    // `self` is how a postcondition names what was read — an identifier the
+    // task itself gives, not a function.
+    expect(mentioned.sort()).toEqual(['environment', 'replicas', 'self']);
     for (const fn of ['contains', 'regex', 'startswith', 'can', 'length']) {
       expect(mentioned).not.toContain(fn);
     }
@@ -1123,7 +1137,15 @@ describe('TF-018 — Expressions and Functions', () => {
       (r) => r.type === 'terraform_resource_references',
     ) as Array<Record<string, unknown>>;
     const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
-    expect(pairs).toEqual(['content->var.environment', 'content->var.services']);
+    // The inputs, and the locals the task asks to be computed and then used —
+    // four locals declared beside a typed-out manifest passed before.
+    expect(pairs).toEqual([
+      'content->local.gold_services',
+      'content->local.scaled_replicas',
+      'content->local.service_summary',
+      'content->var.environment',
+      'content->var.services',
+    ]);
   });
 
   it('grades values that only an expression produces', async () => {
