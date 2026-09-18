@@ -109,62 +109,75 @@ setup:
       label: The findings sheet starts out unanswered
 
 requirements:
-  # Every check is line-anchored with a leading newline so that one key's value
-  # cannot satisfy another key whose name ends with the same text.
-  - type: file_content
+  # Every answer is a whole `KEY=value` line, given once: a key answered with
+  # every candidate from the export (both security groups, all nine times)
+  # fails, and one key's value cannot satisfy another key whose name ends with
+  # the same text.
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nEVENT_NAME=RevokeSecurityGroupIngress\n"
+    key: EVENT_NAME
+    equals: RevokeSecurityGroupIngress
     label: The API call that caused the outage is identified
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nEVENT_SOURCE=ec2.amazonaws.com\n"
+    key: EVENT_SOURCE
+    equals: ec2.amazonaws.com
     label: The service that recorded the call is identified
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nEVENT_TIME=2026-08-25T03:14:52Z\n"
+    key: EVENT_TIME
+    equals: "2026-08-25T03:14:52Z"
     label: The time of the call is recorded exactly as CloudTrail has it
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nAWS_REGION=eu-west-1\n"
+    key: AWS_REGION
+    equals: eu-west-1
     label: The Region the call was made to is identified
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nAFFECTED_SECURITY_GROUP=sg-0a1b2c3d4e5f60718\n"
+    key: AFFECTED_SECURITY_GROUP
+    equals: sg-0a1b2c3d4e5f60718
     label: The security group that was changed is identified
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nPRINCIPAL_ARN=arn:aws:sts::123456789012:assumed-role/PlatformDeployRole/deploy-9f31c2\n"
+    key: PRINCIPAL_ARN
+    equals: "arn:aws:sts::123456789012:assumed-role/PlatformDeployRole/deploy-9f31c2"
     label: The principal that made the call is identified by its full ARN
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nPRINCIPAL_ID=AROAEXAMPLEROLE00004:deploy-9f31c2\n"
+    key: PRINCIPAL_ID
+    equals: "AROAEXAMPLEROLE00004:deploy-9f31c2"
     label: The principalId CloudTrail recorded for that identity is captured
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nSOURCE_IP=203.0.113.47\n"
+    key: SOURCE_IP
+    equals: "203.0.113.47"
     label: The address the request came from is identified
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nOUTCOME=success\n"
+    key: OUTCOME
+    equals: success
     label: The call is correctly reported as having succeeded
 
   # --- the earlier attempt, which did not succeed ---------------------------
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nDENIED_PRINCIPAL_ARN=arn:aws:iam::123456789012:user/priya.raman\n"
+    key: DENIED_PRINCIPAL_ARN
+    equals: "arn:aws:iam::123456789012:user/priya.raman"
     label: The identity behind the earlier refused attempt is identified
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/incident-9214/findings.env
-    contains: "\nDENIED_ERROR_CODE=Client.UnauthorizedOperation\n"
+    key: DENIED_ERROR_CODE
+    equals: Client.UnauthorizedOperation
     label: The error CloudTrail recorded for the refused attempt is captured
 
   # --- the sheet is a set of conclusions, not a copy of the evidence --------
