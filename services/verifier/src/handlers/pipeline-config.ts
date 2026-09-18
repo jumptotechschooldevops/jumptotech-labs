@@ -13,7 +13,7 @@
 import { fail, pass, type HandlerOutcome, type CicdVerifierHandler } from '../contract.js';
 import type { CicdVerifyReader } from '../cicd-reader.js';
 import { parseWorkflow } from '../ci/workflow.js';
-import { allAssignments, parseJenkinsfile } from '../ci/jenkinsfile.js';
+import { allAssignments, parseJenkinsfile, stripComments } from '../ci/jenkinsfile.js';
 import {
   findHardcodedSecrets,
   isSecretReference,
@@ -75,11 +75,18 @@ export const environmentReferenceExists: CicdVerifierHandler<'environment_refere
     if (matching.length === 0) {
       // A step-level `env:` in a workflow and a `withCredentials` binding in a
       // Jenkinsfile both introduce a name without an assignment the parsers
-      // model, so a text fallback keeps a correct answer from failing.
-      if (mentionsName(text, requirement.name)) {
+      // model, so a text fallback keeps a correct answer from failing. The
+      // fallback holds the same line the structured path does: a comment is
+      // not configuration, and when the lab pins a mechanism, only a line that
+      // *uses that mechanism* counts — `$REGISTRY_PASSWORD` in a shell step is
+      // a use of the name, not a binding of it.
+      if (referencedInCode(text, requirement.path, requirement.name, requirement.via)) {
         return pass('referenced in the pipeline');
       }
       const declared = [...new Set(assignments.map((a) => a.key))];
+      if (requirement.via && mentionsName(codeLines(text, requirement.path), requirement.name)) {
+        return fail(`${requirement.name} is used, but never ${viaDescription(requirement.via)}`);
+      }
       return fail(
         declared.length > 0
           ? `'${requirement.path}' declares ${declared.slice(0, 8).join(', ')} but not ${requirement.name}`
@@ -89,7 +96,7 @@ export const environmentReferenceExists: CicdVerifierHandler<'environment_refere
 
     if (requirement.via) {
       const wanted = viaDescription(requirement.via);
-      const satisfied = matching.some((a) => matchesVia(requirement.via!, a.value));
+      const satisfied = matching.some((a) => matchesVia(requirement.via!, a));
       if (!satisfied) {
         return fail(`${requirement.name} is set, but not ${wanted}`);
       }
@@ -129,18 +136,29 @@ export const secretNotHardcoded: CicdVerifierHandler<'secret_not_hardcoded'> = {
  * Jenkins `environment` entry (which is satisfied by the assignment existing
  * at all — the caller has already found it in that block).
  */
-function matchesVia(via: string, value: string | null): boolean {
+function matchesVia(via: string, assignment: CandidateAssignment): boolean {
+  const { value } = assignment;
   switch (via) {
     case 'workflow_secret':
       return value !== null && /\$\{\{\s*secrets\./i.test(value);
     case 'jenkins_credentials':
       return value !== null && /\bcredentials\s*\(/i.test(value);
     case 'workflow_env':
+      // `with:` inputs are recorded as assignments too — so that a token
+      // passed to an action inline is still caught as hardcoded — but an
+      // action input is not an environment variable. Only an `env:` mapping,
+      // at workflow, job or step level, declares one.
+      return isWorkflowEnvLocation(assignment.location);
     case 'jenkins_environment':
       return true;
     default:
       return true;
   }
+}
+
+/** `env`, `jobs.<id>.env` or `jobs.<id>.steps[n].env` — never `….with`. */
+function isWorkflowEnvLocation(location: string | undefined): boolean {
+  return location === undefined || location === 'env' || location.endsWith('.env');
 }
 
 function viaDescription(via: string): string {
@@ -159,24 +177,80 @@ function viaDescription(via: string): string {
 }
 
 /**
- * Is the name referenced anywhere in the file, as a whole word?
+ * The fallback: does code in the file (not a comment) reference the name the
+ * way the lab asks for?
  *
- * Used only as a fallback when no structured assignment carries it — and it is
- * paired with `isSecretReference` so a bare mention inside a hardcoded value
+ *   no `via`              any mention in code
+ *   `jenkins_credentials` a `withCredentials` binding that names it as its
+ *                         variable (`passwordVariable: 'NAME'` and friends)
+ *   `workflow_secret`     `${{ secrets.NAME }}`
+ *   `workflow_env`, `jenkins_environment`
+ *                         never — both are declarations the parsers model, so
+ *                         reaching the fallback means there is none
+ */
+function referencedInCode(text: string, path: string, name: string, via: string | undefined): boolean {
+  const lines = codeLines(text, path);
+  const escaped = escapeRegExp(name);
+  switch (via) {
+    case undefined:
+      return mentionsName(lines, name);
+    case 'jenkins_credentials': {
+      const binding = new RegExp(`\\b[A-Za-z]*[Vv]ariable\\s*:\\s*['"]${escaped}['"]`);
+      return lines.some((line) => binding.test(line));
+    }
+    case 'workflow_secret': {
+      const secret = new RegExp(`\\$\\{\\{[^}]*\\bsecrets\\.${escaped}\\b`);
+      return lines.some((line) => secret.test(line));
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * Is the name referenced anywhere in these lines, as a whole word?
+ *
+ * Paired with `isSecretReference` so a bare mention inside a hardcoded value
  * does not count.
  */
-function mentionsName(text: string, name: string): boolean {
+function mentionsName(lines: readonly string[], name: string): boolean {
   const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`);
-  for (const line of text.split('\n')) {
+  for (const line of lines) {
     if (!pattern.test(line)) continue;
     // Linear: the pipeline file is the student's, and `(.+?)\s*$` was not.
     const assignment = valueAfterSeparator(line);
-    // A line that assigns a plain literal to this name is a hardcoded value,
+    // A line that assigns a plain literal to *this name* is a hardcoded value,
     // not a reference; `secret_not_hardcoded` is the check that reports it.
-    if (assignment && !isSecretReference(assignment)) continue;
+    // `run: echo "$NAME"` assigns to `run`, and is a use of the name.
+    if (assignment && assignedKey(line) === name && !isSecretReference(assignment)) continue;
     return true;
   }
   return false;
+}
+
+/**
+ * The file's lines with comments removed.
+ *
+ * A Jenkinsfile goes through the Jenkins lexer, which knows `//`, `/* … *\/`
+ * and where strings are. Anything else here (a workflow, a shell script) uses
+ * `#`, which counts only at the start of a line or after whitespace, so
+ * `${{ … }}` and URLs survive. It can keep a comment it should have dropped
+ * inside an unusual string, but it never invents code.
+ */
+function codeLines(text: string, path: string): string[] {
+  if (isJenkinsPath(path)) return stripComments(text).split('\n');
+  return text.split('\n').map((line) => line.replace(/(^|\s)#.*$/, '$1'));
+}
+
+/** The key a `KEY = value` / `KEY: value` line assigns to, list dash and quotes removed. */
+function assignedKey(line: string): string {
+  const separator = line.search(/[:=]/);
+  if (separator < 0) return '';
+  return line
+    .slice(0, separator)
+    .replace(/^[\s-]*/, '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '');
 }
 
 function escapeRegExp(value: string): string {

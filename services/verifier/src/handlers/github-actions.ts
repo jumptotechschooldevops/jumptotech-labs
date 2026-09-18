@@ -15,6 +15,7 @@ import {
   runContains,
   usesAction,
   type WorkflowModel,
+  type WorkflowStep,
 } from '../ci/workflow.js';
 
 /**
@@ -193,12 +194,33 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
       if (requirement.with_keys !== undefined) {
         if (!requirement.with_keys.every((key) => step.withKeys.includes(key))) return false;
       }
+      if (requirement.with_contains !== undefined) {
+        if (!withContains(step, requirement.with_contains)) return false;
+      }
       return true;
     });
 
     if (matches.length > 0) {
       const step = matches[0];
       return pass(`step ${step?.index}${step?.name ? ` — ${step.name}` : ''}`);
+    }
+
+    // A step with the right action but the wrong inputs is the likeliest
+    // near-miss; say which inputs, never what they should hold.
+    if (requirement.with_contains !== undefined && requirement.uses !== undefined) {
+      const nearMiss = job.steps.find((step) => usesAction(step.uses, requirement.uses!));
+      const wrong = nearMiss
+        ? Object.keys(requirement.with_contains).filter(
+            (key) => !withContains(nearMiss, { [key]: requirement.with_contains![key]! }),
+          )
+        : [];
+      if (nearMiss && wrong.length > 0) {
+        return fail(
+          `step ${nearMiss.index}${nearMiss.name ? ` — ${nearMiss.name}` : ''} uses ${requirement.uses}, but its ${wrong
+            .map((key) => `'${key}'`)
+            .join(', ')} input${wrong.length === 1 ? ' does' : 's do'} not have the value this lab expects`,
+        );
+      }
     }
 
     // Explain against what the job *does* contain, so the student can compare.
@@ -220,3 +242,11 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
     );
   },
 };
+
+/** Every named input is a scalar whose value contains its fragment. */
+function withContains(step: WorkflowStep, wanted: Record<string, string>): boolean {
+  return Object.entries(wanted).every(([key, fragment]) => {
+    const value = step.withValues[key];
+    return value !== undefined && value.includes(fragment);
+  });
+}

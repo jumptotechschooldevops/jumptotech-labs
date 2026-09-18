@@ -137,6 +137,27 @@ export function parseJenkinsfile(text: string): JenkinsParseResult {
 function stripCommentsAndStrings(
   text: string,
 ): { ok: true; masked: string } | { ok: false; error: string } {
+  return mask(text, true);
+}
+
+/**
+ * The text with its comments blanked and its strings left alone.
+ *
+ * What a check that reads *code* should see: `sh 'docker login $REGISTRY_URL'`
+ * is a use of the variable, `// REGISTRY_URL` is not. The same lexer as the
+ * brace matcher, so a `//` inside a string (`'https://…'`) is not mistaken for
+ * a comment. An unterminated comment or string leaves the text as it is; the
+ * parser has already reported the file as malformed in that case.
+ */
+export function stripComments(text: string): string {
+  const masked = mask(text, false);
+  return masked.ok ? masked.masked : text;
+}
+
+function mask(
+  text: string,
+  blankStrings: boolean,
+): { ok: true; masked: string } | { ok: false; error: string } {
   const out = text.split('');
   let i = 0;
   const n = text.length;
@@ -168,7 +189,7 @@ function stripCommentsAndStrings(
     if (three === "'''" || three === '"""') {
       const end = text.indexOf(three, i + 3);
       if (end === -1) return { ok: false, error: `an unterminated ${three} string literal` };
-      blank(i, end + 3);
+      if (blankStrings) blank(i, end + 3);
       i = end + 3;
       continue;
     }
@@ -187,7 +208,7 @@ function stripCommentsAndStrings(
         if (text[k] === '\n') break;
         k += 1;
       }
-      blank(i, Math.min(k + 1, n));
+      if (blankStrings) blank(i, Math.min(k + 1, n));
       i = Math.min(k + 1, n);
       continue;
     }
@@ -382,7 +403,8 @@ export function findStage(pipeline: JenkinsPipeline, name: string): JenkinsStage
 
 /** Fragments not found in a stage's steps block. Whitespace- and case-insensitive. */
 export function stepsMissing(stage: JenkinsStage, fragments: readonly string[]): string[] {
-  const haystack = (stage.stepsBody ?? '').replace(/\s+/g, ' ').toLowerCase();
+  // A comment in a stage is not a step: `// docker push` does not push.
+  const haystack = stripComments(stage.stepsBody ?? '').replace(/\s+/g, ' ').toLowerCase();
   return fragments.filter((f) => !haystack.includes(f.replace(/\s+/g, ' ').toLowerCase()));
 }
 

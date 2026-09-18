@@ -3438,6 +3438,19 @@ const cicdRequirementSchemas = {
       run_contains: z.array(z.string().min(1).max(120)).max(6).optional(),
       /** Require the step's `with:` block to set these input names. */
       with_keys: z.array(identifier).max(10).optional(),
+      /**
+       * Require `with:` inputs to have a value containing a fragment, e.g.
+       * `{ path: dist }` for an upload step. Matched as a substring of the value
+       * as written (a number or boolean is compared as its YAML text), the way
+       * `run_contains` matches a command. A failure never names the fragment:
+       * the right value is often what the student had to work out.
+       */
+      with_contains: z
+        .record(identifier, z.string().min(1).max(120))
+        .refine((m) => Object.keys(m).length > 0 && Object.keys(m).length <= 10, {
+          message: 'must name between 1 and 10 inputs',
+        })
+        .optional(),
       ...common,
     })
     .strict()

@@ -15,7 +15,7 @@
  * thing with a build's result" is proved here, where it can be exhaustive.
  */
 import { describe, expect, it } from 'vitest';
-import type { Requirement } from '@jumptotech/lab-orchestrator';
+import { requirementSchema, type Requirement } from '@jumptotech/lab-orchestrator';
 import { verifyRequirement } from '../src/index.js';
 import { CicdVerifyReader } from '../src/cicd-reader.js';
 import type { SandboxPathRead } from '@jumptotech/lab-orchestrator';
@@ -318,6 +318,147 @@ describe('environment_reference_exists', () => {
       sandbox,
     );
     expect(result.status).toBe('fail');
+  });
+});
+
+describe('github_workflow_step_exists — with_contains', () => {
+  const workflow = (withBlock: string) => `name: CI
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+${withBlock}
+`;
+  const req = (withContains: Record<string, string>) => ({
+    type: 'github_workflow_step_exists',
+    path: WORKFLOW,
+    job: 'build',
+    uses: 'actions/setup-node',
+    with_contains: withContains,
+  });
+
+  it('matches a number or a string by its YAML text', async () => {
+    for (const value of ['22', "'22'", '"22.4.0"']) {
+      const sandbox = new FakeCicdSandbox().put(WORKFLOW, workflow(`          node-version: ${value}`));
+      expect((await check(req({ 'node-version': '22' }), sandbox)).status).toBe('pass');
+    }
+  });
+
+  it('fails a wrong value, and names the input but never the expected value', async () => {
+    const sandbox = new FakeCicdSandbox().put(WORKFLOW, workflow('          node-version: 18'));
+    const result = await check(req({ 'node-version': '22' }), sandbox);
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain("'node-version' input does not have the value this lab expects");
+    expect(result.detail).not.toContain('22');
+  });
+
+  it('fails an input that is missing or is not a scalar', async () => {
+    for (const block of ['          cache: npm', '          node-version:\n            - 22']) {
+      const sandbox = new FakeCicdSandbox().put(WORKFLOW, workflow(block));
+      expect((await check(req({ 'node-version': '22' }), sandbox)).status).toBe('fail');
+    }
+  });
+
+  it('is refused by the schema when it names no input', () => {
+    expect(() => requirementSchema.parse(req({}))).toThrow();
+  });
+});
+
+describe('environment_reference_exists — what counts as a declaration', () => {
+  const ref = (name: string, via?: string) => ({
+    type: 'environment_reference_exists',
+    path: WORKFLOW,
+    name,
+    ...(via ? { via } : {}),
+  });
+  const workflow = (body: string) => `name: CI
+on: push
+${body}`;
+
+  it('does not take an action input for an environment variable', async () => {
+    const sandbox = new FakeCicdSandbox().put(
+      WORKFLOW,
+      workflow(`jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: some/action@v1
+        with:
+          IMAGE_TAG: abc123
+`),
+    );
+    const result = await check(ref('IMAGE_TAG', 'workflow_env'), sandbox);
+    expect(result.status).toBe('fail');
+  });
+
+  it('accepts env at workflow, job and step level for workflow_env', async () => {
+    const bodies = [
+      'env:\n  IMAGE_TAG: abc\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n',
+      'jobs:\n  build:\n    runs-on: ubuntu-latest\n    env:\n      IMAGE_TAG: abc\n    steps:\n      - run: echo\n',
+      'jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n        env:\n          IMAGE_TAG: abc\n',
+    ];
+    for (const body of bodies) {
+      const sandbox = new FakeCicdSandbox().put(WORKFLOW, workflow(body));
+      expect((await check(ref('IMAGE_TAG', 'workflow_env'), sandbox)).status).toBe('pass');
+    }
+  });
+
+  it('with no via, counts a use in code but not a comment', async () => {
+    const used = new FakeCicdSandbox().put(
+      WORKFLOW,
+      workflow('jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo "$DEPLOY_TARGET"\n'),
+    );
+    expect((await check(ref('DEPLOY_TARGET'), used)).status).toBe('pass');
+
+    const commented = new FakeCicdSandbox().put(
+      WORKFLOW,
+      workflow('# DEPLOY_TARGET: staging\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n'),
+    );
+    expect((await check(ref('DEPLOY_TARGET'), commented)).status).toBe('fail');
+  });
+
+  it('for workflow_secret, accepts the secrets context used directly and nothing weaker', async () => {
+    const direct = new FakeCicdSandbox().put(
+      WORKFLOW,
+      workflow(
+        'jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: docker/login-action@v3\n        with:\n          password: ${{ secrets.REGISTRY_TOKEN }}\n',
+      ),
+    );
+    expect((await check(ref('REGISTRY_TOKEN', 'workflow_secret'), direct)).status).toBe('pass');
+
+    const shell = new FakeCicdSandbox().put(
+      WORKFLOW,
+      workflow('jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo "$REGISTRY_TOKEN" | docker login --password-stdin\n'),
+    );
+    const result = await check(ref('REGISTRY_TOKEN', 'workflow_secret'), shell);
+    expect(result.status).toBe('fail');
+    expect(result.detail).toBe('REGISTRY_TOKEN is used, but never read from the secrets context');
+  });
+});
+
+describe('jenkins_stage_exists — steps_contain reads code, not comments', () => {
+  it('does not count a commented-out step, and does count one inside a string with //', async () => {
+    const jenkinsfile = (steps: string) => `pipeline {
+  agent any
+  stages {
+    stage('Publish') {
+      steps {
+${steps}
+      }
+    }
+  }
+}
+`;
+    const req = { type: 'jenkins_stage_exists', path: 'Jenkinsfile', stage: 'Publish', steps_contain: ['docker push'] };
+
+    const commented = new FakeCicdSandbox().put('Jenkinsfile', jenkinsfile("        // sh 'docker push x'\n        sh 'echo skipped'"));
+    expect((await check(req, commented)).status).toBe('fail');
+
+    const real = new FakeCicdSandbox().put('Jenkinsfile', jenkinsfile("        sh 'docker push https://registry.example/x' // pushed"));
+    expect((await check(req, real)).status).toBe('pass');
   });
 });
 
