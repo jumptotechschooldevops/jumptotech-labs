@@ -714,14 +714,17 @@ describe('TF-002 — Variables and Input Values', () => {
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tfvars'))).toBe(false);
-    // The one configuration file a check names is main.tf, and only to hold
-    // the task's own rule that it names no environment.
+    // No check reads a configuration file as text: the rule that the resource
+    // names no environment is graded on its string literals, so a comment in
+    // main.tf can neither fail nor excuse it.
     const tfPaths = (await tf002()).requirements.filter(
       (r) => 'path' in r && String(r.path).endsWith('.tf'),
     );
-    expect(tfPaths.map((r) => [r.type, 'path' in r ? r.path : ''])).toEqual([
-      ['file_content_absent', 'terraform/main.tf'],
-    ]);
+    expect(tfPaths).toEqual([]);
+    const literal = (await tf002()).requirements.filter((r) => r.type === 'terraform_resource_literal_absent');
+    expect(literal).toHaveLength(1);
+    expect(literal[0]).toMatchObject({ dir: 'terraform', resource_type: 'local_file', name: 'service_config' });
+    expect('literals' in literal[0]! ? [...literal[0].literals].sort() : []).toEqual(['production', 'staging']);
   });
 });
 

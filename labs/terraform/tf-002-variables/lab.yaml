@@ -95,9 +95,10 @@ task:
     `replicas` and `debug` come from the variables instead of being typed in.
     The `service` value does not vary, so it stays as it is.
 
-    Nothing in the configuration should name a particular environment when you
-    are done. If the word `production` appears anywhere in `main.tf`, the file
-    is still an environment-specific copy.
+    Nothing in the resource should name a particular environment when you are
+    done: if any of its values still spells out `staging` or `production`, the
+    file is still an environment-specific copy. Comments are notes for people,
+    not configuration, and are not graded.
 
     Finally, apply it as production, with **four** replicas and debug turned
     **off**. Two of those differ from the defaults you just declared, so you
@@ -194,12 +195,16 @@ requirements:
     name: service_config
     label: The configuration resource was applied
 
-  # The task: "If the word `production` appears anywhere in `main.tf`, the
-  # file is still an environment-specific copy."
-  - type: file_content_absent
-    path: terraform/main.tf
-    contains: production
-    label: main.tf names no particular environment
+  # The task: no value of the resource may still spell out an environment.
+  # Graded on the configuration's string literals, so the seeded comment that
+  # mentions production neither fails a correct solution nor excuses a
+  # hard-coded one.
+  - type: terraform_resource_literal_absent
+    dir: terraform
+    resource_type: local_file
+    name: service_config
+    literals: [staging, production]
+    label: The resource names no particular environment
   - type: file_exists
     path: terraform/build/production.json
     label: The production configuration was written

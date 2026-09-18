@@ -233,6 +233,37 @@ describe('hcl — the cases that defeat regular expressions', () => {
   });
 });
 
+describe('hcl — an argument\'s string literals', () => {
+  it('records quoted strings and heredocs, never comments', () => {
+    const doc = scanHcl(`
+resource "local_file" "a" {
+  # production
+  filename = "build/\${var.environment}.json" # production
+  content = jsonencode({
+    note = "keep" // production
+    /* production */
+    env  = "staging"
+  })
+  body = <<-EOT
+    heredoc text
+  EOT
+}
+`);
+    const block = findBlock(doc, 'resource', 'local_file', 'a')!;
+    const literals = Object.fromEntries(block.arguments.map((a) => [a.name, a.literals]));
+    expect(literals).toEqual({
+      filename: ['build/${var.environment}.json'],
+      content: ['keep', 'staging'],
+      body: ['    heredoc text\n'],
+    });
+  });
+
+  it('is empty for an expression with no strings', () => {
+    const doc = scanHcl('x = var.replicas # "not a literal"\n');
+    expect(doc.arguments[0]?.literals).toEqual([]);
+  });
+});
+
 describe('hcl — merging several files', () => {
   it('merges top-level blocks and records which file each came from', () => {
     const doc = scanHclFiles([

@@ -30,6 +30,17 @@ export interface HclArgument {
   name: string;
   /** Raw source of the right-hand side, trimmed. Never evaluated. */
   value: string;
+  /**
+   * The string literals in the right-hand side — quoted strings and heredoc
+   * bodies — as the lexer read them, in order.
+   *
+   * Taken from the tokens rather than from `value`, because comments never
+   * become tokens: a `# production` note inside a multi-line expression is not
+   * a literal here, and it cannot hide one that follows it either (in the
+   * whitespace-collapsed `value`, a `#` swallows the rest of the expression).
+   * An interpolated template is one literal whose text includes the `${…}`.
+   */
+  literals: string[];
   line: number;
 }
 
@@ -385,8 +396,8 @@ class Parser {
       // `==` is a comparison inside an expression, not an assignment.
       if (!(next && next.kind === 'symbol' && next.value === '=')) {
         this.#index += after.offset + 1;
-        const value = this.#readExpression();
-        this.#lastArgument = { name: head.value, value, line: head.line };
+        const { value, literals } = this.#readExpression();
+        this.#lastArgument = { name: head.value, value, literals, line: head.line };
         return 'argument';
       }
     }
@@ -431,10 +442,11 @@ class Parser {
    * spanning several lines is read whole. The scan stops at the first newline
    * at depth zero — HCL's own statement terminator.
    */
-  #readExpression(): string {
+  #readExpression(): { value: string; literals: string[] } {
     const first = this.#peek();
-    if (!first) return '';
+    if (!first) return { value: '', literals: [] };
 
+    const literals: string[] = [];
     let start = -1;
     let end = -1;
     let depth = 0;
@@ -463,15 +475,16 @@ class Parser {
       }
       if (token.kind === 'symbol' && token.value === ',' && depth === 0) break;
 
+      if (token.kind === 'string') literals.push(token.value);
       if (start === -1) start = token.start;
       end = token.end;
       this.#index += 1;
     }
 
-    if (start === -1) return '';
+    if (start === -1) return { value: '', literals };
     // Collapse runs of whitespace so a multi-line literal is one comparable
     // string, but keep every other character exactly as written.
-    return this.source.slice(start, end).replace(/\s+/g, ' ').trim();
+    return { value: this.source.slice(start, end).replace(/\s+/g, ' ').trim(), literals };
   }
 
   /** Skip an unrecognised statement without losing brace balance. */

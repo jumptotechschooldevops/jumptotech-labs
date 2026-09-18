@@ -1746,6 +1746,37 @@ const sandboxRequirementSchemas = {
    * A literal that merely looks like an address never counts — the reference
    * has to be live, meaning bare or inside `${…}` interpolation.
    */
+  /**
+   * No string literal in a resource's own configuration contains any of these
+   * texts — the resource no longer spells out a value that should come from an
+   * input.
+   *
+   * Graded on the configuration, not the file: comments are not literals (the
+   * scanner's lexer drops them), and only the resource's own arguments are
+   * read, so an allowed-values list in a variable's `validation` block, or a
+   * note in a comment, does not count. Compared without regard to case. A
+   * failure names the argument, never the text found.
+   */
+  terraform_resource_literal_absent: z
+    .object({
+      type: z.literal('terraform_resource_literal_absent'),
+      dir: sandboxPath,
+      resource_type: terraformTypeName,
+      name: terraformLabel,
+      literals: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .max(128)
+            .refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' }),
+        )
+        .min(1)
+        .max(10),
+      ...common,
+    })
+    .strict(),
+
   terraform_resource_references: z
     .object({
       type: z.literal('terraform_resource_references'),
@@ -3919,6 +3950,7 @@ export const REQUIREMENT_FAMILIES = {
   terraform_output_equals: 'terraform',
   terraform_state_absent: 'terraform',
   terraform_resource_references: 'terraform',
+  terraform_resource_literal_absent: 'terraform',
   terraform_variable_declared: 'terraform',
   terraform_locals_declared: 'terraform',
   terraform_data_source_declared: 'terraform',
