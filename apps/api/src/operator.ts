@@ -84,7 +84,7 @@ export interface OperatorSessionView {
   provider: string;
   status: SessionStatus;
   statusReason?: string;
-  /** The handle the student's terminal pane shows; how a student can name their lab to an operator. */
+  /** The sandbox's handle: the container name (`jtt-lab-…`) or namespace suffix to look for on the host. */
   sandboxRef: string;
   /** Kubernetes sessions only. */
   namespace?: string;
@@ -112,7 +112,8 @@ export interface OperatorStatus {
   };
   launchesPaused: boolean;
   database: { ok: boolean };
-  providers: Array<{ provider: string; available: boolean; reason?: string }>;
+  /** Every registered provider. `disabled` ones were switched off on purpose and never degrade the verdict. */
+  providers: Array<{ provider: string; available: boolean; disabled: boolean; reason?: string }>;
   reaper: { lastSuccessAt: string | null; secondsSinceSuccess: number | null; stalled: boolean };
   /**
    * Can a student press Start Lab and get a lab right now? `no` names every
@@ -176,6 +177,7 @@ export async function operatorStatus(deps: OperatorDeps): Promise<OperatorStatus
       .map((status) => ({
         provider: status.providerId,
         available: status.available,
+        disabled: status.disabled === true,
         ...(status.reason ? { reason: status.reason } : {}),
       }));
   } catch {
@@ -194,10 +196,13 @@ export async function operatorStatus(deps: OperatorDeps): Promise<OperatorStatus
   if (deps.launchesPaused) no.push('launches are paused (LAB_LAUNCHES_PAUSED=true)');
   if (occupying === null) no.push('the session store cannot be read — PostgreSQL (RB-02)');
   else if (available === 0) no.push(`capacity is full: ${count} of ${lifetimes.maxActiveSessions} slots held`);
-  if (providers.length > 0 && providers.every((provider) => !provider.available)) {
-    no.push('no sandbox provider is available');
+  // A track switched off by configuration is the deployment as intended; only
+  // an enabled provider that fails its probe is news.
+  const enabled = providers.filter((provider) => !provider.disabled);
+  if (enabled.length === 0 || enabled.every((provider) => !provider.available)) {
+    no.push(enabled.length === 0 ? 'no sandbox provider is enabled' : 'no enabled sandbox provider is available');
   } else {
-    for (const provider of providers.filter((p) => !p.available)) {
+    for (const provider of enabled.filter((p) => !p.available)) {
       degraded.push(`provider ${provider.provider} is unavailable: its labs refuse to start`);
     }
   }

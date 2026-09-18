@@ -51,6 +51,12 @@ export interface ProviderStatus extends ProviderAvailability {
   sandboxKind: string;
   /** True when the provider is registered at all. */
   registered: boolean;
+  /**
+   * True when the operator switched it off (`enabled: false`), as opposed to a
+   * provider that is on and failing its probe. A disabled track is a deployment
+   * decision; an unavailable one is an incident.
+   */
+  disabled?: boolean;
 }
 
 /** How long a probe result is trusted before the registry re-checks. */
@@ -235,6 +241,7 @@ export class ProviderRegistry {
       status = {
         ...base,
         available: false,
+        disabled: true,
         reason: registration.disabledReason ?? 'disabled by configuration',
         ...(registration.remediation ? { remediation: registration.remediation } : {}),
       };

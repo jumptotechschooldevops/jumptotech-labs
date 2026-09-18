@@ -134,7 +134,10 @@ export function formatStatus(status: OperatorStatus): string {
     }`,
     'providers:',
     ...status.providers.map(
-      (p) => `  ${p.provider.padEnd(12)} ${p.available ? 'available' : `UNAVAILABLE${p.reason ? ` — ${p.reason}` : ''}`}`,
+      (p) =>
+        `  ${p.provider.padEnd(12)} ${
+          p.available ? 'available' : p.disabled ? 'off (by configuration)' : `UNAVAILABLE${p.reason ? ` — ${p.reason}` : ''}`
+        }`,
     ),
   ];
   return lines.join('\n');

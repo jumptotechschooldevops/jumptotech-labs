@@ -212,6 +212,33 @@ describe('operator socket — reading', () => {
     expect(pausedStatus.body.data.newLabs.reasons.join('\n')).toMatch(/LAB_LAUNCHES_PAUSED/);
   });
 
+  it('does not count a track switched off by configuration against the verdict', async () => {
+    const { sessions, call } = await compose();
+    const statuses = sessions.providers.statuses.bind(sessions.providers);
+    sessions.providers.statuses = async () => [
+      ...(await statuses()),
+      {
+        providerId: 'aws',
+        implementation: 'aws',
+        sandboxKind: 'none',
+        registered: true,
+        available: false,
+        disabled: true,
+        reason: 'AWS labs are architecture only.',
+      },
+    ];
+    const status = await call('GET', '/v1/status');
+    expect(status.body.data.newLabs).toEqual({ verdict: 'yes', reasons: [] });
+    expect(status.body.data.providers).toContainEqual(expect.objectContaining({ provider: 'aws', disabled: true }));
+
+    // An enabled provider failing its probe is news.
+    sessions.providers.statuses = async () =>
+      (await statuses()).map((s) => ({ ...s, available: false, reason: 'the cluster is not reachable' }));
+    const down = await call('GET', '/v1/status');
+    expect(down.body.data.newLabs.verdict).toBe('no');
+    expect(down.body.data.newLabs.reasons).toContain('no enabled sandbox provider is available');
+  });
+
   it('calls a reaper that has missed five sweeps stalled', async () => {
     const { call } = await compose({ reaperLastSuccessMs: Date.now() - 400_000 });
     const status = await call('GET', '/v1/status');
