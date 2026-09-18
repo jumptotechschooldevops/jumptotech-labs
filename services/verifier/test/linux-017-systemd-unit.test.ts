@@ -118,6 +118,17 @@ describe('LINUX-017 grades the unit semantically', () => {
     expect(result.passed).toBe(true);
   });
 
+  it('reads RestartSec as the time span systemd reads, whatever unit it is written in', async () => {
+    for (const spelling of ['5s', '5sec', '5 seconds', '5000ms']) {
+      const result = await verify(world(CORRECT.replace('RestartSec=5', `RestartSec=${spelling}`)));
+      expect(failed(result.checks), spelling).toEqual([]);
+    }
+    for (const wrong of ['5min', '50', '5x', '']) {
+      const result = await verify(world(CORRECT.replace('RestartSec=5', `RestartSec=${wrong}`)));
+      expect(result.passed, wrong).toBe(false);
+    }
+  });
+
   it('fails a restart policy that would fight the on-call engineer', async () => {
     // `always` brings the service back after a deliberate stop, which the
     // runbook explicitly rules out. This is the draft's substantive error.
