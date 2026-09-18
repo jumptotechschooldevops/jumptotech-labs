@@ -78,6 +78,13 @@ observations. Now they are one story.
 Not tied to one alert, and written as procedures rather than in the nine-section
 shape above:
 
+- [Private beta incident response](private-beta-incident-response.md)
+  — **start here when something is wrong**: incidents A–U by what you see
+  (site down, sign-in, cannot start, capacity, terminal, Verify, Reset,
+  restarts, PostgreSQL, disk, memory, Docker, kind, TLS, one student, all
+  students), each with what to check, the commands, the recovery, when to stop
+  and escalate, and what evidence to keep; the things never to do; and how to
+  collect a sanitized diagnostics bundle.
 - [Private beta operations](private-beta-operations.md)
   — BETA-P0-018, **start here when running the beta**: the production command,
   the daily health check, the operator contract (23 questions and where each is

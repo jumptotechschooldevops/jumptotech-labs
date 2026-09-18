@@ -36,8 +36,9 @@ the defect incident exercise 3 found in this very alert.
 |---|---|---|
 | `capacity_reached` | The platform is full | RB-04 |
 | `student_limit_reached` | A student already holds `MAX_ACTIVE_SESSIONS_PER_STUDENT` sessions. Not a failure; not counted by the alert | nowhere — RB-04 §9 if one account dominates |
-| `provider_unavailable` | The substrate is down | RB-09 / RB-06 |
-| `provision_failed` | The substrate is up and creation failed | **stay here** |
+| `provider_unavailable` | The substrate is down, as its availability probe (memoised 30 s, the same one the catalog shows) reports it. Nothing was created and no slot was held | RB-09 / RB-06; Kubernetes: RB-18 first |
+| `provision_failed` | The substrate was up at the last probe and creation failed. A substrate that died within the probe's 30 s also lands here once | **stay here** |
+| `platform_error` | The start failed before the substrate was asked: the session store threw. The `lab.start.failed` line's `code` names it (`ECONNREFUSED`, a SQLSTATE) | RB-02, then RB-11 |
 | `unauthorized` | Callers are not authenticated | RB-14 |
 
 ## 2. Scope it — before touching anything

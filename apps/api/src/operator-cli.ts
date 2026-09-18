@@ -3,10 +3,10 @@
  *
  * Run inside the api container, where the socket is:
  *
- *   prod exec -T api npx tsx apps/api/src/operator-cli.ts status
- *   prod exec -T api npx tsx apps/api/src/operator-cli.ts sessions [--recent]
- *   prod exec -T api npx tsx apps/api/src/operator-cli.ts session <session-id>
- *   prod exec -T api npx tsx apps/api/src/operator-cli.ts end <session-id> --yes
+ *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts status
+ *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts sessions [--recent]
+ *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts session <session-id>
+ *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts end <session-id> --yes
  *
  * (docs/runbooks/private-beta-operations.md §1 defines `ops` for this.)
  * `--json` prints the api's answer as it came. Exit 0 on success, 1 when the
