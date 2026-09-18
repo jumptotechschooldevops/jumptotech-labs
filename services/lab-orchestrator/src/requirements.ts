@@ -2143,6 +2143,37 @@ const sandboxRequirementSchemas = {
     .strict(),
 
   /**
+   * A property resolves to one of the given values, written as the `Fn::Sub`
+   * template that would produce it (`${Bucket.Arn}/*`).
+   *
+   * Graded on what the value evaluates to, not on which intrinsic spells it:
+   * `!GetAtt X.Arn` is `${X.Arn}`, `!Ref X` is `${X}`, an `Fn::Join` is its
+   * parts joined, and a Sub variable map is substituted. A plain string never
+   * matches a template that contains a reference. When the property is a
+   * list, any entry may match. The values are the answer, so a failure never
+   * repeats them.
+   */
+  cfn_property_resolves_to: z
+    .object({
+      type: z.literal('cfn_property_resolves_to'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      property: cfnPropertyPath,
+      any_of: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .max(512)
+            .refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' }),
+        )
+        .min(1)
+        .max(10),
+      ...common,
+    })
+    .strict(),
+
+  /**
    * Every `Ref`, `Fn::GetAtt` and `Fn::Sub` variable resolves.
    *
    * The check a failed deployment usually needed: a typo in a logical ID, or a
@@ -3989,6 +4020,7 @@ export const REQUIREMENT_FAMILIES = {
   cfn_resource_exists: 'cloudformation',
   cfn_resource_property: 'cloudformation',
   cfn_resource_reference: 'cloudformation',
+  cfn_property_resolves_to: 'cloudformation',
   cfn_references_resolve: 'cloudformation',
   cfn_output_exists: 'cloudformation',
   cfn_cidr_valid: 'cloudformation',

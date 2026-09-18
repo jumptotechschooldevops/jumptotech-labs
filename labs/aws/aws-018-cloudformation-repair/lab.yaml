@@ -163,18 +163,19 @@ requirements:
     via: Ref
     label: The policy attaches to the role by referring to it
 
-  - type: cfn_resource_reference
+  # s3:GetObject acts on objects, whose ARNs are the bucket's ARN plus
+  # `/<key>`. `!GetAtt ExportBucket.Arn` alone names the bucket and grants
+  # nothing on what is in it. Graded on the value the Resource evaluates to, so
+  # `!Sub '${ExportBucket.Arn}/*'`, the same with a Sub variable map, an
+  # Fn::Join of the GetAtt and '/*', or a list that also names the bucket all
+  # pass; the bucket ARN alone, a Sub without the `/*`, and a hand-written ARN
+  # string all fail. The ARN has to come from the bucket's Arn attribute.
+  - type: cfn_property_resolves_to
     path: /home/student/stack/payments-export.yaml
     logical_id: ExportRolePolicy
     property: PolicyDocument.Statement.0.Resource
-    references: ExportBucket
-    # s3:GetObject acts on objects, whose ARNs are the bucket's ARN plus
-    # `/<key>`. `!GetAtt ExportBucket.Arn` alone names the bucket and grants
-    # nothing on what is in it, so the policy builds `${ExportBucket.Arn}/*`
-    # with Fn::Sub. (A Sub that leaves off the `/*` is not caught here: no
-    # requirement type reads the text around a Sub variable.)
-    via: Sub
-    attribute: Arn
+    any_of:
+      - ${ExportBucket.Arn}/*
     label: The policy grants access to the objects, using the bucket's ARN from the bucket resource
 
   # --- nothing dangles ------------------------------------------------------
