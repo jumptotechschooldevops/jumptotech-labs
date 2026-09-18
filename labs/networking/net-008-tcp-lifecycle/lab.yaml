@@ -175,28 +175,21 @@ requirements:
     label: Nothing was started on the empty port
 
   # --- what it means ---------------------------------------------------------
-  - type: file_content
+  - type: file_key_value
     path: /home/student/tcp/answers.txt
-    contains: "udp_holds_connection_state = no"
+    key: udp_holds_connection_state
+    equals: "no"
     label: Whether UDP keeps connection state was identified
-  - type: file_content
+  - type: file_key_value
     path: /home/student/tcp/answers.txt
-    contains: "retry_on_refused_helps = no"
+    key: retry_on_refused_helps
+    equals: "no"
     label: The effect of retrying a refused connection was identified
-  - type: file_content
+  - type: file_key_value
     path: /home/student/tcp/answers.txt
-    contains: "time_wait_belongs_to = the side that closed first"
+    key: time_wait_belongs_to
+    equals: the side that closed first
     label: The end that holds the closed connection was identified
-
-  # --- one answer per line ---------------------------------------------------
-  - type: file_content_absent
-    path: /home/student/tcp/answers.txt
-    contains: "udp_holds_connection_state = yes"
-    label: The UDP question was answered once, not hedged
-  - type: file_content_absent
-    path: /home/student/tcp/answers.txt
-    contains: "retry_on_refused_helps = yes"
-    label: The retry question was answered once, not hedged
 
 hints:
   - level: 1

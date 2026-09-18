@@ -12,9 +12,9 @@
  *      answers, and one requirement asks the sandbox whether that record is
  *      non-empty. A student who typed a plausible HTTP response into `app.txt`
  *      without ever speaking to the service fails that check.
- *   3. **A committed diagnosis** — four `file_content_absent` checks make a
- *      hedged answer fail, so listing every layer against a symptom cannot
- *      satisfy the positive checks by accident.
+ *   3. **A committed diagnosis** — every answer is a `file_key_value`: the
+ *      line must be given once and hold exactly the value, so listing every
+ *      layer against a symptom, on one line or on several, fails.
  *
  * The bypass section is the point of this file: each test is an attempt to pass
  * the lab without doing it, and asserts that the attempt fails.
@@ -157,18 +157,21 @@ describe('NET-003 before the work', () => {
     expect(result.passed).toBe(false);
     expect(result.summary).toBe('LAB NOT COMPLETE');
 
-    // The five `file_content_absent` checks pass on a blank template — nothing
-    // wrong is written there yet — so the untouched lab fails the other 14.
-    const absentChecks = lab.requirements.filter((r) => r.type === 'file_content_absent');
-    expect(absentChecks).toHaveLength(5);
-    expect(failures(result.checks)).toHaveLength(lab.requirements.length - absentChecks.length);
+    // Nothing is answered on a blank template, so every check fails.
+    expect(failures(result.checks)).toHaveLength(lab.requirements.length);
 
     // No check may hand over the value that would satisfy it. Labels are shown
     // on every Check Solution, so a leaky one is a free answer.
     const reported = JSON.stringify(result.checks);
     for (const requirement of lab.requirements) {
-      const answer = (requirement as { contains?: string }).contains;
-      if (!answer) continue;
+      const answer =
+        (requirement as { contains?: string }).contains ??
+        (requirement as { key?: string; equals?: string }).equals;
+      if (!answer || answer.length < 3) continue;
+      // A worksheet key is printed on the worksheet itself; an answer that is
+      // part of one (`app_503` in `app_503_layer`) is not disclosed by it.
+      const keys = lab.requirements.map((r) => (r as { key?: string }).key ?? '');
+      if (keys.some((key) => key.includes(answer))) continue;
       expect(reported, `a check leaked '${answer}'`).not.toContain(answer);
     }
     for (const value of ['transport', 'internet', 'JTT-LEDGER-503-7F2A']) {
@@ -264,9 +267,9 @@ describe('NET-003 cannot be passed without doing it', () => {
   it('rejects the shotgun: every layer against every symptom, one per line', async () => {
     const lab = await loadLabDefinition(NET_003);
 
-    // The attack the `file_content_absent` checks exist for. Every positive
-    // substring is present somewhere in the file, so without those checks this
-    // would pass the entire diagnosis section.
+    // The attack a substring check could not see: every right value is
+    // present somewhere in the file. Each key is now answered several times,
+    // so every diagnosis check fails.
     const keys = ['refused_layer', 'unreachable_layer', 'resolution_layer', 'app_503_layer'];
     const shotgun = [
       ...keys.flatMap((key) => [1, 2, 3, 4, 5, 6, 7].map((n) => `  ${key} = L${n}`)),
@@ -282,10 +285,8 @@ describe('NET-003 cannot be passed without doing it', () => {
     const failed = failures(result.checks);
 
     expect(result.passed).toBe(false);
-    // All four hedge checks fire, and nothing else — proving the positives
-    // really would have been satisfied by the shotgun on their own.
-    expect(failed).toHaveLength(4);
-    for (const check of failed) expect(check.label).toContain('diagnosed once, not hedged');
+    expect(failed).toHaveLength(5);
+    for (const check of failed) expect(check.detail).toMatch(/answers \w+ \d+ times — give one answer$/);
   });
 
   it('rejects the same shotgun in model.txt', async () => {
@@ -308,7 +309,8 @@ describe('NET-003 cannot be passed without doing it', () => {
     const failed = failures(result.checks);
 
     expect(failed).toHaveLength(1);
-    expect(failed[0]?.label).toBe('OSI layer 3 was not mapped to the wrong RFC 1122 name');
+    expect(failed[0]?.label).toBe('OSI layer 3 is mapped to the correct RFC 1122 name');
+    expect(failed[0]?.detail).toContain('answers L3_rfc1122_name 2 times');
   });
 
   it('rejects copying the brief into the answer files', async () => {
@@ -342,8 +344,10 @@ describe('NET-003 cannot be passed without doing it', () => {
     });
 
     expect(result.passed).toBe(false);
-    // Two positives miss and both hedge checks fire on the wrong values.
-    expect(failures(result.checks)).toHaveLength(4);
+    expect(failures(result.checks).map((c) => c.label)).toEqual([
+      'The refused connection is attributed to the correct layer',
+      'The unreachable network is attributed to the correct layer',
+    ]);
   });
 
   it('rejects an app.txt holding only the status line, with no body observed', async () => {
@@ -376,7 +380,7 @@ describe('NET-003 fails one wrong value at a time', () => {
       namespace: NAMESPACE,
     });
 
-    expect(failures(result.checks)).toHaveLength(2);
+    expect(failures(result.checks)).toHaveLength(1);
   });
 
   it('rejects naming the 503 a network problem', async () => {
@@ -406,8 +410,9 @@ describe('NET-003 fails one wrong value at a time', () => {
       namespace: NAMESPACE,
     });
 
-    // The positive check misses and the hedge check fires.
-    expect(failures(result.checks)).toHaveLength(2);
+    expect(failures(result.checks).map((c) => c.label)).toEqual([
+      'OSI layer 3 is mapped to the correct RFC 1122 name',
+    ]);
   });
 
   it('rejects encapsulation ordered from the wire upwards', async () => {
@@ -424,8 +429,8 @@ describe('NET-003 fails one wrong value at a time', () => {
     });
     const failed = failures(result.checks);
 
-    expect(failed).toHaveLength(1);
-    expect(failed[0]?.label).toBe('Encapsulation was ordered correctly');
+    // Every position is graded, so every one of the four reversed lines fails.
+    expect(failed).toHaveLength(4);
   });
 
   it('rejects evidence that records the wrong failure', async () => {
@@ -521,8 +526,7 @@ describe('NET-003 reset returns the lab to its starting condition', () => {
     expect(after.summary).toBe('LAB NOT COMPLETE');
     // Same verdict as a lab that was never started: the reset left nothing of
     // the student's work behind, including the service's access log.
-    const absentChecks = lab.requirements.filter((r) => r.type === 'file_content_absent');
-    expect(failures(after.checks)).toHaveLength(lab.requirements.length - absentChecks.length);
+    expect(failures(after.checks)).toHaveLength(lab.requirements.length);
   });
 });
 
