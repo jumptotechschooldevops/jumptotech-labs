@@ -199,6 +199,7 @@ reads `.env`.
 | `BACKUP_RETENTION_MIN_KEEP` | `7` | The newest N archives are never deleted, however old. |
 | `BACKUP_LABEL` / `--label` | none | `[a-z0-9-]`, up to 32 characters, e.g. `pre-migration`. |
 | `BACKUP_COPY_HOOK` | none | Absolute path of an executable, run with the archive and its sidecar. A non-zero exit fails the run. World-writable hooks are refused. |
+| `BACKUP_COPY_HOOK_TIMEOUT_SECONDS` | 1800 | How long the hook may run before it is stopped (`timeout`, then a kill 30 s later) and the run fails with "did not finish within". A hook hung on a network destination would otherwise hold the backup lock, and every later scheduled backup would refuse to start behind it. Needs coreutils `timeout`; without it the run logs that the hook is unbounded. |
 | `JTT_DB_CONTAINER`, `COMPOSE_PROJECT_NAME`, `JTT_DB_NAME`, `JTT_DB_USER` | see §3.2 | |
 
 ### 5.2 Before a risky or manual migration

@@ -32,6 +32,13 @@
 #                              the archive and its sidecar as arguments, to copy
 #                              them off-host. Its failure fails the run. Where it
 #                              copies to is a DECISION REQUIRED item.
+#   BACKUP_COPY_HOOK_TIMEOUT_SECONDS
+#                              How long the hook may run. Default 1800. A hook
+#                              hung on a network destination would otherwise hold
+#                              the backup lock, and every later scheduled backup
+#                              would refuse to run behind it. Needs coreutils
+#                              `timeout` (present on the Linux host); without it
+#                              the hook runs unbounded and the run says so.
 #   JTT_DB_CONTAINER           The PostgreSQL container. Default: the running
 #                              `postgres` service of COMPOSE_PROJECT_NAME
 #                              (default jumptotech-labs).
@@ -73,6 +80,7 @@ backup_dir=${BACKUP_DIR:-$JTT_REPO_ROOT/backups/postgres}
 retention_days=${BACKUP_RETENTION_DAYS:-14}
 min_keep=${BACKUP_RETENTION_MIN_KEEP:-7}
 copy_hook=${BACKUP_COPY_HOOK-}
+hook_timeout=${BACKUP_COPY_HOOK_TIMEOUT_SECONDS:-1800}
 
 case $backup_dir in
   /*) ;;
@@ -80,6 +88,7 @@ case $backup_dir in
 esac
 [[ $retention_days =~ ^[0-9]+$ ]] || jtt_die "BACKUP_RETENTION_DAYS must be a whole number of days (0 disables retention)"
 [[ $min_keep =~ ^[1-9][0-9]*$ ]] || jtt_die "BACKUP_RETENTION_MIN_KEEP must be a positive whole number"
+[[ $hook_timeout =~ ^[1-9][0-9]*$ ]] || jtt_die "BACKUP_COPY_HOOK_TIMEOUT_SECONDS must be a positive whole number of seconds"
 if [ -n "$label" ] && [[ ! $label =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
   jtt_die "the label may contain only a-z, 0-9 and -, at most 32 characters"
 fi
@@ -159,7 +168,10 @@ take_lock() {
   local dir="$backup_dir/.db-backup.lock" holder
   if ! mkdir "$dir" 2>/dev/null; then
     holder=$(cat "$dir/pid" 2>/dev/null || true)
-    if [[ $holder =~ ^[0-9]+$ ]] && ps -p "$holder" >/dev/null 2>&1; then
+    # Alive by any of three means: a signal-0 probe (a builtin; fails with EPERM
+    # for another account's process), /proc on Linux, or ps where procps exists.
+    # ps alone treated a running backup's lock as stale on a host without procps.
+    if [[ $holder =~ ^[0-9]+$ ]] && { kill -0 "$holder" 2>/dev/null || [ -d "/proc/$holder" ] || ps -p "$holder" >/dev/null 2>&1; }; then
       jtt_die "another backup (pid $holder) is running against $backup_dir"
     fi
     jtt_log "replacing a stale lock left by pid ${holder:-unknown}"
@@ -211,9 +223,20 @@ jtt_log "wrote $final ($size bytes, sha256 $host_sum)"
 # --- off-host copy -------------------------------------------------------------
 
 if [ -n "$copy_hook" ]; then
-  jtt_log "running BACKUP_COPY_HOOK"
-  "$copy_hook" "$final" "$final.sha256" \
-    || jtt_die "BACKUP_COPY_HOOK failed: $name is kept in $backup_dir but was NOT copied off-host"
+  hook=("$copy_hook")
+  if type -P timeout >/dev/null 2>&1; then
+    hook=(timeout --kill-after=30 "$hook_timeout" "$copy_hook")
+    jtt_log "running BACKUP_COPY_HOOK (at most ${hook_timeout}s)"
+  else
+    jtt_log "running BACKUP_COPY_HOOK with no time limit: coreutils timeout is not installed"
+  fi
+  hook_status=0
+  "${hook[@]}" "$final" "$final.sha256" || hook_status=$?
+  case $hook_status in
+    0) ;;
+    124 | 137) jtt_die "BACKUP_COPY_HOOK did not finish within ${hook_timeout}s and was stopped: $name is kept in $backup_dir but was NOT copied off-host" ;;
+    *) jtt_die "BACKUP_COPY_HOOK failed: $name is kept in $backup_dir but was NOT copied off-host" ;;
+  esac
   offhost_copy=copied
 else
   jtt_log "no BACKUP_COPY_HOOK: this archive exists on this host only"

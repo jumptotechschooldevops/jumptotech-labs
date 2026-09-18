@@ -202,7 +202,7 @@ new_case() {
   unset FAKE_PS_IDS FAKE_RUNNING FAKE_MOUNT_SOURCE FAKE_SERVER_DOWN FAKE_SESSIONS \
     FAKE_CREATE_FAIL FAKE_SWAP_FAIL FAKE_PG_DUMP_FAIL FAKE_PG_DUMP_GARBAGE \
     FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG \
-    BACKUP_LABEL BACKUP_RETENTION_DAYS BACKUP_RETENTION_MIN_KEEP BACKUP_COPY_HOOK
+    BACKUP_LABEL BACKUP_RETENTION_DAYS BACKUP_RETENTION_MIN_KEEP BACKUP_COPY_HOOK BACKUP_COPY_HOOK_TIMEOUT_SECONDS
 }
 
 run() {
@@ -408,6 +408,20 @@ chmod 700 "$case_dir/hook.sh"
 BACKUP_COPY_HOOK="$case_dir/hook.sh" backup
 expect 'a failing BACKUP_COPY_HOOK fails the run' says 'NOT copied off-host'
 expect 'a failing BACKUP_COPY_HOOK keeps the local archive' test -n "$(find "$BACKUP_DIR" -name '*.dump' -type f)"
+if type -P timeout >/dev/null 2>&1; then
+  new_case
+  printf '#!/usr/bin/env bash\nexec sleep 30\n' >"$case_dir/hook.sh"
+  chmod 700 "$case_dir/hook.sh"
+  BACKUP_COPY_HOOK="$case_dir/hook.sh" BACKUP_COPY_HOOK_TIMEOUT_SECONDS=1 backup
+  expect 'a hung BACKUP_COPY_HOOK is stopped at its time limit and fails the run' says 'did not finish within 1s'
+  expect 'a hung BACKUP_COPY_HOOK keeps the local archive and releases the lock' clean_ok
+  expect 'a hung BACKUP_COPY_HOOK: the local archive is kept' test -n "$(find "$BACKUP_DIR" -name '*.dump' -type f)"
+else
+  echo '  (skipped: no coreutils timeout on this machine — the hook time limit needs it)'
+fi
+new_case
+BACKUP_COPY_HOOK_TIMEOUT_SECONDS=soon backup
+expect 'a malformed BACKUP_COPY_HOOK_TIMEOUT_SECONDS: refused before the server is touched' server_untouched
 new_case
 printf '#!/usr/bin/env bash\nexit 0\n' >"$case_dir/hook.sh"
 chmod 777 "$case_dir/hook.sh"
