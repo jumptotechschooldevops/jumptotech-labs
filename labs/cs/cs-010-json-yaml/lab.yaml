@@ -299,14 +299,18 @@ requirements:
     path: /home/student/ops/depots.yaml
     contains: "version: 3.10"
     label: The version is quoted, so it stays 3.10 and does not become 3.1
-  - type: file_content_absent
+  # Removing traps is half the task; the file must still say what it meant.
+  # Without this, a depots.yaml holding nothing but `leeds:` passed.
+  - type: file_contains
     path: /home/student/ops/depots.yaml
-    contains: "version: \"1.0\""
-    label: The values the duplicate block was silently winning with are gone
-  - type: file_content_absent
+    contains: ["leeds:", "bristol:", "3.10", "2.4", "enabled"]
+    absent: ["version: \"1.0\""]
+    label: Both depots are still described, without the values the duplicate block was silently winning with
+  # The parser used here refuses tab indentation and a repeated key, so this
+  # covers the trap that stopped the file parsing and the duplicate together.
+  - type: yaml_valid
     path: /home/student/ops/depots.yaml
-    contains: "\t"
-    label: The indentation is spaces, which is the only indentation YAML allows
+    label: The repaired file parses — spaces for indentation, and no key twice
 
   # --- what the traps actually did ----------------------------------------
   # Matched with `grep -x`, whole line, rather than `file_content contains`.
@@ -315,25 +319,26 @@ requirements:
   # is exactly the misreading the lab is about — contains `VERSION_BECAME=3.1`.
   # The same trap sits under `DUPLICATE_KEY=leeds` and `leeds-old`. Whole-line
   # matching is what makes the near-miss fail.
-  - type: command_output
-    command: grep
-    args: ["-x", "DUPLICATE_KEY=leeds", "/home/student/ops/yaml.txt"]
-    contains: "DUPLICATE_KEY=leeds"
+  - type: file_key_value
+    path: /home/student/ops/yaml.txt
+    key: DUPLICATE_KEY
+    equals: leeds
     label: The write-up names the key that was silently overwritten
-  - type: command_output
-    command: grep
-    args: ["-x", "COUNTRY_BECAME=false", "/home/student/ops/yaml.txt"]
-    contains: "COUNTRY_BECAME=false"
+  - type: file_key_value
+    path: /home/student/ops/yaml.txt
+    key: COUNTRY_BECAME
+    equals: "false"
+    ignore_case: true
     label: The write-up records what the country became
-  - type: command_output
-    command: grep
-    args: ["-x", "VERSION_BECAME=3.1", "/home/student/ops/yaml.txt"]
-    contains: "VERSION_BECAME=3.1"
+  - type: file_key_value
+    path: /home/student/ops/yaml.txt
+    key: VERSION_BECAME
+    equals: "3.1"
     label: The write-up records the version that was actually deployed
-  - type: command_output
-    command: grep
-    args: ["-x", "TAB_DEPOT=bristol", "/home/student/ops/yaml.txt"]
-    contains: "TAB_DEPOT=bristol"
+  - type: file_key_value
+    path: /home/student/ops/yaml.txt
+    key: TAB_DEPOT
+    equals: bristol
     label: The write-up names the depot whose line stopped the file parsing
 
 hints:

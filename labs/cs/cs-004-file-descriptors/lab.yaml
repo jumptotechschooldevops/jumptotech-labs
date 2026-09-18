@@ -165,7 +165,8 @@ task:
     ```
 
 
-    Line order does not matter and extra lines are ignored.
+    Line order does not matter and extra lines are ignored, but each key is
+    answered once, on a line that holds only its value.
 
 setup:
   seed_scripts:
@@ -228,21 +229,25 @@ requirements:
   - type: file_exists
     path: /home/student/ops/fds.txt
     label: The findings file exists
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/fds.txt
-    contains: "STDERR_FD=2"
+    key: STDERR_FD
+    equals: "2"
     label: The findings name the descriptor standard error always uses
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/fds.txt
-    contains: "LEAK_KIND=socket"
+    key: LEAK_KIND
+    equals: socket
     label: The findings identify what dominates the collector's descriptor table
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/fds.txt
-    contains: "COLLECTOR_SOFT_LIMIT=256"
+    key: COLLECTOR_SOFT_LIMIT
+    equals: "256"
     label: The findings record the soft limit the collector is running under
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/fds.txt
-    contains: "REAL_FIX=close"
+    key: REAL_FIX
+    equals: close
     label: The findings say what actually stops the crashes recurring
 
 hints:

@@ -234,25 +234,25 @@ requirements:
 
   # Whole-line matches: `contains` is a substring test, and several of the
   # wrong answers here are superstrings of the right ones.
-  - type: command_output
-    command: grep
-    args: ["-x", "ZOMBIE_STATE=Z", "/home/student/ops/zombies.txt"]
-    contains: "ZOMBIE_STATE=Z"
+  - type: file_key_value
+    path: /home/student/ops/zombies.txt
+    key: ZOMBIE_STATE
+    equals: Z
     label: The write-up names the state a dead, uncollected child shows
-  - type: command_output
-    command: grep
-    args: ["-x", "RAW_WAIT_STATUS=1792", "/home/student/ops/zombies.txt"]
-    contains: "RAW_WAIT_STATUS=1792"
+  - type: file_key_value
+    path: /home/student/ops/zombies.txt
+    key: RAW_WAIT_STATUS
+    equals: "1792"
     label: The write-up records the raw status, not the exit code
-  - type: command_output
-    command: grep
-    args: ["-x", "ORPHAN_PARENT=1", "/home/student/ops/zombies.txt"]
-    contains: "ORPHAN_PARENT=1"
+  - type: file_key_value
+    path: /home/student/ops/zombies.txt
+    key: ORPHAN_PARENT
+    equals: "1"
     label: The write-up records what an orphan is reparented to
-  - type: command_output
-    command: grep
-    args: ["-x", "STATE_AFTER_SIGKILL=Z", "/home/student/ops/zombies.txt"]
-    contains: "STATE_AFTER_SIGKILL=Z"
+  - type: file_key_value
+    path: /home/student/ops/zombies.txt
+    key: STATE_AFTER_SIGKILL
+    equals: Z
     label: The write-up records that SIGKILL leaves a zombie exactly where it was
 
 hints:

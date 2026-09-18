@@ -149,13 +149,13 @@ task:
 
     ```
 
-    WHY_THREADS_DONT_HELP_CPU=<the one-word Python reason>
+    WHY_THREADS_DONT_HELP_CPU=<the Python reason: gil, quota, io or scheduler>
 
-    WHY_MORE_WORKERS_DIDNT_HELP=<the one-word reason that is about this container>
+    WHY_MORE_WORKERS_DIDNT_HELP=<the reason about this container: gil, quota, io or scheduler>
 
     BLOCKING_SHOWS_UP_AS=<voluntary or involuntary>
 
-    POOL_SIZE_SHOULD_FOLLOW=<what the pool should be sized from>
+    POOL_SIZE_SHOULD_FOLLOW=<quota or cpu_count>
 
     ```
 
@@ -287,25 +287,29 @@ requirements:
     contains: "OVERSUBSCRIBED=yes"
     label: The comparison is made rather than its answer typed out
 
-  - type: command_output
-    command: grep
-    args: ["-x", "WHY_THREADS_DONT_HELP_CPU=gil", "/home/student/ops/threads.txt"]
-    contains: "WHY_THREADS_DONT_HELP_CPU=gil"
+  - type: file_key_value
+    path: /home/student/ops/threads.txt
+    key: WHY_THREADS_DONT_HELP_CPU
+    equals: gil
+    ignore_case: true
     label: The write-up names why threads cannot speed up this work in Python
-  - type: command_output
-    command: grep
-    args: ["-x", "WHY_MORE_WORKERS_DIDNT_HELP=quota", "/home/student/ops/threads.txt"]
-    contains: "WHY_MORE_WORKERS_DIDNT_HELP=quota"
+  - type: file_key_value
+    path: /home/student/ops/threads.txt
+    key: WHY_MORE_WORKERS_DIDNT_HELP
+    equals: quota
+    ignore_case: true
     label: The write-up names the reason that is about this container, not Python
-  - type: command_output
-    command: grep
-    args: ["-x", "BLOCKING_SHOWS_UP_AS=voluntary", "/home/student/ops/threads.txt"]
-    contains: "BLOCKING_SHOWS_UP_AS=voluntary"
+  - type: file_key_value
+    path: /home/student/ops/threads.txt
+    key: BLOCKING_SHOWS_UP_AS
+    equals: voluntary
+    ignore_case: true
     label: The write-up says which counter waiting moves
-  - type: command_output
-    command: grep
-    args: ["-x", "POOL_SIZE_SHOULD_FOLLOW=quota", "/home/student/ops/threads.txt"]
-    contains: "POOL_SIZE_SHOULD_FOLLOW=quota"
+  - type: file_key_value
+    path: /home/student/ops/threads.txt
+    key: POOL_SIZE_SHOULD_FOLLOW
+    equals: quota
+    ignore_case: true
     label: The write-up says what the pool should have been sized from
 
 hints:
