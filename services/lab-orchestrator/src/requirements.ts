@@ -728,6 +728,26 @@ const kubernetesRequirementSchemas = {
     })
     .strict(),
 
+  /**
+   * No container of the Deployment sets this environment variable to a literal
+   * `value:`. The other half of moving configuration into a ConfigMap or a
+   * Secret: Kubernetes lets a literal `env` entry sit beside the new
+   * reference and win over `envFrom`, so a reference check alone passes a
+   * Deployment that still carries the plaintext.
+   */
+  deployment_env_literal_absent: z
+    .object({
+      type: z.literal('deployment_env_literal_absent'),
+      name: resourceName,
+      env: z
+        .string()
+        .min(1)
+        .max(128)
+        .regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/, 'must be an environment variable name'),
+      ...common,
+    })
+    .strict(),
+
   deployment_uses_secret: z
     .object({
       type: z.literal('deployment_uses_secret'),
@@ -3797,6 +3817,7 @@ export const REQUIREMENT_FAMILIES = {
   deployment_probe: 'kubernetes',
   deployment_uses_configmap: 'kubernetes',
   deployment_uses_secret: 'kubernetes',
+  deployment_env_literal_absent: 'kubernetes',
 
   service_exists: 'kubernetes',
   service_type: 'kubernetes',

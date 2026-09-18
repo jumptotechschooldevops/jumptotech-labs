@@ -1305,6 +1305,9 @@ function toContainerSnapshots(
           }
         : {}),
       ...(probes.length > 0 ? { probes } : {}),
+      ...((container.env ?? []).some((e) => e.value !== undefined)
+        ? { literalEnvNames: (container.env ?? []).filter((e) => e.value !== undefined).map((e) => e.name) }
+        : {}),
       ...(container.ports?.length
         ? {
             ports: container.ports.map((p) => ({

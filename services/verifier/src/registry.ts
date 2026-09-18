@@ -132,6 +132,7 @@ import {
   deploymentStrategy,
   deploymentUsesConfigMap,
   deploymentUsesSecret,
+  deploymentEnvLiteralAbsent,
 } from './handlers/deployments.js';
 import {
   serviceEndpoints,
@@ -336,6 +337,7 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
   deployment_probe: deploymentProbe,
   deployment_uses_configmap: deploymentUsesConfigMap,
   deployment_uses_secret: deploymentUsesSecret,
+  deployment_env_literal_absent: deploymentEnvLiteralAbsent,
 
   service_exists: serviceExists,
   service_type: serviceType,

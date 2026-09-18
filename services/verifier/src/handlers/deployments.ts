@@ -325,6 +325,23 @@ export const deploymentUsesConfigMap: VerifierHandler<'deployment_uses_configmap
   },
 };
 
+export const deploymentEnvLiteralAbsent: VerifierHandler<'deployment_env_literal_absent'> = {
+  type: 'deployment_env_literal_absent',
+  label: (r) => `Deployment ${r.name} no longer sets ${r.env} to a literal value`,
+  async run(r, reader) {
+    const deployment = await reader.deployment(r.name);
+    if (!deployment) return missing('Deployment', r.name, reader.namespace);
+    const containers = [...deployment.containers, ...(deployment.initContainers ?? [])];
+    const offending = containers.filter((c) => (c.literalEnvNames ?? []).includes(r.env));
+    // Names the container and the variable, never a value: none was read.
+    return offending.length === 0
+      ? pass()
+      : fail(
+          `container${offending.length === 1 ? '' : 's'} ${offending.map((c) => `'${c.name}'`).join(', ')} still set${offending.length === 1 ? 's' : ''} ${r.env} to a literal value, which overrides a reference`,
+        );
+  },
+};
+
 export const deploymentUsesSecret: VerifierHandler<'deployment_uses_secret'> = {
   type: 'deployment_uses_secret',
   label: (r) =>
