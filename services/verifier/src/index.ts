@@ -65,6 +65,7 @@ export {
   findStatements,
   IAM_PRINCIPAL_TYPES,
   matchesIamPattern,
+  mayAllowInAnyContext,
   parseIamPolicy,
   principalMatches,
   statementHasNotPrincipal,
