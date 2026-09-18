@@ -1184,20 +1184,26 @@ export class SessionManager {
    * the managed, owner and session labels, and the row stays EXPIRING — holding
    * its slot — until the sandbox is verifiably gone.
    *
-   * A session already ENDING is an End its student asked for: it is resumed as
-   * that End (`resumeAbandonedEnd`), never relabelled, exactly as the reaper
-   * does. A finished session is returned as it is.
+   * A teardown already in flight is finished as what it is, never relabelled:
+   * ENDING is the student's End (`resumeAbandonedEnd`, as the reaper does), and
+   * EXPIRING keeps its reason (idle, lifetime). A finished session is returned
+   * as it is; the operator socket refuses to call this for one.
    */
   async endByOperator(sessionId: string): Promise<TeardownResult> {
     const session = await this.require(sessionId);
     if (session.status === 'ENDING') return this.resumeAbandonedEnd(session.sessionId);
-    return this.#teardown(
-      session,
-      [...LIVE_STATUSES, 'EXPIRING'],
-      'EXPIRING',
-      'EXPIRED',
-      OPERATOR_END_REASON,
-    );
+    if (session.status === 'EXPIRING') {
+      // An expiry already in flight (idle, lifetime) keeps its reason: the
+      // operator's request only helps it finish, and must not relabel it.
+      return this.#teardown(
+        session,
+        ['EXPIRING'],
+        'EXPIRING',
+        'EXPIRED',
+        session.statusReason ?? OPERATOR_END_REASON,
+      );
+    }
+    return this.#teardown(session, LIVE_STATUSES, 'EXPIRING', 'EXPIRED', OPERATOR_END_REASON);
   }
 
   /**

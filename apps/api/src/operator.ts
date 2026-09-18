@@ -51,6 +51,7 @@ import { chmodSync, lstatSync, mkdirSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 import {
+  OPERATOR_END_REASON,
   SessionError,
   isTerminalStatus,
   type LabSession,
@@ -283,13 +284,22 @@ export function createOperatorHandler(deps: OperatorDeps): (req: IncomingMessage
 
   return (req, res) => {
     void (async () => {
-      const url = new URL(req.url ?? '/', 'http://operator.invalid');
       const method = req.method ?? 'GET';
-      const parts = url.pathname.split('/').filter(Boolean);
       let action: OperatorAction | undefined;
       let sessionId: string | undefined;
 
       try {
+        // Inside the try: the HTTP parser accepts request targets (`http://[`)
+        // that URL refuses, and a rejection escaping this handler would take
+        // the api down with it.
+        let url: URL;
+        try {
+          url = new URL(req.url ?? '/', 'http://operator.invalid');
+        } catch {
+          send(res, 400, { ok: false, error: { code: 'INVALID_REQUEST', message: 'that is not a request path' } });
+          return;
+        }
+        const parts = url.pathname.split('/').filter(Boolean);
         if (method === 'GET' && url.pathname === '/v1/status') {
           action = 'status';
           send(res, 200, { ok: true, data: await operatorStatus(deps) });
@@ -329,28 +339,48 @@ export function createOperatorHandler(deps: OperatorDeps): (req: IncomingMessage
             send(res, 200, { ok: true, data: toOperatorView(session, now, !isTerminalStatus(session.status)) });
           } else {
             const before = await deps.sessions.require(sessionId);
+            if (isTerminalStatus(before.status)) {
+              // Nothing to end, and nothing to record as the operator's.
+              count(action, 'rejected');
+              deps.logger.info('ops.operator.request', { action, outcome: 'rejected', sessionId, code: 'SESSION_ALREADY_FINISHED' });
+              send(res, 409, {
+                ok: false,
+                error: {
+                  code: 'SESSION_ALREADY_FINISHED',
+                  message: `session ${sessionId} is already ${before.status}${before.statusReason ? ` (${before.statusReason})` : ''}`,
+                },
+              });
+              return;
+            }
             const result = await deps.sessions.endByOperator(sessionId);
             const after = result.session;
             const finished = isTerminalStatus(after.status);
+            // Whose ending is it? A teardown already in flight (a student's End,
+            // the reaper's expiry) keeps its own reason; the operator only
+            // finished it, and the log says so rather than claiming it.
+            const byOperator = after.statusReason === OPERATOR_END_REASON;
             deps.logger[finished ? 'info' : 'warn'](
               'ops.operator.session_ended',
               {
                 sessionId,
                 labId: after.labId,
                 provider: after.provider,
-                outcome: finished ? 'ended' : 'pending',
+                outcome: !finished ? 'pending' : byOperator ? 'ended' : 'finished_existing_teardown',
                 reason: after.statusReason ?? '',
                 ...(result.destroy.error?.code ? { code: result.destroy.error.code } : {}),
               },
-              finished
-                ? `operator ended session ${sessionId} (was ${before.status}, now ${after.status})`
-                : `operator end of session ${sessionId} is not confirmed yet: it stays ${after.status} and the reaper resumes it`,
+              !finished
+                ? `operator end of session ${sessionId} is not confirmed yet: it stays ${after.status} and the reaper resumes it`
+                : byOperator
+                  ? `operator ended session ${sessionId} (was ${before.status}, now ${after.status})`
+                  : `session ${sessionId} was already being torn down (${after.statusReason ?? before.status}); the operator's request finished it as ${after.status}`,
             );
             send(res, finished ? 200 : 202, {
               ok: true,
               data: {
                 before: before.status,
                 after: after.status,
+                endedBy: byOperator ? 'operator' : 'existing_teardown',
                 sandboxGone: result.destroy.namespaceGone === true || finished,
                 ...(finished
                   ? {}
@@ -389,7 +419,16 @@ export function createOperatorHandler(deps: OperatorDeps): (req: IncomingMessage
           });
         }
       }
-    })();
+    })().catch(() => {
+      // The last line of defence: nothing thrown here may reach the process.
+      if (!res.headersSent) {
+        try {
+          send(res, 500, { ok: false, error: { code: 'OPERATOR_REQUEST_FAILED', message: 'the api could not answer' } });
+        } catch {
+          res.destroy();
+        }
+      }
+    });
   };
 }
 

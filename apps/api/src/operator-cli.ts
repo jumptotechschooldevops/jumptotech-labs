@@ -221,7 +221,9 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       const session = data.session as OperatorSessionView;
       process.stdout.write(
         reply.status === 200
-          ? `ended: ${session.sessionId} was ${String(data.before)}, now ${session.status}. Its slot is free.\n`
+          ? data.endedBy === 'existing_teardown'
+            ? `finished: ${session.sessionId} was already being torn down (${session.statusReason ?? String(data.before)}); now ${session.status}. Its slot is free.\n`
+            : `ended: ${session.sessionId} was ${String(data.before)}, now ${session.status}. Its slot is free.\n`
           : `NOT YET: ${session.sessionId} is ${session.status}. ${String(data.note ?? '')}${data.destroyError ? ` (${String(data.destroyError)})` : ''}\n` +
             'Check again with `session <id>` after the next sweep; RB-17 §4 if it stays.\n',
       );

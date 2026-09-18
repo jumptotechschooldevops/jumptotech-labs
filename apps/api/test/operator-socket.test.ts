@@ -10,7 +10,7 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { createServer, type Server } from 'node:net';
+import { createConnection, createServer, type Server } from 'node:net';
 import path from 'node:path';
 import {
   DEFAULT_SESSION_POLICY,
@@ -281,6 +281,21 @@ describe('operator socket — reading', () => {
     expect((await call('GET', '/v1/sessions?scope=everything')).status).toBe(400);
   });
 
+  it('survives a request line URL cannot parse, and keeps serving', async () => {
+    const { socketPath, call } = await compose();
+    for (const target of ['http://[', '//[::1', 'http://%zz/']) {
+      const raw = await new Promise<string>((resolve, reject) => {
+        const socket = createConnection(socketPath, () => socket.write(`GET ${target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`));
+        let data = '';
+        socket.on('data', (chunk) => (data += chunk));
+        socket.on('end', () => resolve(data));
+        socket.on('error', reject);
+      });
+      expect(raw, target).toMatch(/^HTTP\/1\.1 (400|404)/);
+    }
+    expect((await call('GET', '/v1/status')).status).toBe(200);
+  });
+
   it('refuses malformed ids, unknown sessions, unknown paths and wrong methods', async () => {
     const { call } = await compose();
     expect((await call('GET', '/v1/sessions/..%2F..%2Fetc')).status).toBe(400);
@@ -318,15 +333,35 @@ describe('operator socket — ending one session', () => {
     await expect(sessions.start('K8S-002', 'user-bob')).resolves.toBeDefined();
   });
 
-  it('is idempotent: ending a finished session changes nothing', async () => {
-    const { sessions, call } = await compose();
+  it('refuses to end a finished session, and records nothing as the operator\'s', async () => {
+    const { sessions, call, lines, metric } = await compose();
     const started = await sessions.start('K8S-001', 'user-alice');
     await sessions.end(started.session.sessionId);
 
     const reply = await call('POST', `/v1/sessions/${started.session.sessionId}/end`);
-    expect(reply.status).toBe(200);
-    expect(reply.body.data).toMatchObject({ before: 'ENDED', after: 'ENDED' });
+    expect(reply.status).toBe(409);
+    expect(reply.body.error.code).toBe('SESSION_ALREADY_FINISHED');
+    expect(reply.body.error.message).toMatch(/already ENDED \(ended by student\)/);
     expect((await sessions.require(started.session.sessionId)).statusReason).toBe('ended by student');
+    expect(lines.some((line) => line.includes('"event":"ops.operator.session_ended"'))).toBe(false);
+    expect(await metric('jtt_operator_actions_total', { action: 'end_session', outcome: 'rejected' })).toBe(1);
+  });
+
+  it('finishes an expiry already in flight without relabelling it', async () => {
+    const { sessions, provider, call, lines } = await compose();
+    const started = await sessions.start('K8S-001', 'user-alice');
+    const destroy = provider.destroy.bind(provider);
+    provider.destroy = async () => ({ ok: true, namespaceGone: false, steps: [] });
+    await sessions.expire(started.session.sessionId, 'idle for more than 1200s');
+    expect((await sessions.require(started.session.sessionId)).status).toBe('EXPIRING');
+
+    provider.destroy = destroy;
+    const reply = await call('POST', `/v1/sessions/${started.session.sessionId}/end`);
+    expect(reply.status).toBe(200);
+    expect(reply.body.data).toMatchObject({ before: 'EXPIRING', after: 'EXPIRED', endedBy: 'existing_teardown' });
+    expect((await sessions.require(started.session.sessionId)).statusReason).toBe('idle for more than 1200s');
+    const logged = lines.find((line) => line.includes('"event":"ops.operator.session_ended"'));
+    expect(logged).toContain('"outcome":"finished_existing_teardown"');
   });
 
   it('keeps the slot and says so when the delete is not confirmed, and finishes on retry', async () => {
@@ -362,7 +397,7 @@ describe('operator socket — ending one session', () => {
 
     provider.destroy = destroy;
     const reply = await call('POST', `/v1/sessions/${started.session.sessionId}/end`);
-    expect(reply.body.data).toMatchObject({ before: 'ENDING', after: 'ENDED' });
+    expect(reply.body.data).toMatchObject({ before: 'ENDING', after: 'ENDED', endedBy: 'existing_teardown' });
     expect((await sessions.require(started.session.sessionId)).statusReason).toBe('ended by student');
   });
 });
