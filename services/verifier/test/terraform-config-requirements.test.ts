@@ -41,7 +41,11 @@ function config(files: Record<string, string>, options: { canList?: boolean } = 
   if (options.canList !== false) {
     port.list = async (dir, opts) => {
       if (dir !== DIR) return [];
-      return Object.keys(files).filter((n) => !opts?.suffix || n.endsWith(opts.suffix));
+      // `find -maxdepth N` from the directory: depth 1 is its own files.
+      const depth = opts?.maxDepth ?? 4;
+      return Object.keys(files).filter(
+        (n) => (!opts?.suffix || n.endsWith(opts.suffix)) && n.split('/').length <= depth,
+      );
     };
   }
   const reader = new SandboxReader(port);
@@ -423,5 +427,19 @@ describe('security', () => {
     });
     expect(result.status).toBe('fail');
     expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+});
+
+// ================================================ the root module only
+
+describe('configuration checks read the root module Terraform loads', () => {
+  it('ignores a .tf file in a subdirectory, which Terraform never loads without a module block', async () => {
+    const reader = config({
+      'main.tf': 'variable "replicas" {\n  type = number\n}\n',
+      'decoy/decoy.tf': 'variable "environment" {\n  type    = string\n  default = "staging"\n}\n',
+    });
+    const result = await check(reader, { type: 'terraform_variable_declared', name: 'environment' });
+    expect(result.status).toBe('fail');
+    expect(await reader.terraformConfigPaths(DIR)).toEqual(['main.tf']);
   });
 });

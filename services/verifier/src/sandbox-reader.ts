@@ -358,10 +358,18 @@ export class SandboxReader {
     return scan;
   }
 
-  /** The `.tf` files a configuration check actually looked at. */
+  /**
+   * The `.tf` files a configuration check actually looked at.
+   *
+   * The working directory's own files, and no deeper: Terraform loads the root
+   * module from exactly those, and a `.tf` file in a subdirectory is not part
+   * of the configuration unless a `module` block calls it. Scanning deeper let
+   * a decoy in `terraform/x/decoy.tf` satisfy every configuration check while
+   * the `main.tf` Terraform actually applied stayed unchanged.
+   */
   async terraformConfigPaths(dir: string): Promise<string[]> {
     if (!this.port.list) throw new SandboxCapabilityMissingError('read Terraform configuration files');
-    return this.port.list(dir, { suffix: '.tf', maxDepth: 4, maxEntries: MAX_CONFIG_FILES });
+    return this.port.list(dir, { suffix: '.tf', maxDepth: 1, maxEntries: MAX_CONFIG_FILES });
   }
 
   async #scanConfig(dir: string): Promise<HclDocument> {
