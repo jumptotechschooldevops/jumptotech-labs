@@ -300,7 +300,11 @@ Every error shows a title, what happened, what to do, and a small **Reference**
 | `SESSION_RESET_FAILED` | The reset did not finish — Reset again or End lab |
 | `DESTROY_FAILED` | Your lab is still shutting down — no need to press End again |
 | `PROGRESS_UNAVAILABLE` | Progress is unavailable right now |
-| anything else | the API's own message, never a generic "Something went wrong" |
+| `RATE_LIMITED` | Too many requests — wait a minute |
+| `CHECK_IN_PROGRESS` | A check is already running — press Verify again in a few seconds |
+| `INTERNAL_ERROR`, `UNEXPECTED_ERROR` | Something went wrong on the platform / in this page — try again or reload |
+| anything else, on an action (launch, verify, reset, end, terminal) | plain words for that action — never the provider's message, which is raw kubectl or exec output (`SETUP_FAILED`, `EXEC_FAILED`, `KUBECTL_UNAVAILABLE` …); an unknown Verify error is always "not a mistake in your work" |
+| anything else, while reading a page | the API's own message, never a generic "Something went wrong" |
 
 Operator remediation text that names commands (`docker compose ps`, …) is not
 shown to students; the reference code leads operators to the runbooks

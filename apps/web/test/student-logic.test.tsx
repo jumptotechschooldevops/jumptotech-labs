@@ -144,15 +144,48 @@ describe('what an API error means to a student', () => {
     expect(describeError({ code: 'AUTH_INVALID_TOKEN', message: '' }).kind).toBe('auth');
   });
 
-  it('falls back to the server’s own words and keeps the code, for an error it does not know', () => {
+  it('falls back to the server’s own words and keeps the code, for an error it does not know while reading', () => {
     const described = describeError(
       { code: 'SOMETHING_NEW', message: 'The widget is sideways.', remediation: 'Straighten it.' },
-      'reset',
+      'load',
     );
-    expect(described.title).toBe('The lab could not be reset');
+    expect(described.title).toBe('This page could not be loaded');
     expect(described.message).toBe('The widget is sideways.');
     expect(described.guidance).toBe('Straighten it.');
     expect(described.reference).toBe('SOMETHING_NEW');
+  });
+
+  /*
+   * An action on the environment that fails with a code this file does not
+   * know is the provider's failure, in the provider's words: the kind
+   * provider's reset answers SETUP_FAILED with kubectl's stderr, and the check
+   * route puts "Start the lab environment before checking your solution" on
+   * every verifier error — to a student whose lab is running.
+   */
+  it('never shows a provider’s raw words for an unknown code on an action, and keeps the code', () => {
+    const raw = {
+      message: 'kubectl apply -f /app/labs/kubernetes/K8S-006/setup/deployment.yaml exited 1: error: the server could not find the requested resource',
+      remediation: 'Start the lab environment before checking your solution.',
+    };
+    for (const context of ['launch', 'verify', 'reset', 'end', 'terminal'] as const) {
+      const described = describeError({ code: 'SETUP_FAILED', ...raw }, context);
+      const text = `${described.title} ${described.message} ${described.guidance ?? ''}`;
+      expect(text, context).not.toMatch(/kubectl|\/app\/labs|setup\/|Start the lab environment/);
+      expect(described.reference, context).toBe('SETUP_FAILED');
+      expect(described.retryable, context).toBe(true);
+    }
+    expect(describeError({ code: 'KUBECTL_UNAVAILABLE', ...raw }, 'verify').message).toMatch(
+      /nothing was checked.*not a mistake in your work/,
+    );
+    expect(describeError({ code: 'SETUP_FAILED', ...raw }, 'reset').guidance).toMatch(/Press Reset to try again/);
+  });
+
+  it('explains a rate limit, a check already running, and a fault in the page itself', () => {
+    expect(describeError({ code: 'RATE_LIMITED', message: 'Too many requests.' }, 'load').title).toBe('Too many requests');
+    expect(describeError({ code: 'CHECK_IN_PROGRESS', message: 'x' }, 'verify').guidance).toMatch(/press Verify again/);
+    const page = describeError({ code: 'UNEXPECTED_ERROR', message: "Cannot read properties of undefined (reading 'map')" });
+    expect(page.message).not.toMatch(/undefined|properties/);
+    expect(page.guidance).toMatch(/Reload the page/);
   });
 });
 
