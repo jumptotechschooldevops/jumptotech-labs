@@ -124,10 +124,11 @@ task:
     resolvable for the service into `/home/student/ops/service-env.txt`. The
     file may contain other text around it.
 
-    Note that the supervisor restarts a service after you change its
-    definition rather than instantly, and the service republishes its status
-    every five seconds, so give it a moment before concluding a change did not
-    work.
+    Note that the supervisor does not notice an edited run script by itself:
+    it runs `./run` again only when the service's process ends, and this one
+    never ends on its own. After editing, restart it — `sudo sv restart
+    report-runner` — and give it a moment: the service republishes its status
+    every five seconds.
 
     One honest note on what transfers. The reason a supervised process does not
     have your shell's environment is portable: a process is handed its
@@ -312,8 +313,9 @@ hints:
       exported there. Exporting them in your own terminal instead will change
       nothing at all — that environment belongs to your shell and dies with it.
 
-      After editing, wait a few seconds for the supervisor to restart the
-      service, then re-read the status file. When it reports `STATUS=OK` the
+      After editing, restart the service with `sudo sv restart report-runner`
+      so the supervisor runs the edited script, wait a few seconds, then
+      re-read the status file. When it reports `STATUS=OK` the
       log will start carrying `formatted=OK` lines again.
 
 references:
