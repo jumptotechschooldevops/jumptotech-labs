@@ -33,6 +33,18 @@ beforeEach(() => {
 const panel = (name: string | RegExp) => screen.getByRole('heading', { name }).closest('section')!;
 
 describe('the dashboard', () => {
+  it('never greets a first-time student as a returning one, even before their history loads', async () => {
+    let answer!: (value: unknown) => void;
+    apiMock.listAttempts.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    renderWithProviders(<DashboardPage />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Welcome, Test Student' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 1, name: /Welcome back/ })).toBeNull();
+
+    await act(async () => answer({ student: progressSnapshot().student, attempts: [], count: 0 }));
+    expect(screen.getByRole('heading', { level: 1, name: 'Welcome, Test Student' })).toBeTruthy();
+  });
+
   it('welcomes a first-time student and shows how a lab works', async () => {
     renderWithProviders(<DashboardPage />);
 
