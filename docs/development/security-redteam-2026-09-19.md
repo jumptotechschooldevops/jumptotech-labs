@@ -250,5 +250,20 @@ image. CI runs them on a PR.
 
 ## 10. Evidence
 
-See §4 for the per-fix negative controls. Final gate runs are recorded in the
-branch's final report; they were run under Node 22.23 (the `.nvmrc` version).
+See §4 for the per-fix negative controls. Final gates, run locally (not CI) at
+`c423b40` under Node 22.23 (the `.nvmrc` version), load average ~31:
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | exit 0 |
+| `npm run validate:labs` | exit 0 |
+| `npm run build` | exit 0 |
+| `npm run test:security` | exit 0 — 52 files, 856 tests, 0 failed (baseline at `001bcf1`: 47 files, 784) |
+| `npm test` | exit 0 — api 653/15 skipped; web 233; lab-orchestrator 1344/253; observability 846/37; progress 96/1; sandboxd 138/7; terminal 170/20; verifier 1569 |
+| `bash scripts/test-private-beta-diagnostics.sh` | all cases passed |
+| `git diff --check` | clean |
+
+Skipped tests are the opt-in integration suites (live kind/Docker/sandboxd), not
+run here (§8). Under this load one terminal timing test
+(`session-activity.test.ts`, 5 s timeout) failed once in a parallel run and
+passed alone twice; it did not fail in the final run.
