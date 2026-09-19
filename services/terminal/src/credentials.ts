@@ -18,6 +18,7 @@
  *   - the kubeconfig body is never logged, never echoed to the socket, and
  *     never returned to the browser.
  */
+import { randomBytes } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -247,9 +248,22 @@ export async function writeSessionKubeconfig(
   if (safe.length === 0) throw new Error('refusing to write credentials for an unnamed session');
 
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const file = path.join(dir, `${safe}.kubeconfig`);
+  const file = path.join(dir, `${safe}-${attachNonce()}.kubeconfig`);
   await writeFile(file, kubeconfig, { mode: 0o600 });
   return file;
+}
+
+/**
+ * A per-attach suffix for credential file names.
+ *
+ * One session can have two attaches at once — a second tab, a reconnect racing
+ * the old socket — and the one that loses removes the credentials it wrote.
+ * Named by session id alone, both wrote the *same* file, so the loser's cleanup
+ * deleted the winner's kubeconfig or certificates out from under its live shell,
+ * and every `kubectl` or `docker` in it failed until the student reconnected.
+ */
+function attachNonce(): string {
+  return randomBytes(4).toString('hex');
 }
 
 /** Remove a session's kubeconfig. Safe to call twice. */
@@ -277,7 +291,7 @@ export async function writeSessionDockerCerts(
   const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
   if (safe.length === 0) throw new Error('refusing to write credentials for an unnamed session');
 
-  const certDir = path.join(dir, `${safe}.docker`);
+  const certDir = path.join(dir, `${safe}-${attachNonce()}.docker`);
   await mkdir(certDir, { recursive: true, mode: 0o700 });
   await writeFile(path.join(certDir, 'ca.pem'), credentials.ca, { mode: 0o600 });
   await writeFile(path.join(certDir, 'cert.pem'), credentials.clientCert, { mode: 0o600 });
