@@ -6,6 +6,7 @@
  * The student's own `docker build` is what proves a Dockerfile works, and the
  * image checks are what grade the result.
  */
+import { keyValues } from './filesystem.js';
 import type { DockerVerifierHandler } from '../contract.js';
 import { fail, pass } from '../contract.js';
 import { looksLikeDockerfile, parseDockerfile } from '../dockerfile.js';
@@ -34,6 +35,13 @@ export const workspaceFileExists: DockerVerifierHandler<'workspace_file_exists'>
 
     const content = await reader.file(r.path);
     if (content === null) return fail(`No file named '${r.path}' in your lab workspace`);
+
+    for (const [key, wanted] of Object.entries(r.key_values ?? {})) {
+      const answers = keyValues(content, key, r.separator);
+      if (answers.length === 0) return fail(`'${r.path}' has no answer for ${key}`);
+      if (answers.length > 1) return fail(`'${r.path}' answers ${key} ${answers.length} times — give one answer`);
+      if (answers[0] !== wanted.trim()) return fail(`'${r.path}' has the wrong value for ${key}`);
+    }
 
     const required = r.contains ?? [];
     const missing = required.filter((needle) => !content.includes(needle));
