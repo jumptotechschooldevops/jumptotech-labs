@@ -13,6 +13,9 @@
     "./beta-contract": "./beta-validation-contract.ts",
     "./production-host-contract": "./production-host-contract.ts"
   },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "devDependencies": {
     "vitest": "^3.2.6"
   }
