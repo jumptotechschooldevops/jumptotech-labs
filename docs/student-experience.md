@@ -135,7 +135,7 @@ The launch panel shows exactly one of:
 | This lab is running for the student | **Continue lab** |
 | A launch is in flight | "Preparing your lab environment…" |
 | Another of the student's labs uses their quota | "You already have a lab running" + **Continue *LAB-ID*** |
-| The platform cannot run this lab (`availability.available: false`) | "This lab cannot be started right now" + the API's reason; no button |
+| The platform cannot run this lab (`availability.available: false`) | "This lab cannot be started right now" and what to do; no button. The provider's own `availability.reason` (hosts, addresses, daemon errors) is for operators and is not shown |
 | Otherwise | **Launch lab** |
 
 Launch is single-flight (`ActiveSessionContext.launch`): repeated clicks, or two
