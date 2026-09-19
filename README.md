@@ -3488,8 +3488,11 @@ curl -s localhost:4000/api/me/attempts | jq '.data.attempts[] | {labId, status}'
 
 ## Automated tests
 
+What CI runs, job by job, with the local command for each and the release
+checklist: [docs/development/ci-and-release-gates.md](docs/development/ci-and-release-gates.md).
+
 ```bash
-npm run typecheck        # tsc --noEmit across all workspaces
+npm run typecheck        # tsc --noEmit across all workspaces, and scripts/
 npm test                 # unit tests, no cluster required
 npm run build            # frontend production build
 ```
