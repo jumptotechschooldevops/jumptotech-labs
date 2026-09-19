@@ -29,7 +29,7 @@ Every status has a timer that should already have moved it:
 
 | Status | Should move by | Alert at | What moves it |
 |---|---|---|---|
-| CREATING | ~3 min (ready timeout 180 s + pull) | 10 min | provisioning succeeds or fails; idle expiry after 20 min |
+| CREATING | ~3 min (ready timeout 180 s + pull) | 10 min | provisioning succeeds or fails; the reaper tears down an abandoned start at 10 min |
 | RESETTING | 10 min | 15 min | the reset, or the reaper recovering it to DEGRADED |
 | ENDING / EXPIRING | seconds; resumed at 5 min, retried every sweep | 20 min | the provider confirming the sandbox is gone |
 | DEGRADED | the student's Reset or End; idle expiry at 20 min | 40 min | the student, or the reaper |
@@ -54,8 +54,12 @@ One session, one provider, or every session? `provider` in the query above.
    ```
 2. **CREATING.** A provider hanging: `ready sandboxd 9402` and
    `q 'jtt_sandboxd_runtime_up'` (RB-06), `q 'jtt_provider_available'` (RB-09),
-   the provisioning step breakdown (RB-10). An API restart mid-create leaves the
-   row; idle expiry reclaims it.
+   the provisioning step breakdown (RB-10). An API restart mid-create, or a
+   database blip on its final write, leaves the row CREATING; after 10 minutes
+   the reaper tears it down (`EXPIRED`, reason `the lab did not finish
+   starting`, `jtt_reaper_recoveries_total{reason="abandoned_start"}`) and the
+   student can start again. The alert firing means that did not happen: the
+   reaper (RB-05) or the database (RB-02).
 3. **RESETTING past 15 minutes.** The reaper is not recovering it: sweep errors
    (RB-05), or the database (RB-02).
 4. **ENDING / EXPIRING.** The provider keeps reporting the sandbox as present:

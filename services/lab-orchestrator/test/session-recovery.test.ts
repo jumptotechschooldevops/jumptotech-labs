@@ -20,6 +20,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ABANDONED_START_REASON,
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
   RUNTIME_OWNER_LABEL,
@@ -58,6 +59,7 @@ export function sessionRecovery(
       const ended: string[] = [];
       const transitions: string[] = [];
       const reattached: string[] = [];
+      const recoveries: string[] = [];
 
       /** One API instance, over its own view of the shared store. */
       const instance = () => {
@@ -103,7 +105,9 @@ export function sessionRecovery(
         intervalMs: MINUTE,
         resetRecoveryGraceMs: 10 * MINUTE,
         abandonedEndGraceMs: 5 * MINUTE,
+        abandonedStartGraceMs: 10 * MINUTE,
         now: () => clock.now,
+        metrics: { onRecovered: (reason) => void recoveries.push(reason) },
       });
       const read = async (sessionId: string) => (await store.get(sessionId))!;
       const onlySession = async () => {
@@ -113,7 +117,7 @@ export function sessionRecovery(
       };
 
       return {
-        store, runtime, provider, clock, closed, ended, transitions, reattached,
+        store, runtime, provider, clock, closed, ended, transitions, reattached, recoveries,
         a, b, reaper, read, onlySession,
       };
     }
@@ -167,6 +171,82 @@ export function sessionRecovery(
       expect(await w.read(row.sessionId)).toEqual(afterEnd);
       expect(w.transitions).not.toContain('CREATING->FAILED');
       expect(w.ended).toEqual(['student']);
+    });
+
+    // --------------------------------- 1b. process death during CREATING
+
+    it('tears down a start whose process died, after the grace period, and the late start keeps nothing', async () => {
+      const w = await world();
+
+      // Instance A inserts the session and dies before building anything.
+      const dead = w.provider.holdNextCreate();
+      const abandoned = w.a.manager.start('LINUX-001');
+      abandoned.catch(() => undefined);
+      await dead.entered;
+      const row = await w.onlySession();
+      expect(row.status).toBe('CREATING');
+
+      // Inside the grace period a slow start is left alone.
+      w.clock.now += 5 * MINUTE;
+      const early = await w.reaper.sweep();
+      expect(early).toMatchObject({ removed: [], errors: [] });
+      expect((await w.read(row.sessionId)).status).toBe('CREATING');
+
+      // Past it — and well before the 20-minute idle expiry that used to be the
+      // only way out — the session is torn down and its slot released.
+      w.clock.now += 6 * MINUTE;
+      const sweep = await w.reaper.sweep();
+      expect(sweep.errors).toEqual([]);
+      expect(sweep.removed).toEqual([row.sandboxRef]);
+      expect(sweep.reasons[row.sandboxRef]).toBe('abandoned');
+      expect(await w.read(row.sessionId)).toMatchObject({
+        status: 'EXPIRED',
+        statusReason: ABANDONED_START_REASON,
+      });
+      expect(await w.b.manager.activeCount()).toBe(0);
+      expect(w.recoveries).toEqual(['abandoned_start']);
+      expect(w.ended).toEqual(['failed']);
+      expect(w.closed.map((e) => e.status)).toEqual(['EXPIRED']);
+
+      // The "dead" start was only stuck. It now builds its container, cannot
+      // record ACTIVE, and removes what it built.
+      dead.release();
+      await expect(abandoned).rejects.toMatchObject({ code: 'SESSION_NOT_ACTIVE' });
+      expect(w.runtime.containers.has(row.sandboxRef)).toBe(false);
+      expect((await w.read(row.sessionId)).status).toBe('EXPIRED');
+
+      // Nothing is left for later sweeps.
+      expect(await w.reaper.sweep()).toMatchObject({ removed: [], errors: [], pending: [] });
+    });
+
+    it('removes the sandbox of a start that built it but lost the database on its final write', async () => {
+      const w = await world();
+
+      // The provider finishes; the CREATING → ACTIVE write is lost.
+      w.a.view.failNextTransitionTo('ACTIVE');
+      await expect(w.a.manager.start('LINUX-001')).rejects.toThrow('Connection terminated');
+      const row = await w.onlySession();
+      expect(row.status).toBe('CREATING');
+      expect(w.runtime.containers.has(row.sandboxRef)).toBe(true);
+
+      w.clock.now += 11 * MINUTE;
+      const sweep = await w.reaper.sweep();
+      expect(sweep.removed).toEqual([row.sandboxRef]);
+      expect(w.runtime.containers.has(row.sandboxRef)).toBe(false);
+      expect(await w.read(row.sessionId)).toMatchObject({ status: 'EXPIRED', statusReason: ABANDONED_START_REASON });
+      expect(w.recoveries).toEqual(['abandoned_start']);
+    });
+
+    it('leaves a session that finished starting alone, whatever its age', async () => {
+      const w = await world();
+      const { session } = await w.a.manager.start('LINUX-001');
+
+      w.clock.now += 11 * MINUTE;
+      // ACTIVE, not CREATING: nothing to recover, and not yet idle.
+      const sweep = await w.reaper.sweep();
+      expect(sweep).toMatchObject({ removed: [], errors: [] });
+      expect(w.recoveries).toEqual([]);
+      expect((await w.read(session.sessionId)).status).toBe('ACTIVE');
     });
 
     // --------------------------------------------- 3. failed reset
