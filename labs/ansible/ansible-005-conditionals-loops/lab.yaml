@@ -74,11 +74,43 @@ requirements:
     playbook: site.yml
     has_when: true
     label: A task is gated on a condition
+  # "Do not hard-code node1 anywhere in the condition." The lock's content may
+  # say owner=node1 — the task asks for exactly that line — so what is refused
+  # is a comparison against node1, and the role variable must be read.
+  - type: file_contains
+    path: site.yml
+    contains: [node_role]
+    absent: ['== "node1"', "== 'node1'", "inventory_hostname =="]
+    label: The condition reads the node's role rather than naming a node
+  # First, from cleared paths: the state below is what the playbook made.
+  # Directories and files made by hand passed every check while this lab had
+  # no idempotency check at all.
+  - type: ansible_idempotent
+    playbook: site.yml
+    require_initial_change: true
+    reset_paths:
+      - /opt/jumptotech/bin
+      - /opt/jumptotech/conf
+      - /opt/jumptotech/logs
+      - /opt/jumptotech/releases
+      - /etc/jumptotech/scheduler.lock
+      - /etc/jumptotech/release.txt
+    label: From cleared paths the playbook makes the state, and a second run changes nothing
   - type: managed_file_exists
     path: /opt/jumptotech/bin
     kind: directory
     hosts: all
     label: The bin directory exists on every web host
+  - type: managed_file_exists
+    path: /opt/jumptotech/conf
+    kind: directory
+    hosts: all
+    label: The conf directory exists on every web host
+  - type: managed_file_exists
+    path: /opt/jumptotech/logs
+    kind: directory
+    hosts: all
+    label: The logs directory exists on every web host
   - type: managed_file_exists
     path: /opt/jumptotech/releases
     kind: directory
