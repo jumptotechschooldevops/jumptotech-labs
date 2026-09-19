@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# One wrong capability credential must page.
+#
+# `ScopeDenialDetected` is critical with no threshold above zero: a denial at
+# sandboxd means a misconfiguration, or something presenting a credential it
+# should not hold. Its expression is `increase(...[5m]) > 0`, and increase()
+# cannot see the step of a series that first appears already at 1 — it takes
+# the first sample as the baseline. Until 2026-09-19 sandboxd created each
+# {scope, endpoint} series on its first denial, so a single denial, or a burst
+# inside one scrape interval, never fired the alert. The counter now starts
+# every series at zero (services/observability/src/metrics.ts,
+# SANDBOXD_SCOPE_ENDPOINTS), and a wrong attach credential on the WebSocket
+# upgrade is counted here too, not only in jtt_sandboxd_attach_total.
+#
+#   1. a zero-started series fires on its first denial;
+#   2. a series that first appears at 1 — the old shape — does not: this case
+#      pins why the zero initialisation is required;
+#   3. the alert resolves once the denial leaves the window.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../alerts/security.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a single denial on a zero-started series pages
+    input_series:
+      # Two minutes at zero from the first scrape, then one denial.
+      - series: 'jtt_sandboxd_scope_denials_total{job="sandboxd",instance="sandboxd:9402",scope="attach",endpoint="/v1/attach"}'
+        values: '0x8 1x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ScopeDenialDetected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: sandboxd
+              instance: sandboxd:9402
+              scope: attach
+              endpoint: /v1/attach
+            exp_annotations:
+              summary: 'a caller presented the wrong capability credential to sandboxd'
+              description: 'scope=attach endpoint=/v1/attach. Expected to be zero at all times.'
+              runbook_url: docs/runbooks/RB-08-security-events.md
+
+  - interval: 15s
+    name: a series born at 1 is invisible to increase(), which is why sandboxd starts it at zero
+    input_series:
+      - series: 'jtt_sandboxd_scope_denials_total{job="sandboxd",instance="sandboxd:9402",scope="runtime",endpoint="/v1/runtime"}'
+        values: '_x8 1x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ScopeDenialDetected
+        exp_alerts: []
+
+  - interval: 15s
+    name: the alert resolves once the denial leaves the five-minute window
+    input_series:
+      - series: 'jtt_sandboxd_scope_denials_total{job="sandboxd",instance="sandboxd:9402",scope="docker",endpoint="/v1/docker"}'
+        values: '0x8 1x60'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ScopeDenialDetected
+        exp_alerts: []

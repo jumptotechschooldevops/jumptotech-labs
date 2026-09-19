@@ -100,6 +100,7 @@ export {
   createReaperMetrics,
   createTerminalMetrics,
   createSandboxdMetrics,
+  SANDBOXD_SCOPE_ENDPOINTS,
   promClient,
   type Registry,
   type Counter,

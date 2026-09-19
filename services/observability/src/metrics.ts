@@ -1005,15 +1005,35 @@ export function createSandboxdMetrics(registry: Registry): SandboxdMetrics {
      * either a misconfiguration or something presenting a credential it should
      * not have. There is no benign explanation, which is why the alert on this
      * has no threshold above zero.
+     *
+     * Every series starts at zero, for the reason `jtt_lab_start_outcome_total`
+     * does: a series that first appears at 1 has no visible step, so
+     * `increase()` read 0 and `ScopeDenialDetected` stayed silent on a single
+     * denial, or on a burst inside one scrape interval.
      */
-    scopeDenials: new client.Counter({
-      name: 'jtt_sandboxd_scope_denials_total',
-      help: 'Requests refused for presenting the wrong capability credential. Expected to be zero.',
-      labelNames: ['scope', 'endpoint'],
-      ...common,
-    }),
+    scopeDenials: (() => {
+      const counter = new client.Counter({
+        name: 'jtt_sandboxd_scope_denials_total',
+        help: 'Requests refused for presenting the wrong capability credential. Expected to be zero.',
+        labelNames: ['scope', 'endpoint'],
+        ...common,
+      });
+      for (const [scope, endpoint] of SANDBOXD_SCOPE_ENDPOINTS) counter.inc({ scope, endpoint }, 0);
+      return counter;
+    })(),
   };
 }
+
+/**
+ * The broker's capability endpoints and the scope each requires — the label
+ * pairs of `jtt_sandboxd_scope_denials_total`. The same table as sandboxd's
+ * `ENDPOINT_SCOPES`, which a sandboxd test holds equal to this one.
+ */
+export const SANDBOXD_SCOPE_ENDPOINTS = Object.freeze([
+  ['attach', '/v1/attach'],
+  ['runtime', '/v1/runtime'],
+  ['docker', '/v1/docker'],
+] as const);
 
 /** The TLS edge checks the API runs against the web tier (BETA-P0-018). */
 export const TLS_EDGE_CHECKS = ['served', 'redirect'] as const;

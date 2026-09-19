@@ -457,9 +457,15 @@ export function createSandboxd(deps: SandboxdDeps): Server {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
 
   httpServer.on('upgrade', (req, socket, head) => {
-    const deny = upgradeRefusal(req, config);
+    const decision = upgradeDecision(req, config);
+    const deny = decision?.refusal;
     if (deny) {
       metrics?.attaches.inc({ outcome: 'denied', deny_reason: 'upgrade_refused' });
+      // The attach capability refused is a scope denial like the HTTP ones in
+      // `admit`, and must reach the same zero-threshold alert
+      // (ScopeDenialDetected). It is the credential the terminal — the process
+      // a student types into — holds.
+      if (decision.scopeDenied) metrics?.scopeDenials.inc({ scope: 'attach', endpoint: '/v1/attach' });
       common?.securityEvents.inc({ service: 'sandboxd', event: 'scope_denied' });
       obs.warn('sandbox.attach.denied', {
         outcome: 'denied',
@@ -735,8 +741,16 @@ export function createSandboxd(deps: SandboxdDeps): Server {
  * and no server-side client does.
  */
 export function upgradeRefusal(req: IncomingMessage, config: SandboxdConfig): string | null {
+  return upgradeDecision(req, config)?.refusal ?? null;
+}
+
+/**
+ * Why an upgrade is refused, and whether it was the capability credential that
+ * failed (a scope denial) rather than the path or an Origin header.
+ */
+export function upgradeDecision(req: IncomingMessage, config: SandboxdConfig): { refusal: string; scopeDenied: boolean } | null {
   if (req.headers.origin !== undefined) {
-    return 'requests carrying an Origin header are not accepted; this endpoint is not browser-facing';
+    return { refusal: 'requests carrying an Origin header are not accepted; this endpoint is not browser-facing', scopeDenied: false };
   }
   /*
    * The path decides the scope, and it is resolved before the credential is
@@ -746,15 +760,15 @@ export function upgradeRefusal(req: IncomingMessage, config: SandboxdConfig): st
    */
   const scope = scopeForEndpoint(req.url);
   if (scope === null) {
-    return `no broker endpoint at '${String(req.url)}'`;
+    return { refusal: `no broker endpoint at '${String(req.url)}'`, scopeDenied: false };
   }
   if (scope !== 'attach') {
     // Reachable only if a non-WebSocket endpoint were ever added to the table.
-    return `'${String(req.url)}' is not a WebSocket endpoint`;
+    return { refusal: `'${String(req.url)}' is not a WebSocket endpoint`, scopeDenied: false };
   }
   const decision = authorizeScope(req.headers['x-internal-secret'], scope, config.scopeSecrets);
   if (!decision.ok) {
-    return decision.message ?? 'not authorized';
+    return { refusal: decision.message ?? 'not authorized', scopeDenied: true };
   }
   return null;
 }
