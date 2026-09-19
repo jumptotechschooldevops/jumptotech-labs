@@ -112,6 +112,7 @@ export const iamPolicyStatement: SandboxVerifierHandler<'iam_policy_statement'> 
       ...(requirement.condition !== undefined ? { condition: requirement.condition } : {}),
       ...(requirement.principals !== undefined ? { principals: requirement.principals } : {}),
       ...(requirement.exact_principals ? { exactPrincipals: true } : {}),
+      ...(requirement.exact_actions ? { exactActions: true } : {}),
       ...(requirement.not_principals !== undefined
         ? { notPrincipals: requirement.not_principals }
         : {}),
@@ -128,6 +129,14 @@ export const iamPolicyStatement: SandboxVerifierHandler<'iam_policy_statement'> 
       return fail(
         `no statement in '${requirement.path}' has Effect ${requirement.effect}; ${summarise(policy)}`,
       );
+    }
+    if (requirement.actions !== undefined && requirement.exact_actions) {
+      const loosely = findStatements(policy, { ...selector, exactActions: false });
+      if (loosely.length > 0) {
+        return fail(
+          `a matching statement exists in '${requirement.path}', but its Action allows more than the statement should`,
+        );
+      }
     }
     if (requirement.principals !== undefined && requirement.exact_principals) {
       const loosely = findStatements(policy, { ...selector, exactPrincipals: false });

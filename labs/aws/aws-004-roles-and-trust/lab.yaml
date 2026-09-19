@@ -107,6 +107,8 @@ requirements:
     effect: Allow
     actions:
       - sts:AssumeRole
+    # Finding line 5: "not everything under sts". `sts:*` covers AssumeRole.
+    exact_actions: true
     principals:
       - type: Service
         id: ec2.amazonaws.com
