@@ -250,6 +250,19 @@ The workspace renders the last payload the API returned and never advances a
 status on its own. Transitional states are polled every 3 seconds, steady ones
 every 15. Polling is not activity.
 
+Answers can arrive out of order, so three rules hold regardless:
+
+- A session the page has seen end (or vanish) never becomes live again. A
+  Verify that answers after End cannot bring back the controls; the attempt it
+  recorded is still shown.
+- Verify does not apply the session copy in the check's response — the API reads
+  it *before* checking — but re-reads the session, so an idle warning the check
+  answered goes away at once.
+- A Reset or End dialog closes by itself once its action is no longer possible
+  (the lab expired, is ending, or needs a reset), rather than sending a request
+  the API would refuse. *Launch again* starts with no verdict, and with the new
+  attempt's hints (none), not the previous attempt's.
+
 | Status | Student sees | Actions |
 |---|---|---|
 | `CREATING` | Preparing your lab environment… | none |
