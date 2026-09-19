@@ -92,7 +92,8 @@ cluster-down: ## Delete the local kind cluster
 sandbox-build: ## Build the Linux/Terraform sandbox images
 	@bash scripts/sandbox-build.sh
 
-sandbox-clean: ## Remove this runtime owner's sandbox containers and networks (RUNTIME_OWNER_ID)
+sandbox-clean: ## Remove this runtime owner's sandbox containers and networks (RUNTIME_OWNER_ID; refused on a production checkout)
+	@bash scripts/refuse-on-production.sh sandbox-clean "every running lab's sandbox, without ending its session"
 	@bash scripts/sandbox-clean.sh
 
 status: ## Health report for cluster + services
@@ -304,7 +305,8 @@ check: ## Call the verifier for K8S-001
 reset: ## Reset the K8S-001 lab environment
 	@curl -s -X POST localhost:4000/api/labs/K8S-001/reset | python3 -m json.tool
 
-clean: ## Tear down everything (containers + cluster + STUDENT PROGRESS)
+clean: ## Tear down everything (containers + cluster + STUDENT PROGRESS; refused on a production checkout)
+	@bash scripts/refuse-on-production.sh clean "the PostgreSQL volume (every student's progress) and the kind cluster"
 	@echo "This removes the postgres volume: every student's saved progress goes with it."
 	@echo "Back it up first if it matters: make db-backup. backups/ is not removed."
 	@docker compose down -v --remove-orphans

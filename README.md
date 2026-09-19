@@ -2090,7 +2090,8 @@ make db-shell       # psql inside the container
   [docs/runtime-architecture.md §11](docs/runtime-architecture.md).
 - Data lives in the named volume `jumptotech-labs-postgres-data`.
   `docker compose down` keeps it; `docker compose down -v` and `make clean`
-  delete it, and `make clean` says so before it does.
+  delete it, and `make clean` says so before it does — and refuses outright on
+  a production checkout (`scripts/refuse-on-production.sh`).
 - **The volume is not a backup.** `make db-backup` writes a verified
   `pg_dump --format=custom` archive and checksum to `backups/postgres`
   (git-ignored); `scripts/db-restore.sh` restores one, deliberately, into a new

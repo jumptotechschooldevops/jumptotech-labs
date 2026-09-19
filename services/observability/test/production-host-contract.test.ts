@@ -375,6 +375,21 @@ describe('the gates that prove this contract actually run', () => {
     expect(read('package.json')).toContain('"production:config-check": "tsx scripts/production-config-check.ts"');
   });
 
+  it('refuses the development teardown targets on a production checkout before they destroy anything', () => {
+    const makefile = read('Makefile');
+    for (const [target, destructive] of [
+      ['clean', 'docker compose down -v'],
+      ['sandbox-clean', 'scripts/sandbox-clean.sh'],
+    ] as const) {
+      const start = makefile.indexOf(`\n${target}: ## `);
+      expect(start, target).toBeGreaterThan(-1);
+      const recipe = makefile.slice(start, makefile.indexOf('\n\n', start + 1));
+      const guard = recipe.indexOf(`scripts/refuse-on-production.sh ${target} `);
+      expect(guard, `${target} runs the guard`).toBeGreaterThan(-1);
+      expect(recipe.indexOf(destructive), `${target} still does its work`).toBeGreaterThan(guard);
+    }
+  });
+
   it('never tells an operator to delete volumes', () => {
     for (const file of [
       'scripts/production-preflight.sh',

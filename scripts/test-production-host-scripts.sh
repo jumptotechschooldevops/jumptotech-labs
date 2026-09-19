@@ -261,6 +261,7 @@ case ${1:-} in
   inspect)
     case "$*" in
       *RestartCount*) echo "${FAKE_RESTARTS:-0} ${FAKE_RESTART_POLICY:-unless-stopped}" ;;
+      *'{{.HostConfig.RestartPolicy.Name}}'*) echo "${FAKE_PROJECT_POLICY:-no}" ;;
       *'{{.Name}}'*) echo "/jumptotech-labs-${!##id-}-1" ;;
       *Networks*) echo 'jumptotech-labs-database ' ;;
       *) exit 1 ;;
@@ -344,7 +345,8 @@ fixture() {
       "$root/repo/infrastructure/docker/nginx/tls" "$root/repo/infrastructure/docker/nginx/acme-webroot" \
       "$root/repo/infrastructure/kind/generated" "$root/docker-root" "$root/backups/postgres" "$root/backups/status" "$root/proc"
     cp "$source_repo/scripts/production-preflight.sh" "$source_repo/scripts/private-beta-smoke.sh" \
-      "$source_repo/scripts/host-capacity-sample.sh" "$source_repo/scripts/production-host-lib.sh" "$root/repo/scripts/"
+      "$source_repo/scripts/host-capacity-sample.sh" "$source_repo/scripts/production-host-lib.sh" \
+      "$source_repo/scripts/refuse-on-production.sh" "$root/repo/scripts/"
     printf '#!/bin/sh\nexit 0\n' >"$root/repo/node_modules/.bin/tsx"
     chmod +x "$root/repo/node_modules/.bin/tsx"
     echo 'id: LINUX-001' >"$root/repo/labs/linux/lab.yaml"
@@ -416,7 +418,7 @@ run() { # script case-root args...
   : >"$root/log"
   # The case's FAKE_* settings, as whole NAME=value words (values may hold spaces).
   local fakes=() name
-  for name in $(compgen -e | grep -E '^FAKE_' | grep -vE '^FAKE_(LOG|DOCKER_ROOT)$' || true); do
+  for name in $(compgen -e | grep -E '^(FAKE_|CONFIRM_DESTROY$)' | grep -vE '^FAKE_(LOG|DOCKER_ROOT)$' || true); do
     fakes+=("$name=${!name}")
   done
   set +e
@@ -730,6 +732,58 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 chmod 755 "$root/backups/status"
 common_properties
+
+# --- refuse-on-production.sh (make clean, make sandbox-clean) ----------------------------------
+
+guard() { run refuse-on-production.sh "$@" clean 'the PostgreSQL volume'; }
+
+scenario 'guard: a development checkout may run make clean'
+root=$(fixture guarddev)
+rm -f "$root/repo/infrastructure/docker/nginx/tls/privkey.pem"
+guard "$root"
+check 'exit 0' exit_is 0
+check 'nothing printed' lacks_line 'REFUSED'
+common_properties_guard() {
+  check 'no secret value appears in output or call log' no_secret_leaked
+  check 'only read-only docker verbs were used' only_read_only_calls
+}
+common_properties_guard
+
+scenario 'guard: an installed production TLS key refuses make clean until the project is named'
+root=$(fixture guardkey)
+guard "$root"
+check 'exit 1' exit_is 1
+check 'REFUSED, naming the reason' has_line 'production TLS key is installed'
+check 'names what it would destroy and for which project' has_line "PostgreSQL volume for compose project 'jumptotech-labs'"
+check 'says how to confirm' has_line 'CONFIRM_DESTROY=jumptotech-labs make clean'
+CONFIRM_DESTROY=yes guard "$root"
+check 'a confirmation that is not the project name is refused' exit_is 1
+CONFIRM_DESTROY=jumptotech-labs guard "$root"
+check 'the project name confirms' exit_is 0
+common_properties_guard
+
+scenario 'guard: a production restart policy on this project refuses, even after the key is gone'
+root=$(fixture guardpolicy)
+rm -f "$root/repo/infrastructure/docker/nginx/tls/privkey.pem"
+FAKE_PROJECT_POLICY=$'unless-stopped\nunless-stopped' guard "$root"
+check 'exit 1' exit_is 1
+check 'the restart policy is the reason' has_line 'production restart policy \(unless-stopped\)'
+check 'the project filter is used' grep -q 'ps -aq --filter label=com.docker.compose.project=jumptotech-labs' "$root/log"
+common_properties_guard
+
+scenario 'guard: the confirmation must name the project .env selects'
+root=$(fixture guardproject)
+echo 'COMPOSE_PROJECT_NAME=jtt-hostval' >>"$root/repo/.env"
+CONFIRM_DESTROY=jumptotech-labs guard "$root"
+check 'the default project name does not confirm another project' exit_is 1
+check 'the selected project is named' has_line "compose project 'jtt-hostval'"
+CONFIRM_DESTROY=jtt-hostval guard "$root"
+check 'its own name does' exit_is 0
+
+scenario 'guard: usage errors exit 2'
+root=$(fixture guardusage)
+run refuse-on-production.sh "$root" clean
+check 'exit 2' exit_is 2
 
 # --- private-beta-smoke.sh ---------------------------------------------------------------------
 
