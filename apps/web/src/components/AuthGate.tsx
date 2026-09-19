@@ -5,7 +5,7 @@
  * sign-in button on a deployment that cannot complete a sign-in, and its mirror
  * image: "please sign in" shown when the real problem is that the API is down.
  */
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { useAuth } from '../lib/AuthContext';
 
 export interface AuthGateProps {
@@ -70,6 +70,15 @@ export function AuthGate({ children }: AuthGateProps) {
     );
   }
 
+  /*
+   * The app below belongs to one student. Keyed by who that is, so a re-check
+   * that answers "signed in" as somebody else — a shared computer, another tab
+   * signed in as a different student — starts it afresh instead of keeping the
+   * previous student's sessions, terminal grants, open terminal and progress.
+   * The same student keeps everything (the key does not change).
+   */
+  const who = auth.identity ? `${auth.identity.issuer}|${auth.identity.subject}` : 'unknown';
+
   return (
     <>
       {/* Signed in, but the last re-check could not reach the API: say so, keep the lab. */}
@@ -86,7 +95,7 @@ export function AuthGate({ children }: AuthGateProps) {
           </div>
         </div>
       ) : null}
-      {children}
+      <Fragment key={who}>{children}</Fragment>
     </>
   );
 }
