@@ -372,14 +372,6 @@ export class SessionManager {
   readonly #log: (message: string) => void;
   readonly #metrics: SessionMetricsHooks;
 
-  /**
-   * Capacity is reserved synchronously, before the first `await`, so two
-   * simultaneous Start Lab requests cannot both slip past the limit. (A
-   * multi-instance deployment will need the same guard inside a database
-   * transaction — noted in the README.)
-   */
-  readonly #released = new Set<string>();
-
   constructor(options: SessionManagerOptions) {
     if (!options.providers && !options.provider) {
       throw new Error('SessionManager requires either a provider registry or a single provider');
@@ -775,7 +767,6 @@ export class SessionManager {
       );
       return;
     }
-    this.#release(session.sessionId);
     this.#emit((m) => m.onTransition?.(session.status, 'FAILED'));
     this.#emit((m) =>
       m.onSessionEnded?.({
@@ -1450,7 +1441,6 @@ export class SessionManager {
       );
       return { session: current, destroy };
     }
-    this.#release(session.sessionId);
     this.#emit((m) => m.onTransition?.(inProgress, done));
     this.#emit((m) =>
       m.onSessionEnded?.({
@@ -1508,24 +1498,20 @@ export class SessionManager {
     }
   }
 
-  /**
-   * Release a capacity slot exactly once per session.
+  /*
+   * There is no "release a capacity slot" step anywhere in this class. A slot
+   * is released by the session's status leaving the occupying set, which the
+   * finishing transition has already written: capacity is counted from those
+   * rows (`createWithinLimits`), so there is no tally to decrement and nothing
+   * a re-entered teardown could hand back twice.
    *
-   * The `#released` marker is never cleared: teardown is re-entrant, and a
-   * second pass over an already-released session must not hand back a slot
-   * that was already handed back.
+   * A per-process set of released session ids used to stand in for one. It
+   * was never read, and it grew by one entry for every session this process
+   * ever finished, for the life of the process.
    */
-  #release(sessionId: string): void {
-    // The slot is released by the session's status leaving the occupying set,
-    // which the store already recorded — capacity is derived from those rows,
-    // so there is no separate tally to decrement. The marker is kept because
-    // teardown is re-entrant and callers still ask whether this ran.
-    this.#released.add(sessionId);
-  }
 
   /** Forget a finished session record (used by the reaper's retention sweep). */
   async forget(sessionId: string): Promise<void> {
-    this.#release(sessionId);
     await this.#store.delete(sessionId);
   }
 
