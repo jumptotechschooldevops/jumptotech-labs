@@ -37,7 +37,7 @@ export const workspaceFileExists: DockerVerifierHandler<'workspace_file_exists'>
     if (content === null) return fail(`No file named '${r.path}' in your lab workspace`);
 
     for (const [key, wanted] of Object.entries(r.key_values ?? {})) {
-      const answers = keyValues(content, key, r.separator);
+      const answers = keyValues(content, key, r.separator ?? '=');
       if (answers.length === 0) return fail(`'${r.path}' has no answer for ${key}`);
       if (answers.length > 1) return fail(`'${r.path}' answers ${key} ${answers.length} times — give one answer`);
       if (answers[0] !== wanted.trim()) return fail(`'${r.path}' has the wrong value for ${key}`);

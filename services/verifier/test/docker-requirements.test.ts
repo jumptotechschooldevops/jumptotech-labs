@@ -1124,7 +1124,7 @@ function solve(lab: LoadedLabDefinition): {
           requirement.path,
           [
             ...(requirement.contains ?? []),
-            ...Object.entries(requirement.key_values ?? {}).map(([k, v]) => `${k}${requirement.separator} ${v}`),
+            ...Object.entries(requirement.key_values ?? {}).map(([k, v]) => `${k}${requirement.separator ?? '='} ${v}`),
           ].join('\n') + '\n',
         );
         break;

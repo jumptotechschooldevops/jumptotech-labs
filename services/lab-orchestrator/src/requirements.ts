@@ -1649,7 +1649,7 @@ const sandboxRequirementSchemas = {
        * access, others none" exactly as `770` does. The default, `exact`,
        * compares all four digits.
        */
-      special_bits: z.enum(['exact', 'ignore']).default('exact'),
+      special_bits: z.enum(['exact', 'ignore']).optional(),
       ...common,
     })
     .strict(),
@@ -3202,7 +3202,8 @@ const dockerRequirementSchemas = {
           message: 'must name between 1 and 10 keys',
         })
         .optional(),
-      separator: z.enum(['=', ':']).default('='),
+      /** What separates key from value in `key_values`; `=` when omitted. */
+      separator: z.enum(['=', ':']).optional(),
       ...common,
     })
     .strict(),
