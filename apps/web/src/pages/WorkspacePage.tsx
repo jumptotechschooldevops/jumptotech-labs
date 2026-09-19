@@ -252,7 +252,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const [resetting, setResetting] = useState(false);
   const [ending, setEnding] = useState(false);
   const [continuing, setContinuing] = useState(false);
-  const [actionError, setActionError] = useState<{ error: ApiError; context: 'reset' | 'end' | 'terminal' } | null>(null);
+  const [actionError, setActionError] = useState<{
+    error: ApiError;
+    context: 'reset' | 'end' | 'terminal' | 'activity';
+  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pollTrouble, setPollTrouble] = useState(false);
 
@@ -581,7 +584,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
       const response = await api.recordActivity(sessionId);
       updateSession(response.session);
     } catch (cause) {
-      setActionError({ error: toApiError(cause), context: 'terminal' });
+      setActionError({ error: toApiError(cause), context: 'activity' });
     } finally {
       setContinuing(false);
     }

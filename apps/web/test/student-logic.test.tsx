@@ -180,6 +180,15 @@ describe('what an API error means to a student', () => {
     expect(describeError({ code: 'SETUP_FAILED', ...raw }, 'reset').guidance).toMatch(/Press Reset to try again/);
   });
 
+  it('words a failed Stay active as that, not as a terminal that could not connect', () => {
+    const described = describeError({ code: 'INTERNAL_ERROR', message: 'x' }, 'activity');
+    expect(described.title).toBe('Your lab could not be kept active');
+    const unknown = describeError({ code: 'SOMETHING_NEW', message: 'raw' }, 'activity');
+    expect(unknown.title).toBe('Your lab could not be kept active');
+    expect(unknown.guidance).toMatch(/Typing in the terminal also counts/);
+    expect(`${unknown.title} ${unknown.message}`).not.toMatch(/terminal could not connect|raw/);
+  });
+
   it('explains a rate limit, a check already running, and a fault in the page itself', () => {
     expect(describeError({ code: 'RATE_LIMITED', message: 'Too many requests.' }, 'load').title).toBe('Too many requests');
     expect(describeError({ code: 'CHECK_IN_PROGRESS', message: 'x' }, 'verify').guidance).toMatch(/press Verify again/);
