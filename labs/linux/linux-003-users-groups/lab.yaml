@@ -104,9 +104,12 @@ requirements:
     path: /srv/jumptotech/deploy
     group: deployers
     label: The staging directory belongs to the deployers group
+  # The task states who may read, write and execute, and nothing about special
+  # bits: `chmod 2770`, the usual setgid shared directory, is just as right.
   - type: file_mode
     path: /srv/jumptotech/deploy
     mode: "770"
+    special_bits: ignore
     label: Only the owner and the deployers group can use the staging directory
 
 hints:
