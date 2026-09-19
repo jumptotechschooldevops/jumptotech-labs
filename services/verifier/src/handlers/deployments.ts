@@ -117,11 +117,10 @@ export const deploymentRolloutComplete: VerifierHandler<'deployment_rollout_comp
 /**
  * Kubernetes IntOrString, parsed into something comparable.
  *
- * `1`, `"1"` and `"25%"` are all valid spellings on the wire. The first two
- * mean the same thing — one Pod — and must compare equal however the manifest
- * happened to write them. The third means a proportion of `replicas` and must
- * never compare equal to an absolute count, because `1` and `"1%"` are
- * different instructions.
+ * `1`, `"1"` and `"25%"` are all valid spellings on the wire. A percentage is
+ * a proportion of `replicas`, resolved the way the Deployment controller
+ * resolves it (see `resolvePods`), so bounds are compared by the Pods they
+ * allow — the behaviour a rollout actually has — not by how they are written.
  */
 type SurgeValue = { kind: 'pods' | 'percent'; value: number };
 
@@ -137,6 +136,20 @@ function parseIntOrPercent(raw: number | string | undefined): SurgeValue | null 
 
 const describeSurge = (raw: number | string | undefined): string =>
   raw === undefined ? 'unset' : typeof raw === 'number' ? String(raw) : raw;
+
+/**
+ * The number of Pods a bound allows at this replica count.
+ *
+ * The controller rounds a percentage *up* for maxSurge and *down* for
+ * maxUnavailable (`intstr.GetScaledValueFromIntOrPercent`), so `25%` of 3
+ * replicas is a surge of 1 and an unavailability of 0 — while `25%` of 4 is 1
+ * and 1.
+ */
+function resolvePods(value: SurgeValue, field: 'maxSurge' | 'maxUnavailable', replicas: number): number {
+  if (value.kind === 'pods') return value.value;
+  const scaled = (value.value * replicas) / 100;
+  return field === 'maxSurge' ? Math.ceil(scaled) : Math.floor(scaled);
+}
 
 export const deploymentStrategy: VerifierHandler<'deployment_strategy'> = {
   type: 'deployment_strategy',
@@ -161,7 +174,9 @@ export const deploymentStrategy: VerifierHandler<'deployment_strategy'> = {
      */
     const observedType = deployment.strategy?.type ?? 'RollingUpdate';
     if (observedType !== r.strategy) {
-      return fail(`Strategy is '${observedType}', expected '${r.strategy}'`);
+      // Which strategy the constraint implies is the lab's question (K8S-015):
+      // say what is set, not what should be.
+      return fail(`Strategy is '${observedType}', which does not meet this Deployment's release constraint`);
     }
 
     if (r.maxSurge === undefined && r.maxUnavailable === undefined) return pass();
@@ -173,17 +188,21 @@ export const deploymentStrategy: VerifierHandler<'deployment_strategy'> = {
     }
 
     const problems: string[] = [];
+    const replicas = deployment.desiredReplicas;
     const compare = (field: 'maxSurge' | 'maxUnavailable', expected: number | string): void => {
       const observedRaw = deployment.strategy?.[field];
       const observed = parseIntOrPercent(observedRaw);
       const wanted = parseIntOrPercent(expected);
 
       if (!observed) {
-        problems.push(`${field} is ${describeSurge(observedRaw)}, expected ${describeSurge(expected)}`);
+        problems.push(`${field} is ${describeSurge(observedRaw)}, which is not a valid bound`);
         return;
       }
-      if (!wanted || observed.kind !== wanted.kind || observed.value !== wanted.value) {
-        problems.push(`${field} is ${describeSurge(observedRaw)}, expected ${describeSurge(expected)}`);
+      const allows = resolvePods(observed, field, replicas);
+      if (!wanted || allows !== resolvePods(wanted, field, replicas)) {
+        // The Pods it allows, never the number wanted.
+        const shown = observed.kind === 'percent' ? `${describeSurge(observedRaw)} (${allows} of ${replicas} Pods)` : describeSurge(observedRaw);
+        problems.push(`${field} is ${shown}, which does not meet the constraint`);
       }
     };
 

@@ -1,12 +1,13 @@
 /**
  * K8S-015 — update strategy, and the `deployment_strategy` primitive.
  *
- * The primitive compares meaning rather than text. `maxSurge: 1` and
- * `maxSurge: "1"` are the same instruction written two ways and must agree;
- * `1` and `"1%"` are different instructions — one Pod versus one percent of
- * replicas — and must not. Nothing here inspects YAML: every fixture is a
- * snapshot of the object as the API server stores it, which is the only thing
- * the verifier ever sees.
+ * The primitive compares meaning rather than text: a bound is graded by the
+ * number of Pods it allows at the Deployment's replica count, resolved the
+ * way the controller resolves it (maxSurge rounds up, maxUnavailable down).
+ * `maxSurge: 1`, `"1"` and — at 4 replicas — `"25%"` are one instruction; `1`
+ * and `"1%"` agree only when the replica count makes them allow the same
+ * Pods. Nothing here inspects YAML: every fixture is a snapshot of the object
+ * as the API server stores it, which is the only thing the verifier sees.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import { LabRegistry, requirementSchema, type LoadedLabDefinition } from '@jumptotech/lab-orchestrator';
@@ -31,10 +32,17 @@ beforeAll(async () => {
 type Strategy = { type: string; maxSurge?: number | string; maxUnavailable?: number | string };
 
 /** A Deployment carrying one strategy, for exercising the primitive alone. */
-const withStrategy = (strategy: Strategy | undefined, name = 'checkout-api') =>
+const withStrategy = (strategy: Strategy | undefined, name = 'checkout-api', replicas = 4) =>
   new FakeKubernetes({
     deployments: {
-      [NS]: [deploymentSnapshot({ name, namespace: NS, ...(strategy ? { strategy } : { strategy: undefined }) })],
+      [NS]: [
+        deploymentSnapshot({
+          name,
+          namespace: NS,
+          desiredReplicas: replicas,
+          ...(strategy ? { strategy } : { strategy: undefined }),
+        }),
+      ],
     },
   });
 
@@ -126,7 +134,7 @@ describe('deployment_strategy — maxSurge and maxUnavailable', () => {
   });
 
   it('reports both bounds when both are wrong', async () => {
-    const result = await strategyCheck(rolling('25%', '25%'), {
+    const result = await strategyCheck(rolling('50%', '50%'), {
       name: 'checkout-api',
       strategy: 'RollingUpdate',
       maxSurge: 1,
@@ -137,18 +145,42 @@ describe('deployment_strategy — maxSurge and maxUnavailable', () => {
     expect(result.detail).toContain('maxUnavailable');
   });
 
-  it('never confuses an absolute count with a percentage', async () => {
-    // `1` is one Pod. `"1%"` is one percent of replicas. Different instructions.
-    expect(
-      (await strategyCheck(rolling('1%', 0), { name: 'checkout-api', strategy: 'RollingUpdate', maxSurge: 1 })).status,
-    ).toBe('fail');
-    expect(
-      (await strategyCheck(rolling(1, 0), { name: 'checkout-api', strategy: 'RollingUpdate', maxSurge: '1%' })).status,
-    ).toBe('fail');
-    // …and 100% is not the same as "all of them" expressed as a count.
-    expect(
-      (await strategyCheck(rolling('100%', 0), { name: 'checkout-api', strategy: 'RollingUpdate', maxSurge: 3 })).status,
-    ).toBe('fail');
+  it('compares the Pods a bound allows, rounding the way the controller does', async () => {
+    const at = (replicas: number, maxSurge: number | string, maxUnavailable: number | string) =>
+      new FakeKubernetes({
+        deployments: {
+          [NS]: [
+            deploymentSnapshot({
+              name: 'checkout-api',
+              namespace: NS,
+              desiredReplicas: replicas,
+              strategy: { type: 'RollingUpdate', maxSurge, maxUnavailable },
+            }),
+          ],
+        },
+      });
+    const want = { name: 'checkout-api', strategy: 'RollingUpdate', maxSurge: 1, maxUnavailable: 0 };
+    // 25% of 3: surge ceil(0.75) = 1, unavailable floor(0.75) = 0 — the same rollout.
+    expect((await strategyCheck(at(3, '25%', '25%'), want)).status).toBe('pass');
+    // 25% of 4: unavailable floor(1) = 1 — one Pod may go down.
+    expect((await strategyCheck(at(4, '25%', '25%'), want)).status).toBe('fail');
+    expect((await strategyCheck(at(4, '25%', '0%'), want)).status).toBe('pass');
+    // 1% still rounds up to a whole Pod of surge; 50% of 4 is two.
+    expect((await strategyCheck(at(4, '1%', 0), want)).status).toBe('pass');
+    expect((await strategyCheck(at(4, '50%', 0), want)).status).toBe('fail');
+  });
+
+  it('never prints the bound it wants, and shows what a percentage resolves to', async () => {
+    const result = await strategyCheck(rolling('25%', '25%'), {
+      name: 'checkout-api',
+      strategy: 'RollingUpdate',
+      maxSurge: 1,
+      maxUnavailable: 0,
+    });
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('maxUnavailable is 25% (1 of 4 Pods)');
+    expect(result.detail).not.toContain('expected');
+    expect(result.detail).not.toMatch(/maxUnavailable[^;]*\b0\b/);
   });
 
   it('agrees across equivalent spellings of the same value', async () => {
@@ -249,11 +281,11 @@ describe('K8S-015 — the shipped lab', () => {
           deploymentSnapshot({
             name: 'checkout-api',
             namespace: NS,
-            desiredReplicas: 3,
-            readyReplicas: 3,
-            availableReplicas: 3,
-            updatedReplicas: 3,
-            currentReplicas: 3,
+            desiredReplicas: 4,
+            readyReplicas: 4,
+            availableReplicas: 4,
+            updatedReplicas: 4,
+            currentReplicas: 4,
             selector: { app: 'checkout-api', tier: 'api' },
             podLabels: { app: 'checkout-api', tier: 'api' },
             strategy: defaultStrategy,
@@ -328,12 +360,35 @@ describe('K8S-015 — the shipped lab', () => {
     expect(problems).toContain('checkout-api keeps every replica serving and adds at most one');
   });
 
-  it('fails a percentage that happens to work out, because the constraint is in Pods', async () => {
-    // 33% of 3 replicas rounds to 1, but the requirement asks for one Pod.
+  it('passes percentages that allow exactly the same Pods — the rollout is identical', async () => {
+    // 25% of 4 replicas is a surge of one Pod; 0% is none unavailable.
+    for (const strategy of [
+      { type: 'RollingUpdate', maxSurge: '25%', maxUnavailable: '0%' },
+      { type: 'RollingUpdate', maxSurge: '25%', maxUnavailable: 0 },
+    ]) {
+      expect(await failed(solved({ checkout: { strategy } })), JSON.stringify(strategy)).toEqual([]);
+    }
+  });
+
+  it('fails a percentage that allows more than the constraint', async () => {
+    // 50% of 4 replicas is a surge of two.
     const percentage = solved({
-      checkout: { strategy: { type: 'RollingUpdate', maxSurge: '33%', maxUnavailable: 0 } },
+      checkout: { strategy: { type: 'RollingUpdate', maxSurge: '50%', maxUnavailable: 0 } },
     });
     expect(await failed(percentage)).toEqual(['checkout-api keeps every replica serving and adds at most one']);
+  });
+
+  it('fails the API default on checkout-api: 25% of four replicas lets one Pod go down', async () => {
+    const untouched = solved({ checkout: { strategy: { type: 'RollingUpdate', maxSurge: '25%', maxUnavailable: '25%' } } });
+    expect(await failed(untouched)).toEqual(['checkout-api keeps every replica serving and adds at most one']);
+  });
+
+  it('never names the strategy or bounds a Deployment needs on the first Check', async () => {
+    const checks = (await run(seeded())).checks.filter((c) => c.label.includes('never runs two') || c.label.includes('keeps every replica'));
+    expect(checks).toHaveLength(2);
+    const text = checks.map((c) => c.detail ?? '').join('\n');
+    expect(text).not.toContain('Recreate');
+    expect(text).not.toContain('expected');
   });
 
   it('fails maxUnavailable left at the default even with the right type', async () => {
@@ -379,7 +434,7 @@ describe('K8S-015 — the shipped lab', () => {
     const problems = await failed(midway);
 
     expect(problems).toContain('The checkout-api rollout finished');
-    expect(problems).toContain('All three checkout-api replicas are available');
+    expect(problems).toContain('All four checkout-api replicas are available');
   });
 
   it('does not pass on another session"s solved namespace', async () => {
