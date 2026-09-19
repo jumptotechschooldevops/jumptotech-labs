@@ -86,6 +86,8 @@ export function CatalogProvider({ children }: { children: ReactNode }) {
 
   const catalogGeneration = useRef(0);
   const progressGeneration = useRef(0);
+  /** A snapshot has been read at least once in this visit. */
+  const progressRead = useRef(false);
 
   const reload = useCallback(() => {
     const mine = ++catalogGeneration.current;
@@ -120,12 +122,18 @@ export function CatalogProvider({ children }: { children: ReactNode }) {
       .then(() => api.getProgress())
       .then((snapshot) => {
         if (progressGeneration.current !== mine) return;
+        progressRead.current = true;
         setProgress(snapshot);
         setProgressError(null);
         setProgressStatus('ready');
       })
       .catch((cause: unknown) => {
         if (progressGeneration.current !== mine) return;
+        // A refresh that fails keeps the snapshot already read: completions are
+        // never taken away, so it is still true as far as it goes, and dropping
+        // it made every Completed badge vanish during an API blip. Only a
+        // progress that was never read is an error.
+        if (progressRead.current) return;
         setProgress(null);
         setProgressError(toApiError(cause));
         setProgressStatus('error');
