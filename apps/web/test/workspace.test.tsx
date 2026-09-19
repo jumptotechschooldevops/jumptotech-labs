@@ -163,6 +163,8 @@ describe('finding the running lab', () => {
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
 
     expect(await screen.findByText('Preparing your lab environment…')).toBeTruthy();
+    // Found after a reload: the page did not send the start, and still says what is going on.
+    expect(screen.getByText(/This can take a little while, and this page updates by itself/)).toBeTruthy();
     await waitFor(() => expect(apiMock.getSession).toHaveBeenCalledTimes(1));
     expect(button('Verify').disabled).toBe(true);
     expect(button('Reset').disabled).toBe(true);

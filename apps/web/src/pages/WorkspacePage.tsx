@@ -732,7 +732,16 @@ export function WorkspacePage({ labId }: { labId: string }) {
     if (resetting || status === 'RESETTING') {
       overlay = <Overlay title="Resetting your lab environment…" busy />;
     } else if (status === 'CREATING') {
-      overlay = <Overlay title="Preparing your lab environment…" busy />;
+      // Reached after a reload or from another tab, when this page did not send
+      // the start itself: same reassurance as the launch overlay above.
+      overlay = (
+        <Overlay title="Preparing your lab environment…" busy>
+          <p className="overlay__text">
+            Creating your {environment?.name.toLowerCase() ?? 'environment'}. This can take a little while, and this page
+            updates by itself. You can leave this page; the lab keeps starting.
+          </p>
+        </Overlay>
+      );
     } else if (status === 'DEGRADED') {
       overlay = (
         <Overlay title="Your environment needs a reset">
