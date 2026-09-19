@@ -113,3 +113,32 @@ describe('LINUX-007 — answers are found, not enumerated', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------- LINUX-010
+
+describe('LINUX-010 — graded on what the service sees, not on how the fix is spelled', () => {
+  const RUN = '/etc/sv/ledger-api/run';
+  const CONF = '/etc/jumptotech/ledger-api.conf';
+  async function status(world: FakeWorld, label: string) {
+    const lab = (await realCatalog()).get('LINUX-010');
+    const result = await verifyLab({ lab, namespace: 'jtt-lab-000000000001', sandbox: new FakeSandbox(world) });
+    return result.checks.find((c) => c.label === label)?.status;
+  }
+  const START = 'The supervisor is able to start the service';
+  const PORT = 'The service is configured for its assigned port';
+
+  it('accepts `chmod u+x` as well as 0755: runsv starts ./run as root', async () => {
+    for (const mode of ['744', '755', '700']) {
+      expect(await status({ files: { [RUN]: { content: '#!/bin/sh\n', mode, owner: 'root' } } }, START), mode).toBe('pass');
+    }
+    expect(await status({ files: { [RUN]: { content: '#!/bin/sh\n', mode: '644', owner: 'root' } } }, START)).toBe('fail');
+  });
+
+  it('accepts the old port left behind as a comment, and refuses two PORT settings', async () => {
+    const conf = (content: string) => ({ files: { [CONF]: { content } } });
+    expect(await status(conf('# PORT=9999 (set by the migration)\nPORT=9105\nLOG_LEVEL=info\n'), PORT)).toBe('pass');
+    expect(await status(conf('PORT=9999\nLOG_LEVEL=info\n'), PORT)).toBe('fail');
+    // The shell would take the last one, but a file that says both is not fixed.
+    expect(await status(conf('PORT=9999\nPORT=9105\n'), PORT)).toBe('fail');
+  });
+});

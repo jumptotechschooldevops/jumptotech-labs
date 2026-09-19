@@ -100,18 +100,18 @@ requirements:
       - /etc/service/ledger-api
     expected_exit_code: 0
     label: The service is still enabled
-  - type: file_mode
+  # runsv starts ./run as root, so the owner's execute bit is what matters:
+  # `chmod u+x` (0744) is as correct as 0755.
+  - type: script_executable
     path: /etc/sv/ledger-api/run
-    mode: "755"
     label: The supervisor is able to start the service
-  - type: file_content
+  # The effective setting, read the way the service's `. conf` reads it: the
+  # old value may stay behind as a comment, but PORT is set once, to 9105.
+  - type: file_key_value
     path: /etc/jumptotech/ledger-api.conf
-    contains: PORT=9105
+    key: PORT
+    equals: "9105"
     label: The service is configured for its assigned port
-  - type: file_content_absent
-    path: /etc/jumptotech/ledger-api.conf
-    contains: PORT=9999
-    label: The incorrect port setting is gone
   - type: process_not_running
     pattern: /usr/local/bin/legacy-exporter
     label: The decommissioned exporter is no longer running
