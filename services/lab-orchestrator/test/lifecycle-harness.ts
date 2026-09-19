@@ -73,8 +73,18 @@ export class CallCounter {
  */
 export class PausableStore implements SessionStore {
   #pause: (Gate & { reach(): Promise<void> }) | undefined;
+  #failTransitionTo: SessionStatus | undefined;
 
   constructor(private readonly inner: SessionStore) {}
+
+  /**
+   * Make the next transition *to* `status` fail without writing, as a
+   * connection lost mid-statement does: the caller sees an error, and the row
+   * stays where it was.
+   */
+  failNextTransitionTo(status: SessionStatus): void {
+    this.#failTransitionTo = status;
+  }
 
   pauseNextGet(): Gate {
     this.#pause = gate();
@@ -105,6 +115,10 @@ export class PausableStore implements SessionStore {
     patch?: Partial<LabSession>,
     guard?: TransitionGuard,
   ) {
+    if (this.#failTransitionTo === to) {
+      this.#failTransitionTo = undefined;
+      return Promise.reject(new Error('Connection terminated unexpectedly'));
+    }
     return this.inner.transition(id, from, to, patch, guard);
   }
   touchActivity(sessionId: string, at: string) { return this.inner.touchActivity(sessionId, at); }

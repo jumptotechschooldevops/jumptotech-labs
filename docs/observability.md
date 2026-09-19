@@ -373,7 +373,7 @@ or attestation reason; `private-beta-operations.test.ts` and
 | `CapacityNearExhausted` | warning | > 85% for 10 m | at a cap of 5: only 5 of 5 |
 | `LabStartsFailingHard` / `…Elevated` | critical / warning | ≥ 3 and > 30% / ≥ 2 and > 10% in 10 m | was 5 / 3, sized for a cap of 20 |
 | `LabResetsFailing` | warning | ≥ 3 failed in 30 m | |
-| `SessionStuckProvisioning` | warning | CREATING > 10 m | ready timeout 180 s + pull |
+| `SessionStuckProvisioning` | warning | CREATING > 10 m | ready timeout 180 s + pull; the reaper tears down an abandoned start at 10 m |
 | `SessionResetStuck` | warning | RESETTING > 15 m | the reaper recovers at 10 m |
 | `SessionTeardownStuck` | warning | ENDING/EXPIRING > 20 m | resumed at 5 m, retried each sweep |
 | `SessionDegradedNotReclaimed` | warning | DEGRADED > 40 m | idle expiry is 20 m |

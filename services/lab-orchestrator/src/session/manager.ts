@@ -295,9 +295,18 @@ export interface SessionMetricsHooks {
 /** The `statusReason` of a session an operator ended. */
 export const OPERATOR_END_REASON = 'ended by operator';
 
+/**
+ * The `statusReason` of a session the reaper tore down because its start
+ * never finished — the process building it died, or lost the database, before
+ * it could record ACTIVE or FAILED.
+ */
+export const ABANDONED_START_REASON = 'the lab did not finish starting';
+
 function endReasonFor(done: 'ENDED' | 'EXPIRED', detail: string): string {
   if (done === 'ENDED') return 'student';
   if (detail === OPERATOR_END_REASON) return 'operator';
+  // A start that never finished is a failed start, whoever cleaned it up.
+  if (detail === ABANDONED_START_REASON) return 'failed';
   const lowered = detail.toLowerCase();
   if (lowered.includes('idle')) return 'idle';
   if (lowered.includes('lifetime') || lowered.includes('expired')) return 'expired';

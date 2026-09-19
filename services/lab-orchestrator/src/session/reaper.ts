@@ -9,6 +9,9 @@
  *   abandoned — a student's End is still `ENDING` after `abandonedEndGraceMs`:
  *               its process died, or its destroy did not complete. It is
  *               finished as the End it was, never relabelled EXPIRED.
+ *               Or a start is still `CREATING` after `abandonedStartGraceMs`:
+ *               the process building it died (a restart mid-Start), or lost
+ *               the database before it could record ACTIVE or FAILED.
  *   orphaned  — the cluster has a managed sandbox namespace the store has no
  *               record of (an API restart, or a start that failed midway), or
  *               one whose session already finished (a start or reset that lost
@@ -47,7 +50,7 @@
  */
 import type { DestroyResult, LabProvider, ManagedSandbox } from '../types.js';
 import { ProviderRegistry, singleProviderRegistry } from '../providers/registry.js';
-import type { SessionManager, TeardownResult } from './manager.js';
+import { ABANDONED_START_REASON, type SessionManager, type TeardownResult } from './manager.js';
 import { isExpired, isIdle } from './store.js';
 import { isTerminalStatus, type LabSession } from './types.js';
 
@@ -93,6 +96,23 @@ export interface ReaperOptions {
    */
   abandonedEndGraceMs?: number;
   /**
+   * How long a session may stay `CREATING` before its start is presumed dead
+   * and the session is torn down.
+   *
+   * Nothing else ever moves such a row. Only the start that inserted it can
+   * make it ACTIVE or FAILED, and a process that died mid-Start — a deploy, a
+   * crash, a database blip on the final write — leaves it CREATING, holding a
+   * capacity slot and the student's own (the private beta allows one), behind
+   * a "Preparing…" screen that offers no action, until idle expiry.
+   *
+   * Longer than any healthy start, for the reason `resetRecoveryGraceMs` is:
+   * provisioning is measured up to 300 s and the proxy gives Start 330 s.
+   * Tearing down a start that is alive but slow is safe — it loses its claim,
+   * discards what it built and reports the lab closed — but it turns a slow
+   * success into "start again", so this errs long.
+   */
+  abandonedStartGraceMs?: number;
+  /**
    * How long a finished session record is kept for the UI to read before it is
    * dropped from the store. Zero keeps them forever.
    */
@@ -131,9 +151,10 @@ export interface ReaperMetricsHooks {
   onReclaimed?(reason: string, provider: string): void;
   /**
    * An operation whose owner is gone, made safe or finished by the reaper:
-   * `interrupted_reset` (now DEGRADED) or `abandoned_end` (the End completed).
+   * `interrupted_reset` (now DEGRADED), `abandoned_end` (the End completed) or
+   * `abandoned_start` (a start that never finished, torn down).
    */
-  onRecovered?(reason: 'interrupted_reset' | 'abandoned_end', provider: string): void;
+  onRecovered?(reason: RecoveryReason, provider: string): void;
   /** A session teardown this sweep drove that was not confirmed gone. */
   onTeardownIncomplete?(reason: SweepReason, provider: string): void;
   /**
@@ -143,6 +164,8 @@ export interface ReaperMetricsHooks {
   onSkipped?(reason: string): void;
   onDeleteFailed?(provider: string, reason: string): void;
 }
+
+export type RecoveryReason = 'interrupted_reset' | 'abandoned_end' | 'abandoned_start';
 
 export interface SweepResult {
   /** Namespaces confirmed gone during this sweep. */
@@ -167,6 +190,7 @@ export class SessionReaper {
   readonly #orphanGraceMs: number;
   readonly #resetRecoveryGraceMs: number;
   readonly #abandonedEndGraceMs: number;
+  readonly #abandonedStartGraceMs: number;
   readonly #retentionMs: number;
   readonly #providers: ProviderRegistry;
   readonly #metrics: ReaperMetricsHooks;
@@ -186,6 +210,7 @@ export class SessionReaper {
     // later one than the claim that was recovered.
     this.#resetRecoveryGraceMs = Math.max(1, options.resetRecoveryGraceMs ?? 10 * 60_000);
     this.#abandonedEndGraceMs = options.abandonedEndGraceMs ?? 5 * 60_000;
+    this.#abandonedStartGraceMs = options.abandonedStartGraceMs ?? 10 * 60_000;
     this.#retentionMs = options.retentionMs ?? 15 * 60_000;
     this.#providers =
       options.providers ??
@@ -326,8 +351,38 @@ export class SessionReaper {
           result.pending.push(ref);
           continue;
         }
-        await this.#finish(result, session, 'abandoned', () =>
-          this.options.sessions.resumeAbandonedEnd(session.sessionId),
+        await this.#finish(
+          result,
+          session,
+          'abandoned',
+          () => this.options.sessions.resumeAbandonedEnd(session.sessionId),
+          'abandoned_end',
+        );
+        continue;
+      }
+
+      /*
+       * A start nobody is running any more.
+       *
+       * Torn down like an expiry — the same fenced teardown, the same
+       * session-scoped destroy — and recorded EXPIRED with its own reason, so the
+       * student's page shows a finished lab they can start again instead of
+       * "Preparing…" for the rest of the idle window. Past its deadline or idle,
+       * it is torn down below exactly as before. If the start was alive after
+       * all, its CREATING → ACTIVE write now fails and it discards what it built.
+       */
+      if (
+        session.status === 'CREATING' &&
+        !expired &&
+        !idle &&
+        inStatusMs >= this.#abandonedStartGraceMs
+      ) {
+        await this.#finish(
+          result,
+          session,
+          'abandoned',
+          () => this.options.sessions.expire(session.sessionId, ABANDONED_START_REASON),
+          'abandoned_start',
         );
         continue;
       }
@@ -391,6 +446,7 @@ export class SessionReaper {
     session: LabSession,
     reason: SweepReason,
     teardown: () => Promise<TeardownResult>,
+    recovered?: Extract<RecoveryReason, 'abandoned_end' | 'abandoned_start'>,
   ): Promise<void> {
     const ref = session.sandboxRef ?? session.namespace;
     try {
@@ -399,7 +455,7 @@ export class SessionReaper {
         result.removed.push(ref);
         result.reasons[ref] = reason;
         this.#emit((m) => m.onReclaimed?.(reason, session.provider));
-        if (reason === 'abandoned') this.#emit((m) => m.onRecovered?.('abandoned_end', session.provider));
+        if (recovered) this.#emit((m) => m.onRecovered?.(recovered, session.provider));
         this.#log(`removed ${ref} (${reason}, provider=${session.provider}, lab=${session.labId})`);
       } else {
         result.pending.push(ref);

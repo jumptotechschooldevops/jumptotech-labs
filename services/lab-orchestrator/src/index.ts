@@ -207,6 +207,7 @@ export {
 export * from './session/manifests.js';
 export {
   SessionManager,
+  ABANDONED_START_REASON,
   OPERATOR_END_REASON,
   type ActivityReason,
   type SessionClosedEvent,
@@ -226,6 +227,7 @@ export {
   SessionReaper,
   type ReaperOptions,
   type ReaperMetricsHooks,
+  type RecoveryReason,
   type SweepReason,
   type SweepResult,
 } from './session/reaper.js';
