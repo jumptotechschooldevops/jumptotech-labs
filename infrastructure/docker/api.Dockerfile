@@ -17,6 +17,16 @@ FROM node:22-bookworm-slim
 
 ARG KUBECTL_VERSION=v1.34.2
 ARG DOCKER_CLI_VERSION=27.3.1
+# SHA-256 of every download, per architecture, checked before anything is
+# installed: a changed or truncated file fails the build. Change them with the
+# version. kubectl's and compose's are the checksum files published beside each
+# binary; docker's static tarballs have none published, so theirs were recorded
+# from download.docker.com (2026-09-19). services/observability/test/
+# dockerfile-downloads.test.ts holds every Dockerfile to this.
+ARG KUBECTL_SHA256_AMD64=9591f3d75e1581f3f7392e6ad119aab2f28ae7d6c6e083dc5d22469667f27253
+ARG KUBECTL_SHA256_ARM64=95df604e914941f3172a93fa8feeb1a1a50f4011dfbe0c01e01b660afc8f9b85
+ARG DOCKER_CLI_SHA256_AMD64=9b4f6fe406e50f9085ee474c451e2bb5adb119a03591f467922d3b4e2ddf31d3
+ARG DOCKER_CLI_SHA256_ARM64=4da6a6c7502b7ab561675a5ff5ac192d9b49d76d0b8847cf17ade246122279f4
 
 # Two CLIs, both used only by the platform's own provisioning and health checks.
 # Student commands never run in this container.
@@ -30,16 +40,18 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      amd64) karch=amd64; darch=x86_64 ;; \
-      arm64) karch=arm64; darch=aarch64 ;; \
+      amd64) karch=amd64; darch=x86_64; ksum="$KUBECTL_SHA256_AMD64"; dsum="$DOCKER_CLI_SHA256_AMD64" ;; \
+      arm64) karch=arm64; darch=aarch64; ksum="$KUBECTL_SHA256_ARM64"; dsum="$DOCKER_CLI_SHA256_ARM64" ;; \
       *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
     esac; \
     curl -fsSLo /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${karch}/kubectl"; \
+    echo "${ksum}  /usr/local/bin/kubectl" | sha256sum -c -; \
     chmod 0755 /usr/local/bin/kubectl; \
     kubectl version --client=true --output=yaml >/dev/null; \
     curl -fsSLo /tmp/docker.tgz \
       "https://download.docker.com/linux/static/stable/${darch}/docker-${DOCKER_CLI_VERSION}.tgz"; \
+    echo "${dsum}  /tmp/docker.tgz" | sha256sum -c -; \
     tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
     install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
     rm -rf /tmp/docker.tgz /tmp/docker; \

@@ -47,18 +47,27 @@ RUN npm ci --omit=dev --workspace @jumptotech/sandboxd --include-workspace-root 
 FROM node:22-bookworm-slim
 
 ARG DOCKER_CLI_VERSION=27.3.1
+# SHA-256 of every download, per architecture, checked before anything is
+# installed: a changed or truncated file fails the build. Change them with the
+# version. kubectl's and compose's are the checksum files published beside each
+# binary; docker's static tarballs have none published, so theirs were recorded
+# from download.docker.com (2026-09-19). services/observability/test/
+# dockerfile-downloads.test.ts holds every Dockerfile to this.
+ARG DOCKER_CLI_SHA256_AMD64=9b4f6fe406e50f9085ee474c451e2bb5adb119a03591f467922d3b4e2ddf31d3
+ARG DOCKER_CLI_SHA256_ARM64=4da6a6c7502b7ab561675a5ff5ac192d9b49d76d0b8847cf17ade246122279f4
 
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      amd64) darch=x86_64 ;; \
-      arm64) darch=aarch64 ;; \
+      amd64) darch=x86_64; dsum="$DOCKER_CLI_SHA256_AMD64" ;; \
+      arm64) darch=aarch64; dsum="$DOCKER_CLI_SHA256_ARM64" ;; \
       *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
     esac; \
     curl -fsSLo /tmp/docker.tgz \
       "https://download.docker.com/linux/static/stable/${darch}/docker-${DOCKER_CLI_VERSION}.tgz"; \
+    echo "${dsum}  /tmp/docker.tgz" | sha256sum -c -; \
     tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
     install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
     rm -rf /tmp/docker.tgz /tmp/docker; \
