@@ -165,7 +165,10 @@ requirements:
     path: /home/student/incident-9214/findings.env
     key: OUTCOME
     equals: success
-    label: The call is correctly reported as having succeeded
+    # The worksheet names the two words; the case they are written in is not
+    # the finding.
+    ignore_case: true
+    label: The call's outcome is correctly reported
 
   # --- the earlier attempt, which did not succeed ---------------------------
   - type: file_key_value
