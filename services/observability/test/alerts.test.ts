@@ -120,7 +120,10 @@ function knownSeries(): Set<string> {
   createSandboxdMetrics(registry);
   createOperationsMetrics(registry);
 
-  const names = new Set<string>(['up']);
+  // Series the platform does not register: Prometheus's own `up`, and what
+  // Alertmanager exports about delivery (prometheus.yml job `alertmanager`;
+  // present at zero from startup in prom/alertmanager:v0.27.0, measured).
+  const names = new Set<string>(['up', 'alertmanager_notifications_failed_total']);
   for (const metric of registry.getMetricsAsArray()) {
     names.add(metric.name);
     names.add(`${metric.name}_bucket`);

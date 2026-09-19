@@ -40,6 +40,17 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
+  # Alertmanager, in this namespace on loopback (the same address the
+  # `alerting` block uses). Without it a notification that fails — no
+  # destination installed yet, a rejected webhook, an expired credential — is
+  # visible only in Alertmanager's own log, and every alert above reaches
+  # nobody without anything saying so. Its metrics carry no credential.
+  - job_name: alertmanager
+    static_configs:
+      - targets: ['127.0.0.1:9093']
+        labels:
+          service: alertmanager
+
   - job_name: api
     metrics_path: /metrics
     authorization:

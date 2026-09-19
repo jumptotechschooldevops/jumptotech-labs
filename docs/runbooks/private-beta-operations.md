@@ -422,7 +422,7 @@ finds one. Send the archive, never `.env`, `docker inspect`,
 
 | Decision | Until it is made |
 |---|---|
-| **Where alerts are delivered** (a webhook, chat, paging, mail) and who is on call during the beta | Alerts are visible in Grafana and `amtool` only. The seam: `infrastructure/observability/alertmanager/secrets/webhook-url` |
+| **Where alerts are delivered** (a webhook, chat, paging, mail) and who is on call during the beta | Alerts are visible in Grafana and `amtool` only. The seam: `infrastructure/observability/alertmanager/secrets/webhook-url`. Until it is installed every notification fails, and `AlertNotificationsFailing` fires to say so (read it with `alerts`; it cannot be delivered either). After installing a destination it must clear within 15 minutes; `AlertmanagerUnreachable` means Prometheus cannot reach Alertmanager at all |
 | **An external reachability check** from outside the host (DNS, firewall, public route) | Only the in-host edge check runs. P0-017's `npm run tls:check` from another machine is the ready-made probe |
 | **Host-level exporter** (node_exporter or similar) for per-disk, per-process and network detail | The API's `/proc` and statfs gauges cover memory, load, Docker's filesystem and the backup filesystem only. A node exporter needs the host root filesystem mounted into a container, which this story deliberately did not do |
 | **Attestation re-probe cadence** and who runs it (P0-015 D5) | Manual, before `NetworkIsolationAttestationAging` |

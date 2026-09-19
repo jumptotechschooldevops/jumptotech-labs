@@ -91,3 +91,36 @@ groups:
             Those labs are absent from the catalogue. The startup log names each
             one with the validation error.
           runbook_url: docs/runbooks/RB-07-no-labs-loaded.md
+
+  # Alerts that reach nobody. Both fire while the destination is still a
+  # DECISION REQUIRED (no webhook-url installed: every notification fails), and
+  # say so; neither can itself be delivered then, so they are read where the
+  # operator already looks — `alerts`, the dashboard, and the smoke's
+  # observability.alerts line. The external heartbeat is what notices a dead
+  # host or monitoring stack.
+  - name: alert-delivery
+    rules:
+      - alert: AlertNotificationsFailing
+        expr: sum by (integration) (increase(alertmanager_notifications_failed_total[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Alertmanager could not deliver {{ $value }} {{ $labels.integration }} notification(s) in 15 minutes'
+          description: >-
+            Alerts are firing and reaching nobody. Read `prod logs --since 30m
+            alertmanager | grep -i notify` for the reason; install or fix the
+            destination (infrastructure/observability/alertmanager/secrets).
+          runbook_url: docs/runbooks/private-beta-operations.md
+
+      - alert: AlertmanagerUnreachable
+        expr: up{job="alertmanager"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Prometheus cannot reach Alertmanager: no alert can be delivered'
+          description: >-
+            Alertmanager shares Prometheus's network namespace; restart the
+            three monitoring services together (runbook §6).
+          runbook_url: docs/runbooks/private-beta-operations.md

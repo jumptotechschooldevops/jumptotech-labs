@@ -1,0 +1,74 @@
+# ---------------------------------------------------------------------------
+# A notification that fails must be visible somewhere.
+#
+# Prometheus did not scrape Alertmanager, so with no destination installed
+# (DECISION REQUIRED) or a destination that rejects the webhook, every alert
+# reached nobody and only Alertmanager's own log knew. Alertmanager v0.27
+# exports alertmanager_notifications_failed_total{integration,reason} at zero
+# from startup (measured with prom/alertmanager:v0.27.0), so the first failure
+# is a visible step.
+#
+#   1. failures fire AlertNotificationsFailing;
+#   2. a destination that works stays silent;
+#   3. an unreachable Alertmanager fires AlertmanagerUnreachable.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../alerts/platform.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: failing notifications are visible
+    input_series:
+      # One failed webhook notification per group_interval (5m), from zero.
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager",integration="webhook",reason="other"}'
+        values: '0x20 1x20 2x20 3x20'
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager",integration="webhook",reason="serverError"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AlertNotificationsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              integration: webhook
+            exp_annotations:
+              summary: 'Alertmanager could not deliver 2 webhook notification(s) in 15 minutes'
+              description: >-
+                Alerts are firing and reaching nobody. Read `prod logs --since 30m
+                alertmanager | grep -i notify` for the reason; install or fix the
+                destination (infrastructure/observability/alertmanager/secrets).
+              runbook_url: docs/runbooks/private-beta-operations.md
+
+  - interval: 15s
+    name: a working destination is silent
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{job="alertmanager",integration="webhook",reason="other"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AlertNotificationsFailing
+        exp_alerts: []
+
+  - interval: 15s
+    name: an unreachable Alertmanager is visible
+    input_series:
+      - series: 'up{job="alertmanager",instance="127.0.0.1:9093",service="alertmanager"}'
+        values: '1x4 0x40'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: AlertmanagerUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: alertmanager
+              instance: 127.0.0.1:9093
+              service: alertmanager
+            exp_annotations:
+              summary: 'Prometheus cannot reach Alertmanager: no alert can be delivered'
+              description: >-
+                Alertmanager shares Prometheus's network namespace; restart the
+                three monitoring services together (runbook §6).
+              runbook_url: docs/runbooks/private-beta-operations.md
