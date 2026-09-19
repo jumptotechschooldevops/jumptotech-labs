@@ -114,6 +114,17 @@ requirements:
     action: ec2:RunInstances
     resource: '*'
     label: The pipeline can still launch instances
+  # Finding line 1: "launch, describe and tag … exactly as it stands".
+  - type: iam_policy_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: ec2:DescribeInstances
+    resource: '*'
+    label: The pipeline can still describe instances
+  - type: iam_policy_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: ec2:CreateTags
+    resource: '*'
+    label: The pipeline can still tag instances
 
   - type: iam_policy_allows
     path: /home/student/escalation-review/deployer-policy.json
@@ -150,21 +161,12 @@ requirements:
     label: The pipeline can no longer attach the finance batch role
 
   # --- and it may only hand roles to one service ---------------------------
-  - type: iam_policy_statement
-    path: /home/student/escalation-review/deployer-policy.json
-    effect: Allow
-    actions:
-      - iam:PassRole
-    condition:
-      operator: StringEquals
-      key: iam:PassedToService
-      value: ec2.amazonaws.com
-    label: Handing a role over is restricted to the EC2 service
-
-  # The restriction has to cover the roles the pipeline actually hands over,
-  # however the statements are split: asked as "could this role go to a
-  # different service?". A condition parked on some other statement, beside an
-  # unconditional grant for the app roles, fails here.
+  # Graded by behaviour, asked as "could this role go to a different
+  # service?", so every way of stating the restriction counts: a condition on
+  # the Allow (StringEquals or StringLike), or the documented Deny with
+  # StringNotEquals. A condition parked on some other statement, beside an
+  # unconditional grant for the app roles, fails. Two other services are asked
+  # about so a condition that merely excludes one of them does not pass.
   - type: iam_policy_not_allows
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:PassRole
@@ -179,6 +181,20 @@ requirements:
     context:
       iam:PassedToService: lambda.amazonaws.com
     label: The worker role can only be handed to EC2
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:PassRole
+    resource: arn:aws:iam::123456789012:role/AppServerRole
+    context:
+      iam:PassedToService: ecs-tasks.amazonaws.com
+    label: The application server role cannot be handed to a container service either
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:PassRole
+    resource: arn:aws:iam::123456789012:role/AppWorkerRole
+    context:
+      iam:PassedToService: ecs-tasks.amazonaws.com
+    label: The worker role cannot be handed to a container service either
 
   # --- and the fix must not be "grant more IAM" -----------------------------
   - type: iam_policy_not_allows
@@ -192,6 +208,12 @@ requirements:
     action: iam:CreateRole
     resource: arn:aws:iam::123456789012:role/AppServerRole
     label: The pipeline cannot create roles either
+
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: iam:PutRolePolicy
+    resource: arn:aws:iam::123456789012:role/AppServerRole
+    label: The pipeline cannot write inline role policies either
 
   - type: iam_policy_no_wildcard
     path: /home/student/escalation-review/deployer-policy.json
