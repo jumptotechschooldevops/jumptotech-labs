@@ -36,6 +36,7 @@ import {
 import { api } from './api';
 import { toApiError } from './errors';
 import { isLiveStatus } from './format';
+import { parseRoute } from './router';
 import { resolveTerminalWsBase } from './urls';
 import type {
   ActiveSessionEntry,
@@ -75,7 +76,8 @@ export interface ActiveSessionState {
   launchError: { labId: string; error: ApiError } | null;
   lastStart: StartReport | null;
   launch: (labId: string, labTitle?: string) => Promise<StartLabResponse | null>;
-  clearLaunchError: () => void;
+  /** Forget a refused launch — for one lab, or whichever it was. */
+  clearLaunchError: (labId?: string) => void;
 
   grantFor: (sessionId: string) => TerminalGrant | null;
   /** Mint a fresh grant from the API, replacing any held one. */
@@ -217,7 +219,28 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
     [refresh],
   );
 
-  const clearLaunchError = useCallback(() => setLaunchError(null), []);
+  /*
+   * A refusal answers the moment it was made. Moving on to anything but that
+   * lab's own page or workspace forgets it, so coming back later does not show
+   * it again as if it were new: "you already have a lab running" after that lab
+   * has ended, or a capacity alert from twenty minutes ago. Navigation rather
+   * than a page's unmount decides, because the workspace is loaded lazily and
+   * can mount after a fast refusal has already arrived.
+   */
+  useEffect(() => {
+    const onNavigate = () => {
+      const route = parseRoute(window.location.hash);
+      const labId = route.name === 'lab' || route.name === 'workspace' ? route.labId : null;
+      setLaunchError((current) => (current && current.labId !== labId ? null : current));
+    };
+    window.addEventListener('hashchange', onNavigate);
+    return () => window.removeEventListener('hashchange', onNavigate);
+  }, []);
+
+  const clearLaunchError = useCallback(
+    (labId?: string) => setLaunchError((current) => (!labId || current?.labId === labId ? null : current)),
+    [],
+  );
 
   const grantFor = useCallback((sessionId: string) => grants.current.get(sessionId) ?? null, []);
 
