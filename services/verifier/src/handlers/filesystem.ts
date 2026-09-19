@@ -260,7 +260,10 @@ export const fileMode: SandboxVerifierHandler<'file_mode'> = {
 
     const expected = normalizeMode(requirement.mode);
     const actual = normalizeMode(read.mode);
-    if (actual !== expected) {
+    const permissions = (mode: string) => mode.slice(-3);
+    const differs =
+      requirement.special_bits === 'ignore' ? permissions(actual) !== permissions(expected) : actual !== expected;
+    if (differs) {
       // The observed mode, never the required one: working out the octal
       // value is often the lesson itself (LINUX-011's setgid 2770, sticky
       // 1777, a umask that yields 0640), and one Check would hand it over.

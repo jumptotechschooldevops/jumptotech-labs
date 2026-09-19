@@ -142,3 +142,32 @@ describe('LINUX-010 — graded on what the service sees, not on how the fix is s
     expect(await status(conf('PORT=9999\nPORT=9105\n'), PORT)).toBe('fail');
   });
 });
+
+// ---------------------------------------------------------------- LINUX-003
+
+describe('LINUX-003 — the shared directory is graded on who may use it', () => {
+  const LABEL = 'Only the owner and the deployers group can use the staging directory';
+  async function status(mode: string) {
+    const lab = (await realCatalog()).get('LINUX-003');
+    const world: FakeWorld = { files: { '/srv/jumptotech/deploy': { type: 'directory', mode, group: 'deployers' } } };
+    const result = await verifyLab({ lab, namespace: 'jtt-lab-000000000001', sandbox: new FakeSandbox(world) });
+    return result.checks.find((c) => c.label === LABEL)?.status;
+  }
+
+  it('accepts 770 and the setgid 2770 a shared directory usually gets', async () => {
+    expect(await status('770')).toBe('pass');
+    expect(await status('2770')).toBe('pass');
+  });
+
+  it('still fails any access for other accounts, or less than full group access', async () => {
+    for (const mode of ['775', '2775', '750', '777']) expect(await status(mode), mode).toBe('fail');
+  });
+
+  it('keeps comparing all four digits for a lab that does not opt out (LINUX-011 grades setgid itself)', async () => {
+    const { verifyRequirement } = await import('../src/registry.js');
+    const { SandboxReader } = await import('../src/sandbox-reader.js');
+    const reader = new SandboxReader(new FakeSandbox({ files: { '/srv/x': { type: 'directory', mode: '2770' } } }));
+    const result = await verifyRequirement({ type: 'file_mode', path: '/srv/x', mode: '770', special_bits: 'exact' } as never, reader);
+    expect(result.status).toBe('fail');
+  });
+});

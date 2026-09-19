@@ -1630,7 +1630,20 @@ const sandboxRequirementSchemas = {
     .strict(),
 
   file_mode: z
-    .object({ type: z.literal('file_mode'), path: sandboxPath, mode: fileMode, ...common })
+    .object({
+      type: z.literal('file_mode'),
+      path: sandboxPath,
+      mode: fileMode,
+      /**
+       * `ignore` compares only the rwx bits, for a task that states who may
+       * read, write and execute and says nothing about setuid, setgid or the
+       * sticky bit — a shared directory at `2770` meets "owner and group full
+       * access, others none" exactly as `770` does. The default, `exact`,
+       * compares all four digits.
+       */
+      special_bits: z.enum(['exact', 'ignore']).default('exact'),
+      ...common,
+    })
     .strict(),
 
   file_owner: z
