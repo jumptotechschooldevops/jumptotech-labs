@@ -1838,6 +1838,15 @@ const sandboxRequirementSchemas = {
       type: z.literal('terraform_locals_declared'),
       dir: sandboxPath,
       names: z.array(terraformLabel).min(1).max(20),
+      /**
+       * For named locals, the addresses each one's expression must reach —
+       * directly or through other locals. "Composed as an expression rather
+       * than written out" is then graded: `service_slug = "…-ledger-prod"`
+       * reaches nothing. The failure names the local, not the address.
+       */
+      references: z
+        .record(terraformLabel, z.array(z.string().min(1).max(160).regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/)).min(1).max(8))
+        .optional(),
       ...common,
     })
     .strict(),

@@ -205,6 +205,16 @@ requirements:
     references: local.scaled_replicas
     label: The manifest renders the scaled replica total local
 
+  # "From the variable, not typed in capitals": a literal PRODUCTION reaches
+  # the manifest while var.environment is still referenced through the
+  # replica locals.
+  - type: terraform_resource_literal_absent
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    literals: [production]
+    label: The environment line is not typed into the resource
+
   - type: terraform_resource_exists
     dir: terraform
     resource_type: local_file
