@@ -43,8 +43,9 @@ task:
     magic variable `inventory_hostname` holds the name the inventory used. Both
     are available inside a template with no extra work.
 
-    Create `templates/app.conf.j2` and deploy it to `/etc/jumptotech/app.conf`
-    on the `web` group with the `ansible.builtin.template` module, so that each
+    Create `templates/app.conf.j2`, and write a playbook called `site.yml`
+    that deploys it to `/etc/jumptotech/app.conf` on the `web` group with the
+    `ansible.builtin.template` module, so that each
     node ends up with a file containing these lines:
 
     `app_name=ledger`
@@ -80,6 +81,15 @@ requirements:
     playbook: site.yml
     module: template
     label: The playbook deploys the file with the template module
+  # First, from cleared files: the state every check below reads is what
+  # the playbook itself wrote. Run last with no reset, files written by
+  # hand beside a playbook that changes nothing passed every check.
+  - type: ansible_idempotent
+    playbook: site.yml
+    require_initial_change: true
+    reset_paths:
+      - /etc/jumptotech/app.conf
+    label: From cleared files the playbook writes the state, and a second run changes nothing
   - type: managed_file_content
     path: /etc/jumptotech/app.conf
     hosts: all
@@ -103,9 +113,6 @@ requirements:
       - node_role=replica
       - served_by=node2
     label: node2 renders its own role and hostname
-  - type: ansible_idempotent
-    playbook: site.yml
-    label: A second run of the playbook changes nothing
 
 setup:
   workspace_dir: workspace
