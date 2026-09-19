@@ -194,6 +194,13 @@ describe('each unsafe variation is a FAIL', () => {
     expect(results.find((result) => result.id === 'gates.origins')!.detail).toContain('https://staging.contract.invalid');
   });
 
+  it('never prints an origin entry that is not a bare origin, where a credential could be', () => {
+    const results = mutate((c) => (c.services!.api!.environment!.ALLOWED_ORIGINS = 'https://labs.contract.invalid,https://ops:hunter2-secret@x.invalid'));
+    const detail = results.find((result) => result.id === 'gates.origins')!.detail;
+    expect(detail).not.toContain('hunter2-secret');
+    expect(detail).toContain('1 entry that is not a bare origin (not printed)');
+  });
+
   it('does not count PUBLIC_ORIGIN itself, with or without a trailing slash, as an extra origin', () => {
     const results = mutate((c) => (c.services!.api!.environment!.ALLOWED_ORIGINS = ' https://labs.contract.invalid/ '));
     expect(statusOf(results, 'gates.origins')).toBe('PASS');

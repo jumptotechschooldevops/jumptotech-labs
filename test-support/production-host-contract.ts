@@ -372,10 +372,15 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
     .map((origin) => origin.trim().replace(/\/$/, ''))
     .filter((origin) => origin && origin !== apiOrigin);
   const cookieDomain = env(services.api, 'AUTH_COOKIE_DOMAIN')?.trim();
+  // Named only when it is a bare origin: a malformed entry is exactly where a
+  // pasted credential (`https://user:secret@host`) would sit, and the loader
+  // refuses it anyway (loader.api).
+  const bareExtras = [...new Set(extraOrigins.filter((origin) => /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(origin)))];
+  const otherExtras = extraOrigins.length - extraOrigins.filter((origin) => bareExtras.includes(origin)).length;
   const trustWidened = [
     ...(extraOrigins.length
       ? [
-          `ALLOWED_ORIGINS also trusts ${[...new Set(extraOrigins)].join(', ')}: each can read signed-in responses, pass the CSRF guard and open terminal WebSockets. Remove any you do not operate`,
+          `ALLOWED_ORIGINS also trusts ${[...bareExtras, ...(otherExtras ? [`${otherExtras} ${otherExtras === 1 ? 'entry that is not a bare origin' : 'entries that are not bare origins'} (not printed)`] : [])].join(', ')}: each can read signed-in responses, pass the CSRF guard and open terminal WebSockets. Remove any you do not operate`,
         ]
       : []),
     ...(cookieDomain
