@@ -1,5 +1,5 @@
 /**
- * E2E-001 … E2E-009 — one student, the whole private-beta critical path, in a
+ * E2E-001 … E2E-010 — one student, the whole private-beta critical path, in a
  * real browser against the real stack.
  *
  * One test with steps rather than nine tests: each step depends on the state
@@ -101,6 +101,16 @@ test('a student signs in, completes LINUX-001 in the browser terminal, and the r
       await expect(panel).toContainText("No directory found at '/home/student/project'");
     });
 
+    await test.step('E2E-007c the student asks for a hint; it is recorded against the attempt', async () => {
+      const hints = page.getByRole('region', { name: 'Hints' });
+      const recorded = page.waitForResponse(
+        (response) => response.request().method() === 'POST' && /\/api\/sessions\/[^/]+\/hints$/.test(response.url()),
+      );
+      await hints.getByRole('button', { name: /Show a hint/ }).click();
+      await expect(hints.getByText('Hint 1', { exact: true })).toBeVisible();
+      expect((await recorded).ok()).toBe(true);
+    });
+
     await test.step('E2E-007b the student does the task in the terminal and Verify passes', async () => {
       await runInTerminal(page, LINUX_001_SOLUTION);
       expect(await runInTerminal(page, 'ls ~/project ~/project/archive')).toMatch(/config\.txt.*app\.log/);
@@ -117,6 +127,10 @@ test('a student signs in, completes LINUX-001 in the browser terminal, and the r
       await expect(page.locator('.workspace__status')).toContainText('Ready');
       await expect(page.locator('.workspace__status')).toContainText('Completed');
       await expectTerminalConnected(page);
+      // The hint revealed before the reload is still open, and the next one is not.
+      const hints = page.getByRole('region', { name: 'Hints' });
+      await expect(hints.getByText('Hint 1', { exact: true })).toBeVisible();
+      await expect(hints.getByText('Hint 2', { exact: true })).toHaveCount(0);
       // The same sandbox: the student's files are still there.
       expect(await runInTerminal(page, 'ls ~/project/archive')).toBe('app.log');
 
@@ -135,6 +149,19 @@ test('a student signs in, completes LINUX-001 in the browser terminal, and the r
 
       await expect.poll(async () => (await mySessions(context)).length, { timeout: 60_000 }).toBe(0);
       await expect.poll(() => ownerContainers().length, { timeout: 90_000, intervals: [2_000] }).toBe(0);
+    });
+
+    await test.step('E2E-010 the summary names the next lab on the learning path, and it opens ready to launch', async () => {
+      await expect(page.getByRole('heading', { name: 'Next recommended lab' })).toBeVisible({ timeout: 30_000 });
+      const next = page.getByRole('link', { name: /^Continue learning/ });
+      const href = await next.getAttribute('href');
+      expect(href).toMatch(/^#\/labs\/[A-Z]+-\d{3}$/);
+      expect(href).not.toBe(`#/labs/${LAB_ID}`);
+      await next.focus();
+      await page.keyboard.press('Enter');
+      await expect(page).toHaveURL((url) => url.hash === href);
+      // The finished lab no longer holds the student's one slot.
+      await expect(page.getByRole('button', { name: 'Launch lab' })).toBeEnabled();
     });
 
     expect(pageErrors, 'uncaught page errors').toEqual([]);
