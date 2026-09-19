@@ -32,6 +32,10 @@
 #     same ownership contract as docs/runtime-ownership.md.
 #   · Deterministic teardown in an `if: always()` step, and diagnostics captured
 #     *before* it.
+#   · Suites run through `test-support/strict-vitest.ts`, not bare `vitest run`:
+#     an integration suite skips itself when its infrastructure is missing, and
+#     in a job that exists to provide that infrastructure a skip is a failure,
+#     not a green tick. Same arguments; it also fails a run where no test ran.
 #   · No secrets, no cloud credentials, no registry logins. The AWS track is
 #     simulated and needs none; nothing here has any.
 #
@@ -353,7 +357,7 @@ jobs:
           RUN_INTEGRATION_TESTS: '1'
           KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
         run: |
-          npx vitest run test/integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/integration.test.ts \
             --root services/lab-orchestrator
 
       # BETA-P0-016: PodSecurity admission, the namespace admission policy and
@@ -363,7 +367,7 @@ jobs:
           RUN_INTEGRATION_TESTS: '1'
           KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
         run: |
-          npx vitest run test/pod-security-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/pod-security-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: Whole-catalog Kubernetes suite
@@ -371,7 +375,7 @@ jobs:
           RUN_INTEGRATION_TESTS: '1'
           KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
         run: |
-          npx vitest run test/labs-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/labs-integration.test.ts \
             --root services/lab-orchestrator
 
       # BETA-P0-015. The steps above prove the NetworkPolicy objects exist; a
@@ -385,7 +389,7 @@ jobs:
           RUN_INTEGRATION_TESTS: '1'
           KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
         run: |
-          npx vitest run test/network-policy-enforcement-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/network-policy-enforcement-integration.test.ts \
             --root services/lab-orchestrator \
             --testTimeout=900000 --hookTimeout=900000
 
@@ -458,21 +462,29 @@ jobs:
         run: npm run sandbox:build
 
       - name: Linux and Terraform sandboxes
-        run: npx vitest run test/sandbox-integration.test.ts --root apps/api
+        run: npx tsx test-support/strict-vitest.ts test/sandbox-integration.test.ts --root apps/api
 
       - name: Linux man pages
         run: |
-          npx vitest run test/linux-man-pages-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/linux-man-pages-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: Ansible runtime
         run: |
-          npx vitest run test/ansible-runtime-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/ansible-runtime-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: CI/CD runtime
         run: |
-          npx vitest run test/cicd-runtime-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/cicd-runtime-integration.test.ts \
+            --root services/lab-orchestrator
+
+      # BETA-P0-019. Every absolute path the providers exec, present in each of
+      # the four images just built. It found `/usr/bin/stat` missing from the
+      # Alpine images, which no fake runtime can, and until now ran nowhere.
+      - name: Sandbox images carry every binary the providers exec
+        run: |
+          npx tsx test-support/strict-vitest.ts test/sandbox-image-binaries-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: Diagnostics
@@ -532,7 +544,7 @@ jobs:
 
       - name: NET-004 … NET-008
         run: |
-          npx vitest run \
+          npx tsx test-support/strict-vitest.ts \
             test/net004-integration.test.ts \
             test/net005-integration.test.ts \
             test/net006-integration.test.ts \
@@ -542,7 +554,7 @@ jobs:
 
       - name: The NET_RAW capability boundary
         run: |
-          npx vitest run test/net-raw-capability-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/net-raw-capability-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: Diagnostics
@@ -599,7 +611,7 @@ jobs:
 
       - name: Core Docker suite
         run: |
-          npx vitest run test/docker-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/docker-integration.test.ts \
             --root services/lab-orchestrator \
             --testTimeout=900000 --hookTimeout=900000
 
@@ -611,7 +623,7 @@ jobs:
           set -euo pipefail
           for suite in docker009 docker010 docker011 docker012 docker013 docker014; do
             echo "::group::$suite"
-            npx vitest run "test/${suite}-integration.test.ts" \
+            npx tsx test-support/strict-vitest.ts "test/${suite}-integration.test.ts" \
               --root services/lab-orchestrator \
               --testTimeout=900000 --hookTimeout=900000
             echo "::endgroup::"
@@ -772,7 +784,7 @@ jobs:
 
       - name: TLS edge suite, in the real web image
         run: |
-          npx vitest run test/tls-edge-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/tls-edge-integration.test.ts \
             --root services/observability \
             --testTimeout=300000 --hookTimeout=900000
 

@@ -243,12 +243,13 @@ test-terminal-container: ## Run the terminal integration suite inside a containe
 		-e KUBECONFIG=/app/infrastructure/kind/generated/kubeconfig-internal.yaml \
 		-e RUNTIME_OWNER_ID="$${RUNTIME_OWNER_ID:-terminal-container}" \
 		-e JTT_TEST_RUN_ID="$${JTT_TEST_RUN_ID:-tc$$$$}" \
-		-v "$(PWD)/services:/app/services" \
-		-v "$(PWD)/apps:/app/apps" \
-		-v "$(PWD)/labs:/app/labs" \
-		-v "$(PWD)/test-support:/app/test-support" \
-		-v "$(PWD)/infrastructure:/app/infrastructure" \
-		jumptotech/terminal-test
+		-v "$(CURDIR)/services:/app/services" \
+		-v "$(CURDIR)/apps:/app/apps" \
+		-v "$(CURDIR)/labs:/app/labs" \
+		-v "$(CURDIR)/test-support:/app/test-support" \
+		-v "$(CURDIR)/infrastructure:/app/infrastructure" \
+		jumptotech/terminal-test \
+		npx tsx test-support/strict-vitest.ts test/terminal-integration.test.ts --root services/terminal
 
 # The Linux sandbox image the suite creates its containers from. Built here from
 # the canonical Dockerfile rather than assumed: a fresh runner has no
@@ -268,13 +269,13 @@ test-sandboxd-container: ## Run the sandboxd suite against a real daemon and rea
 		-e JTT_TEST_RUN_ID="$${JTT_TEST_RUN_ID:-sbx$$$$}" \
 		-e LINUX_SANDBOX_IMAGE=$(SANDBOXD_TEST_LINUX_IMAGE) \
 		-v /var/run/docker.sock:/var/run/docker.sock \
-		-v "$(PWD)/services:/app/services" \
-		-v "$(PWD)/apps:/app/apps" \
-		-v "$(PWD)/labs:/app/labs" \
-		-v "$(PWD)/test-support:/app/test-support" \
-		-v "$(PWD)/infrastructure:/app/infrastructure" \
+		-v "$(CURDIR)/services:/app/services" \
+		-v "$(CURDIR)/apps:/app/apps" \
+		-v "$(CURDIR)/labs:/app/labs" \
+		-v "$(CURDIR)/test-support:/app/test-support" \
+		-v "$(CURDIR)/infrastructure:/app/infrastructure" \
 		jumptotech/terminal-test \
-		npx vitest run test/sandboxd-integration.test.ts --root services/sandboxd \
+		npx tsx test-support/strict-vitest.ts test/sandboxd-integration.test.ts --root services/sandboxd \
 			--testTimeout=300000 --hookTimeout=300000
 
 test-db: ## Run the persistence suites against a throwaway PostgreSQL
