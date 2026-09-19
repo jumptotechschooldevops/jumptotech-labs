@@ -180,3 +180,27 @@ describe('TF-002 — exactly the four keys it had', () => {
     expect(decoy.status).toBe('fail');
   });
 });
+
+describe('TF-025 — the validation names the environments it allows', () => {
+  const variable = (condition: string) => `
+variable "environment" {
+  type = string
+  validation {
+    condition     = ${condition}
+    error_message = "Unknown environment."
+  }
+}
+`;
+  it('passes contains() over the allowed list, and a regex naming both', async () => {
+    for (const condition of [
+      'contains(["staging", "production"], var.environment)',
+      'can(regex("^(staging|production)$", var.environment))',
+    ]) {
+      expect(await status('TF-025', 'terraform_variable_validation', { 'variables.tf': variable(condition) }), condition).toBe('pass');
+    }
+  });
+
+  it('fails a condition that rejects nothing', async () => {
+    expect(await status('TF-025', 'terraform_variable_validation', { 'variables.tf': variable('length(var.environment) > 0') })).toBe('fail');
+  });
+});
