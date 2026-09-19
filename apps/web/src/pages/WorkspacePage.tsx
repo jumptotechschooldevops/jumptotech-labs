@@ -270,8 +270,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const refreshedToken = useRef(false);
   const verifying = useRef(false);
 
-  /** Mirrors `reconnectTimer` for rendering: the page says it is retrying rather than asking. */
+  /** Mirrors `reconnectTimer` for rendering: the page says it is retrying. */
   const [retryPending, setRetryPending] = useState(false);
+  /** Why the last attempt failed, until the terminal first connects. */
+  const [connectFailure, setConnectFailure] = useState<string | null>(null);
   const cancelAutoReconnect = useCallback(() => {
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
     reconnectTimer.current = null;
@@ -329,6 +331,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     setActionError(null);
     setNotice(null);
     setEverConnected(false);
+    setConnectFailure(null);
     setGrantError(null);
     autoReconnects.current = 0;
     cancelAutoReconnect();
@@ -438,12 +441,14 @@ export function WorkspacePage({ labId }: { labId: string }) {
       setTerminal(event);
       if (event.status === 'connected') {
         setEverConnected(true);
+        setConnectFailure(null);
         cancelAutoReconnect();
         autoReconnects.current = 0;
         refreshedToken.current = false;
         return;
       }
       if (event.status !== 'disconnected') return;
+      setConnectFailure(event.code ?? 'CONNECTION_LOST');
 
       switch (event.code) {
         case 'SESSION_ENDED':
@@ -815,12 +820,21 @@ export function WorkspacePage({ labId }: { labId: string }) {
             </div>
           </div>
         );
-      } else if (terminal.status === 'disconnected' && !retryPending) {
+      } else if (connectFailure) {
+        // Once an attempt has failed this stays up, with Try again, through the
+        // automatic retries: flipping back to "Connecting…" for each one made
+        // the page flash between two states, and hid the button for a minute.
+        const retrying = retryPending || terminal.status === 'connecting';
         overlay = (
           <div className="overlay">
             <div className="overlay__card" role="alert">
               <p className="overlay__title">The terminal could not connect</p>
-              <p className="overlay__text">{TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST}</p>
+              <p className="overlay__text">{TERMINAL_TEXT[connectFailure] ?? TERMINAL_TEXT.CONNECTION_LOST}</p>
+              {retrying ? (
+                <p className="overlay__text" aria-live="off">
+                  <span className="spinner spinner--sm" aria-hidden="true" /> Trying again automatically…
+                </p>
+              ) : null}
               <button type="button" className="btn btn--primary" onClick={() => reconnect(true)}>
                 Try again
               </button>
@@ -830,9 +844,6 @@ export function WorkspacePage({ labId }: { labId: string }) {
       } else {
         overlay = (
           <Overlay title="Connecting to your terminal…" busy>
-            {terminal.status === 'disconnected' ? (
-              <p className="overlay__text">The connection did not get through. Trying again…</p>
-            ) : null}
             {startReport ? <Steps steps={startReport.steps} pending="Terminal connecting" /> : null}
           </Overlay>
         );

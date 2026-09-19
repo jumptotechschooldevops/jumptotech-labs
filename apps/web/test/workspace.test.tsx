@@ -888,7 +888,7 @@ describe('the terminal connection', () => {
     expect(apiMock.issueTerminal).toHaveBeenCalledTimes(2);
   });
 
-  it('says it is trying again, rather than asking, while an automatic retry is on its way', async () => {
+  it('keeps "could not connect" and Try again on screen through the automatic retries, saying it is retrying', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     terminal.autoConnect = false;
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
@@ -896,19 +896,35 @@ describe('the terminal connection', () => {
     await waitFor(() => expect(terminal.last).not.toBeNull());
 
     act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
-    expect(screen.getByText('Connecting to your terminal…')).toBeTruthy();
-    expect(screen.getByText('The connection did not get through. Trying again…')).toBeTruthy();
-    expect(screen.queryByText('The terminal could not connect')).toBeNull();
+    // Stated at once, with the button — and it says a retry is on its way.
+    expect(screen.getByText('The terminal could not connect')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.getByText(/Trying again automatically…/)).toBeTruthy();
     expect(screen.getByText(/Terminal: Connection to the terminal was lost\. Reconnecting…/)).toBeTruthy();
 
-    // Once the automatic attempts are spent, the student is asked.
-    for (const delay of AUTO_RECONNECTS) {
+    // The retry itself does not flip the page back to "Connecting…".
+    await act(() => vi.advanceTimersByTimeAsync(AUTO_RECONNECTS[0]! + 50));
+    act(() => terminal.last!.onEvent({ status: 'connecting' }));
+    expect(screen.getByText('The terminal could not connect')).toBeTruthy();
+    expect(screen.queryByText('Connecting to your terminal…')).toBeNull();
+
+    // Once the automatic attempts are spent, only the button is left.
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+    for (const delay of AUTO_RECONNECTS.slice(1)) {
       await act(() => vi.advanceTimersByTimeAsync(delay + 50));
       act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
     }
     expect(screen.getByText('The terminal could not connect')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByText(/Trying again automatically…/)).toBeNull();
     expect(screen.queryByText(/Reconnecting…/)).toBeNull();
+
+    // And a connection that does get through clears it.
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(apiMock.issueTerminal).toHaveBeenCalledTimes(2));
+    act(() => terminal.last!.onEvent({ status: 'connected' }));
+    expect(screen.queryByText('The terminal could not connect')).toBeNull();
+    expect(screen.getByText('Terminal: Connected')).toBeTruthy();
   });
 
   it('explains a terminal that never connected, and lets the student try again', async () => {
