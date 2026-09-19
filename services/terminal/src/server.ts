@@ -456,6 +456,15 @@ export function createTerminalServer(
       return false;
     }
 
+    /*
+     * Still this socket's session, and still open? Both waits above and below
+     * can outlast it: the student closes the tab mid-Reset, or an End closes
+     * the shell. `endSession` has then already run for this socket and will
+     * not run again, so anything wired to it now is never closed.
+     */
+    const stillLive = (): boolean => sessions.get(ws) === session && ws.readyState === ws.OPEN;
+    if (!stillLive()) return false;
+
     // Detach the old shell quietly: its exit is expected, not a session end.
     const previous = session.term;
     previous.onData(() => undefined);
@@ -501,6 +510,17 @@ export function createTerminalServer(
         code: 'SANDBOX_UNAVAILABLE',
         message: 'The lab environment was reset, but the terminal could not reconnect.',
       });
+      // The old shell is already gone. Left open, this socket held a dead
+      // terminal until its idle timer; closed, the workspace treats
+      // SANDBOX_UNAVAILABLE as transient and attaches afresh.
+      endSession(ws);
+      if (ws.readyState === ws.OPEN) ws.close(1011, 'reattach failed');
+      return false;
+    }
+
+    if (!stillLive()) {
+      term.kill();
+      log(`session ${sessionId}: reattach abandoned — the socket closed while the new shell was opened`);
       return false;
     }
 
