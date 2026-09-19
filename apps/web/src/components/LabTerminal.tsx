@@ -18,7 +18,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import { codeForClose } from '../lib/terminal';
+import { codeForClose, terminalNotice } from '../lib/terminal';
 import type { TerminalGrant } from '../lib/types';
 
 /**
@@ -309,14 +309,9 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
             // close happened: remembering one would label a real network drop
             // FRAME_TOO_LARGE and stop the automatic reconnect.
             if (code && !ADVISORY_ERROR_CODES.has(code)) serverCode = code;
-            // SESSION_ENDED is also what the terminal service sends this socket
-            // when the same session's terminal is opened in another tab — one
-            // shell per session. Its "the lab has ended" text would be false
-            // then, so the workspace works out which case it is from the
-            // session state and says so in the terminal bar.
-            term.writeln(
-              `\r\n\x1b[31m${code === 'SESSION_ENDED' ? 'The terminal was disconnected.' : serverMessage}\x1b[0m`,
-            );
+            // The student sees words for the code, never the frame's message:
+            // some are a raw exception with hosts and addresses in it.
+            term.writeln(`\r\n\x1b[31m${terminalNotice(code)}\x1b[0m`);
             break;
           }
 
