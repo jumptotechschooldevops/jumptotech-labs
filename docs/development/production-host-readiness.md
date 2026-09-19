@@ -3,7 +3,8 @@
 | | |
 |---|---|
 | **Branch** | `feat/production-host-readiness`, rebased onto `origin/main` at `c00ec48` (PR #34, PR #35, PR #36 — the security audit — and PR #37 — browser E2E — merged); pull request #38 |
-| **Date** | 2026-09-16 |
+| **Date** | 2026-09-16 (written on PR #38, merged into `main` as `bf712a8`) |
+| **Updated** | 2026-09-19, deployment-readiness pass (`feat/deployment-readiness-overnight`, [record](deployment-readiness-2026-09-19.md)): §6 contract checks, §8.1 identity-provider requirements and D15, §13.2 rehearsal steps, §14, §16, §17.1–17.2 recovery drills |
 | **Audience** | the operator who deploys JumpToTech Labs on its first real host, for about five trusted students |
 | **Production host deployed?** | **No.** Nothing in this document ran on a production host. No host, DNS record, public certificate, identity provider, firewall or backup destination exists. |
 
@@ -428,13 +429,33 @@ production stack. It also must not run while the production stack is on the same
 
 ### 13.2 B — five-person rehearsal on the production stack
 
-After §15 and a passing smoke, five operators or trusted testers with beta accounts:
-start the sampler (`capacity-rehearsal`); press Start within one minute on
-LINUX-001, DOCKER-001, K8S-001, ANSIBLE-001 and TF-001; work for 10 minutes,
-including one heavy step each (`docker build`, `terraform apply`, a playbook),
-noting any echo delay; Check Solution, Reset once, End Lab. Then record the PromQL
-above, restart counts, alerts fired and the sampler peaks, and confirm active
-sessions and managed containers return to zero.
+After §15 and a passing smoke, five operators or trusted testers, each with
+their own beta account. Nothing here has been run on a host. Every row names
+what to record; keep the outputs in `/srv/jumptotech/evidence/rehearsal/`.
+`prod`, `q`, `ops` and `alerts` are the runbook's functions
+([private-beta-operations.md §1](../runbooks/private-beta-operations.md)).
+
+| # | Who | Do | Expected | Evidence |
+|---|---|---|---|---|
+| R0 | operator | `ops status`; start the sampler: `make host-capacity-sample ARGS="--out-dir /srv/jumptotech/evidence/capacity-rehearsal --interval 15 --duration 3600 --kubeconfig infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml"` | `slots: 0 of 5 held`, `new labs: YES` | `ops status` output; the sampler's directory |
+| R1 | five testers | sign in at the public origin | each lands on the catalogue signed in as themselves | time per tester |
+| R2 | five testers, within one minute | Start LINUX-001, DOCKER-001, K8S-001, ANSIBLE-001, TF-001 (one each) | five labs open; `ops status` reads `5 of 5 held` | `ops sessions`; start times |
+| R3 | one tester | open a *second* lab in another tab | refused: the student already holds a lab (`STUDENT_SESSION_LIMIT_REACHED`) | screenshot; `q 'sum by (outcome) (increase(jtt_lab_start_outcome_total[30m]))'` shows `student_limit_reached` ≥ 1 |
+| R4 | a sixth account, only if D3 admits one for testing; otherwise skip and rely on §13.1 phase 1 | Start any lab | refused: the platform is full (`LAB_CAPACITY_REACHED`) | the same query shows `capacity_reached` ≥ 1 |
+| R5 | every tester | type in the terminal: `echo ready-$(hostname)`, then one heavy step (`docker build`, `terraform apply`, `ansible-playbook`, `kubectl apply`) | output appears; note any echo delay | per-tester notes |
+| R6 | two testers | A copies the lab page URL to B; B opens it | B does not see A's lab (refused or B's own page) | `q 'sum by (result) (increase(jtt_authz_decisions_total[30m]))'` or the api log's `denied-not-owner`; screenshot |
+| R7 | K8S-001 tester | `kubectl get ns`; `kubectl -n kube-system get pods` | both forbidden: the namespace-scoped credential sees only its own namespace | terminal output |
+| R8 | LINUX-001 and DOCKER-001 testers | `ps aux`; `docker ps` | only their own processes and containers | terminal output |
+| R9 | every tester | Check Solution | a verdict within `VerificationSlow`'s 10 s, pass or fail | `histogram_quantile(0.95, sum by (le, provider) (rate(jtt_verification_duration_seconds_bucket[30m])))` |
+| R10 | every tester | Reset once | a fresh environment; the terminal reconnects by itself | `q 'sum by (outcome) (increase(jtt_lab_reset_outcome_total[30m]))'`: no `failed` |
+| R11 | every tester | reload the page mid-lab; close the tab and reopen the site | the same lab resumes; the terminal reconnects | per-tester notes |
+| R12 | every tester | End Lab | `ops status` returns to `0 of 5 held` within a minute | `ops status` |
+| R13 | operator | `docker ps --filter label=jumptotech.io/managed=true --filter label=jumptotech.io/runtime-owner=<RUNTIME_OWNER_ID>`; `KUBECONFIG=infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml kubectl get ns -l jumptotech.io/managed=true` | both empty (a namespace in `Terminating` for a minute is teardown in flight) | both outputs |
+| R14 | operator | stop the sampler (Ctrl-C); `alerts`; `make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence"` | no alert fired that §3 treats as stop-launches; smoke unchanged from before R0 (including `exposure.host-containers` PASS) | sampler peaks; `alerts`; smoke file |
+
+Then record, in the evidence template §4: start and Check p95 by provider
+(PromQL in the table above), restart counts, the alerts that fired, and the
+sampler's peaks. Whether those numbers are acceptable is D8.
 
 ## 14. Preflight procedure
 
@@ -595,6 +616,46 @@ make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence"
 ```
 
 **Never** `prod down -v`: it deletes the PostgreSQL volume.
+
+### 17.1 What is proven where
+
+| Claim | Proven locally (development machine or CI) | Must be proven on the host |
+|---|---|---|
+| Every production service is `restart: unless-stopped` | rendered and checked: `make production-config-check` `durability.restart-policy`; smoke `stack.*-restart-policy` | the smoke on the host |
+| `prod restart api`: sessions survive, reaper resumes | the five-student harness at `c8eb2c6` | drill D-1 below |
+| terminal, sandboxd, web, postgres restarts | web behaviour in component tests; nothing else | drills D-2…D-5 |
+| The kind node after a Docker restart or reboot | only its restart policy: kind v0.31.0 creates `<cluster>-control-plane` with `on-failure:1` (read with `docker inspect` on four local kind nodes, 2026-09-19). Docker should retry it **once** | whether it returns, whether Kubernetes is Ready, and whether the attestation still validates: drills D-6, D-7 |
+| PostgreSQL data survives all of the above | the named volume (config check `durability.volumes`); `prod down` keeps it | a row count before and after each drill |
+| Monitoring returns | restart policy on all three (config check) | smoke `observability.*` after each drill |
+
+### 17.2 Drill procedure (no students active)
+
+Before the first drill, and again after each one, capture the same four things
+into `/srv/jumptotech/evidence/drills/<drill>-{before,after}.txt`:
+
+```bash
+prod ps; ops status
+docker inspect -f '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}} restarts={{.RestartCount}}' jumptotech-labs-control-plane
+KUBECONFIG=infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml kubectl get nodes
+q 'jtt_network_isolation_attestation_valid'
+prod exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from users; select count(*) from lab_attempts"'
+```
+
+| Drill | Action | Pass when | Record |
+|---|---|---|---|
+| D-1 | `prod restart api` | `ready api 9400` answers 200 (allow up to 300 s: the api transpiles at start); `ops status` unchanged | seconds to ready |
+| D-2 | `prod restart terminal` | `ready terminal 9401` 200 | seconds |
+| D-3 | `prod restart sandboxd` | `ready sandboxd 9402` 200; `q 'jtt_sandboxd_runtime_up'` 1 | seconds |
+| D-4 | `prod restart web` | `prod ps web` healthy; `https://<host>/` 200 from the host | seconds |
+| D-5 | `prod restart postgres` | `prod ps postgres` healthy, then `ready api 9400` 200; row counts unchanged | seconds |
+| D-6 | `sudo systemctl restart docker` (maintenance window) | every service running and healthy with no operator action; the kind node `running` and `kubectl get nodes` Ready; attestation valid; row counts unchanged | seconds to each; the kind node's `restarts=` |
+| D-7 | `sudo reboot` | as D-6, from power-on; `systemctl is-enabled docker` is `enabled` | seconds from boot to smoke PASS |
+
+After every drill: `make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence"`
+must be RESULT unchanged from before it, then start and End one LINUX-001 and
+one K8S-001 lab. If the kind node stays down after D-6 or D-7, the recovery
+above (`docker start …`) is the procedure, and the drill result is FAIL until a
+reboot brings it back unaided or the substrate decision (D2) says otherwise.
 
 ## 18. Security findings and audits
 
