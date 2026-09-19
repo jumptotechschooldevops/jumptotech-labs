@@ -109,7 +109,7 @@ function VerifyResult({ result, newlyCompleted }: { result: VerificationResult; 
       {result.passed ? (
         <p className="verify__text">
           {newlyCompleted
-            ? 'Saved to your progress. You can end the lab now, or keep exploring.'
+            ? 'Saved to your progress. Keep exploring if you like — when you are done, press End lab to free your environment and see your next lab.'
             : result.attempt?.status === 'PASSED'
               ? 'This lab is already recorded as completed.'
               : // The api answers a check even when it could not write the result (its
