@@ -58,7 +58,9 @@ task:
     `register:`, and writes `/etc/jumptotech/node.facts` containing a line
     `detected_hostname=` followed by what that command actually printed. A
     registered variable holds the whole result; the text the command wrote is
-    in its `stdout`.
+    in its `stdout`. That task only reads the machine, so tell Ansible so with
+    `changed_when: false`: the lab runs your playbook twice from a clean node,
+    and the second run should report nothing changed.
 
     Avoid putting anything secret in a variables file. These are plain text,
     they belong in version control, and the moment a password lands in one it
@@ -84,6 +86,19 @@ requirements:
     contains: [app_port, app_release, node_role, "register:", stdout]
     absent: ["8080", "2.4.1", "=primary", "=replica"]
     label: The playbook uses the variables and a registered result instead of literal values
+  # The files below have to be the playbook's work: cleared, then made by a
+  # run of site.yml. A comment-only site.yml naming the variables, beside
+  # files written with ad-hoc commands, passed every check before.
+  - type: ansible_playbook_valid
+    playbook: site.yml
+    label: Ansible accepts the playbook
+  - type: ansible_idempotent
+    playbook: site.yml
+    require_initial_change: true
+    reset_paths:
+      - /etc/jumptotech/app.conf
+      - /etc/jumptotech/node.facts
+    label: From cleared files the playbook writes both files, and a second run changes nothing
   - type: file_exists
     path: host_vars/node1.yml
     label: Host variables exist for node1

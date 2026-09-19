@@ -31,6 +31,6 @@ describe('Ansible labs grade state the playbook made', () => {
       expect(rule.reset_paths?.length ?? 0, `${lab.id}: the idempotency check must clear something`).toBeGreaterThan(0);
       expect(idempotent, `${lab.id}: the idempotency check must run before the state checks`).toBeLessThan(firstState);
     }
-    expect(checked.sort()).toEqual(['ANSIBLE-003', 'ANSIBLE-005', 'ANSIBLE-006', 'ANSIBLE-007', 'ANSIBLE-008', 'ANSIBLE-009', 'ANSIBLE-010']);
+    expect(checked.sort()).toEqual(['ANSIBLE-003', 'ANSIBLE-004', 'ANSIBLE-005', 'ANSIBLE-006', 'ANSIBLE-007', 'ANSIBLE-008', 'ANSIBLE-009', 'ANSIBLE-010']);
   });
 });
