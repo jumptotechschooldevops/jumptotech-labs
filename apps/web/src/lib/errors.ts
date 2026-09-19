@@ -63,7 +63,7 @@ export interface StudentError {
   retryable: boolean;
 }
 
-export type ErrorContext = 'launch' | 'verify' | 'reset' | 'end' | 'load' | 'terminal' | 'progress';
+export type ErrorContext = 'launch' | 'verify' | 'reset' | 'end' | 'load' | 'terminal' | 'progress' | 'activity';
 
 export function toApiError(error: unknown): ApiError {
   if (error instanceof ApiRequestError) return error.error;
@@ -81,6 +81,7 @@ const FALLBACK_TITLE: Record<ErrorContext, string> = {
   load: 'This page could not be loaded',
   terminal: 'The terminal could not connect',
   progress: 'Your progress could not be loaded',
+  activity: 'Your lab could not be kept active',
 };
 
 type Known = Omit<StudentError, 'reference'>;
@@ -349,6 +350,14 @@ function actionFallback(context: ErrorContext): Known | null {
         title: 'The lab could not be started',
         message: 'Something went wrong on the platform while preparing your environment.',
         guidance: 'Try again in a moment. If it keeps happening, tell your instructor and include the reference below.',
+        retryable: true,
+      };
+    case 'activity':
+      return {
+        kind: 'failed',
+        title: 'Your lab could not be kept active',
+        message: 'Something went wrong on the platform while recording that you are still here.',
+        guidance: 'Press Stay active again in a moment. Typing in the terminal also counts as activity.',
         retryable: true,
       };
     case 'terminal':
