@@ -147,8 +147,14 @@ requirements:
     dir: terraform
     name: environment
     min_rules: 1
+    # "The only valid environments are staging and production": a condition
+    # such as `length(var.environment) > 0` rejects nothing. Words are matched
+    # inside string literals and regexes too, so contains([...]) and
+    # can(regex(...)) both qualify.
     condition_mentions:
       - environment
+      - staging
+      - production
     label: The environment variable validates the value it is given
 
   - type: terraform_resource_condition

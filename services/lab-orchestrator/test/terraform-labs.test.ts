@@ -1054,7 +1054,10 @@ describe('TF-025 — Custom Conditions', () => {
     const validation = (await tf025()).requirements.find(
       (r) => r.type === 'terraform_variable_validation',
     ) as Record<string, unknown> | undefined;
-    expect(validation?.condition_mentions).toEqual(['environment']);
+    // The two allowed values are named too — they are what the rule is about,
+    // and a condition that names neither (`length(var.environment) > 0`)
+    // rejects nothing. They are values the task states, not functions.
+    expect(validation?.condition_mentions).toEqual(['environment', 'staging', 'production']);
 
     const precondition = (await tf025()).requirements.find(
       (r) => r.type === 'terraform_resource_condition' && 'condition' in r && r.condition === 'precondition',
@@ -1071,7 +1074,7 @@ describe('TF-025 — Custom Conditions', () => {
     );
     // `self` is how a postcondition names what was read — an identifier the
     // task itself gives, not a function.
-    expect(mentioned.sort()).toEqual(['environment', 'replicas', 'self']);
+    expect(mentioned.sort()).toEqual(['environment', 'production', 'replicas', 'self', 'staging']);
     for (const fn of ['contains', 'regex', 'startswith', 'can', 'length']) {
       expect(mentioned).not.toContain(fn);
     }
