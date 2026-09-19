@@ -213,7 +213,10 @@ export const terraformVariableDeclared: SandboxVerifierHandler<'terraform_variab
         if (declaredType === null) {
           return fail(`Variable '${requirement.name}' declares no type constraint`);
         }
-        if (!collapse(declaredType).includes(collapse(requirement.type_contains))) {
+        // Whitespace means nothing inside a type expression: `map(\n object({`
+        // and `map(object({` are one type, so both sides lose all of it.
+        const bare = (text: string) => text.replace(/\s+/g, '');
+        if (!bare(declaredType).includes(bare(requirement.type_contains))) {
           return fail(
             `Variable '${requirement.name}' does not declare the kind of type this lab asks for`,
           );

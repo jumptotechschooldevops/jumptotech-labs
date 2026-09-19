@@ -204,6 +204,31 @@ describe('block discovery', () => {
     expect(missing.detail).toContain('channel');
   });
 
+  it('matches a type written across several lines, which is how TF-017 students write it', async () => {
+    const reader = config({
+      'variables.tf': `
+        variable "environments" {
+          type = map(
+            object({
+              region   = string
+              replicas = number
+              debug    = optional(bool, false)
+            })
+          )
+        }
+      `,
+    });
+    for (const fragment of ['map(object(', 'optional(']) {
+      expect(
+        (await check(reader, { type: 'terraform_variable_declared', name: 'environments', type_contains: fragment })).status,
+        fragment,
+      ).toBe('pass');
+    }
+    expect(
+      (await check(reader, { type: 'terraform_variable_declared', name: 'environments', type_contains: 'list(object(' })).status,
+    ).toBe('fail');
+  });
+
   it('finds locals across files', async () => {
     const reader = config({
       'a.tf': 'locals { service = "ledger" }',
