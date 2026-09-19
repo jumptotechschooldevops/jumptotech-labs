@@ -25,7 +25,7 @@
  * session it was asked about.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -290,6 +290,23 @@ describe('SessionWorkspaces', () => {
     // Truncated rather than refused: a student who created a huge file by
     // accident should still get a useful answer about its first lines.
     expect(content).toHaveLength(MAX_WORKSPACE_FILE_BYTES);
+  });
+
+  it('reads only the cap from a file larger than any string this process could build', async () => {
+    // The student's shell writes this directory and this process serves every
+    // student's terminal. A whole-file read of this (sparse, so it costs no
+    // disk) either fails outright or holds the whole file in memory before
+    // cutting it to the cap; a bounded read answers from its first 256 KiB.
+    const root = await scratch();
+    const workspaces = new SessionWorkspaces({ root, secret: SECRET });
+    const dir = await workspaces.seed(SESSION_A, []);
+    await writeFile(path.join(dir, 'image.tar'), 'layer\n');
+    await truncate(path.join(dir, 'image.tar'), 600 * 1024 * 1024);
+
+    const content = await workspaces.read(SESSION_A, 'image.tar');
+
+    expect(content).toHaveLength(MAX_WORKSPACE_FILE_BYTES);
+    expect(content!.startsWith('layer\n')).toBe(true);
   });
 
   it('destroys a workspace, and tolerates destroying it twice', async () => {
