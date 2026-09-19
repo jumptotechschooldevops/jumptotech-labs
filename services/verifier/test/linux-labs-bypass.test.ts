@@ -29,6 +29,7 @@ describe('LINUX-005 — a service is enabled by linking it, not by making a dire
         commands: {
           'test -L /etc/service/ledger-api': { exitCode: 0 },
           'readlink -f /etc/service/ledger-api': { exitCode: 0, stdout: '/etc/sv/ledger-api\n' },
+          'cat /etc/service/ledger-api/supervise/stat': { exitCode: 0, stdout: 'run\n' },
         },
       }),
     ).toEqual([]);
@@ -45,7 +46,11 @@ describe('LINUX-005 — a service is enabled by linking it, not by making a dire
           'readlink -f /etc/service/ledger-api': { exitCode: 0, stdout: '/etc/service/ledger-api\n' },
         },
       }),
-    ).toEqual(['The ledger API service is enabled', "The enabled service is the ledger API's own definition"]);
+    ).toEqual([
+      'The ledger API service is enabled',
+      "The enabled service is the ledger API's own definition",
+      'The ledger API is running under supervision',
+    ]);
   });
 
   it('fails a link to something other than the ledger API definition', async () => {
@@ -55,9 +60,26 @@ describe('LINUX-005 — a service is enabled by linking it, not by making a dire
         commands: {
           'test -L /etc/service/ledger-api': { exitCode: 0 },
           'readlink -f /etc/service/ledger-api': { exitCode: 0, stdout: '/etc/sv/debug-tracer\n' },
+          'cat /etc/service/ledger-api/supervise/stat': { exitCode: 0, stdout: 'run\n' },
         },
       }),
     ).toEqual(["The enabled service is the ledger API's own definition"]);
+  });
+
+  it('fails a link to the run file plus a process started by hand — nothing supervises it', async () => {
+    // Measured in a lab-linux container: `ln -s /etc/sv/ledger-api/run
+    // /etc/service/ledger-api` resolves under /etc/sv/ledger-api, but runsvdir
+    // ignores a link to a file, so there is no supervise/stat to read.
+    expect(
+      await failing('LINUX-005', {
+        processes: [...RUNNING],
+        commands: {
+          'test -L /etc/service/ledger-api': { exitCode: 0 },
+          'readlink -f /etc/service/ledger-api': { exitCode: 0, stdout: '/etc/sv/ledger-api/run\n' },
+          'cat /etc/service/ledger-api/supervise/stat': { exitCode: 1, stderr: 'cat: Not a directory\n' },
+        },
+      }),
+    ).toEqual(['The ledger API is running under supervision']);
   });
 });
 
