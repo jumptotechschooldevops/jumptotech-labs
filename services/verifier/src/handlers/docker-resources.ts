@@ -47,7 +47,11 @@ export const dockerImageConfig: DockerVerifierHandler<'docker_image_config'> = {
       // CMD and ENTRYPOINT combine into what the container actually runs, so
       // both forms of writing the same startup command are accepted.
       const argv = [...image.entrypoint, ...image.cmd];
-      const missing = r.cmd_contains.filter((token) => !argv.includes(token));
+      // Words, not whole elements: shell form stores `CMD cat /app/banner.txt`
+      // as ["/bin/sh", "-c", "cat /app/banner.txt"], and it starts the same
+      // program as the exec form.
+      const words = new Set(argv.flatMap((element) => element.split(/\s+/)));
+      const missing = r.cmd_contains.filter((token) => !words.has(token));
       if (missing.length > 0) {
         problems.push(
           `start command is [${argv.join(' ')}], which is missing ${missing.map((m) => `'${m}'`).join(', ')}`,

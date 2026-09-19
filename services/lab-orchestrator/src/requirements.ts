@@ -3066,7 +3066,10 @@ const dockerRequirementSchemas = {
       type: z.literal('docker_image_config'),
       image: imageReference,
       working_dir: z.string().min(1).max(255).optional(),
-      /** Every listed argv element must appear, in order, in CMD or ENTRYPOINT. */
+      /**
+       * Every listed word must appear in CMD or ENTRYPOINT. Elements are split
+       * on whitespace, so exec form and shell form are the same answer.
+       */
       cmd_contains: z.array(z.string().min(1).max(255)).max(10).optional(),
       /**
        * `ENTRYPOINT` and `CMD` as exact argv arrays, separately.
