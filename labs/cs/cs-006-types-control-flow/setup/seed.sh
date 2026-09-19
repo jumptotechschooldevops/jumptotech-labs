@@ -42,22 +42,29 @@ TXT
 # current target minimum
 cat > "$BUNDLE/readings.txt" <<'TXT'
 2 5 1
-12 9 2
+12 11 2
 7 7 3
 4 2 4
-9 3 2
+15 10 3
+3 8 1
+6 4 6
 TXT
 
-# What the broken helper actually decided. It compares the values as they
-# arrive — as text — so "12" is not greater than "9" and "9" is not greater
-# than "3" the way anyone expects.
+# What the broken helper actually decided: the rule in the task, applied to
+# the values as they arrive — as text. Every line below is what that produces
+# (checked by applying it with string comparisons). Four windows are over
+# target and all four are held. Two of the holds are right — the current is
+# at its minimum — and two are the bug: "12" is not greater than "2", and
+# "15" is not greater than "3", when compared character by character.
 cat > "$BUNDLE/decisions.log" <<'TXT'
 2026-08-24T01:00:00 window=1 current=2 target=5 minimum=1 decision=scale-up
-2026-08-24T01:05:00 window=2 current=12 target=9 minimum=2 decision=hold
+2026-08-24T01:05:00 window=2 current=12 target=11 minimum=2 decision=hold
 2026-08-24T01:10:00 window=3 current=7 target=7 minimum=3 decision=hold
 2026-08-24T01:15:00 window=4 current=4 target=2 minimum=4 decision=hold
-2026-08-24T01:20:00 window=5 current=9 target=3 minimum=2 decision=hold
-2026-08-24T01:25:00 ops: four windows over target and it has never scaled down.
+2026-08-24T01:20:00 window=5 current=15 target=10 minimum=3 decision=hold
+2026-08-24T01:25:00 window=6 current=3 target=8 minimum=1 decision=scale-up
+2026-08-24T01:30:00 window=7 current=6 target=4 minimum=6 decision=hold
+2026-08-24T01:35:00 ops: four windows over target and it has never scaled down.
 TXT
 
 chown -R root:root "$BUNDLE"
