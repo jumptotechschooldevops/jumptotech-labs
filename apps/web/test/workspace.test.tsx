@@ -687,6 +687,48 @@ describe('the terminal connection', () => {
     expect(AUTO_RECONNECTS.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(45_000);
   });
 
+  /*
+   * A drop schedules an automatic reconnect, up to 25 s out. A student who
+   * presses Reconnect meanwhile gets a working shell — and the pending timer
+   * used to fire later anyway, bump the connection and replace that shell with
+   * a new one: whatever they had typed, their working directory, a running
+   * command, gone.
+   */
+  it('cancels a pending automatic reconnect once the student reconnects by hand', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    const key = () => Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
+
+    // Five drops in a row: the next automatic attempt is 25 s away.
+    for (let i = 0; i < 4; i += 1) {
+      act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+      await act(() => vi.advanceTimersByTimeAsync(AUTO_RECONNECTS[i]! + 50));
+    }
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    await waitFor(() => expect(screen.getByText('Terminal: Connected')).toBeTruthy());
+    const working = key();
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(key()).toBe(working);
+    expect(screen.getByText('Terminal: Connected')).toBeTruthy();
+  });
+
+  it('cancels a pending automatic reconnect when a connection succeeds some other way', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    const key = () => Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
+
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+    // The terminal reports connected before the retry fires (a reset's reconnect, a reattach).
+    act(() => terminal.last!.onEvent({ status: 'connected' }));
+    const working = key();
+
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(key()).toBe(working);
+  });
+
   it('never retries a sandbox mismatch; it re-reads the session instead', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     await renderConnected();
