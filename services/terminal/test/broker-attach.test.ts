@@ -108,8 +108,36 @@ async function listen(server: Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
+/** A pause point a test opens by hand: whoever reaches it waits for `release`. */
+interface Gate {
+  /** Resolves once `n` callers have reached the gate. */
+  reached(n: number): Promise<void>;
+  release(): void;
+  wait(): Promise<void>;
+}
+
+function gate(): Gate {
+  let arrivals = 0;
+  const waiters: Array<{ n: number; resolve: () => void }> = [];
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => (open = resolve));
+  return {
+    reached(n) {
+      return arrivals >= n ? Promise.resolve() : new Promise((resolve) => waiters.push({ n, resolve }));
+    },
+    release: () => open(),
+    async wait() {
+      arrivals += 1;
+      for (const w of waiters.filter((w) => arrivals >= w.n)) w.resolve();
+      await opened;
+    },
+  };
+}
+
 interface Stack {
   terminalUrl: string;
+  /** The terminal service's HTTP base, for its internal control endpoints. */
+  controlUrl: string;
   ptys: ReturnType<typeof fakePty>[];
   argvs: string[][];
   /** Who the stub API says owns each session. */
@@ -126,7 +154,7 @@ interface Stack {
 async function bringUpStack(
   containers: Record<string, SandboxSnapshot>,
   /** Latency to add, each kept inside that step's own timeout. */
-  delays: { apiMs?: number; inspectMs?: number } = {},
+  delays: { apiMs?: number; inspectMs?: number; apiGate?: Gate; inspectGate?: Gate } = {},
 ): Promise<Stack> {
   const owners = new Map<string, string>([
     [SESSION_A, OWNER_A],
@@ -148,6 +176,7 @@ async function bringUpStack(
     req.on('data', (c) => (body += c));
     req.on('end', async () => {
       if (delays.apiMs) await new Promise((r) => setTimeout(r, delays.apiMs));
+      await delays.apiGate?.wait();
       const claimed = (JSON.parse(body || '{}') as { ownerUserId?: string }).ownerUserId;
       if (!claimed || owners.get(sessionId) !== claimed) {
         res
@@ -195,6 +224,7 @@ async function bringUpStack(
     inspector: {
       inspect: async (ref) => {
         if (delays.inspectMs) await new Promise((r) => setTimeout(r, delays.inspectMs));
+        await delays.inspectGate?.wait();
         return containers[ref] ?? null;
       },
     },
@@ -223,7 +253,13 @@ async function bringUpStack(
   const terminal = createTerminalServer(terminalConfig);
   const terminalPort = await listen(terminal);
 
-  return { terminalUrl: `ws://127.0.0.1:${terminalPort}/terminal`, ptys, argvs, owners };
+  return {
+    terminalUrl: `ws://127.0.0.1:${terminalPort}/terminal`,
+    controlUrl: `http://127.0.0.1:${terminalPort}`,
+    ptys,
+    argvs,
+    owners,
+  };
 }
 
 function tokenFor(sessionId: string, ownerUserId: string): string {
@@ -467,5 +503,151 @@ describe('frames that arrive while a signed token is still attaching', () => {
     await new Promise((r) => setTimeout(r, 900));
     expect(stack.ptys).toHaveLength(1);
     expect(stack.ptys[0]!.killed).toBe(true);
+  });
+});
+
+describe('one shell per session, even while attaches are still in flight', () => {
+  /*
+   * `startSession` closed the session's existing shell *before* its own attach,
+   * then waited on the API and the broker. Anything that happened for the same
+   * session during that wait went unseen: a second socket attaching at once
+   * registered a second shell (the first no longer reachable by session id, so
+   * End could not close it), and a Terminate — End Lab, the reaper — found no
+   * shell to close and was followed by one being opened anyway. Each of those
+   * PTYs lived until the terminal's idle timer, 30 minutes in compose.
+   *
+   * Every pause below is a gate the test opens: no timing is assumed.
+   */
+
+  const closeCode = (ws: WebSocket): Promise<number> =>
+    new Promise((resolve) => ws.on('close', (code) => resolve(code)));
+
+  async function eventually(check: () => boolean, what: string): Promise<void> {
+    const deadline = Date.now() + 3_000;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
+  async function terminate(stack: Stack, sessionId: string): Promise<Record<string, unknown>> {
+    const res = await fetch(`${stack.controlUrl}/internal/terminate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-internal-secret': INTERNAL_SECRET },
+      body: JSON.stringify({ sessionId }),
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { data: Record<string, unknown> }).data;
+  }
+
+  async function authOnly(stack: Stack): Promise<WebSocket> {
+    const ws = open(stack.terminalUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+    return ws;
+  }
+
+  it('two sockets attaching together leave one shell: the newer one', async () => {
+    const apiGate = gate();
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiGate });
+
+    const first = await authOnly(stack);
+    const firstError = frame(first, ['error', 'ready']);
+    const firstClosed = closeCode(first);
+    await apiGate.reached(1);
+
+    const second = await authOnly(stack);
+    const secondReady = frame(second, ['ready', 'error']);
+    await apiGate.reached(2);
+    apiGate.release();
+
+    expect(await secondReady).toMatchObject({ type: 'ready', sandboxRef: refFor(SESSION_A) });
+    expect(await firstError).toMatchObject({ type: 'error', code: 'SESSION_ENDED' });
+    expect(await firstClosed).toBe(4410);
+
+    // The older attach stopped before the broker: only one PTY was ever opened.
+    expect(stack.ptys).toHaveLength(1);
+    expect(stack.ptys[0]!.killed).toBe(false);
+    second.send(JSON.stringify({ type: 'input', data: 'B\r' }));
+    await eventually(() => stack.ptys[0]!.written.includes('B\r'), 'input to reach the shell');
+
+    // And that one shell is the session's, so ending the session reaches it.
+    expect(await terminate(stack, SESSION_A)).toEqual({ terminated: true });
+    await eventually(() => stack.ptys[0]!.killed, 'the shell to be closed');
+  });
+
+  it('a second socket arriving during the first one’s broker attach replaces it', async () => {
+    const inspectGate = gate();
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { inspectGate });
+
+    const first = await authOnly(stack);
+    const firstClosed = closeCode(first);
+    await inspectGate.reached(1);
+
+    const second = await authOnly(stack);
+    const secondReady = frame(second, ['ready', 'error']);
+    await inspectGate.reached(2);
+    inspectGate.release();
+
+    expect(await secondReady).toMatchObject({ type: 'ready' });
+    expect(await firstClosed).toBe(4410);
+
+    // Both attaches reached the broker; the older one's PTY is closed again.
+    await eventually(() => stack.ptys.length === 2 && stack.ptys.filter((p) => p.killed).length === 1, 'one PTY to be closed');
+    const live = stack.ptys.filter((p) => !p.killed);
+    expect(live).toHaveLength(1);
+    second.send(JSON.stringify({ type: 'input', data: 'B\r' }));
+    await eventually(() => live[0]!.written.includes('B\r'), 'input to reach the live shell');
+  });
+
+  it('a Terminate that lands while the shell is attaching opens no shell', async () => {
+    const apiGate = gate();
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiGate });
+
+    const ws = await authOnly(stack);
+    const outcome = frame(ws, ['error', 'ready']);
+    const closed = closeCode(ws);
+    await apiGate.reached(1);
+
+    // End Lab, or the reaper, closing the session's terminal. There is no shell
+    // yet — but there is an attach, and it is cancelled.
+    expect(await terminate(stack, SESSION_A)).toEqual({ terminated: true });
+    apiGate.release();
+
+    expect(await outcome).toMatchObject({ type: 'error', code: 'SESSION_ENDED' });
+    expect(await closed).toBe(4410);
+    expect(stack.ptys).toHaveLength(0);
+  });
+
+  it('a Terminate that lands during the broker attach closes the PTY it opened', async () => {
+    const inspectGate = gate();
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { inspectGate });
+
+    const ws = await authOnly(stack);
+    const closed = closeCode(ws);
+    await inspectGate.reached(1);
+    expect(await terminate(stack, SESSION_A)).toEqual({ terminated: true });
+    inspectGate.release();
+
+    expect(await closed).toBe(4410);
+    await eventually(() => stack.ptys.length === 1 && stack.ptys[0]!.killed, 'the PTY to be closed');
+  });
+
+  it('a cancelled attach does not stop the session attaching again', async () => {
+    const apiGate = gate();
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiGate });
+
+    const ws = await authOnly(stack);
+    const closed = closeCode(ws);
+    await apiGate.reached(1);
+    await terminate(stack, SESSION_A);
+    apiGate.release();
+    expect(await closed).toBe(4410);
+
+    // Nothing is left claiming the session.
+    expect(await terminate(stack, SESSION_A)).toEqual({ terminated: false });
+    const { first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
+    expect(first).toMatchObject({ type: 'ready' });
+    expect(stack.ptys).toHaveLength(1);
   });
 });

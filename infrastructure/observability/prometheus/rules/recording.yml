@@ -191,9 +191,11 @@ groups:
           sum(rate(jtt_auth_attempts_total{outcome!="success"}[5m]))
             / clamp_min(sum(rate(jtt_auth_attempts_total[5m])), 0.001)
 
+      # `superseded` is an attach cancelled because its session was closed, or
+      # attached again from another tab, while it waited: nothing failed.
       - record: jtt:terminal_connection_failure:ratio10m
         expr: |
-          sum(rate(jtt_terminal_connections_total{outcome!="established"}[10m]))
+          sum(rate(jtt_terminal_connections_total{outcome!~"established|superseded"}[10m]))
             / clamp_min(sum(rate(jtt_terminal_connections_total[10m])), 0.001)
 
       # BETA-P0-018. Counts, not rates: `AuthFailureSpike` asks for more than one
