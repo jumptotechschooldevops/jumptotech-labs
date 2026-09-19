@@ -144,7 +144,7 @@ describe('CICD-004 — publishing build artifacts', () => {
       files.set(workflow, files.get(workflow)! + CICD_004_UPLOAD('nothing-here/'));
       withBuild(files);
     });
-    expect(failing(result)).toEqual(['A step uploads a named artifact from the build output']);
+    expect(failing(result)).toEqual(['A step uploads a named artifact from the build output, once it exists']);
     const detail = result.checks.find((c) => c.status !== 'pass')?.detail ?? '';
     expect(detail).toContain("'path' input does not have the value this lab expects");
     expect(detail).not.toContain('dist');
@@ -441,7 +441,7 @@ describe('CICD-010 — troubleshooting a broken pipeline', () => {
 
   it('fails when the artifact path still names a directory the build never creates', async () => {
     const result = await grade('CICD-010', (files) => cicd010(files, CICD_010_WORKFLOW({ path: 'build/' })));
-    expect(failing(result)).toEqual(['The job uploads the build output, named with APP_VERSION']);
+    expect(failing(result)).toEqual(['The job uploads the build output, named with APP_VERSION, after the build']);
   });
 
   it('fails when APP_VERSION is still never defined, or defined only in a comment', async () => {
@@ -455,6 +455,128 @@ describe('CICD-010 — troubleshooting a broken pipeline', () => {
     const result = await grade('CICD-010', (files) =>
       cicd010(files, CICD_010_WORKFLOW({ name: 'statements-${APP_VERSION}' })),
     );
-    expect(failing(result)).toEqual(['The job uploads the build output, named with APP_VERSION']);
+    expect(failing(result)).toEqual(['The job uploads the build output, named with APP_VERSION, after the build']);
+  });
+});
+
+// ------------------------------------------------- shortcuts, second audit
+
+describe('CI/CD shortcuts found by the second lab-quality audit', () => {
+  const WF = '.github/workflows/ci.yml';
+
+  it('CICD-003: the right four steps in the wrong order fail — the runner executes them as listed', async () => {
+    const result = await grade('CICD-003', (files) => {
+      const starter = files.get(WF)!.replace(/\n {6}- name: Check out the repository\n {8}uses: actions\/checkout@v4\n/, '\n');
+      files.set(
+        WF,
+        `${starter}      - run: node --test
+      - run: node build.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/checkout@v4
+`,
+      );
+      withBuild(files);
+    });
+    expect(failing(result).sort()).toEqual([
+      'A step runs the build, once the code and Node.js are in place',
+      'A step runs the tests, after the build',
+    ]);
+    const detail = result.checks.find((c) => c.label.startsWith('A step runs the build'))?.detail ?? '';
+    expect(detail).toContain('runs before a step it depends on');
+  });
+
+  it('CICD-003: a command written as a comment in a run block does not run', async () => {
+    const result = await grade('CICD-003', cicd003('        with:\n          node-version: 20'));
+    expect(failing(result)).toEqual([]);
+    const commented = await grade('CICD-003', (files) => {
+      cicd003('        with:\n          node-version: 20')(files);
+      files.set(WF, files.get(WF)!.replace('        run: node build.mjs', '        run: |\n          echo skipping\n          # node build.mjs'));
+    });
+    expect(failing(commented)).toContain('A step runs the build, once the code and Node.js are in place');
+  });
+
+  it('CICD-004: an upload placed before the build fails', async () => {
+    const result = await grade('CICD-004', (files) => {
+      const wf = files.get(WF)!;
+      const buildAt = wf.indexOf('      - name: Build');
+      expect(buildAt).toBeGreaterThan(0);
+      files.set(WF, wf.slice(0, buildAt) + CICD_004_UPLOAD('dist/').slice(1) + wf.slice(buildAt));
+      withBuild(files);
+    });
+    expect(failing(result)).toEqual(['A step uploads a named artifact from the build output, once it exists']);
+  });
+
+  it('CICD-005: the bare name is not the variable; every expansion form is', async () => {
+    const env = 'env:\n  IMAGE_NAME: jumptotech/statements\n\n';
+    const bare = await grade('CICD-005', (files) => cicd005Workflow(files, { env, run: 'docker build -t IMAGE_NAME .' }));
+    expect(failing(bare)).toEqual(['A step builds the container image, named from IMAGE_NAME']);
+    expect(bare.checks.find((c) => c.status === 'fail')?.detail).toContain('does not expand $IMAGE_NAME');
+    for (const run of ['docker build -t "${IMAGE_NAME}:1" .', 'docker build -t "${{ env.IMAGE_NAME }}:1" .']) {
+      expect(failing(await grade('CICD-005', (files) => cicd005Workflow(files, { env, run }))), run).toEqual([]);
+    }
+  });
+
+  it('CICD-005: an image job without a checkout fails — it would build from an empty directory', async () => {
+    const result = await grade('CICD-005', (files) => {
+      cicd005Workflow(files, { env: 'env:\n  IMAGE_NAME: jumptotech/statements\n\n', run: 'docker build -t "$IMAGE_NAME" .' });
+      files.set(WF, files.get(WF)!.replace(/(needs: build\n {4}steps:\n) {6}- uses: actions\/checkout@v4\n/, '$1'));
+    });
+    expect(failing(result)).toEqual([
+      'The image job checks the repository out',
+      'A step builds the container image, named from IMAGE_NAME',
+    ]);
+  });
+
+  it('CICD-008: REGISTRY_URL declared only in another stage is invisible to Publish', async () => {
+    const result = await grade('CICD-008', (files) => {
+      cicd008(files, `    environment {\n        REGISTRY_PASSWORD = credentials('statements-registry')\n    }\n`, `sh 'echo "publishing to $REGISTRY_URL"'`);
+      files.set('Jenkinsfile', files.get('Jenkinsfile')!.replace("stage('Build') {\n", "stage('Build') {\n            environment {\n                REGISTRY_URL = 'registry.jumptotech.example'\n            }\n"));
+    });
+    expect(failing(result)).toEqual(['REGISTRY_URL is declared as pipeline configuration']);
+  });
+
+  it('CICD-008: the name alone is not a use of the variable; env.REGISTRY_URL is', async () => {
+    const env = `    environment {\n        REGISTRY_URL = 'registry.jumptotech.example'\n        REGISTRY_PASSWORD = credentials('statements-registry')\n    }\n`;
+    const bare = await grade('CICD-008', (files) => cicd008(files, env, `sh 'echo "publishing to REGISTRY_URL"'`));
+    expect(failing(bare)).toEqual(['The Publish stage uses the REGISTRY_URL variable']);
+    const groovy = await grade('CICD-008', (files) => cicd008(files, env, 'echo "publishing to ${env.REGISTRY_URL}"'));
+    expect(failing(groovy)).toEqual([]);
+  });
+
+  it('CICD-006: an agent declared only inside a stage is not the pipeline agent Jenkins requires', async () => {
+    const pipeline = (topAgent: string, stageAgent: string) => `pipeline {
+${topAgent}    stages {
+        stage('Build') {
+${stageAgent}            steps {
+                sh 'node build.mjs'
+            }
+        }
+    }
+}
+`;
+    const good = await grade('CICD-006', (files) => {
+      files.set('Jenkinsfile', pipeline('    agent any\n', ''));
+      withBuild(files);
+    });
+    expect(failing(good)).toEqual([]);
+    const stageOnly = await grade('CICD-006', (files) => {
+      files.set('Jenkinsfile', pipeline('', '            agent any\n'));
+      withBuild(files);
+    });
+    expect(failing(stageOnly)).toEqual(['It is a declarative pipeline with an agent and stages']);
+  });
+
+  it('CICD-009: a tag that does not identify the commit fails', async () => {
+    const result = await grade('CICD-009', (files) => {
+      cicd009(files, {
+        image: 'docker build -t "jumptotech/statements:$IMAGE_TAG" .',
+        deploy: 'sed -i "s|:REPLACE_ME|:$IMAGE_TAG|" deploy/app.yml',
+      });
+      files.set(WF, files.get(WF)!.replace('IMAGE_TAG: ${{ github.sha }}', 'IMAGE_TAG: latest'));
+    });
+    expect(failing(result)).toEqual(['The image tag comes from a workflow variable that identifies the commit']);
+    expect(result.checks.find((c) => c.status === 'fail')?.detail).not.toContain('sha');
   });
 });
