@@ -187,6 +187,16 @@ describe('nginx: upstreams survive a re-created api or terminal container', () =
     expect(seconds).toBeLessThanOrEqual(600);
   });
 
+  it('refuses a raw request target outside each proxied prefix, so a dot segment cannot change the upstream route', () => {
+    // nginx chooses the location on the normalised path, then forwards the
+    // raw target: `/internal/../api/labs` matched `/api/` and reached the
+    // api's `/internal` router (apps/api/test/request-target.test.ts).
+    for (const [, location, body] of proxied) {
+      const prefix = location!.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+      expect(body, location).toMatch(new RegExp(`if \\(\\$request_uri !~ "\\^${prefix}"\\) \\{ return 400;`));
+    }
+  });
+
   it("asks only Docker's embedded DNS, and caches an answer briefly", () => {
     const resolvers = [...locations.matchAll(/^resolver\s+([^;]+);$/gm)].map((m) => m[1]!.split(/\s+/));
     expect(resolvers).toHaveLength(1);

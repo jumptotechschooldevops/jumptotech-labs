@@ -217,6 +217,24 @@ export function createApp(deps: CreateAppDeps): Express {
     }),
   );
 
+  /*
+   * A path with a `.` or `..` segment is refused before any router sees it.
+   *
+   * nginx chooses a location on the normalised path but forwards the raw
+   * request target, and Express does not resolve dot segments: through the
+   * public edge `GET /internal/../api/labs` matched `location /api/` and then
+   * `app.use('/internal')` here, leaving the service-to-service router one
+   * shared secret from the internet instead of off the edge. Browsers resolve
+   * dot segments before sending, so no legitimate request carries one.
+   */
+  app.use((req, res, next) => {
+    if (hasDotSegment(req.url)) {
+      sendError(res, 400, { code: 'INVALID_PATH', message: 'That is not a valid request path.' });
+      return;
+    }
+    next();
+  });
+
   app.use(express.json({ limit: '16kb' }));
 
   // The stop-launches switch as this process runs it, for `LabLaunchesPaused`:
@@ -506,4 +524,22 @@ function bodyParserRefusal(error: unknown): { status: number; code: string; mess
     default:
       return undefined;
   }
+}
+
+/**
+ * True when a request target's path has a `.` or `..` segment — raw,
+ * percent-encoded, or behind an encoded separator — or a backslash, or an
+ * escape that does not decode. The query string is not a path and is not read.
+ */
+export function hasDotSegment(url: string): boolean {
+  const end = url.search(/[?#]/);
+  const rawPath = end === -1 ? url : url.slice(0, end);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPath);
+  } catch {
+    return true;
+  }
+  if (decoded.includes('\\')) return true;
+  return decoded.split('/').some((segment) => segment === '.' || segment === '..');
 }
