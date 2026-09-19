@@ -72,6 +72,14 @@ export function HelpPage() {
             </dd>
           </div>
           <div>
+            <dt>Hints</dt>
+            <dd>
+              Stuck? The instructions beside the terminal have hints that open one at a time, from a gentle nudge to
+              concrete guidance. Hints you have opened stay open if you reload the page. Opening a hint never affects
+              whether a lab counts as completed.
+            </dd>
+          </div>
+          <div>
             <dt>Reset</dt>
             <dd>
               Puts the environment back to the lab’s starting state. Anything you changed inside it is lost. Your
@@ -82,7 +90,7 @@ export function HelpPage() {
             <dt>End lab</dt>
             <dd>
               Deletes the environment. Do this when you are finished so the environment is free for someone else. Your
-              progress is saved.
+              progress is saved. After a completed lab, the summary suggests the next lab on your learning path.
             </dd>
           </div>
         </dl>
