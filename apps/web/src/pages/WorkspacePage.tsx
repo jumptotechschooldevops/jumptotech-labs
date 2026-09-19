@@ -267,9 +267,12 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const refreshedToken = useRef(false);
   const verifying = useRef(false);
 
+  /** Mirrors `reconnectTimer` for rendering: the page says it is retrying rather than asking. */
+  const [retryPending, setRetryPending] = useState(false);
   const cancelAutoReconnect = useCallback(() => {
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
     reconnectTimer.current = null;
+    setRetryPending(false);
   }, []);
   useEffect(() => cancelAutoReconnect, [cancelAutoReconnect]);
 
@@ -442,8 +445,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
           if (delay !== undefined) {
             autoReconnects.current += 1;
             cancelAutoReconnect();
+            setRetryPending(true);
             reconnectTimer.current = setTimeout(() => {
               reconnectTimer.current = null;
+              setRetryPending(false);
               reconnect(false);
             }, delay);
           }
@@ -766,7 +771,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
             </div>
           </div>
         );
-      } else if (terminal.status === 'disconnected') {
+      } else if (terminal.status === 'disconnected' && !retryPending) {
         overlay = (
           <div className="overlay">
             <div className="overlay__card" role="alert">
@@ -781,6 +786,9 @@ export function WorkspacePage({ labId }: { labId: string }) {
       } else {
         overlay = (
           <Overlay title="Connecting to your terminal…" busy>
+            {terminal.status === 'disconnected' ? (
+              <p className="overlay__text">The connection did not get through. Trying again…</p>
+            ) : null}
             {startReport ? <Steps steps={startReport.steps} pending="Terminal connecting" /> : null}
           </Overlay>
         );
@@ -800,7 +808,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
         : resetInFlight
           ? 'Resetting your environment…'
           : terminal.status === 'disconnected'
-            ? (TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST)
+            ? `${TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST}${retryPending ? ' Reconnecting…' : ''}`
             : 'Not connected';
   const showReconnect =
     // Including SESSION_ENDED: while the session is still ACTIVE that means another
