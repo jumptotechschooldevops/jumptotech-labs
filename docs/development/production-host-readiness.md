@@ -418,9 +418,12 @@ make production-preflight ARGS="--backup-dir /srv/jumptotech/backups/postgres --
   group; git commit; checkout and bind-mount readability; `.env` mode, required
   names, shell overrides; TLS files, key mode, `tls:check --offline`; scrape token
   mode and match; alert destination file; kind cluster, network, kubeconfigs,
-  nodes, `seccompDefault`, admission policies; the attestation's verdict, cluster,
-  age and digest against this `.env`; sandbox images; ports 80/443; other public
-  listeners; backup directories, overlap, filesystem, schedule;
+  the cluster-admin API server published on loopback only (FAIL on any other
+  address), nodes, `seccompDefault`, admission policies; the attestation's
+  verdict, cluster, age and digest against this `.env`; sandbox images; ports
+  80/443; other public listeners; backup directories, overlap, filesystem,
+  whether this account can write the status directory (a backup that cannot
+  record its outcome still exits 0, and `BackupStale` fires), schedule;
   `make secrets-check`; `make production-config-check` (rendering, exposure,
   persistence, restart policy, capacity, OIDC/TLS gates, observability).
 

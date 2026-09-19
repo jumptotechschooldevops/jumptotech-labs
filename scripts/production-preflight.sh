@@ -427,6 +427,23 @@ if [ -s "$internal_kubeconfig" ]; then
 else
   fail kind.kubeconfig-internal 'infrastructure/kind/generated/kubeconfig-internal.yaml is missing'
 fi
+# The node publishes the cluster-admin API server on the host. cluster.yaml pins
+# it to 127.0.0.1:16443; a cluster created from another config (kind's own
+# default included, if apiServerAddress was changed) could publish it on every
+# interface, where the only thing between the internet and cluster-admin is a
+# client certificate. The other-listeners check below would list it only as a
+# port to confirm.
+if [ $docker_ok -eq 1 ] && [ $cluster_ok -eq 1 ]; then
+  api_bindings=$( (docker port "$cluster-control-plane" 2>/dev/null || true) | awk '$1 == "6443/tcp" {print $3}')
+  public_bindings=$(printf '%s\n' "$api_bindings" | { grep -Ev '^(127\.[0-9.]+|\[::1\]):[0-9]+$' || true; } | { grep -v '^$' || true; } | tr '\n' ' ')
+  if [ -z "$api_bindings" ]; then
+    fail kind.api-server-address "could not read where $cluster-control-plane publishes its API server (docker port)"
+  elif [ -n "${public_bindings// /}" ]; then
+    fail kind.api-server-address "the cluster-admin API server is published on ${public_bindings% }, not loopback: recreate the cluster from infrastructure/kind/cluster.yaml (apiServerAddress 127.0.0.1)"
+  else
+    pass kind.api-server-address "the API server is published on loopback only ($(printf '%s' "$api_bindings" | tr '\n' ' ' | sed 's/ $//'))"
+  fi
+fi
 
 attestation_digest=
 kube() { KUBECONFIG=$host_kubeconfig kubectl "$@"; }
@@ -542,6 +559,15 @@ elif ! other_can_enter "$status_dir"; then
   fail backup.status-dir "$status_dir is $(mode_of "$status_dir"): the api (uid 1000) cannot enter it; 0755"
 else
   pass backup.status-dir "$status_dir exists and the api can read it"
+  # db-backup.sh logs a status it cannot write and still exits 0 (db-lib.sh
+  # jtt_record_status), so an unwritable directory is a backup that succeeds
+  # every night while BackupStale fires. Docker creates it owned by root when
+  # the stack starts before it exists (private-beta-operations.md §1.1 step 4).
+  if [ -w "$status_dir" ]; then
+    info backup.status-dir-writable 'writable by this account'
+  else
+    warn backup.status-dir-writable "$status_dir is not writable by this account (owner uid $(uid_of "$status_dir")): if the backup job runs as this account, it cannot record its outcome and BackupStale fires while backups succeed"
+  fi
 fi
 if [ "${backup_dir#/}" = "$backup_dir" ]; then
   fail backup.dir "BACKUP_DIR $backup_dir is not absolute"

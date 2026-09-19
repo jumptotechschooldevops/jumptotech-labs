@@ -271,6 +271,10 @@ case ${1:-} in
       id-web) printf '8443/tcp -> 0.0.0.0:443\n8443/tcp -> [::]:443\n8080/tcp -> 0.0.0.0:80\n8080/tcp -> [::]:80\n' ;;
       id-prometheus) printf '3000/tcp -> 127.0.0.1:3001\n' ;;
       id-postgres) [ -z "${FAKE_POSTGRES_PUBLISHED-}" ] || printf '5432/tcp -> 127.0.0.1:5432\n' ;;
+      jumptotech-labs-control-plane)
+        [ -z "${FAKE_KIND_API_UNREADABLE-}" ] || exit 1
+        printf '%s\n' "${FAKE_KIND_API_BINDINGS:-6443/tcp -> 127.0.0.1:16443}"
+        ;;
     esac
     ;;
   stats) printf 'jumptotech-labs-api-1|1.50%%|211.4MiB / 7.6GiB|40\njumptotech-labs-postgres-1|0.20%%|1.1GiB / 7.6GiB|12\n' ;;
@@ -497,6 +501,8 @@ check 'the admission decision is surfaced' has_line '^MANUAL CHECK REQUIRED +aut
 check 'the firewall cannot be proven from the host' has_line '^MANUAL CHECK REQUIRED +exposure\.firewall '
 check 'off-host backup is a manual check' has_line '^MANUAL CHECK REQUIRED +backup\.offhost '
 check 'the attestation digest is compared' has_line '^PASS +k8s\.attestation-digest '
+check 'the cluster API server is on loopback' has_line '^PASS +kind\.api-server-address .*127\.0\.0\.1:16443'
+check 'the backup status directory is writable' has_line '^INFO +backup\.status-dir-writable '
 check 'the configuration check receives the socket group' grep -q 'production-config-check.ts --env-file .* --docker-socket-gid ' "$root/log"
 check 'the report is written' grep -q '^RESULT: PASS' "$root/preflight.txt"
 common_properties
@@ -695,6 +701,35 @@ scenario 'preflight: missing sandbox images fail'
 root=$(fixture images)
 FAKE_MISSING_IMAGES=jumptotech/lab-linux:latest preflight "$root"
 check 'images.LINUX_SANDBOX_IMAGE FAIL' has_fail 'images\.LINUX_SANDBOX_IMAGE'
+
+scenario 'preflight: a cluster-admin API server published beyond loopback fails, and one that cannot be read is not a PASS'
+root=$(fixture kindapi)
+FAKE_KIND_API_BINDINGS=$'6443/tcp -> 0.0.0.0:16443\n6443/tcp -> [::]:16443' preflight "$root"
+check 'kind.api-server-address FAIL' has_fail 'kind\.api-server-address'
+check 'the public binding is named' has_line 'kind\.api-server-address .*0\.0\.0\.0:16443'
+check 'exit 1' exit_is 1
+common_properties
+root=$(fixture kindapiv6)
+FAKE_KIND_API_BINDINGS=$'6443/tcp -> 127.0.0.1:16443\n6443/tcp -> [::]:16443' preflight "$root"
+check 'an IPv6 wildcard beside loopback still fails' has_fail 'kind\.api-server-address'
+root=$(fixture kindapiloop6)
+FAKE_KIND_API_BINDINGS=$'6443/tcp -> 127.0.0.1:16443\n6443/tcp -> [::1]:16443' preflight "$root"
+check 'IPv4 and IPv6 loopback pass' has_line '^PASS +kind\.api-server-address '
+root=$(fixture kindapiunread)
+FAKE_KIND_API_UNREADABLE=1 preflight "$root"
+check 'an unreadable binding fails' has_fail 'kind\.api-server-address'
+
+scenario 'preflight: a backup status directory this account cannot write is warned about'
+root=$(fixture statusro)
+chmod 555 "$root/backups/status"
+preflight "$root"
+check 'backup.status-dir still PASS (the api can read it)' has_line '^PASS +backup\.status-dir '
+# root can write a 0555 directory, so only an unprivileged run can see the refusal.
+if [ "$(id -u)" -ne 0 ]; then
+  check 'backup.status-dir-writable WARN' has_line '^WARN +backup\.status-dir-writable .*BackupStale'
+fi
+chmod 755 "$root/backups/status"
+common_properties
 
 # --- private-beta-smoke.sh ---------------------------------------------------------------------
 
