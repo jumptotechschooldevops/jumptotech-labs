@@ -1877,10 +1877,19 @@ const sandboxRequirementSchemas = {
       resource_type: terraformTypeName,
       name: terraformLabel,
       /** Addresses the list must mention, e.g. `null_resource.database`. */
-      references: z.array(terraformReferenceTarget).min(1).max(10),
+      references: z.array(terraformReferenceTarget).min(1).max(10).optional(),
+      /**
+       * The resource declares no `depends_on` at all — for one whose
+       * dependency a reference already states, where the lesson is that
+       * `depends_on` would add an edge Terraform already had.
+       */
+      absent: z.literal(true).optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((v) => (v.references === undefined) !== (v.absent === undefined), {
+      message: 'must specify exactly one of references or absent',
+    }),
 
   /** A variable declares at least one `validation` block. */
   terraform_variable_validation: z
