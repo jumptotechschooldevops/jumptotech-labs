@@ -229,3 +229,58 @@ describe('every integration suite', () => {
     expect(job).toContain('test/sandbox-image-binaries-integration.test.ts');
   });
 });
+
+describe('the workflows', () => {
+  const files = readdirSync(path.join(REPO_ROOT, '.github/workflows'))
+    .filter((file) => /\.ya?ml$/.test(file))
+    .map((file) => [file, read(`.github/workflows/${file}`)] as const);
+
+  it('use only GitHub-maintained actions', () => {
+    // The supply-chain policy (docs/development/ci-and-release-gates.md): major
+    // tags of actions/* and github/* only. A third-party action is a decision
+    // to make in review, with a pinned SHA, not a line to slip in.
+    const foreign = files.flatMap(([file, text]) =>
+      [...text.matchAll(/uses:\s*([^\s#]+)/g)]
+        .map(([, action]) => action!)
+        .filter((action) => !/^(actions|github)\/[A-Za-z0-9_.\/-]+@v\d+$/.test(action))
+        .map((action) => `${file}: ${action}`),
+    );
+    expect(foreign).toEqual([]);
+  });
+
+  it('never leave the checkout token in .git/config', () => {
+    for (const [file, text] of files) {
+      const checkouts = text.split(/uses:\s*actions\/checkout@/).slice(1);
+      expect(checkouts.length, file).toBeGreaterThan(0);
+      for (const rest of checkouts) {
+        expect(rest.split(/\n\s*- /)[0], `${file}: a checkout without persist-credentials: false`).toMatch(
+          /persist-credentials:\s*false/,
+        );
+      }
+    }
+  });
+
+  it('grant nothing beyond read at workflow level', () => {
+    for (const [file, text] of files) {
+      const top = /^permissions:[ \t]*(\{\}|\n(?:[ \t]+\S.*\n)+)/m.exec(text);
+      expect(top, `${file} has no top-level permissions block`).not.toBeNull();
+      expect(top![1]).not.toMatch(/write/);
+    }
+  });
+
+  it('never cancel a run for a commit pushed to main', () => {
+    for (const [file, text] of files) {
+      if (!/\n\s+push:/.test(text)) continue;
+      expect(text, file).toMatch(/group: [^\n]*github\.event_name == 'pull_request' && github\.ref \|\| github\.sha/);
+      expect(text, file).toMatch(/cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
+    }
+  });
+
+  it('verify every binary they download before installing it', () => {
+    for (const [file, text] of files) {
+      for (const [, target] of text.matchAll(/curl -fsSLo (\S+)/g)) {
+        expect(text, `${file}: ${target} is installed unverified`).toContain(`${target}" | sha256sum -c -`);
+      }
+    }
+  });
+});

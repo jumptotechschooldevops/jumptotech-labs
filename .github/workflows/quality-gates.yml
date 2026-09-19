@@ -64,10 +64,14 @@ on:
     branches: [main]
   pull_request:
 
-# A newer push supersedes an in-flight run on the same ref.
+# A newer push to a pull request supersedes the run in flight. A push to main
+# never does: each merge commit is grouped by its own SHA and validated to the
+# end, so every commit on main has a complete run to point to. (Grouped by ref,
+# a second merge cancelled the first one's run — and a queued run is replaced by
+# the next one — leaving commits on main that no finished run ever checked.)
 concurrency:
-  group: quality-gates-${{ github.ref }}
-  cancel-in-progress: true
+  group: quality-gates-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -84,9 +88,13 @@ jobs:
       JTT_TEST_RUN_ID: ci${{ github.run_id }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          # Nothing here pushes. Not leaving the token in .git/config keeps it
+          # away from every later step, `npm ci`'s dependency scripts included.
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # One place decides the version, and it is the same file `nvm use`
           # reads on a laptop. A literal here is a second source of truth that
@@ -276,8 +284,10 @@ jobs:
       TEST_DB_PORT: 55432
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -326,10 +336,17 @@ jobs:
       LAB_CLUSTER_NAME: jumptotech-labs
       KIND_VERSION: v0.31.0
       KUBECTL_VERSION: v1.34.2
+      # linux/amd64, from the .sha256sum / .sha256 files published beside each
+      # binary; change them with the versions. A download that does not match
+      # fails the step instead of running as root on the runner.
+      KIND_SHA256: eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa
+      KUBECTL_SHA256: 9591f3d75e1581f3f7392e6ad119aab2f28ae7d6c6e083dc5d22469667f27253
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -339,9 +356,11 @@ jobs:
           set -euo pipefail
           curl -fsSLo /tmp/kind \
             "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  /tmp/kind" | sha256sum -c -
           sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           curl -fsSLo /tmp/kubectl \
             "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  /tmp/kubectl" | sha256sum -c -
           sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
           kind --version
           kubectl version --client
@@ -414,7 +433,7 @@ jobs:
 
       - name: Upload cluster logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kind-logs-${{ github.run_id }}
           path: /tmp/kind-logs
@@ -447,8 +466,10 @@ jobs:
       RUN_INTEGRATION_TESTS: '1'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -526,8 +547,10 @@ jobs:
       RUN_INTEGRATION_TESTS: '1'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -562,7 +585,7 @@ jobs:
         run: |
           docker ps -a
           docker network ls --filter name=jtt-net-
-          docker network inspect $(docker network ls -q --filter name=jtt-net-) || true
+          docker network ls -q --filter name=jtt-net- | xargs -r docker network inspect || true
 
       - name: Leaked sandboxes, peers and segments
         if: always()
@@ -594,8 +617,10 @@ jobs:
       RUN_DOCKER_INTEGRATION_TESTS: '1'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -667,10 +692,17 @@ jobs:
       LAB_CLUSTER_NAME: jumptotech-labs
       KIND_VERSION: v0.31.0
       KUBECTL_VERSION: v1.34.2
+      # linux/amd64, from the .sha256sum / .sha256 files published beside each
+      # binary; change them with the versions. A download that does not match
+      # fails the step instead of running as root on the runner.
+      KIND_SHA256: eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa
+      KUBECTL_SHA256: 9591f3d75e1581f3f7392e6ad119aab2f28ae7d6c6e083dc5d22469667f27253
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -680,9 +712,11 @@ jobs:
           set -euo pipefail
           curl -fsSLo /tmp/kind \
             "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  /tmp/kind" | sha256sum -c -
           sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           curl -fsSLo /tmp/kubectl \
             "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  /tmp/kubectl" | sha256sum -c -
           sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
 
       - name: Install
@@ -725,8 +759,10 @@ jobs:
       JTT_TEST_RUN_ID: cisbd${{ github.run_id }}
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -773,8 +809,10 @@ jobs:
       RUN_INTEGRATION_TESTS: '1'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -830,8 +868,10 @@ jobs:
       CI: 'true'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -862,7 +902,7 @@ jobs:
       # Traces, screenshots and videos of test-only students on a throwaway stack.
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-e2e-${{ github.run_id }}
           path: |
