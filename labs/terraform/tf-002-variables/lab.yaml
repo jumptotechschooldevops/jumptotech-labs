@@ -208,6 +208,14 @@ requirements:
   - type: file_exists
     path: terraform/build/production.json
     label: The production configuration was written
+  # "Exactly the shape it has now — the same four keys": the values below
+  # hard-coded under their own keys, with the variables tucked into extra
+  # keys, satisfies every `contains`. jsonencode sorts keys, so the whole
+  # document is fixed.
+  - type: file_content
+    path: terraform/build/production.json
+    equals: '{"debug":false,"environment":"production","replicas":4,"service":"ledger-api"}'
+    label: It has exactly the four keys it had, and nothing else
 
   - type: file_content
     path: terraform/build/production.json

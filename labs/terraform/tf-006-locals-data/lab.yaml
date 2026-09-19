@@ -140,6 +140,9 @@ requirements:
       - service_prefix
       - environment
       - service_slug
+    # "Composed as an expression rather than written out."
+    references:
+      service_slug: [local.service_prefix, local.environment]
     label: The slug is composed from named local values
 
   # `data`, not `resource` — this configuration reads the file, it does not own it.
@@ -174,6 +177,16 @@ requirements:
     attribute: content
     references: data.local_file.platform
     label: The manifest content is derived from the platform settings it read
+
+  # "Every one of them now comes from the local value or from what you
+  # read, rather than from a literal": one reference beside transcribed
+  # values satisfies the checks above.
+  - type: terraform_resource_literal_absent
+    dir: terraform
+    resource_type: local_file
+    name: service_manifest
+    literals: [eu-west-1, gold, jumptotech]
+    label: The manifest types in none of the values it now reads
 
   - type: terraform_resource_exists
     dir: terraform

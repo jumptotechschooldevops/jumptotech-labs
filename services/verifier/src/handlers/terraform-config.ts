@@ -269,7 +269,16 @@ export const terraformLocalsDeclared: SandboxVerifierHandler<'terraform_locals_d
         for (const argument of block.arguments) defined.add(argument.name);
       }
       const missing = requirement.names.filter((name) => !defined.has(name));
-      if (missing.length === 0) return pass();
+      if (missing.length === 0) {
+        const definitions = localDefinitions(config);
+        for (const [name, targets] of Object.entries(requirement.references ?? {})) {
+          const expression = definitions.get(name);
+          if (expression === undefined || !targets.every((target) => referencesTargetTransitively(config, expression, target))) {
+            return fail(`local.${name} is written out rather than composed from the values this lab asks it to use`);
+          }
+        }
+        return pass();
+      }
       return fail(
         defined.size > 0
           ? `The locals block does not define ${missing.join(', ')} (it defines: ${[...defined].slice(0, 8).join(', ')})`
