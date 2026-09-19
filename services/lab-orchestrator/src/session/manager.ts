@@ -311,6 +311,21 @@ export interface StartSessionResult {
   steps: ProvisionStep[];
 }
 
+/** What a caller of `start` is told along the way. */
+export interface StartHooks {
+  /**
+   * The session was admitted — its row exists, CREATING, holding a slot — and
+   * nothing has been built yet.
+   *
+   * The one point at which a start is known to be an attempt rather than a
+   * refusal: every refusal (the lab's provider is down, the platform is full,
+   * the student already holds their share) happens before it and never calls
+   * it. Awaited, so whatever it records exists before the sandbox does. A hook
+   * that throws is logged and ignored: bookkeeping must never stop a lab.
+   */
+  onAdmitted?(session: LabSession): Promise<void> | void;
+}
+
 export interface TeardownResult {
   session: LabSession;
   destroy: DestroyResult;
@@ -453,7 +468,7 @@ export class SessionManager {
    * request body — the route passes what the auth layer resolved, and there is
    * no field a browser could use to name someone else.
    */
-  async start(labId: string, ownerUserId?: string): Promise<StartSessionResult> {
+  async start(labId: string, ownerUserId?: string, hooks: StartHooks = {}): Promise<StartSessionResult> {
     // Throws LabNotFoundError / InvalidLabIdError before anything is reserved.
     const lab = this.#registry.get(labId);
 
@@ -524,6 +539,14 @@ export class SessionManager {
      */
     const session = await this.#insertSession(lab, provider, ownerUserId);
     this.#emit((m) => m.onTransition?.('none', 'CREATING'));
+
+    if (hooks.onAdmitted) {
+      try {
+        await hooks.onAdmitted(session);
+      } catch (error) {
+        this.#log(`session ${session.sessionId}: admission hook failed — ${describeError(error)}`);
+      }
+    }
 
     const context = this.#contextFor(lab, session);
     const provisionStartedAt = this.#now();

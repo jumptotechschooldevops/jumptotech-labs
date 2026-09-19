@@ -239,8 +239,14 @@ describe('starting a lab records an attempt', () => {
   });
 
   it('records a FAILED attempt when the environment cannot be created', async () => {
-    const { app, k8s } = buildApp();
-    k8s.unreachable = 'connection refused';
+    const { app, providers } = buildApp();
+    // Admitted, then the substrate fails to build the sandbox: a provisioning
+    // failure. A Start *refused* before admission (substrate down, platform
+    // full, the student's own limit) is not an attempt at all — see
+    // start-refusal-attempts.test.ts.
+    providers.peek('kubernetes')!.create = async () => {
+      throw new Error('connection refused');
+    };
 
     const failed = await request(app).post('/api/labs/K8S-001/start');
     expect(failed.status).toBeGreaterThanOrEqual(500);

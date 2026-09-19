@@ -217,6 +217,7 @@ export {
   type SandboxInspectResult,
   type SandboxReadPort,
   type SessionView,
+  type StartHooks,
   type StartSessionResult,
   type TeardownResult,
   type TerminalTerminator,
