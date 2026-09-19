@@ -37,7 +37,12 @@ RUN npm run build --workspace @jumptotech/web
 # application bundle. services/observability/test/tls-edge-integration.test.ts
 # builds this stage on its own (`--target edge`), so it tests the image the web
 # service ships without needing a Vite build.
-FROM nginx:1.27-alpine AS edge
+#
+# nginx's stable line. 1.27 was a mainline series: its image was last rebuilt on
+# 2025-04-16, so the public TLS edge carried an nginx and an Alpine userland
+# (musl, zlib, …) with no security update since. The stable tag is rebuilt as
+# upstream and Alpine ship fixes; a rebuild of this image picks them up.
+FROM nginx:1.30-alpine AS edge
 
 # openssl is the only tool the certificate gate needs (BETA-P0-017). The runtime
 # directory holds the one file the gate writes; /var/www/acme is where the
