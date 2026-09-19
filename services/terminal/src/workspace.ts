@@ -40,7 +40,7 @@
  */
 import { createHmac } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
-import { lstat, mkdir, open, readFile, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 /** Refuse to read anything larger; a Dockerfile is a few hundred bytes. */
@@ -182,17 +182,45 @@ export class SessionWorkspaces {
   async read(sessionId: string, relative: string): Promise<string | null> {
     const target = await realWorkspacePath(this.dirFor(sessionId), relative);
     if (target === null) return null;
+
+    /*
+     * Opened once, and only what was opened is read.
+     *
+     * The student's shell writes this directory, so what sits at the path is
+     * theirs to choose, and this process serves every student's terminal. A
+     * whole-file `readFile` of a 150 MiB file they made by accident (a
+     * `docker save` into the workspace) held several times that in this
+     * process — the container is capped at 512 MiB — before cutting it to
+     * 256 KiB; and a FIFO at the path blocked a libuv worker for good (four of
+     * them stall every file operation here, every student's credentials
+     * included). So: `O_NONBLOCK`, so opening a FIFO cannot wait for a writer;
+     * `O_NOFOLLOW`, so the final component cannot have become a link since
+     * `realWorkspacePath` looked; a regular file only; and at most the cap.
+     */
+    let handle;
     try {
-      const content = await readFile(target, 'utf8');
+      handle = await open(target, fsConstants.O_RDONLY | NO_FOLLOW | NON_BLOCK);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'EISDIR' || code === 'ENXIO') return null;
+      // Replaced by a link after the realpath check.
+      if (code === 'ELOOP' || code === 'EMLINK') throw new WorkspacePathError('resolves outside the session workspace');
+      throw error;
+    }
+    try {
+      if (!(await handle.stat()).isFile()) return null;
       // Truncate rather than refuse: a student who accidentally created a huge
       // file should still get a useful answer about its first lines.
-      return content.length > MAX_WORKSPACE_FILE_BYTES
-        ? content.slice(0, MAX_WORKSPACE_FILE_BYTES)
-        : content;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      if ((error as NodeJS.ErrnoException).code === 'EISDIR') return null;
-      throw error;
+      const buffer = Buffer.alloc(MAX_WORKSPACE_FILE_BYTES);
+      let filled = 0;
+      while (filled < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      return buffer.subarray(0, filled).toString('utf8');
+    } finally {
+      await handle.close();
     }
   }
 
@@ -211,6 +239,9 @@ export class SessionWorkspaces {
  * which `open` would reject outright.
  */
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+
+/** `O_NONBLOCK` where the platform has it: opening a FIFO for reading then never waits. */
+const NON_BLOCK = fsConstants.O_NONBLOCK ?? 0;
 
 /**
  * Write one baseline file, never through a symlink.
