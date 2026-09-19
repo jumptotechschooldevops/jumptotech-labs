@@ -41,12 +41,12 @@ code. The ones marked *(exercised locally)* were run against a local stack
 
 | Never | Why |
 |---|---|
-| `prod down -v`, `docker compose down -v`, `make clean` | `-v` deletes the PostgreSQL volume, which holds every student's progress |
+| `prod down -v`, `docker compose down -v`, `make clean` | `-v` deletes the PostgreSQL volume, which holds every student's progress. `make clean` refuses on a checkout with the production TLS key or production containers (`scripts/refuse-on-production.sh`); `docker compose down -v` has no such guard |
 | `docker volume prune`, `docker system prune --volumes` | the same, for every volume on the host |
 | Edit `lab_sessions` rows with SQL | every status change is a fenced transition; a hand edit can send a sandbox to the wrong teardown. Use `ops end <id> --yes` |
 | `DROP`, `TRUNCATE` or `DELETE` in PostgreSQL during an incident | preserve first: [postgres-backup-restore.md](postgres-backup-restore.md) |
 | `docker rm -f` a `jtt-lab-*` container, or `kubectl delete ns lab-…`, by hand while its session is live | the session row still says ACTIVE and holds its slot; `ops end` does both in the right order |
-| `make sandbox-clean` on a host where students have running labs | it removes **every** sandbox of this runtime owner, running ones included, without ending their sessions |
+| `make sandbox-clean` on a host where students have running labs | it removes **every** sandbox of this runtime owner, running ones included, without ending their sessions. The make target refuses on a production checkout; `npm run sandbox:clean` and the script itself do not |
 | Restart `sandboxd` as a first response | every container-track shell drops at once (RB-01 §3) |
 | Paste `.env`, `docker inspect`, `docker compose config` or raw `docker logs` into a ticket or chat | they contain secrets, or can. Send the diagnostics archive instead |
 | Raise `MAX_ACTIVE_SESSIONS` to make a capacity problem go away | the host was sized for five; RB-04 and RB-19 first |

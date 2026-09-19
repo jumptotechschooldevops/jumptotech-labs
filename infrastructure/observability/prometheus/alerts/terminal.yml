@@ -14,14 +14,19 @@ groups:
             shell_start_failed are the sandbox path.
           runbook_url: docs/runbooks/RB-12-terminal.md
 
-      # Two services counting the same shells from opposite ends. Sustained
-      # disagreement means a PTY outlived its socket or vice versa — a leak that
-      # neither service can see on its own.
+      # Two services counting shells from opposite ends. Every broker PTY in
+      # sandboxd belongs to one terminal socket, but not every socket has a
+      # broker PTY: Kubernetes and Docker-track shells are local PTYs in the
+      # terminal container. So only one direction is a leak — broker PTYs
+      # outnumbering the sockets that own them. The old `abs()` fired on four
+      # students with Kubernetes or Docker terminals open, a healthy class.
+      # Local shells can mask that many leaked PTYs; the terminal does not yet
+      # report its broker sockets separately.
       - alert: TerminalPtyDrift
-        expr: abs(sum(jtt_sandboxd_shells_open) - sum(jtt_terminal_connections_open)) > 3
+        expr: (sum(jtt_sandboxd_shells_open) or vector(0)) - (sum(jtt_terminal_connections_open) or vector(0)) > 3
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: 'broker PTYs and terminal sockets disagree by {{ $value }}'
+          summary: 'sandboxd holds {{ $value }} more broker PTYs than the terminal has sockets'
           runbook_url: docs/runbooks/RB-12-terminal.md

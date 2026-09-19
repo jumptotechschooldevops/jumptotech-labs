@@ -580,3 +580,14 @@ re-run on a quiet machine. `make beta-validate` was not re-run.
 
 **Verdict unchanged in kind:** software ready for a real-host deployment test;
 **not ready for student access** until §13.2 is done on a host.
+
+## 16. Deployment-readiness pass — 2026-09-19
+
+`feat/deployment-readiness-overnight` on `main` `001bcf1`; record:
+[deployment-readiness-2026-09-19.md](../development/deployment-readiness-2026-09-19.md).
+Thirteen repository-side defects fixed in the production config check,
+preflight, smoke, `make clean`/`make sandbox-clean`, the restore and TLS
+runbooks, and four alerts (`ScopeDenialDetected`, `SandboxLeakSuspected`,
+`TerminalPtyDrift`, alert delivery). New open decision: D15, bearer tokens on
+`/api/*`. **No production host exists; no gate in §13.2 moved.** Students may
+not be invited. (An unmerged branch also appends a §16; renumber on merge.)

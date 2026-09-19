@@ -3,7 +3,8 @@
 | | |
 |---|---|
 | **Branch** | `feat/production-host-readiness`, rebased onto `origin/main` at `c00ec48` (PR #34, PR #35, PR #36 — the security audit — and PR #37 — browser E2E — merged); pull request #38 |
-| **Date** | 2026-09-16 |
+| **Date** | 2026-09-16 (written on PR #38, merged into `main` as `bf712a8`) |
+| **Updated** | 2026-09-19, deployment-readiness pass (`feat/deployment-readiness-overnight`, [record](deployment-readiness-2026-09-19.md)): §6 contract checks, §8.1 identity-provider requirements and D15, §13.2 rehearsal steps, §14, §16, §17.1–17.2 recovery drills |
 | **Audience** | the operator who deploys JumpToTech Labs on its first real host, for about five trusted students |
 | **Production host deployed?** | **No.** Nothing in this document ran on a production host. No host, DNS record, public certificate, identity provider, firewall or backup destination exists. |
 
@@ -177,9 +178,14 @@ pressure alarms, not sizing: a host that passes them may still be too small.
 | `runtime.docker-socket-gid` | sandboxd joins the socket's group |
 | `gates.node-env` | `NODE_ENV=production` pinned for api, terminal, sandboxd |
 | `gates.authentication` | `AUTH_MODE=oidc` pinned; development student header off |
-| `gates.tls-edge` | `WEB_TLS=required` pinned; `PUBLIC_ORIGIN` a bare https origin, identical for api and web; served-certificate health check |
+| `gates.tls-edge` | `WEB_TLS=required` pinned; `PUBLIC_ORIGIN` a bare https origin whose host the edge's certificate gate accepts (lower-case DNS name: no IP address, no port, not a single label such as `localhost` — the api accepts all three, the edge exits on them), identical for api and web; served-certificate health check |
+| `gates.oidc-client` | FAIL on an `AUTH_COOKIE_NAME` with the `__Host-` prefix (the sign-in transaction cookie derived from it is `Path=/auth`, which browsers refuse for that prefix: every sign-in fails). WARN when `OIDC_AUDIENCE` equals `OIDC_CLIENT_ID` (ID tokens become API bearer tokens), or when `OIDC_REDIRECT_URI` is not literally `PUBLIC_ORIGIN/auth/callback` (the provider compares it byte for byte) |
+| `observability.edge-probe` | WARN when `EDGE_PROBE_ENABLED` is off: the api then measures neither the certificate nor the edge, and every TLS alert is silent |
+| `gates.origins` | WARN when `ALLOWED_ORIGINS` trusts any origin besides `PUBLIC_ORIGIN` (each one can read signed-in responses, pass the CSRF guard and open terminal WebSockets), or when `AUTH_COOKIE_DOMAIN` widens the session cookie beyond this host |
 | `gates.network-policy` | NetworkPolicy and its attestation not waived |
 | `capacity.beta-contract` | `MAX_ACTIVE_SESSIONS=5`, `MAX_ACTIVE_SESSIONS_PER_STUDENT=1` (compose default is 20) |
+| `capacity.shell-ceilings` | `TERMINAL_MAX_SESSIONS` and `SANDBOXD_MAX_SESSIONS` at least `MAX_ACTIVE_SESSIONS`: below it the api admits a lab whose shell is then refused. (The shipped defaults disagree — 20 labs, 16 terminal shells — which is one more reason the capacity default is refused) |
+| `capacity.launches` | WARN when `LAB_LAUNCHES_PAUSED` is on: the stack would start refusing every Start Lab |
 | `durability.volumes` | named volumes for postgres, prometheus, alertmanager, grafana |
 | `durability.healthchecks` | postgres, api, terminal, web |
 | `durability.restart-policy` | every service exactly `restart: unless-stopped` (PR #34); `always` is a FAIL because it would undo `prod stop web` |
@@ -256,6 +262,43 @@ refusals survive the real compose merge.
   invent one.
 
 Also open: federated logout and idle timeout (authentication.md §4.7, D13).
+
+### 8.1 Registering the client: what the code requires of the provider
+
+Derived from `apps/api/src/auth/` (2026-09-19 audit), provider-neutral. A
+provider that cannot do one of these cannot sign anyone in.
+
+| Setting | Required value | Where the code decides it |
+|---|---|---|
+| Client type and grant | confidential client; authorization code with PKCE `S256`; implicit and hybrid off | `oidc-client.ts` |
+| Token endpoint authentication | `client_secret_post` — the secret is sent in the form body. Some providers default to `client_secret_basic` | `oidc-client.ts` `exchangeCode` |
+| Token endpoint | must answer directly: a redirect is refused | `oidc-client.ts` (`redirect: 'error'`) |
+| Redirect URI | exactly `PUBLIC_ORIGIN` + `/auth/callback`: lower case, no port, no trailing slash, byte-identical to `OIDC_REDIRECT_URI` if set (config check `gates.oidc-client`) | `production-auth.ts`, `oidc-client.ts` |
+| Post-logout redirect | `PUBLIC_ORIGIN`, no trailing slash. No `id_token_hint` is sent (D13) | `routes/auth.ts` |
+| Scopes | `openid profile email`; `offline_access` is refused at startup | `production-auth.ts` |
+| ID token signing | asymmetric: RS/PS/ES 256–512 or EdDSA. An `HS256` client (some providers' legacy default) fails every sign-in | `oidc.ts` |
+| ID token claims | `sub`, `exp`, `iat`, `nonce`; `aud` includes the client id; with several audiences, `azp` equals the client id | `oidc.ts`, `browser-sign-in.ts` |
+| Discovery | `OIDC_ISSUER` equals the discovery document's `issuer` byte for byte, trailing slash included; every endpoint, `jwks_uri` included, is https | `discovery.ts` |
+| `OIDC_AUDIENCE` | a dedicated API identifier, not the client id (see below) | `index.ts` |
+| Host clock | NTP-synchronized: 5 s of skew is tolerated | `oidc.ts` |
+
+**Bearer tokens on `/api/*` — REQUIRES EXTERNAL DECISION (D15).** Besides the
+browser cookie, the api accepts `Authorization: Bearer` tokens verified against
+`OIDC_AUDIENCE` only: no authorized-party (`azp`) or token-type check. So any
+token the provider issues with our API in its `aud` is a student — including
+one issued to *another* client of the same provider, and a client-credentials
+token, which is provisioned as a `STUDENT` user. With `OIDC_AUDIENCE` equal to
+the client id, the client's own ID tokens qualify too. The web app never sends
+bearer tokens. Until D15 decides whether production needs the bearer path at
+all, the provider must let only this deployment's client obtain tokens for
+`OIDC_AUDIENCE`, and that audience must be dedicated. This is wider than the
+"any account" gap above: it admits other clients, not only other accounts.
+
+**Sign-out does not revoke terminal access.** The terminal token minted for a
+running lab is bound to the lab session and user, not to the browser session,
+and lives up to `TERMINAL_SESSION_TTL_SECONDS` (1 h). A terminal WebSocket
+already open stays open after sign-out. Low risk for five trusted students on
+their own machines; recorded with D13.
 
 ## 9. TLS contract
 
@@ -386,13 +429,33 @@ production stack. It also must not run while the production stack is on the same
 
 ### 13.2 B — five-person rehearsal on the production stack
 
-After §15 and a passing smoke, five operators or trusted testers with beta accounts:
-start the sampler (`capacity-rehearsal`); press Start within one minute on
-LINUX-001, DOCKER-001, K8S-001, ANSIBLE-001 and TF-001; work for 10 minutes,
-including one heavy step each (`docker build`, `terraform apply`, a playbook),
-noting any echo delay; Check Solution, Reset once, End Lab. Then record the PromQL
-above, restart counts, alerts fired and the sampler peaks, and confirm active
-sessions and managed containers return to zero.
+After §15 and a passing smoke, five operators or trusted testers, each with
+their own beta account. Nothing here has been run on a host. Every row names
+what to record; keep the outputs in `/srv/jumptotech/evidence/rehearsal/`.
+`prod`, `q`, `ops` and `alerts` are the runbook's functions
+([private-beta-operations.md §1](../runbooks/private-beta-operations.md)).
+
+| # | Who | Do | Expected | Evidence |
+|---|---|---|---|---|
+| R0 | operator | `ops status`; start the sampler: `make host-capacity-sample ARGS="--out-dir /srv/jumptotech/evidence/capacity-rehearsal --interval 15 --duration 3600 --kubeconfig infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml"` | `slots: 0 of 5 held`, `new labs: YES` | `ops status` output; the sampler's directory |
+| R1 | five testers | sign in at the public origin | each lands on the catalogue signed in as themselves | time per tester |
+| R2 | five testers, within one minute | Start LINUX-001, DOCKER-001, K8S-001, ANSIBLE-001, TF-001 (one each) | five labs open; `ops status` reads `5 of 5 held` | `ops sessions`; start times |
+| R3 | one tester | open a *second* lab in another tab | refused: the student already holds a lab (`STUDENT_SESSION_LIMIT_REACHED`) | screenshot; `q 'sum by (outcome) (increase(jtt_lab_start_outcome_total[30m]))'` shows `student_limit_reached` ≥ 1 |
+| R4 | a sixth account, only if D3 admits one for testing; otherwise skip and rely on §13.1 phase 1 | Start any lab | refused: the platform is full (`LAB_CAPACITY_REACHED`) | the same query shows `capacity_reached` ≥ 1 |
+| R5 | every tester | type in the terminal: `echo ready-$(hostname)`, then one heavy step (`docker build`, `terraform apply`, `ansible-playbook`, `kubectl apply`) | output appears; note any echo delay | per-tester notes |
+| R6 | two testers | A copies the lab page URL to B; B opens it | B does not see A's lab (refused or B's own page) | `q 'sum by (result) (increase(jtt_authz_decisions_total[30m]))'` or the api log's `denied-not-owner`; screenshot |
+| R7 | K8S-001 tester | `kubectl get ns`; `kubectl -n kube-system get pods` | both forbidden: the namespace-scoped credential sees only its own namespace | terminal output |
+| R8 | LINUX-001 and DOCKER-001 testers | `ps aux`; `docker ps` | only their own processes and containers | terminal output |
+| R9 | every tester | Check Solution | a verdict within `VerificationSlow`'s 10 s, pass or fail | `histogram_quantile(0.95, sum by (le, provider) (rate(jtt_verification_duration_seconds_bucket[30m])))` |
+| R10 | every tester | Reset once | a fresh environment; the terminal reconnects by itself | `q 'sum by (outcome) (increase(jtt_lab_reset_outcome_total[30m]))'`: no `failed` |
+| R11 | every tester | reload the page mid-lab; close the tab and reopen the site | the same lab resumes; the terminal reconnects | per-tester notes |
+| R12 | every tester | End Lab | `ops status` returns to `0 of 5 held` within a minute | `ops status` |
+| R13 | operator | `docker ps --filter label=jumptotech.io/managed=true --filter label=jumptotech.io/runtime-owner=<RUNTIME_OWNER_ID>`; `KUBECONFIG=infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml kubectl get ns -l jumptotech.io/managed=true` | both empty (a namespace in `Terminating` for a minute is teardown in flight) | both outputs |
+| R14 | operator | stop the sampler (Ctrl-C); `alerts`; `make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence"` | no alert fired that §3 treats as stop-launches; smoke unchanged from before R0 (including `exposure.host-containers` PASS) | sampler peaks; `alerts`; smoke file |
+
+Then record, in the evidence template §4: start and Check p95 by provider
+(PromQL in the table above), restart counts, the alerts that fired, and the
+sampler's peaks. Whether those numbers are acceptable is D8.
 
 ## 14. Preflight procedure
 
@@ -415,9 +478,12 @@ make production-preflight ARGS="--backup-dir /srv/jumptotech/backups/postgres --
   group; git commit; checkout and bind-mount readability; `.env` mode, required
   names, shell overrides; TLS files, key mode, `tls:check --offline`; scrape token
   mode and match; alert destination file; kind cluster, network, kubeconfigs,
-  nodes, `seccompDefault`, admission policies; the attestation's verdict, cluster,
-  age and digest against this `.env`; sandbox images; ports 80/443; other public
-  listeners; backup directories, overlap, filesystem, schedule;
+  the cluster-admin API server published on loopback only (FAIL on any other
+  address), nodes, `seccompDefault`, admission policies; the attestation's
+  verdict, cluster, age and digest against this `.env`; sandbox images; ports
+  80/443; other public listeners; backup directories, overlap, filesystem,
+  whether this account can write the status directory (a backup that cannot
+  record its outcome still exits 0, and `BackupStale` fires), schedule;
   `make secrets-check`; `make production-config-check` (rendering, exposure,
   persistence, restart policy, capacity, OIDC/TLS gates, observability).
 
@@ -514,7 +580,7 @@ section header names its proof class:
 | Proof class | Checks |
 |---|---|
 | **LOCAL ENDPOINT PROOF** (127.0.0.1 inside containers) | `/readyz` of api, terminal, sandboxd; api `/health`: labs loaded, durable PostgreSQL progress store, `maxActive` 5, providers available (AWS informational); `pg_isready`; Prometheus targets up; firing alerts; Alertmanager and Grafana answer; deployed 5/1 gauges; attestation valid; certificate days left; backup age, verification age, off-host copy |
-| **HOST-LOCAL PROOF** (Docker on this host) | every service running and healthy; Docker restart counts (WARN); restart policy exactly `unless-stopped` (FAIL otherwise); only 443/80/loopback Grafana published; postgres only on internal networks; optional `--public-ip` probe of forbidden ports **from the host** |
+| **HOST-LOCAL PROOF** (Docker on this host) | every service running and healthy; Docker restart counts (WARN); restart policy exactly `unless-stopped` (FAIL otherwise); only 443/80/loopback Grafana published; **no other container on the daemon** — the kind node, a leftover §13.1 validation stack, a debug container — publishing beyond loopback (`exposure.host-containers`); postgres only on internal networks; optional `--public-ip` probe of forbidden ports **from the host** |
 | **PUBLIC-ENDPOINT PROOF, from this host** | HTTPS 200 with a trusted chain; HSTS; `http://` → 301 to the same path; `tls:check --expect-acme`; `/auth/config` reports oidc with sign-in; `/api/me`, `/api/labs`, `/api/sessions` → 401; `Authorization: Developer` and `x-dev-student-id` → 401; `/auth/login` → 302 to the provider; `/internal`, `/metrics`, `/readyz`, `/health` not routed. **These requests may never leave the host; they do not prove internet reachability.** |
 | **EXTERNAL-INFRASTRUCTURE / PERSON** (always MANUAL CHECK REQUIRED) | scan from another network; restore beside production; a real student flow; a non-beta account refused; an alert received by a person; Grafana through the tunnel |
 
@@ -550,6 +616,46 @@ make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence"
 ```
 
 **Never** `prod down -v`: it deletes the PostgreSQL volume.
+
+### 17.1 What is proven where
+
+| Claim | Proven locally (development machine or CI) | Must be proven on the host |
+|---|---|---|
+| Every production service is `restart: unless-stopped` | rendered and checked: `make production-config-check` `durability.restart-policy`; smoke `stack.*-restart-policy` | the smoke on the host |
+| `prod restart api`: sessions survive, reaper resumes | the five-student harness at `c8eb2c6` | drill D-1 below |
+| terminal, sandboxd, web, postgres restarts | web behaviour in component tests; nothing else | drills D-2…D-5 |
+| The kind node after a Docker restart or reboot | only its restart policy: kind v0.31.0 creates `<cluster>-control-plane` with `on-failure:1` (read with `docker inspect` on four local kind nodes, 2026-09-19). Docker should retry it **once** | whether it returns, whether Kubernetes is Ready, and whether the attestation still validates: drills D-6, D-7 |
+| PostgreSQL data survives all of the above | the named volume (config check `durability.volumes`); `prod down` keeps it | a row count before and after each drill |
+| Monitoring returns | restart policy on all three (config check) | smoke `observability.*` after each drill |
+
+### 17.2 Drill procedure (no students active)
+
+Before the first drill, and again after each one, capture the same four things
+into `/srv/jumptotech/evidence/drills/<drill>-{before,after}.txt`:
+
+```bash
+prod ps; ops status
+docker inspect -f '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}} restarts={{.RestartCount}}' jumptotech-labs-control-plane
+KUBECONFIG=infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml kubectl get nodes
+q 'jtt_network_isolation_attestation_valid'
+prod exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from users; select count(*) from lab_attempts"'
+```
+
+| Drill | Action | Pass when | Record |
+|---|---|---|---|
+| D-1 | `prod restart api` | `ready api 9400` answers 200 (allow up to 300 s: the api transpiles at start); `ops status` unchanged | seconds to ready |
+| D-2 | `prod restart terminal` | `ready terminal 9401` 200 | seconds |
+| D-3 | `prod restart sandboxd` | `ready sandboxd 9402` 200; `q 'jtt_sandboxd_runtime_up'` 1 | seconds |
+| D-4 | `prod restart web` | `prod ps web` healthy; `https://<host>/` 200 from the host | seconds |
+| D-5 | `prod restart postgres` | `prod ps postgres` healthy, then `ready api 9400` 200; row counts unchanged | seconds |
+| D-6 | `sudo systemctl restart docker` (maintenance window) | every service running and healthy with no operator action; the kind node `running` and `kubectl get nodes` Ready; attestation valid; row counts unchanged | seconds to each; the kind node's `restarts=` |
+| D-7 | `sudo reboot` | as D-6, from power-on; `systemctl is-enabled docker` is `enabled` | seconds from boot to smoke PASS |
+
+After every drill: `make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence"`
+must be RESULT unchanged from before it, then start and End one LINUX-001 and
+one K8S-001 lab. If the kind node stays down after D-6 or D-7, the recovery
+above (`docker start …`) is the procedure, and the drill result is FAIL until a
+reboot brings it back unaided or the substrate decision (D2) says otherwise.
 
 ## 18. Security findings and audits
 
@@ -640,6 +746,7 @@ credentials, or delete or overwrite data.
 | D12 | Metric/log retention; external uptime check; host exporter | operations |
 | D13 | Federated logout; idle timeout | sign-out behaviour |
 | D14 | IPv6, HSTS preload, CAA | DNS/TLS |
+| D15 | Whether production accepts OIDC bearer tokens on `/api/*` at all, and if so with an authorized-party check (§8.1) | who besides the browser can act as a student |
 
 ## 20. Evidence for this branch
 

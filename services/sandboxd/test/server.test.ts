@@ -20,7 +20,9 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import type { SandboxSnapshot } from '../src/attach.js';
 import { defaultObservabilityConfig, type SandboxdConfig } from '../src/config.js';
-import { createSandboxd, upgradeRefusal, type BrokerPty } from '../src/server.js';
+import { SANDBOXD_SCOPE_ENDPOINTS, createSandboxdMetrics, promClient } from '@jumptotech/observability';
+import { ENDPOINT_SCOPES } from '../src/scopes.js';
+import { createSandboxd, upgradeDecision, upgradeRefusal, type BrokerPty } from '../src/server.js';
 
 const SECRET = 'internal-service-secret-for-tests';
 const DERIVATION = 'derivation-secret-for-tests';
@@ -102,11 +104,15 @@ interface Harness {
   argvs: string[][];
 }
 
-async function start(containers: Record<string, SandboxSnapshot>): Promise<Harness> {
+async function start(
+  containers: Record<string, SandboxSnapshot>,
+  metrics?: ReturnType<typeof createSandboxdMetrics>,
+): Promise<Harness> {
   const ptys: ReturnType<typeof fakePty>[] = [];
   const argvs: string[][] = [];
   const server = createSandboxd({
     config,
+    ...(metrics ? { metrics } : {}),
     inspector: { inspect: async (ref) => containers[ref] ?? null },
     spawn: (_command, args) => {
       argvs.push(args);
@@ -174,6 +180,46 @@ describe('upgradeRefusal', () => {
     expect(upgradeRefusal(req({ 'x-internal-secret': SECRET + '-attach' }, '/v1/exec'), config)).toMatch(
       /no broker endpoint/,
     );
+  });
+});
+
+describe('scope denials reach ScopeDenialDetected', () => {
+  const req = (headers: Record<string, string>, url = '/v1/attach') => ({ headers, url }) as never;
+  const denials = async (registry: promClient.Registry): Promise<string> =>
+    (await registry.metrics()).split('\n').filter((line) => line.startsWith('jtt_sandboxd_scope_denials_total{')).join('\n');
+
+  it('labels denials with exactly the endpoints this broker authorizes', () => {
+    expect(Object.fromEntries(SANDBOXD_SCOPE_ENDPOINTS.map(([scope, endpoint]) => [endpoint, scope]))).toEqual(ENDPOINT_SCOPES);
+  });
+
+  it('exposes every denial series from the first scrape, at zero, so the first denial is a visible step', async () => {
+    const registry = new promClient.Registry();
+    createSandboxdMetrics(registry);
+    expect(await denials(registry)).toBe(
+      [
+        'jtt_sandboxd_scope_denials_total{scope="attach",endpoint="/v1/attach"} 0',
+        'jtt_sandboxd_scope_denials_total{scope="runtime",endpoint="/v1/runtime"} 0',
+        'jtt_sandboxd_scope_denials_total{scope="docker",endpoint="/v1/docker"} 0',
+      ].join('\n'),
+    );
+  });
+
+  it('classifies only a failed credential as a scope denial', () => {
+    expect(upgradeDecision(req({ 'x-internal-secret': 'nope' }), config)?.scopeDenied).toBe(true);
+    expect(upgradeDecision(req({}), config)?.scopeDenied).toBe(true);
+    expect(upgradeDecision(req({ 'x-internal-secret': SECRET + '-runtime' }), config)?.scopeDenied).toBe(true);
+    expect(upgradeDecision(req({ 'x-internal-secret': SECRET + '-attach', origin: 'https://x.invalid' }), config)?.scopeDenied).toBe(false);
+    expect(upgradeDecision(req({ 'x-internal-secret': SECRET + '-attach' }, '/v1/exec'), config)?.scopeDenied).toBe(false);
+    expect(upgradeDecision(req({ 'x-internal-secret': SECRET + '-attach' }), config)).toBeNull();
+  });
+
+  it('counts a WebSocket upgrade with the wrong attach credential as a scope denial', async () => {
+    const registry = new promClient.Registry();
+    const harness = await start({ [refFor(SESSION_A)]: snapshotFor(SESSION_A) }, createSandboxdMetrics(registry));
+    const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-runtime' });
+    const error = await new Promise<Error>((resolve) => ws.on('error', resolve));
+    expect(error.message).toMatch(/401/);
+    expect(await denials(registry)).toContain('jtt_sandboxd_scope_denials_total{scope="attach",endpoint="/v1/attach"} 1');
   });
 });
 

@@ -1,0 +1,93 @@
+# ---------------------------------------------------------------------------
+# SandboxLeakSuspected must count sessions, not containers.
+#
+# `jtt:sandbox_leak:count` was containers held minus every occupying session.
+# Sessions do not hold one container each: Ansible holds three (a control node
+# and two managed nodes), a Linux lab with a peer two, Kubernetes none. So:
+#
+#   1. five students in one Ansible class read 15 - 5 = 10, and the alert
+#      (more than 5 for 15 minutes) fired on a healthy class — this case fails
+#      on the old rule;
+#   2. five Kubernetes sessions hid six leaked sandboxes (6 - 5 = 1) — this
+#      case fails on the old rule too;
+#   3. the rehearsal mix (Linux, Docker, Ansible, Terraform, Kubernetes)
+#      balances at zero.
+#
+# The rule now subtracts container-backed sessions from the distinct sessions
+# among sandboxd's containers (jtt_sandboxd_container_sessions).
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../rules/recording.yml
+  - ../alerts/runtime.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a healthy all-Ansible class is not a leak
+    input_series:
+      - series: 'jtt_sandboxd_containers_managed{job="sandboxd",provider="container"}'
+        values: '15x100'
+      - series: 'jtt_sandboxd_container_sessions{job="sandboxd"}'
+        values: '5x100'
+      - series: 'jtt_sessions_active{job="api",provider="ansible",status="ACTIVE"}'
+        values: '5x100'
+    promql_expr_test:
+      - expr: jtt:sandbox_leak:count
+        eval_time: 20m
+        exp_samples:
+          - labels: 'jtt:sandbox_leak:count'
+            value: 0
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SandboxLeakSuspected
+        exp_alerts: []
+
+  - interval: 15s
+    name: Kubernetes sessions no longer hide leaked sandboxes
+    input_series:
+      - series: 'jtt_sandboxd_containers_managed{job="sandboxd",provider="container"}'
+        values: '6x100'
+      - series: 'jtt_sandboxd_container_sessions{job="sandboxd"}'
+        values: '6x100'
+      - series: 'jtt_sessions_active{job="api",provider="kubernetes",status="ACTIVE"}'
+        values: '5x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SandboxLeakSuspected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: '6 sandboxes are not accounted for by any session'
+              description: >-
+                Sessions the runtime holds sandbox containers for, minus the
+                container-backed sessions the store knows about. A brief spike
+                during a start is normal; a sustained value is a leak.
+              runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
+
+  - interval: 15s
+    name: the five-lab rehearsal mix balances at zero
+    input_series:
+      # Linux 1 + Docker 1 + Ansible 3 + Terraform 1 containers; four sessions own them.
+      - series: 'jtt_sandboxd_containers_managed{job="sandboxd",provider="container"}'
+        values: '6x100'
+      - series: 'jtt_sandboxd_container_sessions{job="sandboxd"}'
+        values: '4x100'
+      - series: 'jtt_sessions_active{job="api",provider="linux",status="ACTIVE"}'
+        values: '1x100'
+      - series: 'jtt_sessions_active{job="api",provider="docker",status="ACTIVE"}'
+        values: '1x100'
+      - series: 'jtt_sessions_active{job="api",provider="ansible",status="ACTIVE"}'
+        values: '1x100'
+      - series: 'jtt_sessions_active{job="api",provider="terraform",status="ACTIVE"}'
+        values: '1x100'
+      - series: 'jtt_sessions_active{job="api",provider="kubernetes",status="ACTIVE"}'
+        values: '1x100'
+    promql_expr_test:
+      - expr: jtt:sandbox_leak:count
+        eval_time: 20m
+        exp_samples:
+          - labels: 'jtt:sandbox_leak:count'
+            value: 0

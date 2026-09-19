@@ -110,10 +110,15 @@ groups:
       # is a teardown in flight — an ENDING session still counts as occupying
       # capacity until the delete is confirmed, which is correct. Persistently,
       # it is a stuck teardown, and RB-05 says what to do about it.
+      #
+      # Per session, and container-backed sessions only: an Ansible session
+      # holds three containers and a Kubernetes session none, so containers
+      # minus every session paged a healthy all-Ansible class (15 - 5) and let
+      # five Kubernetes sessions hide five leaked containers.
       - record: jtt:sandbox_leak:count
         expr: |
-          (sum(jtt_sandboxd_containers_managed) or vector(0))
-            - (sum(jtt_sessions_active) or vector(0))
+          (sum(jtt_sandboxd_container_sessions) or vector(0))
+            - (sum(jtt_sessions_active{provider!="kubernetes"}) or vector(0))
 
       - record: jtt:reaper_seconds_since_success
         expr: time() - max(jtt_reaper_last_success_timestamp_seconds)

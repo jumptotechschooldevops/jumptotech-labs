@@ -181,12 +181,19 @@ make db-backup
 # → backups/postgres/jtt-pg-jumptotech_labs-20260914T031700Z.dump (+ .sha256)
 ```
 
-On a host:
+On a host, every backup, verification and restore command in this runbook runs
+with the two paths the scheduled job uses (§5.3). Export them once per shell:
 
 ```bash
 cd /srv/jumptotech-labs
-BACKUP_DIR=/srv/jumptotech/backups/postgres scripts/db-backup.sh
+export BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status
+scripts/db-backup.sh
 ```
+
+Without them a manual run falls back to `<repo>/backups/postgres` and
+`<repo>/backups/status`. The archive then sits where the weekly verification,
+retention and any off-host copy never look, and its outcome is recorded where
+the api does not read it.
 
 The archive path is printed on stdout. Progress lines go to stderr, and none of
 them carries a secret. Settings come from the environment only; the script never
@@ -209,8 +216,8 @@ Take one too before running `npm run db:migrate` by hand, and before any manual
 SQL:
 
 ```bash
-scripts/db-backup.sh --label pre-migration
-make db-backup-verify FILE=<the path it printed>
+scripts/db-backup.sh --label pre-migration          # on a host: with BACKUP_DIR and BACKUP_STATUS_DIR exported (§5.1)
+scripts/db-restore.sh --verify-only <the path it printed>
 ```
 
 ### 5.3 Scheduling
@@ -219,10 +226,20 @@ The script is idempotent and safe to call from any scheduler. It exits non-zero
 on every failure. It is a command, not a daemon, and nothing runs permanently.
 Cron example:
 
+The production schedule — a daily backup and a weekly verification — is
+[private-beta-operations.md §1.2](private-beta-operations.md), `/etc/cron.d/jumptotech-db`.
+Its backup line:
+
 ```cron
-# /etc/cron.d/jumptotech-db-backup — daily, 03:17 UTC
-17 3 * * *  jtt-ops  cd /srv/jumptotech-labs && BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status BACKUP_COPY_HOOK=/usr/local/sbin/jtt-copy-backup-offhost scripts/db-backup.sh >>/var/log/jumptotech/db-backup.log 2>&1
+17 3 * * *  jtt-ops  cd /srv/jumptotech-labs && BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status scripts/db-backup.sh >>/var/log/jumptotech/db-backup.log 2>&1
 ```
+
+- **The off-host copy is not in it yet.** Add `BACKUP_COPY_HOOK=<your executable>`
+  to the line once the destination is decided (§5.5, DECISION REQUIRED). A hook
+  path that is not an executable file refuses the run before it starts, and a
+  run refused before it starts records nothing: only `BackupStale` (26 h) would
+  notice. Run the line by hand once after adding a hook, and confirm
+  `db-backup.last-success` was written.
 
 - `jtt-ops` must be able to run `docker`. That is root-equivalent, so choose the
   account accordingly.
@@ -306,7 +323,7 @@ make db-restore-drill
 ### 6.1 Select the backup
 
 ```bash
-ls -l "$BACKUP_DIR"          # newest first by name: the timestamp is the dump's UTC start
+ls -1 "$BACKUP_DIR"/jtt-pg-*.dump | tail -5    # oldest to newest by name: the timestamp is the dump's UTC start
 ```
 
 - Recovering from a bad migration: use the `-pre-migration` archive taken before
@@ -359,9 +376,13 @@ docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "DRO
 
 ### 6.4 Production recovery procedure
 
-Use the same compose files the deployment runs. Production:
-`docker compose -f docker-compose.yml -f docker-compose.runtime.yml -f docker-compose.production.yml`,
-written `$COMPOSE` below.
+Use the same compose files the deployment runs, written `$COMPOSE` below. On
+the production host that is the runbook's `prod` function — all five files and
+`--profile observability` ([private-beta-operations.md §1](private-beta-operations.md)):
+define it, then `COMPOSE=prod`. A shorter file list re-creates the api without
+its backup-status mount, its metrics settings and its health check, so the
+backup alerts and the database dashboard go quiet exactly while you need them.
+On a development stack, `COMPOSE="docker compose -f docker-compose.yml -f docker-compose.runtime.yml"`.
 
 1. **Announce maintenance.** Students will lose work written after the archive
    (§8).
@@ -369,7 +390,8 @@ written `$COMPOSE` below.
    while any session is connected. PostgreSQL itself refuses to rename a database
    with a session open, so a missed client cannot slip through.
 3. **If the current database is still readable, back it up first:**
-   `scripts/db-backup.sh --label pre-restore`. `--replace` keeps the old database
+   `scripts/db-backup.sh --label pre-restore` (with `BACKUP_DIR` and
+   `BACKUP_STATUS_DIR` exported, §5.1). `--replace` keeps the old database
    on this server anyway. An archive also survives the host.
 4. **Verify and inspect** the chosen archive (§6.2, §6.3).
 5. **Replace:**

@@ -26,8 +26,11 @@ either a **misconfiguration** (a service given the wrong secret after a deploy)
 or **something presenting a credential it should not have**. There is no benign
 explanation, which is why the alert has no threshold above zero.
 
-1. `docker compose logs sandboxd | grep '"securityEvent":"scope_denied"'` — the
-   line names the scope and the endpoint.
+1. `prod logs sandboxd | grep -E '"securityEvent":"scope_denied"|"sandbox.attach.denied"'` —
+   an HTTP denial names the scope and the endpoint; a refused terminal attach
+   (the WebSocket upgrade to `/v1/attach`) is logged as `sandbox.attach.denied`
+   with `denyReason: upgrade_refused`. Both count in
+   `jtt_sandboxd_scope_denials_total`.
 2. Compare the deployed values: `SANDBOXD_ATTACH_SECRET` in `terminal`,
    `SANDBOXD_RUNTIME_SECRET` and `SANDBOXD_DOCKER_SECRET` in `api`, all three in
    `sandboxd`. A recent deploy that rotated one and not the others is the

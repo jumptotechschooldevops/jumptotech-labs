@@ -64,6 +64,20 @@ export const PRODUCTION_PUBLICATIONS = Object.freeze([
  */
 export const PRODUCTION_RESTART_POLICY = 'unless-stopped';
 
+/**
+ * The host names the web edge's certificate gate accepts from PUBLIC_ORIGIN
+ * (infrastructure/docker/nginx/tls-preflight.sh, `public_host`): lower-case DNS
+ * labels, at least two of them, the last starting with a letter — so no IP
+ * address, no port and no single-label name such as `localhost`. The api's own
+ * loader accepts all three, so without this the check passed a configuration
+ * whose edge then exits at every start. Kept identical to the gate's pattern by
+ * production-host-contract.test.ts.
+ */
+export const EDGE_PUBLIC_HOST_PATTERN = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** How the api reads a boolean variable (apps/api/src/config.ts `boolFromEnv`). */
+const isTrue = (value: string | undefined): boolean => ['1', 'true', 'yes', 'on'].includes((value ?? '').trim().toLowerCase());
+
 export type CheckStatus = 'PASS' | 'FAIL' | 'WARN' | 'MANUAL' | 'INFO';
 
 export interface CheckResult {
@@ -279,6 +293,37 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
     ),
   );
 
+  // Values the api loader accepts that break or widen sign-in (apps/api/src/routes/auth.ts, index.ts).
+  const cookieName = env(services.api, 'AUTH_COOKIE_NAME') ?? '';
+  const clientId = env(services.api, 'OIDC_CLIENT_ID');
+  const audience = env(services.api, 'OIDC_AUDIENCE');
+  const redirectUri = env(services.api, 'OIDC_REDIRECT_URI')?.trim();
+  const publicOrigin = env(services.api, 'PUBLIC_ORIGIN') ?? '';
+  const oidcFailures = /^__host-/i.test(cookieName)
+    ? [
+        `AUTH_COOKIE_NAME ${cookieName} uses the __Host- prefix: the sign-in transaction cookie derived from it is set with Path=/auth, which browsers refuse for a __Host- cookie, so every sign-in would fail`,
+      ]
+    : [];
+  const oidcWarnings = [
+    ...(clientId && audience && clientId === audience
+      ? [
+          'OIDC_AUDIENCE equals OIDC_CLIENT_ID: every ID token the provider issues to this client is also accepted as an API bearer token. Use a dedicated API audience (.env.example: jumptotech-api) and restrict which clients may request it',
+        ]
+      : []),
+    ...(redirectUri && publicOrigin && redirectUri !== `${publicOrigin}/auth/callback`
+      ? [
+          `OIDC_REDIRECT_URI is not exactly ${publicOrigin}/auth/callback: the api accepts it, but it is sent to the identity provider as written, and providers compare it byte for byte with the registered one`,
+        ]
+      : []),
+  ];
+  results.push(
+    oidcFailures.length
+      ? fail('gates.oidc-client', [...oidcFailures, ...oidcWarnings].join('; '))
+      : oidcWarnings.length
+        ? warn('gates.oidc-client', oidcWarnings.join('; '))
+        : pass('gates.oidc-client', 'a dedicated API audience, a literal callback URI and a sign-in cookie browsers accept'),
+  );
+
   const apiOrigin = env(services.api, 'PUBLIC_ORIGIN') ?? '';
   const webOrigin = env(services.web, 'PUBLIC_ORIGIN') ?? '';
   const healthcheck = services.web?.healthcheck?.test;
@@ -289,11 +334,63 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
       [
         ...(env(services.web, 'WEB_TLS') === 'required' ? [] : ['web is not pinned to WEB_TLS=required']),
         ...(/^https:\/\/[^/]+$/.test(apiOrigin) ? [] : ['PUBLIC_ORIGIN is not a bare https:// origin']),
+        ...(!/^https:\/\/[^/]+$/.test(apiOrigin) || EDGE_PUBLIC_HOST_PATTERN.test(apiOrigin.slice('https://'.length))
+          ? []
+          : [
+              "PUBLIC_ORIGIN's host is not a lower-case DNS name without a port (an IP address, a port or a single-label name such as localhost): the web edge's certificate gate refuses it, so web would restart in a loop and never serve 443",
+            ]),
         ...(apiOrigin === webOrigin ? [] : ['the api and web see different PUBLIC_ORIGIN values']),
         ...(healthText.includes('jtt-tls-preflight') ? [] : ['web has no served-certificate health check']),
       ],
-      'the certificate gate is pinned and PUBLIC_ORIGIN is an https origin',
+      'the certificate gate is pinned and PUBLIC_ORIGIN is an https origin the edge accepts',
     ),
+  );
+
+  // The api probes its own edge (apps/api/src/config.ts loadOperationsConfig):
+  // certificate expiry, the served certificate, the redirect. It is on by
+  // default in production, and EDGE_PROBE_ENABLED=false turns it off with no
+  // error — which also silences every TLS alert, since TlsEdgeCheckNotRunning
+  // only watches a probe that is enabled. The shipped compose files do not pass
+  // the variable through, so .env cannot do this; a compose edit could.
+  const edgeProbe = env(services.api, 'EDGE_PROBE_ENABLED');
+  results.push(
+    edgeProbe !== undefined && edgeProbe.trim() !== '' && !isTrue(edgeProbe)
+      ? warn(
+          'observability.edge-probe',
+          'EDGE_PROBE_ENABLED is off: nothing measures the certificate or the edge, and TlsCertificateRenewalDue, TlsCertificateExpiresWithin7Days, TlsEdgeUnhealthy and TlsEdgeCheckNotRunning cannot fire',
+        )
+      : pass('observability.edge-probe', 'the api probes its own TLS edge (certificate expiry and health alerts can fire)'),
+  );
+
+  // Every ALLOWED_ORIGINS entry is trusted three times over: credentialed CORS
+  // reads, the CSRF origin guard on every state-changing request, and the
+  // terminal's WebSocket origin check. The api accepts any https origin there;
+  // the beta was proven with exactly one, this deployment's own. A cookie Domain
+  // likewise sends the session cookie to every host under it.
+  const extraOrigins = (env(services.api, 'ALLOWED_ORIGINS') ?? '')
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .filter((origin) => origin && origin !== apiOrigin);
+  const cookieDomain = env(services.api, 'AUTH_COOKIE_DOMAIN')?.trim();
+  // Named only when it is a bare origin: a malformed entry is exactly where a
+  // pasted credential (`https://user:secret@host`) would sit, and the loader
+  // refuses it anyway (loader.api).
+  const bareExtras = [...new Set(extraOrigins.filter((origin) => /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(origin)))];
+  const otherExtras = extraOrigins.length - extraOrigins.filter((origin) => bareExtras.includes(origin)).length;
+  const trustWidened = [
+    ...(extraOrigins.length
+      ? [
+          `ALLOWED_ORIGINS also trusts ${[...bareExtras, ...(otherExtras ? [`${otherExtras} ${otherExtras === 1 ? 'entry that is not a bare origin' : 'entries that are not bare origins'} (not printed)`] : [])].join(', ')}: each can read signed-in responses, pass the CSRF guard and open terminal WebSockets. Remove any you do not operate`,
+        ]
+      : []),
+    ...(cookieDomain
+      ? [`AUTH_COOKIE_DOMAIN is set: the session cookie is also sent to every host under ${cookieDomain}. The beta was proven with a host-only cookie`]
+      : []),
+  ];
+  results.push(
+    trustWidened.length
+      ? warn('gates.origins', trustWidened.join('; '))
+      : pass('gates.origins', 'ALLOWED_ORIGINS is PUBLIC_ORIGIN alone and the session cookie is host-only'),
   );
 
   results.push(
@@ -322,6 +419,31 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
       ],
       `MAX_ACTIVE_SESSIONS=${BETA_CONTRACT.maxActiveSessions}, MAX_ACTIVE_SESSIONS_PER_STUDENT=${BETA_CONTRACT.maxActiveSessionsPerStudent} — the five-student contract`,
     ),
+  );
+
+  // The api admits MAX_ACTIVE_SESSIONS labs, but each lab's shell is a PTY the
+  // terminal holds and, for the container tracks, one sandboxd holds too. Each
+  // refuses a connection at its own ceiling, so a lower ceiling there admits the
+  // lab and then gives the last students a dead terminal. Loader defaults (16,
+  // 32) apply when compose leaves a value unset.
+  const seats = Number(max);
+  const shellCeilings = [
+    ['terminal', 'TERMINAL_MAX_SESSIONS', 16],
+    ['sandboxd', 'SANDBOXD_MAX_SESSIONS', 32],
+  ] as const;
+  const shortShells = Number.isInteger(seats)
+    ? shellCeilings
+        .filter(([service]) => services[service])
+        .map(([service, name, fallback]) => [service, name, env(services[service], name) ?? String(fallback)] as const)
+        .filter(([, , ceiling]) => !(Number(ceiling) >= seats))
+        .map(([service, name, ceiling]) => `${service} ${name}=${ceiling} is below MAX_ACTIVE_SESSIONS=${seats}: past it, a started lab gets no shell`)
+    : [];
+  results.push(one('capacity.shell-ceilings', shortShells, 'the terminal and sandboxd accept at least MAX_ACTIVE_SESSIONS shells'));
+
+  results.push(
+    isTrue(env(services.api, 'LAB_LAUNCHES_PAUSED'))
+      ? warn('capacity.launches', 'LAB_LAUNCHES_PAUSED is on: the stack starts refusing every Start Lab (runbook §3). Intended only while an incident is open')
+      : pass('capacity.launches', 'new labs can start (LAB_LAUNCHES_PAUSED is off)'),
   );
 
   // --- durability ----------------------------------------------------------------

@@ -36,6 +36,12 @@ Result values: `PASS`, `FAIL`, `NOT DONE`, `BLOCKED (decision D#)`.
 | D7 | Off-host backup destination, encryption, retention | | | |
 | D8 | Capacity acceptance thresholds | | | |
 | D9 | Where `.env` and the TLS key are recoverable from | | | |
+| D10 | Operator access (SSH keys, bastion) and who holds `docker` | | | |
+| D11 | Attestation re-probe cadence | | | |
+| D12 | Metric/log retention; external uptime check; host exporter | | | |
+| D13 | Federated logout; idle timeout | | | |
+| D14 | IPv6, HSTS preload, CAA | | | |
+| D15 | Bearer tokens on `/api/*` in production (readiness §8.1) | | | |
 
 ## 2. Before first start
 
@@ -45,13 +51,14 @@ Result values: `PASS`, `FAIL`, `NOT DONE`, `BLOCKED (decision D#)`.
 | 3 Checkout at the release commit, mode 0750, `npm ci` | | |
 | 4 Backup, evidence and log directories with the §15 modes | | |
 | 5 `.env` mode 0600; 5/1 limits; `DOCKER_SOCKET_GID` from the socket | | |
-| 6 OIDC client registered; redirect `https://<host>/auth/callback`; restricted to the beta accounts | | |
+| 6 OIDC client registered per readiness §8.1 (`client_secret_post`, asymmetric ID-token signing, exact issuer and callback, dedicated `OIDC_AUDIENCE`); restricted to the beta accounts | | |
 | 7 kind cluster; `seccompDefault` on | | |
 | 8 Sandbox images built; `docker:27-dind` pulled | | |
 | 9 DNS resolves from outside; certificate installed | | |
 | 10 Scrape token written; alert destination installed (or BLOCKED D6) | | |
 | 12 NetworkPolicy probe `VERDICT: PASS` | | `network-probe.json` |
 | 13 `make secrets-check`; `make production-config-check` 0 FAIL | | |
+| 13 Every config-check WARN listed, each with why it is accepted (none expected: `gates.origins`, `gates.oidc-client`, `capacity.launches`, `observability.edge-probe` all PASS on the proven configuration) | | |
 | 14 `make production-preflight` RESULT: PASS | | `preflight-*.txt` |
 | 15 (§13 A) `make beta-validate` on this host at this commit | | report path |
 | 15 (§13 A) capacity samples during the synthetic run | | `capacity-synthetic/` |
@@ -64,14 +71,14 @@ Result values: `PASS`, `FAIL`, `NOT DONE`, `BLOCKED (decision D#)`.
 | 16 `prod up -d --wait` succeeded; `prod ps` all running/healthy | | |
 | 16 First backup + `--verify-only`; cron installed | | archive name |
 | 16 Restore beside production (`--into`) validated | | database name |
-| 17 `make private-beta-smoke`: every line PASS except `backup.offhost` until D7 | | `private-beta-smoke-*.txt` |
+| 17 `make private-beta-smoke`: every line PASS except `backup.offhost` until D7; `exposure.host-containers` PASS | | `private-beta-smoke-*.txt` |
 | 18 External port scan: only 80/443 (+SSH) open | | command + output |
 | 18 External `npm run tls:check -- --expect-acme` exit 0 | | |
 | 19 Beta account signs in; sign-out invalidates the cookie | | |
 | 19 **Non-beta account is refused** | | |
 | 20 LINUX-001, K8S-001, DOCKER-001: start, terminal, check, reset, end | | times |
 | 21 Grafana through the SSH tunnel; smoke `observability.*` PASS | | |
-| 22 Alert delivery drill received by a person (readiness §12.1) | | who, sent/received times |
+| 22 Alert delivery drill received by a person (readiness §12.1); `AlertNotificationsFailing` no longer firing 15 min after the destination is installed | | who, sent/received times |
 | 23 Off-host backup copy recorded (`backup.offhost` PASS, smoke RESULT: PASS) and one restore from it | | |
 
 ## 4. Five-person rehearsal (readiness §13.2)
@@ -88,20 +95,28 @@ Result values: `PASS`, `FAIL`, `NOT DONE`, `BLOCKED (decision D#)`.
 | Largest container memory (name, MiB) | | `containers.csv` |
 | Service restarts during the run | | `docker inspect` |
 | Alerts fired | | `alerts` |
-| Sessions active after End = 0; no managed containers left | | |
+| R3 second lab for one student refused (`student_limit_reached`) | | PromQL |
+| R4 sixth start refused (`capacity_reached`), or SKIPPED with reason | | PromQL |
+| R6 another student's lab URL refused | | `denied-not-owner` |
+| R7/R8 no cross-student visibility (`kubectl`, `ps`, `docker ps`) | | terminal output |
+| R11 reload and reopen resume the same lab | | per tester |
+| Sessions active after End = 0; no managed containers or namespaces left (R13) | | |
 | **Acceptable against D8?** | | decided by |
 
 ## 5. Recovery drills (readiness §17), no students active
 
-| Drill | Result | Time to smoke PASS |
-|---|---|---|
-| `prod restart api` | | |
-| `prod restart terminal` | | |
-| `prod restart sandboxd` | | |
-| `prod restart web` | | |
-| `prod restart postgres` | | |
-| Docker daemon restart (kind node state recorded) | | |
-| Host reboot | | |
+Procedure and pass conditions: readiness §17.2. Row counts are `users` and
+`lab_attempts` before and after.
+
+| Drill | Result | Time to smoke PASS | Row counts unchanged | kind node after (state, `restarts=`, Ready) |
+|---|---|---|---|---|
+| D-1 `prod restart api` | | | | — |
+| D-2 `prod restart terminal` | | | | — |
+| D-3 `prod restart sandboxd` | | | | — |
+| D-4 `prod restart web` | | | | — |
+| D-5 `prod restart postgres` | | | | — |
+| D-6 Docker daemon restart | | | | |
+| D-7 Host reboot | | | | |
 
 ## 6. Sign-off
 

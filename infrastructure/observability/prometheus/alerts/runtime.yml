@@ -42,8 +42,9 @@ groups:
         annotations:
           summary: '{{ $value }} sandboxes are not accounted for by any session'
           description: >-
-            Containers the runtime holds minus sessions the store knows about.
-            A brief spike during a start is normal; a sustained value is a leak.
+            Sessions the runtime holds sandbox containers for, minus the
+            container-backed sessions the store knows about. A brief spike
+            during a start is normal; a sustained value is a leak.
           runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
 
       - alert: OrphansPersisting

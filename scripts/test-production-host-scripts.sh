@@ -255,12 +255,22 @@ case ${1:-} in
     case "$*" in
       *publish=443*) printf '%s' "${FAKE_PUBLISH_443-}" ;;
       *publish=80*) printf '%s' "${FAKE_PUBLISH_80-}" ;;
+      *'{{.Names}}|{{.Ports}}'*)
+        [ -z "${FAKE_PS_PORTS_BROKEN-}" ] || exit 1
+        echo 'jumptotech-labs-web-1|0.0.0.0:443->8443/tcp, [::]:443->8443/tcp, 0.0.0.0:80->8080/tcp, [::]:80->8080/tcp'
+        echo 'jumptotech-labs-prometheus-1|127.0.0.1:3001->3000/tcp'
+        echo 'jumptotech-labs-sandboxd-1|4002/tcp'
+        echo 'jumptotech-labs-control-plane|127.0.0.1:16443->6443/tcp'
+        echo 'jtt-lab-0123abcd|'
+        if [ -n "${FAKE_HOST_PORTS-}" ]; then printf '%s\n' "$FAKE_HOST_PORTS"; fi
+        ;;
       *) echo id-api ;;
     esac
     ;;
   inspect)
     case "$*" in
       *RestartCount*) echo "${FAKE_RESTARTS:-0} ${FAKE_RESTART_POLICY:-unless-stopped}" ;;
+      *'{{.HostConfig.RestartPolicy.Name}}'*) echo "${FAKE_PROJECT_POLICY:-no}" ;;
       *'{{.Name}}'*) echo "/jumptotech-labs-${!##id-}-1" ;;
       *Networks*) echo 'jumptotech-labs-database ' ;;
       *) exit 1 ;;
@@ -271,6 +281,10 @@ case ${1:-} in
       id-web) printf '8443/tcp -> 0.0.0.0:443\n8443/tcp -> [::]:443\n8080/tcp -> 0.0.0.0:80\n8080/tcp -> [::]:80\n' ;;
       id-prometheus) printf '3000/tcp -> 127.0.0.1:3001\n' ;;
       id-postgres) [ -z "${FAKE_POSTGRES_PUBLISHED-}" ] || printf '5432/tcp -> 127.0.0.1:5432\n' ;;
+      jumptotech-labs-control-plane)
+        [ -z "${FAKE_KIND_API_UNREADABLE-}" ] || exit 1
+        printf '%s\n' "${FAKE_KIND_API_BINDINGS:-6443/tcp -> 127.0.0.1:16443}"
+        ;;
     esac
     ;;
   stats) printf 'jumptotech-labs-api-1|1.50%%|211.4MiB / 7.6GiB|40\njumptotech-labs-postgres-1|0.20%%|1.1GiB / 7.6GiB|12\n' ;;
@@ -340,7 +354,8 @@ fixture() {
       "$root/repo/infrastructure/docker/nginx/tls" "$root/repo/infrastructure/docker/nginx/acme-webroot" \
       "$root/repo/infrastructure/kind/generated" "$root/docker-root" "$root/backups/postgres" "$root/backups/status" "$root/proc"
     cp "$source_repo/scripts/production-preflight.sh" "$source_repo/scripts/private-beta-smoke.sh" \
-      "$source_repo/scripts/host-capacity-sample.sh" "$source_repo/scripts/production-host-lib.sh" "$root/repo/scripts/"
+      "$source_repo/scripts/host-capacity-sample.sh" "$source_repo/scripts/production-host-lib.sh" \
+      "$source_repo/scripts/refuse-on-production.sh" "$root/repo/scripts/"
     printf '#!/bin/sh\nexit 0\n' >"$root/repo/node_modules/.bin/tsx"
     chmod +x "$root/repo/node_modules/.bin/tsx"
     echo 'id: LINUX-001' >"$root/repo/labs/linux/lab.yaml"
@@ -412,7 +427,7 @@ run() { # script case-root args...
   : >"$root/log"
   # The case's FAKE_* settings, as whole NAME=value words (values may hold spaces).
   local fakes=() name
-  for name in $(compgen -e | grep -E '^FAKE_' | grep -vE '^FAKE_(LOG|DOCKER_ROOT)$' || true); do
+  for name in $(compgen -e | grep -E '^(FAKE_|CONFIRM_DESTROY$)' | grep -vE '^FAKE_(LOG|DOCKER_ROOT)$' || true); do
     fakes+=("$name=${!name}")
   done
   set +e
@@ -497,6 +512,8 @@ check 'the admission decision is surfaced' has_line '^MANUAL CHECK REQUIRED +aut
 check 'the firewall cannot be proven from the host' has_line '^MANUAL CHECK REQUIRED +exposure\.firewall '
 check 'off-host backup is a manual check' has_line '^MANUAL CHECK REQUIRED +backup\.offhost '
 check 'the attestation digest is compared' has_line '^PASS +k8s\.attestation-digest '
+check 'the cluster API server is on loopback' has_line '^PASS +kind\.api-server-address .*127\.0\.0\.1:16443'
+check 'the backup status directory is writable' has_line '^INFO +backup\.status-dir-writable '
 check 'the configuration check receives the socket group' grep -q 'production-config-check.ts --env-file .* --docker-socket-gid ' "$root/log"
 check 'the report is written' grep -q '^RESULT: PASS' "$root/preflight.txt"
 common_properties
@@ -696,6 +713,87 @@ root=$(fixture images)
 FAKE_MISSING_IMAGES=jumptotech/lab-linux:latest preflight "$root"
 check 'images.LINUX_SANDBOX_IMAGE FAIL' has_fail 'images\.LINUX_SANDBOX_IMAGE'
 
+scenario 'preflight: a cluster-admin API server published beyond loopback fails, and one that cannot be read is not a PASS'
+root=$(fixture kindapi)
+FAKE_KIND_API_BINDINGS=$'6443/tcp -> 0.0.0.0:16443\n6443/tcp -> [::]:16443' preflight "$root"
+check 'kind.api-server-address FAIL' has_fail 'kind\.api-server-address'
+check 'the public binding is named' has_line 'kind\.api-server-address .*0\.0\.0\.0:16443'
+check 'exit 1' exit_is 1
+common_properties
+root=$(fixture kindapiv6)
+FAKE_KIND_API_BINDINGS=$'6443/tcp -> 127.0.0.1:16443\n6443/tcp -> [::]:16443' preflight "$root"
+check 'an IPv6 wildcard beside loopback still fails' has_fail 'kind\.api-server-address'
+root=$(fixture kindapiloop6)
+FAKE_KIND_API_BINDINGS=$'6443/tcp -> 127.0.0.1:16443\n6443/tcp -> [::1]:16443' preflight "$root"
+check 'IPv4 and IPv6 loopback pass' has_line '^PASS +kind\.api-server-address '
+root=$(fixture kindapiunread)
+FAKE_KIND_API_UNREADABLE=1 preflight "$root"
+check 'an unreadable binding fails' has_fail 'kind\.api-server-address'
+
+scenario 'preflight: a backup status directory this account cannot write is warned about'
+root=$(fixture statusro)
+chmod 555 "$root/backups/status"
+preflight "$root"
+check 'backup.status-dir still PASS (the api can read it)' has_line '^PASS +backup\.status-dir '
+# root can write a 0555 directory, so only an unprivileged run can see the refusal.
+if [ "$(id -u)" -ne 0 ]; then
+  check 'backup.status-dir-writable WARN' has_line '^WARN +backup\.status-dir-writable .*BackupStale'
+fi
+chmod 755 "$root/backups/status"
+common_properties
+
+# --- refuse-on-production.sh (make clean, make sandbox-clean) ----------------------------------
+
+guard() { run refuse-on-production.sh "$@" clean 'the PostgreSQL volume'; }
+
+scenario 'guard: a development checkout may run make clean'
+root=$(fixture guarddev)
+rm -f "$root/repo/infrastructure/docker/nginx/tls/privkey.pem"
+guard "$root"
+check 'exit 0' exit_is 0
+check 'nothing printed' lacks_line 'REFUSED'
+common_properties_guard() {
+  check 'no secret value appears in output or call log' no_secret_leaked
+  check 'only read-only docker verbs were used' only_read_only_calls
+}
+common_properties_guard
+
+scenario 'guard: an installed production TLS key refuses make clean until the project is named'
+root=$(fixture guardkey)
+guard "$root"
+check 'exit 1' exit_is 1
+check 'REFUSED, naming the reason' has_line 'production TLS key is installed'
+check 'names what it would destroy and for which project' has_line "PostgreSQL volume for compose project 'jumptotech-labs'"
+check 'says how to confirm' has_line 'CONFIRM_DESTROY=jumptotech-labs make clean'
+CONFIRM_DESTROY=yes guard "$root"
+check 'a confirmation that is not the project name is refused' exit_is 1
+CONFIRM_DESTROY=jumptotech-labs guard "$root"
+check 'the project name confirms' exit_is 0
+common_properties_guard
+
+scenario 'guard: a production restart policy on this project refuses, even after the key is gone'
+root=$(fixture guardpolicy)
+rm -f "$root/repo/infrastructure/docker/nginx/tls/privkey.pem"
+FAKE_PROJECT_POLICY=$'unless-stopped\nunless-stopped' guard "$root"
+check 'exit 1' exit_is 1
+check 'the restart policy is the reason' has_line 'production restart policy \(unless-stopped\)'
+check 'the project filter is used' grep -q 'ps -aq --filter label=com.docker.compose.project=jumptotech-labs' "$root/log"
+common_properties_guard
+
+scenario 'guard: the confirmation must name the project .env selects'
+root=$(fixture guardproject)
+echo 'COMPOSE_PROJECT_NAME=jtt-hostval' >>"$root/repo/.env"
+CONFIRM_DESTROY=jumptotech-labs guard "$root"
+check 'the default project name does not confirm another project' exit_is 1
+check 'the selected project is named' has_line "compose project 'jtt-hostval'"
+CONFIRM_DESTROY=jtt-hostval guard "$root"
+check 'its own name does' exit_is 0
+
+scenario 'guard: usage errors exit 2'
+root=$(fixture guardusage)
+run refuse-on-production.sh "$root" clean
+check 'exit 2' exit_is 2
+
 # --- private-beta-smoke.sh ---------------------------------------------------------------------
 
 smoke() { run private-beta-smoke.sh "$@"; }
@@ -711,6 +809,7 @@ check 'the api requires a session' has_line '^PASS +auth\.required/api/sessions 
 check 'a student flow is a manual check' has_line '^MANUAL CHECK REQUIRED +student\.flow '
 check 'alert delivery is a manual check' has_line '^MANUAL CHECK REQUIRED +alerts\.delivery '
 check 'the external scan is a manual check' has_line '^MANUAL CHECK REQUIRED +exposure\.external '
+check 'loopback-only neighbours and the edge pass the host-wide check' has_line '^PASS +exposure\.host-containers '
 check 'an evidence file is written' bash -c 'ls "$1"/evidence/private-beta-smoke-*.txt >/dev/null' _ "$root"
 check 'the evidence says which host it proves' bash -c 'grep -q "proves nothing about any other host" "$1"/evidence/private-beta-smoke-*.txt' _ "$root"
 common_properties
@@ -789,6 +888,21 @@ FAKE_POSTGRES_PUBLISHED=1 FAKE_DB_INTERNAL=false FAKE_OPEN_PORTS='5432 9090' smo
 check 'exposure.published FAIL' has_fail 'exposure\.published'
 check 'exposure.database-network FAIL' has_fail 'exposure\.database-network'
 check 'exposure.public-ip FAIL' has_fail 'exposure\.public-ip'
+
+scenario 'smoke: a container outside the stack published beyond loopback fails'
+root=$(fixture hostports)
+FAKE_HOST_PORTS=$'jtt-hostval-web-1|127.0.0.1:3000->3000/tcp\njtt-hostval-api-1|0.0.0.0:4000->4000/tcp, 127.0.0.1:9400->9400/tcp\njumptotech-labs-control-plane|0.0.0.0:16443->6443/tcp' smoke "$root"
+check 'exposure.host-containers FAIL' has_fail 'exposure\.host-containers'
+check 'names the public validation api' has_line 'exposure\.host-containers .*jtt-hostval-api-1 0\.0\.0\.0:4000->4000/tcp'
+check 'names a public cluster API' has_line 'exposure\.host-containers .*jumptotech-labs-control-plane 0\.0\.0\.0:16443->6443/tcp'
+check 'does not name a loopback binding' lacks_line 'exposure\.host-containers .*127\.0\.0\.1:9400'
+common_properties
+root=$(fixture hostportsweb)
+FAKE_HOST_PORTS='some-proxy-1|0.0.0.0:443->8443/tcp' smoke "$root"
+check "443 published by a container that is not this stack's web fails" has_line 'exposure\.host-containers .*some-proxy-1 0\.0\.0\.0:443->8443/tcp'
+root=$(fixture hostportsbroken)
+FAKE_PS_PORTS_BROKEN=1 smoke "$root"
+check 'a daemon that cannot list containers is a FAIL, not a pass' has_fail 'exposure\.host-containers'
 
 scenario 'smoke: a scrape target down, the wrong capacity and no attestation fail'
 root=$(fixture observability)

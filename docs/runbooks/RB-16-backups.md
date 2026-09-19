@@ -54,7 +54,10 @@ It prints the archive path on success and records `db-backup.last-success`.
 - **4a A failing run.** The log's last `ERROR:` line names the step: the
   container not running or ambiguous, `pg_dump` failing, the read-back or
   checksum failing, `BACKUP_COPY_HOOK` failing, a lock held by another run. A
-  failed run never leaves an archive. `prod ps postgres` first.
+  failed run leaves no archive, with one exception: when `BACKUP_COPY_HOOK`
+  fails, the verified archive and its `.sha256` are kept on this host (the run
+  still records a failure), and retention is skipped for that run — a hook that
+  keeps failing lets `BACKUP_DIR` grow. `prod ps postgres` first.
 - **4b A job that does not run.** `grep jumptotech /etc/cron.d/*`, the cron
   service's own log, and whether the account can run `docker`.
 - **4c An unreadable directory.**
