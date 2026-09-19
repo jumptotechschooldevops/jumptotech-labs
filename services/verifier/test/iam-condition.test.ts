@@ -120,6 +120,28 @@ describe('evaluateIamPolicy with a request context', () => {
   });
 });
 
+describe('set qualifiers on a key the request does not carry', () => {
+  // IAM User Guide, "Multivalued context keys": ForAnyValue returns false for
+  // a missing key; ForAllValues returns true.
+  it('ForAnyValue is false for a missing key, even with a negated operator', () => {
+    for (const operator of ['ForAnyValue:StringEquals', 'ForAnyValue:StringNotEquals', 'ForAnyValue:StringNotLike']) {
+      const s = statement({ [operator]: { 'aws:TagKeys': 'env' } });
+      expect(conditionsHold(s, {}), operator).toBe(false);
+    }
+  });
+
+  it('ForAllValues is true for a missing key, and IfExists still wins', () => {
+    expect(conditionsHold(statement({ 'ForAllValues:StringEquals': { 'aws:TagKeys': 'env' } }), {})).toBe(true);
+    expect(conditionsHold(statement({ 'ForAnyValue:StringEqualsIfExists': { 'aws:TagKeys': 'env' } }), {})).toBe(true);
+  });
+
+  it('with the key present, ForAnyValue behaves as the base operator', () => {
+    const s = statement({ 'ForAnyValue:StringNotEquals': { 'aws:TagKeys': 'env' } });
+    expect(conditionsHold(s, { 'aws:TagKeys': 'owner' })).toBe(true);
+    expect(conditionsHold(s, { 'aws:TagKeys': 'env' })).toBe(false);
+  });
+});
+
 describe('mayAllowInAnyContext — "could any request be allowed?"', () => {
   const ADMIN = 'arn:aws:iam::123456789012:role/PlatformAdminRole';
   const REQUEST = { action: 'iam:PassRole', resource: ADMIN };
