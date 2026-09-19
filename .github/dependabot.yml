@@ -1,0 +1,54 @@
+# Dependency update policy (docs/development/ci-and-release-gates.md → Dependencies).
+#
+# Security updates were already on for npm (repository settings); nothing
+# proposed anything else. The GitHub Actions in .github/workflows sat on a
+# deprecated Node 20 runtime with nobody told, and the Dockerfiles' base images
+# had no update path but a person remembering.
+#
+# Deliberately quiet: weekly or monthly, minor and patch updates grouped into
+# one pull request per ecosystem, majors one at a time so each gets its own
+# review. Nothing merges itself; every pull request runs the full quality gates.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: fix(deps)
+      prefix-development: chore(deps)
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns: ['*']
+    commit-message:
+      prefix: fix(ci)
+
+  # The service and sandbox images. Monthly: a base-image bump changes what a
+  # student's sandbox contains, so it is reviewed as lab content, not waved
+  # through. Node stays on the major .nvmrc names (README → Requirements);
+  # moving it is a decision, not an update.
+  - package-ecosystem: docker
+    directory: /infrastructure/docker
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+    groups:
+      docker-base-images:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: fix(docker)
