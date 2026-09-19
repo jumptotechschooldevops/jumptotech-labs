@@ -12,8 +12,14 @@
  *   1. **The code is never hidden.** It is kept as `reference`, rendered small,
  *      so a student can quote it to an instructor and an operator can find the
  *      matching log line and runbook.
- *   2. **Unknown codes fall back to the API's own message**, never to a generic
- *      "something went wrong". A new error is still explained by the server.
+ *   2. **Unknown codes fall back to the API's own message** when the page was
+ *      *reading* something, never to a generic "something went wrong": a new
+ *      error is still explained by the server. An *action on the environment*
+ *      (launch, verify, reset, end, terminal) is different. Its unknown codes
+ *      are the provider's — `SETUP_FAILED`, `EXEC_FAILED`, `KUBECTL_UNAVAILABLE`
+ *      — and their messages are raw kubectl or exec output with internal paths
+ *      in it, so those get plain words for the action instead (the code is
+ *      still the reference).
  *   3. **A platform fault is never described as the student's mistake.** An
  *      unreadable environment during Verify is `environment`, not a failure.
  *
@@ -257,6 +263,40 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
         guidance: 'Try again later.',
         retryable: true,
       };
+    case 'RATE_LIMITED':
+      return {
+        kind: 'unavailable',
+        title: 'Too many requests',
+        message: 'This browser sent a lot of requests in a short time, so the platform is asking it to slow down.',
+        guidance: 'Wait a minute, then try again. Your lab and saved progress are not affected.',
+        retryable: true,
+      };
+    case 'CHECK_IN_PROGRESS':
+      return {
+        kind: 'pending',
+        title: 'A check is already running',
+        message: 'Verify is already checking this lab — perhaps from another tab.',
+        guidance: 'Wait a few seconds, then press Verify again.',
+        retryable: true,
+      };
+    case 'INTERNAL_ERROR':
+      return {
+        kind: 'unknown',
+        title: FALLBACK_TITLE[context],
+        message: 'Something went wrong on the platform. This is not a mistake in your work.',
+        guidance: 'Try again in a moment. If it keeps happening, tell your instructor and include the reference below.',
+        retryable: true,
+      };
+    case 'UNEXPECTED_ERROR':
+      // Not from the API at all: an exception in this page. Its text is a
+      // JavaScript error message, which means nothing to a student.
+      return {
+        kind: 'unknown',
+        title: FALLBACK_TITLE[context],
+        message: 'Something unexpected happened in this page.',
+        guidance: 'Reload the page and try again. Your lab and saved progress are not affected.',
+        retryable: true,
+      };
     case 'ORIGIN_NOT_ALLOWED':
       return {
         kind: 'unknown',
@@ -269,8 +309,63 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
   }
 }
 
+/**
+ * Plain words for an action on the environment that failed with a code this
+ * file does not know — rule 2 above. Null for contexts that read, where the
+ * server's own message is the better explanation.
+ */
+function actionFallback(context: ErrorContext): Known | null {
+  switch (context) {
+    case 'verify':
+      // Any refusal the check route does not name is the platform failing to
+      // look. It is never a verdict on the student's work.
+      return {
+        kind: 'environment',
+        title: 'Verification could not run',
+        message:
+          'Your lab environment could not be checked just now, so nothing was checked and nothing was recorded. This is a platform problem, not a mistake in your work.',
+        guidance: 'Try Verify again in a moment. If it keeps happening, let your instructor know.',
+        retryable: true,
+      };
+    case 'reset':
+      return {
+        kind: 'failed',
+        title: 'The lab could not be reset',
+        message: 'Something went wrong on the platform while resetting your environment. This is not a mistake in your work.',
+        guidance: 'Press Reset to try again. If it keeps failing, End lab and launch it again, or let your instructor know.',
+        retryable: true,
+      };
+    case 'end':
+      return {
+        kind: 'failed',
+        title: 'The lab could not be ended',
+        message: 'Something went wrong on the platform while ending your lab.',
+        guidance: 'Try End lab again in a moment. Your saved progress is not affected.',
+        retryable: true,
+      };
+    case 'launch':
+      return {
+        kind: 'failed',
+        title: 'The lab could not be started',
+        message: 'Something went wrong on the platform while preparing your environment.',
+        guidance: 'Try again in a moment. If it keeps happening, tell your instructor and include the reference below.',
+        retryable: true,
+      };
+    case 'terminal':
+      return {
+        kind: 'environment',
+        title: 'The terminal could not connect',
+        message: 'Something went wrong while connecting the terminal to your environment.',
+        guidance: 'Try again in a moment. If it keeps happening, Reset or End the lab.',
+        retryable: true,
+      };
+    default:
+      return null;
+  }
+}
+
 export function describeError(error: ApiError, context: ErrorContext = 'load'): StudentError {
-  const match = known(error.code, error, context);
+  const match = known(error.code, error, context) ?? actionFallback(context);
   if (match) return { ...match, reference: error.code };
   return {
     kind: 'unknown',
