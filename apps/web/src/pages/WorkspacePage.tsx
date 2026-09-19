@@ -276,9 +276,29 @@ export function WorkspacePage({ labId }: { labId: string }) {
   }, []);
   useEffect(() => cancelAutoReconnect, [cancelAutoReconnect]);
 
+  /*
+   * What the page last showed, for the one rule a late answer must not break: a
+   * session that has ended never comes back. A check started before End answers
+   * after it with the copy it read before it ran — ACTIVE — and applying that
+   * brought the ended lab's controls, timer and "press End lab" back.
+   */
+  const shown = useRef<{ session: SessionInfo | null; gone: boolean }>({ session: null, gone: false });
+  shown.current = { session, gone };
+
   /** Take a newer copy of the session, and share it with the rest of the app. */
   const updateSession = useCallback(
     (next: SessionInfo, nextAttempt?: AttemptSummary | null) => {
+      const current = shown.current;
+      if (
+        current.session?.sessionId === next.sessionId &&
+        (current.gone || !isLiveStatus(current.session.status)) &&
+        isLiveStatus(next.status)
+      ) {
+        if (nextAttempt) setAttempt(nextAttempt);
+        return;
+      }
+      // Before the re-render, so a second answer in the same tick is judged against this one.
+      shown.current = { ...current, session: next };
       setSession(next);
       setTimerSeed(Date.now());
       setTimeExpired(
@@ -326,6 +346,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
       .catch((cause: unknown) => {
         const error = toApiError(cause);
         if (error.code === 'SESSION_NOT_FOUND') {
+          shown.current = { ...shown.current, gone: true };
           setGone(true);
           // The app-wide list still names it; left there it keeps an Active lab
           // link alive and blocks Launch on every other lab page.
@@ -360,6 +381,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
           if (cancelled) return;
           const error = toApiError(cause);
           if (error.code === 'SESSION_NOT_FOUND') {
+            shown.current = { ...shown.current, gone: true };
             setGone(true);
             void refreshSessionList();
             return;
@@ -479,8 +501,11 @@ export function WorkspacePage({ labId }: { labId: string }) {
       }
       setVerify({ kind: 'result', result, newlyCompleted: result.newlyCompleted === true });
       setLastChecks(result.checks);
-      if (result.session) updateSession(result.session, result.attempt ?? null);
-      else if (result.attempt) setAttempt(result.attempt);
+      if (result.attempt) setAttempt(result.attempt);
+      // Not `result.session`: it is the copy the API read *before* the check,
+      // so it still carries the idle warning the check itself just cleared, and
+      // can be older than a poll that answered meanwhile. Read it fresh.
+      refreshSession();
       if (result.newlyCompleted) catalog.reloadProgress();
     } catch (cause) {
       const error = toApiError(cause);
@@ -489,7 +514,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     } finally {
       verifying.current = false;
     }
-  }, [sessionId, updateSession, catalog, refreshSession]);
+  }, [sessionId, catalog, refreshSession]);
 
   const handleReset = useCallback(async () => {
     if (!sessionId || resetting) return;
@@ -581,16 +606,17 @@ export function WorkspacePage({ labId }: { labId: string }) {
    * without it the panel simply starts closed, as it always did.
    */
   const attemptId = attempt?.attemptId ?? null;
-  const [revealedLevels, setRevealedLevels] = useState<Set<number> | null>(null);
+  // Kept with the attempt they were read for: a relaunch's first render must not
+  // open the new attempt's hints from the old one's record.
+  const [revealedLevels, setRevealedLevels] = useState<{ attemptId: string; levels: Set<number> } | null>(null);
   useEffect(() => {
-    setRevealedLevels(null);
     if (!attemptId) return;
     let cancelled = false;
     Promise.resolve()
       .then(() => api.getAttempt(attemptId))
       .then(({ attempt: detail }) => {
         if (cancelled || !Array.isArray(detail?.hints)) return;
-        setRevealedLevels(new Set(detail.hints.map((hint) => hint.level)));
+        setRevealedLevels({ attemptId, levels: new Set(detail.hints.map((hint) => hint.level)) });
       })
       .catch(() => undefined);
     return () => {
@@ -598,11 +624,11 @@ export function WorkspacePage({ labId }: { labId: string }) {
     };
   }, [attemptId]);
   const hintsRevealed = useMemo(() => {
-    if (!lab || !revealedLevels) return 0;
+    if (!lab || !revealedLevels || revealedLevels.attemptId !== attemptId) return 0;
     let count = 0;
-    while (count < lab.hints.length && revealedLevels.has(lab.hints[count]!.level)) count += 1;
+    while (count < lab.hints.length && revealedLevels.levels.has(lab.hints[count]!.level)) count += 1;
     return count;
-  }, [lab, revealedLevels]);
+  }, [lab, revealedLevels, attemptId]);
 
   const handleExpire = useCallback(() => setTimeExpired(true), []);
   const handleTimeLow = useCallback(() => setTimeLow(true), []);
@@ -717,6 +743,12 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const canVerify = status === 'ACTIVE' && !resetting && !ending && verify.kind !== 'checking';
   const canReset = (status === 'ACTIVE' || status === 'DEGRADED') && !resetting && !ending && verify.kind !== 'checking';
   const canEnd = (status === 'ACTIVE' || status === 'DEGRADED') && !resetting && !ending;
+
+  // A dialog opened while the action was possible must not outlive that: a
+  // poll that finds the lab expired, ending or needing a reset closes it rather
+  // than leaving a confirm button that sends a request the API will refuse.
+  if (resetOpen && !resetting && !canReset) setResetOpen(false);
+  if (endOpen && !ending && !canEnd) setEndOpen(false);
 
   let overlay: ReactNode = null;
   if (relaunching) {
@@ -931,7 +963,13 @@ export function WorkspacePage({ labId }: { labId: string }) {
           gone={gone}
           attempt={attempt}
           otherRunning={active.entries.find((e) => e.session.labId !== lab.id)?.session.labId}
-          onLaunchAgain={() => void launch(lab.id, lab.title)}
+          onLaunchAgain={() => {
+            // The new environment is judged afresh: the last verdict belongs to
+            // the lab that just ended, not to the one being prepared.
+            setVerify({ kind: 'idle' });
+            setLastChecks(undefined);
+            void launch(lab.id, lab.title);
+          }}
           launching={active.launching !== null}
           launchError={launchError}
         />
@@ -939,6 +977,8 @@ export function WorkspacePage({ labId }: { labId: string }) {
         <div className="workspace__body">
           <aside className="workspace__instructions" aria-label="Instructions">
             <LabBrief
+              // Hints belong to an attempt; a relaunch is a new one and starts closed.
+              key={attempt?.attemptId ?? 'no-attempt'}
               lab={lab}
               showHeader={false}
               checks={lastChecks}
