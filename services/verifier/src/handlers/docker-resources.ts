@@ -145,6 +145,15 @@ export const dockerImageLayers: DockerVerifierHandler<'docker_image_layers'> = {
     const shared = sharedPrefixLength(before.layers, after.layers);
     const changed = after.layers.length - shared;
 
+    // A new image ID is not a changed build: `docker build --label x=2` or an
+    // edited CMD gives a new ID over identical layers. "Changed" means a layer
+    // was rebuilt.
+    if (r.must_differ && changed === 0) {
+      return fail(
+        `'${r.image}' has exactly the layers of '${r.shares_prefix_with}' — only its metadata changed, so no rebuild of the source was shown`,
+      );
+    }
+
     if (r.minimum_shared_prefix !== undefined && shared < r.minimum_shared_prefix) {
       return fail(
         `'${r.image}' shares only ${shared} leading layer${shared === 1 ? '' : 's'} with '${r.shares_prefix_with}', so the earlier build steps were not reused`,
