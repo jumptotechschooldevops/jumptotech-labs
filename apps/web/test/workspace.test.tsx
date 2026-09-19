@@ -23,6 +23,7 @@ import { renderWithProviders } from './app-harness';
 import {
   apiMock,
   attemptSummary,
+  labDetail,
   resetApiMock,
   sessionInfo,
   sessionsResponse,
@@ -244,6 +245,62 @@ describe('Verify', () => {
     expect(apiMock.checkSolution).toHaveBeenCalledTimes(1);
     expect((bar().getByRole('button', { name: 'Verifying…' }) as HTMLButtonElement).disabled).toBe(true);
     await act(async () => resolve(verification(false)));
+  });
+});
+
+describe('hints', () => {
+  beforeEach(() => {
+    apiMock.getLab.mockImplementation((id: string) =>
+      Promise.resolve(
+        labDetail({
+          id,
+          hints: [
+            { level: 1, text: 'A gentle nudge.' },
+            { level: 2, text: 'A closer look.' },
+            { level: 3, text: 'Concrete guidance.' },
+          ],
+        }),
+      ),
+    );
+  });
+
+  it('shows again, after a reload, the hints this attempt already revealed — without recording them twice', async () => {
+    apiMock.getAttempt.mockResolvedValue({
+      student: { studentId: 'dev-student', displayName: 'Dev Student' },
+      attempt: {
+        ...attemptSummary(),
+        hints: [
+          { level: 1, revealedAt: '2026-09-14T10:05:00Z' },
+          { level: 2, revealedAt: '2026-09-14T10:09:00Z' },
+        ],
+        hintsUsed: 2,
+      },
+    });
+    await renderConnected();
+
+    const hints = within(screen.getByRole('region', { name: 'Hints' }));
+    expect(await hints.findByText('Hint 2')).toBeTruthy();
+    expect(hints.getByText('Hint 1')).toBeTruthy();
+    expect(hints.queryByText('Hint 3')).toBeNull();
+    expect(hints.getByText('2 of 3')).toBeTruthy();
+    expect(apiMock.getAttempt).toHaveBeenCalledWith('attempt-1');
+    expect(apiMock.recordHint).not.toHaveBeenCalled();
+
+    // The next reveal is the next hint, and only that one is recorded.
+    fireEvent.click(hints.getByRole('button', { name: /Show hint 3/ }));
+    expect(hints.getByText('Hint 3')).toBeTruthy();
+    await waitFor(() => expect(apiMock.recordHint).toHaveBeenCalledTimes(1));
+    expect(apiMock.recordHint).toHaveBeenCalledWith(SESSION_ID, 3);
+  });
+
+  it('starts closed when the attempt cannot be read', async () => {
+    apiMock.getAttempt.mockRejectedValue(new ApiRequestError(503, { code: 'PROGRESS_UNAVAILABLE', message: 'down' }));
+    await renderConnected();
+    const hints = within(screen.getByRole('region', { name: 'Hints' }));
+    await waitFor(() => expect(apiMock.getAttempt).toHaveBeenCalled());
+    expect(hints.getByText('0 of 3')).toBeTruthy();
+    expect(hints.getByRole('button', { name: /Show a hint/ })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 

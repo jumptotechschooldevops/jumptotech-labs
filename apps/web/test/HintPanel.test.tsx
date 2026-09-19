@@ -121,4 +121,20 @@ describe('HintPanel', () => {
     expect(screen.getByText(HINTS[0]!.text)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /show/i })).toBeNull();
   });
+
+  it('opens hints an earlier visit revealed, without reporting them, and never closes one', () => {
+    const onReveal = vi.fn();
+    const { rerender } = render(<HintPanel hints={HINTS} onReveal={onReveal} alreadyRevealed={2} />);
+    expect(screen.getByText(HINTS[1]!.text)).toBeTruthy();
+    expect(screen.queryByText(HINTS[2]!.text)).toBeNull();
+    expect(onReveal).not.toHaveBeenCalled();
+
+    // A later, smaller answer (another attempt, a stale read) closes nothing.
+    rerender(<HintPanel hints={HINTS} onReveal={onReveal} alreadyRevealed={0} />);
+    expect(screen.getByText(HINTS[1]!.text)).toBeTruthy();
+
+    reveal(1);
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    expect(onReveal).toHaveBeenCalledWith(HINTS[2], 3);
+  });
 });

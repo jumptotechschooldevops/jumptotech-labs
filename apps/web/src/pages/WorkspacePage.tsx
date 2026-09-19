@@ -562,6 +562,37 @@ export function WorkspacePage({ labId }: { labId: string }) {
     [sessionId],
   );
 
+  /*
+   * Hints this attempt already revealed, so a reload or a return to the lab
+   * shows them again instead of starting the panel closed. Read from the
+   * student's own attempt; hints unlock in the lab's order, so the count is how
+   * many of the lab's hints, from the first, were recorded. Best effort:
+   * without it the panel simply starts closed, as it always did.
+   */
+  const attemptId = attempt?.attemptId ?? null;
+  const [revealedLevels, setRevealedLevels] = useState<Set<number> | null>(null);
+  useEffect(() => {
+    setRevealedLevels(null);
+    if (!attemptId) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.getAttempt(attemptId))
+      .then(({ attempt: detail }) => {
+        if (cancelled || !Array.isArray(detail?.hints)) return;
+        setRevealedLevels(new Set(detail.hints.map((hint) => hint.level)));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [attemptId]);
+  const hintsRevealed = useMemo(() => {
+    if (!lab || !revealedLevels) return 0;
+    let count = 0;
+    while (count < lab.hints.length && revealedLevels.has(lab.hints[count]!.level)) count += 1;
+    return count;
+  }, [lab, revealedLevels]);
+
   const handleExpire = useCallback(() => setTimeExpired(true), []);
   const handleTimeLow = useCallback(() => setTimeLow(true), []);
 
@@ -884,7 +915,13 @@ export function WorkspacePage({ labId }: { labId: string }) {
       ) : (
         <div className="workspace__body">
           <aside className="workspace__instructions" aria-label="Instructions">
-            <LabBrief lab={lab} showHeader={false} checks={lastChecks} onHintReveal={handleHintReveal} />
+            <LabBrief
+              lab={lab}
+              showHeader={false}
+              checks={lastChecks}
+              onHintReveal={handleHintReveal}
+              hintsRevealed={hintsRevealed}
+            />
           </aside>
 
           <section className="workspace__main" aria-label="Terminal and verification">
