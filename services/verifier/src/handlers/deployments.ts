@@ -225,7 +225,7 @@ export const deploymentSelector: VerifierHandler<'deployment_selector'> = {
       const actual = deployment.selector[key];
       if (actual === undefined) problems.push(`selector is missing '${key}'`);
       else if (actual !== expected) {
-        problems.push(`selector '${key}' is '${actual}', expected '${expected}'`);
+        problems.push(`selector '${key}' is '${actual}', which is not the value this lab expects`);
       }
     }
     return problems.length === 0 ? pass() : fail(problems.join('; '));

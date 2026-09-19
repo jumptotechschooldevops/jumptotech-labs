@@ -105,7 +105,9 @@ export const serviceSelector: VerifierHandler<'service_selector'> = {
       const actual = service.selector[key];
       if (actual === undefined) problems.push(`selector is missing '${key}'`);
       else if (actual !== expected) {
-        problems.push(`selector '${key}' is '${actual}', expected '${expected}'`);
+        // In a diagnosis lab (K8S-010, NET-025) the right value is the fault
+        // being looked for; say what the selector holds, not what it should.
+        problems.push(`selector '${key}' is '${actual}', which does not select the Pods this Service is for`);
       }
     }
     return problems.length === 0 ? pass() : fail(problems.join('; '));
