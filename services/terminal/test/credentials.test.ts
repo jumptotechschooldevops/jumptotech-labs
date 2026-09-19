@@ -156,7 +156,19 @@ describe('writeSessionKubeconfig', () => {
     const file = await writeSessionKubeconfig(dir, '../../etc/passwd', KUBECONFIG);
 
     expect(path.dirname(file)).toBe(dir);
-    expect(path.basename(file)).toBe('etcpasswd.kubeconfig');
+    expect(path.basename(file)).toMatch(/^etcpasswd-[0-9a-f]{8}\.kubeconfig$/);
+  });
+
+  it('gives two attaches of one session their own file, so one cleanup cannot remove the other', async () => {
+    // Two tabs, or a reconnect racing the old socket: the attach that loses
+    // removes what it wrote. It must not be the file the winner's shell uses.
+    const dir = await scratch();
+    const winner = await writeSessionKubeconfig(dir, 'sess-abc', KUBECONFIG);
+    const loser = await writeSessionKubeconfig(dir, 'sess-abc', KUBECONFIG);
+    expect(loser).not.toBe(winner);
+
+    await removeSessionKubeconfig(loser);
+    expect((await stat(winner)).isFile()).toBe(true);
   });
 
   it('refuses a session id with nothing usable in it', async () => {
