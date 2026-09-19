@@ -278,24 +278,32 @@ test-sandboxd-container: ## Run the sandboxd suite against a real daemon and rea
 		npx tsx test-support/strict-vitest.ts test/sandboxd-integration.test.ts --root services/sandboxd \
 			--testTimeout=300000 --hookTimeout=300000
 
-test-db: ## Run the persistence suites against a throwaway PostgreSQL
-	@docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
-	@docker run --rm -d --name jumptotech-labs-test-db \
+# The container is named after its port. It was one fixed name, and the recipe
+# starts by force-removing any container of that name — so `make test-db` in a
+# second worktree (TEST_DB_PORT=55440, as README → Testing advises) deleted the
+# first worktree's database in the middle of its run. Two runs on one port
+# cannot coexist anyway; two on different ports now can.
+TEST_DB_PORT ?= 55432
+TEST_DB_CONTAINER := jumptotech-labs-test-db-$(TEST_DB_PORT)
+
+test-db: ## Run the persistence suites against a throwaway PostgreSQL (TEST_DB_PORT=55432)
+	@docker rm -f $(TEST_DB_CONTAINER) >/dev/null 2>&1 || true
+	@docker run --rm -d --name $(TEST_DB_CONTAINER) \
 		-e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=jumptotech_labs_test \
-		-p 127.0.0.1:$${TEST_DB_PORT:-55432}:5432 postgres:16-alpine >/dev/null
+		-p 127.0.0.1:$(TEST_DB_PORT):5432 postgres:16-alpine >/dev/null
 	@# Not `pg_isready`: that probes the server's unix socket from inside the
 	@# container and is satisfied by the temporary postmaster the official image
 	@# runs `initdb` against, while a query from the host still gets
 	@# ECONNRESET. The gate has to perform the operation it is gating — see
 	@# scripts/wait-for-postgres.mjs.
 	@node scripts/wait-for-postgres.mjs \
-		postgresql://test:test@localhost:$${TEST_DB_PORT:-55432}/jumptotech_labs_test 90 \
-		|| { docker logs --tail 40 jumptotech-labs-test-db; \
-		     docker rm -f jumptotech-labs-test-db >/dev/null; exit 1; }
+		postgresql://test:test@localhost:$(TEST_DB_PORT)/jumptotech_labs_test 90 \
+		|| { docker logs --tail 40 $(TEST_DB_CONTAINER); \
+		     docker rm -f $(TEST_DB_CONTAINER) >/dev/null; exit 1; }
 	@RUN_DB_TESTS=1 \
-		TEST_DATABASE_URL=postgresql://test:test@localhost:$${TEST_DB_PORT:-55432}/jumptotech_labs_test \
+		TEST_DATABASE_URL=postgresql://test:test@localhost:$(TEST_DB_PORT)/jumptotech_labs_test \
 		npm run test:db; \
-		status=$$?; docker rm -f jumptotech-labs-test-db >/dev/null; exit $$status
+		status=$$?; docker rm -f $(TEST_DB_CONTAINER) >/dev/null; exit $$status
 
 typecheck: ## Typecheck every workspace
 	@npm run typecheck

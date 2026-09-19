@@ -308,15 +308,15 @@ jobs:
       - name: Diagnostics
         if: failure()
         run: |
-          docker ps -a --filter name=jumptotech-labs-test-db
-          docker logs --tail 200 jumptotech-labs-test-db 2>&1 || true
+          docker ps -a --filter "name=jumptotech-labs-test-db-${TEST_DB_PORT}"
+          docker logs --tail 200 "jumptotech-labs-test-db-${TEST_DB_PORT}" 2>&1 || true
 
       # `make test-db` removes the container on both paths; this covers the
       # third, where the job was cancelled between the two.
       - name: Clean up
         if: always()
         run: |
-          docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
+          docker rm -f "jumptotech-labs-test-db-${TEST_DB_PORT}" >/dev/null 2>&1 || true
           docker ps -aq --filter "label=jumptotech.io/restore-drill=${JTT_TEST_RUN_ID}" \
             | xargs -r docker rm -f >/dev/null 2>&1 || true
 
