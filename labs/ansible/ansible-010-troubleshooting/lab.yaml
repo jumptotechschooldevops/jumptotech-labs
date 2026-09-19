@@ -80,6 +80,17 @@ requirements:
   - type: ansible_playbook_valid
     playbook: site.yml
     label: Ansible accepts the playbook
+  # First, so everything below reads what the playbook itself made: the
+  # reset clears both directories and the playbook runs from there. After it,
+  # hand-written files and a playbook cut down to two directory tasks cannot
+  # satisfy the content checks, as they did while this check ran last.
+  - type: ansible_idempotent
+    playbook: site.yml
+    require_initial_change: true
+    reset_paths:
+      - /etc/jumptotech
+      - /var/log/jumptotech
+    label: From a clean node the playbook converges — it changes, then it does not
   - type: managed_file_content
     path: /etc/jumptotech/app.conf
     hosts: all
@@ -102,13 +113,6 @@ requirements:
     contains:
       - reloaded ledger
     label: The handler ran on both nodes
-  - type: ansible_idempotent
-    playbook: site.yml
-    require_initial_change: true
-    reset_paths:
-      - /etc/jumptotech
-      - /var/log/jumptotech
-    label: From a clean node the playbook converges — it changes, then it does not
 
 setup:
   workspace_dir: workspace

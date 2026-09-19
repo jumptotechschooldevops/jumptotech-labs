@@ -163,7 +163,9 @@ export function playbookRoles(document: unknown): string[] {
 /** The module a task runs, or `undefined` when no module key is present. */
 export function taskModule(task: AnsibleTask): string | undefined {
   for (const key of Object.keys(task)) {
-    if (!TASK_DIRECTIVES.has(key)) return key;
+    // `with_items`, `with_dict`, `with_fileglob`… — every `with_<lookup>` is a
+    // loop directive, however the task lists its keys.
+    if (!TASK_DIRECTIVES.has(key) && !key.startsWith('with_')) return key;
   }
   // `action: copy src=… dest=…` is the legacy spelling; the module is its head.
   const action = task.action;
