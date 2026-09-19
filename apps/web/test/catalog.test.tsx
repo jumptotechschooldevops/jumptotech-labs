@@ -8,9 +8,10 @@
  * synthetic — `live-payloads.test.tsx` covers the shipped catalog.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { ApiRequestError } from '../src/lib/api';
 import { CatalogPage } from '../src/pages/CatalogPage';
+import { useCatalog } from '../src/lib/CatalogContext';
 import { renderWithProviders } from './app-harness';
 import {
   LABS,
@@ -37,6 +38,7 @@ beforeEach(() => {
 
 const cards = () => screen.queryAllByRole('article');
 const cardIds = () => cards().map((card) => card.querySelector('.labcard__id')?.textContent);
+const card = (id: string) => cards().find((c) => within(c).queryByText(id))!;
 
 async function renderCatalog(props: Parameters<typeof CatalogPage>[0] = {}) {
   renderWithProviders(<CatalogPage {...props} />);
@@ -95,7 +97,6 @@ describe('the catalog', () => {
     await renderCatalog();
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Status' })).toBeTruthy());
 
-    const card = (id: string) => cards().find((c) => within(c).queryByText(id))!;
     expect(within(card('LINUX-001')).getByText('Completed')).toBeTruthy();
     expect(within(card('K8S-001')).getByText('In progress')).toBeTruthy();
     // Nothing at all on a lab never opened: a badge on every untouched card is noise.
@@ -113,6 +114,38 @@ describe('the catalog', () => {
     await waitFor(() => expect(apiMock.getProgress).toHaveBeenCalled());
     expect(cardIds()).toHaveLength(3);
     expect(screen.queryByRole('combobox', { name: 'Status' })).toBeNull();
+    // …and says why the badges are missing, rather than looking like lost progress.
+    expect(await screen.findByText(/Your progress could not be loaded just now/)).toBeTruthy();
+    expect(screen.getByText(/Your saved progress is not affected/)).toBeTruthy();
+
+    apiMock.getProgress.mockResolvedValue(progressSnapshot({ 'LINUX-001': 'COMPLETED' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(within(card('LINUX-001')).getByText('Completed')).toBeTruthy());
+    expect(screen.queryByText(/Your progress could not be loaded just now/)).toBeNull();
+  });
+
+  it('keeps the badges it already showed when a later progress refresh fails', async () => {
+    apiMock.getProgress.mockResolvedValue(progressSnapshot({ 'LINUX-001': 'COMPLETED' }));
+    let catalog!: ReturnType<typeof useCatalog>;
+    function Probe() {
+      catalog = useCatalog();
+      return null;
+    }
+    renderWithProviders(
+      <>
+        <CatalogPage />
+        <Probe />
+      </>,
+    );
+    await waitFor(() => expect(within(card('LINUX-001')).getByText('Completed')).toBeTruthy());
+
+    apiMock.getProgress.mockRejectedValue(new ApiRequestError(0, { code: 'API_UNREACHABLE', message: 'x' }));
+    act(() => catalog.reloadProgress());
+    await waitFor(() => expect(apiMock.getProgress).toHaveBeenCalledTimes(2));
+
+    expect(within(card('LINUX-001')).getByText('Completed')).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Status' })).toBeTruthy();
+    expect(screen.queryByText(/Your progress could not be loaded just now/)).toBeNull();
   });
 
   it('says so when nothing matches, and clears in one click', async () => {
