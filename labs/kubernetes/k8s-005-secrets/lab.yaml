@@ -44,7 +44,9 @@ task:
 
     Create a Secret named `payments-api` containing a key called `api-token`,
     then change the Deployment to read the credential from that Secret instead
-    of from the literal value. You choose the token value — nothing checks it.
+    of from the literal value — the application still reads it from the
+    `PAYMENTS_API_TOKEN` environment variable. You choose the token value —
+    nothing checks it.
 
     Be clear about what a Secret is and is not. Secret data is base64-encoded,
     and base64 is an encoding, not encryption: anyone who can read the Secret
@@ -76,10 +78,14 @@ requirements:
     name: payments-api
     key: api-token
     label: Secret contains the key api-token
+  # Into the variable the application reads. `envFrom` would hand it a
+  # variable named after the key — `api-token`, which is not even a valid
+  # name — and an unmounted Secret volume hands it nothing.
   - type: deployment_uses_secret
     name: payments
     secret: payments-api
     key: api-token
+    env: PAYMENTS_API_TOKEN
     label: Deployment payments reads the credential from the Secret
   - type: deployment_available
     name: payments

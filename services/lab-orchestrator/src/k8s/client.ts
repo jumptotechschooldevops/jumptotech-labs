@@ -1198,6 +1198,7 @@ export function configReferencesOf(spec: k8s.V1PodSpec | undefined): ConfigRefer
           name: configMapKeyRef.name,
           key: configMapKeyRef.key,
           via: 'env',
+          env: variable.name,
           container: container.name,
         });
       }
@@ -1208,42 +1209,38 @@ export function configReferencesOf(spec: k8s.V1PodSpec | undefined): ConfigRefer
           name: secretKeyRef.name,
           key: secretKeyRef.key,
           via: 'env',
+          env: variable.name,
           container: container.name,
         });
       }
     }
   }
 
-  for (const volume of spec.volumes ?? []) {
-    if (volume.configMap?.name) {
-      const items = volume.configMap.items ?? [];
-      if (items.length === 0) {
-        refs.push({ source: 'configmap', name: volume.configMap.name, via: 'volume' });
-      } else {
-        for (const item of items) {
-          refs.push({
-            source: 'configmap',
-            name: volume.configMap.name,
-            key: item.key,
-            via: 'volume',
-          });
-        }
-      }
+  /*
+   * A volume is configuration a container *reads* only once something mounts
+   * it: a volume declared from a ConfigMap and mounted nowhere hands the
+   * application nothing. Sources inside a `projected` volume count the same
+   * way as a plain `configMap` / `secret` volume.
+   */
+  const mounted = new Set(
+    [...(spec.containers ?? []), ...(spec.initContainers ?? [])].flatMap((c) =>
+      (c.volumeMounts ?? []).map((m) => m.name),
+    ),
+  );
+  const fromVolume = (source: ConfigReference['source'], name: string, items: Array<{ key: string }>) => {
+    if (items.length === 0) {
+      refs.push({ source, name, via: 'volume' });
+    } else {
+      for (const item of items) refs.push({ source, name, key: item.key, via: 'volume' });
     }
-    if (volume.secret?.secretName) {
-      const items = volume.secret.items ?? [];
-      if (items.length === 0) {
-        refs.push({ source: 'secret', name: volume.secret.secretName, via: 'volume' });
-      } else {
-        for (const item of items) {
-          refs.push({
-            source: 'secret',
-            name: volume.secret.secretName,
-            key: item.key,
-            via: 'volume',
-          });
-        }
-      }
+  };
+  for (const volume of spec.volumes ?? []) {
+    if (!mounted.has(volume.name)) continue;
+    if (volume.configMap?.name) fromVolume('configmap', volume.configMap.name, volume.configMap.items ?? []);
+    if (volume.secret?.secretName) fromVolume('secret', volume.secret.secretName, volume.secret.items ?? []);
+    for (const projected of volume.projected?.sources ?? []) {
+      if (projected.configMap?.name) fromVolume('configmap', projected.configMap.name, projected.configMap.items ?? []);
+      if (projected.secret?.name) fromVolume('secret', projected.secret.name, projected.secret.items ?? []);
     }
   }
 

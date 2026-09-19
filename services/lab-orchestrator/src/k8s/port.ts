@@ -50,6 +50,8 @@ export interface ConfigReference {
   key?: string;
   /** How the workload consumes it. */
   via: 'env' | 'envFrom' | 'volume';
+  /** For a single-key `env[].valueFrom`: the variable it sets. */
+  env?: string;
   /** Container carrying the reference. Absent for volume-level references. */
   container?: string;
 }
