@@ -177,7 +177,7 @@ simulates output.
 | Connected | shell ready | keystrokes go to the PTY |
 | The shell exited. | the student typed `exit` | **Reconnect** opens a new shell in the same environment |
 | Disconnected after a period of inactivity. | the terminal service's idle timer | **Reconnect** |
-| Connection to the terminal was lost. Reconnecting… | abnormal close (e.g. network), or a terminal/broker restart | up to six automatic reconnects (1, 3, 6, 10, 15, 25 s — about a minute), then **Reconnect**. Before the first connection the overlay says *Trying again…* instead of asking. A reconnect that succeeds, or one the student asks for, cancels the pending automatic one |
+| Connection to the terminal was lost. Reconnecting… | abnormal close (e.g. network), or a terminal/broker restart | up to six automatic reconnects (1, 3, 6, 10, 15, 25 s — about a minute), then **Reconnect**. Before the first connection, a failed attempt shows *The terminal could not connect* with **Try again** at once, and the overlay stays (saying *Trying again automatically…*) through the automatic retries rather than flashing back to *Connecting…*. A reconnect that succeeds, or one the student asks for, cancels the pending automatic one |
 | The terminal’s access expired. | token refused | one new token is minted automatically |
 | Disconnected — this terminal was opened in another tab or window. | close 4410 while the session is still running: the terminal service keeps one shell per session, so opening the workspace elsewhere takes the terminal over | **Reconnect** takes it back |
 | (ended summary) | close 4410 because the lab ended | the session is re-read and the ended summary replaces the terminal; no reconnect |
