@@ -279,6 +279,22 @@ function open(url: string): WebSocket {
   return ws;
 }
 
+/**
+ * Wait until `check` holds, or fail after a generous deadline.
+ *
+ * Bytes cross two sockets here (test → terminal → broker), so "it arrived" is
+ * polled for rather than assumed after a fixed pause: on a loaded host a pause
+ * that is usually enough is sometimes not, and the test then fails for timing,
+ * not for behaviour.
+ */
+async function eventually(check: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 function frame(ws: WebSocket, types: string[], timeoutMs = 5000): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`no ${types.join('/')} frame`)), timeoutMs);
@@ -315,7 +331,7 @@ describe('a container-backed lab gets a shell without this process holding a run
     expect(stack.argvs[0]).toContain(refFor(SESSION_A));
 
     ws.send(JSON.stringify({ type: 'input', data: 'id -un\r' }));
-    await new Promise((r) => setTimeout(r, 80));
+    await eventually(() => stack.ptys[0]!.written.length > 0, 'input to reach the PTY');
     expect(stack.ptys[0]!.written).toEqual(['id -un\r']);
 
     const output = frame(ws, ['output']);
@@ -351,14 +367,16 @@ describe('a container-backed lab gets a shell without this process holding a run
     // Each socket's input reaches only its own PTY.
     a.ws.send(JSON.stringify({ type: 'input', data: 'A\r' }));
     b.ws.send(JSON.stringify({ type: 'input', data: 'B\r' }));
-    await new Promise((r) => setTimeout(r, 100));
+    await eventually(
+      () => stack.ptys[0]!.written.length > 0 && stack.ptys[1]!.written.length > 0,
+      'input to reach both PTYs',
+    );
     expect(stack.ptys[0]!.written).toEqual(['A\r']);
     expect(stack.ptys[1]!.written).toEqual(['B\r']);
 
     // Closing A's shell leaves B's alone.
     a.ws.close();
-    await new Promise((r) => setTimeout(r, 120));
-    expect(stack.ptys[0]!.killed).toBe(true);
+    await eventually(() => stack.ptys[0]!.killed, "A's PTY to be closed");
     expect(stack.ptys[1]!.killed).toBe(false);
   });
 
@@ -442,7 +460,7 @@ describe('frames that arrive while a signed token is still attaching', () => {
     expect(await first).toMatchObject({ type: 'ready', sandboxRef: refFor(SESSION_A) });
     expect(ws.readyState).toBe(WebSocket.OPEN);
     expect(stack.ptys).toHaveLength(1);
-    await new Promise((r) => setTimeout(r, 100));
+    await eventually(() => stack.ptys[0]!.resizes.length > 0, 'the settled size to reach the PTY');
     expect(stack.ptys[0]!.resizes.at(-1)).toEqual([132, 40]);
   });
 
@@ -456,7 +474,7 @@ describe('frames that arrive while a signed token is still attaching', () => {
 
     expect(await first).toMatchObject({ type: 'ready' });
     ws.send(JSON.stringify({ type: 'input', data: 'after\r' }));
-    await new Promise((r) => setTimeout(r, 100));
+    await eventually(() => stack.ptys[0]!.written.length > 0, 'input to reach the PTY');
     expect(stack.ptys[0]!.written).toEqual(['after\r']);
   });
 
@@ -492,17 +510,20 @@ describe('frames that arrive while a signed token is still attaching', () => {
   });
 
   it('leaves no shell behind when the browser leaves during the broker attach', async () => {
-    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { inspectMs: 400 });
+    const inspectGate = gate();
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { inspectGate });
     const ws = open(stack.terminalUrl);
     await new Promise((resolve) => ws.on('open', resolve));
     ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
     // Past the credentials fetch, inside the broker's inspect.
-    await new Promise((r) => setTimeout(r, 150));
+    await inspectGate.reached(1);
+    const closed = new Promise((resolve) => ws.on('close', resolve));
     ws.close(1000, 'navigated away');
+    await closed;
+    inspectGate.release();
 
-    await new Promise((r) => setTimeout(r, 900));
+    await eventually(() => stack.ptys.length === 1 && stack.ptys[0]!.killed, 'the PTY to be closed');
     expect(stack.ptys).toHaveLength(1);
-    expect(stack.ptys[0]!.killed).toBe(true);
   });
 });
 
@@ -521,14 +542,6 @@ describe('one shell per session, even while attaches are still in flight', () =>
 
   const closeCode = (ws: WebSocket): Promise<number> =>
     new Promise((resolve) => ws.on('close', (code) => resolve(code)));
-
-  async function eventually(check: () => boolean, what: string): Promise<void> {
-    const deadline = Date.now() + 3_000;
-    while (!check()) {
-      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-      await new Promise((r) => setTimeout(r, 20));
-    }
-  }
 
   async function terminate(stack: Stack, sessionId: string): Promise<Record<string, unknown>> {
     const res = await fetch(`${stack.controlUrl}/internal/terminate`, {

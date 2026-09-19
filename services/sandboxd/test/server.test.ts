@@ -146,6 +146,15 @@ function connect(url: string, headers: Record<string, string>): WebSocket {
   return ws;
 }
 
+/** Wait until `check` holds, or fail after a generous deadline (no fixed pauses). */
+async function eventually(check: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 /** Resolve with the first server frame of one of `types`. */
 function nextFrame(ws: WebSocket, types: string[]): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -249,7 +258,7 @@ describe('sandboxd attach', () => {
     expect(harness.argvs[0]).toContain(refFor(SESSION_A));
 
     ws.send(JSON.stringify({ type: 'input', data: 'whoami\r' }));
-    await new Promise((r) => setTimeout(r, 50));
+    await eventually(() => harness.ptys[0]!.written.length > 0, 'input to reach the PTY');
     expect(harness.ptys[0]!.written).toEqual(['whoami\r']);
 
     const output = nextFrame(ws, ['output']);
@@ -337,8 +346,7 @@ describe('sandboxd attach', () => {
     second.send(JSON.stringify({ type: 'attach', sessionId: SESSION_A }));
     await nextFrame(second, ['attached']);
 
-    await new Promise((r) => setTimeout(r, 50));
-    expect(harness.ptys[0]!.killed).toBe(true);
+    await eventually(() => harness.ptys[0]!.killed, 'the replaced PTY to be closed');
     expect(harness.ptys[1]!.killed).toBe(false);
   });
 
@@ -350,8 +358,7 @@ describe('sandboxd attach', () => {
     await nextFrame(ws, ['attached']);
 
     ws.close();
-    await new Promise((r) => setTimeout(r, 100));
-    expect(harness.ptys[0]!.killed).toBe(true);
+    await eventually(() => harness.ptys[0]!.killed, 'the PTY to be closed');
   });
 });
 
