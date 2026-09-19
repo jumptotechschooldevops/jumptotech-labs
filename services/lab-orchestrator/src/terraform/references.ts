@@ -230,6 +230,12 @@ function* dottedChains(expression: string): Generator<string> {
     }
 
     // --- inert text: only `${` wakes it up -------------------------------
+    // `$${` is HCL's escape for a literal `${`: Terraform renders the text
+    // that follows as text, so nothing in it is a reference.
+    if (char === '$' && next === '$' && expression[index + 2] === '{') {
+      index += 3;
+      continue;
+    }
     if (char === '$' && next === '{') {
       stack.push('code');
       braceDepth += 1;
