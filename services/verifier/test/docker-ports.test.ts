@@ -101,7 +101,8 @@ describe('docker_container_port — wrong mappings fail, each in its own way', (
     const result = await check(docker, port('web', 80, 8081));
     expect(result.status).toBe('fail');
     expect(result.detail).toContain('9090');
-    expect(result.detail).toContain('expected 8081');
+    // The expected port is often the answer; it is never printed.
+    expect(result.detail).not.toContain('8081');
   });
 
   it('fails a wrong container port and lists what is published', async () => {
@@ -110,7 +111,9 @@ describe('docker_container_port — wrong mappings fail, each in its own way', (
 
     const result = await check(docker, port('web', 80, 8080));
     expect(result.status).toBe('fail');
-    expect(result.detail).toContain('does not expose 80/tcp');
+    expect(result.detail).toContain('does not expose the port this lab expects');
+    expect(result.detail).toContain('8080');
+    expect(result.detail).not.toMatch(/\b80\/tcp/);
   });
 
   it('fails a container publishing nothing at all', async () => {
