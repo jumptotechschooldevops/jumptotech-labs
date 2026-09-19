@@ -284,3 +284,33 @@ describe('the workflows', () => {
     }
   });
 });
+
+describe('one Node version', () => {
+  // .nvmrc is the single source: CI reads it (setup-node node-version-file),
+  // `nvm use` reads it, and the images and engines must agree with it.
+  const major = read('.nvmrc').trim().replace(/^v/, '').split('.')[0]!;
+
+  it('is what every Node image is built FROM', () => {
+    const dockerDir = path.join(REPO_ROOT, 'infrastructure/docker');
+    const froms = readdirSync(dockerDir)
+      .filter((file) => file.endsWith('.Dockerfile'))
+      .flatMap((file) => [...readFileSync(path.join(dockerDir, file), 'utf8').matchAll(/^FROM (node:\S+)/gm)].map(([, image]) => `${file}: ${image}`));
+    expect(froms.length).toBeGreaterThan(0);
+    for (const from of froms) expect(from).toMatch(new RegExp(`node:${major}-`));
+    expect(read('e2e/docker-compose.e2e.yml')).toMatch(new RegExp(`image: node:${major}-`));
+  });
+
+  it('is the lowest major package.json admits, so no untested older Node is claimed', () => {
+    const engines = (JSON.parse(read('package.json')) as { engines?: { node?: string } }).engines?.node ?? '';
+    expect(engines).toMatch(new RegExp(`^>=${major}(\\.\\d+)* <\\d+$`));
+  });
+
+  it('is what CI installs', () => {
+    for (const file of ['quality-gates.yml']) {
+      const text = read(`.github/workflows/${file}`);
+      const setups = text.split('actions/setup-node@').slice(1);
+      expect(setups.length).toBeGreaterThan(0);
+      for (const setup of setups) expect(setup.split(/\n\s*- /)[0]).toMatch(/node-version-file: \.nvmrc/);
+    }
+  });
+});

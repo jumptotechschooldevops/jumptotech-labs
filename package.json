@@ -6,7 +6,7 @@
   "license": "UNLICENSED",
   "type": "module",
   "engines": {
-    "node": ">=20 <25"
+    "node": ">=22 <25"
   },
   "workspaces": [
     "apps/*",
