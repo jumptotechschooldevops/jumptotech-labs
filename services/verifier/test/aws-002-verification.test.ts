@@ -72,9 +72,11 @@ describe('AWS-002 — the seeded policy does not pass', () => {
         'No Allow statement uses "*" as its Action',
         'No Allow statement uses "*" as its Resource',
         'The job cannot reach the payroll bucket',
+        'The job cannot list the payroll bucket',
+        'The job cannot upload into the payroll bucket, even encrypted',
         'The job may not delete objects',
         'The job may not upload objects without KMS encryption',
-        'The upload permission is conditional on KMS server-side encryption',
+        'The job may not upload objects encrypted any other way',
       ].sort(),
     );
   });
@@ -161,9 +163,8 @@ describe('AWS-002 — policies that look right but mean something else fail', ()
     const result = await run(noCondition);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toContain(
-      'The upload permission is conditional on KMS server-side encryption',
-    );
+    expect(failed(result.checks)).toContain('The job may not upload objects without KMS encryption');
+    expect(failed(result.checks)).toContain('The job may not upload objects encrypted any other way');
   });
 
   it('fails when the condition names the wrong value', async () => {
@@ -171,9 +172,10 @@ describe('AWS-002 — policies that look right but mean something else fail', ()
     const result = await run(wrongValue);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toContain(
-      'The upload permission is conditional on KMS server-side encryption',
-    );
+    expect(failed(result.checks).sort()).toEqual([
+      'The job may not upload objects encrypted any other way',
+      'The job may upload objects to the bucket when they are KMS-encrypted',
+    ]);
   });
 
   it('fails when s3:* quietly grants deletion', async () => {
@@ -304,9 +306,8 @@ describe('AWS-002 — adversarial attempts', () => {
     const result = await run(wrongKey);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toContain(
-      'The upload permission is conditional on KMS server-side encryption',
-    );
+    // The upload is no longer tied to encryption at all.
+    expect(failed(result.checks)).toContain('The job may upload objects to the bucket when they are KMS-encrypted');
   });
 
   it('fails when the required statement is a Deny rather than an Allow', async () => {
@@ -349,7 +350,10 @@ describe('AWS-002 — adversarial attempts', () => {
     const result = await run(both);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toEqual(['The job may not upload objects without KMS encryption']);
+    expect(failed(result.checks).sort()).toEqual([
+      'The job may not upload objects encrypted any other way',
+      'The job may not upload objects without KMS encryption',
+    ]);
   });
 
   it('fails when the right policy is written to the wrong file', async () => {
@@ -361,7 +365,7 @@ describe('AWS-002 — adversarial attempts', () => {
     const result = await verifyLab({ lab, sandbox, namespace: 'jtt-lab-000000000002' });
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toHaveLength(10);
+    expect(failed(result.checks)).toHaveLength(12);
   });
 
   it('refuses a symlink standing in for the policy file', async () => {
@@ -387,5 +391,44 @@ describe('AWS-002 — adversarial attempts', () => {
 
     expect((await verifyLab({ lab, sandbox: neighbour, namespace: 'jtt-lab-neighbour' })).passed).toBe(true);
     expect((await verifyLab({ lab, sandbox: mine, namespace: 'jtt-lab-mine' })).passed).toBe(false);
+  });
+});
+
+describe('AWS-002 — second audit: every documented form passes, every other bucket stays out', () => {
+  it("passes AWS's documented Deny-unless-KMS form beside an unconditional upload grant", async () => {
+    const denyForm = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        { Effect: 'Allow', Action: 's3:ListBucket', Resource: BUCKET },
+        { Effect: 'Allow', Action: ['s3:GetObject', 's3:PutObject'], Resource: OBJECTS },
+        {
+          Effect: 'Deny',
+          Action: 's3:PutObject',
+          Resource: OBJECTS,
+          Condition: { StringNotEquals: { 's3:x-amz-server-side-encryption': 'aws:kms' } },
+        },
+      ],
+    });
+    expect(failed((await run(denyForm)).checks)).toEqual([]);
+  });
+
+  it('fails listing and uploading into every bucket, which ticket line 5 forbids', async () => {
+    const everyBucket = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        { Effect: 'Allow', Action: 's3:ListBucket', Resource: 'arn:aws:s3:::*' },
+        { Effect: 'Allow', Action: 's3:GetObject', Resource: OBJECTS },
+        {
+          Effect: 'Allow',
+          Action: 's3:PutObject',
+          Resource: 'arn:aws:s3:::*/*',
+          Condition: { StringEquals: { 's3:x-amz-server-side-encryption': 'aws:kms' } },
+        },
+      ],
+    });
+    expect(failed((await run(everyBucket)).checks).sort()).toEqual([
+      'The job cannot list the payroll bucket',
+      'The job cannot upload into the payroll bucket, even encrypted',
+    ]);
   });
 });

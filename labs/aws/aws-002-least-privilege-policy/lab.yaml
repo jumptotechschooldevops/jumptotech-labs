@@ -69,7 +69,7 @@ task:
 
       * the document is a valid policy with `Version` `2012-10-17`;
       * listing the bucket, reading objects and uploading objects are permitted;
-      * the upload permission carries the encryption condition the ticket names;
+      * uploads are permitted only with the encryption the ticket names;
       * deleting objects is not permitted;
       * the payroll bucket is not reachable;
       * no statement uses `"*"` on its own as an `Action` or as a `Resource`.
@@ -130,18 +130,16 @@ requirements:
     context: {}
     label: The job may not upload objects without KMS encryption
 
-  - type: iam_policy_statement
+  # Ticket line 3: "ONLY when the upload asks for server-side encryption with
+  # AWS KMS". Graded by behaviour, so the condition may sit on the Allow or in
+  # the documented Deny-unless-KMS statement; any other algorithm is refused.
+  - type: iam_policy_not_allows
     path: /home/student/aws-iam/policy.json
-    effect: Allow
-    actions:
-      - s3:PutObject
-    resources:
-      - arn:aws:s3:::jumptotech-ledger-exports/*
-    condition:
-      operator: StringEquals
-      key: s3:x-amz-server-side-encryption
-      value: aws:kms
-    label: The upload permission is conditional on KMS server-side encryption
+    action: s3:PutObject
+    resource: arn:aws:s3:::jumptotech-ledger-exports/*
+    context:
+      s3:x-amz-server-side-encryption: AES256
+    label: The job may not upload objects encrypted any other way
 
   - type: iam_policy_not_allows
     path: /home/student/aws-iam/policy.json
@@ -154,6 +152,19 @@ requirements:
     action: s3:GetObject
     resource: arn:aws:s3:::jumptotech-payroll/*
     label: The job cannot reach the payroll bucket
+  # Ticket line 5 is "reach any other bucket", not only read from it.
+  - type: iam_policy_not_allows
+    path: /home/student/aws-iam/policy.json
+    action: s3:ListBucket
+    resource: arn:aws:s3:::jumptotech-payroll
+    label: The job cannot list the payroll bucket
+  - type: iam_policy_not_allows
+    path: /home/student/aws-iam/policy.json
+    action: s3:PutObject
+    resource: arn:aws:s3:::jumptotech-payroll/*
+    context:
+      s3:x-amz-server-side-encryption: aws:kms
+    label: The job cannot upload into the payroll bucket, even encrypted
 
   - type: iam_policy_no_wildcard
     path: /home/student/aws-iam/policy.json
