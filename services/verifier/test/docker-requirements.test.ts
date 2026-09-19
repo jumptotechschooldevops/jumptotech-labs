@@ -1119,7 +1119,14 @@ function solve(lab: LoadedLabDefinition): {
         });
         break;
       case 'workspace_file_exists':
-        port.write(SESSION_A, requirement.path, `${(requirement.contains ?? []).join('\n')}\n`);
+        port.write(
+          SESSION_A,
+          requirement.path,
+          [
+            ...(requirement.contains ?? []),
+            ...Object.entries(requirement.key_values ?? {}).map(([k, v]) => `${k}${requirement.separator} ${v}`),
+          ].join('\n') + '\n',
+        );
         break;
       case 'dockerfile_valid':
         port.write(

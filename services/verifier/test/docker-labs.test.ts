@@ -169,3 +169,32 @@ describe('the first Check does not hand over a diagnosis', () => {
     expect(text).not.toMatch(/\b8080\b/);
   });
 });
+
+// ---------------------------------------------------------------- DOCKER-009
+
+describe('DOCKER-009 — each answer given once, and in its own field', () => {
+  const LABEL = 'answers.txt records the exit code and the inspect field that identifies a memory kill';
+  async function answersStatus(answers: string) {
+    const lab = await started('DOCKER-009');
+    await lab.workspace.seed(SESSION, [{ path: 'answers.txt', content: answers }]);
+    const result = await verifyLab({ lab: lab.lab, namespace: SANDBOX, docker: lab.daemon, workspace: { port: lab.workspace, sessionId: SESSION } });
+    return result.checks.find((c) => c.label === LABEL);
+  }
+
+  it('passes the two answers in their fields, with the comments left in', async () => {
+    expect((await answersStatus('# 1. exit code\nexit_code: 137\n# 2. field\ninspect_field: OOMKilled\n'))?.status).toBe('pass');
+  });
+
+  it('fails the answers swapped, hedged, or the inspect output pasted in', async () => {
+    for (const answers of [
+      'exit_code: OOMKilled\ninspect_field: 137\n',
+      'exit_code: 137 or 139\ninspect_field: OOMKilled\n',
+      'exit_code: 137\ninspect_field: OOMKilled\ninspect_field: ExitCode\n',
+      '"ExitCode": 137, "OOMKilled": true, "Error": ""\n',
+    ]) {
+      const check = await answersStatus(answers);
+      expect(check?.status, answers).toBe('fail');
+      expect(check?.detail ?? '').not.toMatch(/137|OOMKilled/);
+    }
+  });
+});

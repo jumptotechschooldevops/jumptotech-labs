@@ -3187,6 +3187,22 @@ const dockerRequirementSchemas = {
         .regex(/^[A-Za-z0-9._][A-Za-z0-9._/-]*$/, 'must be a relative path inside the lab workspace')
         .refine((p) => !p.split('/').includes('..'), { message: 'must not traverse upwards' }),
       contains: z.array(z.string().min(1).max(255)).max(10).optional(),
+      /**
+       * Worksheet answers graded the way `file_key_value` grades them: each
+       * key answered exactly once, the value compared whole, comment lines
+       * ignored. `contains` cannot tell a swapped or hedged answer from a
+       * right one. Failures never name a value.
+       */
+      key_values: z
+        .record(
+          z.string().min(1).max(64).regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/, 'must be a bare key'),
+          z.string().min(1).max(255),
+        )
+        .refine((m) => Object.keys(m).length > 0 && Object.keys(m).length <= 10, {
+          message: 'must name between 1 and 10 keys',
+        })
+        .optional(),
+      separator: z.enum(['=', ':']).default('='),
       ...common,
     })
     .strict(),
