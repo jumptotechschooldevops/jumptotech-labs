@@ -126,3 +126,30 @@ describe('NET-022 — the recreated container keeps the deployment command', () 
     ]);
   });
 });
+
+// ------------------------------------------------ first-Check disclosure
+
+describe('the first Check does not hand over a diagnosis', () => {
+  async function details(labId: string) {
+    const lab = await started(labId);
+    const result = await verifyLab({
+      lab: lab.lab,
+      namespace: SANDBOX,
+      docker: lab.daemon,
+      workspace: { port: lab.workspace, sessionId: SESSION },
+    });
+    return result.checks.map((c) => `${c.label} ${c.detail ?? ''}`).join('\n');
+  }
+
+  it('DOCKER-011 never names the region the API should run in', async () => {
+    // The task has the student find it in /etc/statements/regions.conf.
+    const text = await details('DOCKER-011');
+    expect(text).toContain('us-east-1');
+    expect(text).not.toContain('eu-west-1');
+  });
+
+  it('NET-022 never names the port the application listens on', async () => {
+    const text = await details('NET-022');
+    expect(text).not.toMatch(/\b8080\b/);
+  });
+});
