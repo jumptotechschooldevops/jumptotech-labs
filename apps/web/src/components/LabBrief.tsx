@@ -43,6 +43,7 @@ export function LabBrief({
   onHintReveal,
   showHeader = true,
   showHints = true,
+  hintsRevealed,
   checks,
 }: {
   lab: LabDetail;
@@ -53,6 +54,8 @@ export function LabBrief({
   onHintReveal?: (hint: LabHint, revealedCount: number) => void;
   showHeader?: boolean;
   showHints?: boolean;
+  /** Hints this attempt revealed before the page loaded. */
+  hintsRevealed?: number;
   /** The last verification's checks, to mark the checklist. */
   checks?: CheckResult[];
 }) {
@@ -116,7 +119,11 @@ export function LabBrief({
       </section>
 
       {showHints ? (
-        <HintPanel hints={lab.hints} {...(onHintReveal ? { onReveal: onHintReveal } : {})} />
+        <HintPanel
+          hints={lab.hints}
+          {...(onHintReveal ? { onReveal: onHintReveal } : {})}
+          {...(hintsRevealed ? { alreadyRevealed: hintsRevealed } : {})}
+        />
       ) : null}
 
       {lab.story ? (

@@ -392,8 +392,10 @@ release smoke against the stack `make beta-validate` already brings up:
 - **The countdown is re-seeded on each poll**, so it can drift by up to one poll
   interval between polls; the server's deadline is authoritative.
 - **No real-browser E2E in CI** (see above).
-- **Hint reveals are per page view.** Revealed hints are recorded server-side,
-  but the panel starts collapsed again after a reload.
+- **Hints are per attempt.** The workspace reopens the hints this attempt already
+  revealed (read from `GET /api/me/attempts/:attemptId`, not reported again), so
+  a reload or a return to the lab keeps them. A fresh launch is a new attempt and
+  starts with none. When progress cannot be read, the panel starts closed.
 - **The next lab is a fixed rule**, not personalised guidance (see
   [docs/learning-paths.md](learning-paths.md#what-should-i-do-next--the-recommendation-rule)).
 - **An API outage is slow to show.** When the API is unreachable, the web proxy
