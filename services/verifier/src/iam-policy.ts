@@ -483,7 +483,8 @@ export class IamConditionUnsupportedError extends Error {
  *     negated one (`StringNotEquals`, `ArnNotLike`, `NotIpAddress`, …) true;
  *   · `…IfExists` is true when the key is missing; `Null` tests presence;
  *   · a context value is single-valued, so `ForAnyValue:` behaves as the base
- *     operator and `ForAllValues:` is true for a missing key.
+ *     operator when the key is present; for a missing key `ForAnyValue:` is
+ *     false (even with a negated operator) and `ForAllValues:` is true.
  *
  * Keys are compared without regard to case, as AWS does. Anything else — date
  * operators, binary, policy variables — raises `IamConditionUnsupportedError`
@@ -543,6 +544,9 @@ function conditionHolds(rawOperator: string, value: string | undefined, expected
   }
   if (value === undefined) {
     if (ifExists || setQualifier === 'all') return true;
+    // "If the key … is not present in the request context, ForAnyValue
+    // returns false" — whatever the operator, negated ones included.
+    if (setQualifier === 'any') return false;
     return NEGATED.has(op);
   }
 
