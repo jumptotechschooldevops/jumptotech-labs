@@ -594,11 +594,14 @@ export class SessionManager {
     }
     this.#emit((m) => m.onTransition?.('CREATING', 'ACTIVE'));
 
+    // The count is for the log line only. The session is ACTIVE and its
+    // sandbox built, so a store that fails this read must not turn the start
+    // into an error: the student would be refused a lab that is running and
+    // holding their one slot.
+    const inUse = await this.#store.countOccupying().then(String, () => '?');
     this.#log(
       `session ${session.sessionId} ACTIVE (lab=${lab.id} provider=${session.provider} ` +
-        `sandbox=${session.sandboxRef}, ${await this.#store.countOccupying()}/${
-          this.#lifetimes.maxActiveSessions
-        } in use)`,
+        `sandbox=${session.sandboxRef}, ${inUse}/${this.#lifetimes.maxActiveSessions} in use)`,
     );
 
     return {
