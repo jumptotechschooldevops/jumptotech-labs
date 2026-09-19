@@ -15,6 +15,7 @@
  *      itself what one meant.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AuthGate } from '../src/components/AuthGate';
 import { UserMenu } from '../src/components/UserMenu';
@@ -155,6 +156,56 @@ describe('the sign-in gate', () => {
     });
     expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy();
     expect(screen.queryByText('the catalog')).toBeNull();
+  });
+
+  /*
+   * A shared computer: Alice leaves her tab open, Bob signs in from another tab.
+   * When Alice's tab re-checks it hears "signed in" — as Bob — and used to stay
+   * mounted with everything it held for Alice: her progress, her session list,
+   * her terminal grant and an open terminal socket, until a later poll failed.
+   */
+  it('starts the app afresh when the signed-in identity changes, keeping nothing of the previous student', async () => {
+    const BOB: AuthSession = {
+      ...SIGNED_IN,
+      identity: { ...SIGNED_IN.identity!, subject: 'auth0|bob', email: 'bob@example.test', displayName: 'Bob Example' },
+    };
+    let attempt = 0;
+    let mounts = 0;
+    function Remembers() {
+      const [mountedAs] = useState(() => {
+        mounts += 1;
+        return mounts;
+      });
+      return <div>mounted as {mountedAs}</div>;
+    }
+    render(
+      <AuthProvider
+        loadSession={() => {
+          attempt += 1;
+          return Promise.resolve(attempt === 1 ? SIGNED_IN : attempt === 2 ? SIGNED_IN : BOB);
+        }}
+        signInImpl={() => undefined}
+        signOutImpl={() => Promise.resolve({ signedOut: true })}
+      >
+        <AuthGate>
+          <Remembers />
+        </AuthGate>
+      </AuthProvider>,
+    );
+    expect(await screen.findByText('mounted as 1')).toBeTruthy();
+
+    // The same student again: nothing is thrown away.
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(attempt).toBe(2));
+    expect(screen.getByText('mounted as 1')).toBeTruthy();
+
+    // A different student: the app starts again from nothing.
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(await screen.findByText('mounted as 2')).toBeTruthy();
   });
 
   it('names the missing configuration when no identity provider is set up', async () => {
