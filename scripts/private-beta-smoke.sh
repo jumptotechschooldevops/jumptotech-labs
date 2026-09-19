@@ -308,6 +308,38 @@ if ids=$(jtt_prod ps -q 2>/dev/null) && [ -n "$ids" ]; then
 else
   fail exposure.published 'could not list the stack containers'
 fi
+# exposure.published sees this compose project only. Anything else running on
+# the daemon — the kind node, a validation stack left from the synthetic gate
+# (readiness doc §13.1), a debug container — publishes past it, and the
+# --public-ip probe covers a fixed list of ports. Every container here may bind
+# loopback; only this project's web may bind anything else, and only 443/80.
+web_container=$(printf '%s\n' "$ps_output" | awk -F'|' '$1 == "web" {print $4}' | head -1)
+if all_ports=$(docker ps --format '{{.Names}}|{{.Ports}}' 2>/dev/null); then
+  host_public=()
+  while IFS='|' read -r container ports; do
+    [ -n "$container" ] || continue
+    IFS=',' read -r -a entries <<<"$ports"
+    for entry in ${entries[@]+"${entries[@]}"}; do
+      # "0.0.0.0:443->8443/tcp", "[::]:443->8443/tcp", "127.0.0.1:3001->3000/tcp"; "4002/tcp" is not published.
+      # Docker joins them with ", ".
+      entry=${entry# }
+      case $entry in *'->'*) ;; *) continue ;; esac
+      bind=${entry%%->*}
+      case ${bind%:*} in 127.* | '[::1]' | ::1) continue ;; esac
+      if [ -n "$web_container" ] && [ "$container" = "$web_container" ]; then
+        case $entry in *:443'->8443/tcp' | *:80'->8080/tcp') continue ;; esac
+      fi
+      host_public+=("$container $entry")
+    done
+  done <<<"$all_ports"
+  if [ ${#host_public[@]} -eq 0 ]; then
+    pass exposure.host-containers 'no container on this daemon publishes beyond loopback except the edge on 443/80'
+  else
+    fail exposure.host-containers "published beyond loopback: ${host_public[*]}"
+  fi
+else
+  fail exposure.host-containers 'could not list the containers on this daemon'
+fi
 postgres_id=$(jtt_prod ps -q postgres 2>/dev/null | head -1 || true)
 if [ -n "$postgres_id" ]; then
   internal_all=1

@@ -255,6 +255,15 @@ case ${1:-} in
     case "$*" in
       *publish=443*) printf '%s' "${FAKE_PUBLISH_443-}" ;;
       *publish=80*) printf '%s' "${FAKE_PUBLISH_80-}" ;;
+      *'{{.Names}}|{{.Ports}}'*)
+        [ -z "${FAKE_PS_PORTS_BROKEN-}" ] || exit 1
+        echo 'jumptotech-labs-web-1|0.0.0.0:443->8443/tcp, [::]:443->8443/tcp, 0.0.0.0:80->8080/tcp, [::]:80->8080/tcp'
+        echo 'jumptotech-labs-prometheus-1|127.0.0.1:3001->3000/tcp'
+        echo 'jumptotech-labs-sandboxd-1|4002/tcp'
+        echo 'jumptotech-labs-control-plane|127.0.0.1:16443->6443/tcp'
+        echo 'jtt-lab-0123abcd|'
+        if [ -n "${FAKE_HOST_PORTS-}" ]; then printf '%s\n' "$FAKE_HOST_PORTS"; fi
+        ;;
       *) echo id-api ;;
     esac
     ;;
@@ -800,6 +809,7 @@ check 'the api requires a session' has_line '^PASS +auth\.required/api/sessions 
 check 'a student flow is a manual check' has_line '^MANUAL CHECK REQUIRED +student\.flow '
 check 'alert delivery is a manual check' has_line '^MANUAL CHECK REQUIRED +alerts\.delivery '
 check 'the external scan is a manual check' has_line '^MANUAL CHECK REQUIRED +exposure\.external '
+check 'loopback-only neighbours and the edge pass the host-wide check' has_line '^PASS +exposure\.host-containers '
 check 'an evidence file is written' bash -c 'ls "$1"/evidence/private-beta-smoke-*.txt >/dev/null' _ "$root"
 check 'the evidence says which host it proves' bash -c 'grep -q "proves nothing about any other host" "$1"/evidence/private-beta-smoke-*.txt' _ "$root"
 common_properties
@@ -878,6 +888,21 @@ FAKE_POSTGRES_PUBLISHED=1 FAKE_DB_INTERNAL=false FAKE_OPEN_PORTS='5432 9090' smo
 check 'exposure.published FAIL' has_fail 'exposure\.published'
 check 'exposure.database-network FAIL' has_fail 'exposure\.database-network'
 check 'exposure.public-ip FAIL' has_fail 'exposure\.public-ip'
+
+scenario 'smoke: a container outside the stack published beyond loopback fails'
+root=$(fixture hostports)
+FAKE_HOST_PORTS=$'jtt-hostval-web-1|127.0.0.1:3000->3000/tcp\njtt-hostval-api-1|0.0.0.0:4000->4000/tcp, 127.0.0.1:9400->9400/tcp\njumptotech-labs-control-plane|0.0.0.0:16443->6443/tcp' smoke "$root"
+check 'exposure.host-containers FAIL' has_fail 'exposure\.host-containers'
+check 'names the public validation api' has_line 'exposure\.host-containers .*jtt-hostval-api-1 0\.0\.0\.0:4000->4000/tcp'
+check 'names a public cluster API' has_line 'exposure\.host-containers .*jumptotech-labs-control-plane 0\.0\.0\.0:16443->6443/tcp'
+check 'does not name a loopback binding' lacks_line 'exposure\.host-containers .*127\.0\.0\.1:9400'
+common_properties
+root=$(fixture hostportsweb)
+FAKE_HOST_PORTS='some-proxy-1|0.0.0.0:443->8443/tcp' smoke "$root"
+check "443 published by a container that is not this stack's web fails" has_line 'exposure\.host-containers .*some-proxy-1 0\.0\.0\.0:443->8443/tcp'
+root=$(fixture hostportsbroken)
+FAKE_PS_PORTS_BROKEN=1 smoke "$root"
+check 'a daemon that cannot list containers is a FAIL, not a pass' has_fail 'exposure\.host-containers'
 
 scenario 'smoke: a scrape target down, the wrong capacity and no attestation fail'
 root=$(fixture observability)
