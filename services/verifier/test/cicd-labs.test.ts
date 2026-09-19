@@ -72,6 +72,48 @@ function withBuild(files: Map<string, string>) {
   for (const [path, text] of Object.entries(BUILD_OUTPUT)) files.set(path, text);
 }
 
+// ------------------------------------------------------------------ CICD-003
+
+const CICD_003_STEPS = (setupWith: string) => `
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+${setupWith}
+      - name: Build
+        run: node build.mjs
+      - name: Test
+        run: node --test
+`;
+
+function cicd003(setupWith: string) {
+  return (files: Map<string, string>) => {
+    files.set('.github/workflows/ci.yml', files.get('.github/workflows/ci.yml')! + CICD_003_STEPS(setupWith));
+    withBuild(files);
+  };
+}
+
+describe('CICD-003 — build and test in GitHub Actions', () => {
+  const VERSION = 'A step provisions a chosen Node.js version';
+
+  it('fails the untouched workflow', async () => {
+    expect(failing(await grade('CICD-003'))).toContain(VERSION);
+  });
+
+  it('passes a version given inline', async () => {
+    expect(failing(await grade('CICD-003', cicd003('        with:\n          node-version: 20')))).toEqual([]);
+  });
+
+  it('passes a version read from a version file — setup-node documents both', async () => {
+    const result = await grade('CICD-003', cicd003('        with:\n          node-version-file: package.json'));
+    expect(failing(result)).toEqual([]);
+  });
+
+  it('fails setup-node with no version, or with an empty one: the runner picks whatever it has', async () => {
+    for (const setupWith of ['', '        with:\n          node-version:', "        with:\n          node-version: ''", '        with:\n          cache: npm']) {
+      expect(failing(await grade('CICD-003', cicd003(setupWith))), JSON.stringify(setupWith)).toEqual([VERSION]);
+    }
+  });
+});
+
 // ------------------------------------------------------------------ CICD-004
 
 const CICD_004_UPLOAD = (path: string) => `

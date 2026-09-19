@@ -26,7 +26,7 @@ export interface WorkflowStep {
   uses?: string;
   /** `run:` verbatim, including newlines for a block scalar. */
   run?: string;
-  /** Keys of the step's `with:` mapping. */
+  /** Keys of the step's `with:` mapping that carry a value (not null or ''). */
   withKeys: string[];
   /**
    * The step's `with:` values that are scalars, as their YAML text. A mapping
@@ -214,7 +214,10 @@ function readSteps(raw: unknown, jobId: string, assignments: WorkflowAssignment[
       ...(typeof step.name === 'string' ? { name: step.name } : {}),
       ...(typeof step.uses === 'string' ? { uses: step.uses } : {}),
       ...(typeof step.run === 'string' ? { run: step.run } : {}),
-      withKeys: Object.keys(withMap),
+      // An input with no value is not set: the action sees nothing.
+      withKeys: Object.entries(withMap)
+        .filter(([, value]) => value !== null && value !== undefined && value !== '')
+        .map(([key]) => key),
       withValues: scalarValues(withMap),
       env: readAssignments(step.env, `jobs.${jobId}.steps[${index}].env`, assignments),
     };

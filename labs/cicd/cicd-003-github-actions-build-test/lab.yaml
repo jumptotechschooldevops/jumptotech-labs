@@ -99,8 +99,11 @@ requirements:
     path: .github/workflows/ci.yml
     job: build
     uses: actions/setup-node
-    with_keys:
+    # A chosen version, given inline or read from a version file; setup-node
+    # with no version uses whatever the runner happens to have.
+    with_any_key:
       - node-version
+      - node-version-file
     label: A step provisions a chosen Node.js version
   - type: github_workflow_step_exists
     path: .github/workflows/ci.yml
