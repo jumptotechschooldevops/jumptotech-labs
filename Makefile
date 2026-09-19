@@ -15,7 +15,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate production-preflight production-config-check private-beta-smoke host-capacity-sample private-beta-diagnostics test-private-beta-diagnostics test-production-host typecheck check reset clean
+.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate production-preflight production-config-check private-beta-smoke host-capacity-sample private-beta-diagnostics test-private-beta-diagnostics test-production-host typecheck clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -308,15 +308,20 @@ test-db: ## Run the persistence suites against a throwaway PostgreSQL (TEST_DB_P
 typecheck: ## Typecheck every workspace
 	@npm run typecheck
 
-check: ## Call the verifier for K8S-001
-	@curl -s -X POST localhost:4000/api/labs/K8S-001/check | python3 -m json.tool
-
-reset: ## Reset the K8S-001 lab environment
-	@curl -s -X POST localhost:4000/api/labs/K8S-001/reset | python3 -m json.tool
-
-clean: ## Tear down everything (containers + cluster + STUDENT PROGRESS; refused on a production checkout)
+# It printed its warning and deleted the volume in the same breath. Run from a
+# production checkout — same directory, same COMPOSE_PROJECT_NAME — the bare
+# `docker compose down -v` below reaches the production PostgreSQL volume, and
+# the incident runbook already lists `make clean` beside `prod down -v`. So it
+# refuses outright on a production checkout, and elsewhere does nothing unless
+# the deletion is spelled out.
+clean: ## Tear down everything (containers + cluster + STUDENT PROGRESS; refused on a production checkout); needs CONFIRM=delete-student-progress
 	@bash scripts/refuse-on-production.sh clean "the PostgreSQL volume (every student's progress) and the kind cluster"
-	@echo "This removes the postgres volume: every student's saved progress goes with it."
-	@echo "Back it up first if it matters: make db-backup. backups/ is not removed."
+	@if [ "$(CONFIRM)" != "delete-student-progress" ]; then \
+		echo "make clean removes the postgres volume: every student's saved progress goes with it." >&2; \
+		echo "Back it up first if it matters (make db-backup), then run:" >&2; \
+		echo "  make clean CONFIRM=delete-student-progress" >&2; \
+		exit 2; \
+	fi
+	@echo "Removing the postgres volume: every student's saved progress goes with it. backups/ is not removed."
 	@docker compose down -v --remove-orphans
 	@bash scripts/cluster-down.sh

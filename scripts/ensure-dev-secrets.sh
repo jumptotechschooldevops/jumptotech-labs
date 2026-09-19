@@ -94,7 +94,7 @@ for entry in "${SECRETS[@]}"; do
       echo "warning: POSTGRES_PASSWORD in $ENV_FILE is a development placeholder." >&2
       echo "         Kept, because an existing database volume may have been created with it." >&2
       echo "         Every service refuses it under NODE_ENV=production. To rotate it locally:" >&2
-      echo "         delete the POSTGRES_PASSWORD line, run \`make secrets\`, then \`make clean\`." >&2
+      echo "         delete the POSTGRES_PASSWORD line, run \`make secrets\`, then \`make clean CONFIRM=delete-student-progress\`." >&2
       continue
     fi
   fi
