@@ -98,4 +98,18 @@ describe('LINUX-007 — answers are found, not enumerated', () => {
       'The source log file was recorded',
     ]);
   });
+
+  it('never prints an answer, or a decoy, in a failure detail', async () => {
+    // A Check with placeholder answers used to print "does not mention
+    // 'TXN-4471'" and the archive path — two of the lab's three answers.
+    const lab = (await realCatalog()).get('LINUX-007');
+    for (const world of [answers('0\n', 'TODO\n', 'TODO\n'), answers('0\n', '2026-08-17 settled 4181\n', `${ARCHIVE}/payments-2026-08-17.log\n`)]) {
+      const result = await verifyLab({ lab, namespace: 'jtt-lab-000000000001', sandbox: new FakeSandbox(world) });
+      const text = result.checks.map((c) => `${c.label} ${c.detail ?? ''}`).join('\n');
+      expect(text).not.toContain('TXN-4471');
+      expect(text).not.toContain('payments-2026-08-19');
+      expect(text).not.toContain('payments-2026-08-17');
+      expect(text).not.toContain('settled 4181');
+    }
+  });
 });

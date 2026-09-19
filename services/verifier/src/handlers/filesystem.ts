@@ -74,9 +74,8 @@ export const fileExists: SandboxVerifierHandler<'file_exists'> = {
 /**
  * Several fragments must appear in one file, and/or several must not.
  *
- * Reports the *first* missing fragment rather than all of them: a student
- * fixing a pipeline script wants the next thing to do, and a list of four
- * absences for one forgotten line reads as four problems.
+ * Reports how many fragments are missing (or present when they must not be),
+ * never which: in a findings lab the required text is the answer.
  */
 export const fileContains: SandboxVerifierHandler<'file_contains'> = {
   type: 'file_contains',
@@ -92,14 +91,21 @@ export const fileContains: SandboxVerifierHandler<'file_contains'> = {
       return fail(`'${requirement.path}' is larger than this check can read`);
     }
 
+    // Counts, never the fragments: in a findings lab (LINUX-007) the text a
+    // file must contain is the answer, and a decoy it must not contain is a
+    // hint. The label says what the check is about.
     const content = read.content;
-    const missing = requirement.contains.find((fragment) => !content.includes(fragment));
-    if (missing !== undefined) {
-      return fail(`'${requirement.path}' does not mention '${missing}'`);
+    const missing = requirement.contains.filter((fragment) => !content.includes(fragment));
+    if (missing.length > 0) {
+      return fail(
+        `'${requirement.path}' is missing ${missing.length} of the ${requirement.contains.length} things this check looks for`,
+      );
     }
-    const present = requirement.absent.find((fragment) => content.includes(fragment));
-    if (present !== undefined) {
-      return fail(`'${requirement.path}' still mentions '${present}'`);
+    const present = requirement.absent.filter((fragment) => content.includes(fragment));
+    if (present.length > 0) {
+      return fail(
+        `'${requirement.path}' still contains ${present.length === 1 ? 'something' : `${present.length} things`} this check says must not be there`,
+      );
     }
     return pass();
   },

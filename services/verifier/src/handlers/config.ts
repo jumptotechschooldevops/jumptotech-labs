@@ -36,11 +36,15 @@ export const configMapKey: VerifierHandler<'configmap_key'> = {
           : `ConfigMap '${r.name}' has no key '${r.key}' — it defines ${keys.map((k) => `'${k}'`).join(', ')}`,
       );
     }
-    if (r.value === undefined) return pass();
+    if (r.value === undefined) {
+      // A key that records a finding has to record something: an empty
+      // `--from-literal=selector=` is not an answer.
+      return actual.trim().length > 0 ? pass() : fail(`Key '${r.key}' in ConfigMap '${r.name}' is empty`);
+    }
 
     return actual === r.value
       ? pass()
-      : fail(`Key '${r.key}' is '${actual}', expected '${r.value}'`);
+      : fail(`Key '${r.key}' is '${actual}', which is not the value this lab expects`);
   },
 };
 

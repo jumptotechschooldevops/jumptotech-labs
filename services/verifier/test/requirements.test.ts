@@ -160,6 +160,14 @@ describe('verifier — Service checks (test requirement 18)', () => {
     expect(passed(await check(ready(), { type: 'service_endpoints', name: 'accounts', min_ready: 2 }))).toBe(true);
   });
 
+  it('names the selector value it found, never the one it wants', async () => {
+    // K8S-010 and NET-025 are diagnosis labs: the right selector is the fault.
+    const result = await check(ready(), { type: 'service_selector', name: 'accounts', selector: { app: 'ledger-api' } });
+    expect(passed(result)).toBe(false);
+    expect(result.detail).toContain("'accounts'");
+    expect(result.detail).not.toContain('ledger-api');
+  });
+
   it('fails a Service whose selector matches nothing', async () => {
     // A Service with a bad selector is created happily and silently drops
     // traffic — the fault K8S-003 and K8S-010 both teach.
@@ -197,7 +205,21 @@ describe('verifier — ConfigMap checks (test requirement 19)', () => {
 
     const wrong = await check(withConfig(), { type: 'configmap_key', name: 'statements-config', key: 'STATEMENT_FORMAT', value: 'csv' });
     expect(passed(wrong)).toBe(false);
-    expect(wrong.detail).toContain("expected 'csv'");
+    // What the key holds, never what it should: in a diagnosis lab that is
+    // the finding the student has to record.
+    expect(wrong.detail).toContain("'pdf'");
+    expect(wrong.detail).not.toContain('csv');
+  });
+
+  it('does not accept an empty value as a recorded finding', async () => {
+    const empty = new FakeKubernetes({
+      configMaps: { [NS]: [{ name: 'findings', namespace: NS, data: { selector: '', targetPort: '  ' } }] },
+    });
+    for (const key of ['selector', 'targetPort']) {
+      const result = await check(empty, { type: 'configmap_key', name: 'findings', key });
+      expect(passed(result), key).toBe(false);
+      expect(result.detail).toContain('is empty');
+    }
   });
 
   it('accepts any documented way of consuming a ConfigMap', async () => {
