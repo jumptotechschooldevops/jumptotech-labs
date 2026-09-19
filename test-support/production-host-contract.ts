@@ -293,6 +293,37 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
     ),
   );
 
+  // Values the api loader accepts that break or widen sign-in (apps/api/src/routes/auth.ts, index.ts).
+  const cookieName = env(services.api, 'AUTH_COOKIE_NAME') ?? '';
+  const clientId = env(services.api, 'OIDC_CLIENT_ID');
+  const audience = env(services.api, 'OIDC_AUDIENCE');
+  const redirectUri = env(services.api, 'OIDC_REDIRECT_URI')?.trim();
+  const publicOrigin = env(services.api, 'PUBLIC_ORIGIN') ?? '';
+  const oidcFailures = /^__host-/i.test(cookieName)
+    ? [
+        `AUTH_COOKIE_NAME ${cookieName} uses the __Host- prefix: the sign-in transaction cookie derived from it is set with Path=/auth, which browsers refuse for a __Host- cookie, so every sign-in would fail`,
+      ]
+    : [];
+  const oidcWarnings = [
+    ...(clientId && audience && clientId === audience
+      ? [
+          'OIDC_AUDIENCE equals OIDC_CLIENT_ID: every ID token the provider issues to this client is also accepted as an API bearer token. Use a dedicated API audience (.env.example: jumptotech-api) and restrict which clients may request it',
+        ]
+      : []),
+    ...(redirectUri && publicOrigin && redirectUri !== `${publicOrigin}/auth/callback`
+      ? [
+          `OIDC_REDIRECT_URI is not exactly ${publicOrigin}/auth/callback: the api accepts it, but it is sent to the identity provider as written, and providers compare it byte for byte with the registered one`,
+        ]
+      : []),
+  ];
+  results.push(
+    oidcFailures.length
+      ? fail('gates.oidc-client', [...oidcFailures, ...oidcWarnings].join('; '))
+      : oidcWarnings.length
+        ? warn('gates.oidc-client', oidcWarnings.join('; '))
+        : pass('gates.oidc-client', 'a dedicated API audience, a literal callback URI and a sign-in cookie browsers accept'),
+  );
+
   const apiOrigin = env(services.api, 'PUBLIC_ORIGIN') ?? '';
   const webOrigin = env(services.web, 'PUBLIC_ORIGIN') ?? '';
   const healthcheck = services.web?.healthcheck?.test;

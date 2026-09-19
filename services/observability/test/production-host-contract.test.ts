@@ -52,6 +52,8 @@ function shipped(): ResolvedCompose {
         DEV_STUDENT_HEADER_ENABLED: 'false',
         PUBLIC_ORIGIN: 'https://labs.contract.invalid',
         ALLOWED_ORIGINS: 'https://labs.contract.invalid',
+        OIDC_CLIENT_ID: 'jtt-private-beta',
+        OIDC_AUDIENCE: 'jumptotech-api',
         MAX_ACTIVE_SESSIONS: '5',
         MAX_ACTIVE_SESSIONS_PER_STUDENT: '1',
         NETWORK_POLICY_ENABLED: 'true',
@@ -166,6 +168,8 @@ describe('each unsafe variation is a FAIL', () => {
     ['the attestation waived', 'gates.network-policy', (c) => (c.services!.api!.environment!.NETWORK_POLICY_ATTESTATION_REQUIRED = 'false')],
     ['the compose capacity default', 'capacity.beta-contract', (c) => (c.services!.api!.environment!.MAX_ACTIVE_SESSIONS = '20')],
     ['two labs per student', 'capacity.beta-contract', (c) => (c.services!.api!.environment!.MAX_ACTIVE_SESSIONS_PER_STUDENT = '2')],
+    ['a __Host- session cookie, which breaks the /auth transaction cookie', 'gates.oidc-client', (c) => (c.services!.api!.environment!.AUTH_COOKIE_NAME = '__Host-jtt')],
+    ['a __host- session cookie in any case', 'gates.oidc-client', (c) => (c.services!.api!.environment!.AUTH_COOKIE_NAME = '__HOST-jtt')],
     ['a terminal that holds fewer shells than there are seats', 'capacity.shell-ceilings', (c) => (c.services!.terminal!.environment!.TERMINAL_MAX_SESSIONS = '4')],
     ['a sandboxd that holds fewer shells than there are seats', 'capacity.shell-ceilings', (c) => (c.services!.sandboxd!.environment!.SANDBOXD_MAX_SESSIONS = '2')],
     ['a shell ceiling that is not a number', 'capacity.shell-ceilings', (c) => (c.services!.terminal!.environment!.TERMINAL_MAX_SESSIONS = 'many')],
@@ -193,6 +197,26 @@ describe('each unsafe variation is a FAIL', () => {
   it('does not count PUBLIC_ORIGIN itself, with or without a trailing slash, as an extra origin', () => {
     const results = mutate((c) => (c.services!.api!.environment!.ALLOWED_ORIGINS = ' https://labs.contract.invalid/ '));
     expect(statusOf(results, 'gates.origins')).toBe('PASS');
+  });
+
+  it('warns when an ID token for this client would also be an API bearer token', () => {
+    const results = mutate((c) => (c.services!.api!.environment!.OIDC_AUDIENCE = 'jtt-private-beta'));
+    expect(onlyWarning(results)).toEqual(['gates.oidc-client']);
+    expect(results.find((result) => result.id === 'gates.oidc-client')!.detail).toContain('dedicated API audience');
+  });
+
+  it.each([
+    'https://LABS.contract.invalid/auth/callback',
+    'https://labs.contract.invalid:443/auth/callback',
+    'https://labs.contract.invalid/auth/callback?',
+    'https://labs.contract.invalid/auth/callback#',
+  ])('warns when the callback URI is not the literal one the provider will compare (%s)', (uri) => {
+    expect(onlyWarning(mutate((c) => (c.services!.api!.environment!.OIDC_REDIRECT_URI = uri)))).toEqual(['gates.oidc-client']);
+  });
+
+  it('accepts the literal callback URI', () => {
+    const results = mutate((c) => (c.services!.api!.environment!.OIDC_REDIRECT_URI = 'https://labs.contract.invalid/auth/callback'));
+    expect(statusOf(results, 'gates.oidc-client')).toBe('PASS');
   });
 
   it('warns when the session cookie is widened to a parent domain', () => {

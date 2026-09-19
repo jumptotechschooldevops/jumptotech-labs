@@ -178,6 +178,7 @@ pressure alarms, not sizing: a host that passes them may still be too small.
 | `gates.node-env` | `NODE_ENV=production` pinned for api, terminal, sandboxd |
 | `gates.authentication` | `AUTH_MODE=oidc` pinned; development student header off |
 | `gates.tls-edge` | `WEB_TLS=required` pinned; `PUBLIC_ORIGIN` a bare https origin whose host the edge's certificate gate accepts (lower-case DNS name: no IP address, no port, not a single label such as `localhost` — the api accepts all three, the edge exits on them), identical for api and web; served-certificate health check |
+| `gates.oidc-client` | FAIL on an `AUTH_COOKIE_NAME` with the `__Host-` prefix (the sign-in transaction cookie derived from it is `Path=/auth`, which browsers refuse for that prefix: every sign-in fails). WARN when `OIDC_AUDIENCE` equals `OIDC_CLIENT_ID` (ID tokens become API bearer tokens), or when `OIDC_REDIRECT_URI` is not literally `PUBLIC_ORIGIN/auth/callback` (the provider compares it byte for byte) |
 | `gates.origins` | WARN when `ALLOWED_ORIGINS` trusts any origin besides `PUBLIC_ORIGIN` (each one can read signed-in responses, pass the CSRF guard and open terminal WebSockets), or when `AUTH_COOKIE_DOMAIN` widens the session cookie beyond this host |
 | `gates.network-policy` | NetworkPolicy and its attestation not waived |
 | `capacity.beta-contract` | `MAX_ACTIVE_SESSIONS=5`, `MAX_ACTIVE_SESSIONS_PER_STUDENT=1` (compose default is 20) |
@@ -259,6 +260,43 @@ refusals survive the real compose merge.
   invent one.
 
 Also open: federated logout and idle timeout (authentication.md §4.7, D13).
+
+### 8.1 Registering the client: what the code requires of the provider
+
+Derived from `apps/api/src/auth/` (2026-09-19 audit), provider-neutral. A
+provider that cannot do one of these cannot sign anyone in.
+
+| Setting | Required value | Where the code decides it |
+|---|---|---|
+| Client type and grant | confidential client; authorization code with PKCE `S256`; implicit and hybrid off | `oidc-client.ts` |
+| Token endpoint authentication | `client_secret_post` — the secret is sent in the form body. Some providers default to `client_secret_basic` | `oidc-client.ts` `exchangeCode` |
+| Token endpoint | must answer directly: a redirect is refused | `oidc-client.ts` (`redirect: 'error'`) |
+| Redirect URI | exactly `PUBLIC_ORIGIN` + `/auth/callback`: lower case, no port, no trailing slash, byte-identical to `OIDC_REDIRECT_URI` if set (config check `gates.oidc-client`) | `production-auth.ts`, `oidc-client.ts` |
+| Post-logout redirect | `PUBLIC_ORIGIN`, no trailing slash. No `id_token_hint` is sent (D13) | `routes/auth.ts` |
+| Scopes | `openid profile email`; `offline_access` is refused at startup | `production-auth.ts` |
+| ID token signing | asymmetric: RS/PS/ES 256–512 or EdDSA. An `HS256` client (some providers' legacy default) fails every sign-in | `oidc.ts` |
+| ID token claims | `sub`, `exp`, `iat`, `nonce`; `aud` includes the client id; with several audiences, `azp` equals the client id | `oidc.ts`, `browser-sign-in.ts` |
+| Discovery | `OIDC_ISSUER` equals the discovery document's `issuer` byte for byte, trailing slash included; every endpoint, `jwks_uri` included, is https | `discovery.ts` |
+| `OIDC_AUDIENCE` | a dedicated API identifier, not the client id (see below) | `index.ts` |
+| Host clock | NTP-synchronized: 5 s of skew is tolerated | `oidc.ts` |
+
+**Bearer tokens on `/api/*` — REQUIRES EXTERNAL DECISION (D15).** Besides the
+browser cookie, the api accepts `Authorization: Bearer` tokens verified against
+`OIDC_AUDIENCE` only: no authorized-party (`azp`) or token-type check. So any
+token the provider issues with our API in its `aud` is a student — including
+one issued to *another* client of the same provider, and a client-credentials
+token, which is provisioned as a `STUDENT` user. With `OIDC_AUDIENCE` equal to
+the client id, the client's own ID tokens qualify too. The web app never sends
+bearer tokens. Until D15 decides whether production needs the bearer path at
+all, the provider must let only this deployment's client obtain tokens for
+`OIDC_AUDIENCE`, and that audience must be dedicated. This is wider than the
+"any account" gap above: it admits other clients, not only other accounts.
+
+**Sign-out does not revoke terminal access.** The terminal token minted for a
+running lab is bound to the lab session and user, not to the browser session,
+and lives up to `TERMINAL_SESSION_TTL_SECONDS` (1 h). A terminal WebSocket
+already open stays open after sign-out. Low risk for five trusted students on
+their own machines; recorded with D13.
 
 ## 9. TLS contract
 
@@ -646,6 +684,7 @@ credentials, or delete or overwrite data.
 | D12 | Metric/log retention; external uptime check; host exporter | operations |
 | D13 | Federated logout; idle timeout | sign-out behaviour |
 | D14 | IPv6, HSTS preload, CAA | DNS/TLS |
+| D15 | Whether production accepts OIDC bearer tokens on `/api/*` at all, and if so with an authorized-party check (§8.1) | who besides the browser can act as a student |
 
 ## 20. Evidence for this branch
 
