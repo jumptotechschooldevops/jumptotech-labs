@@ -114,6 +114,25 @@ SH
 chmod 0440 /etc/sudoers.d/020-oncall
 chown root:root /etc/sudoers.d/020-oncall
 
+# --- listing honours NOPASSWD ----------------------------------------------
+#
+# `sudo -n -l <command>` decides whether to ask for a password by `listpw`,
+# which defaults to `any`: if *any* of the account's entries is NOPASSWD, list
+# mode needs no password — the tag on the command being asked about is never
+# consulted. Measured on this image: with `status` tagged NOPASSWD and
+# `restart` not, `sudo -n -l … restart ledger-api` exits 0 while a real
+# `sudo -n … restart ledger-api` fails with "a password is required". The
+# probe would call that policy correct; at three in the morning it is not.
+# `listpw=all` makes list mode password-free only when every entry is.
+cat > /etc/sudoers.d/005-probe <<'SH'
+# Platform-owned — part of the LINUX-015 policy probe. Makes `sudo -l` for the
+# on-call account answer only when every one of its rules is NOPASSWD, so a
+# rule that would still ask for a password is never reported as granted.
+Defaults:oncall listpw=all
+SH
+chmod 0440 /etc/sudoers.d/005-probe
+chown root:root /etc/sudoers.d/005-probe
+
 # --- the policy probe -------------------------------------------------------
 cat > /usr/local/lib/jumptotech/sudo-probe <<'SH'
 #!/bin/sh

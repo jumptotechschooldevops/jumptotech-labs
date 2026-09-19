@@ -115,7 +115,8 @@ task:
     that account may and may not do, and republishes the answer to
     `/var/lib/jumptotech/probe/sudo-probe.status` every few seconds. Read it,
     change the policy, wait about ten seconds, and read it again. It never runs
-    the commands it asks about, so it cannot restart anything.
+    the commands it asks about, so it cannot restart anything — and it counts
+    a command as granted only if the rotation could run it without a password.
 
 setup:
   seed_scripts:
