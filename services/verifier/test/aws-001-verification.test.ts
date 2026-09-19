@@ -288,14 +288,35 @@ describe('AWS-001 — shortcuts do not pass', () => {
     expect(failedLabels(result.checks)).toContain('Every finding has been filled in');
   });
 
-  it('fails when the documented KEY=value format is not followed', async () => {
+  it('fails a value line with anything after the value, as the template forbids', async () => {
+    // The template's rule is "exactly KEY=value … nothing after the value".
+    // Spacing around `=` is tolerated by the grader; extra text on the value
+    // line is not, because that is where a hedge hides.
+    const annotated = SOLVED_FINDINGS.replace(
+      'CAPTURE_1_SOURCE=environment_variables',
+      'CAPTURE_1_SOURCE=environment_variables or credentials_file',
+    );
+    const { result } = await run(annotated, SOLVED_DEPLOY);
+    expect(result.passed).toBe(false);
+
     const spaced = SOLVED_FINDINGS.replace(
       'CAPTURE_1_SOURCE=environment_variables',
       'CAPTURE_1_SOURCE = environment_variables',
     );
-    const { result } = await run(spaced, SOLVED_DEPLOY);
+    expect((await run(spaced, SOLVED_DEPLOY)).result.passed).toBe(true);
+  });
+
+  it('fails the shotgun: every source for every capture and both verdicts for every ARN', async () => {
+    const sources = ['environment_variables', 'credentials_file', 'custom_process', 'config_file', 'instance_role'];
+    const shotgun = [
+      ...[1, 2, 3].flatMap((n) => sources.map((source) => `CAPTURE_${n}_SOURCE=${source}`)),
+      ...[1, 2, 3, 4, 5].flatMap((n) => [`ARN_${n}=valid`, `ARN_${n}=invalid`]),
+      '',
+    ].join('\n');
+    const { result } = await run(shotgun, SOLVED_DEPLOY);
 
     expect(result.passed).toBe(false);
+    expect(failedLabels(result.checks)).toHaveLength(8);
   });
 
   it('fails when the broken profile is deleted instead of repaired', async () => {

@@ -487,6 +487,14 @@ export const systemdUnitDirective: SandboxVerifierHandler<'systemd_unit_directiv
       return fail(`'${requirement.path}' has no [${section}] section`);
     }
     if (!unit.value.isSet(section, directive)) {
+      // An omitted directive has systemd's documented default, when the lab
+      // names one: leaving `Type=` out is `Type=simple`.
+      if (requirement.default !== undefined) {
+        const wanted = requirement.one_of ?? [requirement.equals ?? ''];
+        return wanted.some((w) => collapseWhitespace(w) === collapseWhitespace(requirement.default))
+          ? pass(`${where} is unset, which systemd reads as ${requirement.default}`)
+          : fail(`'${requirement.path}' does not set ${where}, and systemd's default is not what this check expects`);
+      }
       return fail(`'${requirement.path}' does not set ${where}`);
     }
 
@@ -497,11 +505,17 @@ export const systemdUnitDirective: SandboxVerifierHandler<'systemd_unit_directiv
      * membership; an ordinary setting is a scalar whose last assignment wins.
      */
     if (requirement.contains !== undefined) {
-      const members = LIST_DIRECTIVES.has(directive)
-        ? unit.value.tokens(section, directive)
-        : // A scalar directive has one effective value; membership over its
-          // whitespace-split form is still the honest reading of "contains".
-          unit.value.tokens(section, directive);
+      // systemd's leading `-` (optional file: `EnvironmentFile=-/etc/…`) and
+      // `@`/`+`/`!` prefixes qualify a path; they do not change which path.
+      // A scalar directive's words are also split on punctuation, so
+      // `Description=… (ledger-api)` names ledger-api.
+      const members = (
+        LIST_DIRECTIVES.has(directive)
+          ? unit.value.tokens(section, directive)
+          : unit.value.tokens(section, directive).flatMap((token) => token.split(/[(),;"']+/))
+      )
+        .map((token) => token.replace(/^[-@+!:]+/, ''))
+        .filter((token) => token.length > 0);
       return members.includes(requirement.contains)
         ? pass()
         : fail(`${where} is set, but not to what this check expects`);
@@ -518,11 +532,53 @@ export const systemdUnitDirective: SandboxVerifierHandler<'systemd_unit_directiv
     }
 
     const actual = unit.value.scalar(section, directive);
-    return collapseWhitespace(actual) === collapseWhitespace(requirement.equals)
-      ? pass()
-      : fail(`${where} is set, but not to what this check expects`);
+    if (requirement.one_of !== undefined) {
+      return requirement.one_of.some((v) => collapseWhitespace(actual) === collapseWhitespace(v))
+        ? pass()
+        : fail(`${where} is set, but not to what this check expects`);
+    }
+    if (collapseWhitespace(actual) === collapseWhitespace(requirement.equals)) return pass();
+    // `RestartSec=5`, `5s` and `5sec` are one setting: systemd reads a `…Sec`
+    // directive as a time span whose bare number means seconds.
+    if (/Sec$/.test(directive)) {
+      const want = timeSpanMs(requirement.equals ?? '');
+      if (want !== null && timeSpanMs(actual ?? '') === want) return pass();
+    }
+    return fail(`${where} is set, but not to what this check expects`);
   },
 };
+
+/**
+ * A systemd time span in milliseconds, or null when it is not one.
+ *
+ * systemd.time(7): a sequence of numbers each followed by a unit, spaces
+ * allowed between them; a number with no unit is seconds. Only the units a
+ * service's restart and timeout settings are written in are accepted — `us`
+ * and below are not meaningful here, and anything unrecognised is refused
+ * rather than read as zero.
+ */
+export function timeSpanMs(text: string): number | null {
+  const trimmed = text.trim();
+  if (trimmed === '' || trimmed.length > 64) return null;
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed) * 1000;
+  const units: Record<string, number> = {
+    ms: 1, msec: 1,
+    s: 1000, sec: 1000, second: 1000, seconds: 1000,
+    m: 60_000, min: 60_000, minute: 60_000, minutes: 60_000,
+    h: 3_600_000, hr: 3_600_000, hour: 3_600_000, hours: 3_600_000,
+  };
+  let total = 0;
+  let rest = trimmed;
+  while (rest.length > 0) {
+    const match = /^(\d+(?:\.\d+)?)\s*([a-z]+)\s*/.exec(rest);
+    if (!match) return null;
+    const factor = units[match[2]!];
+    if (factor === undefined) return null;
+    total += Number(match[1]) * factor;
+    rest = rest.slice(match[0].length);
+  }
+  return total;
+}
 
 /**
  * Compare scalar values on their content, not on their spacing.

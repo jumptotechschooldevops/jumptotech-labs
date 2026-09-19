@@ -129,27 +129,16 @@ requirements:
     label: The neighbour table was captured
 
   # --- what it means --------------------------------------------------------
-  - type: file_content
+  - type: file_key_value
     path: /home/student/l2/answers.txt
-    contains: "arp_request_destination = broadcast"
+    key: arp_request_destination
+    equals: broadcast
     label: The destination of a resolution request was identified
-  - type: file_content
+  - type: file_key_value
     path: /home/student/l2/answers.txt
-    contains: "off_subnet_frame_goes_to = the gateway"
+    key: off_subnet_frame_goes_to
+    equals: the gateway
     label: The hardware address an off-segment frame carries was identified
-
-  # --- one answer per line --------------------------------------------------
-  #
-  # Each names the same line with a wrong value on it, so listing every option
-  # against a question fails instead of satisfying the checks above by accident.
-  - type: file_content_absent
-    path: /home/student/l2/answers.txt
-    contains: "arp_request_destination = unicast"
-    label: The request's destination was answered once, not hedged
-  - type: file_content_absent
-    path: /home/student/l2/answers.txt
-    contains: "off_subnet_frame_goes_to = the destination itself"
-    label: The off-segment frame question was answered once, not hedged
 
 hints:
   - level: 1
@@ -160,16 +149,19 @@ hints:
       your segment actually is — everything else follows from your own prefix.
   - level: 2
     text: >
-      `man ip-address` and `man ip-route` cover reading your addressing; the
-      gateway is the next hop of the route that is not a directly connected
-      one. `man ip-neighbour` covers the table the kernel keeps, and RFC 826
+      `man ip-address` and `man ip-route` cover reading your addressing. Your
+      routing table has one connected route and no default, so it will not
+      name a gateway; on this segment the gateway is the first usable address
+      of your prefix, and the neighbour table is where you confirm it really
+      answers. `man ip-neighbour` covers the table the kernel keeps, and RFC 826
       explains why the protocol exists at all. Remember that a connection
       attempt does not have to succeed to make the kernel try to resolve — that
       resolution happens first is the point.
   - level: 3
     text: >
-      `ip -brief addr show` and `ip route show` give you the interface, the
-      prefix and the gateway. Pick any address inside your prefix that is not
+      `ip -brief addr show` gives you the interface and the prefix, and
+      `ip route show` confirms there is no default route. The gateway is the
+      first usable address of that prefix. Pick any address inside your prefix that is not
       yours and not the gateway's for the unanswered case. `nc -w2 -v <addr> 9`
       is enough to make the kernel try. `ip neigh show` prints the table; give
       the unanswered one a few seconds to settle before you capture it, and

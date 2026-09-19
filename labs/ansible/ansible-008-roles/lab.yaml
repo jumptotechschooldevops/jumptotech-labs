@@ -17,7 +17,7 @@ prerequisites:
 
 story: >
   There are now four playbooks in the JumpToTech Bank repository that configure
-  a web tier, and they contain the same four tasks with slightly different
+  a web tier, and they contain the same three tasks with slightly different
   spellings. When the log directory moved last month it was fixed in three of
   them.
 
@@ -51,7 +51,7 @@ task:
     `tasks/main.yml`, `handlers/main.yml`, `templates/`, and
     `defaults/main.yml`.
 
-    The four tasks and the `reload ledger` handler currently in `site.yml` live
+    The three tasks and the `reload ledger` handler currently in `site.yml` live
     in the role. `app.conf.j2` moves into the role's own `templates/`
     directory.
 
@@ -81,6 +81,17 @@ requirements:
   - type: yaml_valid
     path: roles/web/defaults/main.yml
     label: The role declares its own defaults
+  - type: file_contains
+    path: roles/web/defaults/main.yml
+    contains: [app_name, app_port, app_release]
+    label: The role's defaults give the three ledger settings
+  # "site.yml becomes a play that applies the role … and declares no tasks of
+  # its own": keeping the old tasks beside `roles: [web]` does the work
+  # outside the role, whatever the role contains.
+  - type: file_contains
+    path: site.yml
+    absent: ["tasks:", "handlers:"]
+    label: site.yml applies the role and declares no tasks or handlers of its own
   - type: ansible_handler_exists
     role: web
     name: reload ledger
@@ -89,6 +100,16 @@ requirements:
   - type: ansible_playbook_valid
     playbook: site.yml
     label: Ansible accepts the refactored playbook
+  # First, from cleared files: the state every check below reads is what
+  # the playbook itself wrote. Run last with no reset, files written by
+  # hand beside a playbook that changes nothing passed every check.
+  - type: ansible_idempotent
+    playbook: site.yml
+    require_initial_change: true
+    reset_paths:
+      - /etc/jumptotech/app.conf
+      - /var/log/jumptotech/reload.log
+    label: From cleared files the playbook writes the state, and a second run changes nothing
   - type: managed_file_content
     path: /etc/jumptotech/app.conf
     hosts: all
@@ -109,9 +130,6 @@ requirements:
     contains:
       - reloaded ledger
     label: The reload still happens on both nodes
-  - type: ansible_idempotent
-    playbook: site.yml
-    label: A second run of the refactored playbook changes nothing
 
 setup:
   workspace_dir: workspace

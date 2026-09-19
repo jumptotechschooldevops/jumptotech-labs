@@ -119,6 +119,7 @@ function solved({
 }: World = {}): FakeWorld {
   const files: FakeWorld['files'] = {};
   if (source !== undefined) files[PROBE] = { content: source, mode };
+  if (writeup !== undefined) files[WRITEUP] = { content: writeup, mode: '644' };
   return { files, scripts, commands };
 }
 
@@ -377,7 +378,7 @@ describe('CS-012 grading hygiene', () => {
     const sandbox = new FakeSandbox(solved());
     await verifyLab({ lab: await lab(), sandbox, namespace: SANDBOX });
 
-    expect(new Set(sandbox.reads)).toEqual(new Set([PROBE]));
+    expect(new Set(sandbox.reads)).toEqual(new Set([PROBE, WRITEUP]));
     expect(sandbox.scriptRuns).toEqual([
       `${PROBE} blocked`,
       `${PROBE} writes 200`,

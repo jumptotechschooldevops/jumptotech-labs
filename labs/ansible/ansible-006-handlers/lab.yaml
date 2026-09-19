@@ -79,6 +79,16 @@ requirements:
     name: reload ledger
     notified: true
     label: A 'reload ledger' handler exists and a task notifies it
+  # First, from cleared files: the state every check below reads is what
+  # the playbook itself wrote. Run last with no reset, files written by
+  # hand beside a playbook that changes nothing passed every check.
+  - type: ansible_idempotent
+    playbook: site.yml
+    require_initial_change: true
+    reset_paths:
+      - /etc/jumptotech/app.conf
+      - /var/log/jumptotech/reload.log
+    label: From cleared files the playbook writes the state, and a second run changes nothing
   - type: managed_file_content
     path: /etc/jumptotech/app.conf
     hosts: all
@@ -93,9 +103,6 @@ requirements:
     contains:
       - reloaded ledger
     label: The reload actually happened on both nodes
-  - type: ansible_idempotent
-    playbook: site.yml
-    label: A second run of the playbook changes nothing
 
 setup:
   workspace_dir: workspace

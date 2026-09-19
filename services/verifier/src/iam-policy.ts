@@ -20,6 +20,7 @@
  *
  * Written from the IAM JSON policy reference and the ARN reference.
  */
+import { cidrContains, parseIpv4Cidr } from './cidr.js';
 
 /** One condition entry: an operator, a condition key, and its accepted values. */
 export interface IamCondition {
@@ -423,11 +424,15 @@ export interface StatementSelector {
   effect?: 'Allow' | 'Deny';
   /** The statement must cover every action listed. */
   actions?: string[];
+  /** With `actions`: the statement's `Action` names those and nothing wider. */
+  exactActions?: boolean;
   /** The statement must cover every resource listed. */
   resources?: string[];
   condition?: ConditionSelector;
   /** Every principal listed must appear in the statement's `Principal`. */
   principals?: IamPrincipal[];
+  /** With `principals`: the statement names no other principal. */
+  exactPrincipals?: boolean;
   /** Every principal listed must appear in the statement's `NotPrincipal`. */
   notPrincipals?: IamPrincipal[];
   sid?: string;
@@ -439,6 +444,16 @@ export function findStatements(policy: IamPolicy, selector: StatementSelector): 
     if (selector.effect !== undefined && statement.effect !== selector.effect) return false;
     if (selector.sid !== undefined && statement.sid !== selector.sid) return false;
     if (selector.actions?.some((action) => !statementCoversAction(statement, action))) return false;
+    // `sts:*` covers sts:AssumeRole by glob, and so would satisfy "covers";
+    // an exact statement names the listed actions as written and no pattern.
+    if (
+      selector.exactActions &&
+      selector.actions !== undefined &&
+      (statement.notActions.length > 0 ||
+        statement.actions.some((own) => !selector.actions!.some((wanted) => wanted.toLowerCase() === own.toLowerCase())))
+    ) {
+      return false;
+    }
     if (selector.resources?.some((resource) => !statementCoversResource(statement, resource))) {
       return false;
     }
@@ -446,6 +461,13 @@ export function findStatements(policy: IamPolicy, selector: StatementSelector): 
       return false;
     }
     if (selector.principals?.some((p) => !statementHasPrincipal(statement, p))) return false;
+    if (
+      selector.exactPrincipals &&
+      selector.principals !== undefined &&
+      statement.principals.some((own) => !selector.principals!.some((wanted) => principalMatches(own, wanted)))
+    ) {
+      return false;
+    }
     if (selector.notPrincipals?.some((p) => !statementHasNotPrincipal(statement, p))) return false;
     return true;
   });
@@ -453,25 +475,197 @@ export function findStatements(policy: IamPolicy, selector: StatementSelector): 
 
 export type IamDecision = 'allow' | 'explicitDeny' | 'implicitDeny';
 
+/** A policy's Condition uses an operator this evaluator does not implement. */
+export class IamConditionUnsupportedError extends Error {
+  constructor(readonly operator: string) {
+    super(`condition operator '${operator}' cannot be evaluated here`);
+    this.name = 'IamConditionUnsupportedError';
+  }
+}
+
+/**
+ * Does one statement's `Condition` block hold for a request context?
+ *
+ * The documented rules, and only the operators the AWS labs meet:
+ *
+ *   · every operator, and every key under it, must hold (AND); the values
+ *     listed for one key are alternatives (OR) — for a negated operator the
+ *     context value must match none of them;
+ *   · a key missing from the context makes a positive operator false and a
+ *     negated one (`StringNotEquals`, `ArnNotLike`, `NotIpAddress`, …) true;
+ *   · `…IfExists` is true when the key is missing; `Null` tests presence;
+ *   · a context value is single-valued, so `ForAnyValue:` behaves as the base
+ *     operator when the key is present; for a missing key `ForAnyValue:` is
+ *     false (even with a negated operator) and `ForAllValues:` is true.
+ *
+ * Keys are compared without regard to case, as AWS does. Anything else — date
+ * operators, binary, policy variables — raises `IamConditionUnsupportedError`
+ * rather than being guessed at.
+ */
+export function conditionsHold(
+  statement: IamStatement,
+  context: Readonly<Record<string, string>>,
+): boolean {
+  const byKey = new Map(Object.entries(context).map(([k, v]) => [k.toLowerCase(), v]));
+  return statement.conditions.every((condition) =>
+    conditionHolds(condition.operator, byKey.get(condition.key.toLowerCase()), condition.values),
+  );
+}
+
+/** Operators that hold when the key is absent from the request. */
+const NEGATED = new Set([
+  'stringnotequals',
+  'stringnotequalsignorecase',
+  'stringnotlike',
+  'arnnotequals',
+  'arnnotlike',
+  'numericnotequals',
+  'notipaddress',
+]);
+
+const NUMERIC = new Set([
+  'numericequals',
+  'numericnotequals',
+  'numericlessthan',
+  'numericlessthanequals',
+  'numericgreaterthan',
+  'numericgreaterthanequals',
+]);
+
+function conditionHolds(rawOperator: string, value: string | undefined, expected: readonly string[]): boolean {
+  let operator = rawOperator;
+  let setQualifier: 'any' | 'all' | undefined;
+  if (/^ForAnyValue:/i.test(operator)) {
+    setQualifier = 'any';
+    operator = operator.slice('ForAnyValue:'.length);
+  } else if (/^ForAllValues:/i.test(operator)) {
+    setQualifier = 'all';
+    operator = operator.slice('ForAllValues:'.length);
+  }
+  let ifExists = false;
+  if (/IfExists$/i.test(operator)) {
+    ifExists = true;
+    operator = operator.slice(0, -'IfExists'.length);
+  }
+  const op = operator.toLowerCase();
+  if (op !== 'null' && !KNOWN.has(op)) throw new IamConditionUnsupportedError(rawOperator);
+
+  if (op === 'null') {
+    const wantMissing = expected.some((v) => v.toLowerCase() === 'true');
+    return wantMissing ? value === undefined : value !== undefined;
+  }
+  if (value === undefined) {
+    if (ifExists || setQualifier === 'all') return true;
+    // "If the key … is not present in the request context, ForAnyValue
+    // returns false" — whatever the operator, negated ones included.
+    if (setQualifier === 'any') return false;
+    return NEGATED.has(op);
+  }
+
+  const any = (test: (candidate: string) => boolean) => expected.some(test);
+  if (NUMERIC.has(op)) {
+    const actual = Number(value);
+    const compare = (v: string): boolean => {
+      const bound = Number(v);
+      if (!Number.isFinite(actual) || !Number.isFinite(bound)) return false;
+      if (op === 'numericequals') return actual === bound;
+      if (op === 'numericnotequals') return actual !== bound;
+      if (op === 'numericlessthan') return actual < bound;
+      if (op === 'numericlessthanequals') return actual <= bound;
+      if (op === 'numericgreaterthan') return actual > bound;
+      return actual >= bound;
+    };
+    return op === 'numericnotequals' ? expected.every(compare) : any(compare);
+  }
+  switch (op) {
+    case 'stringequals':
+    case 'arnequals':
+      return any((v) => v === value);
+    case 'stringnotequals':
+    case 'arnnotequals':
+      return !any((v) => v === value);
+    case 'stringequalsignorecase':
+      return any((v) => v.toLowerCase() === value.toLowerCase());
+    case 'stringnotequalsignorecase':
+      return !any((v) => v.toLowerCase() === value.toLowerCase());
+    case 'stringlike':
+    case 'arnlike':
+      return any((v) => matchesIamPattern(v, value, { caseSensitive: true }));
+    case 'stringnotlike':
+    case 'arnnotlike':
+      return !any((v) => matchesIamPattern(v, value, { caseSensitive: true }));
+    case 'bool':
+      return any((v) => v.toLowerCase() === value.toLowerCase());
+    default: {
+      // ipaddress / notipaddress
+      const address = parseIpv4Cidr(value.includes('/') ? value : `${value}/32`);
+      const inside = any((v) => {
+        const block = parseIpv4Cidr(v.includes('/') ? v : `${v}/32`);
+        return block !== null && address !== null && cidrContains(block, address);
+      });
+      return op === 'ipaddress' ? inside : !inside;
+    }
+  }
+}
+
+const KNOWN = new Set([
+  ...NEGATED,
+  ...NUMERIC,
+  'stringequals',
+  'stringequalsignorecase',
+  'stringlike',
+  'arnequals',
+  'arnlike',
+  'bool',
+  'ipaddress',
+]);
+
 /**
  * Evaluate one identity policy for one action on one resource.
  *
  * The documented rule, and only that rule: an explicit `Deny` wins, otherwise a
  * matching `Allow` grants, otherwise the request is implicitly denied.
+ *
+ * Without a `context`, a statement's `Condition` is not evaluated: every
+ * statement that covers the action and resource applies. With one, a statement
+ * applies only when its conditions hold for that request — which is what lets
+ * a lab ask "may this upload happen *without* KMS?", and what stops a Deny that
+ * never fires from counting as protection.
  */
 export function evaluateIamPolicy(
   policy: IamPolicy,
-  request: { action: string; resource: string },
+  request: { action: string; resource: string; context?: Readonly<Record<string, string>> },
 ): IamDecision {
   const matching = policy.statements.filter(
     (statement) =>
       statementCoversAction(statement, request.action) &&
-      statementCoversResource(statement, request.resource),
+      statementCoversResource(statement, request.resource) &&
+      (request.context === undefined || conditionsHold(statement, request.context)),
   );
-
   if (matching.some((statement) => statement.effect === 'Deny')) return 'explicitDeny';
   if (matching.some((statement) => statement.effect === 'Allow')) return 'allow';
   return 'implicitDeny';
+}
+
+/**
+ * Could *any* request for this action on this resource be allowed, whatever
+ * condition keys it carries?
+ *
+ * The worst case, read soundly without enumerating contexts: an `Allow` counts
+ * whatever its `Condition` says (some request may satisfy it), and a `Deny`
+ * counts only when it has no `Condition` (only then does it fire for every
+ * request). So a grant limited to another service still counts, and a Deny
+ * whose condition never fires is not protection. It can over-report — a
+ * conditional Deny that exactly mirrors a conditional Allow is not credited —
+ * which is the safe direction for a "must not be allowed" check.
+ */
+export function mayAllowInAnyContext(policy: IamPolicy, request: { action: string; resource: string }): boolean {
+  const covering = policy.statements.filter(
+    (statement) =>
+      statementCoversAction(statement, request.action) && statementCoversResource(statement, request.resource),
+  );
+  if (covering.some((statement) => statement.effect === 'Deny' && statement.conditions.length === 0)) return false;
+  return covering.some((statement) => statement.effect === 'Allow');
 }
 
 /**

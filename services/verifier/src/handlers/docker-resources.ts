@@ -8,6 +8,7 @@
  * same principle that makes the Kubernetes verifier accept a manifest, an
  * imperative command, or a script equally.
  */
+import path from 'node:path';
 import type { DockerVerifierHandler } from '../contract.js';
 import { fail, missingDocker, pass } from '../contract.js';
 import { imageMatches } from '../image.js';
@@ -18,6 +19,35 @@ const showArgv = (argv: readonly string[]): string =>
 
 const sameArgv = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((value, index) => value === b[index]);
+
+/**
+ * The words a start command is made of, as `cmd_contains` compares them.
+ *
+ * - Words, not whole argv elements: shell form stores `CMD cat /app/banner.txt`
+ *   as ["/bin/sh", "-c", "cat /app/banner.txt"], and starts the same program as
+ *   the exec form.
+ * - Shell punctuation is not part of a word: `cat /app/banner.txt;` and
+ *   `"/app/banner.txt"` name the same file.
+ * - A relative path is also recorded as the absolute path it resolves to from
+ *   the image's WORKDIR, because that is the file the container opens:
+ *   `CMD ["cat", "banner.txt"]` under `WORKDIR /app` reads /app/banner.txt.
+ *   Resolution never makes an unrelated path match — `/tmp/banner.txt`, or
+ *   `banner.txt` under a different WORKDIR, resolves somewhere else.
+ */
+function commandWords(argv: readonly string[], workingDir: string): Set<string> {
+  const words = new Set<string>();
+  for (const element of argv) {
+    for (const raw of element.split(/[\s;&|()]+/)) {
+      const word = raw.replace(/^['"]+|['"]+$/g, '');
+      if (word === '') continue;
+      words.add(word);
+      if (!word.startsWith('/') && !word.startsWith('-') && !word.includes('$')) {
+        words.add(path.posix.resolve(workingDir || '/', word));
+      }
+    }
+  }
+  return words;
+}
 
 export const dockerImageExists: DockerVerifierHandler<'docker_image_exists'> = {
   type: 'docker_image_exists',
@@ -47,7 +77,8 @@ export const dockerImageConfig: DockerVerifierHandler<'docker_image_config'> = {
       // CMD and ENTRYPOINT combine into what the container actually runs, so
       // both forms of writing the same startup command are accepted.
       const argv = [...image.entrypoint, ...image.cmd];
-      const missing = r.cmd_contains.filter((token) => !argv.includes(token));
+      const words = commandWords(argv, image.workingDir);
+      const missing = r.cmd_contains.filter((token) => !words.has(token));
       if (missing.length > 0) {
         problems.push(
           `start command is [${argv.join(' ')}], which is missing ${missing.map((m) => `'${m}'`).join(', ')}`,
@@ -144,6 +175,15 @@ export const dockerImageLayers: DockerVerifierHandler<'docker_image_layers'> = {
 
     const shared = sharedPrefixLength(before.layers, after.layers);
     const changed = after.layers.length - shared;
+
+    // A new image ID is not a changed build: `docker build --label x=2` or an
+    // edited CMD gives a new ID over identical layers. "Changed" means a layer
+    // was rebuilt.
+    if (r.must_differ && changed === 0) {
+      return fail(
+        `'${r.image}' has exactly the layers of '${r.shares_prefix_with}' — only its metadata changed, so no rebuild of the source was shown`,
+      );
+    }
 
     if (r.minimum_shared_prefix !== undefined && shared < r.minimum_shared_prefix) {
       return fail(

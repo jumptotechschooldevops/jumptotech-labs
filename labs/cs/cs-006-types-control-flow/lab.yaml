@@ -54,15 +54,15 @@ story: >
   Kestrel's autoscaler helper has scaled up plenty of times. It has never once
   scaled down.
 
-  Four of the five windows in last night's batch were over target and every one
-  of them was held. The values it was given are ordinary — twelve replicas
-  against a target of nine — and the rule it implements reads correctly if you
-  say it out loud.
+  Four of the seven windows in last night's batch were over target and every
+  one of them was held. The values it was given are ordinary — twelve replicas
+  against a target of eleven and a minimum of two — and the rule it implements
+  reads correctly if you say it out loud.
 
   The helper takes its numbers from the environment and from a readings file,
   and both of those hand a program text. Nobody converted anything, and text
   does not compare the way numbers do: as far as the helper is concerned,
-  twelve is not more than nine.
+  twelve is not more than two.
 
 objectives:
   - Tell a value's type from where it came, and know that arguments and environment always arrive as text
@@ -144,7 +144,7 @@ setup:
       label: The helper's own decision log is available to read
     - type: file_content
       path: /srv/kestrel/scaler/readings.txt
-      contains: "12 9 2"
+      contains: "12 11 2"
       label: The readings include the window everyone remembers
     - type: file_exists
       path: /srv/kestrel/scaler/README.txt
@@ -215,10 +215,12 @@ requirements:
     timeout_seconds: 15
     output_contains:
       - "DECISION=scale-up current=2 target=5 minimum=1"
-      - "DECISION=scale-down current=12 target=9 minimum=2"
+      - "DECISION=scale-down current=12 target=11 minimum=2"
       - "DECISION=hold current=7 target=7 minimum=3"
       - "DECISION=hold current=4 target=2 minimum=4"
-      - "DECISION=scale-down current=9 target=3 minimum=2"
+      - "DECISION=scale-down current=15 target=10 minimum=3"
+      - "DECISION=scale-up current=3 target=8 minimum=1"
+      - "DECISION=hold current=6 target=4 minimum=6"
     label: Every reading in the batch gets the decision it should have had
 
   # A program that applies the rule formats these lines; one that contains them
@@ -229,7 +231,7 @@ requirements:
     label: The program applies the rule rather than containing the answers
   - type: file_content_absent
     path: /home/student/py/scale.py
-    contains: "current=12 target=9"
+    contains: "current=12 target=11"
     label: The program is not a table of expected decisions
 
 hints:

@@ -118,6 +118,17 @@ describe('LINUX-017 grades the unit semantically', () => {
     expect(result.passed).toBe(true);
   });
 
+  it('reads RestartSec as the time span systemd reads, whatever unit it is written in', async () => {
+    for (const spelling of ['5s', '5sec', '5 seconds', '5000ms']) {
+      const result = await verify(world(CORRECT.replace('RestartSec=5', `RestartSec=${spelling}`)));
+      expect(failed(result.checks), spelling).toEqual([]);
+    }
+    for (const wrong of ['5min', '50', '5x', '']) {
+      const result = await verify(world(CORRECT.replace('RestartSec=5', `RestartSec=${wrong}`)));
+      expect(result.passed, wrong).toBe(false);
+    }
+  });
+
   it('fails a restart policy that would fight the on-call engineer', async () => {
     // `always` brings the service back after a deliberate stop, which the
     // runbook explicitly rules out. This is the draft's substantive error.
@@ -197,6 +208,43 @@ describe('LINUX-017 grades the unit semantically', () => {
     expect(result.passed).toBe(false);
     expect(result.checks).toHaveLength((await lab()).requirements.length);
     expect(result.checks.every((c) => c.status !== 'skipped')).toBe(true);
+  });
+});
+
+describe('LINUX-017 accepts every unit systemd would run the same way', () => {
+  const variant = (from: string, to: string) => {
+    expect(CORRECT).toContain(from);
+    return CORRECT.replace(from, to);
+  };
+
+  it('accepts Type=exec, and Type left out — systemd reads that as simple', async () => {
+    for (const unit of [variant('Type=simple', 'Type=exec'), variant('Type=simple\n', '')]) {
+      expect(failed((await verify(world(unit))).checks)).toEqual([]);
+    }
+  });
+
+  it('still fails a Type that would make systemd wait for a fork or a notification', async () => {
+    for (const type of ['forking', 'notify', 'oneshot']) {
+      expect(failed((await verify(world(variant('Type=simple', `Type=${type}`)))).checks), type).toEqual([
+        'The service is declared as one that runs in the foreground',
+      ]);
+    }
+  });
+
+  it('finds the service name in a Description written in brackets or with punctuation', async () => {
+    for (const description of ['JumpToTech ledger API (ledger-api)', 'ledger-api, the JumpToTech ledger API']) {
+      const unit = variant('Description=ledger-api — JumpToTech ledger API', `Description=${description}`);
+      expect(failed((await verify(world(unit))).checks), description).toEqual([]);
+    }
+    const unnamed = variant('Description=ledger-api — JumpToTech ledger API', 'Description=JumpToTech ledger API');
+    expect(failed((await verify(world(unnamed))).checks)).toEqual(['The description names the service']);
+  });
+
+  it("accepts systemd's optional-file prefix on EnvironmentFile, and not a different file", async () => {
+    const optional = variant('EnvironmentFile=/etc/jumptotech/ledger-api.env', 'EnvironmentFile=-/etc/jumptotech/ledger-api.env');
+    expect(failed((await verify(world(optional))).checks)).toEqual([]);
+    const other = variant('EnvironmentFile=/etc/jumptotech/ledger-api.env', 'EnvironmentFile=/etc/jumptotech/ledger-api.env.bak');
+    expect(failed((await verify(world(other))).checks)).toEqual(['The service reads its settings from the environment file']);
   });
 });
 

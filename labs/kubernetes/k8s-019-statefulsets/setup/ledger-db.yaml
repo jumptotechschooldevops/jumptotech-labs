@@ -6,16 +6,16 @@
 #
 #   * Pod names are random and change on every reschedule, so nothing can
 #     address an individual replica.
-#   * Both replicas mount the same RWO claim, so the second cannot start on a
-#     different node — and if it does start alongside the first, two database
-#     processes write the same files.
+#   * Both replicas mount the same RWO claim. ReadWriteOnce is per node: on the
+#     platform's single-node cluster both start and two database processes
+#     write the same files; on a larger cluster the second could not attach it
+#     on a different node.
 #   * The Service load-balances across a single virtual IP, so a client asking
 #     for "replica 0" gets whichever Pod kube-proxy picks.
 #
-# It is left deliberately at 1/2 available: the second replica cannot attach the
-# already-attached ReadWriteOnce claim. That is not a contrived break — it is
-# the failure this shape produces in production, and it is the symptom that
-# sends a student looking for the right controller.
+# Both replicas therefore come up Ready here. That is deliberate and honest:
+# nothing in the cluster reports the shared-writer problem, which is why the
+# student has to find it by reading what each Pod mounts.
 #
 # Resources are declared for the reason K8S-013 documents, and the claim is
 # small because the session ResourceQuota permits five PVCs in total.

@@ -625,18 +625,18 @@ stages:
       - lab: K8S-003
         skills: [kubernetes.services]
         why: Gives a set of Pods one stable address with a Service.
-      - lab: NET-024
-        skills: [kubernetes.services]
-        why: Shows why Pod IPs change and uses a ClusterIP Service as the stable interface to replaceable Pods.
-      - lab: NET-025
-        skills: [kubernetes.services]
-        why: Distinguishes selector failures from targetPort failures by reading EndpointSlices and testing Service traffic.
       - lab: K8S-004
         skills: [kubernetes.configuration]
         why: Moves an application's configuration into a ConfigMap.
       - lab: K8S-005
         skills: [kubernetes.secrets, security.secrets]
         why: Gives an application a credential through a Secret, and explains why base64 is not encryption.
+      # NET-024 and NET-025 record their evidence in a ConfigMap, so they come
+      # after K8S-004 teaches one; NET-025 reads EndpointSlices, whose
+      # readiness K8S-008 explains, so it follows that.
+      - lab: NET-024
+        skills: [kubernetes.services]
+        why: Shows why Pod IPs change and uses a ClusterIP Service as the stable interface to replaceable Pods.
       - lab: K8S-006
         optional: true
         skills: [kubernetes.batch]
@@ -648,6 +648,9 @@ stages:
       - lab: K8S-008
         skills: [kubernetes.probes, sre.reliability]
         why: Adds a readiness probe so traffic only reaches Pods that can serve it.
+      - lab: NET-025
+        skills: [kubernetes.services]
+        why: Distinguishes selector failures from targetPort failures by reading EndpointSlices and testing Service traffic.
       - lab: K8S-009
         skills: [kubernetes.resources]
         why: Declares CPU and memory requests and limits for a workload.

@@ -276,13 +276,32 @@ describe('NET-008 rejects the wrong observation', () => {
         '  retry_on_refused_helps = no',
         '  retry_on_refused_helps = yes',
         '  time_wait_belongs_to = the side that closed first',
+        '  time_wait_belongs_to = the client',
+        '',
+      ].join('\n'),
+    };
+
+    // Every question is answered more than once — including TIME-WAIT, which
+    // no wrong-value guard covered before — and every one fails.
+    const failed = failures((await verify(box({ files }))).checks);
+    expect(failed).toHaveLength(3);
+    for (const check of failed) expect(check.detail).toMatch(/answers \w+ 2 times — give one answer$/);
+  });
+
+  it('rejects several values on one line', async () => {
+    const files = solvedFiles();
+    files['/home/student/tcp/answers.txt'] = {
+      type: 'file',
+      content: [
+        '  udp_holds_connection_state = no yes',
+        '  retry_on_refused_helps = no',
+        '  time_wait_belongs_to = the side that closed first',
         '',
       ].join('\n'),
     };
 
     const failed = failures((await verify(box({ files }))).checks);
-    expect(failed).toHaveLength(2);
-    for (const check of failed) expect(check.label).toContain('not hedged');
+    expect(failed.map((c) => c.label)).toEqual(['Whether UDP keeps connection state was identified']);
   });
 });
 

@@ -171,13 +171,16 @@ describe('CS-001 when the work has been done', () => {
   });
 
   it('passes a report written differently but correctly', async () => {
-    // Different order, extra commentary, values annotated. The lab grades the
-    // findings, never the formatting — two students who investigated the same
-    // way and wrote it up differently both pass.
+    // Different order, extra commentary on lines of its own, spacing and
+    // quoting. The lab grades the findings, never the formatting — two
+    // students who investigated the same way and wrote it up differently both
+    // pass.
     const verbose = [
       '# scan-01 sizing, written up at 03:40',
-      'VERDICT=saturated   (load 24.00 across 8 processors)',
-      'SCAN01_FULL_MOUNT=/var  — 50G, 100% used',
+      'VERDICT = saturated',
+      'load 24.00 across 8 processors',
+      'SCAN01_FULL_MOUNT="/var"',
+      '/var is 50G, 100% used',
       'SCAN01_LOAD_PER_CPU=3',
       'SCAN01_MEM_MB=16656',
       'SCAN01_MEM_MIB=15885',
@@ -295,16 +298,27 @@ describe('CS-001 rejects the shortcuts', () => {
 // --------------------------------------------------------- known properties
 
 describe('CS-001 grading properties worth stating', () => {
-  it('accepts a value that merely contains the right answer — and that is not a way in', async () => {
-    // `contains` is a substring test, so `SCAN01_CPUS=80` would satisfy the
-    // check for `SCAN01_CPUS=8`. This is pinned deliberately rather than left
-    // as a surprise: writing a superstring of the correct answer requires
-    // already knowing the correct answer, so it is a tolerance for an odd
-    // write-up, not a shortcut past the work.
-    const annotated = CORRECT_REPORT.replace('SCAN01_CPUS=8', 'SCAN01_CPUS=8 logical processors');
-    const result = await verify(worldWith(annotated, THIS_MACHINE_MEMINFO));
+  it('rejects a value line that carries more than the value, which is where a hedge hides', async () => {
+    // A substring check accepted `SCAN01_CPUS=80` for `SCAN01_CPUS=8`, and so
+    // `VERDICT=saturated healthy` too. Each value line is now compared whole,
+    // and the task says notes go on lines of their own.
+    for (const [right, wrong] of [
+      ['SCAN01_CPUS=8', 'SCAN01_CPUS=8 logical processors'],
+      ['SCAN01_CPUS=8', 'SCAN01_CPUS=80'],
+      ['VERDICT=saturated', 'VERDICT=saturated healthy'],
+    ] as const) {
+      const result = await verify(worldWith(CORRECT_REPORT.replace(right, wrong), THIS_MACHINE_MEMINFO));
+      expect(result.passed, wrong).toBe(false);
+    }
+  });
 
-    expect(result.passed).toBe(true);
+  it('rejects every candidate value listed, one per line', async () => {
+    const shotgun = `${CORRECT_REPORT}MEMINFO_SCOPE=container\nVERDICT=healthy\n`;
+    const result = await verify(worldWith(shotgun, THIS_MACHINE_MEMINFO));
+    expect(result.checks.filter((c) => c.status !== 'pass').map((c) => c.detail)).toEqual([
+      "'/home/student/ops/machine.txt' answers MEMINFO_SCOPE 2 times — give one answer",
+      "'/home/student/ops/machine.txt' answers VERDICT 2 times — give one answer",
+    ]);
   });
 
   it('returns to the starting verdict when the sandbox is reset', async () => {

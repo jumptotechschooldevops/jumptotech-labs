@@ -29,7 +29,6 @@
     "The service is still enabled",
     "The supervisor is able to start the service",
     "The service is configured for its assigned port",
-    "The incorrect port setting is gone",
     "The decommissioned exporter is no longer running"
   ],
   "hints": [

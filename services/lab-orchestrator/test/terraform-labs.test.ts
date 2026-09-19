@@ -585,7 +585,7 @@ describe('TF-005 — Multiple Resources and Dependencies', () => {
     const references = (await tf005()).requirements.filter(
       (r) => r.type === 'terraform_resource_references',
     ) as Array<Record<string, unknown>>;
-    expect(references).toHaveLength(2);
+    expect(references).toHaveLength(3);
 
     const integrity = references.find((r) => r.name === 'integrity_record');
     expect(integrity).toMatchObject({
@@ -594,11 +594,23 @@ describe('TF-005 — Multiple Resources and Dependencies', () => {
       referenced_attribute: 'content_sha256',
     });
 
-    const manifest = references.find((r) => r.name === 'deploy_manifest');
-    expect(manifest).toMatchObject({
-      attribute: 'content',
-      references: 'local_file.integrity_record',
-    });
+    // The manifest takes both of its values from resources: the record's
+    // path, and the same checksum the record carries.
+    const manifest = references.filter((r) => r.name === 'deploy_manifest');
+    expect(manifest).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attribute: 'content',
+          references: 'local_file.integrity_record',
+          referenced_attribute: 'filename',
+        }),
+        expect.objectContaining({
+          attribute: 'content',
+          references: 'local_file.service_config',
+          referenced_attribute: 'content_sha256',
+        }),
+      ]),
+    );
 
     // Still graded from applied state as well — the configuration checks were
     // added alongside, not instead.
@@ -687,9 +699,11 @@ describe('TF-002 — Variables and Input Values', () => {
   });
 
   it('proves an override happened, without looking for a tfvars file', async () => {
-    // Two required values differ from the defaults the lab asks for, so
-    // reaching them is only possible by supplying a value — whichever
-    // documented mechanism the student picks. Nothing pins a filename.
+    // Two required values differ from the defaults the lab asks for, so the
+    // task has the student supply them — by whichever documented mechanism
+    // they pick. Nothing pins the mechanism: no tfvars file, no variables file.
+    // (Editing the defaults instead reaches the same applied state and is not
+    // caught; no requirement type reads a default's value.)
     const contents = (await tf002()).requirements
       .filter((r) => r.type === 'file_content' && 'contains' in r)
       .map((r) => ('contains' in r ? String(r.contains) : ''));
@@ -700,7 +714,17 @@ describe('TF-002 — Variables and Input Values', () => {
       .filter((r) => 'path' in r)
       .map((r) => ('path' in r ? String(r.path) : ''));
     expect(paths.some((p) => p.endsWith('.tfvars'))).toBe(false);
-    expect(paths.some((p) => p.endsWith('.tf'))).toBe(false);
+    // No check reads a configuration file as text: the rule that the resource
+    // names no environment is graded on its string literals, so a comment in
+    // main.tf can neither fail nor excuse it.
+    const tfPaths = (await tf002()).requirements.filter(
+      (r) => 'path' in r && String(r.path).endsWith('.tf'),
+    );
+    expect(tfPaths).toEqual([]);
+    const literal = (await tf002()).requirements.filter((r) => r.type === 'terraform_resource_literal_absent');
+    expect(literal).toHaveLength(1);
+    expect(literal[0]).toMatchObject({ dir: 'terraform', resource_type: 'local_file', name: 'service_config' });
+    expect('literals' in literal[0]! ? [...literal[0].literals].sort() : []).toEqual(['production', 'staging']);
   });
 });
 
@@ -1030,7 +1054,10 @@ describe('TF-025 — Custom Conditions', () => {
     const validation = (await tf025()).requirements.find(
       (r) => r.type === 'terraform_variable_validation',
     ) as Record<string, unknown> | undefined;
-    expect(validation?.condition_mentions).toEqual(['environment']);
+    // The two allowed values are named too — they are what the rule is about,
+    // and a condition that names neither (`length(var.environment) > 0`)
+    // rejects nothing. They are values the task states, not functions.
+    expect(validation?.condition_mentions).toEqual(['environment', 'staging', 'production']);
 
     const precondition = (await tf025()).requirements.find(
       (r) => r.type === 'terraform_resource_condition' && 'condition' in r && r.condition === 'precondition',
@@ -1045,7 +1072,9 @@ describe('TF-025 — Custom Conditions', () => {
         ? (r.condition_mentions as string[])
         : [],
     );
-    expect(mentioned.sort()).toEqual(['environment', 'replicas']);
+    // `self` is how a postcondition names what was read — an identifier the
+    // task itself gives, not a function.
+    expect(mentioned.sort()).toEqual(['environment', 'production', 'replicas', 'self', 'staging']);
     for (const fn of ['contains', 'regex', 'startswith', 'can', 'length']) {
       expect(mentioned).not.toContain(fn);
     }
@@ -1114,7 +1143,15 @@ describe('TF-018 — Expressions and Functions', () => {
       (r) => r.type === 'terraform_resource_references',
     ) as Array<Record<string, unknown>>;
     const pairs = references.map((r) => `${r.attribute}->${r.references}`).sort();
-    expect(pairs).toEqual(['content->var.environment', 'content->var.services']);
+    // The inputs, and the locals the task asks to be computed and then used —
+    // four locals declared beside a typed-out manifest passed before.
+    expect(pairs).toEqual([
+      'content->local.gold_services',
+      'content->local.scaled_replicas',
+      'content->local.service_summary',
+      'content->var.environment',
+      'content->var.services',
+    ]);
   });
 
   it('grades values that only an expression produces', async () => {

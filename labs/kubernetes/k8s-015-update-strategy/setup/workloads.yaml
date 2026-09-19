@@ -8,8 +8,8 @@
 #
 # Resources are declared for the reason K8S-013 documents: surging Pods are
 # charged against the session ResourceQuota, and a container declaring nothing
-# inherits the LimitRange default of 1 CPU / 1Gi. Peak here is 6 Pods
-# (checkout-api 3 + 1 surge, ledger-writer 2) = 1.2 CPU of the namespace's 4.
+# inherits the LimitRange default of 1 CPU / 1Gi. Peak here is 7 Pods
+# (checkout-api 4 + 1 surge, ledger-writer 2) = 1.4 CPU of the namespace's 4.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -54,7 +54,7 @@ metadata:
     tier: api
     jumptotech.io/lab-fixture: "true"
 spec:
-  replicas: 3
+  replicas: 4
   minReadySeconds: 3
   selector:
     matchLabels:

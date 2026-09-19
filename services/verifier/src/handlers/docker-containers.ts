@@ -181,9 +181,11 @@ export const dockerContainerEnv: DockerVerifierHandler<'docker_container_env'> =
       return fail(`Container '${r.name}' has no environment variable '${r.key}'`);
     }
     if (r.value === undefined) return pass();
+    // The value found, never the value wanted: in a diagnosis lab the right
+    // value is the answer (DOCKER-011 hides its region even from the label).
     return actual === r.value
       ? pass()
-      : fail(`Container '${r.name}' has ${r.key}='${actual}', expected '${r.value}'`);
+      : fail(`Container '${r.name}' has ${r.key}='${actual}', which is not the value this lab expects`);
   },
 };
 
@@ -202,8 +204,10 @@ export const dockerContainerPort: DockerVerifierHandler<'docker_container_port'>
     );
     if (matching.length === 0) {
       const seen = container.ports.map((p) => describePort(p)).join(', ');
+      // Which port is right is often the diagnosis (NET-022): say what the
+      // container has, not what it should have.
       return fail(
-        `Container '${r.name}' does not expose ${r.container_port}/${r.protocol}${
+        `Container '${r.name}' does not expose the port this lab expects${
           seen ? ` (it has: ${seen})` : ' (it publishes no ports)'
         }`,
       );
@@ -218,7 +222,7 @@ export const dockerContainerPort: DockerVerifierHandler<'docker_container_port'>
     return fail(
       actual.length === 0
         ? `Container '${r.name}' exposes ${r.container_port}/${r.protocol} but does not publish it to a host port`
-        : `Container '${r.name}' publishes ${r.container_port}/${r.protocol} on host port ${actual.join(', ')}, expected ${r.host_port}`,
+        : `Container '${r.name}' publishes ${r.container_port}/${r.protocol} on host port ${actual.join(', ')}, not the one this lab expects`,
     );
   },
 };

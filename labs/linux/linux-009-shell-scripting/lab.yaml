@@ -73,7 +73,8 @@ task:
     that does not exist, such as `/srv/jumptotech/app/missing.status`.
 
     How you write it is entirely up to you. Nothing compares your script to a
-    model answer — it is run against all three cases and graded on what it does.
+    model answer — it is run against all three cases, and against status files
+    elsewhere on the host that it has not seen, and graded on what it does.
     Do check it by hand first: `./health-check.sh <file>; echo $?` shows you
     both halves of what is being marked.
 
@@ -127,6 +128,24 @@ requirements:
     output_contains:
       - STATUS=UNKNOWN
     label: A missing status file reports UNKNOWN and exits 2
+  - type: script_runs
+    path: /home/student/scripts/health-check.sh
+    args:
+      - /srv/jumptotech/checks/payments.status
+    expected_exit_code: 0
+    output_contains:
+      - STATUS=OK
+      - HOST=jumptotech-lab
+    label: A healthy status file the script has not seen before reports OK
+  - type: script_runs
+    path: /home/student/scripts/health-check.sh
+    args:
+      - /srv/jumptotech/checks/reports.status
+    expected_exit_code: 1
+    output_contains:
+      - STATUS=FAIL
+      - HOST=jumptotech-lab
+    label: An unhealthy status file the script has not seen before reports FAIL
 
 hints:
   - level: 1

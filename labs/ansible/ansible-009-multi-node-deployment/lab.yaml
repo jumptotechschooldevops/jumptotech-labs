@@ -80,6 +80,16 @@ requirements:
   - type: ansible_playbook_valid
     playbook: site.yml
     label: Ansible accepts the playbook
+  # Runs first: the status root is cleared on both nodes, the playbook runs
+  # twice, and the checks below then read what it made. A page written by hand
+  # and a playbook that only prints no longer pass. (A running nginx cannot be
+  # reset between runs, so starting it by hand is still not caught here.)
+  - type: ansible_idempotent
+    playbook: site.yml
+    require_initial_change: true
+    reset_paths:
+      - /var/www/status
+    label: From a clean node the playbook deploys the page, and a second run changes nothing
   - type: managed_file_exists
     path: /var/www/status
     kind: directory
@@ -109,9 +119,6 @@ requirements:
     expected: running
     hosts: all
     label: nginx is running on every web host
-  - type: ansible_idempotent
-    playbook: site.yml
-    label: A second run of the playbook changes nothing
 
 setup:
   workspace_dir: workspace

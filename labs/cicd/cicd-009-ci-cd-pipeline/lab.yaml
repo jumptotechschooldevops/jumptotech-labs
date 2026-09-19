@@ -42,18 +42,24 @@ task:
 
     **Trigger.** Continuous integration runs on every push, but delivery must
     not. Restrict this workflow's `push` trigger to the `main` branch with a
-    `branches:` filter, so work in progress on a feature branch is never
-    delivered anywhere.
+    `branches:` filter, so pushing work in progress to a feature branch does
+    not start a delivery. (The `pull_request` trigger still runs every job for
+    a pull request. That is harmless here, since nothing is pushed or applied;
+    a real pipeline would also gate its deploy job with an `if:` condition.)
 
     **The `build` job** stays broadly as it is: check out, provision Node.js,
     build, test, and publish the build output as an artifact. Keep it at five
     steps or more.
 
+    Every job starts on a fresh runner with nothing on it, so the `image` and
+    `deploy` jobs each check the repository out before they use its files.
+
     **The `image` job** declares `needs: build` and builds the container image
     from the Dockerfile already in the workspace. Tag it from `IMAGE_TAG`, a
-    workflow-level `env` value, rather than repeating a literal. A useful tag
-    identifies the commit — `${{ github.sha }}` is the commit that triggered
-    the run, which is what makes an image traceable back to a change.
+    workflow-level `env` value, rather than repeating a literal — and make
+    that value identify the commit: `${{ github.sha }}` is the commit that
+    triggered the run, which is what makes an image traceable back to a
+    change. A tag like `latest` identifies nothing.
 
     **The `deploy` job** declares `needs: image` and updates `deploy/app.yml`
     so its `image:` line names the tag this run produced. Any reasonable
@@ -114,9 +120,18 @@ requirements:
   - type: github_workflow_step_exists
     path: .github/workflows/ci.yml
     job: image
+    uses: actions/checkout
+    label: The image job checks the repository out
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: image
     run_contains:
       - docker build
-    label: The image job builds the container image
+    run_expands:
+      - IMAGE_TAG
+    after:
+      - uses: actions/checkout
+    label: The image job builds the container image, tagged from IMAGE_TAG
   - type: github_workflow_job_exists
     path: .github/workflows/ci.yml
     job: deploy
@@ -126,14 +141,25 @@ requirements:
   - type: github_workflow_step_exists
     path: .github/workflows/ci.yml
     job: deploy
+    uses: actions/checkout
+    label: The deploy job checks the repository out
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: deploy
     run_contains:
       - deploy/app.yml
-    label: The deploy job updates the deployment manifest
+    run_expands:
+      - IMAGE_TAG
+    after:
+      - uses: actions/checkout
+    label: The deploy job writes the new tag into the deployment manifest
   - type: environment_reference_exists
     path: .github/workflows/ci.yml
     name: IMAGE_TAG
     via: workflow_env
-    label: The image tag comes from a workflow variable
+    # The objective: a tag derived from the commit, not a literal like latest.
+    value_contains: github.sha
+    label: The image tag comes from a workflow variable that identifies the commit
   - type: secret_not_hardcoded
     path: .github/workflows/ci.yml
     label: No credentials are written into the workflow

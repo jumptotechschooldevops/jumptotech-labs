@@ -26,8 +26,13 @@ export interface WorkflowStep {
   uses?: string;
   /** `run:` verbatim, including newlines for a block scalar. */
   run?: string;
-  /** Keys of the step's `with:` mapping. */
+  /** Keys of the step's `with:` mapping that carry a value (not null or ''). */
   withKeys: string[];
+  /**
+   * The step's `with:` values that are scalars, as their YAML text. A mapping
+   * or list value is absent here rather than stringified.
+   */
+  withValues: Record<string, string>;
   /** `env:` entries declared on the step. */
   env: WorkflowAssignment[];
 }
@@ -186,7 +191,7 @@ function readSteps(raw: unknown, jobId: string, assignments: WorkflowAssignment[
   return raw.map((entry, i): WorkflowStep => {
     const index = i + 1;
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-      return { index, withKeys: [], env: [] };
+      return { index, withKeys: [], withValues: {}, env: [] };
     }
     const step = entry as Record<string, unknown>;
     const withMap =
@@ -209,7 +214,11 @@ function readSteps(raw: unknown, jobId: string, assignments: WorkflowAssignment[
       ...(typeof step.name === 'string' ? { name: step.name } : {}),
       ...(typeof step.uses === 'string' ? { uses: step.uses } : {}),
       ...(typeof step.run === 'string' ? { run: step.run } : {}),
-      withKeys: Object.keys(withMap),
+      // An input with no value is not set: the action sees nothing.
+      withKeys: Object.entries(withMap)
+        .filter(([, value]) => value !== null && value !== undefined && value !== '')
+        .map(([key]) => key),
+      withValues: scalarValues(withMap),
       env: readAssignments(step.env, `jobs.${jobId}.steps[${index}].env`, assignments),
     };
   });
@@ -228,6 +237,15 @@ function readAssignments(
   }));
   sink.push(...entries);
   return entries;
+}
+
+function scalarValues(map: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(map)) {
+    if (typeof value === 'string') out[key] = value;
+    else if (typeof value === 'number' || typeof value === 'boolean') out[key] = String(value);
+  }
+  return out;
 }
 
 function toStringList(raw: unknown): string[] {
@@ -264,9 +282,38 @@ export function usesAction(actual: string | undefined, expected: string): boolea
   return withoutVersion === wanted;
 }
 
-/** Does a `run:` block contain every fragment, ignoring case and whitespace runs? */
+/** Shell comments removed: `#` at the start of a line or after whitespace. */
+export function withoutShellComments(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/(^|\s)#.*$/, '$1'))
+    .join('\n');
+}
+
+/**
+ * Does code expand this variable, rather than merely spell its name?
+ *
+ * `$NAME`, `${NAME}` (and `${NAME:-default}`, `${NAME%…}`), and
+ * `env.NAME` — which covers `${{ env.NAME }}` in a workflow and `env.NAME` /
+ * `${env.NAME}` in a Jenkinsfile. The caller removes comments first. The
+ * name is a validated identifier, so it is safe inside the pattern.
+ */
+export function expandsVariable(code: string, name: string): boolean {
+  return new RegExp(`\\$(\\{\\s*)?${name}(?![A-Za-z0-9_])|(^|[^A-Za-z0-9_.])env\\.${name}(?![A-Za-z0-9_])`).test(code);
+}
+
+/**
+ * Does a `run:` block contain every fragment, ignoring case and whitespace
+ * runs? Returns the fragments it lacks.
+ *
+ * Shell comments are not commands. YAML strips ` # …` from a plain scalar, but
+ * in a `run: |` block the comment is part of the string, so `# node build.mjs`
+ * would otherwise count as running the build. The rule is the one the pipeline
+ * reference checks use: `#` at the start of a line or after whitespace.
+ */
 export function runContains(run: string | undefined, fragments: readonly string[]): string[] {
   if (!run) return [...fragments];
-  const haystack = run.replace(/\s+/g, ' ').toLowerCase();
+  const code = withoutShellComments(run);
+  const haystack = code.replace(/\s+/g, ' ').toLowerCase();
   return fragments.filter((fragment) => !haystack.includes(fragment.replace(/\s+/g, ' ').toLowerCase()));
 }

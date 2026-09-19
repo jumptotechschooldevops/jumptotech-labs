@@ -104,7 +104,7 @@ Resources:
           - Effect: Allow
             Action:
               - s3:GetObject
-            Resource: !GetAtt ExportBucket.Arn
+            Resource: !Sub '\${ExportBucket.Arn}/*'
 
 Outputs:
   ExportBucketName:
@@ -140,7 +140,8 @@ describe('AWS-018 — the seeded template does not pass', () => {
     expect(failed(result.checks).sort()).toEqual([
       "Every reference in the template resolves to something it declares",
       "The policy attaches to the role by referring to it",
-      "The policy takes the bucket's ARN from the bucket resource",
+      "The policy grants access to the objects, using the bucket's ARN from the bucket resource",
+      "The queue is named from the Environment parameter",
       "The role trusts the service the export instances run on",
       "The role's trust document allows rather than denies",
       "The role's trust document allows the role to be assumed",
@@ -186,7 +187,7 @@ describe('AWS-018 — a correct repair passes however it is written', () => {
 
   it('passes the same template written with long-form intrinsics', async () => {
     const longForm = SOLVED
-      .replace("Resource: !GetAtt ExportBucket.Arn", "Resource:\n              Fn::GetAtt: [ExportBucket, Arn]")
+      .replace("Resource: !Sub '${ExportBucket.Arn}/*'", "Resource:\n              Fn::Sub: '${ExportBucket.Arn}/*'")
       .replace("- !Ref ExportRole", "- Ref: ExportRole")
       .replace("Value: !GetAtt ExportRole.Arn", "Value:\n      Fn::GetAtt: [ExportRole, Arn]")
       .replace("Value: !Ref ExportBucket", "Value:\n      Ref: ExportBucket");
@@ -206,7 +207,7 @@ describe('AWS-018 — a correct repair passes however it is written', () => {
             Roles: [{ Ref: 'ExportRole' }],
             PolicyDocument: {
               Version: '2012-10-17',
-              Statement: [{ Effect: 'Allow', Action: ['s3:GetObject'], Resource: { 'Fn::GetAtt': ['ExportBucket', 'Arn'] } }],
+              Statement: [{ Effect: 'Allow', Action: ['s3:GetObject'], Resource: { 'Fn::Sub': '${ExportBucket.Arn}/*' } }],
             },
           },
         },
@@ -236,7 +237,7 @@ describe('AWS-018 — a correct repair passes however it is written', () => {
     Properties:
       PolicyDocument:
         Statement:
-          - Resource: !GetAtt ExportBucket.Arn
+          - Resource: !Sub '\${ExportBucket.Arn}/*'
             Action: [s3:GetObject]
             Effect: Allow
         Version: '2012-10-17'
@@ -279,19 +280,31 @@ describe('AWS-018 — templates that look repaired but are not', () => {
   });
 
   it('fails when Ref is used where an attribute is required', async () => {
-    const wrongIntrinsic = SOLVED.replace('Resource: !GetAtt ExportBucket.Arn', 'Resource: !Ref ExportBucket');
+    const wrongIntrinsic = SOLVED.replace("Resource: !Sub '${ExportBucket.Arn}/*'", 'Resource: !Ref ExportBucket');
     const result = await run(wrongIntrinsic);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toEqual(["The policy takes the bucket's ARN from the bucket resource"]);
+    expect(failed(result.checks)).toEqual(["The policy grants access to the objects, using the bucket's ARN from the bucket resource"]);
   });
 
-  it('fails when GetAtt names the wrong attribute', async () => {
-    const wrongAttribute = SOLVED.replace('!GetAtt ExportBucket.Arn', '!GetAtt ExportBucket.DomainName');
+  it('fails the bucket ARN alone, which grants s3:GetObject on no object at all', async () => {
+    // What this lab used to accept as the answer. GetObject is authorised
+    // against arn:aws:s3:::bucket/key; the bare bucket ARN matches no key.
+    const bucketOnly = SOLVED.replace("Resource: !Sub '${ExportBucket.Arn}/*'", 'Resource: !GetAtt ExportBucket.Arn');
+    const result = await run(bucketOnly);
+
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual([
+      "The policy grants access to the objects, using the bucket's ARN from the bucket resource",
+    ]);
+  });
+
+  it('fails when the Sub names the wrong attribute', async () => {
+    const wrongAttribute = SOLVED.replace('${ExportBucket.Arn}/*', '${ExportBucket.DomainName}/*');
     const result = await run(wrongAttribute);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toContain("The policy takes the bucket's ARN from the bucket resource");
+    expect(failed(result.checks)).toContain("The policy grants access to the objects, using the bucket's ARN from the bucket resource");
   });
 
   it('fails when the logical ID is right but the resource type is wrong', async () => {
@@ -326,7 +339,7 @@ describe('AWS-018 — templates that look repaired but are not', () => {
     const result = await run(commented);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toHaveLength(7);
+    expect(failed(result.checks)).toHaveLength(8);
   });
 
   it('cannot be passed by putting the expected values in an unrelated resource', async () => {
@@ -388,6 +401,61 @@ Outputs:`,
 
 // --------------------------------------------------------------- isolation
 
+describe('AWS-018 — the object ARN, graded on its value rather than its spelling', () => {
+  const OBJECTS = "The policy grants access to the objects, using the bucket's ARN from the bucket resource";
+  const LINE = "Resource: !Sub '${ExportBucket.Arn}/*'";
+  const withResource = (yaml: string) => {
+    expect(SOLVED).toContain(LINE);
+    return SOLVED.replace(LINE, yaml);
+  };
+
+  const equivalent: Array<[string, string]> = [
+    ['a list naming the bucket and its objects', "Resource:\n              - !GetAtt ExportBucket.Arn\n              - !Sub '${ExportBucket.Arn}/*'"],
+    ['a list with the objects first', "Resource:\n              - !Sub '${ExportBucket.Arn}/*'\n              - !GetAtt ExportBucket.Arn"],
+    ['Fn::Join of the GetAtt and /*', "Resource: !Join ['', [!GetAtt ExportBucket.Arn, '/*']]"],
+    ['Fn::Join with the separator doing the work', "Resource: !Join ['/', [!GetAtt ExportBucket.Arn, '*']]"],
+    ['a Sub variable map bound to the GetAtt', "Resource: !Sub ['${B}/*', {B: !GetAtt ExportBucket.Arn}]"],
+    ['long-form Fn::Sub', "Resource:\n              Fn::Sub: '${ExportBucket.Arn}/*'"],
+    ['long-form Fn::Join with a list-form GetAtt', "Resource:\n              Fn::Join: ['', [{'Fn::GetAtt': [ExportBucket, Arn]}, '/*']]"],
+  ];
+  for (const [name, yaml] of equivalent) {
+    it(`passes ${name}`, async () => {
+      const result = await run(withResource(yaml));
+      expect(failed(result.checks)).toEqual([]);
+      expect(result.passed).toBe(true);
+    });
+  }
+
+  const wrong: Array<[string, string]> = [
+    ['a Sub that leaves off the /*', "Resource: !Sub '${ExportBucket.Arn}'"],
+    ['a Join that leaves off the /*', "Resource: !Join ['', [!GetAtt ExportBucket.Arn]]"],
+    ['a list naming only the bucket', 'Resource:\n              - !GetAtt ExportBucket.Arn'],
+    ['a hand-written ARN string', "Resource: 'arn:aws:s3:::staging-payments-exports/*'"],
+    ['the template text as a plain string, not a Sub', "Resource: '${ExportBucket.Arn}/*'"],
+    ['the bucket name where the ARN belongs', "Resource: !Join ['', [!Ref ExportBucket, '/*']]"],
+    ['a Sub variable bound to the bucket name', "Resource: !Sub ['${B}/*', {B: !Ref ExportBucket}]"],
+    ['a Sub variable left unbound', "Resource: !Sub ['${B}/*', {C: !GetAtt ExportBucket.Arn}]"],
+    ['a narrower prefix than the task asks for', "Resource: !Sub '${ExportBucket.Arn}/exports/*'"],
+    ['every resource in the account', "Resource: '*'"],
+  ];
+  for (const [name, yaml] of wrong) {
+    it(`fails ${name}`, async () => {
+      const result = await run(withResource(yaml));
+      expect(result.passed).toBe(false);
+      expect(failed(result.checks)).toContain(OBJECTS);
+    });
+  }
+
+  it('says what failed without handing over the value', async () => {
+    const result = await run(withResource('Resource: !GetAtt ExportBucket.Arn'));
+    const detail = result.checks.find((c) => c.label === OBJECTS)?.detail ?? '';
+    expect(detail).toContain('PolicyDocument.Statement.0.Resource');
+    expect(detail).not.toContain('/*');
+    expect(detail).not.toContain('ExportBucket.Arn');
+    expect(detail).not.toContain('Sub');
+  });
+});
+
 describe('AWS-018 — isolation', () => {
   it('is not passed by another session having solved it', async () => {
     const lab = await loadLabDefinition(AWS_018);
@@ -416,5 +484,49 @@ describe('AWS-018 — isolation', () => {
 
     expect(result.passed).toBe(false);
     expect(result.checks.find((c) => c.status === 'fail')?.detail).toContain('not a regular file');
+  });
+});
+
+describe('AWS-018 — second audit: outputs and names are graded on what they evaluate to', () => {
+  const ROLE_ARN = 'The stack exports the role ARN, taken from the role';
+  const BUCKET_NAME = 'The stack exports the bucket name, taken from the bucket';
+  const QUEUE = 'The queue is named from the Environment parameter';
+
+  it('fails the role name exported where its ARN belongs, and the ARN where the bucket name belongs', async () => {
+    const swapped = SOLVED.replace('Value: !GetAtt ExportRole.Arn', 'Value: !Ref ExportRole').replace(
+      'Value: !Ref ExportBucket',
+      'Value: !GetAtt ExportBucket.Arn',
+    );
+    expect(failed((await run(swapped)).checks).sort()).toEqual([BUCKET_NAME, ROLE_ARN]);
+  });
+
+  it('passes the same outputs written with Sub', async () => {
+    const sub = SOLVED.replace('Value: !GetAtt ExportRole.Arn', "Value: !Sub '${ExportRole.Arn}'").replace(
+      'Value: !Ref ExportBucket',
+      "Value: !Sub '${ExportBucket}'",
+    );
+    expect(failed((await run(sub)).checks)).toEqual([]);
+  });
+
+  it('fails a new Env parameter declared to make the old reference resolve', async () => {
+    const newParam = SOLVED.replace(
+      "QueueName: !Sub '\${Environment}-payments-export-events'",
+      "QueueName: !Sub '\${Env}-payments-export-events'",
+    ).replace('Parameters:\n', 'Parameters:\n  Env:\n    Type: String\n    Default: staging\n');
+    expect(newParam).toContain('${Env}');
+    expect(failed((await run(newParam)).checks)).toEqual([QUEUE]);
+  });
+
+  it('passes the queue named from Environment with Join, and fails a literal name', async () => {
+    const join = SOLVED.replace(
+      "QueueName: !Sub '\${Environment}-payments-export-events'",
+      "QueueName: !Join ['-', [!Ref Environment, payments-export-events]]",
+    );
+    expect(failed((await run(join)).checks)).toEqual([]);
+    const literal = SOLVED.replace(
+      "QueueName: !Sub '\${Environment}-payments-export-events'",
+      'QueueName: staging-payments-export-events',
+    );
+    expect(failed((await run(literal)).checks)).toEqual([QUEUE]);
   });
 });

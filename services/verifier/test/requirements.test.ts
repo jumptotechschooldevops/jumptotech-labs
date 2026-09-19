@@ -160,6 +160,14 @@ describe('verifier — Service checks (test requirement 18)', () => {
     expect(passed(await check(ready(), { type: 'service_endpoints', name: 'accounts', min_ready: 2 }))).toBe(true);
   });
 
+  it('names the selector value it found, never the one it wants', async () => {
+    // K8S-010 and NET-025 are diagnosis labs: the right selector is the fault.
+    const result = await check(ready(), { type: 'service_selector', name: 'accounts', selector: { app: 'ledger-api' } });
+    expect(passed(result)).toBe(false);
+    expect(result.detail).toContain("'accounts'");
+    expect(result.detail).not.toContain('ledger-api');
+  });
+
   it('fails a Service whose selector matches nothing', async () => {
     // A Service with a bad selector is created happily and silently drops
     // traffic — the fault K8S-003 and K8S-010 both teach.
@@ -175,6 +183,31 @@ describe('verifier — Service checks (test requirement 18)', () => {
 
   it('runs the shipped K8S-003 lab end to end', async () => {
     expect((await runLab(registry.get('K8S-003'), ready())).passed).toBe(true);
+  });
+});
+
+// ------------------------------------ Secret/ConfigMap delivered to the app
+
+describe('verifier — configuration has to reach the variable the application reads', () => {
+  const lab = async () => (await realCatalog()).get('K8S-005');
+  const payments = (configRefs: ConfigReference[]) =>
+    new FakeKubernetes({
+      deployments: { [NS]: [deploymentSnapshot({ name: 'payments', desiredReplicas: 1, selector: { app: 'payments' }, configRefs })] },
+    });
+  const rule = { type: 'deployment_uses_secret', name: 'payments', secret: 'payments-api', key: 'api-token', env: 'PAYMENTS_API_TOKEN' } as const;
+
+  it('passes the key delivered into PAYMENTS_API_TOKEN', async () => {
+    expect(passed(await check(payments([{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN' }]), rule))).toBe(true);
+  });
+
+  it('fails envFrom, which names the variable api-token, and a different variable', async () => {
+    expect(passed(await check(payments([{ source: 'secret', name: 'payments-api', via: 'envFrom' }]), rule))).toBe(false);
+    expect(passed(await check(payments([{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'TOKEN' }]), rule))).toBe(false);
+  });
+
+  it('K8S-005 asks for exactly that', async () => {
+    const shipped = (await lab()).requirements.find((r) => r.type === 'deployment_uses_secret');
+    expect(shipped).toMatchObject({ env: 'PAYMENTS_API_TOKEN', key: 'api-token' });
   });
 });
 
@@ -197,7 +230,21 @@ describe('verifier — ConfigMap checks (test requirement 19)', () => {
 
     const wrong = await check(withConfig(), { type: 'configmap_key', name: 'statements-config', key: 'STATEMENT_FORMAT', value: 'csv' });
     expect(passed(wrong)).toBe(false);
-    expect(wrong.detail).toContain("expected 'csv'");
+    // What the key holds, never what it should: in a diagnosis lab that is
+    // the finding the student has to record.
+    expect(wrong.detail).toContain("'pdf'");
+    expect(wrong.detail).not.toContain('csv');
+  });
+
+  it('does not accept an empty value as a recorded finding', async () => {
+    const empty = new FakeKubernetes({
+      configMaps: { [NS]: [{ name: 'findings', namespace: NS, data: { selector: '', targetPort: '  ' } }] },
+    });
+    for (const key of ['selector', 'targetPort']) {
+      const result = await check(empty, { type: 'configmap_key', name: 'findings', key });
+      expect(passed(result), key).toBe(false);
+      expect(result.detail).toContain('is empty');
+    }
   });
 
   it('accepts any documented way of consuming a ConfigMap', async () => {
@@ -233,6 +280,16 @@ describe('verifier — ConfigMap checks (test requirement 19)', () => {
   it('runs the shipped K8S-004 lab end to end', async () => {
     expect((await runLab(registry.get('K8S-004'), withConfig())).passed).toBe(true);
   });
+
+  it('fails K8S-004 when only one of the two settings moved into the ConfigMap', async () => {
+    const oneKey = withConfig([{ source: 'configmap', name: 'statements-config', via: 'env', key: 'STATEMENT_FORMAT' }]);
+    const result = await runLab(registry.get('K8S-004'), oneKey);
+
+    expect(result.passed).toBe(false);
+    expect(result.checks.filter((c) => c.status !== 'pass').map((c) => c.label)).toEqual([
+      'Deployment statements reads RETENTION_DAYS from the ConfigMap',
+    ]);
+  });
 });
 
 // -------------------------------------------------------------- 20. Secrets
@@ -247,7 +304,7 @@ describe('verifier — Secret checks (test requirement 20)', () => {
             name: 'payments',
             desiredReplicas: 1,
             selector: { app: 'payments' },
-            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env' }],
+            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN' }],
           }),
         ],
       },
@@ -273,6 +330,35 @@ describe('verifier — Secret checks (test requirement 20)', () => {
     expect(
       passed(await check(withSecret(), { type: 'deployment_uses_secret', name: 'payments', secret: 'payments-api', key: 'api-token' })),
     ).toBe(true);
+  });
+
+  it('fails K8S-005 when the plaintext literal is left beside the Secret reference', async () => {
+    // Kubernetes accepts both; the lesson is that the literal leaves the
+    // manifest. Only the name is known to the check — no value is read.
+    const leftBehind = new FakeKubernetes({
+      secrets: { [NS]: [{ name: 'payments-api', namespace: NS, type: 'Opaque', keys: ['api-token'] }] },
+      deployments: {
+        [NS]: [
+          deploymentSnapshot({
+            name: 'payments',
+            desiredReplicas: 1,
+            selector: { app: 'payments' },
+            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN' }],
+            containers: [
+              { name: 'api', image: 'nginx:stable', ready: true, restartCount: 0, state: 'running', literalEnvNames: ['PAYMENTS_API_TOKEN'] },
+            ],
+          }),
+        ],
+      },
+    });
+    const result = await runLab(registry.get('K8S-005'), leftBehind);
+    const failing = result.checks.filter((c) => c.status !== 'pass');
+
+    expect(result.passed).toBe(false);
+    expect(failing.map((c) => c.label)).toEqual(['The token is no longer written into the Deployment']);
+    expect(failing[0]?.detail).toBe(
+      "container 'api' still sets PAYMENTS_API_TOKEN to a literal value, which overrides a reference",
+    );
   });
 
   it('runs the shipped K8S-005 lab end to end', async () => {
@@ -718,5 +804,57 @@ describe('verifier — registry completeness', () => {
     // The registry is a mapped type over RequirementType, so a missing handler
     // is a compile error; this asserts the runtime object agrees.
     expect(registeredRequirementTypes().length).toBeGreaterThanOrEqual(80);
+  });
+});
+
+// ------------------------------------------------------------- named ports
+
+describe('verifier — a named port means the number the container gives it', () => {
+  const pod = (ports: Array<{ name?: string; containerPort: number }>) =>
+    podSnapshot({
+      name: 'accounts-1',
+      labels: { app: 'accounts' },
+      containers: [{ name: 'web', image: 'nginx:stable', ready: true, restartCount: 0, state: 'running', ports }],
+    });
+  const cluster = (targetPort: number | string, ports: Array<{ name?: string; containerPort: number }>) =>
+    new FakeKubernetes({
+      services: {
+        [NS]: [{ name: 'accounts', namespace: NS, type: 'ClusterIP', selector: { app: 'accounts' }, ports: [{ port: 80, targetPort, protocol: 'TCP' }] }],
+      },
+      pods: { [NS]: [pod(ports)] },
+    });
+  const req = { type: 'service_port', name: 'accounts', port: 80, target_port: 80 } as Requirement;
+
+  it('accepts targetPort: http when the selected Pods name port 80 http', async () => {
+    expect(passed(await check(cluster('http', [{ name: 'http', containerPort: 80 }]), req))).toBe(true);
+    expect(passed(await check(cluster(80, [{ name: 'http', containerPort: 80 }]), req))).toBe(true);
+  });
+
+  it('refuses a name that resolves to another port, or to nothing', async () => {
+    expect(passed(await check(cluster('http', [{ name: 'http', containerPort: 8080 }]), req))).toBe(false);
+    expect(passed(await check(cluster('web', [{ name: 'http', containerPort: 80 }]), req))).toBe(false);
+  });
+
+  it('resolves a probe port name through the container', async () => {
+    const k8s = new FakeKubernetes({
+      deployments: {
+        [NS]: [
+          deploymentSnapshot({
+            name: 'notifications',
+            containers: [
+              {
+                name: 'web', image: 'nginx:stable', ready: true, restartCount: 0, state: 'running',
+                ports: [{ name: 'http', containerPort: 80 }],
+                probes: [{ kind: 'readiness', handler: 'httpGet', path: '/', port: 'http' }],
+              },
+            ],
+          }),
+        ],
+      },
+    });
+    const probe = (port: number) =>
+      check(k8s, { type: 'deployment_probe', name: 'notifications', probe: 'readiness', handler: 'httpGet', path: '/', port } as Requirement);
+    expect(passed(await probe(80))).toBe(true);
+    expect(passed(await probe(8080))).toBe(false);
   });
 });

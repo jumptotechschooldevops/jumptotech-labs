@@ -90,6 +90,10 @@ requirements:
   - type: docker_container_exists
     name: audit-log
     label: Container audit-log exists
+  - type: docker_container_image
+    name: audit-log
+    image: alpine:3.20
+    label: Container audit-log runs the image the task names
   - type: docker_container_state
     name: audit-log
     expected: exited

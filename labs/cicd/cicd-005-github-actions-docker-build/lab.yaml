@@ -66,6 +66,9 @@ task:
 
     * declares `needs: build`, so it only runs when the build job succeeded —
       there is no point building an image around code that failed its tests;
+    * checks the repository out first — every job starts on a fresh runner
+      with nothing on it, so a job that builds from the Dockerfile needs its
+      own copy of the code;
     * runs `docker build` in a step;
     * takes the image name from a workflow-level `env` value called
       `IMAGE_NAME` rather than repeating a literal in every step.
@@ -114,9 +117,20 @@ requirements:
   - type: github_workflow_step_exists
     path: .github/workflows/ci.yml
     job: image
+    uses: actions/checkout
+    label: The image job checks the repository out
+  # The name has to be expanded: `-t IMAGE_NAME` tags the image with the
+  # literal text, which Docker rejects.
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: image
     run_contains:
       - docker build
-    label: A step builds the container image
+    run_expands:
+      - IMAGE_NAME
+    after:
+      - uses: actions/checkout
+    label: A step builds the container image, named from IMAGE_NAME
   - type: environment_reference_exists
     path: .github/workflows/ci.yml
     name: IMAGE_NAME

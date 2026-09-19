@@ -99,9 +99,10 @@ task:
     reporting, and it helps to have seen the small version first.
 
     Leave the workspace with a successful build in `dist/` and the script in
-    place. Then press Check Solution — it reads your script and runs the same
-    three commands itself, so it is verifying what a pipeline would verify
-    rather than what you typed into the terminal.
+    place. Then press Check Solution — it reads your script to see that it
+    names the three stages, then runs those three commands itself (not your
+    script), so it is verifying what a pipeline would verify rather than what
+    you typed into the terminal.
 
 setup:
   workspace_dir: workspace

@@ -166,6 +166,13 @@ requirements:
     references: PrivateRouteTable
     via: Ref
     label: DynamoDbEndpoint is associated with the private route table
+  - type: cfn_resource_reference
+    path: /home/student/network/vpc.yaml
+    logical_id: DynamoDbEndpoint
+    property: VpcId
+    references: Vpc
+    via: Ref
+    label: DynamoDbEndpoint belongs to this VPC
 
   # --- what must survive ----------------------------------------------------
   - type: cfn_resource_exists
@@ -187,29 +194,35 @@ requirements:
     label: Every reference in the template still resolves
 
   # --- the written conclusions ----------------------------------------------
-  - type: file_content
+  - type: file_key_value
     path: /home/student/network/findings.env
-    contains: "\nENDPOINT_TYPE=Gateway\n"
+    key: ENDPOINT_TYPE
+    equals: Gateway
     label: The endpoint type is named as AWS names it
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/network/findings.env
-    contains: "\nENDPOINT_CHARGE=none\n"
+    key: ENDPOINT_CHARGE
+    equals: none
     label: What AWS charges for that endpoint type is stated correctly
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/network/findings.env
-    contains: "\nBACKUP_TRAFFIC_VIA=gateway_endpoint\n"
+    key: BACKUP_TRAFFIC_VIA
+    equals: gateway_endpoint
     label: The backup traffic now reaches S3 the cheap way
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/network/findings.env
-    contains: "\nPATCHING_TRAFFIC_VIA=nat_gateway\n"
-    label: OS patching is correctly still routed through the NAT gateway
+    key: PATCHING_TRAFFIC_VIA
+    equals: nat_gateway
+    # The label must not name the route: that is the answer.
+    label: The route OS patching takes is correctly reported
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/network/findings.env
-    contains: "\nNAT_SHARE_REMOVED=88\n"
+    key: NAT_SHARE_REMOVED
+    equals: "88"
     label: The share of NAT-processed bytes removed is calculated correctly
 
   - type: file_content_absent

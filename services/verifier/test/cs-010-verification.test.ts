@@ -307,7 +307,7 @@ describe('CS-010 rejects a YAML repair that is not a repair', () => {
     const result = await verify(solved({ yaml: unquoted }));
     expect(result.passed).toBe(false);
     expect(failed(result.checks)).toEqual([
-      'The country is quoted, so it stays a country and does not become false',
+      'The leeds country is quoted, so it stays the country code it was meant to be',
     ]);
   });
 
@@ -317,7 +317,7 @@ describe('CS-010 rejects a YAML repair that is not a repair', () => {
     const result = await verify(solved({ yaml: unquoted }));
     expect(result.passed).toBe(false);
     expect(failed(result.checks)).toEqual([
-      'The version is quoted, so it stays 3.10 and does not become 3.1',
+      'The leeds version is quoted, so it stays exactly as written',
     ]);
   });
 
@@ -327,7 +327,7 @@ describe('CS-010 rejects a YAML repair that is not a repair', () => {
     const result = await verify(solved({ yaml: tabbed }));
     expect(result.passed).toBe(false);
     expect(failed(result.checks)).toEqual([
-      'The indentation is spaces, which is the only indentation YAML allows',
+      'The repaired file parses — spaces for indentation, and no key twice',
     ]);
   });
 
@@ -337,7 +337,8 @@ describe('CS-010 rejects a YAML repair that is not a repair', () => {
     expect(result.passed).toBe(false);
     expect(failed(result.checks)).toEqual([
       'The duplicated depot key appears once, and still appears',
-      'The values the duplicate block was silently winning with are gone',
+      'Both depots are still described, without the values the duplicate block was silently winning with',
+      'The repaired file parses — spaces for indentation, and no key twice',
     ]);
   });
 
@@ -349,8 +350,15 @@ describe('CS-010 rejects a YAML repair that is not a repair', () => {
     const result = await verify(solved({ yaml: renamed }));
     expect(result.passed).toBe(false);
     expect(failed(result.checks)).toEqual([
-      'The values the duplicate block was silently winning with are gone',
+      'Both depots are still described, without the values the duplicate block was silently winning with',
     ]);
+  });
+
+  it('rejects a file gutted down to the one line the count check looks for', async () => {
+    // Every trap is "gone" from a file that no longer says anything.
+    const result = await verify(solved({ yaml: 'leeds:\n' }));
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual(['Both depots are still described, without the values the duplicate block was silently winning with']);
   });
 
   it('rejects deleting the depot rather than repairing it', async () => {
@@ -484,7 +492,8 @@ describe('CS-010 grading hygiene', () => {
     );
     for (const check of result.checks) {
       expect(check.detail ?? '', check.label).not.toMatch(
-        /d8cd267f|key=region|key=enabled|COUNTRY_BECAME|VERSION_BECAME|TAB_DEPOT|DUPLICATE_KEY/,
+        // Key names are printed in the task; only values would be a disclosure.
+        /d8cd267f|key=region|key=enabled|COUNTRY_BECAME=|VERSION_BECAME=|TAB_DEPOT=|DUPLICATE_KEY=|=false|=3\.1\b|=bristol|=leeds/,
       );
     }
   });
@@ -493,7 +502,7 @@ describe('CS-010 grading hygiene', () => {
     const sandbox = new FakeSandbox(solved());
     await verifyLab({ lab: await lab(), sandbox, namespace: SANDBOX });
 
-    expect(new Set(sandbox.reads)).toEqual(new Set([LOADER, YAML_FIX]));
+    expect(new Set(sandbox.reads)).toEqual(new Set([LOADER, YAML_FIX, WRITEUP]));
     for (const inspection of sandbox.inspections) {
       expect(inspection).toMatch(/^(sha256sum|grep) /);
       expect(inspection).toContain('/home/student/');

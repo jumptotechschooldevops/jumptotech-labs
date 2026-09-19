@@ -217,7 +217,19 @@ requirements:
     name: deploy_manifest
     attribute: content
     references: local_file.integrity_record
+    referenced_attribute: filename
     label: The deploy manifest derives the integrity record's path from that resource
+
+  # "That same checksum" — taken from the resource here too. The file check
+  # above is satisfied by pasting the digits; this is not.
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: deploy_manifest
+    attribute: content
+    references: local_file.service_config
+    referenced_attribute: content_sha256
+    label: The deploy manifest derives its checksum from the configuration resource
 
   - type: terraform_output_equals
     dir: terraform

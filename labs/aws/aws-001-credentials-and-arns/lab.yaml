@@ -120,45 +120,53 @@ setup:
 
 requirements:
   # --- Part 1: credential precedence ---------------------------------------
-  - type: file_content
+  - type: file_key_value
     path: /home/student/aws-incident/findings.env
-    contains: "CAPTURE_1_SOURCE=environment_variables"
+    key: CAPTURE_1_SOURCE
+    equals: environment_variables
     label: Capture 1 — the winning credential source is identified correctly
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/aws-incident/findings.env
-    contains: "CAPTURE_2_SOURCE=credentials_file"
+    key: CAPTURE_2_SOURCE
+    equals: credentials_file
     label: Capture 2 — the winning credential source is identified correctly
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/aws-incident/findings.env
-    contains: "CAPTURE_3_SOURCE=custom_process"
+    key: CAPTURE_3_SOURCE
+    equals: custom_process
     label: Capture 3 — the winning credential source is identified correctly
 
   # --- Part 2: ARN judgements ----------------------------------------------
-  - type: file_content
+  - type: file_key_value
     path: /home/student/aws-incident/findings.env
-    contains: "ARN_1=valid"
+    key: ARN_1
+    equals: valid
     label: ARN 1 is judged correctly
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/aws-incident/findings.env
-    contains: "ARN_2=invalid"
+    key: ARN_2
+    equals: invalid
     label: ARN 2 is judged correctly
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/aws-incident/findings.env
-    contains: "ARN_3=valid"
+    key: ARN_3
+    equals: valid
     label: ARN 3 is judged correctly
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/aws-incident/findings.env
-    contains: "ARN_4=invalid"
+    key: ARN_4
+    equals: invalid
     label: ARN 4 is judged correctly
 
-  - type: file_content
+  - type: file_key_value
     path: /home/student/aws-incident/findings.env
-    contains: "ARN_5=invalid"
+    key: ARN_5
+    equals: invalid
     label: ARN 5 is judged correctly
 
   - type: file_content_absent

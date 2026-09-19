@@ -28,6 +28,7 @@ import {
 import type { SandboxReader } from '../sandbox-reader.js';
 import {
   CloudFormationParseError,
+  asSubTemplate,
   outputReference,
   parseCloudFormationTemplate,
   readPath,
@@ -169,6 +170,39 @@ export const cfnResourceReference: SandboxVerifierHandler<'cfn_resource_referenc
   },
 };
 
+export const cfnPropertyResolvesTo: SandboxVerifierHandler<'cfn_property_resolves_to'> = {
+  type: 'cfn_property_resolves_to',
+  label: (r) => `${r.logical_id}.${r.property} resolves to the required value`,
+  async run(requirement, reader) {
+    const result = await readTemplate(reader, requirement.path);
+    if ('outcome' in result) return result.outcome;
+
+    const resource = result.template.resources[requirement.logical_id];
+    if (!resource) return fail(`no resource named '${requirement.logical_id}' in '${requirement.path}'`);
+
+    const value = readPath(resource.properties, requirement.property);
+    if (value === undefined || value === null) {
+      return fail(`'${requirement.logical_id}' has no ${requirement.property}`);
+    }
+
+    // A list passes when any entry resolves: a policy may name the bucket and
+    // its objects side by side.
+    const entries = Array.isArray(value) ? value : [value];
+    const matches = (template: string | null): boolean =>
+      template !== null &&
+      (requirement.any_of !== undefined
+        ? requirement.any_of.includes(template)
+        : template.includes(requirement.contains ?? '\u0000'));
+    if (entries.some((entry) => matches(asSubTemplate(entry)))) return pass();
+
+    // Never the expected value: it is the answer.
+    const shape = Array.isArray(value) ? `a list of ${value.length}, none of which does` : 'it does not';
+    return fail(
+      `'${requirement.logical_id}'.${requirement.property} does not resolve to what the task asks for (${shape})`,
+    );
+  },
+};
+
 export const cfnReferencesResolve: SandboxVerifierHandler<'cfn_references_resolve'> = {
   type: 'cfn_references_resolve',
   label: (r) => `Every reference in ${r.path} resolves`,
@@ -213,6 +247,15 @@ export const cfnOutputExists: SandboxVerifierHandler<'cfn_output_exists'> = {
       if (!reference) return fail(`output '${requirement.name}' does not reference a resource`);
       if (reference.target !== requirement.references) {
         return fail(`output '${requirement.name}' references '${reference.target}'`);
+      }
+    }
+    if (requirement.resolves_to !== undefined) {
+      // "An ARN is not an identifier": `!Ref Role` names the right resource
+      // and returns its name, not its ARN. Compare what the Value evaluates to.
+      const output = result.template.outputs[requirement.name] as { Value?: unknown } | null;
+      const value = asSubTemplate(output?.Value);
+      if (value === null || !requirement.resolves_to.includes(value)) {
+        return fail(`output '${requirement.name}' does not give the value this lab asks for`);
       }
     }
     return pass();

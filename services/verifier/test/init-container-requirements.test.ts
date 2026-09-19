@@ -295,8 +295,19 @@ describe('workload_container — command and args', () => {
 
 // ------------------------------------------------------------------- the lab
 
+const REVISION_2 = { 'deployment.kubernetes.io/revision': '2' };
+
 describe('K8S-016 — the shipped lab', () => {
-  const app = (over: Partial<ContainerSnapshot> = {}) => container({ name: 'api', image: APP_IMAGE, ...over });
+  // The application exactly as the fixture declares it: it serves the shared
+  // volume and proves readiness by fetching the index page.
+  const app = (over: Partial<ContainerSnapshot> = {}) =>
+    container({
+      name: 'api',
+      image: APP_IMAGE,
+      volumeMounts: [{ name: 'site', mountPath: '/usr/share/nginx/html' }],
+      probes: [{ kind: 'readiness', handler: 'httpGet', path: '/index.html', port: 'http' }],
+      ...over,
+    });
   const init = (over: Partial<ContainerSnapshot> = {}) =>
     container({ name: 'prepare-content', image: INIT_IMAGE, ...over });
 
@@ -315,6 +326,8 @@ describe('K8S-016 — the shipped lab', () => {
             selector: SELECTOR,
             podLabels: SELECTOR,
             containers: [app()],
+            volumes: [{ name: 'site', source: 'emptyDir' }],
+            annotations: { 'deployment.kubernetes.io/revision': '1' },
             ...over,
           }),
         ],
@@ -326,7 +339,7 @@ describe('K8S-016 — the shipped lab', () => {
   const seeded = () => state({ readyReplicas: 0, availableReplicas: 0 });
   /** Solved: init container added, both replicas up. */
   const solved = (over: Partial<Parameters<typeof deploymentSnapshot>[0]> = {}) =>
-    state({ initContainers: [init()], generation: 2, observedGeneration: 2, ...over });
+    state({ initContainers: [init()], generation: 2, observedGeneration: 2, annotations: REVISION_2, ...over });
 
   const run = (k8s: FakeKubernetes, ns = NS) => verifyLab({ k8s, lab, namespace: ns });
   const failed = async (k8s: FakeKubernetes, ns = NS) =>
@@ -366,7 +379,10 @@ describe('K8S-016 — the shipped lab', () => {
       new Set([
         'deployment_exists',
         'deployment_selector',
+        'workload_annotation',
         'workload_container',
+        'workload_volume_mount',
+        'deployment_probe',
         'deployment_replicas',
         'deployment_rollout_complete',
         'deployment_available',
@@ -382,6 +398,7 @@ describe('K8S-016 — the shipped lab', () => {
      * passes, because the fixture's application is not the broken part.
      */
     expect(await failed(seeded())).toEqual([
+      'The original Deployment was fixed, not replaced',
       'An init container prepare-content runs before the application',
       'The rollout finished',
       'Both replicas are available and serving',
@@ -394,7 +411,7 @@ describe('K8S-016 — the shipped lab', () => {
 
   it('fails when the preparation was added as a second app container', async () => {
     // The most likely wrong answer: right name and image, wrong list.
-    const wrongList = state({ containers: [app(), init()], generation: 2, observedGeneration: 2 });
+    const wrongList = state({ containers: [app(), init()], generation: 2, observedGeneration: 2, annotations: REVISION_2 });
     expect(await failed(wrongList)).toEqual(['An init container prepare-content runs before the application']);
   });
 
@@ -424,8 +441,32 @@ describe('K8S-016 — the shipped lab', () => {
   });
 
   it('still refuses a deleted-and-recreated Deployment', async () => {
-    expect(await failed(solved({ selector: { app: 'reporting-api' }, podLabels: { app: 'reporting-api' } }))).toEqual([
+    // `kubectl create deployment` writes a one-label selector, and any
+    // re-created object starts again at revision 1.
+    const recreated = solved({
+      selector: { app: 'reporting-api' },
+      podLabels: { app: 'reporting-api' },
+      annotations: { 'deployment.kubernetes.io/revision': '1' },
+    });
+    expect(await failed(recreated)).toEqual([
+      'The Deployment still selects the reporting-api Pods',
       'The original Deployment was fixed, not replaced',
+    ]);
+  });
+
+  it('refuses a do-nothing init container once the app stops serving the shared volume', async () => {
+    // The audit's bypass: add any busybox init container, drop the app's mount
+    // of the empty volume, and nginx serves its own bundled index.html.
+    const unmounted = solved({ containers: [app({ volumeMounts: [] })] });
+    expect(await failed(unmounted)).toEqual(['The application still serves from the shared volume']);
+  });
+
+  it('refuses a do-nothing init container once the readiness probe stops asking for the page', async () => {
+    const tcpOnly = solved({
+      containers: [app({ probes: [{ kind: 'readiness', handler: 'tcpSocket', port: 'http' }] })],
+    });
+    expect(await failed(tcpOnly)).toEqual([
+      'The application still proves it is ready by fetching its index page',
     ]);
   });
 

@@ -21,6 +21,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { loadLabDefinition, type LoadedLabDefinition } from '@jumptotech/lab-orchestrator';
 import { verifyLab } from '../src/index.js';
@@ -57,10 +58,12 @@ function line(c: string, t: string, m: string): string {
 
 const BATCH: Array<[string, string, string]> = [
   ['2', '5', '1'],
-  ['12', '9', '2'],
+  ['12', '11', '2'],
   ['7', '7', '3'],
   ['4', '2', '4'],
-  ['9', '3', '2'],
+  ['15', '10', '3'],
+  ['3', '8', '1'],
+  ['6', '4', '6'],
 ];
 
 /** What a correct program prints for every invocation the lab makes. */
@@ -267,7 +270,7 @@ describe('CS-006 rejects the bypasses', () => {
     const table = [
       '#!/bin/sh',
       'echo "DECISION=scale-down current=10 target=9 minimum=2"',
-      'echo "DECISION=scale-down current=12 target=9 minimum=2"',
+      'echo "DECISION=scale-down current=12 target=11 minimum=2"',
       'echo "DECISION=hold current=3 target=1 minimum=3"',
       '',
     ].join('\n');
@@ -297,7 +300,7 @@ describe('CS-006 grading hygiene', () => {
     const result = await verify(worldWith('#!/bin/sh\nexit 1\n', runs));
     for (const check of result.checks) {
       expect(check.detail ?? '', check.label).not.toMatch(
-        /DECISION=scale-down current=10|current=12 target=9|DECISION=hold current=3/,
+        /DECISION=scale-down current=10|current=12 target=11|DECISION=hold current=3/,
       );
     }
   });
@@ -328,5 +331,39 @@ describe('CS-006 grading hygiene', () => {
       expect(requirement.timeout_seconds).toBeGreaterThan(0);
       expect(requirement.timeout_seconds).toBeLessThanOrEqual(60);
     }
+  });
+});
+
+describe('CS-006 evidence agrees with the bug the lab describes', () => {
+  // The seeded log is what the rule produces when every comparison is made on
+  // text. It used to disagree: 12/9/2 compared as text is a scale-up, not a
+  // hold, and 9/3/2 is a scale-down — while the story said every over-target
+  // window was held.
+  async function seeded() {
+    const seed = await readFile(path.join(LABS_DIR, 'cs', 'cs-006-types-control-flow', 'setup', 'seed.sh'), 'utf8');
+    const heredoc = (name: string) => {
+      const start = seed.indexOf(`cat > "$BUNDLE/${name}" <<'TXT'\n`);
+      expect(start).toBeGreaterThan(-1);
+      const body = seed.slice(seed.indexOf('\n', start) + 1);
+      return body.slice(0, body.indexOf('\nTXT\n'));
+    };
+    return { readings: heredoc('readings.txt'), log: heredoc('decisions.log') };
+  }
+  const asText = (c: string, t: string, m: string) => (c < t ? 'scale-up' : c > t && c > m ? 'scale-down' : 'hold');
+
+  it('logs, for every reading, the decision the rule makes when it compares text', async () => {
+    const { readings, log } = await seeded();
+    const rows = readings.split('\n').map((l) => l.split(' ') as [string, string, string]);
+    const decisions = [...log.matchAll(/decision=(\S+)/g)].map((m) => m[1]);
+    expect(decisions).toEqual(rows.map(([c, t, m]) => asText(c, t, m)));
+  });
+
+  it('matches the story: four windows over target, all held, never a scale-down', async () => {
+    const { readings, log } = await seeded();
+    const rows = readings.split('\n').map((l) => l.split(' ').map(Number) as [number, number, number]);
+    expect(rows.filter(([c, t]) => c > t)).toHaveLength(4);
+    expect(log).not.toContain('decision=scale-down');
+    // ...and two of those holds are wrong, which is what the student finds.
+    expect(rows.filter(([c, t, m]) => c > t && decide(c, t, m) === 'scale-down')).toHaveLength(2);
   });
 });

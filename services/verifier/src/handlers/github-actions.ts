@@ -12,9 +12,12 @@ import {
   findJob,
   findTrigger,
   parseWorkflow,
+  expandsVariable,
   runContains,
   usesAction,
+  withoutShellComments,
   type WorkflowModel,
+  type WorkflowStep,
 } from '../ci/workflow.js';
 
 /**
@@ -185,20 +188,68 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
      * for "a step that runs the build AND passes --production" is not satisfied
      * by two separate steps each doing half.
      */
-    const matches = job.steps.filter((step) => {
+    const candidates = job.steps.filter((step) => {
       if (requirement.uses !== undefined && !usesAction(step.uses, requirement.uses)) return false;
       if (requirement.run_contains !== undefined) {
         if (runContains(step.run, requirement.run_contains).length > 0) return false;
       }
+      if (requirement.run_expands !== undefined) {
+        const code = withoutShellComments(step.run ?? '');
+        if (!requirement.run_expands.every((name) => expandsVariable(code, name))) return false;
+      }
       if (requirement.with_keys !== undefined) {
         if (!requirement.with_keys.every((key) => step.withKeys.includes(key))) return false;
+      }
+      if (requirement.with_any_key !== undefined) {
+        if (!requirement.with_any_key.some((key) => step.withKeys.includes(key))) return false;
+      }
+      if (requirement.with_contains !== undefined) {
+        if (!withContains(step, requirement.with_contains)) return false;
       }
       return true;
     });
 
+    // The runner executes steps in order: a build before the checkout builds
+    // an empty directory, and an upload before the build uploads nothing.
+    const precedes = (step: (typeof job.steps)[number]) =>
+      (requirement.after ?? []).every((earlier) =>
+        job.steps.some(
+          (other) =>
+            other.index < step.index &&
+            (earlier.uses === undefined || usesAction(other.uses, earlier.uses)) &&
+            (earlier.run_contains === undefined || runContains(other.run, earlier.run_contains).length === 0),
+        ),
+      );
+    const matches = candidates.filter(precedes);
+
+    if (candidates.length > 0 && matches.length === 0) {
+      const step = candidates[0]!;
+      return fail(
+        `step ${step.index}${step.name ? ` — ${step.name}` : ''} is in job '${requirement.job}', but runs before a step it depends on; the runner executes steps in the order they are listed`,
+      );
+    }
+
     if (matches.length > 0) {
       const step = matches[0];
       return pass(`step ${step?.index}${step?.name ? ` — ${step.name}` : ''}`);
+    }
+
+    // A step with the right action but the wrong inputs is the likeliest
+    // near-miss; say which inputs, never what they should hold.
+    if (requirement.with_contains !== undefined && requirement.uses !== undefined) {
+      const nearMiss = job.steps.find((step) => usesAction(step.uses, requirement.uses!));
+      const wrong = nearMiss
+        ? Object.keys(requirement.with_contains).filter(
+            (key) => !withContains(nearMiss, { [key]: requirement.with_contains![key]! }),
+          )
+        : [];
+      if (nearMiss && wrong.length > 0) {
+        return fail(
+          `step ${nearMiss.index}${nearMiss.name ? ` — ${nearMiss.name}` : ''} uses ${requirement.uses}, but its ${wrong
+            .map((key) => `'${key}'`)
+            .join(', ')} input${wrong.length === 1 ? ' does' : 's do'} not have the value this lab expects`,
+        );
+      }
     }
 
     // Explain against what the job *does* contain, so the student can compare.
@@ -213,6 +264,18 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
 
     const fragments = requirement.run_contains ?? [];
     const runningSteps = job.steps.filter((s) => s.run !== undefined);
+    if (requirement.run_expands !== undefined) {
+      const near = runningSteps.find((s) => runContains(s.run, fragments).length === 0);
+      if (near) {
+        const code = withoutShellComments(near.run ?? '');
+        const unexpanded = requirement.run_expands.filter((name) => !expandsVariable(code, name));
+        return fail(
+          `step ${near.index}${near.name ? ` — ${near.name}` : ''} does not expand ${unexpanded
+            .map((n) => `$${n}`)
+            .join(' or ')}; the name alone is literal text to the shell`,
+        );
+      }
+    }
     return fail(
       runningSteps.length > 0
         ? `no 'run:' step in job '${requirement.job}' includes ${fragments.map((f) => `'${f}'`).join(' and ')}`
@@ -220,3 +283,11 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
     );
   },
 };
+
+/** Every named input is a scalar whose value contains its fragment. */
+function withContains(step: WorkflowStep, wanted: Record<string, string>): boolean {
+  return Object.entries(wanted).every(([key, fragment]) => {
+    const value = step.withValues[key];
+    return value !== undefined && value.includes(fragment);
+  });
+}

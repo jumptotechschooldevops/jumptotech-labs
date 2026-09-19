@@ -133,6 +133,14 @@ requirements:
     selector:
       app: payments-api
       tier: api
+    label: The Deployment still selects the payments-api Pods
+  # A Deployment deleted and re-created starts again at revision 1; one that
+  # was changed in place has rolled out at least one new revision.
+  - type: workload_annotation
+    kind: deployment
+    name: payments-api
+    key: deployment.kubernetes.io/revision
+    min_int: 2
     label: The original Deployment was updated, not replaced
   - type: deployment_replicas
     name: payments-api

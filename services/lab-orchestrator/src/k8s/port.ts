@@ -50,6 +50,8 @@ export interface ConfigReference {
   key?: string;
   /** How the workload consumes it. */
   via: 'env' | 'envFrom' | 'volume';
+  /** For a single-key `env[].valueFrom`: the variable it sets. */
+  env?: string;
   /** Container carrying the reference. Absent for volume-level references. */
   container?: string;
 }
@@ -88,6 +90,17 @@ export interface ContainerSnapshot {
   restartPolicy?: string;
   /** Probes declared on this container. Optional so older fixtures stay valid. */
   probes?: ProbeSnapshot[];
+  /**
+   * `spec.containers[].ports`. Read so a check can resolve a *named* port —
+   * `targetPort: http`, `port: http` on a probe — to the number it stands for.
+   */
+  ports?: Array<{ name?: string; containerPort: number; protocol?: string }>;
+  /**
+   * Names of `env` entries set to a literal `value:`. Names only: a literal
+   * may be a credential a lab is about removing, and values never enter the
+   * platform (the same rule Secret snapshots keep).
+   */
+  literalEnvNames?: string[];
 }
 
 export interface ResourceRequirementsSnapshot {

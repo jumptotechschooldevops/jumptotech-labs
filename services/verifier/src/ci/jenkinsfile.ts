@@ -137,6 +137,27 @@ export function parseJenkinsfile(text: string): JenkinsParseResult {
 function stripCommentsAndStrings(
   text: string,
 ): { ok: true; masked: string } | { ok: false; error: string } {
+  return mask(text, true);
+}
+
+/**
+ * The text with its comments blanked and its strings left alone.
+ *
+ * What a check that reads *code* should see: `sh 'docker login $REGISTRY_URL'`
+ * is a use of the variable, `// REGISTRY_URL` is not. The same lexer as the
+ * brace matcher, so a `//` inside a string (`'https://…'`) is not mistaken for
+ * a comment. An unterminated comment or string leaves the text as it is; the
+ * parser has already reported the file as malformed in that case.
+ */
+export function stripComments(text: string): string {
+  const masked = mask(text, false);
+  return masked.ok ? masked.masked : text;
+}
+
+function mask(
+  text: string,
+  blankStrings: boolean,
+): { ok: true; masked: string } | { ok: false; error: string } {
   const out = text.split('');
   let i = 0;
   const n = text.length;
@@ -168,7 +189,7 @@ function stripCommentsAndStrings(
     if (three === "'''" || three === '"""') {
       const end = text.indexOf(three, i + 3);
       if (end === -1) return { ok: false, error: `an unterminated ${three} string literal` };
-      blank(i, end + 3);
+      if (blankStrings) blank(i, end + 3);
       i = end + 3;
       continue;
     }
@@ -187,7 +208,7 @@ function stripCommentsAndStrings(
         if (text[k] === '\n') break;
         k += 1;
       }
-      blank(i, Math.min(k + 1, n));
+      if (blankStrings) blank(i, Math.min(k + 1, n));
       i = Math.min(k + 1, n);
       continue;
     }
@@ -233,8 +254,8 @@ interface Block {
  * `masked` drives the search and the brace walk; `original` supplies the text
  * that is handed back, so callers read real content rather than the mask.
  */
-function findBlock(masked: string, original: string, header: RegExp): Block | null {
-  const match = header.exec(masked);
+function findBlock(masked: string, original: string, header: RegExp, searchIn: string = masked): Block | null {
+  const match = header.exec(searchIn);
   if (!match) return null;
 
   const open = masked.indexOf('{', match.index);
@@ -251,6 +272,31 @@ function findBlock(masked: string, original: string, header: RegExp): Block | nu
     }
   }
   return null;
+}
+
+/**
+ * The masked body with everything inside a nested block blanked out, offsets
+ * preserved: only the block's own directives remain visible.
+ *
+ * `agent any` inside `stage('Build')` is a stage's agent, not the pipeline's,
+ * and an `environment` block inside a stage is not the pipeline's
+ * `environment`. Searching the whole body found them anyway.
+ */
+function topLevelOnly(maskedBody: string): string {
+  let depth = 0;
+  let out = '';
+  for (const ch of maskedBody) {
+    if (ch === '{') {
+      out += depth === 0 ? '{' : ' ';
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      out += depth === 0 ? '}' : ' ';
+    } else {
+      out += depth === 0 || ch === '\n' ? ch : ' ';
+    }
+  }
+  return out;
 }
 
 /** Every `name {` or `name value` directive at the top level of a block. */
@@ -284,7 +330,7 @@ function readDirectiveNames(maskedBody: string): string[] {
  */
 function readDirectiveValue(maskedBody: string, body: string, name: string): string | null {
   const pattern = new RegExp(`(^|[^\\w.])${name}\\b`, 'm');
-  const match = pattern.exec(maskedBody);
+  const match = pattern.exec(topLevelOnly(maskedBody));
   if (!match) return null;
 
   const start = match.index + match[0].length;
@@ -306,7 +352,7 @@ function readEnvironmentBlock(
   body: string,
   location: string,
 ): JenkinsAssignment[] {
-  const block = findBlock(maskedBody, body, /(^|[^\w.])environment\s*\{/);
+  const block = findBlock(maskedBody, body, /(^|[^\w.])environment\s*\{/, topLevelOnly(maskedBody));
   if (!block) return [];
 
   const assignments: JenkinsAssignment[] = [];
@@ -382,7 +428,8 @@ export function findStage(pipeline: JenkinsPipeline, name: string): JenkinsStage
 
 /** Fragments not found in a stage's steps block. Whitespace- and case-insensitive. */
 export function stepsMissing(stage: JenkinsStage, fragments: readonly string[]): string[] {
-  const haystack = (stage.stepsBody ?? '').replace(/\s+/g, ' ').toLowerCase();
+  // A comment in a stage is not a step: `// docker push` does not push.
+  const haystack = stripComments(stage.stepsBody ?? '').replace(/\s+/g, ' ').toLowerCase();
   return fragments.filter((f) => !haystack.includes(f.replace(/\s+/g, ' ').toLowerCase()));
 }
 

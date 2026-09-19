@@ -321,6 +321,23 @@ const processPattern = z
   .regex(/^[A-Za-z0-9._\-/ :=@,+]+$/, 'must be a plain command-line fragment');
 
 /** Literal text a file or command output must contain. */
+/**
+ * The request an IAM check asks about, as condition keys and their values
+ * (`aws:SecureTransport: "true"`, `s3:x-amz-server-side-encryption: aws:kms`).
+ *
+ * With a context, a statement applies only when its `Condition` holds for it;
+ * without one, conditions are not evaluated and every covering statement
+ * applies. A key left out is a key the request does not carry — which is how a
+ * lab asks about an upload *without* encryption.
+ */
+const iamRequestContext = z
+  .record(
+    z.string().min(1).max(128).regex(/^[A-Za-z0-9:._/-]+$/, 'must be an IAM condition key'),
+    z.string().max(512).refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' }),
+  )
+  .refine((m) => Object.keys(m).length <= 10, { message: 'must name at most 10 keys' })
+  .optional();
+
 const literalText = z
   .string()
   .min(1)
@@ -707,6 +724,28 @@ const kubernetesRequirementSchemas = {
       /** Require a specific key to be referenced. */
       key: z.string().min(1).max(253).regex(/^[-._a-zA-Z0-9]+$/, 'invalid ConfigMap key').optional(),
       via: z.enum(['env', 'envFrom', 'volume']).optional(),
+      /** As on deployment_uses_secret: the variable the value must arrive in. */
+      env: z.string().min(1).max(253).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name').optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * No container of the Deployment sets this environment variable to a literal
+   * `value:`. The other half of moving configuration into a ConfigMap or a
+   * Secret: Kubernetes lets a literal `env` entry sit beside the new
+   * reference and win over `envFrom`, so a reference check alone passes a
+   * Deployment that still carries the plaintext.
+   */
+  deployment_env_literal_absent: z
+    .object({
+      type: z.literal('deployment_env_literal_absent'),
+      name: resourceName,
+      env: z
+        .string()
+        .min(1)
+        .max(128)
+        .regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/, 'must be an environment variable name'),
       ...common,
     })
     .strict(),
@@ -718,6 +757,12 @@ const kubernetesRequirementSchemas = {
       secret: resourceName,
       key: z.string().min(1).max(253).regex(/^[-._a-zA-Z0-9]+$/, 'invalid Secret key').optional(),
       via: z.enum(['env', 'envFrom', 'volume']).optional(),
+      /**
+       * The environment variable the value must arrive in — the name the
+       * application reads. `envFrom` names variables after the keys, so it
+       * satisfies this only when the key *is* that name.
+       */
+      env: z.string().min(1).max(253).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name').optional(),
       ...common,
     })
     .strict(),
@@ -1552,8 +1597,61 @@ const sandboxRequirementSchemas = {
       message: 'must specify equals, contains, or both',
     }),
 
+  /**
+   * One answer on a worksheet: the line `KEY = value` holds exactly this value.
+   *
+   * The form a findings or triage file is written in (`VERDICT=exceeds`,
+   * `refused_layer = L4`), graded the way a person marking it would:
+   *
+   *   · the key must be answered **once** — a second line for the same key is
+   *     a hedge, not an answer, and fails even if one of them is right;
+   *   · the value is compared **whole** (surrounding whitespace and one pair
+   *     of matching quotes removed), so `L4 L3` is not `L4`;
+   *   · other lines are ignored, as are `#` comment lines and a seeded
+   *     placeholder the student left blank (`KEY =`).
+   *
+   * `file_content contains` cannot say any of that: every value listed on its
+   * own line satisfied it. The expected value is never echoed; a failure says
+   * whether the key is unanswered, answered more than once, or wrong.
+   *
+   * Parsing is plain string splitting — no pattern from lab.yaml reaches a
+   * regular-expression engine.
+   */
+  file_key_value: z
+    .object({
+      type: z.literal('file_key_value'),
+      path: sandboxPath,
+      key: z
+        .string()
+        .min(1)
+        .max(128)
+        .refine((v) => v.trim() === v && !/[=:\n\r#]/.test(v), {
+          message: 'must be a bare key: no separators, comment marks, newlines or surrounding spaces',
+        }),
+      equals: literalText,
+      /** What separates key from value. */
+      separator: z.enum(['=', ':']).default('='),
+      /** Compare the value case-insensitively (the key is always exact). */
+      ignore_case: z.boolean().default(false),
+      ...common,
+    })
+    .strict(),
+
   file_mode: z
-    .object({ type: z.literal('file_mode'), path: sandboxPath, mode: fileMode, ...common })
+    .object({
+      type: z.literal('file_mode'),
+      path: sandboxPath,
+      mode: fileMode,
+      /**
+       * `ignore` compares only the rwx bits, for a task that states who may
+       * read, write and execute and says nothing about setuid, setgid or the
+       * sticky bit — a shared directory at `2770` meets "owner and group full
+       * access, others none" exactly as `770` does. The default, `exact`,
+       * compares all four digits.
+       */
+      special_bits: z.enum(['exact', 'ignore']).optional(),
+      ...common,
+    })
     .strict(),
 
   file_owner: z
@@ -1669,6 +1767,37 @@ const sandboxRequirementSchemas = {
    * A literal that merely looks like an address never counts — the reference
    * has to be live, meaning bare or inside `${…}` interpolation.
    */
+  /**
+   * No string literal in a resource's own configuration contains any of these
+   * texts — the resource no longer spells out a value that should come from an
+   * input.
+   *
+   * Graded on the configuration, not the file: comments are not literals (the
+   * scanner's lexer drops them), and only the resource's own arguments are
+   * read, so an allowed-values list in a variable's `validation` block, or a
+   * note in a comment, does not count. Compared without regard to case. A
+   * failure names the argument, never the text found.
+   */
+  terraform_resource_literal_absent: z
+    .object({
+      type: z.literal('terraform_resource_literal_absent'),
+      dir: sandboxPath,
+      resource_type: terraformTypeName,
+      name: terraformLabel,
+      literals: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .max(128)
+            .refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' }),
+        )
+        .min(1)
+        .max(10),
+      ...common,
+    })
+    .strict(),
+
   terraform_resource_references: z
     .object({
       type: z.literal('terraform_resource_references'),
@@ -1717,6 +1846,15 @@ const sandboxRequirementSchemas = {
       type: z.literal('terraform_locals_declared'),
       dir: sandboxPath,
       names: z.array(terraformLabel).min(1).max(20),
+      /**
+       * For named locals, the addresses each one's expression must reach —
+       * directly or through other locals. "Composed as an expression rather
+       * than written out" is then graded: `service_slug = "…-ledger-prod"`
+       * reaches nothing. The failure names the local, not the address.
+       */
+      references: z
+        .record(terraformLabel, z.array(z.string().min(1).max(160).regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/)).min(1).max(8))
+        .optional(),
       ...common,
     })
     .strict(),
@@ -1747,10 +1885,19 @@ const sandboxRequirementSchemas = {
       resource_type: terraformTypeName,
       name: terraformLabel,
       /** Addresses the list must mention, e.g. `null_resource.database`. */
-      references: z.array(terraformReferenceTarget).min(1).max(10),
+      references: z.array(terraformReferenceTarget).min(1).max(10).optional(),
+      /**
+       * The resource declares no `depends_on` at all — for one whose
+       * dependency a reference already states, where the lesson is that
+       * `depends_on` would add an edge Terraform already had.
+       */
+      absent: z.literal(true).optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((v) => (v.references === undefined) !== (v.absent === undefined), {
+      message: 'must specify exactly one of references or absent',
+    }),
 
   /** A variable declares at least one `validation` block. */
   terraform_variable_validation: z
@@ -1880,11 +2027,23 @@ const sandboxRequirementSchemas = {
       sid: z.string().min(1).max(128).optional(),
       /** The statement must cover every action listed. */
       actions: z.array(iamAction).min(1).max(50).optional(),
+      /**
+       * With `actions`: the statement's `Action` names exactly those, not a
+       * pattern that also covers them. `sts:*` covers `sts:AssumeRole`, and
+       * also every other STS action a trust policy was not asked to allow.
+       */
+      exact_actions: z.boolean().optional(),
       /** The statement must cover every resource listed. */
       resources: z.array(iamResource).min(1).max(50).optional(),
       condition: iamConditionSelector.optional(),
       /** Every principal listed must appear in the statement's `Principal`. */
       principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
+      /**
+       * With `principals`: the statement's `Principal` names those and nothing
+       * else. A trust statement that lets the right service in *and* keeps the
+       * principal it was meant to remove is not the statement asked for.
+       */
+      exact_principals: z.boolean().optional(),
       /** Every principal listed must appear in the statement's `NotPrincipal`. */
       not_principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
       ...common,
@@ -1903,20 +2062,36 @@ const sandboxRequirementSchemas = {
       path: sandboxPath,
       action: iamAction,
       resource: iamResource,
+      context: iamRequestContext,
       ...common,
     })
     .strict(),
 
-  /** The policy does **not** permit this action on this resource. */
+  /**
+   * The policy does **not** permit this action on this resource.
+   *
+   * `any_context: true` asks it for every possible request at once: an Allow
+   * counts whatever its `Condition` says, and only an unconditional Deny
+   * counts as protection. That is the reading for "this must never be
+   * possible" — a grant limited to some other service still fails it, and a
+   * Deny whose condition never fires does not rescue it. It cannot be combined
+   * with `context`, which asks about one particular request.
+   */
   iam_policy_not_allows: z
     .object({
       type: z.literal('iam_policy_not_allows'),
       path: sandboxPath,
       action: iamAction,
       resource: iamResource,
+      context: iamRequestContext,
+      any_context: z.literal(true).optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((r) => !(r.any_context === true && r.context !== undefined), {
+      message: 'any_context and context cannot be combined',
+      path: ['any_context'],
+    }),
 
   /**
    * No statement uses the bare `*` wildcard in the named field.
@@ -2013,6 +2188,52 @@ const sandboxRequirementSchemas = {
     .strict(),
 
   /**
+   * A property resolves to one of the given values, written as the `Fn::Sub`
+   * template that would produce it (`${Bucket.Arn}/*`).
+   *
+   * Graded on what the value evaluates to, not on which intrinsic spells it:
+   * `!GetAtt X.Arn` is `${X.Arn}`, `!Ref X` is `${X}`, an `Fn::Join` is its
+   * parts joined, and a Sub variable map is substituted. A plain string never
+   * matches a template that contains a reference. When the property is a
+   * list, any entry may match. The values are the answer, so a failure never
+   * repeats them.
+   */
+  cfn_property_resolves_to: z
+    .object({
+      type: z.literal('cfn_property_resolves_to'),
+      path: sandboxPath,
+      logical_id: cfnLogicalId,
+      property: cfnPropertyPath,
+      any_of: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .max(512)
+            .refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' }),
+        )
+        .min(1)
+        .max(10)
+        .optional(),
+      /**
+       * Instead of a whole value: the evaluated template must include this —
+       * `${Environment}` for "named from the Environment parameter", whatever
+       * else the name holds.
+       */
+      contains: z
+        .string()
+        .min(1)
+        .max(256)
+        .refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' })
+        .optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => (v.any_of === undefined) !== (v.contains === undefined), {
+      message: 'must specify exactly one of any_of or contains',
+    }),
+
+  /**
    * Every `Ref`, `Fn::GetAtt` and `Fn::Sub` variable resolves.
    *
    * The check a failed deployment usually needed: a typo in a logical ID, or a
@@ -2030,6 +2251,23 @@ const sandboxRequirementSchemas = {
       name: cfnLogicalId,
       /** Logical ID the output's `Value` must reference. */
       references: cfnLogicalId.optional(),
+      /**
+       * The output's `Value` must evaluate to one of these `Fn::Sub`
+       * templates — `${Role.Arn}` for a role's ARN, `${Bucket}` for a bucket's
+       * name — however it is spelled (see `cfn_property_resolves_to`). A
+       * failure never repeats them.
+       */
+      resolves_to: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .max(512)
+            .refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' }),
+        )
+        .min(1)
+        .max(10)
+        .optional(),
       ...common,
     })
     .strict(),
@@ -2440,8 +2678,10 @@ const sandboxRequirementSchemas = {
    * matched by membership, while an ordinary setting is a scalar whose last
    * assignment wins. `LIST_DIRECTIVES` in the verifier holds that mapping.
    *
-   * Exactly one of `equals`, `contains` or `absent` is required, so a lab
-   * cannot write a check whose meaning is ambiguous.
+   * Exactly one of `equals`, `one_of`, `contains` or `absent` is required, so
+   * a lab cannot write a check whose meaning is ambiguous. `default` is the
+   * value systemd documents for an omitted directive (`Type=` → `simple`):
+   * with it, leaving the directive out is graded as that value.
    */
   systemd_unit_directive: z
     .object({
@@ -2455,19 +2695,28 @@ const sandboxRequirementSchemas = {
         .regex(/^[A-Za-z][A-Za-z0-9-]*$/, 'must be a systemd directive name'),
       /** Effective scalar value — the last assignment — must equal this. */
       equals: z.string().min(1).max(512).optional(),
+      /** Effective scalar value must equal one of these. */
+      one_of: z.array(z.string().min(1).max(512)).min(2).max(8).optional(),
       /** Accumulated, whitespace-split members must include this token. */
       contains: z.string().min(1).max(512).optional(),
       /** The directive must have no value in effect. */
       absent: z.boolean().optional(),
+      /** systemd's documented value when the directive is omitted. */
+      default: z.string().min(1).max(512).optional(),
       ...common,
     })
     .strict()
     .refine(
       (v) =>
-        [v.equals !== undefined, v.contains !== undefined, v.absent === true].filter(Boolean)
-          .length === 1,
-      { message: 'must specify exactly one of equals, contains or absent' },
-    ),
+        [v.equals !== undefined, v.one_of !== undefined, v.contains !== undefined, v.absent === true].filter(
+          Boolean,
+        ).length === 1,
+      { message: 'must specify exactly one of equals, one_of, contains or absent' },
+    )
+    .refine((v) => v.default === undefined || v.equals !== undefined || v.one_of !== undefined, {
+      message: 'default applies only to equals or one_of',
+      path: ['default'],
+    }),
 
   /**
    * A systemd unit file declares a section at all.
@@ -2817,7 +3066,10 @@ const dockerRequirementSchemas = {
       type: z.literal('docker_image_config'),
       image: imageReference,
       working_dir: z.string().min(1).max(255).optional(),
-      /** Every listed argv element must appear, in order, in CMD or ENTRYPOINT. */
+      /**
+       * Every listed word must appear in CMD or ENTRYPOINT. Elements are split
+       * on whitespace, so exec form and shell form are the same answer.
+       */
       cmd_contains: z.array(z.string().min(1).max(255)).max(10).optional(),
       /**
        * `ENTRYPOINT` and `CMD` as exact argv arrays, separately.
@@ -2935,6 +3187,23 @@ const dockerRequirementSchemas = {
         .regex(/^[A-Za-z0-9._][A-Za-z0-9._/-]*$/, 'must be a relative path inside the lab workspace')
         .refine((p) => !p.split('/').includes('..'), { message: 'must not traverse upwards' }),
       contains: z.array(z.string().min(1).max(255)).max(10).optional(),
+      /**
+       * Worksheet answers graded the way `file_key_value` grades them: each
+       * key answered exactly once, the value compared whole, comment lines
+       * ignored. `contains` cannot tell a swapped or hedged answer from a
+       * right one. Failures never name a value.
+       */
+      key_values: z
+        .record(
+          z.string().min(1).max(64).regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/, 'must be a bare key'),
+          z.string().min(1).max(255),
+        )
+        .refine((m) => Object.keys(m).length > 0 && Object.keys(m).length <= 10, {
+          message: 'must name between 1 and 10 keys',
+        })
+        .optional(),
+      /** What separates key from value in `key_values`; `=` when omitted. */
+      separator: z.enum(['=', ':']).optional(),
       ...common,
     })
     .strict(),
@@ -3381,6 +3650,17 @@ const identifier = z
   .max(64)
   .regex(/^[A-Za-z_][A-Za-z0-9_-]*$/, 'must be an identifier such as build or fetch-depth');
 
+/** Picks out one step of a job: by the action it uses, what it runs, or both. */
+const workflowStepMatcher = z
+  .object({
+    uses: z.string().min(1).max(160).optional(),
+    run_contains: z.array(z.string().min(1).max(120)).min(1).max(6).optional(),
+  })
+  .strict()
+  .refine((v) => v.uses !== undefined || v.run_contains !== undefined, {
+    message: 'must specify uses, run_contains, or both',
+  });
+
 const cicdRequirementSchemas = {
   github_workflow_exists: z
     .object({
@@ -3436,13 +3716,48 @@ const cicdRequirementSchemas = {
       job: identifier,
       uses: z.string().min(1).max(160).optional(),
       run_contains: z.array(z.string().min(1).max(120)).max(6).optional(),
-      /** Require the step's `with:` block to set these input names. */
+      /**
+       * Require the step's `run:` to expand each of these variables — `$NAME`,
+       * `${NAME}`, `${{ env.NAME }}` — rather than merely spell the name. A
+       * bare `IMAGE_NAME` is literal text to the shell.
+       */
+      run_expands: z.array(envVarName).min(1).max(6).optional(),
+      /**
+       * Require the step to come after a step matching each of these, in the
+       * job's order — the order the runner executes them in.
+       */
+      after: z.array(workflowStepMatcher).min(1).max(4).optional(),
+      /**
+       * Require the step's `with:` block to set these input names. An input
+       * written with no value (`node-version:` or `''`) is not set: the action
+       * sees nothing and falls back to its default.
+       */
       with_keys: z.array(identifier).max(10).optional(),
+      /**
+       * Require at least one of these inputs to be set — for actions that take
+       * the same thing in more than one way (`actions/setup-node` reads the
+       * version from `node-version` or from a file named by
+       * `node-version-file`).
+       */
+      with_any_key: z.array(identifier).min(2).max(10).optional(),
+      /**
+       * Require `with:` inputs to have a value containing a fragment, e.g.
+       * `{ path: dist }` for an upload step. Matched as a substring of the value
+       * as written (a number or boolean is compared as its YAML text), the way
+       * `run_contains` matches a command. A failure never names the fragment:
+       * the right value is often what the student had to work out.
+       */
+      with_contains: z
+        .record(identifier, z.string().min(1).max(120))
+        .refine((m) => Object.keys(m).length > 0 && Object.keys(m).length <= 10, {
+          message: 'must name between 1 and 10 inputs',
+        })
+        .optional(),
       ...common,
     })
     .strict()
-    .refine((v) => v.uses !== undefined || v.run_contains !== undefined, {
-      message: 'must specify uses, run_contains, or both',
+    .refine((v) => v.uses !== undefined || v.run_contains !== undefined || v.run_expands !== undefined, {
+      message: 'must specify uses, run_contains, run_expands, or a combination',
     }),
 
   // --- Jenkins -------------------------------------------------------------
@@ -3472,6 +3787,11 @@ const cicdRequirementSchemas = {
       stage: z.string().min(1).max(64),
       /** Require the stage's `steps` block to mention all of these substrings. */
       steps_contain: z.array(z.string().min(1).max(120)).max(6).optional(),
+      /**
+       * Require the stage's steps to expand each of these variables — `$NAME`,
+       * `${NAME}`, `env.NAME` — rather than merely spell the name.
+       */
+      steps_expand: z.array(envVarName).min(1).max(6).optional(),
       /** Require the stage to appear after these stages, in file order. */
       after: z.array(z.string().min(1).max(64)).max(10).optional(),
       ...common,
@@ -3498,6 +3818,12 @@ const cicdRequirementSchemas = {
       via: z
         .enum(['workflow_env', 'workflow_secret', 'jenkins_environment', 'jenkins_credentials'])
         .optional(),
+      /**
+       * Require the declaration's value to contain this text, e.g.
+       * `github.sha` for a tag derived from the commit. A failure never names
+       * the text.
+       */
+      value_contains: z.string().min(1).max(120).optional(),
       ...common,
     })
     .strict(),
@@ -3719,6 +4045,7 @@ export const REQUIREMENT_FAMILIES = {
   deployment_probe: 'kubernetes',
   deployment_uses_configmap: 'kubernetes',
   deployment_uses_secret: 'kubernetes',
+  deployment_env_literal_absent: 'kubernetes',
 
   service_exists: 'kubernetes',
   service_type: 'kubernetes',
@@ -3810,6 +4137,7 @@ export const REQUIREMENT_FAMILIES = {
   file_exists: 'filesystem',
   directory_exists: 'filesystem',
   file_content: 'filesystem',
+  file_key_value: 'filesystem',
   file_mode: 'filesystem',
   file_owner: 'filesystem',
   file_group: 'filesystem',
@@ -3819,6 +4147,7 @@ export const REQUIREMENT_FAMILIES = {
   terraform_output_equals: 'terraform',
   terraform_state_absent: 'terraform',
   terraform_resource_references: 'terraform',
+  terraform_resource_literal_absent: 'terraform',
   terraform_variable_declared: 'terraform',
   terraform_locals_declared: 'terraform',
   terraform_data_source_declared: 'terraform',
@@ -3843,6 +4172,7 @@ export const REQUIREMENT_FAMILIES = {
   cfn_resource_exists: 'cloudformation',
   cfn_resource_property: 'cloudformation',
   cfn_resource_reference: 'cloudformation',
+  cfn_property_resolves_to: 'cloudformation',
   cfn_references_resolve: 'cloudformation',
   cfn_output_exists: 'cloudformation',
   cfn_cidr_valid: 'cloudformation',

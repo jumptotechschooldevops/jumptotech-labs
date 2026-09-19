@@ -47,6 +47,15 @@ describe('a literal is not a reference', () => {
     expect(isLiteralExpression('"subnet-${aws_subnet.app.id}"')).toBe(false);
   });
 
+  it('does not see a reference behind the $${ escape, which Terraform renders as text', () => {
+    // `"$${local_file.a.id}"` renders the characters ${local_file.a.id}.
+    expect(refs('"$${local_file.a.content_sha256}"')).toEqual([]);
+    expect(referencesTarget('"sha: $${local_file.a.id}"', 'local_file.a')).toBe(false);
+    expect(refs('<<-EOT\n  $${local_file.a.id}\nEOT')).toEqual([]);
+    // A real interpolation after an escaped one is still seen.
+    expect(refs('"$${x} ${local_file.a.id}"')).toEqual(['local_file.a.id']);
+  });
+
   it('separates the inert half of a string from the live half', () => {
     // The first address is text; only the interpolated one is a dependency.
     expect(refs('"local_file.decoy.id is not it: ${local_file.real.id}"')).toEqual([

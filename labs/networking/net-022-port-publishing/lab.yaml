@@ -260,6 +260,16 @@ requirements:
     container_port: 8080
     host_port: 3000
     label: The published port mapping is correct
+  # The recreated container must still run the deployment's command: that is
+  # what moves nginx's listener. Read from the container's own config (the
+  # archive endpoint, so nothing is executed in it). Without the command the
+  # mapping above can be right while the application answers on the old port.
+  - type: docker_container_file_content
+    container: payments-status
+    path: /etc/nginx/conf.d/default.conf
+    contains:
+      - "listen       8080;"
+    label: The recreated container still configures the application the way the deployment did
 
   - type: workspace_file_exists
     path: diagnosis.txt

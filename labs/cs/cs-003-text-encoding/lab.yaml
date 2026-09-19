@@ -168,7 +168,8 @@ task:
 
 
     `LIMIT_COUNTS` is what the partner's 20 is counting. Line order does not
-    matter and extra lines are ignored.
+    matter and extra lines are ignored, but each key is
+    answered once, on a line that holds only its value.
 
 setup:
   seed_scripts:
@@ -236,29 +237,35 @@ requirements:
   - type: file_exists
     path: /home/student/ops/encoding.txt
     label: The findings file exists
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/encoding.txt
-    contains: "ASCII_HEX=41"
+    key: ASCII_HEX
+    equals: "41"
     label: The findings record the bytes of an ASCII letter
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/encoding.txt
-    contains: "UMLAUT_HEX=c3bc"
+    key: UMLAUT_HEX
+    equals: c3bc
     label: The findings record the bytes of a two-byte character
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/encoding.txt
-    contains: "CJK_HEX=e69db1"
+    key: CJK_HEX
+    equals: e69db1
     label: The findings record the bytes of a three-byte character
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/encoding.txt
-    contains: "UMLAUT_CODEPOINT=U+00FC"
+    key: UMLAUT_CODEPOINT
+    equals: U+00FC
     label: The findings record the code point behind those bytes
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/encoding.txt
-    contains: "OVER_LIMIT_LINE=4"
+    key: OVER_LIMIT_LINE
+    equals: "4"
     label: The findings identify the line the byte limit rejects
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/encoding.txt
-    contains: "LIMIT_COUNTS=bytes"
+    key: LIMIT_COUNTS
+    equals: bytes
     label: The findings say what the partner's limit is counting
 
 hints:
