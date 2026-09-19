@@ -571,6 +571,140 @@ describe('after the lab has ended', () => {
   });
 });
 
+/*
+ * Late answers. Found by an independent review of this page and reproduced
+ * before the fixes; each test is the student's sequence.
+ */
+describe('answers that arrive late', () => {
+  it('a Verify that answers after End does not bring the ended lab back', async () => {
+    let answerCheck!: (value: unknown) => void;
+    apiMock.checkSolution.mockReturnValue(new Promise((resolve) => (answerCheck = resolve)));
+    apiMock.endLab.mockResolvedValue({ message: 'ok', session: sessionInfo({ status: 'ENDED' }), steps: [] });
+    await renderConnected();
+
+    fireEvent.click(button('Verify'));
+    fireEvent.click(button('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+
+    // The check answers with the session as the API read it before checking: ACTIVE.
+    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ status: 'ENDED' }), environment: null });
+    await act(async () =>
+      answerCheck(
+        verification(true, {
+          session: sessionInfo(),
+          attempt: attemptSummary({ status: 'PASSED', completedAt: '2026-09-14T10:30:00Z' }),
+          newlyCompleted: true,
+        }),
+      ),
+    );
+
+    expect(screen.getByRole('heading', { name: 'Lab ended' })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Lab actions' })).toBeNull();
+    expect(screen.queryByTestId('terminal')).toBeNull();
+    // What the check did record is still worth knowing.
+    expect(screen.getByText('You completed this lab. It is saved to your progress.')).toBeTruthy();
+  });
+
+  it('Verify clears an idle warning the check itself answered, instead of keeping the stale copy', async () => {
+    const idle = sessionInfo({ idleWarning: true, secondsUntilIdle: 60 });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session: idle, labTitle: 'Files and Directories' }]));
+    apiMock.getSession.mockResolvedValue({ session: idle, environment: null });
+    await renderConnected();
+    expect(await screen.findByText(/Are you still working/)).toBeTruthy();
+
+    // The check counts as activity; its response still carries the copy read before it ran.
+    apiMock.checkSolution.mockResolvedValue(verification(false, { session: idle }));
+    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ idleWarning: false }), environment: null });
+    fireEvent.click(button('Verify'));
+    await screen.findByText(/Not complete yet/);
+
+    await waitFor(() => expect(screen.queryByText(/Are you still working/)).toBeNull());
+  });
+
+  it('a lab launched again starts with no verdict and no hints from the attempt before', async () => {
+    apiMock.getLab.mockImplementation((id: string) =>
+      Promise.resolve(
+        labDetail({ id, hints: [{ level: 1, text: 'N1' }, { level: 2, text: 'N2' }, { level: 3, text: 'N3' }] }),
+      ),
+    );
+    apiMock.getAttempt.mockImplementation((id: string) =>
+      Promise.resolve({
+        student: { studentId: 's', displayName: 'S' },
+        attempt: {
+          ...attemptSummary({ attemptId: id }),
+          hints: id === 'attempt-1' ? [{ level: 1, revealedAt: 'x' }, { level: 2, revealedAt: 'x' }] : [],
+          hintsUsed: id === 'attempt-1' ? 2 : 0,
+        },
+      }),
+    );
+    apiMock.checkSolution.mockResolvedValue(verification(true, { attempt: attemptSummary({ status: 'PASSED' }), newlyCompleted: true }));
+    apiMock.endLab.mockResolvedValue({
+      message: 'ok',
+      session: sessionInfo({ status: 'ENDED' }),
+      attempt: attemptSummary({ status: 'PASSED' }),
+      steps: [],
+    });
+    await renderConnected();
+    await within(screen.getByRole('region', { name: 'Hints' })).findByText('Hint 2');
+    fireEvent.click(button('Verify'));
+    await screen.findByText('Lab passed — every check passes');
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    fireEvent.click(button('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+
+    let answerStart!: (value: unknown) => void;
+    apiMock.startLab.mockReturnValue(new Promise((resolve) => (answerStart = resolve)));
+    fireEvent.click(screen.getByRole('button', { name: 'Launch again' }));
+    await screen.findByText('Preparing your lab environment…');
+    expect(screen.queryByText('Lab passed — every check passes')).toBeNull();
+
+    await act(async () =>
+      answerStart({
+        session: sessionInfo({ sessionId: 'sess-0000000000000002' }),
+        attempt: attemptSummary({ attemptId: 'attempt-2' }),
+        environment: { environmentId: 'e', provider: 'docker-linux', phase: 'ready', namespace: '' },
+        steps: [],
+        terminal: { url: 'ws://t', token: 'second' },
+      }),
+    );
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('second'));
+    await waitFor(() => expect(apiMock.getAttempt).toHaveBeenCalledWith('attempt-2'));
+    const hints = within(screen.getByRole('region', { name: 'Hints' }));
+    await waitFor(() => expect(hints.getByText('0 of 3')).toBeTruthy());
+    expect(hints.queryByText('Hint 1')).toBeNull();
+  }, 20_000);
+
+  it('closes an End dialog left open when the lab expires, so it cannot send a refused request', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    fireEvent.click(button('End lab'));
+    expect(screen.getByRole('alertdialog', { name: 'End this lab?' })).toBeTruthy();
+
+    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ status: 'EXPIRED' }), environment: null });
+    await act(() => vi.advanceTimersByTimeAsync(15_100));
+    await screen.findByRole('heading', { name: 'Your lab environment expired' });
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(apiMock.endLab).not.toHaveBeenCalled();
+  });
+
+  it('closes a Reset dialog left open when the lab starts shutting down', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    fireEvent.click(button('Reset'));
+    expect(screen.getByRole('alertdialog', { name: 'Reset this lab?' })).toBeTruthy();
+
+    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ status: 'EXPIRING' }), environment: null });
+    await act(() => vi.advanceTimersByTimeAsync(15_100));
+    await screen.findByText('Time is up — removing your environment…');
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(apiMock.resetLab).not.toHaveBeenCalled();
+  });
+});
+
 describe('when the session list cannot be read', () => {
   it('says so, instead of claiming the lab is not running', async () => {
     apiMock.listMySessions.mockRejectedValueOnce(new ApiRequestError(0, { code: 'API_UNREACHABLE', message: 'x' }));
