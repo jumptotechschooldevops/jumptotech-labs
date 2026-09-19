@@ -141,6 +141,7 @@ describe('AWS-018 — the seeded template does not pass', () => {
       "Every reference in the template resolves to something it declares",
       "The policy attaches to the role by referring to it",
       "The policy grants access to the objects, using the bucket's ARN from the bucket resource",
+      "The queue is named from the Environment parameter",
       "The role trusts the service the export instances run on",
       "The role's trust document allows rather than denies",
       "The role's trust document allows the role to be assumed",
@@ -338,7 +339,7 @@ describe('AWS-018 — templates that look repaired but are not', () => {
     const result = await run(commented);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toHaveLength(7);
+    expect(failed(result.checks)).toHaveLength(8);
   });
 
   it('cannot be passed by putting the expected values in an unrelated resource', async () => {
@@ -483,5 +484,49 @@ describe('AWS-018 — isolation', () => {
 
     expect(result.passed).toBe(false);
     expect(result.checks.find((c) => c.status === 'fail')?.detail).toContain('not a regular file');
+  });
+});
+
+describe('AWS-018 — second audit: outputs and names are graded on what they evaluate to', () => {
+  const ROLE_ARN = 'The stack exports the role ARN, taken from the role';
+  const BUCKET_NAME = 'The stack exports the bucket name, taken from the bucket';
+  const QUEUE = 'The queue is named from the Environment parameter';
+
+  it('fails the role name exported where its ARN belongs, and the ARN where the bucket name belongs', async () => {
+    const swapped = SOLVED.replace('Value: !GetAtt ExportRole.Arn', 'Value: !Ref ExportRole').replace(
+      'Value: !Ref ExportBucket',
+      'Value: !GetAtt ExportBucket.Arn',
+    );
+    expect(failed((await run(swapped)).checks).sort()).toEqual([BUCKET_NAME, ROLE_ARN]);
+  });
+
+  it('passes the same outputs written with Sub', async () => {
+    const sub = SOLVED.replace('Value: !GetAtt ExportRole.Arn', "Value: !Sub '${ExportRole.Arn}'").replace(
+      'Value: !Ref ExportBucket',
+      "Value: !Sub '${ExportBucket}'",
+    );
+    expect(failed((await run(sub)).checks)).toEqual([]);
+  });
+
+  it('fails a new Env parameter declared to make the old reference resolve', async () => {
+    const newParam = SOLVED.replace(
+      "QueueName: !Sub '\${Environment}-payments-export-events'",
+      "QueueName: !Sub '\${Env}-payments-export-events'",
+    ).replace('Parameters:\n', 'Parameters:\n  Env:\n    Type: String\n    Default: staging\n');
+    expect(newParam).toContain('${Env}');
+    expect(failed((await run(newParam)).checks)).toEqual([QUEUE]);
+  });
+
+  it('passes the queue named from Environment with Join, and fails a literal name', async () => {
+    const join = SOLVED.replace(
+      "QueueName: !Sub '\${Environment}-payments-export-events'",
+      "QueueName: !Join ['-', [!Ref Environment, payments-export-events]]",
+    );
+    expect(failed((await run(join)).checks)).toEqual([]);
+    const literal = SOLVED.replace(
+      "QueueName: !Sub '\${Environment}-payments-export-events'",
+      'QueueName: staging-payments-export-events',
+    );
+    expect(failed((await run(literal)).checks)).toEqual([QUEUE]);
   });
 });

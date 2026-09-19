@@ -2181,10 +2181,25 @@ const sandboxRequirementSchemas = {
             .refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' }),
         )
         .min(1)
-        .max(10),
+        .max(10)
+        .optional(),
+      /**
+       * Instead of a whole value: the evaluated template must include this —
+       * `${Environment}` for "named from the Environment parameter", whatever
+       * else the name holds.
+       */
+      contains: z
+        .string()
+        .min(1)
+        .max(256)
+        .refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' })
+        .optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((v) => (v.any_of === undefined) !== (v.contains === undefined), {
+      message: 'must specify exactly one of any_of or contains',
+    }),
 
   /**
    * Every `Ref`, `Fn::GetAtt` and `Fn::Sub` variable resolves.
@@ -2204,6 +2219,23 @@ const sandboxRequirementSchemas = {
       name: cfnLogicalId,
       /** Logical ID the output's `Value` must reference. */
       references: cfnLogicalId.optional(),
+      /**
+       * The output's `Value` must evaluate to one of these `Fn::Sub`
+       * templates — `${Role.Arn}` for a role's ARN, `${Bucket}` for a bucket's
+       * name — however it is spelled (see `cfn_property_resolves_to`). A
+       * failure never repeats them.
+       */
+      resolves_to: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .max(512)
+            .refine((v) => !/[\u0000-\u001f]/.test(v), { message: 'must not contain control characters' }),
+        )
+        .min(1)
+        .max(10)
+        .optional(),
       ...common,
     })
     .strict(),

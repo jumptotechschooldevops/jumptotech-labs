@@ -188,8 +188,12 @@ export const cfnPropertyResolvesTo: SandboxVerifierHandler<'cfn_property_resolve
     // A list passes when any entry resolves: a policy may name the bucket and
     // its objects side by side.
     const entries = Array.isArray(value) ? value : [value];
-    const wanted = new Set(requirement.any_of);
-    if (entries.some((entry) => wanted.has(asSubTemplate(entry) ?? ''))) return pass();
+    const matches = (template: string | null): boolean =>
+      template !== null &&
+      (requirement.any_of !== undefined
+        ? requirement.any_of.includes(template)
+        : template.includes(requirement.contains ?? '\u0000'));
+    if (entries.some((entry) => matches(asSubTemplate(entry)))) return pass();
 
     // Never the expected value: it is the answer.
     const shape = Array.isArray(value) ? `a list of ${value.length}, none of which does` : 'it does not';
@@ -243,6 +247,15 @@ export const cfnOutputExists: SandboxVerifierHandler<'cfn_output_exists'> = {
       if (!reference) return fail(`output '${requirement.name}' does not reference a resource`);
       if (reference.target !== requirement.references) {
         return fail(`output '${requirement.name}' references '${reference.target}'`);
+      }
+    }
+    if (requirement.resolves_to !== undefined) {
+      // "An ARN is not an identifier": `!Ref Role` names the right resource
+      // and returns its name, not its ARN. Compare what the Value evaluates to.
+      const output = result.template.outputs[requirement.name] as { Value?: unknown } | null;
+      const value = asSubTemplate(output?.Value);
+      if (value === null || !requirement.resolves_to.includes(value)) {
+        return fail(`output '${requirement.name}' does not give the value this lab asks for`);
       }
     }
     return pass();
