@@ -42,6 +42,11 @@ task:
 
     The binding must reference a namespaced Role, not a ClusterRole.
 
+    Your account can create these two objects but not edit or delete them —
+    the lab does not let you rewrite RBAC you have already granted. Check your
+    manifests before you apply them; if one goes in wrong, Reset Lab puts the
+    namespace back to its starting state.
+
 setup:
   manifests:
     - setup/configmap.yaml
@@ -130,9 +135,12 @@ hints:
       the subject ServiceAccount. Both objects are namespaced.
   - level: 3
     text: >
-      After applying your Role and RoleBinding, `kubectl auth can-i get
-      configmap/inventory-config --as=system:serviceaccount:<ns>:inventory-sync`
-      should answer yes.
+      After applying your Role and RoleBinding, watch the workload itself:
+      `kubectl logs deploy/inventory-sync -f` prints the status of each call
+      it makes to the API, and it changes from 403 to 200 once the account is
+      allowed to read the ConfigMap. (`kubectl auth can-i --as=…` needs
+      permission to impersonate other accounts, which your own account does
+      not have here.)
 
 references:
   - title: Using RBAC Authorization
