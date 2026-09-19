@@ -382,12 +382,19 @@ Storage, IndexedDB or cookies (enforced by `apps/web/test/token-storage.test.tsx
 | `navigation.test.tsx` | nav, `aria-current`, titles, focus, active-lab indicator, not found |
 | `dashboard.test.tsx` | every dashboard panel, including unavailable sources |
 | `student-flow.test.tsx` | dashboard → catalog → launch → verify → reset → verify → end → dashboard |
+| `launch-refusal.test.tsx` | a refused launch is forgotten once the student moves on |
+| `LabTerminal.test.tsx` | what the terminal puts on the wire, typed-ahead input, close reasons, safe error lines |
 
-**Browser E2E.** The repository has no browser test runner, and a real launch
-needs the full runtime (kind and/or the sandbox broker), which ordinary CI does
-not have. Rather than add Playwright for a suite CI cannot run, the routed-app
-flow above runs in jsdom on every `npm test`, and the real-browser check is this
-release smoke against the stack `make beta-validate` already brings up:
+**Browser E2E.** Playwright runs the real stack in a real browser: `npm run
+test:e2e` locally and the `browser-e2e` job in CI (`e2e/`, and
+[docs/development/browser-e2e-private-beta.md](development/browser-e2e-private-beta.md)).
+The critical path (`e2e/tests/student-critical-path.spec.ts`) signs in, finds
+LINUX-001, launches it, fails and then passes Verify, opens a hint, reloads (the
+session, the result and the hint survive), ends the lab and follows the
+summary's next lab to its page. Other specs cover Reset, reload while creating,
+a second tab, five students plus a refused sixth, isolation, and injected
+failures. The manual release smoke below remains useful against a stack that is
+already up (`make beta-validate`):
 
 1. `make up`, open http://localhost:3000 and sign in. **Development mode has no
    browser sign-in:** `/auth/session` answers signed-out and the gate reads *no
@@ -418,7 +425,6 @@ release smoke against the stack `make beta-validate` already brings up:
   workspace shows elapsed time, then the steps the API reports once it returns.
 - **The countdown is re-seeded on each poll**, so it can drift by up to one poll
   interval between polls; the server's deadline is authoritative.
-- **No real-browser E2E in CI** (see above).
 - **Hints are per attempt.** The workspace reopens the hints this attempt already
   revealed (read from `GET /api/me/attempts/:attemptId`, not reported again), so
   a reload or a return to the lab keeps them. A fresh launch is a new attempt and
