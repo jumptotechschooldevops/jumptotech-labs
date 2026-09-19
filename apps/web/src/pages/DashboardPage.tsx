@@ -51,7 +51,10 @@ function ActiveLabPanel() {
     );
   }
 
-  if (status === 'error' && error) {
+  // Only when nothing is known. A later re-read that fails (the tab came back
+  // during an API blip) must not hide a running lab the student already saw —
+  // the top bar keeps showing it, and Continue re-reads it anyway.
+  if (status === 'error' && error && entries.length === 0) {
     return (
       <section className="panel" aria-labelledby="active-lab-heading">
         <h2 id="active-lab-heading" className="visually-hidden">
