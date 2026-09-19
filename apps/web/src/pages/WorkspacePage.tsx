@@ -386,6 +386,9 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const reconnect = useCallback(
     (freshToken: boolean) => {
       if (!sessionId) return;
+      // Whatever asked for this connection, an automatic one still pending
+      // would replace it — and the shell the student is typing in — later.
+      cancelAutoReconnect();
       setActionError(null);
       if (!freshToken) {
         setConnectKey((n) => n + 1);
@@ -399,7 +402,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
           else setActionError({ error, context: 'terminal' });
         });
     },
-    [sessionId, obtainGrant, refreshSession],
+    [sessionId, obtainGrant, refreshSession, cancelAutoReconnect],
   );
 
   const handleTerminalEvent = useCallback(
@@ -407,6 +410,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
       setTerminal(event);
       if (event.status === 'connected') {
         setEverConnected(true);
+        cancelAutoReconnect();
         autoReconnects.current = 0;
         refreshedToken.current = false;
         return;
