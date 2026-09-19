@@ -74,7 +74,9 @@ task:
     argument, accepts two modes, and refuses anything else.
 
     Write a `Dockerfile` that builds it into an image tagged
-    `jumptotech/batch:1.0`, based on `alpine:3.20`. The image must behave
+    `jumptotech/batch:1.0`, based on `alpine:3.20`, with the script copied to
+    `/app/batch.sh` — the path the runbook and the platform's checks expect,
+    and the program the image runs. The image must behave
     exactly like the runbook describes:
 
       - `docker run jumptotech/batch:1.0` with no arguments must run the script
