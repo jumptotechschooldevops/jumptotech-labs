@@ -689,6 +689,54 @@ describe('docker verifier — image, volume, and network checks', () => {
     }
   });
 
+  describe('cmd_contains names the file the container opens, however the command spells it', () => {
+    const banner = (image: { cmd?: string[]; entrypoint?: string[]; workingDir?: string }) => {
+      const docker = new FakeDockerDaemon();
+      docker.addImage('greeter:1', image);
+      return check(docker, {
+        type: 'docker_image_config',
+        image: 'greeter:1',
+        cmd_contains: ['/app/banner.txt'],
+      } as Requirement);
+    };
+
+    it('accepts a relative path resolved from WORKDIR, in exec and shell form', async () => {
+      // DOCKER-004's hint 3: "WORKDIR affects how a relative path is resolved".
+      for (const cmd of [
+        ['cat', 'banner.txt'],
+        ['cat', './banner.txt'],
+        ['/bin/sh', '-c', 'cat banner.txt'],
+      ]) {
+        expect(passed(await banner({ workingDir: '/app', cmd })), JSON.stringify(cmd)).toBe(true);
+      }
+    });
+
+    it('accepts the absolute path with shell punctuation or quotes around it, and via ENTRYPOINT', async () => {
+      for (const image of [
+        { cmd: ['/bin/sh', '-c', 'cat /app/banner.txt;'] },
+        { cmd: ['/bin/sh', '-c', 'cat "/app/banner.txt" && sleep 0'] },
+        { entrypoint: ['cat'], cmd: ['/app/banner.txt'] },
+        { cmd: ['cat', '/app/banner.txt'] },
+      ]) {
+        expect(passed(await banner({ workingDir: '/app', ...image })), JSON.stringify(image)).toBe(true);
+      }
+    });
+
+    it('still refuses a command that names no such file, or the same name somewhere else', async () => {
+      for (const image of [
+        { workingDir: '/app', cmd: ['true'] },
+        { workingDir: '/app', cmd: ['cat', '/tmp/banner.txt'] },
+        { workingDir: '/srv', cmd: ['cat', 'banner.txt'] },
+        { workingDir: '/app', cmd: ['cat', 'banner.txt.bak'] },
+        { workingDir: '/app', cmd: ['/bin/sh', '-c', 'cat /app/banner.txt.old'] },
+        { workingDir: '', cmd: ['cat', 'banner.txt'] },
+      ]) {
+        const result = await banner(image);
+        expect(passed(result), JSON.stringify(image)).toBe(false);
+      }
+    });
+  });
+
   it('finds volumes and networks, and checks a network driver', async () => {
     const docker = new FakeDockerDaemon();
     await docker.createVolume('ledger-data');

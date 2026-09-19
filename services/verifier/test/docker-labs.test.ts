@@ -94,6 +94,15 @@ describe('DOCKER-004 — build an image from a Dockerfile', () => {
     expect(await grade(shell)).toEqual([]);
   });
 
+  it('passes the relative-path CMD its hint teaches: WORKDIR /app, then cat banner.txt', async () => {
+    const relative = await started('DOCKER-004');
+    await relative.workspace.seed(SESSION, [{ path: 'Dockerfile', content: DOCKERFILE.replace('CMD ["cat", "/app/banner.txt"]', 'CMD ["cat", "banner.txt"]') }]);
+    relative.daemon.addImage('jumptotech/greeter:1.0', { workingDir: '/app', cmd: ['cat', 'banner.txt'] });
+    relative.daemon.addContainer({ name: 'greeter', image: 'jumptotech/greeter:1.0', detach: false }, 'exited', 0);
+    relative.daemon.putFile('greeter', '/app/banner.txt', 'x\n');
+    expect(await grade(relative)).toEqual([]);
+  });
+
   it('fails an image whose build never produced the banner', async () => {
     const lab = await built('jumptotech/greeter:1.0');
     expect(await grade(lab)).toEqual(['The image contains the banner the RUN step produced']);
