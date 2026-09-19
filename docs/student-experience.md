@@ -276,6 +276,11 @@ The private beta runs with `MAX_ACTIVE_SESSIONS=5` and
   refusal refreshes the session list and turns into the same Continue link.
   The UI never suggests starting another lab.
 
+A refusal describes the moment it was made. It is shown on the lab's page and
+workspace, and forgotten as soon as the student navigates anywhere else, so it is
+never announced again later as if it were new (`ActiveSessionContext`). A
+per-student refusal is also dropped once no other lab is running.
+
 Operators still see both as distinct metric outcomes and log fields
 (`capacity_reached` vs `student_limit_reached`); nothing about that changed.
 
