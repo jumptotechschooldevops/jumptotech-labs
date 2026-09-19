@@ -296,11 +296,14 @@ Also observed, and correct:
   it, so the browser's `reconnectTerminal` path reopens it (§3). The
   same-socket reattach is effectively unused behind the broker. A student sees
   "Reconnecting to your new environment…" and a fresh shell.
-- **The leak panel reads +1 at five students.** `jtt:sandbox_leak:count`
-  compares containers with sessions. An Ansible session holds three
+- **The leak panel read +1 at five students.** `jtt:sandbox_leak:count`
+  compared containers with sessions. An Ansible session holds three
   containers and a Kubernetes session holds none, so five students read 1 even
-  with no leak. `SandboxLeakSuspected` needs more than 5 for 15 minutes, so the
-  alert stays correct.
+  with no leak. That mix stayed under `SandboxLeakSuspected`'s threshold, but
+  the rule was not correct in general: an all-Ansible class read 10 and fired,
+  and Kubernetes sessions hid leaked sandboxes. Since 2026-09-19 it compares
+  distinct sessions among sandboxd's containers with container-backed sessions
+  (`sandbox-leak-alerts.test.yml`), and reads 0 for every mix.
 - **An Ansible shell opens in `/home/student`**, while the project and `$HOME`
   are `/home/student/lab`. Not a blocker. The lab text names the project
   directory.

@@ -24,6 +24,7 @@ import {
   setCollector,
   simpleCheck,
 } from '@jumptotech/observability';
+import { distinctContainerSessions, ownedContainers } from './container-accounting.js';
 import { DockerOps } from './docker-ops.js';
 import { loadSandboxdConfig } from './config.js';
 import { DockerSandboxInspector } from './inspector.js';
@@ -145,24 +146,43 @@ async function probeRuntime(): Promise<void> {
  * independently maintained counters would drift into a permanent false
  * difference and the leak alert would be silenced within a week.
  */
+/*
+ * Scoped to this runtime owner, exactly as `/v1/runtime` `list` already scopes
+ * it. Counting another deployment's sandboxes on a shared daemon would make
+ * this instance's leak panel permanently non-zero and the alert useless — the
+ * same reasoning that made the broker scope the verb itself.
+ *
+ * Both gauges below read one listing per scrape: the promise is shared for a
+ * few seconds rather than asking the daemon twice.
+ */
+let listing: { at: number; containers: ReturnType<typeof runtime.list> } | null = null;
+function ownContainers(): ReturnType<typeof runtime.list> {
+  if (!listing || Date.now() - listing.at > 5_000) {
+    listing = {
+      at: Date.now(),
+      containers: runtime.list(MANAGED_CONTAINER_SELECTOR).then((all) => ownedContainers(all, config.runtimeOwner)),
+    };
+  }
+  return listing.containers;
+}
+
 setCollector(metrics.containersManaged, async (gauge) => {
   try {
-    const all = await runtime.list(MANAGED_CONTAINER_SELECTOR);
-    /*
-     * Scoped to this runtime owner, exactly as `/v1/runtime` `list` already
-     * scopes it. Counting another deployment's sandboxes on a shared daemon
-     * would make this instance's leak panel permanently non-zero and the alert
-     * useless — the same reasoning that made the broker scope the verb itself.
-     */
-    const mine = all.filter(
-      (container) => container.labels?.[RUNTIME_OWNER_LABEL] === config.runtimeOwner,
-    );
+    const mine = await ownContainers();
     gauge.reset();
     gauge.set({ provider: 'container' }, mine.length);
   } catch {
     // A runtime that cannot be listed is already reported by
     // `jtt_sandboxd_runtime_up`; leaving the gauge at its last value would be
     // a lie, so it is cleared instead.
+    gauge.reset();
+  }
+});
+
+setCollector(metrics.containerSessions, async (gauge) => {
+  try {
+    gauge.set(distinctContainerSessions(await ownContainers()));
+  } catch {
     gauge.reset();
   }
 });

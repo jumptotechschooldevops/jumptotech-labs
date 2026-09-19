@@ -926,6 +926,7 @@ export interface SandboxdMetrics {
   runtimeOpDuration: Histogram;
   dockerOps: Counter;
   containersManaged: Gauge;
+  containerSessions: Gauge;
   runtimeUp: Gauge;
   shellsOpen: Gauge;
   attaches: Counter;
@@ -970,6 +971,18 @@ export function createSandboxdMetrics(registry: Registry): SandboxdMetrics {
       name: 'jtt_sandboxd_containers_managed',
       help: 'Sandbox containers the runtime currently holds, by provider.',
       labelNames: ['provider'],
+      ...common,
+    }),
+
+    /*
+     * The leak detector's actual left-hand side. Sessions hold one container
+     * (Linux), two (a Linux lab with a peer) or three (Ansible), so the
+     * container count above cannot be compared with a session count; distinct
+     * sessions among those containers can (services/sandboxd/src/container-accounting.ts).
+     */
+    containerSessions: new client.Gauge({
+      name: 'jtt_sandboxd_container_sessions',
+      help: 'Distinct sessions among the sandbox containers the runtime holds; a container with no session counts alone.',
       ...common,
     }),
 

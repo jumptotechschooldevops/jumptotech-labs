@@ -168,12 +168,16 @@ have permitted `kind` or `major` on our own metrics.
 
 ### State is read, not counted
 
-`jtt_sessions_active` and `jtt_sandboxd_containers_managed` are read from the
-session store and the container runtime at scrape time. A counter the
-application maintains drifts whenever an increment is missed on an error path —
-and error paths are where sessions go missing. That property is load-bearing:
-the leak alert *subtracts* the two, and two independently drifting counters
-would show a permanent false difference until somebody silenced the alert.
+`jtt_sessions_active`, `jtt_sandboxd_containers_managed` and
+`jtt_sandboxd_container_sessions` are read from the session store and the
+container runtime at scrape time. A counter the application maintains drifts
+whenever an increment is missed on an error path — and error paths are where
+sessions go missing. That property is load-bearing: the leak alert *subtracts*
+container-backed sessions (`provider!="kubernetes"`) from the distinct sessions
+among sandboxd's containers, and two independently drifting counters would show
+a permanent false difference until somebody silenced the alert. It compares
+sessions, not containers: an Ansible session holds three containers and a
+Kubernetes session none.
 
 The database probe and pool statistics are the exception — they run on a timer,
 not at scrape time. A collector that hangs hangs the scrape, and the scrape is

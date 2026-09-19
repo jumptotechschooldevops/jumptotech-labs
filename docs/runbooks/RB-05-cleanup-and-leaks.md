@@ -14,7 +14,7 @@ not a counter: a counter that stops rising looks exactly like a quiet period.
 
 ```promql
 jtt:reaper_seconds_since_success     # > 300 is five missed sweeps
-jtt:sandbox_leak:count               # containers held − sessions known
+jtt:sandbox_leak:count               # sessions sandboxd holds containers for − container-backed sessions known
 sum(jtt_reaper_orphans_found)
 ```
 
