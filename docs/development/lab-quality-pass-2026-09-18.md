@@ -97,7 +97,7 @@ than the task claims; **P3** wording.
 | ANSIBLE-003, -009 | state made ad hoc + empty/debug playbook | cleared baseline, playbook must create it (live: shortcut fails; real playbook 6/6 and 7/7) | 929bd10 |
 | ANSIBLE-004 | empty vars files + literal playbook | vars files hold the values; playbook uses them (live: 10/10; literal playbook 6/10) | 929bd10 |
 | NET-022 | recreated without the command (nginx back on 80) | nginx config from the container must carry the listener | b27ed51 |
-| NET-002 | one line per value; two addresses and `prod` never graded | `file_key_value`, all graded | a29b4c3 |
+| NET-002 | one line per value; two addresses and `prod` never graded | `file_key_value` for Part 2 and classify.txt (Part 1 is still substring-graded — see the 2026-09-19 pass, §6) | a29b4c3 |
 | LINUX-009 | a script that dispatched on the file *name* | also graded on two status files it has not seen (measured 5/7 → 7/7) | df79a5c |
 | K8S-004, -005 | reference added beside the original literal `env` values, which still win | literals must be gone (`deployment_env_literal_absent`) | da4e395, 54d1a69 |
 | K8S-004 | one of the two settings moved | each key referenced | f85b2d0 |
