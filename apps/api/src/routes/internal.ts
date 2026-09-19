@@ -105,7 +105,9 @@ export function createInternalRoutes(deps: InternalRoutesDeps): Router {
       const context = await sessions.getTerminalContext(session.sessionId);
       sendOk(res, context);
     } catch (error) {
-      sessionErrorResponse(res, error);
+      // Service to service: the terminal logs the provider's words and tells
+      // the browser its own (services/terminal/src/server.ts).
+      sessionErrorResponse(res, error, 'service');
     }
   }));
 
@@ -129,7 +131,9 @@ export function createInternalRoutes(deps: InternalRoutesDeps): Router {
       const touched = await sessions.touchActivity(session.sessionId, 'terminal');
       sendOk(res, { recorded: touched !== null });
     } catch (error) {
-      sessionErrorResponse(res, error);
+      // Service to service: the terminal logs the provider's words and tells
+      // the browser its own (services/terminal/src/server.ts).
+      sessionErrorResponse(res, error, 'service');
     }
   }));
 
