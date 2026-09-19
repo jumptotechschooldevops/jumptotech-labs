@@ -178,6 +178,16 @@ requirements:
       - ${ExportBucket.Arn}/*
     label: The policy grants access to the objects, using the bucket's ARN from the bucket resource
 
+  # The change request: the queue is "named from the Environment parameter".
+  # Declaring a new `Env` parameter makes every reference resolve and names
+  # the queue from something else.
+  - type: cfn_property_resolves_to
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportQueue
+    property: QueueName
+    contains: ${Environment}
+    label: The queue is named from the Environment parameter
+
   # --- nothing dangles ------------------------------------------------------
   - type: cfn_references_resolve
     path: /home/student/stack/payments-export.yaml
@@ -188,12 +198,18 @@ requirements:
     path: /home/student/stack/payments-export.yaml
     name: ExportBucketName
     references: ExportBucket
+    # The bucket's name is what Ref returns; its Arn attribute is not a name.
+    resolves_to:
+      - ${ExportBucket}
     label: The stack exports the bucket name, taken from the bucket
 
   - type: cfn_output_exists
     path: /home/student/stack/payments-export.yaml
     name: ExportRoleArn
     references: ExportRole
+    # "An ARN is not an identifier": Ref on a role returns its name.
+    resolves_to:
+      - ${ExportRole.Arn}
     label: The stack exports the role ARN, taken from the role
 
 hints:
