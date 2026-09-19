@@ -986,6 +986,7 @@ function solve(lab: LoadedLabDefinition): {
   // Files are placed after the containers exist, since the fake needs one to
   // put a file into.
   const containerFiles: Array<{ container: string; path: string; content: string }> = [];
+  const imageConfigs = new Map<string, Record<string, unknown>>();
 
   const specFor = (name: string) => {
     const existing = specs.get(name);
@@ -1091,8 +1092,12 @@ function solve(lab: LoadedLabDefinition): {
         docker.addImage(requirement.image, { layers: [...prefix, 'sha256:after-tail'] });
         break;
       }
-      case 'docker_image_config':
-        docker.addImage(requirement.image, {
+      case 'docker_image_config': {
+        // Several config checks may describe one image: merge them, so a
+        // later check does not replace what an earlier one set.
+        const merged = { ...(imageConfigs.get(requirement.image) ?? {}) };
+        imageConfigs.set(requirement.image, merged);
+        Object.assign(merged, {
           ...(requirement.entrypoint ? { entrypoint: [...requirement.entrypoint] } : {}),
           ...(requirement.cmd ? { cmd: [...requirement.cmd] } : {}),
           ...(requirement.working_dir ? { workingDir: requirement.working_dir } : {}),
@@ -1101,7 +1106,9 @@ function solve(lab: LoadedLabDefinition): {
           ...(requirement.labels ? { labels: { ...requirement.labels } } : {}),
           ...(requirement.exposed_port ? { exposedPorts: [`${requirement.exposed_port}/tcp`] } : {}),
         });
+        docker.addImage(requirement.image, merged);
         break;
+      }
       case 'docker_volume_exists':
         void docker.createVolume(requirement.name);
         break;

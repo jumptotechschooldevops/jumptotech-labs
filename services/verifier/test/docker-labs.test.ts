@@ -78,6 +78,22 @@ describe('DOCKER-004 — build an image from a Dockerfile', () => {
     expect(await grade(lab)).toEqual(['Container greeter runs the image you built']);
   });
 
+  it('fails an image whose CMD does nothing, and accepts the shell form', async () => {
+    const quiet = await started('DOCKER-004');
+    await quiet.workspace.seed(SESSION, [{ path: 'Dockerfile', content: DOCKERFILE.replace('CMD ["cat", "/app/banner.txt"]', 'CMD ["true"]') }]);
+    quiet.daemon.addImage('jumptotech/greeter:1.0', { workingDir: '/app', cmd: ['true'] });
+    quiet.daemon.addContainer({ name: 'greeter', image: 'jumptotech/greeter:1.0', detach: false }, 'exited', 0);
+    quiet.daemon.putFile('greeter', '/app/banner.txt', 'x\n');
+    expect(await grade(quiet)).toEqual(['The image starts by printing the banner']);
+
+    const shell = await started('DOCKER-004');
+    await shell.workspace.seed(SESSION, [{ path: 'Dockerfile', content: DOCKERFILE }]);
+    shell.daemon.addImage('jumptotech/greeter:1.0', { workingDir: '/app', cmd: ['/bin/sh', '-c', 'cat /app/banner.txt'] });
+    shell.daemon.addContainer({ name: 'greeter', image: 'jumptotech/greeter:1.0', detach: false }, 'exited', 0);
+    shell.daemon.putFile('greeter', '/app/banner.txt', 'x\n');
+    expect(await grade(shell)).toEqual([]);
+  });
+
   it('fails an image whose build never produced the banner', async () => {
     const lab = await built('jumptotech/greeter:1.0');
     expect(await grade(lab)).toEqual(['The image contains the banner the RUN step produced']);

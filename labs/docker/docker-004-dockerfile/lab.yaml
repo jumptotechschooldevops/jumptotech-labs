@@ -99,6 +99,13 @@ requirements:
     image: jumptotech/greeter:1.0
     working_dir: /app
     label: The built image sets its working directory to /app
+  # "A CMD that prints /app/banner.txt": `CMD ["true"]` exits 0 and passed
+  # every other check. Exec form or shell form, the banner path is in it.
+  - type: docker_image_config
+    image: jumptotech/greeter:1.0
+    cmd_contains:
+      - /app/banner.txt
+    label: The image starts by printing the banner
   - type: docker_container_exists
     name: greeter
     label: Container greeter exists
