@@ -107,13 +107,20 @@ interface Harness {
 async function start(
   containers: Record<string, SandboxSnapshot>,
   metrics?: ReturnType<typeof createSandboxdMetrics>,
-): Promise<Harness> {
+  /** Awaited inside every container inspect, so a test can hold one open. */
+  inspectGate?: () => Promise<void>,
+): Promise<Harness & { healthUrl: string }> {
   const ptys: ReturnType<typeof fakePty>[] = [];
   const argvs: string[][] = [];
   const server = createSandboxd({
     config,
     ...(metrics ? { metrics } : {}),
-    inspector: { inspect: async (ref) => containers[ref] ?? null },
+    inspector: {
+      inspect: async (ref) => {
+        await inspectGate?.();
+        return containers[ref] ?? null;
+      },
+    },
     spawn: (_command, args) => {
       argvs.push(args);
       const p = fakePty();
@@ -125,7 +132,12 @@ async function start(
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
-  return { url: `ws://127.0.0.1:${port}/v1/attach`, ptys, argvs };
+  return {
+    url: `ws://127.0.0.1:${port}/v1/attach`,
+    healthUrl: `http://127.0.0.1:${port}/health`,
+    ptys,
+    argvs,
+  };
 }
 
 function connect(url: string, headers: Record<string, string>): WebSocket {
@@ -340,5 +352,47 @@ describe('sandboxd attach', () => {
     ws.close();
     await new Promise((r) => setTimeout(r, 100));
     expect(harness.ptys[0]!.killed).toBe(true);
+  });
+});
+
+describe('an attach whose caller leaves while the container is inspected', () => {
+  /*
+   * The terminal service gives the broker 15 s to answer an attach, and the
+   * inspect behind it may itself take up to 15 s on a busy Docker daemon. A
+   * caller that gave up — or whose browser left — closed its socket while the
+   * inspect was still running; the broker then spawned `docker exec` anyway and
+   * registered it for a socket nobody would ever read. That PTY held a shell in
+   * the student's container and one of SANDBOXD_MAX_SESSIONS until the idle
+   * timer, 30 minutes in compose.
+   */
+  it('spawns nothing, and holds nothing', async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const inspecting = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const harness = await start({ [refFor(SESSION_A)]: snapshotFor(SESSION_A) }, async () => {
+      entered();
+      await released;
+    });
+
+    const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
+    await new Promise((resolve) => ws.on('open', resolve));
+    ws.send(JSON.stringify({ type: 'attach', sessionId: SESSION_A, cols: 80, rows: 24 }));
+    await inspecting;
+
+    const closed = new Promise((resolve) => ws.on('close', resolve));
+    ws.close(1000, 'caller gave up');
+    await closed;
+    release();
+
+    // What follows the inspect is promise continuations only, no I/O: letting
+    // the event loop turn once runs all of it.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(harness.argvs).toEqual([]);
+    expect(harness.ptys).toEqual([]);
+    const health = (await (await fetch(harness.healthUrl)).json()) as Record<string, unknown>;
+    expect(JSON.stringify(health)).toContain('"shells":0');
   });
 });
