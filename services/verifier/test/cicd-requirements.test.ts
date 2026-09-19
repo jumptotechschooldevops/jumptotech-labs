@@ -15,6 +15,7 @@
  * thing with a build's result" is proved here, where it can be exhaustive.
  */
 import { describe, expect, it } from 'vitest';
+import { expandsVariable } from '../src/ci/workflow.js';
 import { requirementSchema, type Requirement } from '@jumptotech/lab-orchestrator';
 import { verifyRequirement } from '../src/index.js';
 import { CicdVerifyReader } from '../src/cicd-reader.js';
@@ -648,5 +649,19 @@ describe('fail-closed behaviour', () => {
       sandbox,
     );
     expect(result.status).toBe('fail');
+  });
+});
+
+describe('expandsVariable — a variable is read, not merely named', () => {
+  it('accepts the shell, workflow and Groovy expansion forms', () => {
+    for (const code of ['$IMAGE_NAME', '"${IMAGE_NAME}"', '${IMAGE_NAME:-x}', '${{ env.IMAGE_NAME }}', '${env.IMAGE_NAME}', 'env.IMAGE_NAME']) {
+      expect(expandsVariable(code, 'IMAGE_NAME'), code).toBe(true);
+    }
+  });
+
+  it('rejects the bare name, a longer name, and a different namespace', () => {
+    for (const code of ['IMAGE_NAME', '$IMAGE_NAMES', '$MY_IMAGE_NAME', 'github.env.IMAGE_NAME', '$ IMAGE_NAME']) {
+      expect(expandsVariable(code, 'IMAGE_NAME'), code).toBe(false);
+    }
   });
 });
