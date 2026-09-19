@@ -74,6 +74,6 @@ export default defineConfig({
     include: ['test/**/*.test.{ts,tsx}'],
     // PLATFORM-006: the host-execution guard. The UI suite has no business
     // starting a process, and this is what proves it rather than assuming it.
-    setupFiles: ['../../test-support/vitest.setup.ts'],
+    setupFiles: ['../../test-support/vitest.setup.ts', './test/rtl-setup.ts'],
   },
 });
