@@ -367,6 +367,49 @@ ${withBlock}
   });
 });
 
+describe('github_workflow_step_exists — with_keys and with_any_key', () => {
+  const workflow = (withBlock: string) => `name: CI
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+${withBlock}
+`;
+  const req = (extra: Record<string, unknown>) => ({
+    type: 'github_workflow_step_exists',
+    path: WORKFLOW,
+    job: 'build',
+    uses: 'actions/setup-node',
+    ...extra,
+  });
+  const run = (extra: Record<string, unknown>, withBlock: string) =>
+    check(req(extra), new FakeCicdSandbox().put(WORKFLOW, workflow(withBlock))).then((r) => r.status);
+
+  it('with_any_key passes when any one of the inputs is set', async () => {
+    const anyOf = { with_any_key: ['node-version', 'node-version-file'] };
+    expect(await run(anyOf, '        with:\n          node-version: 22')).toBe('pass');
+    expect(await run(anyOf, '        with:\n          node-version-file: .nvmrc')).toBe('pass');
+    expect(await run(anyOf, '        with:\n          cache: npm')).toBe('fail');
+    expect(await run(anyOf, '')).toBe('fail');
+  });
+
+  it('does not count an input written with no value, for either field', async () => {
+    for (const empty of ['          node-version:', "          node-version: ''", '          node-version: ~']) {
+      const block = `        with:\n${empty}`;
+      expect(await run({ with_keys: ['node-version'] }, block), empty).toBe('fail');
+      expect(await run({ with_any_key: ['node-version', 'node-version-file'] }, block), empty).toBe('fail');
+    }
+    // A value of false or 0 is still a value.
+    expect(await run({ with_keys: ['node-version'] }, '        with:\n          node-version: 0')).toBe('pass');
+  });
+
+  it('is refused by the schema with fewer than two alternatives', () => {
+    expect(() => requirementSchema.parse(req({ with_any_key: ['node-version'] }))).toThrow();
+  });
+});
+
 describe('environment_reference_exists — what counts as a declaration', () => {
   const ref = (name: string, via?: string) => ({
     type: 'environment_reference_exists',

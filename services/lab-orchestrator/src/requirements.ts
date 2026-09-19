@@ -3597,8 +3597,19 @@ const cicdRequirementSchemas = {
       job: identifier,
       uses: z.string().min(1).max(160).optional(),
       run_contains: z.array(z.string().min(1).max(120)).max(6).optional(),
-      /** Require the step's `with:` block to set these input names. */
+      /**
+       * Require the step's `with:` block to set these input names. An input
+       * written with no value (`node-version:` or `''`) is not set: the action
+       * sees nothing and falls back to its default.
+       */
       with_keys: z.array(identifier).max(10).optional(),
+      /**
+       * Require at least one of these inputs to be set — for actions that take
+       * the same thing in more than one way (`actions/setup-node` reads the
+       * version from `node-version` or from a file named by
+       * `node-version-file`).
+       */
+      with_any_key: z.array(identifier).min(2).max(10).optional(),
       /**
        * Require `with:` inputs to have a value containing a fragment, e.g.
        * `{ path: dist }` for an upload step. Matched as a substring of the value

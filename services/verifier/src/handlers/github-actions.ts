@@ -194,6 +194,9 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
       if (requirement.with_keys !== undefined) {
         if (!requirement.with_keys.every((key) => step.withKeys.includes(key))) return false;
       }
+      if (requirement.with_any_key !== undefined) {
+        if (!requirement.with_any_key.some((key) => step.withKeys.includes(key))) return false;
+      }
       if (requirement.with_contains !== undefined) {
         if (!withContains(step, requirement.with_contains)) return false;
       }
