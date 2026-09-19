@@ -692,7 +692,7 @@ export function createTerminalServer(
         clearTimeout(authTimer);
         const cols = message.cols ?? 80;
         const rows = message.rows ?? 24;
-        void startSession(ws, claims, cols, rows)
+        void attachInTurn(claims.sid, () => startSession(ws, claims, cols, rows))
           .then((started) => {
             if (!started) return;
             authenticated = true;
@@ -750,14 +750,46 @@ export function createTerminalServer(
     });
   });
 
+  /**
+   * Attaches in flight, per session id: the tail of that session's queue.
+   *
+   * "One shell per session" is enforced by `startSession` closing whatever is
+   * registered for the session before it attaches. That check alone ran before
+   * the credentials fetch and the attach, so sockets that authenticated with
+   * one token at the same moment each found nothing to close, and each
+   * registered a shell: one student could hold as many shells, and as many of
+   * the shared `maxSessions` slots, as sockets they opened at once, and End Lab
+   * reached only the last. Taking attaches for one session in turn makes the
+   * check exact — each attach replaces the one before it, the newest wins, as
+   * a sequential reconnect always did — and bounds a session to one attach in
+   * flight. Different sessions never wait on each other.
+   */
+  const attachQueues = new Map<string, Promise<unknown>>();
+
+  function attachInTurn(sessionId: string, attach: () => Promise<boolean>): Promise<boolean> {
+    const previous = attachQueues.get(sessionId) ?? Promise.resolve();
+    const turn = previous.then(attach, attach);
+    const tail = turn.catch(() => undefined);
+    attachQueues.set(sessionId, tail);
+    void tail.then(() => {
+      if (attachQueues.get(sessionId) === tail) attachQueues.delete(sessionId);
+    });
+    return turn;
+  }
+
   async function startSession(
     ws: WebSocket,
     claims: TerminalSessionClaims,
     cols: number,
     rows: number,
   ): Promise<boolean> {
+    // A socket that left while an earlier attach for its session ran has
+    // nothing to attach, and must not replace the shell that attach opened.
+    if (ws.readyState !== ws.OPEN) return false;
+
     // One shell per session. A second connection for the same session replaces
-    // the first rather than running two shells against one sandbox.
+    // the first rather than running two shells against one sandbox. Exact,
+    // because `attachInTurn` never runs two of these for one session at once.
     closeSession(claims.sid);
 
     /*
