@@ -53,8 +53,9 @@ task:
     lifecycle, and because the cluster can be configured to encrypt Secrets at
     rest — not because base64 protects anything.
 
-    This lab checks only that the key `api-token` exists and that the workload
-    references it. The platform never reads Secret values.
+    This lab checks that the key `api-token` exists, that the workload reads
+    the credential from it, and that the token is no longer written into the
+    Deployment. The platform never reads Secret values.
 
 setup:
   manifests:
