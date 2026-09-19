@@ -177,9 +177,12 @@ pressure alarms, not sizing: a host that passes them may still be too small.
 | `runtime.docker-socket-gid` | sandboxd joins the socket's group |
 | `gates.node-env` | `NODE_ENV=production` pinned for api, terminal, sandboxd |
 | `gates.authentication` | `AUTH_MODE=oidc` pinned; development student header off |
-| `gates.tls-edge` | `WEB_TLS=required` pinned; `PUBLIC_ORIGIN` a bare https origin, identical for api and web; served-certificate health check |
+| `gates.tls-edge` | `WEB_TLS=required` pinned; `PUBLIC_ORIGIN` a bare https origin whose host the edge's certificate gate accepts (lower-case DNS name: no IP address, no port, not a single label such as `localhost` — the api accepts all three, the edge exits on them), identical for api and web; served-certificate health check |
+| `gates.origins` | WARN when `ALLOWED_ORIGINS` trusts any origin besides `PUBLIC_ORIGIN` (each one can read signed-in responses, pass the CSRF guard and open terminal WebSockets), or when `AUTH_COOKIE_DOMAIN` widens the session cookie beyond this host |
 | `gates.network-policy` | NetworkPolicy and its attestation not waived |
 | `capacity.beta-contract` | `MAX_ACTIVE_SESSIONS=5`, `MAX_ACTIVE_SESSIONS_PER_STUDENT=1` (compose default is 20) |
+| `capacity.shell-ceilings` | `TERMINAL_MAX_SESSIONS` and `SANDBOXD_MAX_SESSIONS` at least `MAX_ACTIVE_SESSIONS`: below it the api admits a lab whose shell is then refused. (The shipped defaults disagree — 20 labs, 16 terminal shells — which is one more reason the capacity default is refused) |
+| `capacity.launches` | WARN when `LAB_LAUNCHES_PAUSED` is on: the stack would start refusing every Start Lab |
 | `durability.volumes` | named volumes for postgres, prometheus, alertmanager, grafana |
 | `durability.healthchecks` | postgres, api, terminal, web |
 | `durability.restart-policy` | every service exactly `restart: unless-stopped` (PR #34); `always` is a FAIL because it would undo `prod stop web` |

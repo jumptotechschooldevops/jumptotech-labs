@@ -51,6 +51,7 @@ function shipped(): ResolvedCompose {
         AUTH_MODE: 'oidc',
         DEV_STUDENT_HEADER_ENABLED: 'false',
         PUBLIC_ORIGIN: 'https://labs.contract.invalid',
+        ALLOWED_ORIGINS: 'https://labs.contract.invalid',
         MAX_ACTIVE_SESSIONS: '5',
         MAX_ACTIVE_SESSIONS_PER_STUDENT: '1',
         NETWORK_POLICY_ENABLED: 'true',
@@ -64,13 +65,13 @@ function shipped(): ResolvedCompose {
       healthcheck: { test: ['CMD', 'node', '-e', 'readyz'] },
     },
     terminal: {
-      environment: gated(),
+      environment: gated({ TERMINAL_MAX_SESSIONS: '16' }),
       cap_add: ['SETUID', 'SETGID'],
       networks: { default: null, kind: null, sandboxes: null },
       healthcheck: { test: ['CMD', 'node', '-e', 'livez'] },
     },
     sandboxd: {
-      environment: gated(),
+      environment: gated({ SANDBOXD_MAX_SESSIONS: '32' }),
       volumes: [{ type: 'bind', source: '/var/run/docker.sock', target: '/var/run/docker.sock' }],
       group_add: ['998'],
       networks: { default: null },
@@ -103,6 +104,13 @@ function shipped(): ResolvedCompose {
   };
   for (const service of Object.values(services)) service.restart = 'unless-stopped';
   return { services, networks: { database: { internal: true }, default: {}, kind: { external: true }, sandboxes: {} } };
+}
+
+/** The same public origin for the api and the edge, as `${PUBLIC_ORIGIN}` gives both. */
+function setOrigin(config: ResolvedCompose, origin: string): void {
+  config.services!.api!.environment!.PUBLIC_ORIGIN = origin;
+  config.services!.api!.environment!.ALLOWED_ORIGINS = origin;
+  config.services!.web!.environment!.PUBLIC_ORIGIN = origin;
 }
 
 const statusOf = (results: CheckResult[], id: string): CheckResult['status'] | undefined =>
@@ -151,10 +159,16 @@ describe('each unsafe variation is a FAIL', () => {
     ['an unpinned certificate gate', 'gates.tls-edge', (c) => delete c.services!.web!.environment!.WEB_TLS],
     ['a plaintext public origin', 'gates.tls-edge', (c) => (c.services!.api!.environment!.PUBLIC_ORIGIN = 'http://labs.contract.invalid')],
     ['no served-certificate health check', 'gates.tls-edge', (c) => delete c.services!.web!.healthcheck],
+    ['an IP address as the public origin, which the edge refuses', 'gates.tls-edge', (c) => setOrigin(c, 'https://203.0.113.7')],
+    ['a port in the public origin, which the edge refuses', 'gates.tls-edge', (c) => setOrigin(c, 'https://labs.contract.invalid:8443')],
+    ['a single-label public host, which the edge refuses', 'gates.tls-edge', (c) => setOrigin(c, 'https://localhost')],
     ['NetworkPolicy off', 'gates.network-policy', (c) => (c.services!.api!.environment!.NETWORK_POLICY_ENABLED = 'false')],
     ['the attestation waived', 'gates.network-policy', (c) => (c.services!.api!.environment!.NETWORK_POLICY_ATTESTATION_REQUIRED = 'false')],
     ['the compose capacity default', 'capacity.beta-contract', (c) => (c.services!.api!.environment!.MAX_ACTIVE_SESSIONS = '20')],
     ['two labs per student', 'capacity.beta-contract', (c) => (c.services!.api!.environment!.MAX_ACTIVE_SESSIONS_PER_STUDENT = '2')],
+    ['a terminal that holds fewer shells than there are seats', 'capacity.shell-ceilings', (c) => (c.services!.terminal!.environment!.TERMINAL_MAX_SESSIONS = '4')],
+    ['a sandboxd that holds fewer shells than there are seats', 'capacity.shell-ceilings', (c) => (c.services!.sandboxd!.environment!.SANDBOXD_MAX_SESSIONS = '2')],
+    ['a shell ceiling that is not a number', 'capacity.shell-ceilings', (c) => (c.services!.terminal!.environment!.TERMINAL_MAX_SESSIONS = 'many')],
     ['PostgreSQL data in a bind mount', 'durability.volumes', (c) => (c.services!.postgres!.volumes = [{ type: 'bind', source: '/tmp/pg', target: '/var/lib/postgresql/data' }])],
     ['no database health check', 'durability.healthchecks', (c) => delete c.services!.postgres!.healthcheck],
     ['a service with no restart policy', 'durability.restart-policy', (c) => delete c.services!.sandboxd!.restart],
@@ -166,6 +180,40 @@ describe('each unsafe variation is a FAIL', () => {
 
   it.each(cases)('%s', (_name, id, change) => {
     expect(statusOf(mutate(change), id)).toBe('FAIL');
+  });
+
+  const onlyWarning = (results: CheckResult[]): string[] => results.filter((result) => result.status === 'WARN').map((result) => result.id);
+
+  it('warns, rather than passes, when ALLOWED_ORIGINS trusts an origin beyond PUBLIC_ORIGIN, and names it', () => {
+    const results = mutate((c) => (c.services!.api!.environment!.ALLOWED_ORIGINS = 'https://labs.contract.invalid,https://staging.contract.invalid'));
+    expect(onlyWarning(results)).toEqual(['gates.origins']);
+    expect(results.find((result) => result.id === 'gates.origins')!.detail).toContain('https://staging.contract.invalid');
+  });
+
+  it('does not count PUBLIC_ORIGIN itself, with or without a trailing slash, as an extra origin', () => {
+    const results = mutate((c) => (c.services!.api!.environment!.ALLOWED_ORIGINS = ' https://labs.contract.invalid/ '));
+    expect(statusOf(results, 'gates.origins')).toBe('PASS');
+  });
+
+  it('warns when the session cookie is widened to a parent domain', () => {
+    expect(onlyWarning(mutate((c) => (c.services!.api!.environment!.AUTH_COOKIE_DOMAIN = 'contract.invalid')))).toEqual(['gates.origins']);
+  });
+
+  it.each(['true', 'TRUE', '1', 'yes', 'on'])('warns when the stack would start with launches paused (%s)', (value) => {
+    expect(onlyWarning(mutate((c) => (c.services!.api!.environment!.LAB_LAUNCHES_PAUSED = value)))).toEqual(['capacity.launches']);
+  });
+
+  it('treats an unset or false pause the way the api does', () => {
+    expect(statusOf(mutate((c) => (c.services!.api!.environment!.LAB_LAUNCHES_PAUSED = 'false')), 'capacity.launches')).toBe('PASS');
+    expect(statusOf(mutate((c) => (c.services!.api!.environment!.LAB_LAUNCHES_PAUSED = '')), 'capacity.launches')).toBe('PASS');
+  });
+
+  it('applies the loader defaults when compose leaves a shell ceiling unset', () => {
+    const results = mutate((c) => {
+      delete c.services!.terminal!.environment!.TERMINAL_MAX_SESSIONS;
+      delete c.services!.sandboxd!.environment!.SANDBOXD_MAX_SESSIONS;
+    });
+    expect(statusOf(results, 'capacity.shell-ceilings')).toBe('PASS');
   });
 
   it('warns, rather than passes, when the backup status directory is the in-checkout default', () => {
@@ -267,6 +315,17 @@ describe('the contract restates declarations it does not own', () => {
     expect(PRODUCTION_RESTART_POLICY).toBe('unless-stopped');
     for (const file of ['docker-compose.production.yml', 'docker-compose.production-observability.yml']) {
       expect(read(file)).toContain(`restart: ${PRODUCTION_RESTART_POLICY}`);
+    }
+  });
+
+  it("accepts exactly the public host names the web edge's certificate gate accepts", () => {
+    const gate = read('infrastructure/docker/nginx/tls-preflight.sh');
+    const shellPattern = gate.match(/printf '%s' "\$host" \| grep -Eq '([^']+)'/)?.[1];
+    expect(shellPattern, 'the host pattern in tls-preflight.sh public_host').toBeDefined();
+    expect(contract.EDGE_PUBLIC_HOST_PATTERN.source).toBe(shellPattern);
+    for (const host of ['labs.example.com', 'a.b-c.example', 'x1.io']) expect(contract.EDGE_PUBLIC_HOST_PATTERN.test(host), host).toBe(true);
+    for (const host of ['localhost', '203.0.113.7', 'labs.example.com:443', 'Labs.example.com', 'labs.example.com/', 'user@labs.example.com', '-a.example.com']) {
+      expect(contract.EDGE_PUBLIC_HOST_PATTERN.test(host), host).toBe(false);
     }
   });
 

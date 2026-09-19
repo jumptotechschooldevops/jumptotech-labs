@@ -187,12 +187,19 @@ interface Scenario {
   dockerSocketGid?: number;
   /** Check ids that must FAIL. Empty: nothing may FAIL. `compose` means compose itself must refuse. */
   expectFail: string[];
+  /** When given, exactly these check ids must WARN — so a clean configuration also proves it warns about nothing. */
+  expectWarn?: string[];
 }
 
 function scenarios(base: Record<string, string>): Scenario[] {
   return [
-    { name: 'a complete five-student beta configuration passes', change: {}, dockerSocketGid: 998, expectFail: [] },
-    { name: 'the capacity default (20) is refused', change: { MAX_ACTIVE_SESSIONS: null }, expectFail: ['capacity.beta-contract'] },
+    { name: 'a complete five-student beta configuration passes', change: {}, dockerSocketGid: 998, expectFail: [], expectWarn: [] },
+    {
+      // The compose default admits 20 labs; the terminal's default holds 16 shells.
+      name: 'the capacity default (20) is refused, and is past the terminal default (16)',
+      change: { MAX_ACTIVE_SESSIONS: null },
+      expectFail: ['capacity.beta-contract', 'capacity.shell-ceilings'],
+    },
     { name: 'two sessions per student is refused', change: { MAX_ACTIVE_SESSIONS_PER_STUDENT: '2' }, expectFail: ['capacity.beta-contract'] },
     { name: 'AUTH_MODE=development in .env cannot reach the api', change: { AUTH_MODE: 'development' }, expectFail: [] },
     { name: 'NODE_ENV=development in .env cannot reach the api', change: { NODE_ENV: 'development' }, expectFail: [] },
@@ -239,6 +246,28 @@ function scenarios(base: Record<string, string>): Scenario[] {
       change: { POSTGRES_PASSWORD: `"${base.POSTGRES_PASSWORD}` },
       expectFail: ['compose'],
     },
+    // The api accepts these origins; the web edge's certificate gate does not,
+    // so the edge would exit at every start.
+    ...(
+      [
+        ['an IP address', 'https://203.0.113.7'],
+        ['a port', 'https://labs.production-check.invalid:8443'],
+        ['a single-label host', 'https://localhost'],
+      ] as const
+    ).map(([what, origin]) => ({
+      name: `a public origin with ${what}, which the edge refuses, is refused`,
+      change: { PUBLIC_ORIGIN: origin, ALLOWED_ORIGINS: origin, OIDC_REDIRECT_URI: `${origin}/auth/callback` },
+      expectFail: ['gates.tls-edge'],
+    })),
+    { name: 'a terminal with fewer shells than seats is refused', change: { TERMINAL_MAX_SESSIONS: '4' }, expectFail: ['capacity.shell-ceilings'] },
+    {
+      name: 'a second trusted origin is a warning that names it',
+      change: { ALLOWED_ORIGINS: 'https://labs.production-check.invalid,https://staging.production-check.invalid' },
+      expectFail: [],
+      expectWarn: ['gates.origins'],
+    },
+    { name: 'a parent-domain session cookie is a warning', change: { AUTH_COOKIE_DOMAIN: 'production-check.invalid' }, expectFail: [], expectWarn: ['gates.origins'] },
+    { name: 'starting with launches paused is a warning', change: { LAB_LAUNCHES_PAUSED: 'true' }, expectFail: [], expectWarn: ['capacity.launches'] },
   ];
 }
 
@@ -278,6 +307,13 @@ function selfTest(): number {
         }
         for (const id of failed) {
           if (!scenario.expectFail.includes(id)) problems.push(`${id} failed unexpectedly: ${results.find((r) => r.id === id)!.detail}`);
+        }
+        if (scenario.expectWarn) {
+          const warned = results.filter((result) => result.status === 'WARN').map((result) => result.id);
+          for (const id of scenario.expectWarn.filter((id) => !warned.includes(id))) problems.push(`${id} did not warn`);
+          for (const id of warned.filter((id) => !scenario.expectWarn!.includes(id))) {
+            problems.push(`${id} warned unexpectedly: ${results.find((r) => r.id === id)!.detail}`);
+          }
         }
         const printed = results.map(formatResult).join('\n');
         secretLeak = SECRET_NAMES.some((name) => values[name] && values[name]!.length >= 6 && printed.includes(values[name]!));

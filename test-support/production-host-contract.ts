@@ -64,6 +64,20 @@ export const PRODUCTION_PUBLICATIONS = Object.freeze([
  */
 export const PRODUCTION_RESTART_POLICY = 'unless-stopped';
 
+/**
+ * The host names the web edge's certificate gate accepts from PUBLIC_ORIGIN
+ * (infrastructure/docker/nginx/tls-preflight.sh, `public_host`): lower-case DNS
+ * labels, at least two of them, the last starting with a letter — so no IP
+ * address, no port and no single-label name such as `localhost`. The api's own
+ * loader accepts all three, so without this the check passed a configuration
+ * whose edge then exits at every start. Kept identical to the gate's pattern by
+ * production-host-contract.test.ts.
+ */
+export const EDGE_PUBLIC_HOST_PATTERN = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** How the api reads a boolean variable (apps/api/src/config.ts `boolFromEnv`). */
+const isTrue = (value: string | undefined): boolean => ['1', 'true', 'yes', 'on'].includes((value ?? '').trim().toLowerCase());
+
 export type CheckStatus = 'PASS' | 'FAIL' | 'WARN' | 'MANUAL' | 'INFO';
 
 export interface CheckResult {
@@ -289,11 +303,42 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
       [
         ...(env(services.web, 'WEB_TLS') === 'required' ? [] : ['web is not pinned to WEB_TLS=required']),
         ...(/^https:\/\/[^/]+$/.test(apiOrigin) ? [] : ['PUBLIC_ORIGIN is not a bare https:// origin']),
+        ...(!/^https:\/\/[^/]+$/.test(apiOrigin) || EDGE_PUBLIC_HOST_PATTERN.test(apiOrigin.slice('https://'.length))
+          ? []
+          : [
+              "PUBLIC_ORIGIN's host is not a lower-case DNS name without a port (an IP address, a port or a single-label name such as localhost): the web edge's certificate gate refuses it, so web would restart in a loop and never serve 443",
+            ]),
         ...(apiOrigin === webOrigin ? [] : ['the api and web see different PUBLIC_ORIGIN values']),
         ...(healthText.includes('jtt-tls-preflight') ? [] : ['web has no served-certificate health check']),
       ],
-      'the certificate gate is pinned and PUBLIC_ORIGIN is an https origin',
+      'the certificate gate is pinned and PUBLIC_ORIGIN is an https origin the edge accepts',
     ),
+  );
+
+  // Every ALLOWED_ORIGINS entry is trusted three times over: credentialed CORS
+  // reads, the CSRF origin guard on every state-changing request, and the
+  // terminal's WebSocket origin check. The api accepts any https origin there;
+  // the beta was proven with exactly one, this deployment's own. A cookie Domain
+  // likewise sends the session cookie to every host under it.
+  const extraOrigins = (env(services.api, 'ALLOWED_ORIGINS') ?? '')
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .filter((origin) => origin && origin !== apiOrigin);
+  const cookieDomain = env(services.api, 'AUTH_COOKIE_DOMAIN')?.trim();
+  const trustWidened = [
+    ...(extraOrigins.length
+      ? [
+          `ALLOWED_ORIGINS also trusts ${[...new Set(extraOrigins)].join(', ')}: each can read signed-in responses, pass the CSRF guard and open terminal WebSockets. Remove any you do not operate`,
+        ]
+      : []),
+    ...(cookieDomain
+      ? [`AUTH_COOKIE_DOMAIN is set: the session cookie is also sent to every host under ${cookieDomain}. The beta was proven with a host-only cookie`]
+      : []),
+  ];
+  results.push(
+    trustWidened.length
+      ? warn('gates.origins', trustWidened.join('; '))
+      : pass('gates.origins', 'ALLOWED_ORIGINS is PUBLIC_ORIGIN alone and the session cookie is host-only'),
   );
 
   results.push(
@@ -322,6 +367,31 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
       ],
       `MAX_ACTIVE_SESSIONS=${BETA_CONTRACT.maxActiveSessions}, MAX_ACTIVE_SESSIONS_PER_STUDENT=${BETA_CONTRACT.maxActiveSessionsPerStudent} — the five-student contract`,
     ),
+  );
+
+  // The api admits MAX_ACTIVE_SESSIONS labs, but each lab's shell is a PTY the
+  // terminal holds and, for the container tracks, one sandboxd holds too. Each
+  // refuses a connection at its own ceiling, so a lower ceiling there admits the
+  // lab and then gives the last students a dead terminal. Loader defaults (16,
+  // 32) apply when compose leaves a value unset.
+  const seats = Number(max);
+  const shellCeilings = [
+    ['terminal', 'TERMINAL_MAX_SESSIONS', 16],
+    ['sandboxd', 'SANDBOXD_MAX_SESSIONS', 32],
+  ] as const;
+  const shortShells = Number.isInteger(seats)
+    ? shellCeilings
+        .filter(([service]) => services[service])
+        .map(([service, name, fallback]) => [service, name, env(services[service], name) ?? String(fallback)] as const)
+        .filter(([, , ceiling]) => !(Number(ceiling) >= seats))
+        .map(([service, name, ceiling]) => `${service} ${name}=${ceiling} is below MAX_ACTIVE_SESSIONS=${seats}: past it, a started lab gets no shell`)
+    : [];
+  results.push(one('capacity.shell-ceilings', shortShells, 'the terminal and sandboxd accept at least MAX_ACTIVE_SESSIONS shells'));
+
+  results.push(
+    isTrue(env(services.api, 'LAB_LAUNCHES_PAUSED'))
+      ? warn('capacity.launches', 'LAB_LAUNCHES_PAUSED is on: the stack starts refusing every Start Lab (runbook §3). Intended only while an incident is open')
+      : pass('capacity.launches', 'new labs can start (LAB_LAUNCHES_PAUSED is off)'),
   );
 
   // --- durability ----------------------------------------------------------------
