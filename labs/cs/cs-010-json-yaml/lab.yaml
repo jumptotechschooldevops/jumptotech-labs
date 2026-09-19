@@ -172,9 +172,9 @@ task:
 
     DUPLICATE_KEY=<the key that appears twice>
 
-    COUNTRY_BECAME=<the value a parser gave leeds's country>
+    COUNTRY_BECAME=<what a parser reads the line `country: no` as>
 
-    VERSION_BECAME=<the value a parser gave leeds's version>
+    VERSION_BECAME=<what a parser reads the line `version: 3.10` as>
 
     TAB_DEPOT=<the depot whose line is indented with a tab>
 
