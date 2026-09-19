@@ -49,7 +49,9 @@ function LaunchPanel({ lab }: { lab: LabDetail }) {
     return () => clearInterval(timer);
   }, [otherShuttingDown, refresh]);
   const unavailable = lab.availability?.available === false;
-  const error = launchError?.labId === lab.id ? launchError.error : null;
+  const refusal = launchError?.labId === lab.id ? launchError.error : null;
+  // "You already have a lab running" is no longer true once no other lab is.
+  const error = refusal?.code === 'STUDENT_SESSION_LIMIT_REACHED' && !other ? null : refusal;
 
   const onLaunch = () => {
     if (sessions.launching) return;
