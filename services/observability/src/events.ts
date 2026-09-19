@@ -78,6 +78,8 @@ export const LOG_EVENTS = [
   'verify.passed',
   'verify.failed',
   'verify.errored',
+  // The sandbox was reset or ended while the check ran; its verdict was not recorded.
+  'verify.discarded',
 
   // --- cleanup ---------------------------------------------------------------
   'reaper.started',
