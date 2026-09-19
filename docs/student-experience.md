@@ -230,6 +230,15 @@ replaces the terminal and every control with a summary: whether the lab was
 completed, **Launch a fresh environment** (or Continue, if another lab is
 running), **Back to labs** and **Dashboard**.
 
+A completed lab leads on. The summary reads the path's recommendation
+(`GET /api/me/learning-paths/devops-engineer`) after End, so the finished lab is
+counted, and when it names a lab to open next it shows that lab, the API's
+reason, and **Continue learning** straight to its page; **Continue the learning
+path** stays as the secondary link. When it names none (the end has not finished,
+the path is complete, progress cannot be read) the path link is the main action.
+A passing Verify says the same thing ahead of time: press End lab when you are
+done to free the environment and see the next lab.
+
 If cleanup is still running (`503 DESTROY_FAILED` with the session `ENDING`) the
 workspace shows "Your lab is still shutting down — you do not need to press End
 lab again", keeps polling, and moves to the summary when the API reports

@@ -42,6 +42,7 @@ import type {
   CheckResult,
   LabDetail,
   LabHint,
+  LearningRecommendation,
   ProvisionStep,
   SessionInfo,
 } from '../lib/types';
@@ -52,6 +53,7 @@ import { LabBrief } from '../components/LabBrief';
 import { LabTerminal, type LabTerminalHandle, type TerminalEvent } from '../components/LabTerminal';
 import { FLAGSHIP_PATH_ID } from '../lib/learningPath';
 import { LabTimer } from '../components/LabTimer';
+import { Recommendation, recommendsLab } from '../components/LearningPath';
 import { VerificationPanel, type VerifyState } from '../components/VerificationPanel';
 import { Badge, EmptyState, LoadingState } from '../components/ui';
 
@@ -991,6 +993,35 @@ export function WorkspacePage({ labId }: { labId: string }) {
   );
 }
 
+/**
+ * After a completed lab: the path's next lab, straight from the API's rule.
+ *
+ * Read when the summary appears, which is after End, so the lab just finished
+ * is already counted and no longer running. Anything but a lab to open next —
+ * the student still has a lab running (the end has not finished), the path is
+ * complete, progress cannot be read — shows nothing, and the summary keeps its
+ * link to the path page.
+ */
+function useNextLabAfter(labId: string, enabled: boolean): LearningRecommendation | null {
+  const [next, setNext] = useState<LearningRecommendation | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.getLearningPathProgress(FLAGSHIP_PATH_ID))
+      .then((progress) => {
+        const recommendation = progress?.recommendation;
+        if (cancelled || !recommendation || !recommendsLab(recommendation) || recommendation.labId === labId) return;
+        setNext(recommendation);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [labId, enabled]);
+  return enabled ? next : null;
+}
+
 function FinalSummary({
   lab,
   session,
@@ -1010,6 +1041,8 @@ function FinalSummary({
   launching: boolean;
   launchError: ApiError | null;
 }) {
+  const passed = attempt?.status === 'PASSED';
+  const next = useNextLabAfter(lab.id, passed && !otherRunning);
   const title = gone
     ? 'This lab environment no longer exists'
     : session && session.status === 'EXPIRED' && removedForInactivity(session)
@@ -1045,15 +1078,20 @@ function FinalSummary({
           </p>
         )}
         {launchError ? <ErrorNotice error={describeError(launchError, 'launch')} headingLevel={3} /> : null}
+        {next ? <Recommendation recommendation={next} /> : null}
         <div className="final__actions">
           {otherRunning ? (
             <a className="btn btn--primary" href={hrefFor({ name: 'workspace', labId: otherRunning })}>
               Continue {otherRunning}
             </a>
-          ) : attempt?.status === 'PASSED' ? (
+          ) : passed ? (
             <>
-              {/* A completed lab leads on: the path page names the next lab. */}
-              <a className="btn btn--primary" href={hrefFor({ name: 'path', pathId: FLAGSHIP_PATH_ID })}>
+              {/* A completed lab leads on: to the next lab when the path names
+                  one (above), and to the path page either way. */}
+              <a
+                className={`btn ${next ? 'btn--secondary' : 'btn--primary'}`}
+                href={hrefFor({ name: 'path', pathId: FLAGSHIP_PATH_ID })}
+              >
                 Continue the learning path
               </a>
               <button type="button" className="btn btn--secondary" onClick={onLaunchAgain} disabled={launching}>

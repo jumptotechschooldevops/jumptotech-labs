@@ -24,6 +24,7 @@ import {
   apiMock,
   attemptSummary,
   labDetail,
+  learningPathProgress,
   resetApiMock,
   sessionInfo,
   sessionsResponse,
@@ -493,6 +494,66 @@ describe('after the lab has ended', () => {
     expect(next.getAttribute('href')).toBe('#/paths/devops-engineer');
     expect(next.className).toMatch(/btn--primary/);
     expect(screen.getByRole('button', { name: 'Launch again' }).className).not.toMatch(/btn--primary/);
+  });
+
+  async function passAndEnd() {
+    apiMock.endLab.mockResolvedValue({
+      message: 'Lab environment released.',
+      session: sessionInfo({ status: 'ENDED' }),
+      attempt: attemptSummary({ status: 'PASSED' }),
+      steps: [],
+    });
+    await renderConnected();
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    fireEvent.click(button('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+  }
+
+  it('after a completed lab, names the next lab from the learning path and links straight to it', async () => {
+    apiMock.getLearningPathProgress.mockResolvedValue(
+      learningPathProgress({ 'LINUX-001': 'COMPLETED' }, {
+        kind: 'NEXT_IN_STAGE',
+        labId: 'LINUX-002',
+        labTitle: 'Permissions',
+        reason: 'LINUX-002 is the next lab in Linux.',
+      }),
+    );
+    await passAndEnd();
+
+    expect(await screen.findByRole('heading', { name: 'Next recommended lab' })).toBeTruthy();
+    expect(screen.getByText('LINUX-002 is the next lab in Linux.')).toBeTruthy();
+    const next = screen.getByRole('link', { name: /Continue learning.*LINUX-002/ });
+    expect(next.getAttribute('href')).toBe('#/labs/LINUX-002');
+    expect(next.className).toMatch(/btn--primary/);
+    // The path is still one click away, but it is no longer the main action.
+    expect(screen.getByRole('link', { name: 'Continue the learning path' }).className).not.toMatch(/btn--primary/);
+    // Read after End, so the finished lab is counted.
+    expect(apiMock.getLearningPathProgress).toHaveBeenCalledWith('devops-engineer');
+  });
+
+  it('after a completed lab, offers only the path when the path does not name a lab to open', async () => {
+    // The end has not finished yet, so the student still counts as running a lab.
+    apiMock.getLearningPathProgress.mockResolvedValue(
+      learningPathProgress({ 'LINUX-001': 'COMPLETED' }, {
+        kind: 'RESUME_ACTIVE',
+        labId: 'LINUX-001',
+        labTitle: 'Files and Directories',
+        reason: 'You have a lab running.',
+      }),
+    );
+    await passAndEnd();
+    await waitFor(() => expect(apiMock.getLearningPathProgress).toHaveBeenCalled());
+
+    expect(screen.queryByRole('heading', { name: 'Next recommended lab' })).toBeNull();
+    expect(screen.queryByText('You have a lab running.')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Continue the learning path' }).className).toMatch(/btn--primary/);
+  });
+
+  it('does not suggest a next lab for a lab that was not completed', async () => {
+    await endLab();
+    expect(apiMock.getLearningPathProgress).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: 'Next recommended lab' })).toBeNull();
   });
 
   it('explains a relaunch the platform refused, on the summary', async () => {

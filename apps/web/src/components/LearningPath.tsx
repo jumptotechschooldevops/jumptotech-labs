@@ -64,6 +64,11 @@ export function SkillStatusText({ status }: { status: SkillStatus }) {
 
 const LAB_KINDS = new Set(['CONTINUE_ATTEMPT', 'PREREQUISITE_FIRST', 'START_STAGE', 'NEXT_IN_STAGE', 'EXTRA_PRACTICE']);
 
+/** Whether a recommendation points at a lab to open next (not a running lab, not "nothing left"). */
+export function recommendsLab(recommendation: LearningRecommendation): boolean {
+  return Boolean(recommendation.labId) && LAB_KINDS.has(recommendation.kind);
+}
+
 /**
  * "What should I do next?" — the API's answer and its reason.
  *
