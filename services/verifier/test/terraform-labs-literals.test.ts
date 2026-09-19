@@ -204,3 +204,26 @@ variable "environment" {
     expect(await status('TF-025', 'terraform_variable_validation', { 'variables.tf': variable('length(var.environment) > 0') })).toBe('fail');
   });
 });
+
+describe('TF-016 — the release record states its dependency with a reference only', () => {
+  const record = (extra: string) => `
+resource "local_file" "release_record" {
+  filename = "build/app/release-record.txt"
+  content  = "manifest sha256: \${local_file.app_manifest.content_sha256}\\n"
+${extra}}
+`;
+  const absent = async (main: string) => {
+    const lab = (await realCatalog()).get('TF-016');
+    const found = lab.requirements.filter((r) => r.type === 'terraform_resource_depends_on' && 'absent' in r && r.absent === true);
+    expect(found).toHaveLength(1);
+    return (await verifyRequirement(found[0]!, sandbox({ 'main.tf': main }))).status;
+  };
+
+  it('passes the record that only references the manifest', async () => {
+    expect(await absent(record(''))).toBe('pass');
+  });
+
+  it('fails a redundant depends_on on the manifest it already references', async () => {
+    expect(await absent(record('  depends_on = [local_file.app_manifest]\n'))).toBe('fail');
+  });
+});

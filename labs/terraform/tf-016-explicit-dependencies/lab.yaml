@@ -145,6 +145,15 @@ requirements:
       - local_file.migration_marker
     label: The manifest declares an explicit dependency on the migration marker
 
+  # "`depends_on` here would add an edge Terraform already had. Do not add
+  # one." — the other half of the lesson.
+  - type: terraform_resource_depends_on
+    dir: terraform
+    resource_type: local_file
+    name: release_record
+    absent: true
+    label: The release record relies on its reference, with no depends_on added
+
   # The implicit half: a value is shared, so a reference states it.
   - type: terraform_resource_references
     dir: terraform

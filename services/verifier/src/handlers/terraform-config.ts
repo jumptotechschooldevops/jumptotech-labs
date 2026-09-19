@@ -313,7 +313,10 @@ export const terraformDataSourceDeclared: SandboxVerifierHandler<'terraform_data
 
 export const terraformResourceDependsOn: SandboxVerifierHandler<'terraform_resource_depends_on'> = {
   type: 'terraform_resource_depends_on',
-  label: (r) => `${r.resource_type}.${r.name} declares depends_on`,
+  label: (r) =>
+    r.absent === true
+      ? `${r.resource_type}.${r.name} declares no depends_on`
+      : `${r.resource_type}.${r.name} declares depends_on`,
   async run(requirement, reader) {
     return withConfig(reader, requirement.dir, (config) => {
       const block = resourceBlock(config, requirement.resource_type, requirement.name, 'managed');
@@ -321,12 +324,19 @@ export const terraformResourceDependsOn: SandboxVerifierHandler<'terraform_resou
         return fail(`No resource '${requirement.resource_type}.${requirement.name}' is declared`);
       }
       const expression = argumentValue(block, 'depends_on');
+      if (requirement.absent === true) {
+        return expression === null
+          ? pass()
+          : fail(
+              `'${requirement.resource_type}.${requirement.name}' declares depends_on, but a reference already gives Terraform that dependency`,
+            );
+      }
       if (expression === null) {
         return fail(
           `'${requirement.resource_type}.${requirement.name}' declares no depends_on. Use it only where a real ordering requirement exists that no reference expresses.`,
         );
       }
-      const missing = requirement.references.filter(
+      const missing = (requirement.references ?? []).filter(
         (target) => !referencesTarget(expression, target),
       );
       if (missing.length > 0) {
