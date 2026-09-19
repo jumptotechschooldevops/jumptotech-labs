@@ -362,7 +362,8 @@ describe('GET /api/labs/:id — unknown labs (test requirement 32)', () => {
     for (const bad of ['not-a-lab', '../../etc/passwd', 'k8s-1']) {
       const res = await request(buildApp().app).get(`/api/labs/${encodeURIComponent(bad)}`);
       expect(res.status, bad).toBe(400);
-      expect(res.body.error.code).toBe('INVALID_LAB_ID');
+      // A traversal is refused before routing, as a path (request-target.test.ts).
+      expect(res.body.error.code).toBe(bad.includes('..') ? 'INVALID_PATH' : 'INVALID_LAB_ID');
     }
   });
 
