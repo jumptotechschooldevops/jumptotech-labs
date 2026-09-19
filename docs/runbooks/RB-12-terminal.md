@@ -53,9 +53,13 @@ sum(jtt_sandboxd_shells_open)
 sum(jtt_terminal_connections_open)
 ```
 
-Two services counting the same shells from opposite ends. Sustained
-disagreement means a PTY outlived its socket or vice versa — a leak neither
-service can see alone, which is why the comparison exists.
+Two services counting shells from opposite ends. The terminal counts every
+socket; sandboxd counts only broker PTYs — container-track shells (Linux,
+Ansible, Terraform, CI/CD). Kubernetes and Docker-track shells are local PTYs
+in the terminal container, so the terminal's number is normally the larger one
+by exactly that many. `TerminalPtyDrift` fires only when sandboxd holds more
+than three PTYs beyond the terminal's sockets: a broker PTY that outlived its
+socket, which neither service can see alone.
 
 Small transient differences during connect and disconnect are normal.
 
@@ -67,7 +71,8 @@ Per section 4.
 
 - Connection success ratio above 0.95.
 - Open a terminal and run a command.
-- `jtt_terminal_connections_open` and `jtt_sandboxd_shells_open` agree.
+- `jtt_sandboxd_shells_open` is no larger than `jtt_terminal_connections_open`
+  (the difference is the open Kubernetes and Docker-track shells).
 - `jtt_terminal_bytes_total` increases — the shell is actually carrying data,
   not merely connected.
 

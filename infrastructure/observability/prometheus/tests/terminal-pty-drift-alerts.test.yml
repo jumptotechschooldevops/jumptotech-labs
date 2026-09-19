@@ -1,0 +1,62 @@
+# ---------------------------------------------------------------------------
+# TerminalPtyDrift must not page a healthy class of Kubernetes students.
+#
+# jtt_terminal_connections_open counts every terminal socket;
+# jtt_sandboxd_shells_open counts broker PTYs, which only container-track
+# shells have. Kubernetes and Docker-track shells are local PTYs in the
+# terminal container. The old rule took the absolute difference, so four
+# students with Kubernetes terminals open read 4 and fired. Only broker PTYs
+# outnumbering the sockets that own them is a leak.
+#
+#   1. four local shells, no broker PTY: silent (fails on the old rule);
+#   2. five broker PTYs with one socket left: fires;
+#   3. a mixed class that balances: silent.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../alerts/terminal.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: four students in Kubernetes terminals are not drift
+    input_series:
+      - series: 'jtt_terminal_connections_open{job="terminal"}'
+        values: '4x80'
+      - series: 'jtt_sandboxd_shells_open{job="sandboxd"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TerminalPtyDrift
+        exp_alerts: []
+
+  - interval: 15s
+    name: broker PTYs that outlived their sockets page
+    input_series:
+      - series: 'jtt_terminal_connections_open{job="terminal"}'
+        values: '1x80'
+      - series: 'jtt_sandboxd_shells_open{job="sandboxd"}'
+        values: '5x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TerminalPtyDrift
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'sandboxd holds 4 more broker PTYs than the terminal has sockets'
+              runbook_url: docs/runbooks/RB-12-terminal.md
+
+  - interval: 15s
+    name: a mixed class balances
+    input_series:
+      # Three container-track shells through the broker, two local shells.
+      - series: 'jtt_terminal_connections_open{job="terminal"}'
+        values: '5x80'
+      - series: 'jtt_sandboxd_shells_open{job="sandboxd"}'
+        values: '3x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TerminalPtyDrift
+        exp_alerts: []
