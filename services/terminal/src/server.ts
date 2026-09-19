@@ -99,6 +99,47 @@ let obs: Logger = silentLogger();
 let terminalMetrics: TerminalMetrics | null = null;
 let securityMetrics: CommonMetrics | null = null;
 
+/*
+ * What a browser is told when a shell could not be opened.
+ *
+ * The web client writes this into the student's terminal. A refusal the
+ * platform wrote itself — the API's ownership and state checks, sandboxd's
+ * attach gate — says exactly what the student needs and is forwarded as it
+ * is. Anything else is another component's own words: a credential exchange
+ * that failed in the provider (a Kubernetes API URL, `docker` stderr), Node's
+ * socket error with the broker's address, a spawn error with a path. The code
+ * still travels, the originals stay in this service's log, and the browser
+ * gets a sentence of ours.
+ */
+const PLATFORM_WORDED_CODES = new Set([
+  // The API (`routes/internal.ts`, `SessionManager.requireActive`).
+  'SESSION_NOT_OWNED',
+  'SESSION_NOT_ACTIVE',
+  'SESSION_NOT_FOUND',
+  'OWNER_REQUIRED',
+  'INVALID_SESSION_ID',
+  // This service.
+  'CONTAINER_EXEC_DISABLED',
+  'INVALID_WORKSPACE_PATH',
+  // sandboxd's attach gate (`services/sandboxd/src/attach.ts`) and the broker protocol.
+  'SANDBOX_NOT_FOUND',
+  'SANDBOX_NOT_MANAGED',
+  'SANDBOX_NOT_OWNED',
+  'SANDBOX_SESSION_MISMATCH',
+  'SANDBOX_NOT_RUNNING',
+  'SANDBOX_REF_MISMATCH',
+  'BROKER_CLOSED',
+  'BROKER_PROTOCOL',
+  'CAPACITY',
+]);
+
+function browserMessage(code: string, message: string, phase: 'credentials' | 'shell'): string {
+  if (PLATFORM_WORDED_CODES.has(code)) return phase === 'shell' ? `Could not start a shell: ${message}` : message;
+  return phase === 'shell'
+    ? 'Could not start a shell in the lab environment.'
+    : 'The terminal could not be given access to this lab environment.';
+}
+
 export function createTerminalServer(
   config: TerminalConfig,
   observability?: {
@@ -883,7 +924,7 @@ export function createTerminalServer(
         err: error,
       });
       await discardCredentials();
-      send(ws, { type: 'error', code, message: msg });
+      send(ws, { type: 'error', code, message: browserMessage(code, msg, 'credentials') });
       ws.close(4403, 'no credentials');
       return false;
     }
@@ -938,7 +979,7 @@ export function createTerminalServer(
       send(ws, {
         type: 'error',
         code,
-        message: `Could not start a shell: ${message}`,
+        message: browserMessage(code, message, 'shell'),
       });
       terminalMetrics?.connections.inc({ outcome: 'shell_start_failed' });
       obs.error('terminal.connection.rejected', {
