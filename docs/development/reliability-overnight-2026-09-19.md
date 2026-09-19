@@ -56,6 +56,7 @@ Every defect was reproduced in a failing test before it was changed.
 | 7 | **The session guard answered any lookup failure as 404 and audited it `denied-not-owner`**: a DB blip told students their lab was gone (non-retryable in the UI) and fed `AuthzOwnershipDenialSpike` | only `SESSION_NOT_FOUND` is a 404; other failures reach the central handler (500, retryable) | `session-guard-store-failure.test.ts` |
 | 8 | **sandboxd spawned `docker exec` for a caller that had left during the inspect** (terminal gives up at 15 s; inspect may take 15 s): a PTY and a broker slot for 30 min | re-check the socket after the inspect; `deny_reason="caller_gone"` | `server.test.ts` |
 | 9 | **A reset's reattach wired the new shell to a closed socket** (tab closed or End during Reset) — a broker PTY for 30 min; and **after a failed reattach the socket stayed open around a dead shell**, so the workspace's automatic reconnect never ran | re-check after each wait; close 1011 after `SANDBOX_UNAVAILABLE` | `broker-attach.test.ts` |
+| 11 | **An attach that lost deleted the winner's credentials**: kubeconfigs and Docker certificates were named by session id alone, so a second tab's losing attach removed the file the live shell used | per-attach file names | `credentials.test.ts`, `docker-credentials.test.ts`; found by an independent review of this branch |
 | 10 | **Kubernetes API requests had no deadline.** A hung API server hung Start/Reset, pinned a session's Check lock forever, and stalled the reaper — for every provider | a per-request 30 s `AbortSignal` via the KubeConfig auth hook; surfaces as `ENVIRONMENT_UNREACHABLE` | `kubernetes-client-deadline.test.ts` (all hang before) |
 
 Also: attach tests that asserted after fixed 50–120 ms sleeps across two
@@ -120,6 +121,8 @@ seeds; fails on every seed with defect 1 restored. **PROVEN BY AUTOMATED TEST**
 | A container that is not running reads every path as absent (`readSandboxPath` treats a failed `stat` as absence). No lab today has only absence requirements, so no full false pass; 36 labs can show a misleading ✓ on a dead sandbox | verifier semantics; needs a runtime-state check on the absence path |
 | The workspace offers no End on a CREATING session | web change; the reaper now bounds it at ~11 min, `ops end` is immediate |
 | api SIGTERM waits for in-flight requests with no bound (Docker's 10 s SIGKILL ends it); a killed Start is recovered by defect 6's fix | behaviour already safe |
+| A check's fence runs just before `recordCheck`, not in the same transaction: an End landing in those milliseconds can still mark a just-closed attempt PASSED (`recordCheck` sets PASSED unconditionally) | window reduced from seconds to milliseconds; closing it changes progress-service semantics |
+| Another overnight branch (security red-team, off `001bcf1`) also changed the terminal attach path | not inspected, per the isolation rule; expect a conflict in `services/terminal/src/server.ts` at reconciliation |
 | A resumed abandoned-start teardown that needed a second sweep is labelled `idle` rather than `abandoned` in teardown metrics | cosmetic |
 
 ## 6. Real-host reliability tests still required
