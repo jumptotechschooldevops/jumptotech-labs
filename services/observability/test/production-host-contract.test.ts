@@ -219,6 +219,15 @@ describe('each unsafe variation is a FAIL', () => {
     expect(statusOf(results, 'gates.oidc-client')).toBe('PASS');
   });
 
+  it.each(['false', '0', 'off', 'no'])('warns when the edge probe, and with it every TLS alert, is switched off (%s)', (value) => {
+    expect(onlyWarning(mutate((c) => (c.services!.api!.environment!.EDGE_PROBE_ENABLED = value)))).toEqual(['observability.edge-probe']);
+  });
+
+  it('leaves the edge probe on its production default when it is unset or on', () => {
+    expect(statusOf(mutate((c) => (c.services!.api!.environment!.EDGE_PROBE_ENABLED = 'true')), 'observability.edge-probe')).toBe('PASS');
+    expect(statusOf(mutate((c) => (c.services!.api!.environment!.EDGE_PROBE_ENABLED = '')), 'observability.edge-probe')).toBe('PASS');
+  });
+
   it('warns when the session cookie is widened to a parent domain', () => {
     expect(onlyWarning(mutate((c) => (c.services!.api!.environment!.AUTH_COOKIE_DOMAIN = 'contract.invalid')))).toEqual(['gates.origins']);
   });

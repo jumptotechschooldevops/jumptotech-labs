@@ -270,6 +270,9 @@ function scenarios(base: Record<string, string>): Scenario[] {
     },
     { name: 'a parent-domain session cookie is a warning', change: { AUTH_COOKIE_DOMAIN: 'production-check.invalid' }, expectFail: [], expectWarn: ['gates.origins'] },
     { name: 'starting with launches paused is a warning', change: { LAB_LAUNCHES_PAUSED: 'true' }, expectFail: [], expectWarn: ['capacity.launches'] },
+    // Compose passes no EDGE_PROBE_ENABLED to the api, so the probe keeps its
+    // production default; the contract still warns if a compose edit ever does.
+    { name: 'EDGE_PROBE_ENABLED=false in .env cannot switch the TLS alerts off', change: { EDGE_PROBE_ENABLED: 'false' }, expectFail: [], expectWarn: [] },
     // The api accepts these; sign-in then fails, or the audience admits ID tokens.
     { name: 'a __Host- session cookie, which breaks sign-in, is refused', change: { AUTH_COOKIE_NAME: '__Host-jtt' }, expectFail: ['gates.oidc-client'] },
     { name: 'an API audience equal to the client id is a warning', change: { OIDC_AUDIENCE: 'jtt-private-beta' }, expectFail: [], expectWarn: ['gates.oidc-client'] },

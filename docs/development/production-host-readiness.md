@@ -179,6 +179,7 @@ pressure alarms, not sizing: a host that passes them may still be too small.
 | `gates.authentication` | `AUTH_MODE=oidc` pinned; development student header off |
 | `gates.tls-edge` | `WEB_TLS=required` pinned; `PUBLIC_ORIGIN` a bare https origin whose host the edge's certificate gate accepts (lower-case DNS name: no IP address, no port, not a single label such as `localhost` — the api accepts all three, the edge exits on them), identical for api and web; served-certificate health check |
 | `gates.oidc-client` | FAIL on an `AUTH_COOKIE_NAME` with the `__Host-` prefix (the sign-in transaction cookie derived from it is `Path=/auth`, which browsers refuse for that prefix: every sign-in fails). WARN when `OIDC_AUDIENCE` equals `OIDC_CLIENT_ID` (ID tokens become API bearer tokens), or when `OIDC_REDIRECT_URI` is not literally `PUBLIC_ORIGIN/auth/callback` (the provider compares it byte for byte) |
+| `observability.edge-probe` | WARN when `EDGE_PROBE_ENABLED` is off: the api then measures neither the certificate nor the edge, and every TLS alert is silent |
 | `gates.origins` | WARN when `ALLOWED_ORIGINS` trusts any origin besides `PUBLIC_ORIGIN` (each one can read signed-in responses, pass the CSRF guard and open terminal WebSockets), or when `AUTH_COOKIE_DOMAIN` widens the session cookie beyond this host |
 | `gates.network-policy` | NetworkPolicy and its attestation not waived |
 | `capacity.beta-contract` | `MAX_ACTIVE_SESSIONS=5`, `MAX_ACTIVE_SESSIONS_PER_STUDENT=1` (compose default is 20) |

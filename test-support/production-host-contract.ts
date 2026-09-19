@@ -346,6 +346,22 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
     ),
   );
 
+  // The api probes its own edge (apps/api/src/config.ts loadOperationsConfig):
+  // certificate expiry, the served certificate, the redirect. It is on by
+  // default in production, and EDGE_PROBE_ENABLED=false turns it off with no
+  // error — which also silences every TLS alert, since TlsEdgeCheckNotRunning
+  // only watches a probe that is enabled. The shipped compose files do not pass
+  // the variable through, so .env cannot do this; a compose edit could.
+  const edgeProbe = env(services.api, 'EDGE_PROBE_ENABLED');
+  results.push(
+    edgeProbe !== undefined && edgeProbe.trim() !== '' && !isTrue(edgeProbe)
+      ? warn(
+          'observability.edge-probe',
+          'EDGE_PROBE_ENABLED is off: nothing measures the certificate or the edge, and TlsCertificateRenewalDue, TlsCertificateExpiresWithin7Days, TlsEdgeUnhealthy and TlsEdgeCheckNotRunning cannot fire',
+        )
+      : pass('observability.edge-probe', 'the api probes its own TLS edge (certificate expiry and health alerts can fire)'),
+  );
+
   // Every ALLOWED_ORIGINS entry is trusted three times over: credentialed CORS
   // reads, the CSRF origin guard on every state-changing request, and the
   // terminal's WebSocket origin check. The api accepts any https origin there;
