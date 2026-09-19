@@ -15,7 +15,7 @@
  *     Linux host — the defect found while writing this contract.
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -299,6 +299,26 @@ describe('the contract restates declarations it does not own', () => {
     const prod = runbook.slice(runbook.indexOf('prod() {'), runbook.indexOf('}', runbook.indexOf('prod() {')));
     const order = [...prod.matchAll(/-f (docker-compose[.a-z-]*\.yml)/g)].map((match) => match[1]);
     expect(order).toEqual([...PRODUCTION_COMPOSE_FILES]);
+  });
+
+  it('gives no runbook a production compose command with fewer than the five files', () => {
+    // A three-file `up -d api` during a restore re-created the api without its
+    // backup-status mount, metrics settings and health check.
+    const docs = ['docs/development/production-host-readiness.md', 'docs/releases/production-host-evidence-template.md', 'docs/releases/private-beta-release-gate.md'];
+    const runbooks = readdirSync(path.join(REPO_ROOT, 'docs/runbooks')).filter((file) => file.endsWith('.md'));
+    const offenders: string[] = [];
+    for (const file of [...docs, ...runbooks.map((name) => `docs/runbooks/${name}`)]) {
+      const text = read(file);
+      // Fenced blocks, and inline code spans, with shell line continuations joined.
+      const spans = [...text.matchAll(/```[^\n]*\n([\s\S]*?)```/g), ...text.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]!.replace(/\\\n\s*/g, ' '));
+      for (const span of spans) {
+        for (const command of span.split('\n').filter((line) => /docker compose\b.*docker-compose\.production\.yml/.test(line))) {
+          const complete = PRODUCTION_COMPOSE_FILES.every((name) => command.includes(name)) && command.includes('--profile observability');
+          if (!complete) offenders.push(`${file}: ${command.trim()}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   it('allows exactly the publications secret-distribution.json allows', () => {

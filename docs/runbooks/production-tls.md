@@ -85,9 +85,12 @@ and must never stay installed.
 scripts/tls-install.sh --cert /path/to/fullchain.pem --key /path/to/privkey.pem
 # or: make tls-install CERT=/path/to/fullchain.pem KEY=/path/to/privkey.pem
 
-docker compose -f docker-compose.yml -f docker-compose.runtime.yml \
-               -f docker-compose.production.yml up -d --build
+prod up -d --build --wait --wait-timeout 900    # prod: private-beta-operations.md §1
 ```
+
+`prod` is the whole production stack — five compose files and the
+observability profile. Starting with fewer files brings the edge up without
+monitoring and the api without its backup-status mount.
 
 With the stack down, `tls-install.sh` checks the pair in a one-off web container
 and copies it into place. With the stack up, it also reloads and proves (§4.3).
