@@ -194,7 +194,7 @@ describe('verifier — configuration has to reach the variable the application r
     new FakeKubernetes({
       deployments: { [NS]: [deploymentSnapshot({ name: 'payments', desiredReplicas: 1, selector: { app: 'payments' }, configRefs })] },
     });
-  const rule = { type: 'deployment_uses_secret', name: 'payments', secret: 'payments-api', key: 'api-token', env: 'PAYMENTS_API_TOKEN' };
+  const rule = { type: 'deployment_uses_secret', name: 'payments', secret: 'payments-api', key: 'api-token', env: 'PAYMENTS_API_TOKEN' } as const;
 
   it('passes the key delivered into PAYMENTS_API_TOKEN', async () => {
     expect(passed(await check(payments([{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN' }]), rule))).toBe(true);
