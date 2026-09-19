@@ -2628,11 +2628,11 @@ npm run cluster:down         # delete the kind cluster
 ```
 
 Stop the broker with Ctrl-C. Any sandboxes still running are labelled with their
-expiry and are collected by the reaper on the next start; to clear them by hand:
+expiry and are collected by the reaper on the next start; to clear this
+stack's by hand (its `RUNTIME_OWNER_ID` only, never another worktree's):
 
 ```bash
-docker rm -f $(docker ps -aq --filter label=jumptotech.io/managed=true)
-docker network prune -f --filter label=jumptotech.io/managed=true
+npm run sandbox:clean
 ```
 
 ---
@@ -3975,15 +3975,18 @@ npm run cluster:up
 docker compose up --build
 ```
 
-To clear only the lab sandboxes, without recreating the cluster:
+To clear only this stack's lab namespaces, without recreating the cluster
+(development only — on a host with students, end their labs with `ops end`
+instead: [private-beta-operations.md §7.1](docs/runbooks/private-beta-operations.md)):
 
 ```bash
-KUBECONFIG=infrastructure/kind/generated/kubeconfig-host.yaml \
-  kubectl delete ns -l jumptotech.io/managed=true
+KUBECONFIG=infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml \
+  kubectl delete ns -l "jumptotech.io/managed=true,jumptotech.io/runtime-owner=$(grep -E '^RUNTIME_OWNER_ID=' .env | tail -1 | cut -d= -f2-)"
 ```
 
-That selector is the same one the reaper uses, so it can only ever match
-namespaces this platform created.
+That is the selector the reaper uses: managed, and owned by this stack's
+`RUNTIME_OWNER_ID`. Without the owner it would also delete every other
+worktree's labs on a shared cluster (docs/runtime-ownership.md).
 
 ---
 

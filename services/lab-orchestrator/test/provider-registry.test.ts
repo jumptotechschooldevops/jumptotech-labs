@@ -102,6 +102,9 @@ describe('provider registry (test requirements 1–5)', () => {
     expect(status.registered).toBe(true);
     expect(status.available).toBe(false);
     expect(status.reason).toContain('Docker labs need a per-session Docker daemon');
+    // Switched off, not failing: the operator status must not treat it as an incident.
+    expect(status.disabled).toBe(true);
+    expect((await reg.status('kubernetes')).disabled).toBeUndefined();
   });
 
   it('reports AWS as registered but never available', async () => {

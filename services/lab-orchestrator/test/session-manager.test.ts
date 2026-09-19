@@ -27,7 +27,7 @@ interface Harness {
   terminated: string[];
 }
 
-async function harness(overrides: { maxActiveSessions?: number; maxSessionSeconds?: number; idleTimeoutSeconds?: number } = {}): Promise<Harness> {
+async function harness(overrides: { maxActiveSessions?: number; maxSessionSeconds?: number; idleTimeoutSeconds?: number; availabilityCheckTimeoutMs?: number } = {}): Promise<Harness> {
   const registry = await realCatalog();
 
   const k8s = new FakeKubernetes();
@@ -48,6 +48,7 @@ async function harness(overrides: { maxActiveSessions?: number; maxSessionSecond
 
   const terminated: string[] = [];
   const manager = new SessionManager({
+    ...(overrides.availabilityCheckTimeoutMs !== undefined ? { availabilityCheckTimeoutMs: overrides.availabilityCheckTimeoutMs } : {}),
     registry,
     provider,
     store: new InMemorySessionStore(),
@@ -350,20 +351,71 @@ describe('expiry', () => {
   });
 });
 
+describe('the availability check before a start', () => {
+  it('goes ahead without it when the probe does not answer in time', async () => {
+    const h = await harness({ availabilityCheckTimeoutMs: 20 });
+    const provider = h.manager.providers.peek('kubernetes')!;
+    vi.spyOn(provider, 'availability').mockReturnValue(new Promise(() => undefined));
+
+    const started = Date.now();
+    const { session } = await h.manager.start('K8S-001');
+    expect(session.status).toBe('ACTIVE');
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
 describe('failed provisioning', () => {
   let failing: Harness;
 
   beforeEach(async () => {
     failing = await harness();
-    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
   });
 
   it('marks the session FAILED, releases the slot, and does not leak a namespace', async () => {
-    await expect(failing.manager.start('K8S-001')).rejects.toBeInstanceOf(SessionError);
+    // The cluster answered the last availability probe and went away before
+    // this start reached it: the probe is memoised, so the start gets as far
+    // as provisioning and fails there.
+    expect((await failing.manager.providers.status('kubernetes')).available).toBe(true);
+    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
+
+    await expect(failing.manager.start('K8S-001')).rejects.toMatchObject({ code: 'SESSION_PROVISION_FAILED' });
 
     const sessions = await failing.manager.list();
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.status).toBe('FAILED');
+    expect(await failing.manager.activeCount()).toBe(0);
+  });
+
+  it('after one failed provision, the next Start asks the substrate again instead of failing the same way', async () => {
+    expect((await failing.manager.providers.status('kubernetes')).available).toBe(true);
+    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
+
+    await expect(failing.manager.start('K8S-001')).rejects.toMatchObject({ code: 'SESSION_PROVISION_FAILED' });
+    // Within the same 30 s: no second failed provision, a clear refusal.
+    await expect(failing.manager.start('K8S-002')).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+    expect((await failing.manager.list()).filter((s) => s.status === 'FAILED')).toHaveLength(1);
+  });
+
+  it('does not refuse on a stale "down": a substrate that just came back is asked again', async () => {
+    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
+    expect((await failing.manager.providers.status('kubernetes')).available).toBe(false);
+    failing.k8s.unreachable = undefined;
+
+    const { session } = await failing.manager.start('K8S-001');
+    expect(session.status).toBe('ACTIVE');
+  });
+
+  it('refuses a start as PROVIDER_UNAVAILABLE, holding no slot and writing no row, when the substrate is known to be down', async () => {
+    failing.k8s.unreachable = 'connect ECONNREFUSED 172.18.0.2:6443';
+
+    const refusal = await failing.manager.start('K8S-001').catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(SessionError);
+    expect(refusal).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', details: { provider: 'kubernetes' } });
+    expect((refusal as SessionError).message).toMatch(/cannot be created right now/);
+    // No developer command in what a student is shown.
+    expect(`${(refusal as SessionError).message} ${(refusal as SessionError).remediation ?? ''}`).not.toMatch(/npm run|sandbox:build/);
+
+    expect(await failing.manager.list()).toHaveLength(0);
     expect(await failing.manager.activeCount()).toBe(0);
   });
 });

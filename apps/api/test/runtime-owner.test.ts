@@ -13,7 +13,7 @@
  * as shipped hand both services the same required variable.
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isValidRuntimeOwner, resolveRuntimeOwner } from '@jumptotech/lab-orchestrator';
@@ -162,5 +162,19 @@ describe('the compose stack hands every owner-aware service the same required ow
     }
     const script = readFileSync(path.join(REPO_ROOT, 'scripts/sandbox-clean.sh'), 'utf8');
     expect(script).toContain('label=jumptotech.io/runtime-owner=${OWNER}');
+
+    // Documented commands are operator cleanup too: every managed-selector
+    // delete in the README or a runbook names the owner as well.
+    const docs = [
+      readFileSync(path.join(REPO_ROOT, 'README.md'), 'utf8'),
+      ...readdirSync(path.join(REPO_ROOT, 'docs/runbooks'))
+        .filter((file) => file.endsWith('.md'))
+        .map((file) => readFileSync(path.join(REPO_ROOT, 'docs/runbooks', file), 'utf8')),
+    ];
+    for (const text of docs) {
+      for (const line of text.split('\n').filter((l) => /(kubectl delete|docker rm)[^\n]*managed=true/.test(l))) {
+        expect(line, line).toMatch(/runtime-owner/);
+      }
+    }
   });
 });

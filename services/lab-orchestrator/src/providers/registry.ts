@@ -51,6 +51,12 @@ export interface ProviderStatus extends ProviderAvailability {
   sandboxKind: string;
   /** True when the provider is registered at all. */
   registered: boolean;
+  /**
+   * True when the operator switched it off (`enabled: false`), as opposed to a
+   * provider that is on and failing its probe. A disabled track is a deployment
+   * decision; an unavailable one is an incident.
+   */
+  disabled?: boolean;
 }
 
 /** How long a probe result is trusted before the registry re-checks. */
@@ -144,12 +150,14 @@ export class ProviderRegistry {
    * carries its own explanation so an operator can tell "you forgot to register
    * this" from "this is deliberately not enabled".
    *
-   * It deliberately does **not** probe the backend. A cluster that is down or a
-   * Docker daemon that is not running is a transient failure, and the student is
-   * better served by provisioning attempting it and reporting the real error
-   * against the real step ("✗ Environment created — connect ECONNREFUSED …")
-   * than by a generic refusal. The catalog still probes, through `status()`, so
-   * a lab whose backend is down is marked unavailable *before* it is clicked.
+   * It does **not** probe the backend. `SessionManager.start` asks `status()`
+   * separately, with a deadline, and refuses a start as PROVIDER_UNAVAILABLE
+   * only when a fresh probe still says the backend is down — so a substrate
+   * that is down is not reported as a failed provision (and counted against
+   * RB-03), while one that is slow to answer, or has just come back, is still
+   * attempted and any failure reported against its real step. The catalog
+   * probes through `status()` too, so a lab whose backend is down is marked
+   * unavailable *before* it is clicked.
    */
   async resolve(providerId: string): Promise<LabProvider> {
     if (!isLabProviderId(providerId)) {
@@ -235,6 +243,7 @@ export class ProviderRegistry {
       status = {
         ...base,
         available: false,
+        disabled: true,
         reason: registration.disabledReason ?? 'disabled by configuration',
         ...(registration.remediation ? { remediation: registration.remediation } : {}),
       };

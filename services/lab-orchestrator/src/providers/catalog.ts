@@ -155,10 +155,21 @@ export interface ProviderAvailability {
   reason?: string;
   /** What an operator can do about it. */
   remediation?: string;
+  /**
+   * Why, in words safe to show a student — no host, address or command. Set
+   * only where the reason matters to them: a security refusal must say that
+   * it is one. `reason` stays for the log and the operator.
+   */
+  studentReason?: string;
 }
 
 export const AVAILABLE: ProviderAvailability = { available: true };
 
-export function unavailable(reason: string, remediation?: string): ProviderAvailability {
-  return { available: false, reason, ...(remediation ? { remediation } : {}) };
+export function unavailable(reason: string, remediation?: string, studentReason?: string): ProviderAvailability {
+  return {
+    available: false,
+    reason,
+    ...(remediation ? { remediation } : {}),
+    ...(studentReason ? { studentReason } : {}),
+  };
 }

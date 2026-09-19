@@ -37,6 +37,7 @@ import { HttpTerminalControl, noopTerminalControl } from './terminal-control.js'
 import { buildApiObservability, jwksFetchMetricHook, sessionMetricsHooks } from './observability.js';
 import { installRuntimeCollectors } from './observability-collectors.js';
 import { installOperationsCollectors } from './operations.js';
+import { createOperatorHandler, startOperatorSocket } from './operator.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -300,6 +301,9 @@ async function main(): Promise<void> {
     metrics: sessionMetricsHooks(metrics.sessions),
   });
 
+  // When the reaper last finished a sweep, for the operator socket's status.
+  let reaperLastSuccessMs: number | undefined;
+
   // Students are never responsible for cleanup. The reaper reclaims expired,
   // idle, and orphaned sandboxes across *every* substrate; see
   // services/lab-orchestrator/src/session/reaper.ts.
@@ -318,6 +322,7 @@ async function main(): Promise<void> {
          */
         if (event.outcome === 'started') {
           metrics.reaper.lastSuccess.set(Date.now() / 1000);
+          reaperLastSuccessMs = Date.now();
           return;
         }
         metrics.reaper.sweeps.inc({ outcome: event.outcome });
@@ -329,6 +334,7 @@ async function main(): Promise<void> {
           // exactly like a quiet period, and "cleanup stopped" has to be
           // detectable without anyone noticing an absence.
           metrics.reaper.lastSuccess.set(Date.now() / 1000);
+          reaperLastSuccessMs = Date.now();
           for (const [provider, count] of Object.entries(event.orphansByProvider)) {
             metrics.reaper.orphansFound.set({ provider }, count);
           }
@@ -473,6 +479,28 @@ async function main(): Promise<void> {
     metrics.sessions.perStudentLimit.set(config.lifetimes.maxActiveSessionsPerStudent);
   }
 
+  /*
+   * The operator socket: what an instructor on the host can ask this process
+   * about its sessions, and the one way to end a single student's lab by hand
+   * (docs/runbooks/private-beta-operations.md §7). Off unless configured; the
+   * compose files place it in the container's private /tmp.
+   */
+  const operatorSocket = config.operations.operatorSocketPath
+    ? await startOperatorSocket({
+        socketPath: config.operations.operatorSocketPath,
+        logger,
+        handler: createOperatorHandler({
+          sessions,
+          logger,
+          actions: metrics.operations.operatorActions,
+          launchesPaused: config.launchesPaused === true,
+          retentionSeconds: config.sessionRetentionMinutes * 60,
+          reaperLastSuccessMs: () => reaperLastSuccessMs,
+          reaperIntervalSeconds: config.reaperIntervalSeconds,
+        }),
+      })
+    : null;
+
   const server = app.listen(config.port, '0.0.0.0', () => {
     observability.markStarted();
 
@@ -533,6 +561,7 @@ async function main(): Promise<void> {
       attemptSweeper.stop();
       clearInterval(authSessionSweeper);
       observabilityServer.close();
+      operatorSocket?.close();
       server.close(() => {
         // Release the connection pool so a restart does not leave connections
         // hanging on the database side.

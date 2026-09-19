@@ -38,6 +38,15 @@ export {
 } from './redact.js';
 
 export {
+  findSecretLeaks,
+  sanitizeLogLines,
+  stripQueryStrings,
+  type LogSource,
+  type SanitizeOptions,
+  type SanitizeResult,
+} from './support-bundle.js';
+
+export {
   PRODUCTION_SECRET_MIN_LENGTH,
   PLACEHOLDER_MARKERS,
   SecretPolicyError,
@@ -78,6 +87,8 @@ export {
   TLS_EDGE_CHECKS,
   BACKUP_OPERATIONS,
   NETWORK_ATTESTATION_RESULTS,
+  OPERATOR_ACTIONS,
+  OPERATOR_OUTCOMES,
   createOperationsMetrics,
   type OperationsMetrics,
   createCommonMetrics,

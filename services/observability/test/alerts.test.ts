@@ -207,6 +207,8 @@ describe('the alert set', () => {
       'OidcSignInFailures',
       'HostDiskSpaceCritical',
       'HostMemoryCritical',
+      // A pause nobody lifted refuses every start and nothing else fires on it.
+      'LabLaunchesPaused',
     ]) {
       expect(names, `no alert named ${required}`).toContain(required);
     }

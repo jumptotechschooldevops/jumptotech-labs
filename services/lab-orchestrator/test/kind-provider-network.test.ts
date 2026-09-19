@@ -12,7 +12,10 @@
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_SESSION_POLICY,
+  InMemorySessionStore,
   KindLabProvider,
+  SessionManager,
   NETWORK_ATTESTATION_NAME,
   NETWORK_ATTESTATION_NAMESPACE,
   attestationConfigMap,
@@ -23,6 +26,7 @@ import {
 } from '../src/index.js';
 import { FakeKubernetes, fakeExec } from './fakes.js';
 import { loadK8s001, sessionContext } from './helpers.js';
+import { realCatalog } from './real-catalog.js';
 
 const NOW = Date.parse('2026-09-14T12:00:00Z');
 
@@ -105,6 +109,49 @@ describe('guardrails', () => {
     expect(result.error?.code).toBe('PROVISION_FAILED');
     expect(result.error?.message).toMatch(/ALLOW_EXTERNAL_EGRESS/);
     expect(policyNames(k8s)).toEqual([]);
+  });
+});
+
+describe('the gate, at Start Lab', () => {
+  /*
+   * Start consults the provider's availability before capacity. The gate's
+   * refusal must still name itself: a student is not admitted, nothing is
+   * written, and the reason says network isolation — not a generic error.
+   * (The CI kind suite caught its message being replaced by a generic one.)
+   */
+  function gatedManager(k8s: FakeKubernetes) {
+    return realCatalog().then(
+      (registry) =>
+        new SessionManager({
+          registry,
+          provider: makeProvider(k8s, true),
+          store: new InMemorySessionStore(),
+          policy: { ...DEFAULT_SESSION_POLICY, network: CONTEXT.policy.network },
+          lifetimes: { maxSessionSeconds: 3_600, idleTimeoutSeconds: 1_200, warningSeconds: 300, maxActiveSessions: 5 },
+          namespaceSecret: 'kind-provider-network-test-secret',
+        }),
+    );
+  }
+
+  it.each([
+    ['no attestation', () => new FakeKubernetes()],
+    ['a FAIL verdict', () => clusterWithAttestation('FAIL')],
+  ])('refuses with the isolation reason, writing nothing, on %s', async (_label, cluster) => {
+    const k8s = cluster();
+    const manager = await gatedManager(k8s);
+
+    const refusal = await manager.start('K8S-001').catch((error: unknown) => error);
+    expect(refusal).toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+    expect((refusal as Error).message).toMatch(/network isolation is not proven/);
+    expect(await manager.list()).toHaveLength(0);
+    expect(await manager.activeCount()).toBe(0);
+    expect(await k8s.namespaceExists(CONTEXT.namespace)).toBe(false);
+  });
+
+  it('admits a student once the attestation is a PASS for this contract', async () => {
+    const manager = await gatedManager(clusterWithAttestation('PASS'));
+    const { session } = await manager.start('K8S-001');
+    expect(session.status).toBe('ACTIVE');
   });
 });
 

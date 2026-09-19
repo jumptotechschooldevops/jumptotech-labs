@@ -177,6 +177,11 @@ export const LAB_START_OUTCOMES = [
   'provider_unavailable',
   'provision_failed',
   'unauthorized',
+  // The start failed on something that is not a session-domain refusal — the
+  // database, a bug, an unexpected throw. Kept apart from `provision_failed`,
+  // whose runbook (RB-03) sends an operator to the sandbox substrate: a start
+  // that died on the session store is RB-02, and the log line's `code` says so.
+  'platform_error',
 ] as const;
 
 /**
@@ -214,6 +219,7 @@ export interface SessionMetrics {
   oldestInStatus: Gauge;
   capacityLimit: Gauge;
   perStudentLimit: Gauge;
+  launchesPaused: Gauge;
   capacityRejections: Counter;
   studentLimitRejections: Counter;
   sessionLifetime: Histogram;
@@ -377,6 +383,18 @@ export function createSessionMetrics(registry: Registry): SessionMetrics {
     perStudentLimit: new client.Gauge({
       name: 'jtt_sessions_per_student_limit',
       help: 'MAX_ACTIVE_SESSIONS_PER_STUDENT, the configured per-student ceiling.',
+      ...common,
+    }),
+
+    /*
+     * The stop-launches switch, as deployed. A pause is an operator decision
+     * that refuses every Start Lab; read back from the running api, it cannot
+     * outlive the maintenance it was set for without an alert saying so
+     * (`LabLaunchesPaused`).
+     */
+    launchesPaused: new client.Gauge({
+      name: 'jtt_lab_launches_paused',
+      help: 'LAB_LAUNCHES_PAUSED as deployed: 1 while every Start Lab is refused for maintenance.',
       ...common,
     }),
 
@@ -1026,7 +1044,13 @@ export interface OperationsMetrics {
   networkAttestationVerifiedAt: Gauge;
   networkAttestationMaxAge: Gauge;
   networkAttestationChecks: Counter;
+  operatorActions: Counter;
 }
+
+/** What the api's operator socket can be asked to do. */
+export const OPERATOR_ACTIONS = ['status', 'sessions', 'session', 'end_session'] as const;
+/** How an operator request ended: served, refused (bad input, unknown session), or failed. */
+export const OPERATOR_OUTCOMES = ['ok', 'rejected', 'failed'] as const;
 
 /**
  * Operational facts about the deployment rather than the product — BETA-P0-018.
@@ -1182,6 +1206,25 @@ export function createOperationsMetrics(registry: Registry): OperationsMetrics {
       'result',
       NETWORK_ATTESTATION_RESULTS,
     ),
+
+    /*
+     * Requests served by the api's operator socket (apps/api/src/operator.ts),
+     * by action and outcome. The socket is reachable only through
+     * `docker exec`, so every increment is a person on the host; an
+     * `end_session` here is a student's lab ended by hand.
+     */
+    operatorActions: (() => {
+      const counter = new client.Counter({
+        name: 'jtt_operator_actions_total',
+        help: 'Requests served by the api operator socket, by action and outcome.',
+        labelNames: ['action', 'outcome'],
+        ...common,
+      });
+      for (const action of OPERATOR_ACTIONS) {
+        for (const outcome of OPERATOR_OUTCOMES) counter.inc({ action, outcome }, 0);
+      }
+      return counter;
+    })(),
   };
 }
 

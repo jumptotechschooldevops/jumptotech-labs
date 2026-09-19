@@ -128,6 +128,7 @@ describe('LAB_LAUNCHES_PAUSED', () => {
 
   it('refuses every start, writes nothing, and leaves a running lab fully usable; unpausing restores starts', async () => {
     const running = compose();
+    expect(await running.counter('jtt_lab_launches_paused')).toBe(0);
     const started = await request(running.app).post('/api/labs/K8S-001/start').set(as('alice'));
     expect(started.status).toBe(200);
     const sessionId = started.body.data.session.sessionId as string;
@@ -142,10 +143,14 @@ describe('LAB_LAUNCHES_PAUSED', () => {
     expect((await request(paused.app).get('/api/sessions').set(as('bob'))).body.data.sessions).toHaveLength(0);
     expect(await paused.counter('jtt_lab_start_outcome_total')).toBe(0);
     expect(paused.lines.some((line) => line.includes('lab.start.paused'))).toBe(true);
+    // Read back from the running process, so `LabLaunchesPaused` cannot miss a pause.
+    expect(await paused.counter('jtt_lab_launches_paused')).toBe(1);
 
     // alice's running lab: read, terminal grant, and End all still work.
     expect((await request(paused.app).get(`/api/sessions/${sessionId}`).set(as('alice'))).status).toBe(200);
     expect((await request(paused.app).post(`/api/sessions/${sessionId}/terminal`).set(as('alice'))).status).toBe(200);
+    // Reset rebuilds the sandbox of a running lab; a pause refuses only new ones.
+    expect((await request(paused.app).post(`/api/sessions/${sessionId}/reset`).set(as('alice'))).status).toBe(200);
     const health = await request(paused.app).get('/health');
     expect(health.body.data.sessions).toMatchObject({ active: 1, launchesPaused: true });
     expect((await request(paused.app).delete(`/api/sessions/${sessionId}`).set(as('alice'))).status).toBe(200);
@@ -154,5 +159,6 @@ describe('LAB_LAUNCHES_PAUSED', () => {
     const resumed = compose(running.sessions, { LAB_LAUNCHES_PAUSED: 'false' });
     expect((await request(resumed.app).post('/api/labs/K8S-002/start').set(as('bob'))).status).toBe(200);
     expect((await request(resumed.app).get('/health')).body.data.sessions.launchesPaused).toBe(false);
+    expect(await resumed.counter('jtt_lab_launches_paused')).toBe(0);
   });
 });

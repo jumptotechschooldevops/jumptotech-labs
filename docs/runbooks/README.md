@@ -53,6 +53,7 @@ diagnosis, and the alerts that look alike are known in advance.
 | [RB-17 Session lifecycle](RB-17-session-lifecycle.md) | `LabResetsFailing`, `SessionStuckProvisioning`, `SessionResetStuck`, `SessionTeardownStuck`, `SessionDegradedNotReclaimed` |
 | [RB-18 Network isolation](RB-18-network-isolation.md) | `NetworkIsolationNotAttested`, `NetworkIsolationAttestationAging` |
 | [RB-19 Host pressure](RB-19-host-pressure.md) | `HostMemoryPressure`, `HostMemoryCritical`, `HostDiskSpaceLow`, `HostDiskSpaceCritical`, `HostCpuSaturated` |
+| [RB-21 Launches paused](RB-21-launches-paused.md) | `LabLaunchesPaused` |
 
 `ReaperSweepErrorsPersisting` is in RB-05.
 
@@ -77,6 +78,13 @@ observations. Now they are one story.
 Not tied to one alert, and written as procedures rather than in the nine-section
 shape above:
 
+- [Private beta incident response](private-beta-incident-response.md)
+  — **start here when something is wrong**: incidents A–U by what you see
+  (site down, sign-in, cannot start, capacity, terminal, Verify, Reset,
+  restarts, PostgreSQL, disk, memory, Docker, kind, TLS, one student, all
+  students), each with what to check, the commands, the recovery, when to stop
+  and escalate, and what evidence to keep; the things never to do; and how to
+  collect a sanitized diagnostics bundle.
 - [Private beta operations](private-beta-operations.md)
   — BETA-P0-018, **start here when running the beta**: the production command,
   the daily health check, the operator contract (23 questions and where each is

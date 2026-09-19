@@ -82,7 +82,20 @@ ENV HOME=/tmp \
 USER node
 EXPOSE 4000
 
-HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \
+# The api transpiles its TypeScript at start (tsx), so how long it takes
+# to listen depends on the host's CPU: seconds when idle, and 225 s measured on
+# a laptop at load 20 (docs/development/beta-operations-2026-09-18.md). Within
+# the start period a failing check does not count and the first passing one
+# marks the container healthy, so a long period costs a healthy start nothing.
+# A short one declared a slow start unhealthy, which made `up --wait` fail and
+# `depends_on: service_healthy` refuse to start web and terminal.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=300s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.API_PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-CMD ["npx", "tsx", "apps/api/src/index.ts"]
+# `node …/tsx`, not `npx tsx`: under `npx` the process that receives SIGTERM
+# is npm, which exits without passing it on, so the api's shutdown handler —
+# stop the reaper, close the listeners, release the database pool — never ran
+# (measured: exit 143 in 4 s and no `process.stopping` line). tsx relays the
+# signal to the one child it runs, as it does for sandboxd; the api does not
+# change uid, so the relay is permitted. It also skips npm's own start-up.
+CMD ["node", "/app/node_modules/.bin/tsx", "apps/api/src/index.ts"]

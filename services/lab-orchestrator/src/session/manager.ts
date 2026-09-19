@@ -234,6 +234,12 @@ export interface SessionManagerOptions {
   terminal?: TerminalTerminator;
   /** Told when a session finishes, so learning history can be closed off. */
   listener?: SessionLifecycleListener;
+  /**
+   * How long Start waits for a provider's availability probe before going
+   * ahead without it (default 5 s). A hung cluster API must not hang every
+   * Start; without an answer, provisioning tries and reports what it finds.
+   */
+  availabilityCheckTimeoutMs?: number;
   now?: () => number;
   logger?: (message: string) => void;
   /**
@@ -286,8 +292,12 @@ export interface SessionMetricsHooks {
  * So the *text* stays in the log line, where it is useful and bounded by
  * retention, and the *metric* gets one of four values.
  */
+/** The `statusReason` of a session an operator ended. */
+export const OPERATOR_END_REASON = 'ended by operator';
+
 function endReasonFor(done: 'ENDED' | 'EXPIRED', detail: string): string {
   if (done === 'ENDED') return 'student';
+  if (detail === OPERATOR_END_REASON) return 'operator';
   const lowered = detail.toLowerCase();
   if (lowered.includes('idle')) return 'idle';
   if (lowered.includes('lifetime') || lowered.includes('expired')) return 'expired';
@@ -343,6 +353,7 @@ export class SessionManager {
   readonly #terminal: TerminalTerminator | undefined;
   readonly #listener: SessionLifecycleListener | undefined;
   readonly #now: () => number;
+  readonly #availabilityCheckTimeoutMs: number;
   readonly #log: (message: string) => void;
   readonly #metrics: SessionMetricsHooks;
 
@@ -368,6 +379,7 @@ export class SessionManager {
     this.#terminal = options.terminal;
     this.#listener = options.listener;
     this.#now = options.now ?? (() => Date.now());
+    this.#availabilityCheckTimeoutMs = options.availabilityCheckTimeoutMs ?? 5_000;
     this.#log = options.logger ?? (() => undefined);
     this.#metrics = options.metrics ?? {};
   }
@@ -465,6 +477,41 @@ export class SessionManager {
     }
 
     /*
+     * Is the substrate up? The same probe the catalog shows students, asked
+     * again fresh when its memoised answer is no, and bounded in time: a probe
+     * that does not answer lets the start go ahead. Without it a runtime that was down still reached
+     * `create`, failed there, and was reported as a failed *provision*: the
+     * operator was sent to RB-03 instead of the substrate, and the student
+     * was told to rebuild a sandbox image. Checked before capacity, like the
+     * registration check above, so a refused start holds no slot.
+     */
+    let availability = await this.#probe(lab.environment.provider);
+    if (availability && !availability.available) {
+      // Memoised for 30 s: a substrate that has just come back must not keep
+      // refusing starts. Ask again, now, before saying no.
+      this.#providers.invalidate(lab.environment.provider);
+      availability = await this.#probe(lab.environment.provider);
+    }
+    if (availability && !availability.available) {
+      // The probe's reason names hosts and addresses, and its remediation is
+      // an operator's command: both go to the log (and `ops status`), and the
+      // student gets words they can act on.
+      this.#log(
+        `start of ${lab.id} refused: provider ${lab.environment.provider} is unavailable — ${availability.reason ?? 'no reason given'}`,
+      );
+      throw new SessionError(
+        'PROVIDER_UNAVAILABLE',
+        // A security refusal says it is one (the network-isolation gate);
+        // anything else stays generic.
+        availability.studentReason
+          ? `This lab's environment cannot be created right now: ${availability.studentReason}.`
+          : "This lab's environment cannot be created right now.",
+        'Try again in a few minutes. If it keeps happening, tell your instructor.',
+        { provider: lab.environment.provider },
+      );
+    }
+
+    /*
      * Capacity is counted from durable state, and the count and the insert are
      * one step.
      *
@@ -537,6 +584,23 @@ export class SessionManager {
       environment: result.environment,
       steps: result.steps,
     };
+  }
+
+  /**
+   * The provider's availability, or null when the probe did not answer in time.
+   * `status()` never rejects: a failing probe is an unavailable provider.
+   */
+  async #probe(providerId: LabProviderId): Promise<Awaited<ReturnType<ProviderRegistry['status']>> | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), this.#availabilityCheckTimeoutMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([this.#providers.status(providerId), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -649,6 +713,11 @@ export class SessionManager {
     context: LabSessionContext,
     reason: string,
   ): Promise<void> {
+    // A failed provision is news about the substrate: forget the memoised
+    // "available", so the next Start (and the catalog) probes again instead of
+    // walking into the same failure for the rest of the 30 s.
+    this.#providers.invalidate(session.provider);
+
     /*
      * Best-effort teardown so a failed start does not leak a sandbox.
      *
@@ -1143,6 +1212,38 @@ export class SessionManager {
   async expire(sessionId: string, reason: string): Promise<TeardownResult> {
     const session = await this.require(sessionId);
     return this.#teardown(session, [...LIVE_STATUSES, 'EXPIRING'], 'EXPIRING', 'EXPIRED', reason);
+  }
+
+  /**
+   * An operator ended the session, from the api's operator socket.
+   *
+   * The same fenced teardown the reaper uses, recorded EXPIRED with the reason
+   * "ended by operator", so the student's page, the metrics and the audit line
+   * all say the platform ended it rather than the student. Nothing is skipped:
+   * the shell is closed, the provider's own session-scoped destroy re-checks
+   * the managed, owner and session labels, and the row stays EXPIRING — holding
+   * its slot — until the sandbox is verifiably gone.
+   *
+   * A teardown already in flight is finished as what it is, never relabelled:
+   * ENDING is the student's End (`resumeAbandonedEnd`, as the reaper does), and
+   * EXPIRING keeps its reason (idle, lifetime). A finished session is returned
+   * as it is; the operator socket refuses to call this for one.
+   */
+  async endByOperator(sessionId: string): Promise<TeardownResult> {
+    const session = await this.require(sessionId);
+    if (session.status === 'ENDING') return this.resumeAbandonedEnd(session.sessionId);
+    if (session.status === 'EXPIRING') {
+      // An expiry already in flight (idle, lifetime) keeps its reason: the
+      // operator's request only helps it finish, and must not relabel it.
+      return this.#teardown(
+        session,
+        ['EXPIRING'],
+        'EXPIRING',
+        'EXPIRED',
+        session.statusReason ?? OPERATOR_END_REASON,
+      );
+    }
+    return this.#teardown(session, LIVE_STATUSES, 'EXPIRING', 'EXPIRED', OPERATOR_END_REASON);
   }
 
   /**

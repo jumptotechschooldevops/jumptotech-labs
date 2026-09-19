@@ -228,6 +228,12 @@ jobs:
       - name: Production-host scripts fail closed and change nothing
         run: bash scripts/test-production-host-scripts.sh
 
+      # The support bundle an operator sends after an incident: sentinels planted
+      # in .env, logs, SQL, query strings, owner ids and terminal lines never
+      # reach it; only read-only verbs run; a leak deletes it.
+      - name: Support bundle holds no secret or student data
+        run: bash scripts/test-private-beta-diagnostics.sh
+
       # An archive holds every student's data. .gitignore keeps the default names
       # out; this catches one committed under any name or path.
       - name: No database archive is committed

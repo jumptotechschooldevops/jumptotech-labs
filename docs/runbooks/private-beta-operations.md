@@ -2,7 +2,9 @@
 
 **BETA-P0-018.** How to run JumpToTech Labs for the private beta, about five
 concurrent students, and how to tell when it is unhealthy. Start here. The
-alert runbooks (RB-01…RB-19) go deeper on one alert each.
+alert runbooks (RB-01…RB-21) go deeper on one alert each. When something is
+already wrong, go to [private-beta-incident-response.md](private-beta-incident-response.md),
+which is organised by what you see (A–U).
 
 | | |
 |---|---|
@@ -45,7 +47,17 @@ ready() {
 
 # Alerts Alertmanager currently holds.
 alerts() { prod exec -T alertmanager amtool alert query --alertmanager.url=http://127.0.0.1:9093; }
+
+# The api's operator socket (apps/api/src/operator.ts): `ops status`,
+# `ops sessions [--recent]`, `ops session <id>`, `ops end <id> --yes`.
+ops() { prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts "$@"; }
 ```
+
+`ops` talks to a Unix socket inside the api container. It is on no network and
+needs no credential: only someone who can `docker exec` into the api can use
+it. It shows sessions by id, lab, status and times, and the owner by internal
+user id only. `ops end` is the **only** supported way to end another person's
+lab (§7).
 
 The order of the `-f` files matters (the production overlay's port resets must
 follow the observability overlay). Prometheus and Alertmanager are unreachable
@@ -116,6 +128,7 @@ Five minutes, before every class and after any change.
 ```bash
 prod ps                        # every service Up; web and postgres (healthy)
 alerts                         # nothing critical
+ops status                     # "new labs: YES", slots free, launches not paused
 ready api 9400                 # 200, database and lab_registry ok
 ready terminal 9401
 ready sandboxd 9402            # 200, runtime ok
@@ -165,6 +178,24 @@ questions:
 | 22 | Is the backup recent enough? | Row 7 | `jtt:backup_age:seconds{operation="backup"}` |
 | 23 | Has a backup/restore check failed? | Row 7 | `jtt_backup_last_failure_timestamp_seconds`, `BackupVerifyFailed` |
 
+### 2.1 The operator's day
+
+| When | Do | You are looking for |
+|---|---|---|
+| **Daily** (any time) | §2 without the dashboard; `q 'jtt:backup_age:seconds / 3600'` | Backup under 24 h old, no firing alert, disk (`q 'jtt:host_filesystem_available:ratio'`) above 0.2 |
+| **Before class** (30 minutes before) | All of §2 and the dashboard; `ops sessions` | `new labs: YES`; no leftover sessions from yesterday (a session older than `MAX_SESSION_MINUTES` is a stuck teardown: RB-17); launches not paused (RB-21) |
+| **During class** | Keep `alerts` and the dashboard open. Run `ops status` when a student reports a problem | Capacity (`slots`), `DEGRADED` sessions, the first failing component |
+| **A student reports a problem** | [incident-response §2.T](private-beta-incident-response.md) | Their session in `ops sessions`, by lab and start time |
+| **Several students report problems** | [incident-response §2.U](private-beta-incident-response.md) | The first red item in §2 |
+| **After class** | `ops sessions`; `make private-beta-diagnostics` if anything went wrong | Slots returning to zero as students end or idle out |
+
+A service that was just re-created (`prod up -d api`) can take minutes to
+listen on a busy host, because the api transpiles its TypeScript at startup.
+225 seconds was measured on a laptop at load 20. `prod ps` shows
+`health: starting` meanwhile, and that is not a failure. It becomes a failure
+when the status turns `unhealthy`, which happens only after the start period
+(300 s) and five failed checks.
+
 ---
 
 ## 3. Should students stop launching labs?
@@ -199,8 +230,9 @@ alone: their terminals, Verify, Reset and End keep working.
    prod exec -T api node -e "fetch('http://127.0.0.1:4000/health').then(r=>r.json()).then(b=>console.log(b.data.sessions))"
    ```
    `launchesPaused: true`. The api logs `lab.start.paused` for each refusal.
-   Undo with `LAB_LAUNCHES_PAUSED=false` (or remove the line) and
-   `prod up -d api`.
+   `ops status` then reads `launches paused: YES` and `new labs: NO`. The
+   gauge `jtt_lab_launches_paused` is 1, and `LabLaunchesPaused` fires after
+   30 minutes so that a pause cannot be forgotten (RB-21).
 
    `prod up -d api` re-creates the api container. Students with a lab open keep
    their workspace and terminal while it restarts (the web app shows "Cannot
@@ -215,6 +247,19 @@ alone: their terminals, Verify, Reset and End keep working.
 4. **Take the site down:** `prod stop web`. This is not a launch gate: every
    student loses the site, running labs included (they are reclaimed later by
    idle expiry). Use it only for §3's security rows.
+
+### Restoring normal operation
+
+1. The reason for stopping is gone: §2 is green, apart from the pause itself.
+2. `LAB_LAUNCHES_PAUSED=false` in `.env` (or delete the line), restore
+   `MAX_ACTIVE_SESSIONS=5` if you lowered it, and `DOCKER_TRACK_ENABLED` if you
+   changed it.
+3. `prod up -d api`. Wait for `ready api 9400` to answer 200. On a busy host
+   this can take a few minutes (§2.1).
+4. `ops status`: `launches paused: no`, `new labs: YES`, and the slot count you
+   expect. `q 'jtt_lab_launches_paused'` reads 0.
+5. If you stopped the site: `prod start web`, then `prod ps web` shows healthy.
+6. Tell the cohort. Write down when it started and ended (incident-response §5).
 
 ---
 
@@ -233,19 +278,26 @@ alone: their terminals, Verify, Reset and End keep working.
    - `provider_unavailable` — the substrate for that track is down: RB-09, RB-06;
      for Kubernetes check RB-18 first.
    - `provision_failed` — the substrate is up and creation failed: RB-03.
+   - `platform_error` — the start failed before the substrate was asked;
+     almost always the database (RB-02). The log line's `code` names it.
    - `unauthorized` — sign-in: RB-14.
+   - No `lab.start.failed` line, and the student saw "Your sign-in could not be
+     checked right now" (`AUTH_UNAVAILABLE`, 503): the request never reached
+     Start. The database that holds sign-ins is unreachable. RB-02.
 3. If the log shows nothing, the request never reached the API: `prod ps web`,
    RB-15, then RB-01.
 
 ## 5. Session capacity reached
 
 ```bash
-q 'sum by (status) (jtt_sessions_active)'
+ops status                     # slots held, by status
+ops sessions                   # who holds each slot: lab, status, age, idle time
 q 'max by (status) (jtt_sessions_oldest_status_age_seconds) / 60'
 ```
 
 - Five `ACTIVE` sessions and five students working: the platform is full by
-  design. There is no queue. Someone must end a lab.
+  design. There is no queue. Someone must end a lab. A student who has left
+  without ending theirs can be ended for them: `ops end <session> --yes` (§7).
 - A slot held by `ENDING`, `EXPIRING`, `RESETTING` or `DEGRADED` for a long time:
   [RB-17](RB-17-session-lifecycle.md). That slot comes back when the session is
   unstuck, not by raising the cap.
@@ -301,6 +353,8 @@ down, `prod down` — and take a backup first
 | Symptom | Runbook |
 |---|---|
 | Sessions stuck in a status, resets failing | [RB-17](RB-17-session-lifecycle.md) |
+| Launches paused and nobody lifted it | [RB-21](RB-21-launches-paused.md) |
+| Anything a student or you can see going wrong | [incident response](private-beta-incident-response.md) |
 | Cleanup stalled or erroring, leaks | [RB-05](RB-05-cleanup-and-leaks.md) |
 | Sandbox runtime unhealthy | [RB-06](RB-06-sandboxd.md) |
 | Database unhealthy | [RB-02](RB-02-database.md) |
@@ -313,6 +367,56 @@ Do not edit `lab_sessions` rows by hand. Every status change is a fenced
 transition (BETA-P0-006/007); a hand edit can hand a sandbox to the wrong
 teardown. The reaper recovers interrupted resets and ends; if it does not,
 that is the incident.
+
+### 7.1 Ending one student's lab for them
+
+When a student cannot end a broken lab themselves, has left one running, or
+holds a `DEGRADED` or stuck `CREATING` session:
+
+```bash
+ops sessions                       # find it: lab, status, age, idle time
+ops session <session>              # read it before you act
+ops end <session> --yes            # tell the student first
+```
+
+This runs the same teardown as the reaper. It closes the student's shell,
+deletes the sandbox through the provider's own label-checked destroy, and
+records the session `EXPIRED` with the reason `ended by operator`. The
+student's page says their environment expired. Their saved progress is kept.
+The slot is free as soon as the sandbox is confirmed gone.
+
+- `ended: … now EXPIRED` means it is done.
+- `NOT YET: … is EXPIRING` means the provider did not confirm the delete. The
+  session keeps its slot and the reaper retries on every sweep. RB-17 §4 if it
+  stays.
+- A teardown already in flight is finished as what it is, not relabelled:
+  `ENDING` (the student pressed End and it stalled) as the student's End,
+  `EXPIRING` (idle or time limit) with its own reason. The CLI says
+  `finished: … was already being torn down`.
+- A session that has already finished is refused
+  (`SESSION_ALREADY_FINISHED`) and nothing is recorded as yours.
+- It is logged (`ops.operator.session_ended`) and counted
+  (`jtt_operator_actions_total{action="end_session"}`,
+  `jtt_lab_end_total{reason="operator"}`).
+
+Never `docker rm` a sandbox or `kubectl delete` a lab namespace by hand while
+its session is live. The row keeps its slot, and the student's page keeps
+showing a lab that no longer exists.
+
+### 7.2 Collecting diagnostics
+
+After any incident, before restarting anything if you can:
+
+```bash
+make private-beta-diagnostics ARGS="--since 1h"
+```
+
+This writes one sanitized archive under `~/jtt-diagnostics/` and prints its
+path and sha256. What it contains and never contains is in
+[incident-response §4](private-beta-incident-response.md). It checks itself for
+this deployment's secret values before packaging and deletes the bundle if it
+finds one. Send the archive, never `.env`, `docker inspect`,
+`docker compose config` or raw logs.
 
 ## 8. DECISION REQUIRED
 
