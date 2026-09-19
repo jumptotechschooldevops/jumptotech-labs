@@ -34,6 +34,7 @@ import {
   issueTerminalGrant,
   noLimit,
   sessionErrorResponse,
+  studentMessage,
   toSessionPayload,
   type SessionRoutesDeps,
 } from './sessions.js';
@@ -387,7 +388,9 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
         await record(log, 'close failed attempt', () =>
           progress.failAttempt(
             attempt.attemptId,
-            error instanceof Error ? error.message : String(error),
+            // The student's history keeps the platform's words for why; the
+            // provider's are in the session manager's log.
+            studentMessage(code, error instanceof Error ? error.message : String(error)),
           ),
         );
       }

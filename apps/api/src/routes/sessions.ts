@@ -134,17 +134,87 @@ const STATUS_BY_CODE: Record<string, number> = {
   CREDENTIALS_UNAVAILABLE: 503,
 };
 
-export function sessionErrorResponse(res: Response, error: unknown): void {
+export function sessionErrorResponse(
+  res: Response,
+  error: unknown,
+  audience: 'student' | 'service' = 'student',
+): void {
   if (error instanceof SessionError) {
+    const forStudent = audience === 'student';
     sendError(res, STATUS_BY_CODE[error.code] ?? 500, {
       code: error.code,
-      message: error.message,
+      message: forStudent ? studentMessage(error.code, error.message) : error.message,
       ...(error.remediation ? { remediation: error.remediation } : {}),
-      ...(error.details ? { details: error.details } : {}),
+      ...(error.details ? { details: forStudent ? withoutProviderWords(error.details) : error.details } : {}),
     });
     return;
   }
   throw error;
+}
+
+/*
+ * What a student is told when the failure is in the provider's own words.
+ *
+ * A failed provision, reset, teardown or credential mint carries the message
+ * the container runtime, the runtime broker or the Kubernetes API produced —
+ * `docker run` stderr, a daemon path, an API server URL and an internal
+ * address. Those are for the operator, and the operator has them: the
+ * session manager logs them (`session … FAILED: …`, `… DEGRADED: …`), the
+ * session row keeps them for `ops sessions`, and the terminal service logs the
+ * credential exchange's. The browser gets the code — which the web client
+ * already turns into its own words (`apps/web/src/lib/errors.ts`) — and a
+ * sentence of ours. Codes whose message the platform writes itself (capacity,
+ * the student's own limit, a provider the catalog marks unavailable, with the
+ * network-isolation gate's own reason) are unchanged.
+ */
+const STUDENT_MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
+  SESSION_PROVISION_FAILED: 'The lab environment could not be created. Anything that was started has been cleaned up.',
+  PROVISION_FAILED: 'The lab environment could not be created.',
+  SETUP_FAILED: 'The lab environment was created, but its starting state could not be set up.',
+  SESSION_RESET_FAILED: 'The lab environment could not be rebuilt.',
+  RESET_FAILED: 'The lab environment could not be rebuilt.',
+  SESSION_CLEANUP_FAILED: 'The lab environment could not be removed yet.',
+  DESTROY_FAILED: 'The lab environment is still shutting down.',
+  CREDENTIALS_UNAVAILABLE: 'The terminal could not be given access to this lab environment.',
+  ENVIRONMENT_UNREACHABLE: 'The lab environment could not be read, so nothing was checked.',
+};
+
+export function studentMessage(code: string | undefined, message: string): string {
+  return (code && STUDENT_MESSAGE_BY_CODE[code]) ?? message;
+}
+
+/**
+ * A failure's `details`, without the provider's words: each step keeps its id,
+ * label, status and timing but not its `detail`, and an environment keeps its
+ * state but not its `message`. The web client renders labels only.
+ */
+export function withoutProviderWords<T>(details: T): T {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return details;
+  const out: Record<string, unknown> = { ...(details as Record<string, unknown>) };
+  if (Array.isArray(out.steps)) {
+    out.steps = out.steps.map((step) => {
+      if (!step || typeof step !== 'object') return step;
+      const { detail: _detail, ...rest } = step as Record<string, unknown>;
+      return rest;
+    });
+  }
+  if (out.environment && typeof out.environment === 'object' && !Array.isArray(out.environment)) {
+    const { message: _message, ...rest } = out.environment as Record<string, unknown>;
+    out.environment = rest;
+  }
+  return out as T;
+}
+
+/**
+ * A session's `statusReason` as its student sees it. Platform-authored reasons
+ * ("ended by student", "idle for more than 1200s") pass unchanged; the two that
+ * embed a provider's message are cut to the platform's own words.
+ */
+function studentStatusReason(status: string, reason: string | undefined): string | undefined {
+  if (!reason) return undefined;
+  if (status === 'FAILED') return STUDENT_MESSAGE_BY_CODE.SESSION_PROVISION_FAILED;
+  if (reason.startsWith('The last reset did not finish')) return 'The last reset did not finish.';
+  return reason;
 }
 
 /**
@@ -182,7 +252,7 @@ export function toSessionPayload(manager: SessionManager, session: LabSession) {
     lastActivityAt: view.lastActivityAt,
     expiresAt: view.expiresAt,
     ...(view.endedAt ? { endedAt: view.endedAt } : {}),
-    ...(view.statusReason ? { statusReason: view.statusReason } : {}),
+    ...(view.statusReason ? { statusReason: studentStatusReason(view.status, view.statusReason) } : {}),
     secondsRemaining: view.secondsRemaining,
     secondsUntilIdle: view.secondsUntilIdle,
     idleWarning: view.idleWarning,
@@ -534,6 +604,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         durationMs: Date.now() - verifyStartedAt,
         ...(result.error ? { code: result.error.code } : {}),
       },
+      // The provider's words stay here; the student is told ours.
+      ...(result.error ? [`verification could not read the environment: ${result.error.message}`] : []),
     );
 
     if (result.error) {
@@ -542,7 +614,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       // recording one would inflate `check_count` with a cluster outage.
       sendError(res, 503, {
         code: result.error.code,
-        message: result.error.message,
+        message: studentMessage(result.error.code, result.error.message),
         remediation: 'Start the lab environment before checking your solution.',
         details: { checks: result.checks },
       });
@@ -633,14 +705,15 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         // recoverable by the two things the student can actually do.
         sendError(res, 503, {
           code: result.error?.code ?? 'RESET_FAILED',
-          message: result.error?.message ?? 'Failed to reset the lab environment',
+          // Whatever the provider's code, its message is its own words.
+          message: STUDENT_MESSAGE_BY_CODE.RESET_FAILED!,
           remediation:
             'The environment could not be rebuilt and cannot be used as it is. Reset the lab to try again, or End Lab to release it.',
-          details: {
+          details: withoutProviderWords({
             steps: result.steps,
             removed: result.removed,
             session: toSessionPayload(sessions, session),
-          },
+          }),
         });
         return;
       }
@@ -706,13 +779,13 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       if (!destroy.namespaceGone) {
         sendError(res, 503, {
           code: destroy.error?.code ?? 'DESTROY_FAILED',
-          message: destroy.error?.message ?? 'The lab environment is still shutting down.',
+          message: STUDENT_MESSAGE_BY_CODE.DESTROY_FAILED!,
           // No time is promised: the reaper finishes an unfinished End after a
           // grace period and then retries every sweep until the provider
           // confirms the sandbox is gone, which it cannot bound.
           remediation:
             'Cleanup keeps retrying automatically in the background. You do not need to press End Lab again.',
-          details: { steps: destroy.steps, session: toSessionPayload(sessions, session) },
+          details: withoutProviderWords({ steps: destroy.steps, session: toSessionPayload(sessions, session) }),
         });
         return;
       }
