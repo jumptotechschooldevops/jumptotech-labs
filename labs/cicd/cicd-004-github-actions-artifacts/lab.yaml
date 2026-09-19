@@ -103,7 +103,10 @@ requirements:
     # writes to.
     with_contains:
       path: dist
-    label: A step uploads a named artifact from the build output
+    # An upload that runs before the build collects nothing.
+    after:
+      - run_contains: [node build.mjs]
+    label: A step uploads a named artifact from the build output, once it exists
   - type: project_builds
     produces: dist/build-info.json
     label: The build succeeds and writes its manifest

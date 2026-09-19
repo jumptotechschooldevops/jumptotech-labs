@@ -122,7 +122,8 @@ requirements:
   - type: jenkins_stage_exists
     path: Jenkinsfile
     stage: Publish
-    steps_contain:
+    # Read, not merely spelled: `echo REGISTRY_URL` prints the name.
+    steps_expand:
       - REGISTRY_URL
     label: The Publish stage uses the REGISTRY_URL variable
   - type: tests_pass

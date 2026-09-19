@@ -110,13 +110,19 @@ requirements:
     job: build
     run_contains:
       - node build.mjs
-    label: A step runs the build
+    # "In that order": a build before the checkout builds an empty directory.
+    after:
+      - uses: actions/checkout
+      - uses: actions/setup-node
+    label: A step runs the build, once the code and Node.js are in place
   - type: github_workflow_step_exists
     path: .github/workflows/ci.yml
     job: build
     run_contains:
       - node --test
-    label: A step runs the tests
+    after:
+      - run_contains: [node build.mjs]
+    label: A step runs the tests, after the build
   - type: project_builds
     produces: dist/build-info.json
     label: The build command actually succeeds
