@@ -81,6 +81,9 @@ export const environmentReferenceExists: CicdVerifierHandler<'environment_refere
       // *uses that mechanism* counts — `$REGISTRY_PASSWORD` in a shell step is
       // a use of the name, not a binding of it.
       if (referencedInCode(text, requirement.path, requirement.name, requirement.via)) {
+        if (requirement.value_contains !== undefined) {
+          return fail(`${requirement.name} is referenced, but no declaration of its value was found`);
+        }
         return pass('referenced in the pipeline');
       }
       const declared = [...new Set(assignments.map((a) => a.key))];
@@ -94,16 +97,23 @@ export const environmentReferenceExists: CicdVerifierHandler<'environment_refere
       );
     }
 
-    if (requirement.via) {
-      const wanted = viaDescription(requirement.via);
-      const satisfied = matching.some((a) => matchesVia(requirement.via!, a));
-      if (!satisfied) {
-        return fail(`${requirement.name} is set, but not ${wanted}`);
-      }
-      return pass(wanted);
+    const declared = requirement.via ? matching.filter((a) => matchesVia(requirement.via!, a)) : matching;
+    if (requirement.via && declared.length === 0) {
+      return fail(`${requirement.name} is set, but not ${viaDescription(requirement.via)}`);
     }
 
-    return pass(`declared in ${matching[0]?.location ?? requirement.path}`);
+    if (requirement.value_contains !== undefined) {
+      // Never name the text: it is what the student had to decide.
+      const wanted = requirement.value_contains.replace(/\s+/g, '').toLowerCase();
+      const holds = declared.some(
+        (a) => a.value !== null && a.value.replace(/\s+/g, '').toLowerCase().includes(wanted),
+      );
+      if (!holds) {
+        return fail(`${requirement.name} is declared, but its value is not derived the way this lab asks`);
+      }
+    }
+
+    return pass(requirement.via ? viaDescription(requirement.via) : `declared in ${matching[0]?.location ?? requirement.path}`);
   },
 };
 
@@ -150,7 +160,9 @@ function matchesVia(via: string, assignment: CandidateAssignment): boolean {
       // at workflow, job or step level, declares one.
       return isWorkflowEnvLocation(assignment.location);
     case 'jenkins_environment':
-      return true;
+      // "Declared in the pipeline's environment block": a stage-level
+      // `environment` is invisible to every other stage.
+      return assignment.location === 'pipeline.environment';
     default:
       return true;
   }

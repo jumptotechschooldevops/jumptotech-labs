@@ -254,8 +254,8 @@ interface Block {
  * `masked` drives the search and the brace walk; `original` supplies the text
  * that is handed back, so callers read real content rather than the mask.
  */
-function findBlock(masked: string, original: string, header: RegExp): Block | null {
-  const match = header.exec(masked);
+function findBlock(masked: string, original: string, header: RegExp, searchIn: string = masked): Block | null {
+  const match = header.exec(searchIn);
   if (!match) return null;
 
   const open = masked.indexOf('{', match.index);
@@ -272,6 +272,31 @@ function findBlock(masked: string, original: string, header: RegExp): Block | nu
     }
   }
   return null;
+}
+
+/**
+ * The masked body with everything inside a nested block blanked out, offsets
+ * preserved: only the block's own directives remain visible.
+ *
+ * `agent any` inside `stage('Build')` is a stage's agent, not the pipeline's,
+ * and an `environment` block inside a stage is not the pipeline's
+ * `environment`. Searching the whole body found them anyway.
+ */
+function topLevelOnly(maskedBody: string): string {
+  let depth = 0;
+  let out = '';
+  for (const ch of maskedBody) {
+    if (ch === '{') {
+      out += depth === 0 ? '{' : ' ';
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      out += depth === 0 ? '}' : ' ';
+    } else {
+      out += depth === 0 || ch === '\n' ? ch : ' ';
+    }
+  }
+  return out;
 }
 
 /** Every `name {` or `name value` directive at the top level of a block. */
@@ -305,7 +330,7 @@ function readDirectiveNames(maskedBody: string): string[] {
  */
 function readDirectiveValue(maskedBody: string, body: string, name: string): string | null {
   const pattern = new RegExp(`(^|[^\\w.])${name}\\b`, 'm');
-  const match = pattern.exec(maskedBody);
+  const match = pattern.exec(topLevelOnly(maskedBody));
   if (!match) return null;
 
   const start = match.index + match[0].length;
@@ -327,7 +352,7 @@ function readEnvironmentBlock(
   body: string,
   location: string,
 ): JenkinsAssignment[] {
-  const block = findBlock(maskedBody, body, /(^|[^\w.])environment\s*\{/);
+  const block = findBlock(maskedBody, body, /(^|[^\w.])environment\s*\{/, topLevelOnly(maskedBody));
   if (!block) return [];
 
   const assignments: JenkinsAssignment[] = [];

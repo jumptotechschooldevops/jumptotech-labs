@@ -282,9 +282,38 @@ export function usesAction(actual: string | undefined, expected: string): boolea
   return withoutVersion === wanted;
 }
 
-/** Does a `run:` block contain every fragment, ignoring case and whitespace runs? */
+/** Shell comments removed: `#` at the start of a line or after whitespace. */
+export function withoutShellComments(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/(^|\s)#.*$/, '$1'))
+    .join('\n');
+}
+
+/**
+ * Does code expand this variable, rather than merely spell its name?
+ *
+ * `$NAME`, `${NAME}` (and `${NAME:-default}`, `${NAME%…}`), and
+ * `env.NAME` — which covers `${{ env.NAME }}` in a workflow and `env.NAME` /
+ * `${env.NAME}` in a Jenkinsfile. The caller removes comments first. The
+ * name is a validated identifier, so it is safe inside the pattern.
+ */
+export function expandsVariable(code: string, name: string): boolean {
+  return new RegExp(`\\$(\\{\\s*)?${name}(?![A-Za-z0-9_])|(^|[^A-Za-z0-9_.])env\\.${name}(?![A-Za-z0-9_])`).test(code);
+}
+
+/**
+ * Does a `run:` block contain every fragment, ignoring case and whitespace
+ * runs? Returns the fragments it lacks.
+ *
+ * Shell comments are not commands. YAML strips ` # …` from a plain scalar, but
+ * in a `run: |` block the comment is part of the string, so `# node build.mjs`
+ * would otherwise count as running the build. The rule is the one the pipeline
+ * reference checks use: `#` at the start of a line or after whitespace.
+ */
 export function runContains(run: string | undefined, fragments: readonly string[]): string[] {
   if (!run) return [...fragments];
-  const haystack = run.replace(/\s+/g, ' ').toLowerCase();
+  const code = withoutShellComments(run);
+  const haystack = code.replace(/\s+/g, ' ').toLowerCase();
   return fragments.filter((fragment) => !haystack.includes(fragment.replace(/\s+/g, ' ').toLowerCase()));
 }

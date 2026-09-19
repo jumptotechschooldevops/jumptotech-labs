@@ -9,8 +9,10 @@
  */
 import { fail, pass, type HandlerOutcome, type CicdVerifierHandler } from '../contract.js';
 import type { CicdVerifyReader } from '../cicd-reader.js';
+import { expandsVariable } from '../ci/workflow.js';
 import {
   findStage,
+  stripComments,
   parseJenkinsfile,
   stepsMissing,
   type JenkinsPipeline,
@@ -90,6 +92,18 @@ export const jenkinsStageExists: CicdVerifierHandler<'jenkins_stage_exists'> = {
       if (missing.length > 0) {
         return fail(
           `stage '${stage.name}' does not run ${missing.map((m) => `'${m}'`).join(' or ')}`,
+        );
+      }
+    }
+
+    if (requirement.steps_expand) {
+      // `REGISTRY_URL` alone is literal text to the shell and to Groovy; the
+      // value arrives only through `$REGISTRY_URL`, `${…}` or `env.…`.
+      const code = stripComments(stage.stepsBody ?? '');
+      const unexpanded = requirement.steps_expand.filter((name) => !expandsVariable(code, name));
+      if (unexpanded.length > 0) {
+        return fail(
+          `stage '${stage.name}' does not read ${unexpanded.map((n) => `$${n}`).join(' or ')}; the name alone is literal text`,
         );
       }
     }

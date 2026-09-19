@@ -3542,6 +3542,17 @@ const identifier = z
   .max(64)
   .regex(/^[A-Za-z_][A-Za-z0-9_-]*$/, 'must be an identifier such as build or fetch-depth');
 
+/** Picks out one step of a job: by the action it uses, what it runs, or both. */
+const workflowStepMatcher = z
+  .object({
+    uses: z.string().min(1).max(160).optional(),
+    run_contains: z.array(z.string().min(1).max(120)).min(1).max(6).optional(),
+  })
+  .strict()
+  .refine((v) => v.uses !== undefined || v.run_contains !== undefined, {
+    message: 'must specify uses, run_contains, or both',
+  });
+
 const cicdRequirementSchemas = {
   github_workflow_exists: z
     .object({
@@ -3598,6 +3609,17 @@ const cicdRequirementSchemas = {
       uses: z.string().min(1).max(160).optional(),
       run_contains: z.array(z.string().min(1).max(120)).max(6).optional(),
       /**
+       * Require the step's `run:` to expand each of these variables — `$NAME`,
+       * `${NAME}`, `${{ env.NAME }}` — rather than merely spell the name. A
+       * bare `IMAGE_NAME` is literal text to the shell.
+       */
+      run_expands: z.array(envVarName).min(1).max(6).optional(),
+      /**
+       * Require the step to come after a step matching each of these, in the
+       * job's order — the order the runner executes them in.
+       */
+      after: z.array(workflowStepMatcher).min(1).max(4).optional(),
+      /**
        * Require the step's `with:` block to set these input names. An input
        * written with no value (`node-version:` or `''`) is not set: the action
        * sees nothing and falls back to its default.
@@ -3626,8 +3648,8 @@ const cicdRequirementSchemas = {
       ...common,
     })
     .strict()
-    .refine((v) => v.uses !== undefined || v.run_contains !== undefined, {
-      message: 'must specify uses, run_contains, or both',
+    .refine((v) => v.uses !== undefined || v.run_contains !== undefined || v.run_expands !== undefined, {
+      message: 'must specify uses, run_contains, run_expands, or a combination',
     }),
 
   // --- Jenkins -------------------------------------------------------------
@@ -3657,6 +3679,11 @@ const cicdRequirementSchemas = {
       stage: z.string().min(1).max(64),
       /** Require the stage's `steps` block to mention all of these substrings. */
       steps_contain: z.array(z.string().min(1).max(120)).max(6).optional(),
+      /**
+       * Require the stage's steps to expand each of these variables — `$NAME`,
+       * `${NAME}`, `env.NAME` — rather than merely spell the name.
+       */
+      steps_expand: z.array(envVarName).min(1).max(6).optional(),
       /** Require the stage to appear after these stages, in file order. */
       after: z.array(z.string().min(1).max(64)).max(10).optional(),
       ...common,
@@ -3683,6 +3710,12 @@ const cicdRequirementSchemas = {
       via: z
         .enum(['workflow_env', 'workflow_secret', 'jenkins_environment', 'jenkins_credentials'])
         .optional(),
+      /**
+       * Require the declaration's value to contain this text, e.g.
+       * `github.sha` for a tag derived from the commit. A failure never names
+       * the text.
+       */
+      value_contains: z.string().min(1).max(120).optional(),
       ...common,
     })
     .strict(),
