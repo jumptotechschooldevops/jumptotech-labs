@@ -216,7 +216,8 @@ requirements:
     path: /home/student/network/findings.env
     key: PATCHING_TRAFFIC_VIA
     equals: nat_gateway
-    label: OS patching is correctly still routed through the NAT gateway
+    # The label must not name the route: that is the answer.
+    label: The route OS patching takes is correctly reported
 
   - type: file_key_value
     path: /home/student/network/findings.env

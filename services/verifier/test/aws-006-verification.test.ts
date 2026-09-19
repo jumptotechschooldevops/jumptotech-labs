@@ -148,7 +148,7 @@ describe('AWS-006 — plausible misreadings of the trail fail', () => {
     expect(result.passed).toBe(false);
     expect(failed(result.checks).sort()).toEqual([
       'The address the request came from is identified',
-      'The call is correctly reported as having succeeded',
+      "The call's outcome is correctly reported",
       'The principal that made the call is identified by its full ARN',
       'The principalId CloudTrail recorded for that identity is captured',
       'The time of the call is recorded exactly as CloudTrail has it',
@@ -214,10 +214,16 @@ describe('AWS-006 — plausible misreadings of the trail fail', () => {
     expect((await run(sheet({ DENIED_ERROR_CODE: 'AccessDenied' }))).passed).toBe(false);
   });
 
+  it('accepts the outcome in any case, as the worksheet only names the words', async () => {
+    for (const outcome of ['success', 'SUCCESS', 'Success']) {
+      expect(failed((await run(sheet({ OUTCOME: outcome }))).checks), outcome).toEqual([]);
+    }
+  });
+
   it('fails when the successful call is reported as a failure', async () => {
     const result = await run(sheet({ OUTCOME: 'failure' }));
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toEqual(['The call is correctly reported as having succeeded']);
+    expect(failed(result.checks)).toEqual(["The call's outcome is correctly reported"]);
   });
 });
 
@@ -242,7 +248,7 @@ describe('AWS-006 — shortcuts and missing work', () => {
       'The Region the call was made to is identified',
       'The security group that was changed is identified',
       'The principal that made the call is identified by its full ARN',
-      'The call is correctly reported as having succeeded',
+      "The call's outcome is correctly reported",
     ]);
   });
 
