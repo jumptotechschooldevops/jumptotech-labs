@@ -602,6 +602,24 @@ export function createSandboxd(deps: SandboxdDeps): Server {
       return;
     }
 
+    /*
+     * The caller can leave while the container is inspected: the terminal
+     * service gives up on an attach after 15 s, and an inspect on a busy
+     * daemon may take as long. Its `close` handler has already run and found
+     * no shell to end, so a PTY spawned now would hold a shell in the
+     * student's container, and a broker slot, for a socket nobody reads —
+     * until the idle timer. It must not replace a live shell either.
+     */
+    if (ws.readyState !== ws.OPEN) {
+      metrics?.attaches.inc({ outcome: 'failed', deny_reason: 'caller_gone' });
+      obs.info('sandbox.attach.denied', {
+        sessionId,
+        outcome: 'failed',
+        denyReason: 'caller_gone',
+      }, 'the caller closed its socket before the container was inspected');
+      return;
+    }
+
     // One shell per session: a reconnect replaces rather than doubles.
     const existing = bySessionId.get(sessionId);
     if (existing && existing !== ws) {
