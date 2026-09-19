@@ -69,7 +69,10 @@ function scan(dir: string, envFile: string | undefined): never {
   try {
     literals = configuredSecrets(envFile);
   } catch {
-    process.stderr.write('diagnostics-sanitize-logs: configured secrets unreadable; scanning for shapes only\n');
+    // The literal check is the one that matters (the shapes are a backstop),
+    // so an env file that was named and cannot be read fails the gate rather
+    // than passing a bundle nobody checked for this deployment's own values.
+    fail('the configured secrets could not be read from the env file, so the bundle cannot be checked for them');
   }
   let leaks = 0;
   for (const file of filesUnder(dir)) {

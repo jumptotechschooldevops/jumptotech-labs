@@ -197,6 +197,9 @@ describe('the redactor cannot be turned into a denial of service', () => {
     `postgres://${'u'.repeat(2000)}`,
     `${'0123456789abcdef'.repeat(400)}`,
     `${'x@y.'.repeat(1000)}z`,
+    `${'password'.repeat(900)}`,
+    `${'_SECRET'.repeat(1100)}=`,
+    `${'bearer '.repeat(1100)}`,
   ];
 
   for (const [index, input] of ADVERSARIAL.entries()) {
@@ -206,4 +209,54 @@ describe('the redactor cannot be turned into a denial of service', () => {
       expect(performance.now() - started).toBeLessThan(50);
     });
   }
+});
+
+describe('credential shapes the corpus above did not reach', () => {
+  /*
+   * Found by the 2026-09-19 red-team pass. Each is a way a credential reaches a
+   * log *value* — an error quoting an env file, a header echoed in lower case, a
+   * JSON body inside a message — rather than a key the typed logger drops.
+   */
+  const MISSED: Array<[string, string, string]> = [
+    ['a lower-case bearer header', 'authorization: bearer abc123def456ghi789', 'abc123def456ghi789'],
+    ['a lower-case basic header', 'authorization: basic dXNlcjpwYXNzd29yZA==', 'dXNlcjpwYXNzd29yZA=='],
+    ['an env-file password line', 'GRAFANA_ADMIN_PASSWORD=correct-horse-battery', 'correct-horse-battery'],
+    ['a libpq password variable', 'PGPASSWORD=hunter2hunter2', 'hunter2hunter2'],
+    ['a service secret header', 'x-internal-secret: s3rvice-s3cret-value', 's3rvice-s3cret-value'],
+    ['a secret in a JSON body', '{"clientSecret":"GOCSPX-abcdefghij1234"}', 'GOCSPX-abcdefghij1234'],
+    ['a password in a JSON body', 'body {"password":"hunter2hunter2"}', 'hunter2hunter2'],
+    ['a token query parameter', 'GET /hook?token=tok_abcdef123456&x=1', 'tok_abcdef123456'],
+    ['an api key parameter', 'api_key=key-abcdef123456', 'key-abcdef123456'],
+  ];
+
+  for (const [description, value, secret] of MISSED) {
+    it(`redacts ${description}`, () => {
+      expect(redactString(value)).not.toContain(secret);
+    });
+  }
+
+  it('redacts a credential named by its field, whatever its shape', () => {
+    const out = JSON.stringify(
+      redactValue({ reason: { password: 'hunter2hunter2', clientSecret: 'short-ish', token: 'abc' } }),
+    );
+    expect(out).not.toContain('hunter2hunter2');
+    expect(out).not.toContain('short-ish');
+    expect(out).not.toMatch(/"token":"abc"/);
+  });
+
+  it('keeps fields that merely mention a credential word', () => {
+    // The audit line's own field, and a token's lifetime, are not credentials.
+    expect(redactValue({ authorizationResult: 'allowed', tokenTtlSeconds: 900 })).toEqual({
+      authorizationResult: 'allowed',
+      tokenTtlSeconds: 900,
+    });
+  });
+
+  it('keeps no fragment of a secret cut by the length bound', () => {
+    const secret = 'a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0a1b2';
+    const out = redactString(`${'x '.repeat(4090)}${secret}`);
+    for (let i = 0; i + 8 <= secret.length; i += 1) {
+      expect(out, `fragment at ${i}`).not.toContain(secret.slice(i, i + 8));
+    }
+  });
 });
