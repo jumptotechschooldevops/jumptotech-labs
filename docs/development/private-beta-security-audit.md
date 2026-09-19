@@ -899,3 +899,23 @@ against its controls.
 
 `npm run test:security`: 800 passed (797 + the three auth cases), locally, not
 CI. No finding in §3's register changes severity.
+
+## 31. Addendum — 2026-09-19 red-team pass
+
+§1–§30 are the audit as recorded. A red-team pass on
+`feat/security-redteam-overnight` (base `001bcf1`) is written up in
+[security-redteam-2026-09-19.md](security-redteam-2026-09-19.md). In short:
+
+- **No** cross-student access, authorization or authentication bypass, secret
+  disclosure, or session-limit bypass found; §8's conclusions stand, now also
+  replayed as one five-student scenario (`five-student-adversarial.test.ts`).
+- Fixed: two cross-student **availability** gaps in the shared terminal (one
+  token racing many shells, SEC-RT-1; unbounded and FIFO-blocking workspace
+  reads, SEC-RT-2); the `/internal` router reachable from the edge by a
+  dot-segment path (SEC-RT-3, so §6 boundary 2's "no browser can reach it" was
+  not true through nginx); provider/internal error text in student responses and
+  terminal frames (SEC-RT-4); redactor gaps (SEC-RT-5).
+- Register changes here: **SEC-DEP-1 FIXED** (express 4.22.3 → qs 6.16.0);
+  **SEC-HDR-1 MITIGATED** (frame, sniffing, referrer and permissions headers; a
+  full CSP remains a follow-up). New open items SEC-RT-6…14 are listed there.
+- The §26 accepted risks and the §25/§26 untrusted-cohort blockers are unchanged.
