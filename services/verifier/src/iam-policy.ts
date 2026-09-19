@@ -424,6 +424,8 @@ export interface StatementSelector {
   effect?: 'Allow' | 'Deny';
   /** The statement must cover every action listed. */
   actions?: string[];
+  /** With `actions`: the statement's `Action` names those and nothing wider. */
+  exactActions?: boolean;
   /** The statement must cover every resource listed. */
   resources?: string[];
   condition?: ConditionSelector;
@@ -442,6 +444,16 @@ export function findStatements(policy: IamPolicy, selector: StatementSelector): 
     if (selector.effect !== undefined && statement.effect !== selector.effect) return false;
     if (selector.sid !== undefined && statement.sid !== selector.sid) return false;
     if (selector.actions?.some((action) => !statementCoversAction(statement, action))) return false;
+    // `sts:*` covers sts:AssumeRole by glob, and so would satisfy "covers";
+    // an exact statement names the listed actions as written and no pattern.
+    if (
+      selector.exactActions &&
+      selector.actions !== undefined &&
+      (statement.notActions.length > 0 ||
+        statement.actions.some((own) => !selector.actions!.some((wanted) => wanted.toLowerCase() === own.toLowerCase())))
+    ) {
+      return false;
+    }
     if (selector.resources?.some((resource) => !statementCoversResource(statement, resource))) {
       return false;
     }

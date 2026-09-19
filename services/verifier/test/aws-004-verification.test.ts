@@ -193,12 +193,13 @@ describe('AWS-004 — trust policies that look right but are not', () => {
     }
   });
 
-  it('accepts sts:Assume* as covering the action, but still rejects a bare wildcard', async () => {
+  it('rejects sts:Assume* (finding lines 5 and 6: the one action, no wildcard) and a bare wildcard', async () => {
+    // sts:Assume* also allows AssumeRoleWithSAML and AssumeRoleWithWebIdentity.
     const scoped = JSON.stringify({
       Version: '2012-10-17',
       Statement: [{ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:Assume*' }],
     });
-    expect((await run(scoped)).passed).toBe(true);
+    expect((await run(scoped)).passed).toBe(false);
 
     const bare = JSON.stringify({
       Version: '2012-10-17',
@@ -291,5 +292,28 @@ describe('AWS-004 — isolation and shortcuts', () => {
 
     expect(result.passed).toBe(false);
     expect(result.checks.find((c) => c.status === 'fail')?.detail).toContain('not a regular file');
+  });
+});
+
+describe('AWS-004 — the trust statement allows AssumeRole, not everything under sts', () => {
+  const trust = (action: unknown) =>
+    JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [{ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: action }],
+    });
+  const LABEL = 'The EC2 service, and nothing else, is allowed to assume the role';
+
+  it('fails sts:* and sts:Assume*, which cover AssumeRole and more', async () => {
+    for (const action of ['sts:*', 'sts:Assume*', ['sts:AssumeRole', 'sts:TagSession']]) {
+      const result = await run(trust(action));
+      expect(failed(result.checks), JSON.stringify(action)).toEqual([LABEL]);
+      expect(result.checks.find((c) => c.label === LABEL)?.detail).toContain('its Action allows more');
+    }
+  });
+
+  it('passes sts:AssumeRole written as a string or a one-element list, in any case', async () => {
+    for (const action of ['sts:AssumeRole', ['sts:AssumeRole'], 'STS:AssumeRole']) {
+      expect(failed((await run(trust(action))).checks), JSON.stringify(action)).toEqual([]);
+    }
   });
 });

@@ -2010,6 +2010,12 @@ const sandboxRequirementSchemas = {
       sid: z.string().min(1).max(128).optional(),
       /** The statement must cover every action listed. */
       actions: z.array(iamAction).min(1).max(50).optional(),
+      /**
+       * With `actions`: the statement's `Action` names exactly those, not a
+       * pattern that also covers them. `sts:*` covers `sts:AssumeRole`, and
+       * also every other STS action a trust policy was not asked to allow.
+       */
+      exact_actions: z.boolean().optional(),
       /** The statement must cover every resource listed. */
       resources: z.array(iamResource).min(1).max(50).optional(),
       condition: iamConditionSelector.optional(),
