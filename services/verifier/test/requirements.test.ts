@@ -186,6 +186,31 @@ describe('verifier — Service checks (test requirement 18)', () => {
   });
 });
 
+// ------------------------------------ Secret/ConfigMap delivered to the app
+
+describe('verifier — configuration has to reach the variable the application reads', () => {
+  const lab = async () => (await realCatalog()).get('K8S-005');
+  const payments = (configRefs: ConfigReference[]) =>
+    new FakeKubernetes({
+      deployments: { [NS]: [deploymentSnapshot({ name: 'payments', desiredReplicas: 1, selector: { app: 'payments' }, configRefs })] },
+    });
+  const rule = { type: 'deployment_uses_secret', name: 'payments', secret: 'payments-api', key: 'api-token', env: 'PAYMENTS_API_TOKEN' };
+
+  it('passes the key delivered into PAYMENTS_API_TOKEN', async () => {
+    expect(passed(await check(payments([{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN' }]), rule))).toBe(true);
+  });
+
+  it('fails envFrom, which names the variable api-token, and a different variable', async () => {
+    expect(passed(await check(payments([{ source: 'secret', name: 'payments-api', via: 'envFrom' }]), rule))).toBe(false);
+    expect(passed(await check(payments([{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'TOKEN' }]), rule))).toBe(false);
+  });
+
+  it('K8S-005 asks for exactly that', async () => {
+    const shipped = (await lab()).requirements.find((r) => r.type === 'deployment_uses_secret');
+    expect(shipped).toMatchObject({ env: 'PAYMENTS_API_TOKEN', key: 'api-token' });
+  });
+});
+
 // ----------------------------------------------------------- 19. ConfigMaps
 
 describe('verifier — ConfigMap checks (test requirement 19)', () => {
@@ -279,7 +304,7 @@ describe('verifier — Secret checks (test requirement 20)', () => {
             name: 'payments',
             desiredReplicas: 1,
             selector: { app: 'payments' },
-            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env' }],
+            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN' }],
           }),
         ],
       },
@@ -318,7 +343,7 @@ describe('verifier — Secret checks (test requirement 20)', () => {
             name: 'payments',
             desiredReplicas: 1,
             selector: { app: 'payments' },
-            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env' }],
+            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN' }],
             containers: [
               { name: 'api', image: 'nginx:stable', ready: true, restartCount: 0, state: 'running', literalEnvNames: ['PAYMENTS_API_TOKEN'] },
             ],

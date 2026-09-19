@@ -340,6 +340,7 @@ export const deploymentUsesConfigMap: VerifierHandler<'deployment_uses_configmap
       name: r.configmap,
       ...(r.key !== undefined ? { key: r.key } : {}),
       ...(r.via !== undefined ? { via: r.via } : {}),
+      ...(r.env !== undefined ? { env: r.env } : {}),
     });
   },
 };
@@ -376,6 +377,7 @@ export const deploymentUsesSecret: VerifierHandler<'deployment_uses_secret'> = {
       name: r.secret,
       ...(r.key !== undefined ? { key: r.key } : {}),
       ...(r.via !== undefined ? { via: r.via } : {}),
+      ...(r.env !== undefined ? { env: r.env } : {}),
     });
   },
 };
@@ -393,7 +395,14 @@ export const deploymentUsesSecret: VerifierHandler<'deployment_uses_secret'> = {
  */
 function checkConfigReference(
   workload: Pick<DeploymentSnapshot, 'configRefs'>,
-  want: { source: ConfigReference['source']; kind: string; name: string; key?: string; via?: ConfigReference['via'] },
+  want: {
+    source: ConfigReference['source'];
+    kind: string;
+    name: string;
+    key?: string;
+    via?: ConfigReference['via'];
+    env?: string;
+  },
 ): HandlerOutcome {
   const refs = workload.configRefs ?? [];
   const matching = refs.filter((ref) => ref.source === want.source && ref.name === want.name);
@@ -420,6 +429,20 @@ function checkConfigReference(
     if (!hasKey) {
       const keys = byMechanism.map((ref) => `'${ref.key}'`).join(', ');
       return fail(`${want.kind} '${want.name}' is referenced, but key '${want.key}' is not — found ${keys}`);
+    }
+  }
+
+  if (want.env !== undefined) {
+    // The application reads one variable by name. `envFrom` names variables
+    // after the keys (and skips keys that are not valid names), so it only
+    // delivers `want.env` when the key is that name.
+    const delivers = byMechanism.some((ref) =>
+      ref.via === 'env'
+        ? ref.env === want.env && (want.key === undefined || ref.key === want.key)
+        : ref.via === 'envFrom' && want.key === want.env,
+    );
+    if (!delivers) {
+      return fail(`${want.kind} '${want.name}' is referenced, but not as the variable ${want.env} the application reads`);
     }
   }
 

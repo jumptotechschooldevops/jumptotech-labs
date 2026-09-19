@@ -724,6 +724,8 @@ const kubernetesRequirementSchemas = {
       /** Require a specific key to be referenced. */
       key: z.string().min(1).max(253).regex(/^[-._a-zA-Z0-9]+$/, 'invalid ConfigMap key').optional(),
       via: z.enum(['env', 'envFrom', 'volume']).optional(),
+      /** As on deployment_uses_secret: the variable the value must arrive in. */
+      env: z.string().min(1).max(253).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name').optional(),
       ...common,
     })
     .strict(),
@@ -755,6 +757,12 @@ const kubernetesRequirementSchemas = {
       secret: resourceName,
       key: z.string().min(1).max(253).regex(/^[-._a-zA-Z0-9]+$/, 'invalid Secret key').optional(),
       via: z.enum(['env', 'envFrom', 'volume']).optional(),
+      /**
+       * The environment variable the value must arrive in — the name the
+       * application reads. `envFrom` names variables after the keys, so it
+       * satisfies this only when the key *is* that name.
+       */
+      env: z.string().min(1).max(253).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name').optional(),
       ...common,
     })
     .strict(),
