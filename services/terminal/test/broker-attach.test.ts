@@ -651,3 +651,85 @@ describe('one shell per session, even while attaches are still in flight', () =>
     expect(stack.ptys).toHaveLength(1);
   });
 });
+
+describe('a reattach after a container reset, when the socket goes away meanwhile', () => {
+  /*
+   * A container reset recreates the sandbox and the API asks this service to
+   * give the student's socket a fresh shell. That reattach waits on the API and
+   * on the broker, and installed whatever the broker handed back without
+   * looking at the socket again. A tab closed during a Reset — or an End
+   * arriving then — had already run `endSession` for that socket, so the new
+   * broker shell was wired to a closed socket and never closed: a PTY in the
+   * student's container for the broker's idle timer, 30 minutes in compose.
+   */
+
+  async function reattach(stack: Stack, sessionId: string): Promise<Record<string, unknown>> {
+    const res = await fetch(`${stack.controlUrl}/internal/reattach`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-internal-secret': INTERNAL_SECRET },
+      body: JSON.stringify({ sessionId }),
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { data: Record<string, unknown> }).data;
+  }
+
+  it('closes the shell it opened instead of wiring it to a closed socket', async () => {
+    const delays: Parameters<typeof bringUpStack>[1] = {};
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, delays);
+    const { ws, first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
+    expect(first).toMatchObject({ type: 'ready' });
+    expect(stack.ptys).toHaveLength(1);
+
+    // The reattach's broker attach parks in the inspect.
+    const inspectGate = gate();
+    delays!.inspectGate = inspectGate;
+    const reattaching = reattach(stack, SESSION_A);
+    await inspectGate.reached(1);
+
+    // The student closes the tab while the new shell is being opened.
+    const closed = new Promise((resolve) => ws.on('close', resolve));
+    ws.close(1000, 'tab closed');
+    await closed;
+    inspectGate.release();
+
+    expect(await reattaching).toEqual({ reattached: false });
+    // The broker opened the replacement shell; it is closed again, and so is
+    // the original one.
+    const deadline = Date.now() + 3_000;
+    while (!(stack.ptys.length === 2 && stack.ptys.every((p) => p.killed)) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(stack.ptys).toHaveLength(2);
+    expect(stack.ptys.map((p) => p.killed)).toEqual([true, true]);
+  });
+
+  it('closes the socket when the new shell cannot be opened, so the browser reconnects', async () => {
+    const containers = { [refFor(SESSION_A)]: snapshot(SESSION_A) };
+    const stack = await bringUpStack(containers);
+    const { ws, first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
+    expect(first).toMatchObject({ type: 'ready' });
+
+    // The rebuilt sandbox is not there (yet): the broker refuses the attach.
+    delete containers[refFor(SESSION_A)];
+    const error = frame(ws, ['error']);
+    const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+    expect(await reattach(stack, SESSION_A)).toEqual({ reattached: false });
+
+    // SANDBOX_UNAVAILABLE is one the workspace retries on disconnect; a socket
+    // left open around a dead shell never disconnected, so it never retried.
+    expect(await error).toMatchObject({ code: 'SANDBOX_UNAVAILABLE' });
+    expect(await closed).toBe(1011);
+    expect(stack.ptys.map((p) => p.killed)).toEqual([true]);
+  });
+
+  it('still hands a live socket its new shell', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) });
+    const { ws, first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
+    expect(first).toMatchObject({ type: 'ready' });
+
+    const reattached = frame(ws, ['reattached']);
+    expect(await reattach(stack, SESSION_A)).toEqual({ reattached: true });
+    expect(await reattached).toMatchObject({ sandboxRef: refFor(SESSION_A) });
+    expect(stack.ptys.map((p) => p.killed)).toEqual([true, false]);
+  });
+});
