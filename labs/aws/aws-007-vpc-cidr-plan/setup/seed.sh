@@ -72,7 +72,8 @@ The subnets
       must the two private subnets. Use the Availability Zones of eu-west-1.
 
   R8. Public subnets must give instances a public IPv4 address on launch.
-      Private subnets must not.
+      Private subnets must not. Declare the setting on every subnet, true or
+      false: review does not accept a tier that is only private by default.
 
 Growth
 ------
