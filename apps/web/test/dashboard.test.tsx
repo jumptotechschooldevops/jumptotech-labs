@@ -166,4 +166,23 @@ describe('the dashboard', () => {
 
     expect(await screen.findByText('We could not check whether you have a lab running')).toBeTruthy();
   });
+
+  it('keeps showing a running lab it already knew when a later re-read fails', async () => {
+    apiMock.listMySessions.mockResolvedValue(
+      sessionsResponse([{ session: sessionInfo(), labTitle: 'Files and Directories', attempt: attemptSummary() }]),
+    );
+    renderWithProviders(<DashboardPage />);
+    expect(await screen.findByRole('heading', { name: 'You have a lab running' })).toBeTruthy();
+
+    // The student comes back to the tab while the API is briefly unreachable.
+    apiMock.listMySessions.mockRejectedValue(new ApiRequestError(0, { code: 'API_UNREACHABLE', message: 'x' }));
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(apiMock.listMySessions).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByRole('heading', { name: 'You have a lab running' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Continue lab' }).getAttribute('href')).toBe('#/labs/LINUX-001/workspace');
+    expect(screen.queryByText('We could not check whether you have a lab running')).toBeNull();
+  });
 });
