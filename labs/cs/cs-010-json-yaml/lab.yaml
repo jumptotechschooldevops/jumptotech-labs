@@ -313,12 +313,12 @@ requirements:
     label: The repaired file parses — spaces for indentation, and no key twice
 
   # --- what the traps actually did ----------------------------------------
-  # Matched with `grep -x`, whole line, rather than `file_content contains`.
-  # `contains` is a substring test, and the wrong answer here is a superstring
-  # of the right one: `VERSION_BECAME=3.10` — the version the file says, which
-  # is exactly the misreading the lab is about — contains `VERSION_BECAME=3.1`.
-  # The same trap sits under `DUPLICATE_KEY=leeds` and `leeds-old`. Whole-line
-  # matching is what makes the near-miss fail.
+  # Graded with `file_key_value`, which compares the whole value, rather than
+  # `file_content contains`, a substring test. The wrong answer here is a
+  # superstring of the right one: `VERSION_BECAME=3.10` — the version the file
+  # says, which is exactly the misreading the lab is about — contains
+  # `VERSION_BECAME=3.1`. The same trap sits under `DUPLICATE_KEY=leeds` and
+  # `leeds-old`. Whole-value matching is what makes the near-miss fail.
   - type: file_key_value
     path: /home/student/ops/yaml.txt
     key: DUPLICATE_KEY
