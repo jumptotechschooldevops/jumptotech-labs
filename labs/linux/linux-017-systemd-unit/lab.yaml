@@ -199,7 +199,10 @@ requirements:
     path: /etc/systemd/system/ledger-api.service
     section: Service
     directive: Type
-    equals: simple
+    # "Runs in the foreground … ready as soon as it is running": simple, or
+    # exec (ready once exec succeeds). Omitted, systemd reads it as simple.
+    one_of: [simple, exec]
+    default: simple
     label: The service is declared as one that runs in the foreground
   - type: systemd_unit_directive
     path: /etc/systemd/system/ledger-api.service

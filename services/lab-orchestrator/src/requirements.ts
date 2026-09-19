@@ -2601,8 +2601,10 @@ const sandboxRequirementSchemas = {
    * matched by membership, while an ordinary setting is a scalar whose last
    * assignment wins. `LIST_DIRECTIVES` in the verifier holds that mapping.
    *
-   * Exactly one of `equals`, `contains` or `absent` is required, so a lab
-   * cannot write a check whose meaning is ambiguous.
+   * Exactly one of `equals`, `one_of`, `contains` or `absent` is required, so
+   * a lab cannot write a check whose meaning is ambiguous. `default` is the
+   * value systemd documents for an omitted directive (`Type=` → `simple`):
+   * with it, leaving the directive out is graded as that value.
    */
   systemd_unit_directive: z
     .object({
@@ -2616,19 +2618,28 @@ const sandboxRequirementSchemas = {
         .regex(/^[A-Za-z][A-Za-z0-9-]*$/, 'must be a systemd directive name'),
       /** Effective scalar value — the last assignment — must equal this. */
       equals: z.string().min(1).max(512).optional(),
+      /** Effective scalar value must equal one of these. */
+      one_of: z.array(z.string().min(1).max(512)).min(2).max(8).optional(),
       /** Accumulated, whitespace-split members must include this token. */
       contains: z.string().min(1).max(512).optional(),
       /** The directive must have no value in effect. */
       absent: z.boolean().optional(),
+      /** systemd's documented value when the directive is omitted. */
+      default: z.string().min(1).max(512).optional(),
       ...common,
     })
     .strict()
     .refine(
       (v) =>
-        [v.equals !== undefined, v.contains !== undefined, v.absent === true].filter(Boolean)
-          .length === 1,
-      { message: 'must specify exactly one of equals, contains or absent' },
-    ),
+        [v.equals !== undefined, v.one_of !== undefined, v.contains !== undefined, v.absent === true].filter(
+          Boolean,
+        ).length === 1,
+      { message: 'must specify exactly one of equals, one_of, contains or absent' },
+    )
+    .refine((v) => v.default === undefined || v.equals !== undefined || v.one_of !== undefined, {
+      message: 'default applies only to equals or one_of',
+      path: ['default'],
+    }),
 
   /**
    * A systemd unit file declares a section at all.

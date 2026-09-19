@@ -211,6 +211,43 @@ describe('LINUX-017 grades the unit semantically', () => {
   });
 });
 
+describe('LINUX-017 accepts every unit systemd would run the same way', () => {
+  const variant = (from: string, to: string) => {
+    expect(CORRECT).toContain(from);
+    return CORRECT.replace(from, to);
+  };
+
+  it('accepts Type=exec, and Type left out — systemd reads that as simple', async () => {
+    for (const unit of [variant('Type=simple', 'Type=exec'), variant('Type=simple\n', '')]) {
+      expect(failed((await verify(world(unit))).checks)).toEqual([]);
+    }
+  });
+
+  it('still fails a Type that would make systemd wait for a fork or a notification', async () => {
+    for (const type of ['forking', 'notify', 'oneshot']) {
+      expect(failed((await verify(world(variant('Type=simple', `Type=${type}`)))).checks), type).toEqual([
+        'The service is declared as one that runs in the foreground',
+      ]);
+    }
+  });
+
+  it('finds the service name in a Description written in brackets or with punctuation', async () => {
+    for (const description of ['JumpToTech ledger API (ledger-api)', 'ledger-api, the JumpToTech ledger API']) {
+      const unit = variant('Description=ledger-api — JumpToTech ledger API', `Description=${description}`);
+      expect(failed((await verify(world(unit))).checks), description).toEqual([]);
+    }
+    const unnamed = variant('Description=ledger-api — JumpToTech ledger API', 'Description=JumpToTech ledger API');
+    expect(failed((await verify(world(unnamed))).checks)).toEqual(['The description names the service']);
+  });
+
+  it("accepts systemd's optional-file prefix on EnvironmentFile, and not a different file", async () => {
+    const optional = variant('EnvironmentFile=/etc/jumptotech/ledger-api.env', 'EnvironmentFile=-/etc/jumptotech/ledger-api.env');
+    expect(failed((await verify(world(optional))).checks)).toEqual([]);
+    const other = variant('EnvironmentFile=/etc/jumptotech/ledger-api.env', 'EnvironmentFile=/etc/jumptotech/ledger-api.env.bak');
+    expect(failed((await verify(world(other))).checks)).toEqual(['The service reads its settings from the environment file']);
+  });
+});
+
 describe('LINUX-017 discloses nothing and claims nothing it cannot check', () => {
   it('never reveals an expected directive value in a failure detail', async () => {
     const wrong = CORRECT
