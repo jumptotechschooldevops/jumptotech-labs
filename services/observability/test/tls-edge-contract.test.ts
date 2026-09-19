@@ -218,6 +218,33 @@ describe('nginx: the development listener (web.conf) is unchanged', () => {
   });
 });
 
+describe('nginx: every response carries the security headers', () => {
+  const headers = code(read('infrastructure/docker/nginx/security-headers.conf'));
+
+  it('forbids framing, plugins, base rebasing and MIME sniffing, and names no script or connect source', () => {
+    expect(headers).toMatch(/^add_header Content-Security-Policy "frame-ancestors 'none'; object-src 'none'; base-uri 'none'" always;$/m);
+    expect(headers).toMatch(/^add_header X-Frame-Options "DENY" always;$/m);
+    expect(headers).toMatch(/^add_header X-Content-Type-Options "nosniff" always;$/m);
+    expect(headers).toMatch(/^add_header Referrer-Policy "same-origin" always;$/m);
+    // Nothing the SPA, xterm.js or the terminal WebSocket depends on is restricted here.
+    expect(headers).not.toMatch(/script-src|style-src|connect-src|default-src/);
+  });
+
+  it('is included at server level by the development and the TLS application server', () => {
+    expect(code(read('infrastructure/docker/nginx/web.conf'))).toMatch(/^\s+include \/etc\/nginx\/jumptotech\/security-headers\.conf;$/m);
+    const tls = code(read('infrastructure/docker/nginx/web-tls.conf'));
+    const app = tls.split(/^server\s*\{/m).find((block) => /include \/etc\/nginx\/jumptotech\/locations\.conf/.test(block)) ?? '';
+    expect(app).toMatch(/include \/etc\/nginx\/jumptotech\/security-headers\.conf;/);
+    expect(read('infrastructure/docker/web.Dockerfile')).toMatch(
+      /^COPY infrastructure\/docker\/nginx\/security-headers\.conf \/etc\/nginx\/jumptotech\/security-headers\.conf$/m,
+    );
+  });
+
+  it('declares no add_header in a location, where it would silently drop these and HSTS', () => {
+    expect(code(read('infrastructure/docker/nginx/locations.conf'))).not.toMatch(/add_header/);
+  });
+});
+
 describe('nginx: the edge access log never records a query string', () => {
   /*
    * The stock `main` format logs `$request` (path *and* query) and the Referer.
