@@ -317,6 +317,35 @@ export function referenceAt(
 }
 
 /**
+ * `template` with every `${Name}` it declares replaced by `resolved`'s entry.
+ *
+ * One left-to-right scan rather than a match over `/\$\{([^}]*)\}/g`: the
+ * template text comes from a student's file, and that pattern backtracks
+ * quadratically over a long run of `${${${…`. The scan keeps the pattern's
+ * meaning exactly — because `[^}]*` cannot cross a `}`, each `${` was closed
+ * by the *first* `}` after it, and a `${` with no `}` left in the string ended
+ * the matching. So `${${B}` names `${B` and resolves to nothing, an unclosed
+ * `${` keeps its text, and `${!B}` stays escaped the way Sub escapes it.
+ */
+function substituteSubVariables(template: string, resolved: Map<string, string>): string {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const open = template.indexOf('${', at);
+    if (open === -1) break;
+    const close = template.indexOf('}', open + 2);
+    // No `}` left, so no later `${` can close either: the rest is literal.
+    if (close === -1) break;
+    const whole = template.slice(open, close + 1);
+    const name = template.slice(open + 2, close);
+    out += template.slice(at, open);
+    out += name.startsWith('!') ? whole : (resolved.get(name) ?? whole);
+    at = close + 1;
+  }
+  return out + template.slice(at);
+}
+
+/**
  * A value as the `Fn::Sub` template that would produce it, or `null` when it
  * uses anything that cannot be written that way.
  *
@@ -368,9 +397,7 @@ export function asSubTemplate(value: unknown, depth = 0): string | null {
       if (template === null) return null;
       resolved.set(name, template);
     }
-    return sub[0].replace(/\$\{([^}]*)\}/g, (whole, name: string) =>
-      name.startsWith('!') ? whole : (resolved.get(name) ?? whole),
-    );
+    return substituteSubVariables(sub[0], resolved);
   }
   return null;
 }
