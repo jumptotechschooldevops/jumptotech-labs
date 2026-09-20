@@ -229,6 +229,19 @@ then note the finding codes and `notAfter`.
 | ACME challenge fails, CA reports a redirect or connection error | port 80 blocked, DNS points elsewhere, or port 80 not served by this edge | `tls:check --expect-acme`, `dig`, the firewall |
 | ACME client reports rate limiting | too many failed or duplicate orders | wait; test against staging first |
 | `served_differs_from_installed` | files changed without a reload, or something else answers on 443 | `scripts/tls-install.sh` again with the same pair, or `docker compose ... exec web nginx -s reload` |
+| `served_differs_from_installed`, and the reload **did** run | the pair was written in the same second as the pair it replaced, so nginx reused the certificate it had (see below) | `touch` both files, then reload again |
+
+When nginx reconfigures it reuses a certificate it has already loaded unless
+the file's modification time has moved, and it reads that time in whole seconds.
+A pair written into the same second as the pair it replaces therefore looks
+untouched: `nginx -s reload` exits 0, the master keeps the certificate it had,
+and waiting does not help. `scripts/tls-install.sh` cannot end there quietly —
+it proves the served certificate after reloading and rolls back if it is not the
+new one (§4.3) — but a pair installed by hand or by a deploy hook that writes
+the files itself can, and then only the health check says so. The remedy is
+`touch tls/fullchain.pem tls/privkey.pem` and another reload; the certificates
+themselves need no change. Proven in
+`services/observability/test/tls-edge-integration.test.ts`.
 
 ### 7.3 The certificate has already expired
 

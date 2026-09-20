@@ -31,7 +31,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
 import { randomBytes, createHash, createPrivateKey, X509Certificate } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -125,6 +125,49 @@ function pairDir(name: string, certificatePem: string | null, keyPem: string | n
 
 function fingerprint(certificatePem: string): string {
   return new X509Certificate(certificatePem).fingerprint256;
+}
+
+/**
+ * Install `pair` over the live pair in `dir`, the way an operator who does not
+ * use scripts/tls-install.sh does: write both files, reload afterwards.
+ *
+ * The modification time is part of the installation. When nginx reconfigures it
+ * reuses a certificate it has already loaded unless the file's modification
+ * time has moved, and it reads that time in whole seconds: a pair written in
+ * the same second as the pair it replaces is indistinguishable to nginx, so
+ * `nginx -s reload` exits 0, the master keeps the certificate it had, and no
+ * amount of waiting heals it. Measured on nginx 1.27.5 and 1.30.5, which is
+ * both sides of the version this image pins. A real install is seconds to
+ * months after the one before it, so the files are stamped into a later second
+ * here; 'stays unhealthy after a reload that nginx treats as a no-op' below is
+ * the same install without that gap, and proves the health check refuses to
+ * call it healthy.
+ */
+function installOverLivePair(dir: string, pair: string): void {
+  const replaced = statSync(path.join(dir, 'fullchain.pem')).mtimeMs;
+  const installed = new Date(Math.max(Date.now(), Math.floor(replaced / 1000) * 1000 + 1000));
+  for (const file of ['fullchain.pem', 'privkey.pem']) {
+    copyFileSync(path.join(pair, file), path.join(dir, file));
+    utimesSync(path.join(dir, file), installed, installed);
+  }
+}
+
+/**
+ * The container health check, until it passes or `budget` runs out.
+ *
+ * `nginx -s reload` only signals the master and returns. The old workers keep
+ * accepting, with the old certificate, until the master has re-read the
+ * configuration, started new workers and retired them: measured at up to ~2 s
+ * on a CPU-limited edge. Wait for the health check itself, as
+ * scripts/tls-install.sh does, instead of guessing a delay.
+ */
+async function healthyWithin(edge: Edge, budget: number): Promise<Result> {
+  let health = await docker('exec', edge.name, ...web.healthcheck.test.slice(1));
+  for (const deadline = Date.now() + budget; health.code !== 0 && Date.now() < deadline; ) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    health = await docker('exec', edge.name, ...web.healthcheck.test.slice(1));
+  }
+  return health;
 }
 
 function keyFragments(pem: string): string[] {
@@ -705,9 +748,7 @@ describe.skipIf(!ENABLED)('the production TLS edge, in the real web image (BETA-
     it('notices a certificate installed without a reload, in the health check and the operator check', async () => {
       const tlsDir = pairDir('drift-live', chain(identities.live!), identities.live!.key);
       const drifting = await startEdge('drift', { certDir: tlsDir });
-      const replacement = pairDir('drift-new', chain(identities.drift!), identities.drift!.key);
-      copyFileSync(path.join(replacement, 'fullchain.pem'), path.join(tlsDir, 'fullchain.pem'));
-      copyFileSync(path.join(replacement, 'privkey.pem'), path.join(tlsDir, 'privkey.pem'));
+      installOverLivePair(tlsDir, pairDir('drift-new', chain(identities.drift!), identities.drift!.key));
 
       const health = await docker('exec', drifting.name, ...web.healthcheck.test.slice(1));
       expect(health.stderr).toContain('the served certificate is not the installed one');
@@ -718,21 +759,47 @@ describe.skipIf(!ENABLED)('the production TLS edge, in the real web image (BETA-
       expect(check.stdout + check.stderr).toContain('served_differs_from_installed');
 
       expect((await docker('exec', drifting.name, 'nginx', '-s', 'reload')).code).toBe(0);
-      // `nginx -s reload` only signals the master and returns. The old workers keep
-      // accepting, with the old certificate, until the master has re-read the
-      // configuration, started new workers and retired them: measured at up to ~2 s
-      // on a CPU-limited edge. Wait for the health check itself, as
-      // scripts/tls-install.sh does, instead of guessing a delay.
-      let reloaded = await docker('exec', drifting.name, ...web.healthcheck.test.slice(1));
-      for (const deadline = Date.now() + 20_000; reloaded.code !== 0 && Date.now() < deadline; ) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        reloaded = await docker('exec', drifting.name, ...web.healthcheck.test.slice(1));
-      }
+      const reloaded = await healthyWithin(drifting, 20_000);
       expect(reloaded.code, reloaded.stderr).toBe(0);
       expect((await httpsGet(drifting.httpsPort, '/')).fingerprint).toBe(fingerprint(identities.drift!.cert));
       const healed = await tlsCheck(drifting, ['--cert-dir', tlsDir]);
       expect(healed.code, healed.stdout + healed.stderr).toBe(0);
       expect(healed.stdout + healed.stderr).not.toContain('served_differs_from_installed');
+    }, 300_000);
+
+    // The same installation as the test above, minus the one thing that tells
+    // nginx anything changed. `nginx -s reload` reports success and reuses the
+    // certificate it already holds, so the edge keeps serving the certificate
+    // that is no longer on disk. Nothing downstream may call that healthy.
+    it('stays unhealthy after a reload that nginx treats as a no-op, and heals when the files are touched', async () => {
+      const tlsDir = pairDir('stale-live', chain(identities.live!), identities.live!.key);
+      const stale = await startEdge('stale', { certDir: tlsDir });
+
+      const replacement = pairDir('stale-new', chain(identities.drift!), identities.drift!.key);
+      const loaded = statSync(path.join(tlsDir, 'fullchain.pem')).mtime;
+      for (const file of ['fullchain.pem', 'privkey.pem']) {
+        copyFileSync(path.join(replacement, file), path.join(tlsDir, file));
+        utimesSync(path.join(tlsDir, file), loaded, loaded);
+      }
+
+      expect((await docker('exec', stale.name, 'nginx', '-s', 'reload')).code).toBe(0);
+      // Long enough for a reload that was going to take effect to have done so.
+      const ignored = await healthyWithin(stale, 5_000);
+      expect(ignored.code).not.toBe(0);
+      expect(ignored.stderr).toContain('the served certificate is not the installed one');
+      expect((await httpsGet(stale.httpsPort, '/')).fingerprint).toBe(fingerprint(identities.live!.cert));
+      const stillDrifting = await tlsCheck(stale, ['--cert-dir', tlsDir]);
+      expect(stillDrifting.code).toBe(2);
+      expect(stillDrifting.stdout + stillDrifting.stderr).toContain('served_differs_from_installed');
+
+      // The remedy the runbook gives (§7.2): move the files' timestamp and
+      // reload again. Nothing about the certificates themselves changes.
+      const touched = new Date(Math.max(Date.now(), loaded.getTime() + 1_000));
+      for (const file of ['fullchain.pem', 'privkey.pem']) utimesSync(path.join(tlsDir, file), touched, touched);
+      expect((await docker('exec', stale.name, 'nginx', '-s', 'reload')).code).toBe(0);
+      const healed = await healthyWithin(stale, 20_000);
+      expect(healed.code, healed.stderr).toBe(0);
+      expect((await httpsGet(stale.httpsPort, '/')).fingerprint).toBe(fingerprint(identities.drift!.cert));
     }, 300_000);
 
     it('warns through the operator check inside the renewal window', async () => {
