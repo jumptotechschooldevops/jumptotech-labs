@@ -664,20 +664,7 @@ export class KubernetesClient implements KubernetesPort {
       if (statusCodeOf(error) === 404) return null;
       asUnreachable(`reading service ${namespace}/${name}`, error);
     }
-    return {
-      name: service.metadata?.name ?? name,
-      namespace: service.metadata?.namespace ?? namespace,
-      type: service.spec?.type ?? 'ClusterIP',
-      ...(service.spec?.clusterIP ? { clusterIP: service.spec.clusterIP } : {}),
-      selector: service.spec?.selector ?? {},
-      ports: (service.spec?.ports ?? []).map((port) => ({
-        ...(port.name ? { name: port.name } : {}),
-        port: port.port,
-        ...(port.targetPort !== undefined ? { targetPort: port.targetPort as number | string } : {}),
-        protocol: port.protocol ?? 'TCP',
-        ...(port.nodePort !== undefined ? { nodePort: port.nodePort } : {}),
-      })),
-    };
+    return toServiceSnapshot(service, namespace, name);
   }
 
   /**
@@ -1211,6 +1198,7 @@ export function configReferencesOf(spec: k8s.V1PodSpec | undefined): ConfigRefer
           name: configMapKeyRef.name,
           key: configMapKeyRef.key,
           via: 'env',
+          env: variable.name,
           container: container.name,
         });
       }
@@ -1221,42 +1209,38 @@ export function configReferencesOf(spec: k8s.V1PodSpec | undefined): ConfigRefer
           name: secretKeyRef.name,
           key: secretKeyRef.key,
           via: 'env',
+          env: variable.name,
           container: container.name,
         });
       }
     }
   }
 
-  for (const volume of spec.volumes ?? []) {
-    if (volume.configMap?.name) {
-      const items = volume.configMap.items ?? [];
-      if (items.length === 0) {
-        refs.push({ source: 'configmap', name: volume.configMap.name, via: 'volume' });
-      } else {
-        for (const item of items) {
-          refs.push({
-            source: 'configmap',
-            name: volume.configMap.name,
-            key: item.key,
-            via: 'volume',
-          });
-        }
-      }
+  /*
+   * A volume is configuration a container *reads* only once something mounts
+   * it: a volume declared from a ConfigMap and mounted nowhere hands the
+   * application nothing. Sources inside a `projected` volume count the same
+   * way as a plain `configMap` / `secret` volume.
+   */
+  const mounted = new Set(
+    [...(spec.containers ?? []), ...(spec.initContainers ?? [])].flatMap((c) =>
+      (c.volumeMounts ?? []).map((m) => m.name),
+    ),
+  );
+  const fromVolume = (source: ConfigReference['source'], name: string, items: Array<{ key: string }>) => {
+    if (items.length === 0) {
+      refs.push({ source, name, via: 'volume' });
+    } else {
+      for (const item of items) refs.push({ source, name, key: item.key, via: 'volume' });
     }
-    if (volume.secret?.secretName) {
-      const items = volume.secret.items ?? [];
-      if (items.length === 0) {
-        refs.push({ source: 'secret', name: volume.secret.secretName, via: 'volume' });
-      } else {
-        for (const item of items) {
-          refs.push({
-            source: 'secret',
-            name: volume.secret.secretName,
-            key: item.key,
-            via: 'volume',
-          });
-        }
-      }
+  };
+  for (const volume of spec.volumes ?? []) {
+    if (!mounted.has(volume.name)) continue;
+    if (volume.configMap?.name) fromVolume('configmap', volume.configMap.name, volume.configMap.items ?? []);
+    if (volume.secret?.secretName) fromVolume('secret', volume.secret.secretName, volume.secret.items ?? []);
+    for (const projected of volume.projected?.sources ?? []) {
+      if (projected.configMap?.name) fromVolume('configmap', projected.configMap.name, projected.configMap.items ?? []);
+      if (projected.secret?.name) fromVolume('secret', projected.secret.name, projected.secret.items ?? []);
     }
   }
 
@@ -1318,6 +1302,18 @@ function toContainerSnapshots(
           }
         : {}),
       ...(probes.length > 0 ? { probes } : {}),
+      ...((container.env ?? []).some((e) => e.value !== undefined)
+        ? { literalEnvNames: (container.env ?? []).filter((e) => e.value !== undefined).map((e) => e.name) }
+        : {}),
+      ...(container.ports?.length
+        ? {
+            ports: container.ports.map((p) => ({
+              ...(p.name ? { name: p.name } : {}),
+              containerPort: p.containerPort,
+              ...(p.protocol ? { protocol: p.protocol } : {}),
+            })),
+          }
+        : {}),
     };
   });
 }
@@ -1604,7 +1600,28 @@ function toRoleBindingSnapshot(
   };
 }
 
-function toPersistentVolumeClaimSnapshot(
+export function toServiceSnapshot(
+  service: k8s.V1Service,
+  namespace: string,
+  name: string,
+): ServiceSnapshot {
+  return {
+    name: service.metadata?.name ?? name,
+    namespace: service.metadata?.namespace ?? namespace,
+    type: service.spec?.type ?? 'ClusterIP',
+    ...(service.spec?.clusterIP ? { clusterIP: service.spec.clusterIP } : {}),
+    selector: service.spec?.selector ?? {},
+    ports: (service.spec?.ports ?? []).map((port) => ({
+      ...(port.name ? { name: port.name } : {}),
+      port: port.port,
+      ...(port.targetPort !== undefined ? { targetPort: port.targetPort as number | string } : {}),
+      protocol: port.protocol ?? 'TCP',
+      ...(port.nodePort !== undefined ? { nodePort: port.nodePort } : {}),
+    })),
+  };
+}
+
+export function toPersistentVolumeClaimSnapshot(
   pvc: k8s.V1PersistentVolumeClaim,
   namespace: string,
   name: string,

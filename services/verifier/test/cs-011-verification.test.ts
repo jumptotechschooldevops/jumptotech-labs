@@ -127,6 +127,7 @@ function solved({
 }: World = {}): FakeWorld {
   const files: FakeWorld['files'] = {};
   if (source !== undefined) files[PROGRAM] = { content: source, mode };
+  if (writeup !== undefined) files[WRITEUP] = { content: writeup, mode: '644' };
   return { files, scripts, commands };
 }
 
@@ -363,7 +364,8 @@ describe('CS-011 grading hygiene', () => {
     );
     for (const check of result.checks) {
       expect(check.detail ?? '', check.label).not.toMatch(
-        /1792|RAW=768|CHILD_STATE=Z|ZOMBIE_STATE|ORPHAN_PARENT|STATE_AFTER_SIGKILL/,
+        // Key names are printed in the task; only values would be a disclosure.
+        /1792|RAW=768|CHILD_STATE=Z|ZOMBIE_STATE=|ORPHAN_PARENT=|STATE_AFTER_SIGKILL=/,
       );
     }
   });
@@ -372,7 +374,7 @@ describe('CS-011 grading hygiene', () => {
     const sandbox = new FakeSandbox(solved());
     await verifyLab({ lab: await lab(), sandbox, namespace: SANDBOX });
 
-    expect(new Set(sandbox.reads)).toEqual(new Set([PROGRAM]));
+    expect(new Set(sandbox.reads)).toEqual(new Set([PROGRAM, WRITEUP]));
     expect(sandbox.scriptRuns).toEqual([`${PROGRAM} 7`, `${PROGRAM} 3`, `${PROGRAM} 0`]);
     for (const inspection of sandbox.inspections) {
       expect(inspection).toContain('/home/student/');

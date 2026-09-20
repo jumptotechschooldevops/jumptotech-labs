@@ -136,6 +136,45 @@ export const terraformResourceReferences: SandboxVerifierHandler<'terraform_reso
   },
 };
 
+// ======================================================= literals absent
+
+export const terraformResourceLiteralAbsent: SandboxVerifierHandler<'terraform_resource_literal_absent'> = {
+  type: 'terraform_resource_literal_absent',
+  label: (r) => `${r.resource_type}.${r.name} hard-codes none of the listed values`,
+  async run(requirement, reader) {
+    return withConfig(reader, requirement.dir, async (config) => {
+      const block = resourceBlock(config, requirement.resource_type, requirement.name, 'managed');
+      if (!block) {
+        return fail(
+          `No resource '${requirement.resource_type}.${requirement.name}' is declared (${await scanned(reader, requirement.dir)})`,
+        );
+      }
+
+      /*
+       * Only string tokens are compared, so a comment — in the file or inside
+       * a multi-line expression — neither satisfies nor fails this. The
+       * message names the argument and leaves the text out: the student can
+       * see their own file, and the list is the lab's to state.
+       */
+      const forbidden = requirement.literals.map((literal) => literal.toLowerCase());
+      const offending = block.arguments
+        .filter((argument) =>
+          argument.literals.some((literal) => {
+            const text = literal.toLowerCase();
+            return forbidden.some((needle) => text.includes(needle));
+          }),
+        )
+        .map((argument) => argument.name);
+      if (offending.length > 0) {
+        return fail(
+          `${requirement.resource_type}.${requirement.name} still hard-codes a value this lab asks it to take from input, in: ${offending.join(', ')}`,
+        );
+      }
+      return pass();
+    });
+  },
+};
+
 // ============================================================== variables
 
 export const terraformVariableDeclared: SandboxVerifierHandler<'terraform_variable_declared'> = {
@@ -174,7 +213,10 @@ export const terraformVariableDeclared: SandboxVerifierHandler<'terraform_variab
         if (declaredType === null) {
           return fail(`Variable '${requirement.name}' declares no type constraint`);
         }
-        if (!collapse(declaredType).includes(collapse(requirement.type_contains))) {
+        // Whitespace means nothing inside a type expression: `map(\n object({`
+        // and `map(object({` are one type, so both sides lose all of it.
+        const bare = (text: string) => text.replace(/\s+/g, '');
+        if (!bare(declaredType).includes(bare(requirement.type_contains))) {
           return fail(
             `Variable '${requirement.name}' does not declare the kind of type this lab asks for`,
           );
@@ -227,7 +269,16 @@ export const terraformLocalsDeclared: SandboxVerifierHandler<'terraform_locals_d
         for (const argument of block.arguments) defined.add(argument.name);
       }
       const missing = requirement.names.filter((name) => !defined.has(name));
-      if (missing.length === 0) return pass();
+      if (missing.length === 0) {
+        const definitions = localDefinitions(config);
+        for (const [name, targets] of Object.entries(requirement.references ?? {})) {
+          const expression = definitions.get(name);
+          if (expression === undefined || !targets.every((target) => referencesTargetTransitively(config, expression, target))) {
+            return fail(`local.${name} is written out rather than composed from the values this lab asks it to use`);
+          }
+        }
+        return pass();
+      }
       return fail(
         defined.size > 0
           ? `The locals block does not define ${missing.join(', ')} (it defines: ${[...defined].slice(0, 8).join(', ')})`
@@ -262,7 +313,10 @@ export const terraformDataSourceDeclared: SandboxVerifierHandler<'terraform_data
 
 export const terraformResourceDependsOn: SandboxVerifierHandler<'terraform_resource_depends_on'> = {
   type: 'terraform_resource_depends_on',
-  label: (r) => `${r.resource_type}.${r.name} declares depends_on`,
+  label: (r) =>
+    r.absent === true
+      ? `${r.resource_type}.${r.name} declares no depends_on`
+      : `${r.resource_type}.${r.name} declares depends_on`,
   async run(requirement, reader) {
     return withConfig(reader, requirement.dir, (config) => {
       const block = resourceBlock(config, requirement.resource_type, requirement.name, 'managed');
@@ -270,12 +324,19 @@ export const terraformResourceDependsOn: SandboxVerifierHandler<'terraform_resou
         return fail(`No resource '${requirement.resource_type}.${requirement.name}' is declared`);
       }
       const expression = argumentValue(block, 'depends_on');
+      if (requirement.absent === true) {
+        return expression === null
+          ? pass()
+          : fail(
+              `'${requirement.resource_type}.${requirement.name}' declares depends_on, but a reference already gives Terraform that dependency`,
+            );
+      }
       if (expression === null) {
         return fail(
           `'${requirement.resource_type}.${requirement.name}' declares no depends_on. Use it only where a real ordering requirement exists that no reference expresses.`,
         );
       }
-      const missing = requirement.references.filter(
+      const missing = (requirement.references ?? []).filter(
         (target) => !referencesTarget(expression, target),
       );
       if (missing.length > 0) {

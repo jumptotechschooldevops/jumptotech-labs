@@ -241,10 +241,22 @@ describe('NET-004 cannot be passed without producing the state', () => {
     const result = await verify(box(SOLVED_NEIGHBOURS, files));
     const failed = failures(result.checks);
 
-    // Every positive check is satisfied by the hedge; both absent checks fire,
-    // which is the entire reason they exist.
+    // Both questions are answered twice, and both fail as a hedge.
     expect(failed).toHaveLength(2);
-    for (const check of failed) expect(check.label).toContain('not hedged');
+    for (const check of failed) expect(check.detail).toMatch(/answers \w+ 2 times — give one answer$/);
+  });
+
+  it('rejects the hedges a wrong-value guard never covered', async () => {
+    // `multicast` had no guard, and a same-line hedge matched every substring.
+    for (const hedged of [
+      '  arp_request_destination = broadcast\n  arp_request_destination = multicast\n  off_subnet_frame_goes_to = the gateway\n',
+      '  arp_request_destination = broadcast or multicast\n  off_subnet_frame_goes_to = the gateway\n',
+    ]) {
+      const files = solvedFiles();
+      files['/home/student/l2/answers.txt'] = { type: 'file', content: hedged };
+      const failed = failures((await verify(box(SOLVED_NEIGHBOURS, files))).checks);
+      expect(failed.map((c) => c.label)).toEqual(['The destination of a resolution request was identified']);
+    }
   });
 
   it('rejects documentation-only work', async () => {

@@ -164,11 +164,14 @@ requirements:
     name: memory-probe
     expected: true
     label: The kernel stopped memory-probe for exceeding its memory limit
+  # Each answer given once and compared whole: a substring check passed the
+  # two answers swapped, or the whole `docker inspect` output pasted in.
   - type: workspace_file_exists
     path: answers.txt
-    contains:
-      - "137"
-      - OOMKilled
+    separator: ':'
+    key_values:
+      exit_code: "137"
+      inspect_field: OOMKilled
     label: answers.txt records the exit code and the inspect field that identifies a memory kill
 
 # `Reset Lab` restores this session's Docker environment to its baseline: every

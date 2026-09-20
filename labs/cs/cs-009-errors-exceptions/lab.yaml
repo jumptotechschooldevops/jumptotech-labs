@@ -215,13 +215,15 @@ requirements:
   - type: file_exists
     path: /home/student/ops/errors.txt
     label: The traceback was read and written up
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/errors.txt
-    contains: "UNCAUGHT_TYPE=IsADirectoryError"
+    key: UNCAUGHT_TYPE
+    equals: IsADirectoryError
     label: The write-up names the exception the traceback ended with
-  - type: file_content
+  - type: file_key_value
     path: /home/student/ops/errors.txt
-    contains: "UNCAUGHT_EXIT=1"
+    key: UNCAUGHT_EXIT
+    equals: "1"
     label: The write-up records what an uncaught exception does to the exit status
 
 hints:

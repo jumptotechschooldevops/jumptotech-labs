@@ -249,20 +249,20 @@ requirements:
     contains: "BLOCKED_SYSCALL=read"
     label: The call is decoded from the table rather than named in the source
 
-  - type: command_output
-    command: grep
-    args: ["-x", "BLOCKED_SYSCALL=read", "/home/student/ops/syscalls.txt"]
-    contains: "BLOCKED_SYSCALL=read"
+  - type: file_key_value
+    path: /home/student/ops/syscalls.txt
+    key: BLOCKED_SYSCALL
+    equals: read
     label: The write-up names the call the blocked process was in
-  - type: command_output
-    command: grep
-    args: ["-x", "PRINTER_IS=unbuffered", "/home/student/ops/syscalls.txt"]
-    contains: "PRINTER_IS=unbuffered"
+  - type: file_key_value
+    path: /home/student/ops/syscalls.txt
+    key: PRINTER_IS
+    equals: unbuffered
     label: The write-up says what the production printer actually does
-  - type: command_output
-    command: grep
-    args: ["-x", "SYSCALLS_SAVED_BY_BUFFERING=199", "/home/student/ops/syscalls.txt"]
-    contains: "SYSCALLS_SAVED_BY_BUFFERING=199"
+  - type: file_key_value
+    path: /home/student/ops/syscalls.txt
+    key: SYSCALLS_SAVED_BY_BUFFERING
+    equals: "199"
     label: The write-up puts a number on what buffering is worth
 
 hints:

@@ -117,11 +117,10 @@ export const deploymentRolloutComplete: VerifierHandler<'deployment_rollout_comp
 /**
  * Kubernetes IntOrString, parsed into something comparable.
  *
- * `1`, `"1"` and `"25%"` are all valid spellings on the wire. The first two
- * mean the same thing — one Pod — and must compare equal however the manifest
- * happened to write them. The third means a proportion of `replicas` and must
- * never compare equal to an absolute count, because `1` and `"1%"` are
- * different instructions.
+ * `1`, `"1"` and `"25%"` are all valid spellings on the wire. A percentage is
+ * a proportion of `replicas`, resolved the way the Deployment controller
+ * resolves it (see `resolvePods`), so bounds are compared by the Pods they
+ * allow — the behaviour a rollout actually has — not by how they are written.
  */
 type SurgeValue = { kind: 'pods' | 'percent'; value: number };
 
@@ -137,6 +136,20 @@ function parseIntOrPercent(raw: number | string | undefined): SurgeValue | null 
 
 const describeSurge = (raw: number | string | undefined): string =>
   raw === undefined ? 'unset' : typeof raw === 'number' ? String(raw) : raw;
+
+/**
+ * The number of Pods a bound allows at this replica count.
+ *
+ * The controller rounds a percentage *up* for maxSurge and *down* for
+ * maxUnavailable (`intstr.GetScaledValueFromIntOrPercent`), so `25%` of 3
+ * replicas is a surge of 1 and an unavailability of 0 — while `25%` of 4 is 1
+ * and 1.
+ */
+function resolvePods(value: SurgeValue, field: 'maxSurge' | 'maxUnavailable', replicas: number): number {
+  if (value.kind === 'pods') return value.value;
+  const scaled = (value.value * replicas) / 100;
+  return field === 'maxSurge' ? Math.ceil(scaled) : Math.floor(scaled);
+}
 
 export const deploymentStrategy: VerifierHandler<'deployment_strategy'> = {
   type: 'deployment_strategy',
@@ -161,7 +174,9 @@ export const deploymentStrategy: VerifierHandler<'deployment_strategy'> = {
      */
     const observedType = deployment.strategy?.type ?? 'RollingUpdate';
     if (observedType !== r.strategy) {
-      return fail(`Strategy is '${observedType}', expected '${r.strategy}'`);
+      // Which strategy the constraint implies is the lab's question (K8S-015):
+      // say what is set, not what should be.
+      return fail(`Strategy is '${observedType}', which does not meet this Deployment's release constraint`);
     }
 
     if (r.maxSurge === undefined && r.maxUnavailable === undefined) return pass();
@@ -173,17 +188,21 @@ export const deploymentStrategy: VerifierHandler<'deployment_strategy'> = {
     }
 
     const problems: string[] = [];
+    const replicas = deployment.desiredReplicas;
     const compare = (field: 'maxSurge' | 'maxUnavailable', expected: number | string): void => {
       const observedRaw = deployment.strategy?.[field];
       const observed = parseIntOrPercent(observedRaw);
       const wanted = parseIntOrPercent(expected);
 
       if (!observed) {
-        problems.push(`${field} is ${describeSurge(observedRaw)}, expected ${describeSurge(expected)}`);
+        problems.push(`${field} is ${describeSurge(observedRaw)}, which is not a valid bound`);
         return;
       }
-      if (!wanted || observed.kind !== wanted.kind || observed.value !== wanted.value) {
-        problems.push(`${field} is ${describeSurge(observedRaw)}, expected ${describeSurge(expected)}`);
+      const allows = resolvePods(observed, field, replicas);
+      if (!wanted || allows !== resolvePods(wanted, field, replicas)) {
+        // The Pods it allows, never the number wanted.
+        const shown = observed.kind === 'percent' ? `${describeSurge(observedRaw)} (${allows} of ${replicas} Pods)` : describeSurge(observedRaw);
+        problems.push(`${field} is ${shown}, which does not meet the constraint`);
       }
     };
 
@@ -206,7 +225,7 @@ export const deploymentSelector: VerifierHandler<'deployment_selector'> = {
       const actual = deployment.selector[key];
       if (actual === undefined) problems.push(`selector is missing '${key}'`);
       else if (actual !== expected) {
-        problems.push(`selector '${key}' is '${actual}', expected '${expected}'`);
+        problems.push(`selector '${key}' is '${actual}', which is not the value this lab expects`);
       }
     }
     return problems.length === 0 ? pass() : fail(problems.join('; '));
@@ -289,7 +308,16 @@ export const deploymentProbe: VerifierHandler<'deployment_probe'> = {
     // A probe may name a port either numerically or by container-port name, and
     // both are correct Kubernetes; compare as strings so neither form is
     // arbitrarily rejected.
-    if (r.port !== undefined && String(probe.port ?? '') !== String(r.port)) {
+    // A name resolves through the container's own declared ports, in either
+    // direction: `port: http` satisfies an expected 80 when `http` is 80.
+    const asNumber = (value: number | string | undefined): string | undefined => {
+      if (value === undefined) return undefined;
+      const text = String(value);
+      if (/^\d+$/.test(text)) return text;
+      const named = (container.ports ?? []).find((p) => p.name === text);
+      return named ? String(named.containerPort) : text;
+    };
+    if (r.port !== undefined && String(probe.port ?? '') !== String(r.port) && asNumber(probe.port) !== asNumber(r.port)) {
       problems.push(`probe port is '${probe.port ?? 'unset'}', expected '${r.port}'`);
     }
 
@@ -312,7 +340,25 @@ export const deploymentUsesConfigMap: VerifierHandler<'deployment_uses_configmap
       name: r.configmap,
       ...(r.key !== undefined ? { key: r.key } : {}),
       ...(r.via !== undefined ? { via: r.via } : {}),
+      ...(r.env !== undefined ? { env: r.env } : {}),
     });
+  },
+};
+
+export const deploymentEnvLiteralAbsent: VerifierHandler<'deployment_env_literal_absent'> = {
+  type: 'deployment_env_literal_absent',
+  label: (r) => `Deployment ${r.name} no longer sets ${r.env} to a literal value`,
+  async run(r, reader) {
+    const deployment = await reader.deployment(r.name);
+    if (!deployment) return missing('Deployment', r.name, reader.namespace);
+    const containers = [...deployment.containers, ...(deployment.initContainers ?? [])];
+    const offending = containers.filter((c) => (c.literalEnvNames ?? []).includes(r.env));
+    // Names the container and the variable, never a value: none was read.
+    return offending.length === 0
+      ? pass()
+      : fail(
+          `container${offending.length === 1 ? '' : 's'} ${offending.map((c) => `'${c.name}'`).join(', ')} still set${offending.length === 1 ? 's' : ''} ${r.env} to a literal value, which overrides a reference`,
+        );
   },
 };
 
@@ -331,6 +377,7 @@ export const deploymentUsesSecret: VerifierHandler<'deployment_uses_secret'> = {
       name: r.secret,
       ...(r.key !== undefined ? { key: r.key } : {}),
       ...(r.via !== undefined ? { via: r.via } : {}),
+      ...(r.env !== undefined ? { env: r.env } : {}),
     });
   },
 };
@@ -348,7 +395,14 @@ export const deploymentUsesSecret: VerifierHandler<'deployment_uses_secret'> = {
  */
 function checkConfigReference(
   workload: Pick<DeploymentSnapshot, 'configRefs'>,
-  want: { source: ConfigReference['source']; kind: string; name: string; key?: string; via?: ConfigReference['via'] },
+  want: {
+    source: ConfigReference['source'];
+    kind: string;
+    name: string;
+    key?: string;
+    via?: ConfigReference['via'];
+    env?: string;
+  },
 ): HandlerOutcome {
   const refs = workload.configRefs ?? [];
   const matching = refs.filter((ref) => ref.source === want.source && ref.name === want.name);
@@ -375,6 +429,20 @@ function checkConfigReference(
     if (!hasKey) {
       const keys = byMechanism.map((ref) => `'${ref.key}'`).join(', ');
       return fail(`${want.kind} '${want.name}' is referenced, but key '${want.key}' is not — found ${keys}`);
+    }
+  }
+
+  if (want.env !== undefined) {
+    // The application reads one variable by name. `envFrom` names variables
+    // after the keys (and skips keys that are not valid names), so it only
+    // delivers `want.env` when the key is that name.
+    const delivers = byMechanism.some((ref) =>
+      ref.via === 'env'
+        ? ref.env === want.env && (want.key === undefined || ref.key === want.key)
+        : ref.via === 'envFrom' && want.key === want.env,
+    );
+    if (!delivers) {
+      return fail(`${want.kind} '${want.name}' is referenced, but not as the variable ${want.env} the application reads`);
     }
   }
 

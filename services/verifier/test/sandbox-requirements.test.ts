@@ -127,7 +127,7 @@ describe('LINUX-002 — the filesystem family end to end', () => {
     const failed = failures(result.checks);
     expect(failed).toHaveLength(1);
     expect(failed[0]?.detail).toBe(
-      "'/home/student/secure/api-token.txt' has permissions 644, expected 600",
+      "'/home/student/secure/api-token.txt' has permissions 644, which is not what this lab requires",
     );
   });
 

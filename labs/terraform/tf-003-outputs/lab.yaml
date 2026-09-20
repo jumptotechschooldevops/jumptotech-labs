@@ -195,6 +195,14 @@ requirements:
     contains: <sensitive>
     label: An output is marked sensitive, so the listing redacts it
 
+  # outputs.txt is the student's own file, so `<sensitive>` could be typed into
+  # it. The state is what Terraform wrote: only an output declared with
+  # `sensitive = true` carries this key there (Terraform 1.9, measured).
+  - type: file_content
+    path: terraform/terraform.tfstate
+    contains: '"sensitive": true'
+    label: Terraform recorded an output as sensitive in its state
+
   - type: file_content_absent
     path: terraform/outputs.txt
     contains: not-a-real-token-placeholder

@@ -13,7 +13,8 @@
 #
 #   may oncall check the ledger service?       must end up permitted
 #   may oncall restart the ledger service?     must end up permitted
-#   may oncall read /etc/shadow?               must end up denied
+#   may oncall run anything outside its remit? must end up denied (asked of
+#     /etc/shadow, a shell, env, tee, su, find and less — see the seed)
 #   may oncall restart a *different* service?  must end up denied
 #
 # The fourth is the lesson. A rule naming the control binary without
@@ -114,7 +115,8 @@ task:
     that account may and may not do, and republishes the answer to
     `/var/lib/jumptotech/probe/sudo-probe.status` every few seconds. Read it,
     change the policy, wait about ten seconds, and read it again. It never runs
-    the commands it asks about, so it cannot restart anything.
+    the commands it asks about, so it cannot restart anything — and it counts
+    a command as granted only if the rotation could run it without a password.
 
 setup:
   seed_scripts:

@@ -508,6 +508,26 @@ function worldSatisfying(requirements: readonly Requirement[]): FakeWorld {
         break;
       }
 
+      case 'file_contains': {
+        const existing = world.files[requirement.path] ?? { type: 'file' as const };
+        world.files[requirement.path] = {
+          ...existing,
+          type: 'file',
+          content: `${existing.content ?? ''}${requirement.contains.join('\n')}\n`,
+        };
+        break;
+      }
+
+      case 'file_key_value': {
+        const existing = world.files[requirement.path] ?? { type: 'file' as const };
+        world.files[requirement.path] = {
+          ...existing,
+          type: 'file',
+          content: `${existing.content ?? ''}${requirement.key}${requirement.separator}${requirement.equals}\n`,
+        };
+        break;
+      }
+
       case 'file_mode':
         world.files[requirement.path] = { type: 'file', ...world.files[requirement.path], mode: requirement.mode };
         break;

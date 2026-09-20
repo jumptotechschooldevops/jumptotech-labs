@@ -163,14 +163,30 @@ requirements:
     via: Ref
     label: The policy attaches to the role by referring to it
 
-  - type: cfn_resource_reference
+  # s3:GetObject acts on objects, whose ARNs are the bucket's ARN plus
+  # `/<key>`. `!GetAtt ExportBucket.Arn` alone names the bucket and grants
+  # nothing on what is in it. Graded on the value the Resource evaluates to, so
+  # `!Sub '${ExportBucket.Arn}/*'`, the same with a Sub variable map, an
+  # Fn::Join of the GetAtt and '/*', or a list that also names the bucket all
+  # pass; the bucket ARN alone, a Sub without the `/*`, and a hand-written ARN
+  # string all fail. The ARN has to come from the bucket's Arn attribute.
+  - type: cfn_property_resolves_to
     path: /home/student/stack/payments-export.yaml
     logical_id: ExportRolePolicy
     property: PolicyDocument.Statement.0.Resource
-    references: ExportBucket
-    via: GetAtt
-    attribute: Arn
-    label: The policy takes the bucket's ARN from the bucket resource
+    any_of:
+      - ${ExportBucket.Arn}/*
+    label: The policy grants access to the objects, using the bucket's ARN from the bucket resource
+
+  # The change request: the queue is "named from the Environment parameter".
+  # Declaring a new `Env` parameter makes every reference resolve and names
+  # the queue from something else.
+  - type: cfn_property_resolves_to
+    path: /home/student/stack/payments-export.yaml
+    logical_id: ExportQueue
+    property: QueueName
+    contains: ${Environment}
+    label: The queue is named from the Environment parameter
 
   # --- nothing dangles ------------------------------------------------------
   - type: cfn_references_resolve
@@ -182,12 +198,18 @@ requirements:
     path: /home/student/stack/payments-export.yaml
     name: ExportBucketName
     references: ExportBucket
+    # The bucket's name is what Ref returns; its Arn attribute is not a name.
+    resolves_to:
+      - ${ExportBucket}
     label: The stack exports the bucket name, taken from the bucket
 
   - type: cfn_output_exists
     path: /home/student/stack/payments-export.yaml
     name: ExportRoleArn
     references: ExportRole
+    # "An ARN is not an identifier": Ref on a role returns its name.
+    resolves_to:
+      - ${ExportRole.Arn}
     label: The stack exports the role ARN, taken from the role
 
 hints:
@@ -213,8 +235,10 @@ hints:
       and `${Env}` should be the parameter the template actually declares. A
       list entry that must point at a resource needs `!Ref`, not the bare name.
       An ARN is an attribute, so it comes from `!GetAtt <resource>.Arn`. The
-      missing output takes the role's ARN the same way, and the trust document
-      belongs under the role's `Properties`.
+      bucket's ARN names the bucket, not the objects in it, and `s3:GetObject`
+      acts on objects: the policy needs `!Sub '${ExportBucket.Arn}/*'`. The
+      missing output takes the role's ARN with `!GetAtt`, and the trust
+      document belongs under the role's `Properties`.
 
 references:
   - title: AWS CloudFormation — Template sections

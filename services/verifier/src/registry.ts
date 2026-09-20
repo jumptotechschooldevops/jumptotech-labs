@@ -98,6 +98,7 @@ import {
   cfnCidrWithin,
   cfnOutputExists,
   cfnPropertyDistinct,
+  cfnPropertyResolvesTo,
   cfnReferencesResolve,
   cfnResourceExists,
   cfnResourceProperty,
@@ -132,6 +133,7 @@ import {
   deploymentStrategy,
   deploymentUsesConfigMap,
   deploymentUsesSecret,
+  deploymentEnvLiteralAbsent,
 } from './handlers/deployments.js';
 import {
   serviceEndpoints,
@@ -230,6 +232,7 @@ import {
   directoryExists,
   fileContains,
   fileContent,
+  fileKeyValue,
   fileExists,
   fileGroup,
   fileMode,
@@ -250,6 +253,7 @@ import {
   terraformLocalsDeclared,
   terraformResourceCondition,
   terraformResourceDependsOn,
+  terraformResourceLiteralAbsent,
   terraformResourceReferences,
   terraformVariableDeclared,
   terraformVariableValidation,
@@ -335,6 +339,7 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
   deployment_probe: deploymentProbe,
   deployment_uses_configmap: deploymentUsesConfigMap,
   deployment_uses_secret: deploymentUsesSecret,
+  deployment_env_literal_absent: deploymentEnvLiteralAbsent,
 
   service_exists: serviceExists,
   service_type: serviceType,
@@ -436,6 +441,7 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   file_exists: fileExists,
   directory_exists: directoryExists,
   file_content: fileContent,
+  file_key_value: fileKeyValue,
   file_mode: fileMode,
   file_owner: fileOwner,
   file_group: fileGroup,
@@ -446,6 +452,7 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_state_absent: terraformStateAbsent,
 
   terraform_resource_references: terraformResourceReferences,
+  terraform_resource_literal_absent: terraformResourceLiteralAbsent,
   terraform_variable_declared: terraformVariableDeclared,
   terraform_locals_declared: terraformLocalsDeclared,
   terraform_data_source_declared: terraformDataSourceDeclared,
@@ -464,6 +471,7 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   cfn_resource_exists: cfnResourceExists,
   cfn_resource_property: cfnResourceProperty,
   cfn_resource_reference: cfnResourceReference,
+  cfn_property_resolves_to: cfnPropertyResolvesTo,
   cfn_references_resolve: cfnReferencesResolve,
   cfn_output_exists: cfnOutputExists,
   cfn_cidr_valid: cfnCidrValid,

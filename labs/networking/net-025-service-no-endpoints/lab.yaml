@@ -14,6 +14,8 @@ environment:
 
 prerequisites:
   - NET-024
+  # EndpointSlices list only ready Pods; readiness is K8S-008's subject.
+  - K8S-008
 
 story: >
   The ledger-api Pods are Running and Ready, but two Services are broken.

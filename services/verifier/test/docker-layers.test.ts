@@ -114,6 +114,16 @@ describe('docker_image_layers — a prefix is a prefix', () => {
     expect(result.detail).toContain('shares only 0 leading layers');
   });
 
+  it('fails a metadata-only rebuild: a new image ID over exactly the same layers', async () => {
+    // `docker build --label v=2 -t app:after .` on an untouched Dockerfile.
+    // The IDs differ; not one layer was rebuilt, so nothing about caching
+    // was shown — the second audit found DOCKER-013 passed this way.
+    const docker = daemonWith({ 'app:before': HOSTILE_BEFORE, 'app:after': HOSTILE_BEFORE });
+    const result = await check(docker, layersCheck({ minimum_shared_prefix: 1 }));
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('only its metadata changed');
+  });
+
   it('accepts identical arrays when the images are allowed to be the same', async () => {
     const docker = daemonWith({ 'app:before': FRIENDLY_BEFORE, 'app:after': FRIENDLY_BEFORE });
     expect(

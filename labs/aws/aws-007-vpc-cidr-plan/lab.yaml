@@ -306,7 +306,8 @@ hints:
       R7 is `AvailabilityZone`, and the two subnets of each tier must not carry
       the same one. R8 is `MapPublicIpOnLaunch`, which must be true on both
       public subnets and false on both private subnets — the draft omits it
-      entirely on the private pair, and an omitted property is not a false one.
+      entirely on the private pair. CloudFormation's default happens to be
+      false, but R8 asks for the setting to be declared, not left to a default.
 
 skills:
   - aws.networking.vpc-cidr

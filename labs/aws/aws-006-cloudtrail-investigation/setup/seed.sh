@@ -527,6 +527,7 @@ AFFECTED_SECURITY_GROUP=FILL_ME
 PRINCIPAL_ARN=FILL_ME
 PRINCIPAL_ID=FILL_ME
 SOURCE_IP=FILL_ME
+# Did the call that caused this succeed? One word: success or failure.
 OUTCOME=FILL_ME
 
 # The earlier attempt at the same API call that did not succeed.

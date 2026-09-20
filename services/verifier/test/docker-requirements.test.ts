@@ -689,6 +689,54 @@ describe('docker verifier — image, volume, and network checks', () => {
     }
   });
 
+  describe('cmd_contains names the file the container opens, however the command spells it', () => {
+    const banner = (image: { cmd?: string[]; entrypoint?: string[]; workingDir?: string }) => {
+      const docker = new FakeDockerDaemon();
+      docker.addImage('greeter:1', image);
+      return check(docker, {
+        type: 'docker_image_config',
+        image: 'greeter:1',
+        cmd_contains: ['/app/banner.txt'],
+      } as Requirement);
+    };
+
+    it('accepts a relative path resolved from WORKDIR, in exec and shell form', async () => {
+      // DOCKER-004's hint 3: "WORKDIR affects how a relative path is resolved".
+      for (const cmd of [
+        ['cat', 'banner.txt'],
+        ['cat', './banner.txt'],
+        ['/bin/sh', '-c', 'cat banner.txt'],
+      ]) {
+        expect(passed(await banner({ workingDir: '/app', cmd })), JSON.stringify(cmd)).toBe(true);
+      }
+    });
+
+    it('accepts the absolute path with shell punctuation or quotes around it, and via ENTRYPOINT', async () => {
+      for (const image of [
+        { cmd: ['/bin/sh', '-c', 'cat /app/banner.txt;'] },
+        { cmd: ['/bin/sh', '-c', 'cat "/app/banner.txt" && sleep 0'] },
+        { entrypoint: ['cat'], cmd: ['/app/banner.txt'] },
+        { cmd: ['cat', '/app/banner.txt'] },
+      ]) {
+        expect(passed(await banner({ workingDir: '/app', ...image })), JSON.stringify(image)).toBe(true);
+      }
+    });
+
+    it('still refuses a command that names no such file, or the same name somewhere else', async () => {
+      for (const image of [
+        { workingDir: '/app', cmd: ['true'] },
+        { workingDir: '/app', cmd: ['cat', '/tmp/banner.txt'] },
+        { workingDir: '/srv', cmd: ['cat', 'banner.txt'] },
+        { workingDir: '/app', cmd: ['cat', 'banner.txt.bak'] },
+        { workingDir: '/app', cmd: ['/bin/sh', '-c', 'cat /app/banner.txt.old'] },
+        { workingDir: '', cmd: ['cat', 'banner.txt'] },
+      ]) {
+        const result = await banner(image);
+        expect(passed(result), JSON.stringify(image)).toBe(false);
+      }
+    });
+  });
+
   it('finds volumes and networks, and checks a network driver', async () => {
     const docker = new FakeDockerDaemon();
     await docker.createVolume('ledger-data');
@@ -768,7 +816,45 @@ describe('docker verifier — workspace checks read a file and nothing more', ()
       workspace,
     );
     expect(missingText.status).toBe('fail');
-    expect(missingText.detail).toContain("'volumes:'");
+    expect(missingText.detail).toContain('compose.yaml');
+  });
+
+  it('never names the values it is looking for, because they are often the answer', async () => {
+    // A worksheet check's `contains` is regularly the thing the student had to
+    // work out — the port a service turned out to be on, the resolver a
+    // container turned out to use. A detail that listed the missing values
+    // would hand those over to anyone who pressed Check Solution once with a
+    // blank worksheet. Same rule as `docker_container_file_content`, and the
+    // same rule PLATFORM-SEC holds for Terraform outputs.
+    const docker = new FakeDockerDaemon();
+    const workspace = withWorkspace({ 'diagnosis.txt': 'port: ____\nresolver: ____\n' });
+
+    const blank = await check(
+      docker,
+      {
+        type: 'workspace_file_exists',
+        path: 'diagnosis.txt',
+        contains: ['port: 8080', 'resolver: 127.0.0.11'],
+      } as Requirement,
+      workspace,
+    );
+    expect(blank.status).toBe('fail');
+    expect(JSON.stringify(blank)).not.toContain('8080');
+    expect(JSON.stringify(blank)).not.toContain('127.0.0.11');
+
+    // A partial answer still gets a useful count, and still names nothing.
+    const partial = await check(
+      docker,
+      {
+        type: 'workspace_file_exists',
+        path: 'diagnosis.txt',
+        contains: ['port: ____', 'resolver: 127.0.0.11'],
+      } as Requirement,
+      workspace,
+    );
+    expect(partial.status).toBe('fail');
+    expect(partial.detail).toContain('1 of the 2');
+    expect(JSON.stringify(partial)).not.toContain('127.0.0.11');
   });
 
   it('parses a Dockerfile structurally and never evaluates it', () => {
@@ -948,6 +1034,7 @@ function solve(lab: LoadedLabDefinition): {
   // Files are placed after the containers exist, since the fake needs one to
   // put a file into.
   const containerFiles: Array<{ container: string; path: string; content: string }> = [];
+  const imageConfigs = new Map<string, Record<string, unknown>>();
 
   const specFor = (name: string) => {
     const existing = specs.get(name);
@@ -1053,8 +1140,12 @@ function solve(lab: LoadedLabDefinition): {
         docker.addImage(requirement.image, { layers: [...prefix, 'sha256:after-tail'] });
         break;
       }
-      case 'docker_image_config':
-        docker.addImage(requirement.image, {
+      case 'docker_image_config': {
+        // Several config checks may describe one image: merge them, so a
+        // later check does not replace what an earlier one set.
+        const merged = { ...(imageConfigs.get(requirement.image) ?? {}) };
+        imageConfigs.set(requirement.image, merged);
+        Object.assign(merged, {
           ...(requirement.entrypoint ? { entrypoint: [...requirement.entrypoint] } : {}),
           ...(requirement.cmd ? { cmd: [...requirement.cmd] } : {}),
           ...(requirement.working_dir ? { workingDir: requirement.working_dir } : {}),
@@ -1063,7 +1154,9 @@ function solve(lab: LoadedLabDefinition): {
           ...(requirement.labels ? { labels: { ...requirement.labels } } : {}),
           ...(requirement.exposed_port ? { exposedPorts: [`${requirement.exposed_port}/tcp`] } : {}),
         });
+        docker.addImage(requirement.image, merged);
         break;
+      }
       case 'docker_volume_exists':
         void docker.createVolume(requirement.name);
         break;
@@ -1074,7 +1167,14 @@ function solve(lab: LoadedLabDefinition): {
         });
         break;
       case 'workspace_file_exists':
-        port.write(SESSION_A, requirement.path, `${(requirement.contains ?? []).join('\n')}\n`);
+        port.write(
+          SESSION_A,
+          requirement.path,
+          [
+            ...(requirement.contains ?? []),
+            ...Object.entries(requirement.key_values ?? {}).map(([k, v]) => `${k}${requirement.separator ?? '='} ${v}`),
+          ].join('\n') + '\n',
+        );
         break;
       case 'dockerfile_valid':
         port.write(

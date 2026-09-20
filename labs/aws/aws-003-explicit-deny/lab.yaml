@@ -130,23 +130,42 @@ requirements:
     label: The developer role may upload a build artifact
 
   # --- what must remain impossible ----------------------------------------
+  #
+  # Asked of an ordinary request over TLS. A Deny that only fires for some
+  # other kind of request (`aws:SecureTransport: false`) protects nothing here.
   - type: iam_policy_not_allows
     path: /home/student/access-review/policy.json
     action: s3:GetObject
     resource: arn:aws:s3:::jumptotech-build-artifacts/customer-exports/2026-07-balances.csv
+    context:
+      aws:SecureTransport: "true"
     label: Customer exports cannot be read
 
   - type: iam_policy_not_allows
     path: /home/student/access-review/policy.json
     action: s3:PutObject
     resource: arn:aws:s3:::jumptotech-build-artifacts/customer-exports/2026-07-balances.csv
+    context:
+      aws:SecureTransport: "true"
     label: Customer exports cannot be overwritten
 
   - type: iam_policy_not_allows
     path: /home/student/access-review/policy.json
     action: s3:DeleteObject
     resource: arn:aws:s3:::jumptotech-build-artifacts/customer-exports/2026-07-balances.csv
+    context:
+      aws:SecureTransport: "true"
     label: Customer exports cannot be deleted
+
+  # Every export, not only the one the ticket happened to sample: a Deny on
+  # 2026-07-balances.csv alone leaves the rest of customer-exports/ readable.
+  - type: iam_policy_not_allows
+    path: /home/student/access-review/policy.json
+    action: s3:GetObject
+    resource: arn:aws:s3:::jumptotech-build-artifacts/customer-exports/2026-08-balances.csv
+    context:
+      aws:SecureTransport: "true"
+    label: No other customer export can be read either
 
   - type: iam_policy_not_allows
     path: /home/student/access-review/policy.json
@@ -168,7 +187,7 @@ requirements:
       - s3:PutObject
       - s3:DeleteObject
     resources:
-      - arn:aws:s3:::jumptotech-build-artifacts/customer-exports/2026-07-balances.csv
+      - arn:aws:s3:::jumptotech-build-artifacts/customer-exports/*
     label: Customer exports are protected by an explicit Deny, not merely by omission
 
   # --- review rules ---------------------------------------------------------

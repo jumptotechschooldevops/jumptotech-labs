@@ -44,7 +44,9 @@ task:
 
     Create a Secret named `payments-api` containing a key called `api-token`,
     then change the Deployment to read the credential from that Secret instead
-    of from the literal value. You choose the token value — nothing checks it.
+    of from the literal value — the application still reads it from the
+    `PAYMENTS_API_TOKEN` environment variable. You choose the token value —
+    nothing checks it.
 
     Be clear about what a Secret is and is not. Secret data is base64-encoded,
     and base64 is an encoding, not encryption: anyone who can read the Secret
@@ -53,8 +55,9 @@ task:
     lifecycle, and because the cluster can be configured to encrypt Secrets at
     rest — not because base64 protects anything.
 
-    This lab checks only that the key `api-token` exists and that the workload
-    references it. The platform never reads Secret values.
+    This lab checks that the key `api-token` exists, that the workload reads
+    the credential from it, and that the token is no longer written into the
+    Deployment. The platform never reads Secret values.
 
 setup:
   manifests:
@@ -75,15 +78,26 @@ requirements:
     name: payments-api
     key: api-token
     label: Secret contains the key api-token
+  # Into the variable the application reads. `envFrom` would hand it a
+  # variable named after the key — `api-token`, which is not even a valid
+  # name — and an unmounted Secret volume hands it nothing.
   - type: deployment_uses_secret
     name: payments
     secret: payments-api
     key: api-token
+    env: PAYMENTS_API_TOKEN
     label: Deployment payments reads the credential from the Secret
   - type: deployment_available
     name: payments
     min_available: 1
     label: payments is still running after the change
+  # The lesson is that the plaintext leaves the manifest. A Secret reference
+  # added beside the literal passed before; the literal would still be in
+  # every copy of the Deployment.
+  - type: deployment_env_literal_absent
+    name: payments
+    env: PAYMENTS_API_TOKEN
+    label: The token is no longer written into the Deployment
 
 hints:
   - level: 1

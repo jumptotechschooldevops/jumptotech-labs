@@ -170,6 +170,16 @@ requirements:
     references: var.environments
     label: The manifest content comes from the structured settings
 
+  # "Every one taken from the selected entry … not from a literal": one
+  # reference to var.environments beside typed-in values passes the check
+  # above.
+  - type: terraform_resource_literal_absent
+    dir: terraform
+    resource_type: local_file
+    name: environment_manifest
+    literals: [eu-central-1, eu-west-1, production, staging]
+    label: The manifest types in none of the settings it now reads
+
   - type: terraform_resource_exists
     dir: terraform
     resource_type: local_file

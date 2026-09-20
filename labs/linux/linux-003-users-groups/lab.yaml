@@ -71,6 +71,13 @@ setup:
     - type: file_exists
       path: /srv/jumptotech/README.txt
       label: The host README is present
+    # getent exits 2 for a key it does not know: the group the student is
+    # asked to create does not exist yet.
+    - type: command_exit_code
+      command: getent
+      args: [group, deployers]
+      expected_exit_code: 2
+      label: The deployers group does not exist yet
 
 requirements:
   - type: group_exists
@@ -97,9 +104,12 @@ requirements:
     path: /srv/jumptotech/deploy
     group: deployers
     label: The staging directory belongs to the deployers group
+  # The task states who may read, write and execute, and nothing about special
+  # bits: `chmod 2770`, the usual setgid shared directory, is just as right.
   - type: file_mode
     path: /srv/jumptotech/deploy
     mode: "770"
+    special_bits: ignore
     label: Only the owner and the deployers group can use the staging directory
 
 hints:

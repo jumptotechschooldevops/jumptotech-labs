@@ -58,11 +58,14 @@ export {
 } from './sandbox-reader.js';
 export { normalizeMode } from './handlers/filesystem.js';
 export {
+  IamConditionUnsupportedError,
   IamPolicyParseError,
+  conditionsHold,
   evaluateIamPolicy,
   findStatements,
   IAM_PRINCIPAL_TYPES,
   matchesIamPattern,
+  mayAllowInAnyContext,
   parseIamPolicy,
   principalMatches,
   statementHasNotPrincipal,
@@ -82,6 +85,7 @@ export {
 export {
   CFN_PSEUDO_PARAMETERS,
   CloudFormationParseError,
+  asSubTemplate,
   collectReferences,
   outputReference,
   parseCloudFormationTemplate,

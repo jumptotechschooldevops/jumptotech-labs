@@ -41,7 +41,11 @@ function config(files: Record<string, string>, options: { canList?: boolean } = 
   if (options.canList !== false) {
     port.list = async (dir, opts) => {
       if (dir !== DIR) return [];
-      return Object.keys(files).filter((n) => !opts?.suffix || n.endsWith(opts.suffix));
+      // `find -maxdepth N` from the directory: depth 1 is its own files.
+      const depth = opts?.maxDepth ?? 4;
+      return Object.keys(files).filter(
+        (n) => (!opts?.suffix || n.endsWith(opts.suffix)) && n.split('/').length <= depth,
+      );
     };
   }
   const reader = new SandboxReader(port);
@@ -198,6 +202,31 @@ describe('block discovery', () => {
     const missing = await check(reader, { type: 'terraform_variable_declared', name: 'nope' });
     expect(missing.status).toBe('fail');
     expect(missing.detail).toContain('channel');
+  });
+
+  it('matches a type written across several lines, which is how TF-017 students write it', async () => {
+    const reader = config({
+      'variables.tf': `
+        variable "environments" {
+          type = map(
+            object({
+              region   = string
+              replicas = number
+              debug    = optional(bool, false)
+            })
+          )
+        }
+      `,
+    });
+    for (const fragment of ['map(object(', 'optional(']) {
+      expect(
+        (await check(reader, { type: 'terraform_variable_declared', name: 'environments', type_contains: fragment })).status,
+        fragment,
+      ).toBe('pass');
+    }
+    expect(
+      (await check(reader, { type: 'terraform_variable_declared', name: 'environments', type_contains: 'list(object(' })).status,
+    ).toBe('fail');
   });
 
   it('finds locals across files', async () => {
@@ -423,5 +452,19 @@ describe('security', () => {
     });
     expect(result.status).toBe('fail');
     expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+});
+
+// ================================================ the root module only
+
+describe('configuration checks read the root module Terraform loads', () => {
+  it('ignores a .tf file in a subdirectory, which Terraform never loads without a module block', async () => {
+    const reader = config({
+      'main.tf': 'variable "replicas" {\n  type = number\n}\n',
+      'decoy/decoy.tf': 'variable "environment" {\n  type    = string\n  default = "staging"\n}\n',
+    });
+    const result = await check(reader, { type: 'terraform_variable_declared', name: 'environment' });
+    expect(result.status).toBe('fail');
+    expect(await reader.terraformConfigPaths(DIR)).toEqual(['main.tf']);
   });
 });

@@ -74,6 +74,15 @@ RUN [ -e /usr/bin/python ] || ln -sf /usr/bin/python3 /usr/bin/python
 COPY infrastructure/docker/sandbox-ansible-entrypoint.sh /usr/local/bin/jtt-entrypoint
 RUN chmod 0755 /usr/local/bin/jtt-entrypoint
 
+# The structured run summary the `ansible_idempotent` check reads. The
+# orchestrator enables it per run (ANSIBLE_CALLBACK_PLUGINS points here,
+# ANSIBLE_CALLBACKS_ENABLED=jtt_stats); without it every idempotency check
+# reports that the run "did not complete". Platform-owned: no lab can name,
+# supply or replace it.
+COPY infrastructure/docker/ansible-lab-callback.py /opt/jumptotech/callbacks/jtt_stats.py
+RUN chmod 0755 /opt/jumptotech /opt/jumptotech/callbacks \
+ && chmod 0644 /opt/jumptotech/callbacks/jtt_stats.py
+
 RUN printf 'export PATH=/usr/local/bin:/usr/bin:/bin\nexport ANSIBLE_HOST_KEY_CHECKING=False\nexport ANSIBLE_RETRY_FILES_ENABLED=False\ncd /home/student/lab 2>/dev/null || true\n' \
       >/home/student/.profile \
  && cp /home/student/.profile /home/student/.bashrc \

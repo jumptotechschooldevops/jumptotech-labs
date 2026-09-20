@@ -57,8 +57,11 @@ task:
     Third, write the full path of the archived log file you found it in into
     `source.txt`. Evidence without a source is not evidence.
 
-    Each file may contain extra surrounding text; what is checked is that the
-    right answer is in it.
+    `error-count.txt` holds the number and nothing else — the output of a
+    command that counts is fine, since a trailing newline is ignored. The
+    other two may contain extra surrounding text, such as the whole log line
+    you found; what is checked is that the right answer is in them and no
+    other candidate is.
 
 setup:
   seed_scripts:
@@ -75,17 +78,22 @@ setup:
       label: The archived log for the incident date is present
 
 requirements:
+  # The whole file is the answer. `contains: "17"` accepted `seq 1 99`.
   - type: file_content
     path: /home/student/analysis/error-count.txt
-    contains: "17"
+    equals: "17"
     label: The error count for the current log is correct
-  - type: file_content
+  # Extra text is allowed, a dump of every archive is not: "settled 4181"
+  # appears only in the two archives that do not hold the rejection.
+  - type: file_contains
     path: /home/student/analysis/failed-transaction.txt
-    contains: TXN-4471
+    contains: [TXN-4471]
+    absent: ["settled 4181"]
     label: The rejected transaction was identified
-  - type: file_content
+  - type: file_contains
     path: /home/student/analysis/source.txt
-    contains: /var/log/jumptotech/archive/payments-2026-08-19.log
+    contains: [/var/log/jumptotech/archive/payments-2026-08-19.log]
+    absent: [payments-2026-08-17.log, payments-2026-08-18.log, /var/log/jumptotech/payments.log]
     label: The source log file was recorded
 
 hints:

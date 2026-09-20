@@ -78,7 +78,7 @@ task:
     Enable `ledger-api` so its process is running under supervision. Disable
     `debug-tracer` so its process is stopped and stays stopped — removing the
     symlink is what makes it stay down; stopping it without disabling it would
-    only last until the supervisor next scanned.
+    only last until the supervisor, or the host, next restarted.
 
     Note that the supervisor rescans `/etc/service` every few seconds rather
     than instantly, so give it a moment before concluding something has not
@@ -96,15 +96,37 @@ setup:
       label: The debug tracer is running
 
 requirements:
+  # Enabled means linked, not merely present: an empty directory made with
+  # mkdir satisfied `test -d`, and a process started by hand satisfied the
+  # process check, so the service passed without ever being supervised.
   - type: command_exit_code
     command: test
     args:
-      - -d
+      - -L
       - /etc/service/ledger-api
     expected_exit_code: 0
     label: The ledger API service is enabled
+  - type: command_output
+    command: readlink
+    args:
+      - -f
+      - /etc/service/ledger-api
+    contains: /etc/sv/ledger-api
+    label: The enabled service is the ledger API's own definition
   - type: process_running
     pattern: /usr/local/bin/ledger-api
+    label: The ledger API is running
+  # Supervision, from runsv itself: a link to the *run file* (rather than the
+  # service directory) is a symlink that resolves under /etc/sv/ledger-api,
+  # but runsvdir supervises nothing through it, and a process started by
+  # hand would satisfy the check above. Only a supervised service has a
+  # supervise/stat that says `run`. Read as root: supervise/ is 0700.
+  - type: command_output
+    command: cat
+    args:
+      - /etc/service/ledger-api/supervise/stat
+    as_user: root
+    contains: run
     label: The ledger API is running under supervision
   - type: path_absent
     path: /etc/service/debug-tracer

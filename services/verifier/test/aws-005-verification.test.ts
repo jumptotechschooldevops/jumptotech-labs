@@ -74,9 +74,12 @@ describe('AWS-005 — the seeded policy contains the escalation', () => {
 
     expect(result.passed).toBe(false);
     expect(failed(result.checks).sort()).toEqual([
-      'Handing a role over is restricted to the EC2 service',
+      'The application server role can only be handed to EC2',
+      'The application server role cannot be handed to a container service either',
       'The pipeline can no longer attach the administrator role',
       'The pipeline can no longer attach the finance batch role',
+      'The worker role can only be handed to EC2',
+      'The worker role cannot be handed to a container service either',
     ]);
   });
 
@@ -149,13 +152,81 @@ describe('AWS-005 — correct repairs pass, however expressed', () => {
 });
 
 describe('AWS-005 — repairs that do not actually close the escalation', () => {
+  it('fails a condition parked on some other role while the app roles pass unconditionally', async () => {
+    // The statement check used to be satisfied by any conditional PassRole.
+    const parked = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        EC2_STATEMENT,
+        { Effect: 'Allow', Action: 'iam:PassRole', Resource: [ROLE('AppServerRole'), ROLE('AppWorkerRole')] },
+        {
+          Effect: 'Allow',
+          Action: 'iam:PassRole',
+          Resource: ROLE('UnusedRole'),
+          Condition: { StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } },
+        },
+      ],
+    });
+    const result = await run(parked);
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual([
+      'The application server role can only be handed to EC2',
+      'The worker role can only be handed to EC2',
+      'The application server role cannot be handed to a container service either',
+      'The worker role cannot be handed to a container service either',
+    ]);
+  });
+
+  it('passes the restriction written as one conditional statement per role', async () => {
+    const perRole = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        EC2_STATEMENT,
+        ...['AppServerRole', 'AppWorkerRole'].map((name) => ({
+          Effect: 'Allow',
+          Action: 'iam:PassRole',
+          Resource: ROLE(name),
+          Condition: { StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } },
+        })),
+      ],
+    });
+    expect(failed((await run(perRole)).checks)).toEqual([]);
+  });
+
+  it('fails role/* kept, with a Deny on the admin roles that never fires', async () => {
+    const neverFires = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        EC2_STATEMENT,
+        {
+          Effect: 'Allow',
+          Action: 'iam:PassRole',
+          Resource: ROLE('*'),
+          Condition: { StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } },
+        },
+        {
+          Effect: 'Deny',
+          Action: 'iam:PassRole',
+          Resource: [ROLE('PlatformAdminRole'), ROLE('ReconciliationBatchRole')],
+          Condition: { StringEquals: { 'iam:PassedToService': 'lambda.amazonaws.com' } },
+        },
+      ],
+    });
+    const result = await run(neverFires);
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual([
+      'The pipeline can no longer attach the administrator role',
+      'The pipeline can no longer attach the finance batch role',
+    ]);
+  });
+
   it('fails when the permission is simply deleted', async () => {
     const removed = JSON.stringify({ Version: '2012-10-17', Statement: [EC2_STATEMENT] });
     const result = await run(removed);
 
     expect(result.passed).toBe(false);
     expect(failed(result.checks)).toContain('The pipeline can still attach the application server role');
-    expect(failed(result.checks)).toContain('Handing a role over is restricted to the EC2 service');
+    expect(failed(result.checks)).toContain('The pipeline can still attach the worker role');
   });
 
   it('fails when the condition is added but the roles are still unrestricted', async () => {
@@ -191,7 +262,12 @@ describe('AWS-005 — repairs that do not actually close the escalation', () => 
     const result = await run(noCondition);
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toEqual(['Handing a role over is restricted to the EC2 service']);
+    expect(failed(result.checks)).toEqual([
+      'The application server role can only be handed to EC2',
+      'The worker role can only be handed to EC2',
+      'The application server role cannot be handed to a container service either',
+      'The worker role cannot be handed to a container service either',
+    ]);
   });
 
   it('fails when a prefix is chosen that still reaches a sensitive role', async () => {
@@ -309,6 +385,129 @@ describe('AWS-005 — repairs that do not actually close the escalation', () => 
   });
 });
 
+describe('AWS-005 — the administrator roles, for any service (the review\'s context problem)', () => {
+  /*
+   * The admin checks once asked only about EC2. A grant of every role to a
+   * different service — the same escalation, through ECS or Lambda — then
+   * passed. They are asked of every request now.
+   */
+  const SCOPED_APP = JSON.parse(SOLVED).Statement[1];
+  const ADMIN_FAILS = [
+    'The pipeline can no longer attach the administrator role',
+    'The pipeline can no longer attach the finance batch role',
+  ];
+  const ECS_FAILS = [
+    'The application server role cannot be handed to a container service either',
+    'The worker role cannot be handed to a container service either',
+  ];
+  const withExtra = (...extra: unknown[]) =>
+    JSON.stringify({ Version: '2012-10-17', Statement: [EC2_STATEMENT, SCOPED_APP, ...extra] });
+
+  it('fails every role handed to ECS beside a correct EC2 statement (the reproduction from the review)', async () => {
+    const result = await run(
+      withExtra({
+        Effect: 'Allow',
+        Action: 'iam:PassRole',
+        Resource: '*',
+        Condition: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+      }),
+    );
+    expect(result.passed).toBe(false);
+    // The grant reaches the app roles through ECS as well.
+    expect(failed(result.checks).sort()).toEqual([...ADMIN_FAILS, ...ECS_FAILS].sort());
+  });
+
+  it('fails the administrator role alone handed to Lambda', async () => {
+    const result = await run(
+      withExtra({
+        Effect: 'Allow',
+        Action: 'iam:PassRole',
+        Resource: ROLE('PlatformAdminRole'),
+        Condition: { StringEquals: { 'iam:PassedToService': 'lambda.amazonaws.com' } },
+      }),
+    );
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks)).toEqual(['The pipeline can no longer attach the administrator role']);
+  });
+
+  it('fails the administrator roles handed to EC2 by name', async () => {
+    const result = await run(
+      withExtra({
+        Effect: 'Allow',
+        Action: 'iam:PassRole',
+        Resource: [ROLE('PlatformAdminRole'), ROLE('ReconciliationBatchRole')],
+        Condition: { StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } },
+      }),
+    );
+    expect(failed(result.checks).sort()).toEqual(ADMIN_FAILS);
+  });
+
+  it('fails role/* for "any service but Lambda", with a Deny on the admin roles that fires only for EC2', async () => {
+    // The app-role checks ask about Lambda, so this grant slips past them;
+    // the admin roles can still go to ECS, and only the any-request reading
+    // sees that.
+    const result = await run(
+      JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          EC2_STATEMENT,
+          SCOPED_APP,
+          {
+            Effect: 'Allow',
+            Action: 'iam:PassRole',
+            Resource: ROLE('*'),
+            Condition: { StringNotEquals: { 'iam:PassedToService': 'lambda.amazonaws.com' } },
+          },
+          {
+            Effect: 'Deny',
+            Action: 'iam:PassRole',
+            Resource: [ROLE('PlatformAdminRole'), ROLE('ReconciliationBatchRole')],
+            Condition: { StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } },
+          },
+        ],
+      }),
+    );
+    expect(result.passed).toBe(false);
+    expect(failed(result.checks).sort()).toEqual([...ADMIN_FAILS, ...ECS_FAILS].sort());
+  });
+
+  it('passes a scoped Allow with an unconditional Deny on the admin roles, and says nothing of the answer when it fails', async () => {
+    const passed = await run(
+      withExtra({
+        Effect: 'Deny',
+        Action: 'iam:PassRole',
+        Resource: [ROLE('PlatformAdminRole'), ROLE('ReconciliationBatchRole')],
+      }),
+    );
+    expect(failed(passed.checks)).toEqual([]);
+
+    const failing = await run(
+      withExtra({
+        Effect: 'Allow',
+        Action: 'iam:PassRole',
+        Resource: '*',
+        Condition: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+      }),
+    );
+    const blob = failing.checks.map((c) => `${c.label} ${c.detail ?? ''}`).join('\n');
+    expect(blob).not.toContain('iam:PassedToService');
+    expect(blob).not.toContain('ec2.amazonaws.com');
+    expect(blob).not.toContain('AppServerRole');
+  });
+
+  it('asks the admin checks of every request, and the app-role checks of a named one', async () => {
+    const lab = await loadLabDefinition(AWS_005);
+    const admin = lab.requirements.filter(
+      (r) => r.type === 'iam_policy_not_allows' && /Admin|Batch/.test(r.resource),
+    );
+    expect(admin).toHaveLength(2);
+    for (const rule of admin) {
+      expect(rule).toMatchObject({ any_context: true });
+      expect('context' in rule ? rule.context : undefined).toBeUndefined();
+    }
+  });
+});
+
 describe('AWS-005 — isolation and shortcuts', () => {
   it('is not passed by a solved copy in another file', async () => {
     const lab = await loadLabDefinition(AWS_005);
@@ -343,5 +542,62 @@ describe('AWS-005 — isolation and shortcuts', () => {
 
     expect(result.passed).toBe(false);
     expect(result.checks.find((c) => c.status === 'fail')?.detail).toContain('not a regular file');
+  });
+});
+
+describe('AWS-005 — every explicit way of stating "EC2 only" passes', () => {
+  const APP = [ROLE('AppServerRole'), ROLE('AppWorkerRole')];
+
+  it('passes StringLike with the exact service, which hint 3 calls "a string operator"', async () => {
+    const like = SOLVED.replace('StringEquals', 'StringLike');
+    expect(failed((await run(like)).checks)).toEqual([]);
+  });
+
+  it('passes the documented Deny idiom: scoped Allow, Deny PassRole unless the service is EC2', async () => {
+    const denyIdiom = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        EC2_STATEMENT,
+        { Effect: 'Allow', Action: ['iam:PassRole', 'iam:GetRole'], Resource: APP },
+        {
+          Effect: 'Deny',
+          Action: 'iam:PassRole',
+          Resource: '*',
+          Condition: { StringNotEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' } },
+        },
+      ],
+    });
+    expect(failed((await run(denyIdiom)).checks)).toEqual([]);
+  });
+
+  it('fails a condition that only keeps the roles away from Lambda', async () => {
+    const notLambda = SOLVED.replace(
+      '{"StringEquals":{"iam:PassedToService":"ec2.amazonaws.com"}}',
+      '{"StringNotEquals":{"iam:PassedToService":"lambda.amazonaws.com"}}',
+    );
+    expect(notLambda).not.toBe(SOLVED);
+    expect(failed((await run(notLambda)).checks).sort()).toEqual([
+      'The application server role cannot be handed to a container service either',
+      'The worker role cannot be handed to a container service either',
+    ]);
+  });
+
+  it('fails the EC2 statement cut down, and a new inline-policy permission', async () => {
+    const cut = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [{ ...EC2_STATEMENT, Action: ['ec2:RunInstances'] }, JSON.parse(SOLVED).Statement[1]],
+    });
+    expect(failed((await run(cut)).checks).sort()).toEqual([
+      'The pipeline can still describe instances',
+      'The pipeline can still tag instances',
+    ]);
+    const inline = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        EC2_STATEMENT,
+        { ...JSON.parse(SOLVED).Statement[1], Action: ['iam:PassRole', 'iam:GetRole', 'iam:PutRolePolicy'] },
+      ],
+    });
+    expect(failed((await run(inline)).checks)).toEqual(['The pipeline cannot write inline role policies either']);
   });
 });

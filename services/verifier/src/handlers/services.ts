@@ -45,12 +45,32 @@ export const servicePort: VerifierHandler<'service_port'> = {
       return fail(`Service does not expose port ${r.port} — it exposes ${observed}`);
     }
 
+    // A named targetPort (`http`) means whichever container port carries that
+    // name on the Pods the Service selects — as valid as the number, and what
+    // the lab fixtures' own `name: http` invites. Resolved against those Pods.
+    const selected = Object.entries(service.selector);
+    const pods =
+      selected.length === 0
+        ? []
+        : (await reader.pods(selected.map(([k, v]) => `${k}=${v}`).join(','))).filter((pod) =>
+            selected.every(([k, v]) => pod.labels[k] === v),
+          );
+    const resolves = (name: string, wanted: string) =>
+      pods.some((pod) =>
+        pod.containers.some((c) =>
+          (c.ports ?? []).some((cp) => cp.name === name && String(cp.containerPort) === wanted),
+        ),
+      );
+
     const match = onPort.find((p) => {
       if (r.protocol && p.protocol !== r.protocol) return false;
       if (r.target_port !== undefined) {
         // An omitted targetPort defaults to the Service port.
         const target = p.targetPort ?? p.port;
-        if (String(target) !== String(r.target_port)) return false;
+        const wanted = String(r.target_port);
+        if (String(target) === wanted) return true;
+        if (typeof target === 'string' && !/^\d+$/.test(target) && resolves(target, wanted)) return true;
+        return false;
       }
       return true;
     });
@@ -85,7 +105,9 @@ export const serviceSelector: VerifierHandler<'service_selector'> = {
       const actual = service.selector[key];
       if (actual === undefined) problems.push(`selector is missing '${key}'`);
       else if (actual !== expected) {
-        problems.push(`selector '${key}' is '${actual}', expected '${expected}'`);
+        // In a diagnosis lab (K8S-010, NET-025) the right value is the fault
+        // being looked for; say what the selector holds, not what it should.
+        problems.push(`selector '${key}' is '${actual}', which does not select the Pods this Service is for`);
       }
     }
     return problems.length === 0 ? pass() : fail(problems.join('; '));

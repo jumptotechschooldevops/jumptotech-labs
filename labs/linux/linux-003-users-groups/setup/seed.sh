@@ -8,6 +8,16 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
+# The sandbox image creates a `deployers` group with `student` in it, for the
+# permission labs that need a second group to chgrp to. This lab is about
+# creating that group, so it must start without it: otherwise `groupadd
+# deployers` fails with "already exists" and two checks pass before the
+# student has done anything. Only this session's container is changed.
+if getent group deployers >/dev/null; then
+  gpasswd -d student deployers >/dev/null 2>&1 || true
+  groupdel deployers
+fi
+
 install -d -o root -g root -m 0755 /srv/jumptotech
 
 cat > /srv/jumptotech/README.txt <<'TXT'

@@ -139,6 +139,8 @@ requirements:
 
   - type: file_exists
     path: terraform/tfplan
+    # A saved plan is a zip archive of some kilobytes; `touch tfplan` is not one.
+    min_bytes: 200
     label: The first plan was saved to a file
 
   - type: file_exists
@@ -157,6 +159,7 @@ requirements:
 
   - type: file_exists
     path: terraform/tfplan2
+    min_bytes: 200
     label: The second plan was saved to a file
 
   - type: file_exists
@@ -197,6 +200,17 @@ requirements:
     path: terraform/build/rollback-plan.txt
     contains: build/release-manifest.txt
     label: The rollback plan names the manifest file it rolls back to
+
+  # "…by referring to the first resource, not by you typing the path a second
+  # time." The file check above cannot tell the two apart; this can.
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: rollback_plan
+    attribute: content
+    references: local_file.release_manifest
+    referenced_attribute: filename
+    label: The rollback plan takes the manifest's filename from that resource
 
   - type: terraform_output_equals
     dir: terraform

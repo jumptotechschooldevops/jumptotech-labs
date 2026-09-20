@@ -74,9 +74,8 @@ export const fileExists: SandboxVerifierHandler<'file_exists'> = {
 /**
  * Several fragments must appear in one file, and/or several must not.
  *
- * Reports the *first* missing fragment rather than all of them: a student
- * fixing a pipeline script wants the next thing to do, and a list of four
- * absences for one forgotten line reads as four problems.
+ * Reports how many fragments are missing (or present when they must not be),
+ * never which: in a findings lab the required text is the answer.
  */
 export const fileContains: SandboxVerifierHandler<'file_contains'> = {
   type: 'file_contains',
@@ -92,14 +91,21 @@ export const fileContains: SandboxVerifierHandler<'file_contains'> = {
       return fail(`'${requirement.path}' is larger than this check can read`);
     }
 
+    // Counts, never the fragments: in a findings lab (LINUX-007) the text a
+    // file must contain is the answer, and a decoy it must not contain is a
+    // hint. The label says what the check is about.
     const content = read.content;
-    const missing = requirement.contains.find((fragment) => !content.includes(fragment));
-    if (missing !== undefined) {
-      return fail(`'${requirement.path}' does not mention '${missing}'`);
+    const missing = requirement.contains.filter((fragment) => !content.includes(fragment));
+    if (missing.length > 0) {
+      return fail(
+        `'${requirement.path}' is missing ${missing.length} of the ${requirement.contains.length} things this check looks for`,
+      );
     }
-    const present = requirement.absent.find((fragment) => content.includes(fragment));
-    if (present !== undefined) {
-      return fail(`'${requirement.path}' still mentions '${present}'`);
+    const present = requirement.absent.filter((fragment) => content.includes(fragment));
+    if (present.length > 0) {
+      return fail(
+        `'${requirement.path}' still contains ${present.length === 1 ? 'something' : `${present.length} things`} this check says must not be there`,
+      );
     }
     return pass();
   },
@@ -185,6 +191,66 @@ export const fileContent: SandboxVerifierHandler<'file_content'> = {
   },
 };
 
+/**
+ * One `KEY = value` answer, given once, with exactly the expected value.
+ *
+ * See `file_key_value` in requirements.ts for the grading rules. Linear in the
+ * file's size: one split, and a scan of each line for its first separator.
+ */
+export const fileKeyValue: SandboxVerifierHandler<'file_key_value'> = {
+  type: 'file_key_value',
+  label: (r) => `${r.path} answers ${r.key}`,
+  async run(requirement, reader) {
+    const read = await reader.path(requirement.path);
+    if (!read) return missingPath('file', requirement.path);
+    if (read.type !== 'file') {
+      return fail(`'${requirement.path}' is ${describeType(read)}, not a regular file`);
+    }
+    if (read.content === undefined) return fail(`'${requirement.path}' could not be read`);
+    // A truncated read cannot prove the key is answered only once.
+    if (read.truncated) return fail(`'${requirement.path}' is larger than this check can read`);
+
+    const answers = keyValues(read.content, requirement.key, requirement.separator);
+    if (answers.length === 0) {
+      return fail(`'${requirement.path}' has no answer for ${requirement.key}`);
+    }
+    if (answers.length > 1) {
+      return fail(
+        `'${requirement.path}' answers ${requirement.key} ${answers.length} times — give one answer`,
+      );
+    }
+    const fold = (text: string) => (requirement.ignore_case ? text.toLowerCase() : text);
+    return fold(answers[0]!) === fold(requirement.equals.trim())
+      ? pass()
+      : fail(`'${requirement.path}' has the wrong value for ${requirement.key}`);
+  },
+};
+
+/**
+ * Every non-empty value given to `key` in a `KEY<sep>value` text.
+ *
+ * Comment lines (`#`) are skipped, a leading `export ` on the key is dropped
+ * (an env file may use it), and a value wrapped in one pair of matching quotes
+ * is unwrapped. An empty value is a placeholder, not an answer.
+ */
+export function keyValues(text: string, key: string, separator: '=' | ':'): string[] {
+  const values: string[] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    const at = line.indexOf(separator);
+    if (at <= 0) continue;
+    const name = line.slice(0, at).trim().replace(/^export\s+/, '');
+    if (name !== key) continue;
+    let value = line.slice(at + 1).trim();
+    if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.endsWith(value[0]!)) {
+      value = value.slice(1, -1).trim();
+    }
+    if (value !== '') values.push(value);
+  }
+  return values;
+}
+
 export const fileMode: SandboxVerifierHandler<'file_mode'> = {
   type: 'file_mode',
   label: (r) => `${r.path} has permissions ${normalizeMode(r.mode)}`,
@@ -194,10 +260,14 @@ export const fileMode: SandboxVerifierHandler<'file_mode'> = {
 
     const expected = normalizeMode(requirement.mode);
     const actual = normalizeMode(read.mode);
-    if (actual !== expected) {
-      return fail(
-        `'${requirement.path}' has permissions ${actual}, expected ${expected}`,
-      );
+    const permissions = (mode: string) => mode.slice(-3);
+    const differs =
+      requirement.special_bits === 'ignore' ? permissions(actual) !== permissions(expected) : actual !== expected;
+    if (differs) {
+      // The observed mode, never the required one: working out the octal
+      // value is often the lesson itself (LINUX-011's setgid 2770, sticky
+      // 1777, a umask that yields 0640), and one Check would hand it over.
+      return fail(`'${requirement.path}' has permissions ${actual}, which is not what this lab requires`);
     }
     return pass();
   },

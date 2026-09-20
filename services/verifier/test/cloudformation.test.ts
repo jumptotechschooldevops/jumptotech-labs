@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  asSubTemplate,
   CloudFormationParseError,
   collectReferences,
   outputReference,
@@ -372,5 +373,117 @@ describe('the handlers grade through the same model', () => {
     expect(result.status).toBe('fail');
     expect(result.detail!.length).toBeLessThan(200);
     expect(result.detail).not.toContain('AWSTemplateFormatVersion');
+  });
+});
+
+describe('asSubTemplate — a value as the Sub template that would produce it', () => {
+  it('writes GetAtt, Ref, Join and a Sub variable map the same way', () => {
+    expect(asSubTemplate({ 'Fn::GetAtt': ['Bucket', 'Arn'] })).toBe('${Bucket.Arn}');
+    expect(asSubTemplate({ 'Fn::GetAtt': 'Bucket.Arn' })).toBe('${Bucket.Arn}');
+    expect(asSubTemplate({ Ref: 'Bucket' })).toBe('${Bucket}');
+    expect(asSubTemplate({ 'Fn::Join': ['', [{ 'Fn::GetAtt': ['Bucket', 'Arn'] }, '/*']] })).toBe('${Bucket.Arn}/*');
+    expect(asSubTemplate({ 'Fn::Sub': ['${B}/*', { B: { 'Fn::GetAtt': ['Bucket', 'Arn'] } }] })).toBe('${Bucket.Arn}/*');
+    expect(asSubTemplate({ 'Fn::Sub': '${Bucket.Arn}/*' })).toBe('${Bucket.Arn}/*');
+  });
+
+  it('never lets a plain string equal a template with a reference in it', () => {
+    expect(asSubTemplate('${Bucket.Arn}/*')).toBe('${!Bucket.Arn}/*');
+    expect(asSubTemplate({ 'Fn::Join': ['', ['${Bucket.Arn}', '/*']] })).toBe('${!Bucket.Arn}/*');
+    // An escaped Sub variable stays escaped, even when the map defines it.
+    expect(asSubTemplate({ 'Fn::Sub': ['${!B}/*', { B: { Ref: 'Bucket' } }] })).toBe('${!B}/*');
+  });
+
+  it('gives up on anything it cannot write as a template', () => {
+    expect(asSubTemplate({ 'Fn::Select': [0, ['a']] })).toBeNull();
+    expect(asSubTemplate({ 'Fn::Join': ['', 'not-a-list'] })).toBeNull();
+    expect(asSubTemplate({ 'Fn::Sub': ['${B}', { B: { 'Fn::Select': [0, ['a']] } }] })).toBeNull();
+    expect(asSubTemplate({ Ref: 'A', Other: 1 })).toBeNull();
+    expect(asSubTemplate(['${Bucket.Arn}'])).toBeNull();
+  });
+});
+
+describe('Fn::Sub variable substitution scans the template, it does not match a pattern', () => {
+  const sub = (template: string, variables: Record<string, unknown> = { B: { Ref: 'Bucket' } }) =>
+    asSubTemplate({ 'Fn::Sub': [template, variables] });
+
+  it('replaces a mapped variable and leaves the text around it alone', () => {
+    expect(sub('${B}')).toBe('${Bucket}');
+    expect(sub('arn:aws:s3:::${B}/data/*')).toBe('arn:aws:s3:::${Bucket}/data/*');
+    expect(sub('${B}', { B: { 'Fn::GetAtt': ['Bucket', 'Arn'] } })).toBe('${Bucket.Arn}');
+  });
+
+  it('leaves a variable the map does not define exactly as written', () => {
+    expect(sub('${C}/*')).toBe('${C}/*');
+    expect(sub('${AWS::Region}')).toBe('${AWS::Region}');
+    // A name the map has no entry for must not pick one up from Object's prototype.
+    expect(sub('${toString}')).toBe('${toString}');
+    expect(sub('${__proto__}')).toBe('${__proto__}');
+  });
+
+  it('never substitutes an escaped variable, even one the map defines', () => {
+    expect(sub('${!B}')).toBe('${!B}');
+    expect(sub('${!B}/${B}')).toBe('${!B}/${Bucket}');
+    expect(sub('${!}')).toBe('${!}');
+  });
+
+  it('replaces every occurrence in one string, left to right', () => {
+    expect(sub('${B}${B}', { B: { Ref: 'Bucket' } })).toBe('${Bucket}${Bucket}');
+    expect(sub('${A}:${B}:${A}', { A: { Ref: 'Alpha' }, B: { Ref: 'Beta' } })).toBe(
+      '${Alpha}:${Beta}:${Alpha}',
+    );
+    // A mapped literal keeps its text, with its own `${` escaped as Sub escapes it.
+    expect(sub('a${A}b${C}c${B}d', { A: { Ref: 'Alpha' }, B: 'lit${x}' })).toBe(
+      'a${Alpha}b${C}clit${!x}d',
+    );
+  });
+
+  it('keeps malformed placeholder text as it stands', () => {
+    // No closing brace: nothing is a placeholder, so nothing changes.
+    expect(sub('${B')).toBe('${B');
+    expect(sub('prefix ${B and ${A')).toBe('prefix ${B and ${A');
+    // A closed placeholder still resolves; a trailing unclosed one is text.
+    expect(sub('${B}${')).toBe('${Bucket}${');
+    expect(sub('${B}-${B')).toBe('${Bucket}-${B');
+    // Each `${` is closed by the first `}` after it, so the inner name is `${B`.
+    expect(sub('${${B}')).toBe('${${B}');
+    expect(sub('${${B}}')).toBe('${${B}}');
+    // Stray braces are ordinary characters.
+    expect(sub('}${B}{')).toBe('}${Bucket}{');
+    expect(sub('$B} {B} ${')).toBe('$B} {B} ${');
+  });
+
+  it('handles a long run of ${ without pathological slowdown', () => {
+    // The shape CodeQL flagged: `/\$\{([^}]*)\}/g` backtracks quadratically over
+    // this, taking tens of seconds. A single scan is linear, so it is immediate.
+    const repeats = 200_000;
+    const shapes = [
+      '${'.repeat(repeats) + 'x', // never closed
+      '${'.repeat(repeats) + '}', // one closing brace, far away
+      '${'.repeat(repeats) + '${B}', // a real variable behind the run
+      '${}'.repeat(repeats), // many empty placeholders
+      '${!'.repeat(repeats), // many escapes, none closed
+    ];
+    const started = performance.now();
+    for (const shape of shapes) {
+      // None of these names is in the map, so every one comes back unchanged.
+      expect(sub(shape)).toBe(shape);
+    }
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe('a Sub variable map defines local names, not references', () => {
+  it('does not report a mapped variable as dangling, but still checks the map values', () => {
+    const template = parseCloudFormationTemplate(`Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+  Policy:
+    Type: AWS::IAM::Policy
+    Properties:
+      Resource: !Sub ['\${B}/*', {B: !GetAtt Bucket.Arn}]
+      Other: !Sub ['\${C}/*', {C: !GetAtt Missing.Arn}]
+      Unmapped: !Sub ['\${D}/*', {E: x}]
+`);
+    expect(unresolvedReferences(template).map((r) => r.target).sort()).toEqual(['D', 'Missing']);
   });
 });

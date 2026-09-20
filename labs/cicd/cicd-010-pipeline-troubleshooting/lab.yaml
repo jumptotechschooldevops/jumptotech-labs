@@ -127,7 +127,18 @@ requirements:
     job: build
     run_contains:
       - node build.mjs
-    label: The job runs the project's build command
+    after:
+      - uses: actions/checkout
+      - uses: actions/setup-node
+    label: The job runs the project's build command, once the code and Node.js are in place
+  - type: github_workflow_step_exists
+    path: .github/workflows/ci.yml
+    job: build
+    run_contains:
+      - node --test
+    after:
+      - run_contains: [node build.mjs]
+    label: The job runs the test suite, after the build
   - type: github_workflow_step_exists
     path: .github/workflows/ci.yml
     job: build
@@ -135,10 +146,16 @@ requirements:
     with_keys:
       - name
       - path
-    label: The job uploads the build output
+    with_contains:
+      path: dist
+      name: env.APP_VERSION
+    after:
+      - run_contains: [node build.mjs]
+    label: The job uploads the build output, named with APP_VERSION, after the build
   - type: environment_reference_exists
     path: .github/workflows/ci.yml
     name: APP_VERSION
+    via: workflow_env
     label: APP_VERSION is defined in the workflow
   - type: jenkinsfile_exists
     path: Jenkinsfile

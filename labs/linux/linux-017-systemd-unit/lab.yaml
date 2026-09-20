@@ -59,9 +59,9 @@ story: >
   November, and platform want the unit file ahead of the window so it can go
   through review with everything else.
 
-  Someone started one during the planning meeting and stopped after four lines.
-  What they left behind is not a draft so much as a note to self, and two of the
-  four lines are actively wrong.
+  Someone started one during the planning meeting and stopped after five lines.
+  What they left behind is not a draft so much as a note to self, and three of
+  the five lines are actively wrong.
 
   The service itself is still running here under runit, doing exactly what it
   will have to keep doing afterwards.
@@ -90,8 +90,8 @@ task:
     `/etc/sv/ledger-api/run` shows how the same contract is satisfied today —
     which account it drops to, where it works from, how it gets its settings.
     And there is an abandoned draft already at the unit path. Do not trust it:
-    someone started it in a meeting and two of its four lines are wrong. One of
-    them stops systemd reading the file at all.
+    someone started it in a meeting and three of its five lines are wrong. One
+    of them stops systemd reading the file at all.
 
     A word on what this lab can and cannot check, because you should not be
     misled about it. **Your unit is never started.** This sandbox runs `runit`
@@ -147,6 +147,14 @@ requirements:
     path: /etc/systemd/system/ledger-api.service
     mode: "644"
     label: The unit file is readable by the service manager
+  # The runbook: the unit "belongs to root, world-readable — 0644". A unit a
+  # student created with sudo is root's already; one copied in as student is
+  # not, and a service manager should not load configuration an ordinary
+  # account can rewrite.
+  - type: file_owner
+    path: /etc/systemd/system/ledger-api.service
+    owner: root
+    label: The unit file belongs to root, as the runbook requires
 
   # --- the three sections a service unit needs ----------------------------
   - type: systemd_unit_section
@@ -191,7 +199,10 @@ requirements:
     path: /etc/systemd/system/ledger-api.service
     section: Service
     directive: Type
-    equals: simple
+    # "Runs in the foreground … ready as soon as it is running": simple, or
+    # exec (ready once exec succeeds). Omitted, systemd reads it as simple.
+    one_of: [simple, exec]
+    default: simple
     label: The service is declared as one that runs in the foreground
   - type: systemd_unit_directive
     path: /etc/systemd/system/ledger-api.service
@@ -256,7 +267,7 @@ hints:
       and what should happen when someone stops it on purpose. Those last two
       are different questions and the runbook answers them differently.
 
-      Then look at the draft. One of its four lines stops the file being read at
+      Then look at the draft. One of its five lines stops the file being read at
       all — not a wrong value, a shape problem. If you fix nothing else first,
       fix that, because until it is fixed nothing else in the file counts.
   - level: 2

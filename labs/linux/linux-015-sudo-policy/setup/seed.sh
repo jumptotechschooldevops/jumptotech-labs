@@ -16,7 +16,9 @@
 #
 #   may oncall check the ledger service?      must end up permitted
 #   may oncall restart the ledger service?    must end up permitted
-#   may oncall read /etc/shadow?              must end up denied
+#   may oncall run anything else as root?     must end up denied — asked of
+#     /etc/shadow, a shell, env, tee, su, find and less, so a policy that
+#     grants the two commands *plus* a way out still fails
 #   may oncall restart a *different* service? must end up denied
 #
 # The last one is the whole lesson. A rule that names the control binary
@@ -112,6 +114,25 @@ SH
 chmod 0440 /etc/sudoers.d/020-oncall
 chown root:root /etc/sudoers.d/020-oncall
 
+# --- listing honours NOPASSWD ----------------------------------------------
+#
+# `sudo -n -l <command>` decides whether to ask for a password by `listpw`,
+# which defaults to `any`: if *any* of the account's entries is NOPASSWD, list
+# mode needs no password — the tag on the command being asked about is never
+# consulted. Measured on this image: with `status` tagged NOPASSWD and
+# `restart` not, `sudo -n -l … restart ledger-api` exits 0 while a real
+# `sudo -n … restart ledger-api` fails with "a password is required". The
+# probe would call that policy correct; at three in the morning it is not.
+# `listpw=all` makes list mode password-free only when every entry is.
+cat > /etc/sudoers.d/005-probe <<'SH'
+# Platform-owned — part of the LINUX-015 policy probe. Makes `sudo -l` for the
+# on-call account answer only when every one of its rules is NOPASSWD, so a
+# rule that would still ask for a password is never reported as granted.
+Defaults:oncall listpw=all
+SH
+chmod 0440 /etc/sudoers.d/005-probe
+chown root:root /etc/sudoers.d/005-probe
+
 # --- the policy probe -------------------------------------------------------
 cat > /usr/local/lib/jumptotech/sudo-probe <<'SH'
 #!/bin/sh
@@ -134,15 +155,33 @@ ask() {
   fi
 }
 
+# "Everything else" is more than one question. A policy that grants the two
+# commands plus a shell, or plus a tool that runs or writes anything as root,
+# still hands over the host; asking only about /etc/shadow would call it
+# correct. Any one of these being permitted is a command outside the remit.
+outside_remit() {
+  for cmd in "/bin/cat /etc/shadow" "/bin/bash" "/bin/sh" "/usr/bin/env" \
+             "/usr/bin/tee /etc/sudoers.d/020-oncall" "/usr/bin/su" \
+             "/usr/bin/find /" "/usr/bin/less /etc/shadow"; do
+    # Word-splitting of $cmd is intended: each entry is a command and its args.
+    # shellcheck disable=SC2086
+    if [ "$(ask $cmd)" = permitted ]; then
+      echo permitted
+      return
+    fi
+  done
+  echo denied
+}
+
 while true; do
   status_ledger=$(ask "$CTL" status ledger-api)
   restart_ledger=$(ask "$CTL" restart ledger-api)
-  read_shadow=$(ask /bin/cat /etc/shadow)
+  other_command=$(outside_remit)
   restart_other=$(ask "$CTL" restart payments-api)
 
   [ "$status_ledger" = permitted ]  && p_status=ok      || p_status=denied
   [ "$restart_ledger" = permitted ] && p_restart=ok     || p_restart=denied
-  [ "$read_shadow" = permitted ]    && f_cmd=allowed    || f_cmd=denied
+  [ "$other_command" = permitted ]  && f_cmd=allowed    || f_cmd=denied
   [ "$restart_other" = permitted ]  && f_arg=allowed    || f_arg=denied
 
   printf 'PERMITTED_STATUS=%s\nPERMITTED_RESTART=%s\nFORBIDDEN_CMD=%s\nFORBIDDEN_ARG=%s\nPROBED_AS=%s\n' \

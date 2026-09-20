@@ -178,6 +178,43 @@ requirements:
     references: var.environment
     label: The manifest content is derived from the environment variable
 
+  # Declaring the four locals is not the same as using them: a manifest typed
+  # out beside four unused locals passed the declaration check. Reaching them
+  # through another local (a rendered template, say) counts.
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    attribute: content
+    references: local.service_summary
+    label: The manifest renders the service summary local
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    attribute: content
+    references: local.gold_services
+    label: The manifest renders the gold-services local
+
+  - type: terraform_resource_references
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    attribute: content
+    references: local.scaled_replicas
+    label: The manifest renders the scaled replica total local
+
+  # "From the variable, not typed in capitals": a literal PRODUCTION reaches
+  # the manifest while var.environment is still referenced through the
+  # replica locals.
+  - type: terraform_resource_literal_absent
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    literals: [production]
+    label: The environment line is not typed into the resource
+
   - type: terraform_resource_exists
     dir: terraform
     resource_type: local_file

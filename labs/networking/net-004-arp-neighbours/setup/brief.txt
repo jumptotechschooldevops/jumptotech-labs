@@ -26,7 +26,11 @@ down anywhere — you have to read it off the machine. You need three things:
   · your own address and prefix length
   · the address of the gateway on your segment
 
-`ip addr` and `ip route` between them will tell you all three.
+`ip addr` gives you the first two. The gateway is not in `ip route`: this
+segment has one connected route and no default, which is the "no route off
+it" above. On a segment like this one the gateway holds the first usable
+address of the prefix — the arithmetic is NET-002's. Treat that as a claim to
+test, not a fact: the "resolved" outcome below is how you prove it.
 
 
 A NOTE ON TOOLS
