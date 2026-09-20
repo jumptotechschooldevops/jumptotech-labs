@@ -83,6 +83,18 @@ COPY services/observability services/observability
 COPY services/lab-orchestrator services/lab-orchestrator
 COPY services/sandboxd        services/sandboxd
 
+# npm does not hoist every dependency to the root of the tree: a workspace's own
+# dependency can be installed inside that workspace, and `prom-client` — which
+# services/observability/src/metrics.ts imports — is placed at
+# services/observability/node_modules/prom-client by the lockfile. The installed
+# tree is therefore more than /app/node_modules, and a runtime stage that copies
+# only the root one ships a service that cannot start. Until the host's own
+# node_modules was excluded from the build context this was hidden: the source
+# COPY above carried the host's copy in.
+# services/observability/test/runtime-image-dependencies.test.ts holds every
+# Dockerfile to this, driven by the lockfile.
+COPY --from=build /app/services/observability/node_modules ./services/observability/node_modules
+
 # The broker owns nothing it runs on: a bug in it cannot rewrite its own source.
 RUN chown -R root:root /app && chmod -R a-w /app
 
