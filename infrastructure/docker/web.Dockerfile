@@ -55,6 +55,7 @@ COPY infrastructure/docker/nginx/web.conf /etc/nginx/conf.d/default.conf
 # listener (web-tls.conf, mounted over default.conf by
 # docker-compose.production.yml), so the two cannot drift apart.
 COPY infrastructure/docker/nginx/locations.conf /etc/nginx/jumptotech/locations.conf
+COPY infrastructure/docker/nginx/security-headers.conf /etc/nginx/jumptotech/security-headers.conf
 
 # The certificate gate. It does nothing unless WEB_TLS=required, which only the
 # production overlay sets. It then refuses to let nginx start on a missing,

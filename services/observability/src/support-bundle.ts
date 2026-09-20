@@ -243,7 +243,13 @@ const LEAK_PATTERNS: ReadonlyArray<{ kind: string; re: RegExp }> = [
   { kind: 'pem', re: /-----BEGIN [A-Z0-9 ]{0,40}(?:KEY|CERTIFICATE)-----/ },
   { kind: 'jwt', re: /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\./ },
   { kind: 'dsn', re: /\b(?:postgres|postgresql|mysql|redis):\/\/[^\s:/@]{1,128}:[^\s@]{1,256}@/i },
-  { kind: 'authorization', re: /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}/ },
+  { kind: 'authorization', re: /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}/i },
+  // A value assigned to something named as a credential. Twelve characters at
+  // least, and never a redaction marker (`[` is not a value character).
+  {
+    kind: 'credential',
+    re: /(?:secret|password|passwd|token|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]{0,32}["']?\s{0,4}[:=]\s{0,4}["']?[^\s"',;&[\]{}]{12,}/i,
+  },
   { kind: 'oauth', re: /\b(?:client_secret|refresh_token|id_token|access_token|code_verifier)=[^&\s"'[]{4,}/i },
   { kind: 'cookie', re: /\bjtt_session=[^;\s"'[]{8,}/ },
 ];

@@ -235,6 +235,15 @@ describe('findSecretLeaks — the gate before a bundle is packaged', () => {
     expect(findSecretLeaks('cookie jtt_session=abcdefghijkl', [])).toEqual(['cookie']);
   });
 
+  it('finds a credential however its header or its name was spelled', () => {
+    // Free text reaches the bundle outside logs/ too — a session's
+    // statusReason, a provider's reason — and only this gate reads it.
+    expect(findSecretLeaks('authorization: bearer abcdefghijklmnopqrstu', [])).toEqual(['authorization']);
+    expect(findSecretLeaks('x-internal-secret: 0123456789abcdefghij', [])).toEqual(['credential']);
+    expect(findSecretLeaks('GRAFANA_ADMIN_PASSWORD=correct-horse-battery', [])).toEqual(['credential']);
+    expect(findSecretLeaks('{"clientSecret":"GOCSPX-abcdefghij1234"}', [])).toEqual(['credential']);
+  });
+
   it('does not cry wolf on what a bundle legitimately holds', () => {
     const innocent = [
       'jtt-lab-3f9a2c1b77e04d1e  Up 12 minutes',
@@ -243,6 +252,9 @@ describe('findSecretLeaks — the gate before a bundle is packaged', () => {
       '"GET /auth/callback?[query removed] HTTP/2.0"',
       'client_secret=[REDACTED:oauth]',
       'short min 3 ab',
+      'x-internal-secret: [REDACTED:configured-secret]',
+      'TERMINAL_SESSION_SECRET is set (64 chars)',
+      'the basic lab bearer of news',
     ].join('\n');
     expect(findSecretLeaks(innocent, ['ab'])).toEqual([]);
   });

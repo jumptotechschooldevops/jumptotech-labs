@@ -46,6 +46,8 @@ export type SecretKind =
   | 'oauth'
   | 'email'
   | 'kubeconfig'
+  | 'credential'
+  | 'field'
   | 'configured-secret';
 
 interface Pattern {
@@ -74,8 +76,14 @@ const PATTERNS: readonly Pattern[] = [
   // log line, but an error quoting one can.
   { kind: 'kubeconfig', re: /\b(?:client-key-data|client-certificate-data|certificate-authority-data|token)\s*:\s*\S+/gi },
 
-  // An HTTP credential header value, however it was spelled.
+  // An HTTP credential header value, however it was spelled. Schemes are
+  // case-insensitive on the wire, so a header echoed as `authorization: bearer
+  // …` is the same credential; the lower-case forms are matched after the
+  // header name, or for `bearer` with a token-length value, so that ordinary
+  // prose ("the basic lab") is not.
   { kind: 'authorization', re: /\b(?:Bearer|Basic|Negotiate|Digest)\s+[A-Za-z0-9._~+/=-]{4,}/g },
+  { kind: 'authorization', re: /\bauthorization\s*[:=]\s*[A-Za-z]{1,16}\s+[A-Za-z0-9._~+/=-]{4,}/gi },
+  { kind: 'authorization', re: /\bbearer\s+[A-Za-z0-9._~+/=-]{12,}/gi },
 
   // A database or cache URL carrying an inline password.
   { kind: 'dsn', re: /\b(?:postgres|postgresql|mysql|mongodb|redis|amqp)(?:\+\w+)?:\/\/[^\s:/@]{1,128}:[^\s@]{1,256}@/gi },
@@ -86,6 +94,17 @@ const PATTERNS: readonly Pattern[] = [
   // OAuth/OIDC exchange parameters. `code` is short-lived but single-use and
   // still a credential while it lives.
   { kind: 'oauth', re: /\b(?:client_secret|refresh_token|id_token|access_token|code_verifier|code)=[^&\s"']{4,}/gi },
+
+  // A value assigned to something named as a credential: an env-file line
+  // (`GRAFANA_ADMIN_PASSWORD=…`, `PGPASSWORD=…`), a header (`x-internal-secret:
+  // …`), a query parameter (`?token=…`, `api_key=…`), a JSON member
+  // (`"clientSecret":"…"`). Anchored on the credential word rather than on the
+  // whole name, so no unbounded run precedes it; the name's tail and the value
+  // are bounded.
+  {
+    kind: 'credential',
+    re: /(?:secret|password|passwd|token|api[_-]?key|private[_-]?key)[A-Za-z0-9_-]{0,32}["']?\s{0,4}[:=]\s{0,4}["']?[^\s"',;&[\]{}]{4,512}/gi,
+  },
 
   { kind: 'aws-key', re: /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA)[0-9A-Z]{16}\b/g },
 
@@ -146,7 +165,7 @@ export function registerSecretValues(values: Iterable<string | undefined>): void
 /** Replace every recognised secret in `value`. */
 export function redactString(value: string): string {
   const input = value.length > MAX_SCANNED_CHARS
-    ? `${value.slice(0, MAX_SCANNED_CHARS)}…[truncated ${value.length - MAX_SCANNED_CHARS} chars]`
+    ? `${withoutCutToken(value.slice(0, MAX_SCANNED_CHARS))}…[truncated ${value.length - MAX_SCANNED_CHARS} chars]`
     : value;
 
   let out = input;
@@ -163,6 +182,30 @@ export function redactString(value: string): string {
   }
   return out;
 }
+
+/**
+ * Drop the token the length bound cut through.
+ *
+ * A secret straddling the cut arrives here as a fragment too short for its
+ * pattern and no longer equal to its registered literal, so it would survive.
+ * The run of token characters at the end of the kept text is removed instead:
+ * a word cut in half is no loss in a line already marked as truncated.
+ */
+function withoutCutToken(head: string): string {
+  let end = head.length;
+  while (end > 0 && /[A-Za-z0-9+/=_.~-]/.test(head[end - 1]!)) end -= 1;
+  return head.slice(0, end);
+}
+
+/**
+ * Field names whose value is a credential whatever it looks like.
+ *
+ * Exact names, not substrings: the audit line's `authorizationResult` and a
+ * `tokenTtlSeconds` are not credentials, and a substring rule would blank the
+ * operational fields an incident needs.
+ */
+const CREDENTIAL_FIELD =
+  /^(?:password|passwd|secret|token|apiKey|api_key|clientSecret|client_secret|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|privateKey|private_key|kubeconfig|authorization|cookie|set-cookie|x-internal-secret)$/i;
 
 /** True when `value` contains something the scanner would replace. */
 export function containsSecret(value: string): boolean {
@@ -199,7 +242,10 @@ export function redactValue(value: unknown, depth = 0): unknown {
     for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
       if (seen >= 64) break;
       seen += 1;
-      out[redactString(key)] = redactValue(entry, depth + 1);
+      out[redactString(key)] =
+        CREDENTIAL_FIELD.test(key) && entry !== undefined && entry !== null
+          ? '[REDACTED:field]'
+          : redactValue(entry, depth + 1);
     }
     return out;
   }

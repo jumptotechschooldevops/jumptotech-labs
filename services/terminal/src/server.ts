@@ -99,6 +99,47 @@ let obs: Logger = silentLogger();
 let terminalMetrics: TerminalMetrics | null = null;
 let securityMetrics: CommonMetrics | null = null;
 
+/*
+ * What a browser is told when a shell could not be opened.
+ *
+ * The web client writes this into the student's terminal. A refusal the
+ * platform wrote itself — the API's ownership and state checks, sandboxd's
+ * attach gate — says exactly what the student needs and is forwarded as it
+ * is. Anything else is another component's own words: a credential exchange
+ * that failed in the provider (a Kubernetes API URL, `docker` stderr), Node's
+ * socket error with the broker's address, a spawn error with a path. The code
+ * still travels, the originals stay in this service's log, and the browser
+ * gets a sentence of ours.
+ */
+const PLATFORM_WORDED_CODES = new Set([
+  // The API (`routes/internal.ts`, `SessionManager.requireActive`).
+  'SESSION_NOT_OWNED',
+  'SESSION_NOT_ACTIVE',
+  'SESSION_NOT_FOUND',
+  'OWNER_REQUIRED',
+  'INVALID_SESSION_ID',
+  // This service.
+  'CONTAINER_EXEC_DISABLED',
+  'INVALID_WORKSPACE_PATH',
+  // sandboxd's attach gate (`services/sandboxd/src/attach.ts`) and the broker protocol.
+  'SANDBOX_NOT_FOUND',
+  'SANDBOX_NOT_MANAGED',
+  'SANDBOX_NOT_OWNED',
+  'SANDBOX_SESSION_MISMATCH',
+  'SANDBOX_NOT_RUNNING',
+  'SANDBOX_REF_MISMATCH',
+  'BROKER_CLOSED',
+  'BROKER_PROTOCOL',
+  'CAPACITY',
+]);
+
+function browserMessage(code: string, message: string, phase: 'credentials' | 'shell'): string {
+  if (PLATFORM_WORDED_CODES.has(code)) return phase === 'shell' ? `Could not start a shell: ${message}` : message;
+  return phase === 'shell'
+    ? 'Could not start a shell in the lab environment.'
+    : 'The terminal could not be given access to this lab environment.';
+}
+
 export function createTerminalServer(
   config: TerminalConfig,
   observability?: {
@@ -692,7 +733,7 @@ export function createTerminalServer(
         clearTimeout(authTimer);
         const cols = message.cols ?? 80;
         const rows = message.rows ?? 24;
-        void startSession(ws, claims, cols, rows)
+        void attachInTurn(claims.sid, () => startSession(ws, claims, cols, rows))
           .then((started) => {
             if (!started) return;
             authenticated = true;
@@ -750,14 +791,46 @@ export function createTerminalServer(
     });
   });
 
+  /**
+   * Attaches in flight, per session id: the tail of that session's queue.
+   *
+   * "One shell per session" is enforced by `startSession` closing whatever is
+   * registered for the session before it attaches. That check alone ran before
+   * the credentials fetch and the attach, so sockets that authenticated with
+   * one token at the same moment each found nothing to close, and each
+   * registered a shell: one student could hold as many shells, and as many of
+   * the shared `maxSessions` slots, as sockets they opened at once, and End Lab
+   * reached only the last. Taking attaches for one session in turn makes the
+   * check exact — each attach replaces the one before it, the newest wins, as
+   * a sequential reconnect always did — and bounds a session to one attach in
+   * flight. Different sessions never wait on each other.
+   */
+  const attachQueues = new Map<string, Promise<unknown>>();
+
+  function attachInTurn(sessionId: string, attach: () => Promise<boolean>): Promise<boolean> {
+    const previous = attachQueues.get(sessionId) ?? Promise.resolve();
+    const turn = previous.then(attach, attach);
+    const tail = turn.catch(() => undefined);
+    attachQueues.set(sessionId, tail);
+    void tail.then(() => {
+      if (attachQueues.get(sessionId) === tail) attachQueues.delete(sessionId);
+    });
+    return turn;
+  }
+
   async function startSession(
     ws: WebSocket,
     claims: TerminalSessionClaims,
     cols: number,
     rows: number,
   ): Promise<boolean> {
+    // A socket that left while an earlier attach for its session ran has
+    // nothing to attach, and must not replace the shell that attach opened.
+    if (ws.readyState !== ws.OPEN) return false;
+
     // One shell per session. A second connection for the same session replaces
-    // the first rather than running two shells against one sandbox.
+    // the first rather than running two shells against one sandbox. Exact,
+    // because `attachInTurn` never runs two of these for one session at once.
     closeSession(claims.sid);
 
     /*
@@ -851,7 +924,7 @@ export function createTerminalServer(
         err: error,
       });
       await discardCredentials();
-      send(ws, { type: 'error', code, message: msg });
+      send(ws, { type: 'error', code, message: browserMessage(code, msg, 'credentials') });
       ws.close(4403, 'no credentials');
       return false;
     }
@@ -906,7 +979,7 @@ export function createTerminalServer(
       send(ws, {
         type: 'error',
         code,
-        message: `Could not start a shell: ${message}`,
+        message: browserMessage(code, message, 'shell'),
       });
       terminalMetrics?.connections.inc({ outcome: 'shell_start_failed' });
       obs.error('terminal.connection.rejected', {

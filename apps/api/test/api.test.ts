@@ -151,14 +151,16 @@ describe('GET /api/labs/:id', () => {
   });
 
   it.each([
-    ['..%2F..%2Fetc%2Fpasswd', 400],
-    ['K8S-001;id', 400],
-    ['not-a-lab', 400],
-  ])('rejects a malformed id (%s)', async (id, status) => {
+    // A traversal is refused before routing, as a path rather than a lab id
+    // (test/request-target.test.ts).
+    ['..%2F..%2Fetc%2Fpasswd', 400, 'INVALID_PATH'],
+    ['K8S-001;id', 400, 'INVALID_LAB_ID'],
+    ['not-a-lab', 400, 'INVALID_LAB_ID'],
+  ])('rejects a malformed id (%s)', async (id, status, code) => {
     const res = await request(buildApp(new FakeKubernetes(), registry).app).get(`/api/labs/${id}`);
 
     expect(res.status).toBe(status);
-    expect(res.body.error.code).toBe('INVALID_LAB_ID');
+    expect(res.body.error.code).toBe(code);
   });
 });
 
