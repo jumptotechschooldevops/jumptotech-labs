@@ -22,6 +22,18 @@ const dockerfiles = readdirSync(DOCKER_DIR)
   .filter((file) => file.endsWith('.Dockerfile'))
   .map((file) => [file, readFileSync(path.join(DOCKER_DIR, file), 'utf8')] as const);
 
+/**
+ * A path read from a Dockerfile becomes part of a pattern below. Every regex
+ * metacharacter in it is made literal — the backslash among them and first, or
+ * an unescaped one turns the rest of the path into escape sequences and the
+ * pattern accepts a `sha256sum -c` line that names some other file.
+ */
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The `sha256sum -c -` line that verifies `target` itself, and no other path. */
+const verifies = (target: string): RegExp =>
+  new RegExp(`^\\s*echo "\\$\\{[a-z]+sum\\}  ${escapeRegExp(target)}" \\| sha256sum -c -; \\\\$`);
+
 /** `ARG NAME=value` defaults, per file. */
 const args = (text: string): Map<string, string> =>
   new Map([...text.matchAll(/^ARG ([A-Z0-9_]+)=(\S+)$/gm)].map(([, name, value]) => [name!, value!]));
@@ -38,11 +50,33 @@ describe('Dockerfile downloads', () => {
       for (const match of text.matchAll(/curl -fsSLo (\S+)[^\n]*\n[^\n]*\n([^\n]*)/g)) {
         // The line after the URL line: `echo "${sum}  <path>" | sha256sum -c -`.
         const [, target, next] = match;
-        const expected = new RegExp(`^\\s*echo "\\$\\{[a-z]+sum\\}  ${target!.replace(/[/.]/g, '\\$&')}" \\| sha256sum -c -; \\\\$`);
-        if (!expected.test(next!)) unverified.push(`${file}: ${target}`);
+        if (!verifies(target!).test(next!)) unverified.push(`${file}: ${target}`);
       }
     }
     expect(unverified).toEqual([]);
+  });
+
+  it('read the downloaded path literally, whatever characters it holds', () => {
+    const line = (target: string) => `    echo "\${ksum}  ${target}" | sha256sum -c -; \\`;
+    // Paths a regex would otherwise read as syntax. A backslash is the one that
+    // has to be escaped first: escaping the others around it would leave `\.`,
+    // and the escape a later pass adds becomes part of the input's own escape.
+    const awkward = ['/tmp/a\\d.tgz', '/tmp/a+b.tgz', '/usr/local/bin/kubectl?', '/tmp/(a|b).zip', '/tmp/x[1].tgz'];
+    for (const target of awkward) {
+      expect(verifies(target).test(line(target)), `verifies its own line: ${target}`).toBe(true);
+    }
+    // ...and unescaped, each of those accepts a line naming some other file.
+    const impostors: [string, string][] = [
+      ['/tmp/a\\d.tgz', '/tmp/a1.tgz'],
+      ['/tmp/docker.tgz', '/tmp/dockeritgz'],
+      ['/tmp/a+b.tgz', '/tmp/ab.tgz'],
+      ['/usr/local/bin/kubectl?', '/usr/local/bin/kubect'],
+      ['/tmp/(a|b).zip', '/tmp/a.zip'],
+      ['/tmp/x[1].tgz', '/tmp/x1.tgz'],
+    ];
+    for (const [target, other] of impostors) {
+      expect(verifies(target).test(line(other)), `${target} must not accept ${other}`).toBe(false);
+    }
   });
 
   it('pin a well-formed checksum for both architectures they build', () => {
