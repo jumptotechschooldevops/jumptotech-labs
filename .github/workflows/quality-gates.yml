@@ -32,6 +32,10 @@
 #     same ownership contract as docs/runtime-ownership.md.
 #   · Deterministic teardown in an `if: always()` step, and diagnostics captured
 #     *before* it.
+#   · Suites run through `test-support/strict-vitest.ts`, not bare `vitest run`:
+#     an integration suite skips itself when its infrastructure is missing, and
+#     in a job that exists to provide that infrastructure a skip is a failure,
+#     not a green tick. Same arguments; it also fails a run where no test ran.
 #   · No secrets, no cloud credentials, no registry logins. The AWS track is
 #     simulated and needs none; nothing here has any.
 #
@@ -60,10 +64,14 @@ on:
     branches: [main]
   pull_request:
 
-# A newer push supersedes an in-flight run on the same ref.
+# A newer push to a pull request supersedes the run in flight. A push to main
+# never does: each merge commit is grouped by its own SHA and validated to the
+# end, so every commit on main has a complete run to point to. (Grouped by ref,
+# a second merge cancelled the first one's run — and a queued run is replaced by
+# the next one — leaving commits on main that no finished run ever checked.)
 concurrency:
-  group: quality-gates-${{ github.ref }}
-  cancel-in-progress: true
+  group: quality-gates-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -80,9 +88,13 @@ jobs:
       JTT_TEST_RUN_ID: ci${{ github.run_id }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          # Nothing here pushes. Not leaving the token in .git/config keeps it
+          # away from every later step, `npm ci`'s dependency scripts included.
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # One place decides the version, and it is the same file `nvm use`
           # reads on a laptop. A literal here is a second source of truth that
@@ -272,8 +284,10 @@ jobs:
       TEST_DB_PORT: 55432
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -294,15 +308,15 @@ jobs:
       - name: Diagnostics
         if: failure()
         run: |
-          docker ps -a --filter name=jumptotech-labs-test-db
-          docker logs --tail 200 jumptotech-labs-test-db 2>&1 || true
+          docker ps -a --filter "name=jumptotech-labs-test-db-${TEST_DB_PORT}"
+          docker logs --tail 200 "jumptotech-labs-test-db-${TEST_DB_PORT}" 2>&1 || true
 
       # `make test-db` removes the container on both paths; this covers the
       # third, where the job was cancelled between the two.
       - name: Clean up
         if: always()
         run: |
-          docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
+          docker rm -f "jumptotech-labs-test-db-${TEST_DB_PORT}" >/dev/null 2>&1 || true
           docker ps -aq --filter "label=jumptotech.io/restore-drill=${JTT_TEST_RUN_ID}" \
             | xargs -r docker rm -f >/dev/null 2>&1 || true
 
@@ -322,10 +336,17 @@ jobs:
       LAB_CLUSTER_NAME: jumptotech-labs
       KIND_VERSION: v0.31.0
       KUBECTL_VERSION: v1.34.2
+      # linux/amd64, from the .sha256sum / .sha256 files published beside each
+      # binary; change them with the versions. A download that does not match
+      # fails the step instead of running as root on the runner.
+      KIND_SHA256: eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa
+      KUBECTL_SHA256: 9591f3d75e1581f3f7392e6ad119aab2f28ae7d6c6e083dc5d22469667f27253
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -335,9 +356,11 @@ jobs:
           set -euo pipefail
           curl -fsSLo /tmp/kind \
             "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  /tmp/kind" | sha256sum -c -
           sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           curl -fsSLo /tmp/kubectl \
             "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  /tmp/kubectl" | sha256sum -c -
           sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
           kind --version
           kubectl version --client
@@ -353,7 +376,7 @@ jobs:
           RUN_INTEGRATION_TESTS: '1'
           KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
         run: |
-          npx vitest run test/integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/integration.test.ts \
             --root services/lab-orchestrator
 
       # BETA-P0-016: PodSecurity admission, the namespace admission policy and
@@ -363,7 +386,7 @@ jobs:
           RUN_INTEGRATION_TESTS: '1'
           KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
         run: |
-          npx vitest run test/pod-security-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/pod-security-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: Whole-catalog Kubernetes suite
@@ -371,7 +394,7 @@ jobs:
           RUN_INTEGRATION_TESTS: '1'
           KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
         run: |
-          npx vitest run test/labs-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/labs-integration.test.ts \
             --root services/lab-orchestrator
 
       # BETA-P0-015. The steps above prove the NetworkPolicy objects exist; a
@@ -385,7 +408,7 @@ jobs:
           RUN_INTEGRATION_TESTS: '1'
           KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
         run: |
-          npx vitest run test/network-policy-enforcement-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/network-policy-enforcement-integration.test.ts \
             --root services/lab-orchestrator \
             --testTimeout=900000 --hookTimeout=900000
 
@@ -410,7 +433,7 @@ jobs:
 
       - name: Upload cluster logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kind-logs-${{ github.run_id }}
           path: /tmp/kind-logs
@@ -443,8 +466,10 @@ jobs:
       RUN_INTEGRATION_TESTS: '1'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -458,21 +483,29 @@ jobs:
         run: npm run sandbox:build
 
       - name: Linux and Terraform sandboxes
-        run: npx vitest run test/sandbox-integration.test.ts --root apps/api
+        run: npx tsx test-support/strict-vitest.ts test/sandbox-integration.test.ts --root apps/api
 
       - name: Linux man pages
         run: |
-          npx vitest run test/linux-man-pages-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/linux-man-pages-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: Ansible runtime
         run: |
-          npx vitest run test/ansible-runtime-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/ansible-runtime-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: CI/CD runtime
         run: |
-          npx vitest run test/cicd-runtime-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/cicd-runtime-integration.test.ts \
+            --root services/lab-orchestrator
+
+      # BETA-P0-019. Every absolute path the providers exec, present in each of
+      # the four images just built. It found `/usr/bin/stat` missing from the
+      # Alpine images, which no fake runtime can, and until now ran nowhere.
+      - name: Sandbox images carry every binary the providers exec
+        run: |
+          npx tsx test-support/strict-vitest.ts test/sandbox-image-binaries-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: Diagnostics
@@ -514,8 +547,10 @@ jobs:
       RUN_INTEGRATION_TESTS: '1'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -532,7 +567,7 @@ jobs:
 
       - name: NET-004 … NET-008
         run: |
-          npx vitest run \
+          npx tsx test-support/strict-vitest.ts \
             test/net004-integration.test.ts \
             test/net005-integration.test.ts \
             test/net006-integration.test.ts \
@@ -542,7 +577,7 @@ jobs:
 
       - name: The NET_RAW capability boundary
         run: |
-          npx vitest run test/net-raw-capability-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/net-raw-capability-integration.test.ts \
             --root services/lab-orchestrator
 
       - name: Diagnostics
@@ -550,7 +585,7 @@ jobs:
         run: |
           docker ps -a
           docker network ls --filter name=jtt-net-
-          docker network inspect $(docker network ls -q --filter name=jtt-net-) || true
+          docker network ls -q --filter name=jtt-net- | xargs -r docker network inspect || true
 
       - name: Leaked sandboxes, peers and segments
         if: always()
@@ -582,8 +617,10 @@ jobs:
       RUN_DOCKER_INTEGRATION_TESTS: '1'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -599,7 +636,7 @@ jobs:
 
       - name: Core Docker suite
         run: |
-          npx vitest run test/docker-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/docker-integration.test.ts \
             --root services/lab-orchestrator \
             --testTimeout=900000 --hookTimeout=900000
 
@@ -611,7 +648,7 @@ jobs:
           set -euo pipefail
           for suite in docker009 docker010 docker011 docker012 docker013 docker014; do
             echo "::group::$suite"
-            npx vitest run "test/${suite}-integration.test.ts" \
+            npx tsx test-support/strict-vitest.ts "test/${suite}-integration.test.ts" \
               --root services/lab-orchestrator \
               --testTimeout=900000 --hookTimeout=900000
             echo "::endgroup::"
@@ -655,10 +692,17 @@ jobs:
       LAB_CLUSTER_NAME: jumptotech-labs
       KIND_VERSION: v0.31.0
       KUBECTL_VERSION: v1.34.2
+      # linux/amd64, from the .sha256sum / .sha256 files published beside each
+      # binary; change them with the versions. A download that does not match
+      # fails the step instead of running as root on the runner.
+      KIND_SHA256: eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa
+      KUBECTL_SHA256: 9591f3d75e1581f3f7392e6ad119aab2f28ae7d6c6e083dc5d22469667f27253
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -668,9 +712,11 @@ jobs:
           set -euo pipefail
           curl -fsSLo /tmp/kind \
             "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  /tmp/kind" | sha256sum -c -
           sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           curl -fsSLo /tmp/kubectl \
             "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  /tmp/kubectl" | sha256sum -c -
           sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
 
       - name: Install
@@ -713,8 +759,10 @@ jobs:
       JTT_TEST_RUN_ID: cisbd${{ github.run_id }}
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -761,8 +809,10 @@ jobs:
       RUN_INTEGRATION_TESTS: '1'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -772,7 +822,7 @@ jobs:
 
       - name: TLS edge suite, in the real web image
         run: |
-          npx vitest run test/tls-edge-integration.test.ts \
+          npx tsx test-support/strict-vitest.ts test/tls-edge-integration.test.ts \
             --root services/observability \
             --testTimeout=300000 --hookTimeout=900000
 
@@ -818,8 +868,10 @@ jobs:
       CI: 'true'
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -850,7 +902,7 @@ jobs:
       # Traces, screenshots and videos of test-only students on a throwaway stack.
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-e2e-${{ github.run_id }}
           path: |

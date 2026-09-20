@@ -1,0 +1,14 @@
+{
+  // `npm run typecheck` walks the workspaces, and scripts/ is not one: every
+  // TypeScript file here ran under tsx, which strips types without checking
+  // them, so validate-labs, production-config-check, verify-network-policy,
+  // tls-check and the five-student gate were never typechecked by the gate
+  // that claims to cover "all workspaces". `npm run typecheck:scripts`.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

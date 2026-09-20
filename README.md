@@ -2090,8 +2090,9 @@ make db-shell       # psql inside the container
   [docs/runtime-architecture.md §11](docs/runtime-architecture.md).
 - Data lives in the named volume `jumptotech-labs-postgres-data`.
   `docker compose down` keeps it; `docker compose down -v` and `make clean`
-  delete it, and `make clean` says so before it does — and refuses outright on
-  a production checkout (`scripts/refuse-on-production.sh`).
+  delete it. `make clean` refuses outright on a production checkout
+  (`scripts/refuse-on-production.sh`), and elsewhere refuses unless told
+  `CONFIRM=delete-student-progress`.
 - **The volume is not a backup.** `make db-backup` writes a verified
   `pg_dump --format=custom` archive and checksum to `backups/postgres`
   (git-ignored); `scripts/db-restore.sh` restores one, deliberately, into a new
@@ -3487,8 +3488,11 @@ curl -s localhost:4000/api/me/attempts | jq '.data.attempts[] | {labId, status}'
 
 ## Automated tests
 
+What CI runs, job by job, with the local command for each and the release
+checklist: [docs/development/ci-and-release-gates.md](docs/development/ci-and-release-gates.md).
+
 ```bash
-npm run typecheck        # tsc --noEmit across all workspaces
+npm run typecheck        # tsc --noEmit across all workspaces, and scripts/
 npm test                 # unit tests, no cluster required
 npm run build            # frontend production build
 ```

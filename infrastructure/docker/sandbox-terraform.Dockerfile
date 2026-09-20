@@ -32,6 +32,11 @@ ARG SANDBOX_LINUX_IMAGE=jumptotech/lab-linux:latest
 FROM debian:bookworm-slim AS tools
 
 ARG TERRAFORM_VERSION=1.9.8
+# SHA-256 of the release zip, per architecture, from HashiCorp's published
+# terraform_<version>_SHA256SUMS; change them with the version. The providers
+# need nothing here: `terraform providers mirror` verifies them itself.
+ARG TERRAFORM_SHA256_AMD64=186e0145f5e5f2eb97cbd785bc78f21bae4ef15119349f6ad4fa535b83b10df8
+ARG TERRAFORM_SHA256_ARM64=f85868798834558239f6148834884008f2722548f84034c9b0f62934b2d73ebb
 ARG LOCAL_PROVIDER_VERSION=2.5.2
 ARG RANDOM_PROVIDER_VERSION=3.6.3
 
@@ -43,12 +48,13 @@ RUN set -eux; \
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      amd64) tfarch=amd64 ;; \
-      arm64) tfarch=arm64 ;; \
+      amd64) tfarch=amd64; tfsum="$TERRAFORM_SHA256_AMD64" ;; \
+      arm64) tfarch=arm64; tfsum="$TERRAFORM_SHA256_ARM64" ;; \
       *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
     esac; \
     curl -fsSLo /tmp/terraform.zip \
       "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${tfarch}.zip"; \
+    echo "${tfsum}  /tmp/terraform.zip" | sha256sum -c -; \
     unzip -q /tmp/terraform.zip -d /usr/local/bin; \
     rm /tmp/terraform.zip; \
     chmod 0755 /usr/local/bin/terraform; \

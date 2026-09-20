@@ -43,6 +43,22 @@ describe('Docker build contexts', () => {
     expect(present).toContain('infrastructure/docker/nginx/tls/');
   });
 
+  it('exclude host build state, which the images build for themselves', () => {
+    // A workspace's own node_modules was copied over the image's `npm ci`
+    // install by `COPY services/<ws> services/<ws>` (release-engineering audit).
+    const present = rules('.dockerignore');
+    for (const rule of ['node_modules', '**/node_modules', '**/dist', '**/coverage']) {
+      expect(present, rule).toContain(rule);
+    }
+    // Every node_modules an image has, it installed: only ever copied between stages.
+    const dockerDir = path.join(REPO_ROOT, 'infrastructure/docker');
+    for (const name of readdirSync(dockerDir).filter((file) => file.endsWith('.Dockerfile'))) {
+      for (const line of readFileSync(path.join(dockerDir, name), 'utf8').split('\n')) {
+        if (/^\s*(COPY|ADD)\s/.test(line) && /node_modules/.test(line)) expect(line, name).toMatch(/--from=/);
+      }
+    }
+  });
+
   it('are never asked to copy an excluded path', () => {
     const dockerDir = path.join(REPO_ROOT, 'infrastructure/docker');
     const excludedPrefixes = EXCLUDED.filter((rule) => !rule.startsWith('**')).map((rule) => rule.replace(/\/$/, ''));

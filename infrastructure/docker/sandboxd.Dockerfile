@@ -47,18 +47,27 @@ RUN npm ci --omit=dev --workspace @jumptotech/sandboxd --include-workspace-root 
 FROM node:22-bookworm-slim
 
 ARG DOCKER_CLI_VERSION=27.3.1
+# SHA-256 of every download, per architecture, checked before anything is
+# installed: a changed or truncated file fails the build. Change them with the
+# version. kubectl's and compose's are the checksum files published beside each
+# binary; docker's static tarballs have none published, so theirs were recorded
+# from download.docker.com (2026-09-19). services/observability/test/
+# dockerfile-downloads.test.ts holds every Dockerfile to this.
+ARG DOCKER_CLI_SHA256_AMD64=9b4f6fe406e50f9085ee474c451e2bb5adb119a03591f467922d3b4e2ddf31d3
+ARG DOCKER_CLI_SHA256_ARM64=4da6a6c7502b7ab561675a5ff5ac192d9b49d76d0b8847cf17ade246122279f4
 
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      amd64) darch=x86_64 ;; \
-      arm64) darch=aarch64 ;; \
+      amd64) darch=x86_64; dsum="$DOCKER_CLI_SHA256_AMD64" ;; \
+      arm64) darch=aarch64; dsum="$DOCKER_CLI_SHA256_ARM64" ;; \
       *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
     esac; \
     curl -fsSLo /tmp/docker.tgz \
       "https://download.docker.com/linux/static/stable/${darch}/docker-${DOCKER_CLI_VERSION}.tgz"; \
+    echo "${dsum}  /tmp/docker.tgz" | sha256sum -c -; \
     tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
     install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
     rm -rf /tmp/docker.tgz /tmp/docker; \
@@ -73,6 +82,18 @@ COPY package.json package-lock.json tsconfig.base.json ./
 COPY services/observability services/observability
 COPY services/lab-orchestrator services/lab-orchestrator
 COPY services/sandboxd        services/sandboxd
+
+# npm does not hoist every dependency to the root of the tree: a workspace's own
+# dependency can be installed inside that workspace, and `prom-client` — which
+# services/observability/src/metrics.ts imports — is placed at
+# services/observability/node_modules/prom-client by the lockfile. The installed
+# tree is therefore more than /app/node_modules, and a runtime stage that copies
+# only the root one ships a service that cannot start. Until the host's own
+# node_modules was excluded from the build context this was hidden: the source
+# COPY above carried the host's copy in.
+# services/observability/test/runtime-image-dependencies.test.ts holds every
+# Dockerfile to this, driven by the lockfile.
+COPY --from=build /app/services/observability/node_modules ./services/observability/node_modules
 
 # The broker owns nothing it runs on: a bug in it cannot rewrite its own source.
 RUN chown -R root:root /app && chmod -R a-w /app

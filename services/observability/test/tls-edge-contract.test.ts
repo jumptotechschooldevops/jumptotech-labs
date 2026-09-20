@@ -245,7 +245,7 @@ describe('the web image (web.Dockerfile)', () => {
   const dockerfile = code(read('infrastructure/docker/web.Dockerfile'));
 
   it('builds an edge stage with openssl and the gate, and ships the bundle on top of it', () => {
-    expect(dockerfile).toMatch(/^FROM nginx:1\.27-alpine AS edge$/m);
+    expect(dockerfile).toMatch(/^FROM nginx:1\.30-alpine AS edge$/m);
     expect(dockerfile).toMatch(/apk add --no-cache openssl/);
     expect(dockerfile).toMatch(
       /^COPY --chmod=0755 infrastructure\/docker\/nginx\/tls-preflight\.sh \/usr\/local\/bin\/jtt-tls-preflight$/m,
@@ -254,7 +254,7 @@ describe('the web image (web.Dockerfile)', () => {
       /^COPY --chmod=0755 infrastructure\/docker\/nginx\/05-jumptotech-tls-preflight\.sh \/docker-entrypoint\.d\/05-jumptotech-tls-preflight\.sh$/m,
     );
     const stages = [...dockerfile.matchAll(/^FROM\s+(.+)$/gm)].map((m) => m[1]);
-    expect(stages).toEqual(['node:22-bookworm-slim AS build', 'nginx:1.27-alpine AS edge', 'edge']);
+    expect(stages).toEqual(['node:22-bookworm-slim AS build', 'nginx:1.30-alpine AS edge', 'edge']);
     expect(dockerfile.slice(dockerfile.lastIndexOf('FROM edge'))).toMatch(/COPY --from=build \/app\/apps\/web\/dist \/usr\/share\/nginx\/html/);
   });
 

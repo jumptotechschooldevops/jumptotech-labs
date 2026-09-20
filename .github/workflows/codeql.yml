@@ -19,6 +19,15 @@ on:
   schedule:
     - cron: '45 17 * * 6'
 
+# As in quality-gates.yml: a newer push to a pull request cancels the analysis
+# in flight; every commit pushed to main is analysed to the end.
+concurrency:
+  group: codeql-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Nothing at workflow level; the job asks for exactly what analysis needs.
+permissions: {}
+
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
@@ -28,6 +37,9 @@ jobs:
     #   - https://gh.io/using-larger-runners (GitHub.com only)
     # Consider using larger runners or machines with greater resources for possible analysis time improvements.
     runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    # The default is six hours. A normal javascript-typescript analysis takes a
+    # few minutes; a hung one should fail, not hold a runner.
+    timeout-minutes: 45
     permissions:
       # required for all workflows
       security-events: write
@@ -45,6 +57,10 @@ jobs:
         include:
         - language: javascript-typescript
           build-mode: none
+        # The workflows themselves: expression injection into `run:`, untrusted
+        # checkouts, over-broad permissions. No build; it reads .github/.
+        - language: actions
+          build-mode: none
         # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'rust', 'swift'
         # Use `c-cpp` to analyze code written in C, C++ or both
         # Use 'java-kotlin' to analyze code written in Java, Kotlin or both
@@ -56,6 +72,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
+      with:
+        persist-credentials: false
 
     # Add any setup steps before running the `github/codeql-action/init` action.
     # This includes steps like installing compilers or runtimes (`actions/setup-node`

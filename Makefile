@@ -15,7 +15,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate production-preflight production-config-check private-beta-smoke host-capacity-sample private-beta-diagnostics test-private-beta-diagnostics test-production-host typecheck check reset clean
+.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate production-preflight production-config-check private-beta-smoke host-capacity-sample private-beta-diagnostics test-private-beta-diagnostics test-production-host typecheck clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -243,12 +243,13 @@ test-terminal-container: ## Run the terminal integration suite inside a containe
 		-e KUBECONFIG=/app/infrastructure/kind/generated/kubeconfig-internal.yaml \
 		-e RUNTIME_OWNER_ID="$${RUNTIME_OWNER_ID:-terminal-container}" \
 		-e JTT_TEST_RUN_ID="$${JTT_TEST_RUN_ID:-tc$$$$}" \
-		-v "$(PWD)/services:/app/services" \
-		-v "$(PWD)/apps:/app/apps" \
-		-v "$(PWD)/labs:/app/labs" \
-		-v "$(PWD)/test-support:/app/test-support" \
-		-v "$(PWD)/infrastructure:/app/infrastructure" \
-		jumptotech/terminal-test
+		-v "$(CURDIR)/services:/app/services" \
+		-v "$(CURDIR)/apps:/app/apps" \
+		-v "$(CURDIR)/labs:/app/labs" \
+		-v "$(CURDIR)/test-support:/app/test-support" \
+		-v "$(CURDIR)/infrastructure:/app/infrastructure" \
+		jumptotech/terminal-test \
+		npx tsx test-support/strict-vitest.ts test/terminal-integration.test.ts --root services/terminal
 
 # The Linux sandbox image the suite creates its containers from. Built here from
 # the canonical Dockerfile rather than assumed: a fresh runner has no
@@ -268,46 +269,59 @@ test-sandboxd-container: ## Run the sandboxd suite against a real daemon and rea
 		-e JTT_TEST_RUN_ID="$${JTT_TEST_RUN_ID:-sbx$$$$}" \
 		-e LINUX_SANDBOX_IMAGE=$(SANDBOXD_TEST_LINUX_IMAGE) \
 		-v /var/run/docker.sock:/var/run/docker.sock \
-		-v "$(PWD)/services:/app/services" \
-		-v "$(PWD)/apps:/app/apps" \
-		-v "$(PWD)/labs:/app/labs" \
-		-v "$(PWD)/test-support:/app/test-support" \
-		-v "$(PWD)/infrastructure:/app/infrastructure" \
+		-v "$(CURDIR)/services:/app/services" \
+		-v "$(CURDIR)/apps:/app/apps" \
+		-v "$(CURDIR)/labs:/app/labs" \
+		-v "$(CURDIR)/test-support:/app/test-support" \
+		-v "$(CURDIR)/infrastructure:/app/infrastructure" \
 		jumptotech/terminal-test \
-		npx vitest run test/sandboxd-integration.test.ts --root services/sandboxd \
+		npx tsx test-support/strict-vitest.ts test/sandboxd-integration.test.ts --root services/sandboxd \
 			--testTimeout=300000 --hookTimeout=300000
 
-test-db: ## Run the persistence suites against a throwaway PostgreSQL
-	@docker rm -f jumptotech-labs-test-db >/dev/null 2>&1 || true
-	@docker run --rm -d --name jumptotech-labs-test-db \
+# The container is named after its port. It was one fixed name, and the recipe
+# starts by force-removing any container of that name — so `make test-db` in a
+# second worktree (TEST_DB_PORT=55440, as README → Testing advises) deleted the
+# first worktree's database in the middle of its run. Two runs on one port
+# cannot coexist anyway; two on different ports now can.
+TEST_DB_PORT ?= 55432
+TEST_DB_CONTAINER := jumptotech-labs-test-db-$(TEST_DB_PORT)
+
+test-db: ## Run the persistence suites against a throwaway PostgreSQL (TEST_DB_PORT=55432)
+	@docker rm -f $(TEST_DB_CONTAINER) >/dev/null 2>&1 || true
+	@docker run --rm -d --name $(TEST_DB_CONTAINER) \
 		-e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=jumptotech_labs_test \
-		-p 127.0.0.1:$${TEST_DB_PORT:-55432}:5432 postgres:16-alpine >/dev/null
+		-p 127.0.0.1:$(TEST_DB_PORT):5432 postgres:16-alpine >/dev/null
 	@# Not `pg_isready`: that probes the server's unix socket from inside the
 	@# container and is satisfied by the temporary postmaster the official image
 	@# runs `initdb` against, while a query from the host still gets
 	@# ECONNRESET. The gate has to perform the operation it is gating — see
 	@# scripts/wait-for-postgres.mjs.
 	@node scripts/wait-for-postgres.mjs \
-		postgresql://test:test@localhost:$${TEST_DB_PORT:-55432}/jumptotech_labs_test 90 \
-		|| { docker logs --tail 40 jumptotech-labs-test-db; \
-		     docker rm -f jumptotech-labs-test-db >/dev/null; exit 1; }
+		postgresql://test:test@localhost:$(TEST_DB_PORT)/jumptotech_labs_test 90 \
+		|| { docker logs --tail 40 $(TEST_DB_CONTAINER); \
+		     docker rm -f $(TEST_DB_CONTAINER) >/dev/null; exit 1; }
 	@RUN_DB_TESTS=1 \
-		TEST_DATABASE_URL=postgresql://test:test@localhost:$${TEST_DB_PORT:-55432}/jumptotech_labs_test \
+		TEST_DATABASE_URL=postgresql://test:test@localhost:$(TEST_DB_PORT)/jumptotech_labs_test \
 		npm run test:db; \
-		status=$$?; docker rm -f jumptotech-labs-test-db >/dev/null; exit $$status
+		status=$$?; docker rm -f $(TEST_DB_CONTAINER) >/dev/null; exit $$status
 
 typecheck: ## Typecheck every workspace
 	@npm run typecheck
 
-check: ## Call the verifier for K8S-001
-	@curl -s -X POST localhost:4000/api/labs/K8S-001/check | python3 -m json.tool
-
-reset: ## Reset the K8S-001 lab environment
-	@curl -s -X POST localhost:4000/api/labs/K8S-001/reset | python3 -m json.tool
-
-clean: ## Tear down everything (containers + cluster + STUDENT PROGRESS; refused on a production checkout)
+# It printed its warning and deleted the volume in the same breath. Run from a
+# production checkout — same directory, same COMPOSE_PROJECT_NAME — the bare
+# `docker compose down -v` below reaches the production PostgreSQL volume, and
+# the incident runbook already lists `make clean` beside `prod down -v`. So it
+# refuses outright on a production checkout, and elsewhere does nothing unless
+# the deletion is spelled out.
+clean: ## Tear down everything (containers + cluster + STUDENT PROGRESS; refused on a production checkout); needs CONFIRM=delete-student-progress
 	@bash scripts/refuse-on-production.sh clean "the PostgreSQL volume (every student's progress) and the kind cluster"
-	@echo "This removes the postgres volume: every student's saved progress goes with it."
-	@echo "Back it up first if it matters: make db-backup. backups/ is not removed."
+	@if [ "$(CONFIRM)" != "delete-student-progress" ]; then \
+		echo "make clean removes the postgres volume: every student's saved progress goes with it." >&2; \
+		echo "Back it up first if it matters (make db-backup), then run:" >&2; \
+		echo "  make clean CONFIRM=delete-student-progress" >&2; \
+		exit 2; \
+	fi
+	@echo "Removing the postgres volume: every student's saved progress goes with it. backups/ is not removed."
 	@docker compose down -v --remove-orphans
 	@bash scripts/cluster-down.sh

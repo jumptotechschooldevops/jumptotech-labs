@@ -11,7 +11,8 @@
  * went unnoticed; only the real images can answer this.
  *
  * Tier: INTEGRATION. Gated on RUN_INTEGRATION_TESTS=1 and Docker; an image that
- * is not built is reported and skipped, never pulled or built here. Creates
+ * is not built is reported and skipped (a real vitest skip, which CI's strict
+ * runner fails on), never pulled or built here. Creates
  * only `docker run --rm` containers with no network, which remove themselves.
  */
 import { execFile } from 'node:child_process';
@@ -57,9 +58,13 @@ async function inImage(image: string, script: string): Promise<string> {
 }
 
 describe.runIf(ENABLED)('sandbox images carry every binary the providers exec', () => {
-  it.each(IMAGES)('%s (%s)', async (_name, image, extra) => {
+  // `it.for`, not `it.each`, for the test context: a missing image is reported
+  // as a skip. It used to `return`, which vitest counts as a pass, so a CI job
+  // whose images were built under another tag went green having checked nothing.
+  it.for(IMAGES)('%s (%s)', { timeout: 180_000 }, async ([, image, extra], context) => {
     if (!(await imagePresent(image))) {
       console.log(`[sandbox-image-binaries] ${image} is not built — run: npm run sandbox:build`);
+      context.skip();
       return;
     }
     const binaries = [...new Set([...INTERNAL_EXEC_ALLOWLIST, ...extra])];
@@ -72,5 +77,5 @@ describe.runIf(ENABLED)('sandbox images carry every binary the providers exec', 
     // Owner and group are whoever the image runs as (root, or student on terraform).
     expect(file).toMatch(/^regular file\|\d{3,4}\|\w+\|\w+\|1$/);
     expect(dir).toMatch(/^directory\|\d{3,4}\|\w+\|\w+\|\d+$/);
-  }, 180_000);
+  });
 });

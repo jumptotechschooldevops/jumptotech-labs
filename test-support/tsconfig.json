@@ -1,0 +1,12 @@
+{
+  // The helpers here are typechecked only through the suites that import them;
+  // vitest.setup.ts is imported by none (it is named in each vitest config), so
+  // without this nothing checked it.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["*.ts"]
+}

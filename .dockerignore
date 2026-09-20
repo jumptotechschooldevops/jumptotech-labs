@@ -22,3 +22,24 @@ infrastructure/observability/alertmanager/secrets/
 backups/
 # Per-run secrets e2e/stack.sh generates for the browser E2E stack.
 e2e/.stack/
+
+# Host build state (release-engineering audit). Every image installs its own
+# dependencies with `npm ci` inside the build and builds its own bundle, so none
+# of this is ever needed — but the Dockerfiles copy whole workspace directories
+# (`COPY services/observability services/observability`), and a workspace's own
+# node_modules on the host (npm nests a package there when versions differ:
+# services/observability/node_modules/prom-client today) was copied over the one
+# `npm ci` had just installed in the image — host-built, and on a Mac built for
+# the wrong platform if it were ever a native addon. It was also ~270 MB of
+# context sent to the builder on every build.
+node_modules
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+**/*.log
+**/.DS_Store
+.idea/
+.vscode/
+e2e/test-results/
+e2e/playwright-report/
