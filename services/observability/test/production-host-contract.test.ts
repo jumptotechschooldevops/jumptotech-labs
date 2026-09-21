@@ -23,6 +23,7 @@ import * as contract from '@jumptotech/test-support/production-host-contract';
 import {
   PRODUCTION_COMPOSE_FILES,
   PRODUCTION_PUBLICATIONS,
+  composeDurationSeconds,
   evaluateProductionComposition,
   evaluateServiceLoaders,
   formatResult,
@@ -267,6 +268,41 @@ describe('each unsafe variation is a FAIL', () => {
     const results = mutate((c) => (c.services!.api!.volumes![1]!.source = '/repo/backups/status'));
     expect(results.filter((result) => result.status === 'WARN').map((result) => result.id)).toEqual(['backup.status-dir']);
     expect(statusOf(results, 'backup.status-dir')).toBe('WARN');
+  });
+});
+
+describe('the PostgreSQL stop grace period is read the way Compose renders it', () => {
+  it('reads Go durations', () => {
+    expect(composeDurationSeconds('60s')).toBe(60);
+    expect(composeDurationSeconds('1m0s')).toBe(60);
+    expect(composeDurationSeconds('1h2m3s')).toBe(3723);
+    expect(composeDurationSeconds('1m30.5s')).toBe(90.5);
+    expect(composeDurationSeconds('500ms')).toBe(0.5);
+  });
+
+  it('refuses anything that is not a duration', () => {
+    for (const text of ['', '60', 's', '1x', '1m 0s', '-1s', '1.s', '.5s', '1m0']) expect(composeDurationSeconds(text)).toBeUndefined();
+  });
+
+  it('passes 1m0s and 30s, and fails 29s, 500ms and an unreadable value', () => {
+    const grace = (value: string) => mutate((c) => (c.services!.postgres!.stop_grace_period = value));
+    expect(statusOf(grace('1m0s'), 'durability.database-shutdown')).toBe('PASS');
+    expect(statusOf(grace('30s'), 'durability.database-shutdown')).toBe('PASS');
+    expect(statusOf(grace('29s'), 'durability.database-shutdown')).toBe('FAIL');
+    // Read as minutes, "500ms" would have been 30 000 s: a false PASS.
+    expect(statusOf(grace('500ms'), 'durability.database-shutdown')).toBe('FAIL');
+    expect(statusOf(grace('forever'), 'durability.database-shutdown')).toBe('FAIL');
+  });
+
+  // CodeQL js/polynomial-redos: the old /(\d+)(h|m|s)/g rescanned every run of digits from each start.
+  it('reads a long run of zeros in linear time', () => {
+    const zeros = '0'.repeat(200_000);
+    const started = performance.now();
+    expect(composeDurationSeconds(zeros)).toBeUndefined();
+    expect(composeDurationSeconds(`${zeros}s`)).toBe(0);
+    expect(composeDurationSeconds(`1m${zeros}s`)).toBe(60);
+    expect(statusOf(mutate((c) => (c.services!.postgres!.stop_grace_period = zeros)), 'durability.database-shutdown')).toBe('FAIL');
+    expect(performance.now() - started).toBeLessThan(2_000);
   });
 });
 
