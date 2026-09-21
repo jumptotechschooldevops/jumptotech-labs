@@ -130,8 +130,11 @@ reset:
     containers: true
     volumes: true
     networks: true
-    # The image the student built is theirs, and a reset should take it away
-    # along with their Dockerfile — otherwise the lab would start half-done.
+    # The image the student built is theirs, and a reset takes it away, so the
+    # lab cannot start half-done. The workspace reset re-seeds the starter
+    # files only: a Dockerfile the student wrote is still in the workspace
+    # afterwards (the terminal service's seed overwrites declared files and
+    # removes nothing), and the lab is not passing until it is built again.
     images: true
     workspace: true
 
