@@ -4,6 +4,8 @@
 **Blast radius:** exactly `jtt_provider_labs_total` for that provider — the
 Providers dashboard turns "docker is down" into "fourteen labs cannot start".
 
+Commands use `prod` and `q` from [private-beta-operations.md §1](private-beta-operations.md).
+
 ## 1. Confirm it is real
 
 ```promql
@@ -34,9 +36,9 @@ student is misled while you work.
 
 1. The reason is in the log, not the metric — free text cannot be a label:
    ```bash
-   docker compose logs api | grep '"event":"provider.availability.changed"'
+   prod logs api | grep '"event":"provider.availability.changed"'
    ```
-2. `curl -s localhost:4000/health | jq '.data.providers'` gives every provider's
+2. `prod exec -T api node -e "fetch('http://127.0.0.1:4000/health').then(r=>r.json()).then(b=>console.log(JSON.stringify(b.data.providers,null,1)))"` gives every provider's
    current status and reason in one place.
 3. Kubernetes: `kubectl get nodes`, and confirm the API can reach the API server
    (`jtt_config_info` shows the configured substrate).

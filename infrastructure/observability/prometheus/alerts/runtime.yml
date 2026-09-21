@@ -65,15 +65,9 @@ groups:
           summary: 'cleanup is failing to delete sandboxes on {{ $labels.provider }}'
           runbook_url: docs/runbooks/RB-05-cleanup-and-leaks.md
 
-      - alert: ReaperRefusingForeignOwner
-        expr: increase(jtt_reaper_skipped_total{reason="foreign_owner"}[15m]) > 0
-        for: 0m
-        labels:
-          severity: warning
-        annotations:
-          summary: 'the reaper found sandboxes wearing this platform''s labels that it does not own'
-          description: >-
-            Either two deployments share a runtime with the same labels and
-            different RUNTIME_OWNER_ID, or something is imitating platform
-            ownership metadata. Both need looking at.
-          runbook_url: docs/runbooks/RB-08-security-events.md
+      # There is deliberately no alert on a "foreign owner". One existed
+      # (ReaperRefusingForeignOwner, on jtt_reaper_skipped_total{reason=
+      # "foreign_owner"}) and could never fire: discovery returns only this
+      # deployment's own sandboxes, so the reaper never meets a foreign one,
+      # and it records only `no_expiry_label` and `within_grace_period`.
+      # Unowned and foreign sandboxes are found by hand: RB-05 §4b.

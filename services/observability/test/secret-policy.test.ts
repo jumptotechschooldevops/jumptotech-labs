@@ -49,6 +49,12 @@ describe('a production secret', () => {
     expect(secretWeakness('ab'.repeat(32))).toBe('low-entropy');
   });
 
+  it('refuses a value with surrounding whitespace, which the services do not all strip', () => {
+    for (const value of [`${HEX_64} `, ` ${HEX_64}`, `${HEX_64}\t`, `${HEX_64}\r`]) {
+      expect(secretWeakness(value), JSON.stringify(value.replace(HEX_64, '<hex>'))).toBe('whitespace');
+    }
+  });
+
   it('lets a caller set a lower floor for provider-issued credentials', () => {
     expect(secretWeakness('GOCSPX-abcdefghijklmnop', 16)).toBeNull();
     expect(secretWeakness('GOCSPX-abcdefghijklmnop')).toBe('too-short');
@@ -113,6 +119,17 @@ describe('assertProductionSecrets', () => {
         forbidden: [],
       }),
     ).toThrow(/INTERNAL_SERVICE_SECRET and TERMINAL_SESSION_SECRET are the same value/);
+  });
+
+  it('refuses a padded variable even when the loader trimmed it before asking', () => {
+    expect(() =>
+      assertProductionSecrets({
+        service: 'sandboxd',
+        env: { SANDBOXD_ATTACH_SECRET: `${HEX_48} ` } as NodeJS.ProcessEnv,
+        secrets: [{ name: 'SANDBOXD_ATTACH_SECRET', value: HEX_48, required: true }],
+        forbidden: [],
+      }),
+    ).toThrow(/SANDBOXD_ATTACH_SECRET has leading or trailing whitespace/);
   });
 
   it('refuses a secret the service must not hold', () => {

@@ -17,7 +17,8 @@ The certificate lifecycle itself is [production-tls.md](production-tls.md).
 q 'jtt_tls_check_status'                          # 0 ok, 1 warning, 2 critical
 q 'jtt_tls_check_findings'                        # the finding codes
 q 'jtt:tls_certificate_expiry:seconds / 86400'    # days left
-npm run --silent tls:check -- --origin "$PUBLIC_ORIGIN" --cert-dir infrastructure/docker/nginx/tls
+origin=$(grep -E '^PUBLIC_ORIGIN=' .env | tail -1 | cut -d= -f2-)    # not a secret
+npm run --silent tls:check -- --origin "$origin" --cert-dir infrastructure/docker/nginx/tls
 ```
 
 `tls:check` prints the full message for every code and also compares the served
@@ -29,7 +30,7 @@ from another machine too (without `--cert-dir`) to see DNS and the firewall.
 | code | Meaning | Section |
 |---|---|---|
 | `renewal_due` | Under 21 days | 5a |
-| `expires_soon`, `served_expired` | Under 7 days, or expired | 5a, then [production-tls.md §8](production-tls.md) |
+| `expires_soon`, `served_expired` | Under 7 days, or expired | 5a, then [production-tls.md §7.3](production-tls.md) |
 | `served_untrusted` | Chain does not reach a public root: missing intermediate, or a staging certificate | 5b |
 | `served_hostname_mismatch` | The certificate does not name `PUBLIC_ORIGIN`'s host | 5b |
 | `connection_refused`, `timeout`, `handshake_failed` | nginx is not serving TLS on 8443 | 5c |
@@ -74,8 +75,9 @@ expired, tell the cohort (§3 of the operations runbook) while issuing one.
   A closed 80 is usually a host firewall; an unexpected answer is something else
   bound to 80.
 - **5e The check.** `ready api 9400`; the API needs `PUBLIC_ORIGIN` (pinned in
-  production) and must resolve `web`. `EDGE_PROBE_ENABLED=false` in `.env` turns
-  it off — do not, except to stop a misbehaving check while you fix it.
+  production) and must resolve `web`. The check cannot be switched off from
+  `.env`: no compose file passes `EDGE_PROBE_ENABLED` to the api, so it keeps
+  its production default (on).
 
 ## 6. Verify recovery
 
@@ -95,7 +97,7 @@ expired, tell the cohort (§3 of the operations runbook) while issuing one.
 ## 8. Escalate when
 
 Under 48 hours to expiry with no certificate available, or any sign the private
-key has been exposed ([production-tls.md §9](production-tls.md)).
+key has been exposed ([production-tls.md §8](production-tls.md)).
 
 ## 9. Follow-up
 

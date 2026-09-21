@@ -357,7 +357,7 @@ checkout: *applied / pending / modified / unknown*.
 Inspect it:
 
 ```bash
-docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d jumptotech_labs_check_20260914'
+prod exec postgres sh -c 'psql -U "$POSTGRES_USER" -d jumptotech_labs_check_20260914'   # docker compose exec on a development stack
 ```
 
 ```sql
@@ -371,7 +371,7 @@ a separate server (`JTT_DB_CONTAINER=<a disposable postgres:16-alpine>`). Remove
 the check database when finished:
 
 ```bash
-docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE jumptotech_labs_check_20260914"'
+prod exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE jumptotech_labs_check_20260914"'
 ```
 
 ### 6.4 Production recovery procedure
@@ -382,7 +382,10 @@ the production host that is the runbook's `prod` function — all five files and
 define it, then `COMPOSE=prod`. A shorter file list re-creates the api without
 its backup-status mount, its metrics settings and its health check, so the
 backup alerts and the database dashboard go quiet exactly while you need them.
-On a development stack, `COMPOSE="docker compose -f docker-compose.yml -f docker-compose.runtime.yml"`.
+On a development stack, a function rather than a string, because zsh does not
+split an unquoted variable into words and `$COMPOSE stop api` would then look
+for a command named after the whole string:
+`dev() { docker compose -f docker-compose.yml -f docker-compose.runtime.yml "$@"; }; COMPOSE=dev`.
 
 1. **Announce maintenance.** Students will lose work written after the archive
    (§8).
@@ -419,7 +422,9 @@ On a development stack, `COMPOSE="docker compose -f docker-compose.yml -f docker
    printed which ones are pending.
    - **CHECKSUM DIFFERS** or **unknown** in that report means the code and the
      data disagree. Deploy the release that matches the archive; do not edit
-     migrations.
+     migrations. The api refuses to start on CHECKSUM DIFFERS, but **not** on
+     unknown: it starts against a schema newer than its code, so do not start
+     it until the release matches.
 7. **Validate** (§6.5).
 
 ### 6.5 Validate
@@ -453,7 +458,7 @@ Only after the restore is accepted, **and** after a fresh `scripts/db-backup.sh`
 of the restored state:
 
 ```bash
-docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE jumptotech_labs_prerestore_<ts>"'
+$COMPOSE exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE jumptotech_labs_prerestore_<ts>"'
 ```
 
 No script does this for you, by design.

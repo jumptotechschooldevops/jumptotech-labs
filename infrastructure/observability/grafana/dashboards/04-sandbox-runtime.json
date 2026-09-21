@@ -707,7 +707,7 @@
       "id": 83,
       "type": "timeseries",
       "title": "Reaper refusals by reason",
-      "description": "A refusal is a safety property working. `foreign_owner` is also a security signal \u2014 something not ours is wearing our labels.",
+      "description": "A refusal is a safety property working: a managed sandbox with no expiry label, or one inside its grace period. Sandboxes another deployment owns are never seen by the reaper (RB-05 \u00a74b).",
       "datasource": {
         "type": "prometheus",
         "uid": "jtt-prometheus"

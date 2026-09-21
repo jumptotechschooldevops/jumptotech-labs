@@ -835,9 +835,9 @@ export function createReaperMetrics(registry: Registry): ReaperMetrics {
     }),
 
     /*
-     * A refusal to delete is a *safety* property, and one of its reasons is a
-     * security signal: `foreign_owner` means something the platform does not
-     * own is wearing its labels.
+     * A refusal to delete is a *safety* property: `no_expiry_label` and
+     * `within_grace_period`. Discovery is owner-scoped, so a sandbox another
+     * deployment owns never reaches the reaper and is never counted here.
      */
     skipped: new client.Counter({
       name: 'jtt_reaper_skipped_total',

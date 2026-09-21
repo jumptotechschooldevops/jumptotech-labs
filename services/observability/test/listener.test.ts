@@ -205,6 +205,63 @@ describe('/readyz reflects dependencies', () => {
     expect(await registry.metrics()).toContain('jtt_readyz_ok{service="test"} 0');
   });
 
+  it('refreshes jtt_readyz_ok at every scrape, so one unready probe does not latch an alert', async () => {
+    const TOKEN = 'test-scrape-token-0123456789abcdef';
+    let healthy = true;
+    const registry = createRegistry({ service: 'test', defaultMetrics: false });
+    const common = createCommonMetrics(registry, 'test');
+    const server = createObservabilityListener({
+      service: 'test',
+      port: 0,
+      host: '127.0.0.1',
+      registry,
+      scrapeToken: TOKEN,
+      checks: [simpleCheck('runtime', () => (healthy ? { ok: true } : { ok: false, reason: 'unreachable' }))],
+      logger: silentLogger(),
+      readyzGauge: common.readyzOk,
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => (server.listening ? resolve() : server.once('listening', () => resolve())));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const scrape = async (): Promise<string> =>
+      (await fetch(`${url}/metrics`, { headers: { authorization: `Bearer ${TOKEN}` } })).text();
+
+    // Nothing polls /readyz: the scrape alone reports the dependency going down…
+    healthy = false;
+    expect(await scrape()).toContain('jtt_readyz_ok{service="test"} 0');
+    // …and coming back, although nobody asked /readyz in between.
+    healthy = true;
+    expect(await scrape()).toContain('jtt_readyz_ok{service="test"} 1');
+    // A probe that met the blip does not latch the gauge either.
+    healthy = false;
+    expect((await fetch(`${url}/readyz`)).status).toBe(503);
+    healthy = true;
+    expect(await scrape()).toContain('jtt_readyz_ok{service="test"} 1');
+  });
+
+  it('serves the scrape even when a readiness check hangs', async () => {
+    const TOKEN = 'test-scrape-token-0123456789abcdef';
+    const registry = createRegistry({ service: 'test', defaultMetrics: false });
+    const common = createCommonMetrics(registry, 'test');
+    const server = createObservabilityListener({
+      service: 'test',
+      port: 0,
+      host: '127.0.0.1',
+      registry,
+      scrapeToken: TOKEN,
+      checks: [{ name: 'wedged', check: () => new Promise(() => undefined) }],
+      logger: silentLogger(),
+      readyzGauge: common.readyzOk,
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => (server.listening ? resolve() : server.once('listening', () => resolve())));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const started = Date.now();
+    const res = await fetch(`${url}/metrics`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    expect(res.status).toBe(200);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it('needs no credential', async () => {
     const { url } = await listen({});
     expect((await fetch(`${url}/readyz`)).status).toBe(200);

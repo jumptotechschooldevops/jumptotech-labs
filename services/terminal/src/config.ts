@@ -221,7 +221,8 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
   });
 
   const explicitInternalSecret = env.INTERNAL_SERVICE_SECRET?.trim() ?? '';
-  const sandboxBrokerCredential = env.SANDBOXD_ATTACH_SECRET ?? '';
+  // Trimmed, as sandboxd trims the value it compares against (scope secrets).
+  const sandboxBrokerCredential = env.SANDBOXD_ATTACH_SECRET?.trim() ?? '';
   const sandboxBrokerEnabled = boolFromEnv(env, 'TERMINAL_SANDBOX_BROKER_ENABLED', false);
 
   if (isProductionEnv(env)) {

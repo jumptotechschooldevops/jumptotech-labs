@@ -113,6 +113,44 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.end(body);
 }
 
+/**
+ * Readiness is evaluated at every scrape as well as on `/readyz`.
+ *
+ * The gauge used to move only when something requested `/readyz`. The api's
+ * compose health check polls it; nothing polls the terminal's or sandboxd's.
+ * So `ServiceNotReady` was blind for those two, and it latched: one smoke or
+ * diagnostics run that met sandboxd during a runtime blip left
+ * `jtt_readyz_ok{service="sandboxd"} 0` — a critical page — until somebody
+ * happened to ask again. Bounded, so a check that hangs cannot stall the
+ * scrape that would report it: the previous value is kept instead.
+ */
+const SCRAPE_READINESS_TIMEOUT_MS = 2_000;
+
+async function refreshReadinessGauge(options: ObservabilityListenerOptions): Promise<void> {
+  const gauge = options.readyzGauge;
+  if (!gauge) return;
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), SCRAPE_READINESS_TIMEOUT_MS);
+    timer.unref();
+  });
+  try {
+    const report = await Promise.race([
+      evaluateReadiness({
+        service: options.service,
+        checks: options.checks,
+        ...(options.isStarted ? { isStarted: options.isStarted } : {}),
+      }),
+      timedOut,
+    ]);
+    if (report !== 'timeout') gauge.set({ service: options.service }, report.ready ? 1 : 0);
+  } catch {
+    // Checks do not throw by contract; the scrape must be served either way.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function createObservabilityListener(options: ObservabilityListenerOptions): Server {
   const host = options.host ?? '127.0.0.1';
 
@@ -190,6 +228,7 @@ export function createObservabilityListener(options: ObservabilityListenerOption
           }
         }
 
+        await refreshReadinessGauge(options);
         try {
           const body = await options.registry.metrics();
           res.writeHead(200, {

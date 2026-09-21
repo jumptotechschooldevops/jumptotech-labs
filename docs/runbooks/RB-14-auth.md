@@ -3,6 +3,8 @@
 **Alerts:** `AuthFailureSpike` (warning), `JwksFetchFailing` (warning),
 `AuthRejectionsAbnormal` (warning), `OidcSignInFailures` (warning)
 
+Commands use `prod` and `q` from [private-beta-operations.md §1](private-beta-operations.md).
+
 **At private-beta volume (BETA-P0-018)** `AuthFailureSpike` cannot fire: it needs
 more than one failure a second. The two beta alerts count instead —
 `AuthRejectionsAbnormal` at 20 presented-and-rejected credentials in 10 minutes
@@ -37,19 +39,27 @@ fires on a busy morning that is working fine.
 
 ## 2. Scope it — `outcome` names the cause
 
+`jtt_auth_attempts_total{outcome}` carries the api's error code
+(`apps/api/src/auth/identity.ts`):
+
 | outcome | Meaning |
 |---|---|
-| `no_credential` | Unauthenticated requests. Normal on `/auth/session`. |
-| `invalid_token` / `expired` | Token verification failed |
-| `unknown_session` | A cookie whose server-side record is gone |
-| `session_expired` | Working as designed |
+| `success` | Signed in |
+| `AUTH_REQUIRED` | No credential at all. Normal for a signed-out browser, and for a cookie whose server-side session is gone |
+| `AUTH_EXPIRED` | The session or token has expired: working as designed |
+| `AUTH_INVALID_TOKEN` | A credential was presented and did not verify: a bad signature, a malformed header, or the provider refusing a code exchange |
+| `AUTH_MISCONFIGURED` | The api cannot reach or use the identity provider (discovery, keys, token endpoint): §4 |
+| `AUTH_UNAVAILABLE` | The platform, not the caller: the database behind sign-ins did not answer, and the request got 503. RB-02 |
 
-On the callback: `state_mismatch`, `open_redirect_blocked` and
-`replayed_transaction` are **security-relevant**, not merely errors. See RB-08.
+`jtt_auth_callback_total{outcome}` for the sign-in round trip: `success`,
+`not_configured`, `provider_refused`, `no_transaction`, `state_mismatch`,
+`no_code`, `verification_failed`. A burst of `state_mismatch` or
+`no_transaction` with no matching sign-in attempts is **security-relevant**, not
+merely an error: RB-08.
 
 ## 3. Immediate mitigation
 
-If `unknown_session` dominates right after a deploy on a stack with no
+If `AUTH_REQUIRED` from browsers that were signed in dominates right after a deploy on a stack with no
 `DATABASE_URL`, browser sessions were in memory and the restart signed everyone
 out. Users signing in again is the whole fix — and `ProgressStoreIsMemory`
 should also be firing, which is the more important alert. This can only happen
@@ -58,7 +68,9 @@ start (BETA-P0-014).
 
 ## 4. Diagnose
 
-1. `docker compose logs api | grep '"event":"authn.failed"'`.
+1. `prod logs --since 30m api | grep '"authorizationResult":"unauthenticated"'`
+   — every refused request, by route. `authn.failed` is logged only for
+   `AUTH_UNAVAILABLE` (the database, not the caller).
 2. **JWKS.** Verification fails closed, so a provider outage means nobody can
    sign in — and cached keys mask it until they expire, which is why this often
    appears long after the provider's problem started:
@@ -94,7 +106,7 @@ Configuration or the provider. Nothing here is fixed by restarting the API.
 ## 6. Verify recovery
 
 - Failure ratio back to baseline (a low non-zero rate is normal — every
-  unauthenticated page load is a `no_credential`).
+  signed-out page load is an `AUTH_REQUIRED`).
 - Complete a real sign-in end to end.
 - `jtt_auth_sessions_active` increases.
 - `jtt_oidc_jwks_fetch_total{outcome="success"}` increments.

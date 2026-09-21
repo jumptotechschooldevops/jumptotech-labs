@@ -20,6 +20,7 @@
 | Public host name | |
 | Release commit (`git rev-parse HEAD`) and tag | |
 | `JTT_COMMIT` in `.env` matches | |
+| Smoke `release.commit`: every running service reports that commit | |
 
 Result values: `PASS`, `FAIL`, `NOT DONE`, `BLOCKED (decision D#)`.
 
@@ -92,6 +93,7 @@ Result values: `PASS`, `FAIL`, `NOT DONE`, `BLOCKED (decision D#)`.
 | Lowest memory available | | `host.csv` |
 | Lowest Docker disk available | | `host.csv` |
 | Peak containers / sandboxes / Pods | | `host.csv` |
+| Peak CPU iowait / steal %, peak memory pressure (PSI), OOM kills during the run | | `host.csv` (empty columns: the kernel lacks the source) |
 | Largest container memory (name, MiB) | | `containers.csv` |
 | Service restarts during the run | | `docker inspect` |
 | Alerts fired | | `alerts` |

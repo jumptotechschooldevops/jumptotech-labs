@@ -568,6 +568,17 @@ async function main(): Promise<void> {
         const closed = learning.database?.close() ?? Promise.resolve();
         void closed.catch(() => undefined).finally(() => process.exit(0));
       });
+      // `close` waits for in-flight requests, and Start Lab holds its request
+      // for the whole provisioning (up to the 180 s ready timeout). Docker's
+      // grace is 10 s: past it the api was SIGKILLed with the pool still open.
+      // Cut the remaining connections at 7 s, so the callback above still
+      // releases the pool; a start cut off here is recovered by the reaper
+      // (abandoned start), as after any api restart.
+      setTimeout(() => {
+        logger.warn('process.stopping', { reason: 'shutdown_deadline' }, 'requests still in flight after 7 s; closing their connections');
+        server.closeAllConnections();
+      }, 7_000).unref();
+      setTimeout(() => process.exit(0), 9_000).unref();
     });
   }
 }

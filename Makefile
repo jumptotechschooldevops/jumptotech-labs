@@ -99,13 +99,19 @@ sandbox-clean: ## Remove this runtime owner's sandbox containers and networks (R
 status: ## Health report for cluster + services
 	@bash scripts/cluster-status.sh
 
-up: ## Start the application: every track, all 114 labs
+# The development stack. Refused on a production checkout, where it would
+# re-create the stack without the production overlays: that host uses `prod`
+# (docs/runbooks/private-beta-operations.md §1).
+up: ## Start the development stack: every track (refused on a production checkout; use `prod`)
+	@bash scripts/refuse-on-production.sh --recreates up
 	@$(COMPOSE) up --build
 
-up-kubernetes-only: ## Start with no container runtime anywhere (Kubernetes track only)
+up-kubernetes-only: ## Start with no container runtime anywhere (Kubernetes track only; refused on a production checkout)
+	@bash scripts/refuse-on-production.sh --recreates up-kubernetes-only
 	@docker compose up --build
 
-rebuild: ## Rebuild and restart the compose stack (required after platform source changes)
+rebuild: ## Rebuild and restart the development stack after source changes (refused on a production checkout; use `prod`)
+	@bash scripts/refuse-on-production.sh --recreates rebuild
 	@$(COMPOSE) up --build -d
 
 verify-api-image: ## Confirm the running API container has current composition wiring
@@ -129,7 +135,8 @@ test-sandbox: ## Run tests against real Linux/Terraform sandbox containers
 
 # --- database (PLATFORM-005) ------------------------------------------------
 
-db-up: ## Start PostgreSQL only
+db-up: ## Start PostgreSQL only (development; refused on a production checkout)
+	@bash scripts/refuse-on-production.sh --recreates db-up
 	@docker compose up -d postgres
 
 db-migrate: ## Apply pending migrations (forward-only, never destructive)

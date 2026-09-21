@@ -327,3 +327,26 @@ tests:
       - eval_time: 13m
         alertname: LabStartFailureRateElevated
         exp_alerts: []
+
+  # A full platform is CapacityExhausted's page (RB-04), not a start failure:
+  # five students pressing Start on a full five-seat platform sent a second
+  # critical page to RB-03.
+  - interval: 30s
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{instance="api:9400",outcome="capacity_reached"}'
+        values: '0+0x10 1+1x10 11+0x40'
+      - series: 'jtt_lab_start_outcome_total{instance="api:9400",outcome="success"}'
+        values: '0+0x60'
+    promql_expr_test:
+      - expr: jtt:lab_start_failures:increase10m
+        eval_time: 12m
+        exp_samples:
+          - labels: 'jtt:lab_start_failures:increase10m'
+            value: 0
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: LabStartFailureRateElevated
+        exp_alerts: []

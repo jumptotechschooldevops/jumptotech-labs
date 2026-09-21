@@ -80,7 +80,8 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      # As the api's: TypeScript is compiled at start (api.Dockerfile).
+      start_period: 300s
 
   sandboxd:
     environment:

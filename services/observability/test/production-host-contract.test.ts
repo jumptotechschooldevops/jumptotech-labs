@@ -23,6 +23,7 @@ import * as contract from '@jumptotech/test-support/production-host-contract';
 import {
   PRODUCTION_COMPOSE_FILES,
   PRODUCTION_PUBLICATIONS,
+  composeDurationSeconds,
   evaluateProductionComposition,
   evaluateServiceLoaders,
   formatResult,
@@ -104,7 +105,11 @@ function shipped(): ResolvedCompose {
       volumes: [{ type: 'volume', source: 'grafana-data', target: '/var/lib/grafana' }],
     },
   };
-  for (const service of Object.values(services)) service.restart = 'unless-stopped';
+  for (const service of Object.values(services)) {
+    service.restart = 'unless-stopped';
+    service.logging = { driver: 'json-file', options: { 'max-size': '10m', 'max-file': '5' } };
+  }
+  services.postgres!.stop_grace_period = '1m0s';
   return { services, networks: { database: { internal: true }, default: {}, kind: { external: true }, sandboxes: {} } };
 }
 
@@ -140,6 +145,9 @@ describe('each unsafe variation is a FAIL', () => {
   const cases: Array<[string, string, (config: ResolvedCompose) => void]> = [
     ['a missing overlay or profile', 'compose.services', (c) => delete c.services!.grafana],
     ['an unreviewed service', 'compose.services', (c) => (c.services!.debug = {})],
+    ['PostgreSQL killed at the default 10 s stop grace', 'durability.database-shutdown', (c) => delete c.services!.postgres!.stop_grace_period],
+    ['unrotated container logs', 'durability.log-rotation', (c) => delete c.services!.postgres!.logging],
+    ['a log driver with no size bound', 'durability.log-rotation', (c) => (c.services!.api!.logging = { driver: 'json-file' })],
     ['PostgreSQL published on loopback', 'exposure.published-ports', (c) => (c.services!.postgres!.ports = [{ target: 5432, published: 5432, host_ip: '127.0.0.1' }])],
     ['the api published', 'exposure.published-ports', (c) => (c.services!.api!.ports = [{ target: 4000, published: 4000, host_ip: '127.0.0.1' }])],
     ['plaintext on the HTTPS port', 'exposure.published-ports', (c) => (c.services!.web!.ports = [{ target: 3000, published: 443 }, { target: 8080, published: 80 }])],
@@ -260,6 +268,41 @@ describe('each unsafe variation is a FAIL', () => {
     const results = mutate((c) => (c.services!.api!.volumes![1]!.source = '/repo/backups/status'));
     expect(results.filter((result) => result.status === 'WARN').map((result) => result.id)).toEqual(['backup.status-dir']);
     expect(statusOf(results, 'backup.status-dir')).toBe('WARN');
+  });
+});
+
+describe('the PostgreSQL stop grace period is read the way Compose renders it', () => {
+  it('reads Go durations', () => {
+    expect(composeDurationSeconds('60s')).toBe(60);
+    expect(composeDurationSeconds('1m0s')).toBe(60);
+    expect(composeDurationSeconds('1h2m3s')).toBe(3723);
+    expect(composeDurationSeconds('1m30.5s')).toBe(90.5);
+    expect(composeDurationSeconds('500ms')).toBe(0.5);
+  });
+
+  it('refuses anything that is not a duration', () => {
+    for (const text of ['', '60', 's', '1x', '1m 0s', '-1s', '1.s', '.5s', '1m0']) expect(composeDurationSeconds(text)).toBeUndefined();
+  });
+
+  it('passes 1m0s and 30s, and fails 29s, 500ms and an unreadable value', () => {
+    const grace = (value: string) => mutate((c) => (c.services!.postgres!.stop_grace_period = value));
+    expect(statusOf(grace('1m0s'), 'durability.database-shutdown')).toBe('PASS');
+    expect(statusOf(grace('30s'), 'durability.database-shutdown')).toBe('PASS');
+    expect(statusOf(grace('29s'), 'durability.database-shutdown')).toBe('FAIL');
+    // Read as minutes, "500ms" would have been 30 000 s: a false PASS.
+    expect(statusOf(grace('500ms'), 'durability.database-shutdown')).toBe('FAIL');
+    expect(statusOf(grace('forever'), 'durability.database-shutdown')).toBe('FAIL');
+  });
+
+  // CodeQL js/polynomial-redos: the old /(\d+)(h|m|s)/g rescanned every run of digits from each start.
+  it('reads a long run of zeros in linear time', () => {
+    const zeros = '0'.repeat(200_000);
+    const started = performance.now();
+    expect(composeDurationSeconds(zeros)).toBeUndefined();
+    expect(composeDurationSeconds(`${zeros}s`)).toBe(0);
+    expect(composeDurationSeconds(`1m${zeros}s`)).toBe(60);
+    expect(statusOf(mutate((c) => (c.services!.postgres!.stop_grace_period = zeros)), 'durability.database-shutdown')).toBe('FAIL');
+    expect(performance.now() - started).toBeLessThan(2_000);
   });
 });
 
@@ -447,6 +490,25 @@ describe('the gates that prove this contract actually run', () => {
       const guard = recipe.indexOf(`scripts/refuse-on-production.sh ${target} `);
       expect(guard, `${target} runs the guard`).toBeGreaterThan(-1);
       expect(recipe.indexOf(destructive), `${target} still does its work`).toBeGreaterThan(guard);
+    }
+  });
+
+  it('refuses the development start targets on a production checkout before they re-create anything', () => {
+    // On the production project these re-create every service from the
+    // development files: no AUTH_MODE/NODE_ENV pins, no restart policy, no edge.
+    const makefile = read('Makefile');
+    for (const [target, starts] of [
+      ['up', '$(COMPOSE) up'],
+      ['up-kubernetes-only', 'docker compose up'],
+      ['rebuild', '$(COMPOSE) up'],
+      ['db-up', 'docker compose up'],
+    ] as const) {
+      const start = makefile.indexOf(`\n${target}: ## `);
+      expect(start, target).toBeGreaterThan(-1);
+      const recipe = makefile.slice(start, makefile.indexOf('\n\n', start + 1));
+      const guard = recipe.indexOf(`scripts/refuse-on-production.sh --recreates ${target}\n`);
+      expect(guard, `${target} runs the guard`).toBeGreaterThan(-1);
+      expect(recipe.indexOf(starts), `${target} still does its work`).toBeGreaterThan(guard);
     }
   });
 

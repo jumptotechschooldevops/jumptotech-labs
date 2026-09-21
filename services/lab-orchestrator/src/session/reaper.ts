@@ -158,8 +158,8 @@ export interface ReaperMetricsHooks {
   /** A session teardown this sweep drove that was not confirmed gone. */
   onTeardownIncomplete?(reason: SweepReason, provider: string): void;
   /**
-   * A refusal to delete. `foreign_owner` is also a security signal: something
-   * the platform does not own is wearing its ownership labels.
+   * A refusal to delete: `no_expiry_label` or `within_grace_period`. Discovery
+   * is owner-scoped, so a sandbox another deployment owns is never seen here.
    */
   onSkipped?(reason: string): void;
   onDeleteFailed?(provider: string, reason: string): void;

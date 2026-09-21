@@ -59,6 +59,7 @@ import {
   type ResolvedCompose,
 } from '@jumptotech/test-support/production-host-contract';
 import { loadConfig, loadNetworkPolicyConfig } from '../apps/api/src/config.js';
+import { secretWeakness } from '../services/observability/src/secret-policy.js';
 import { loadSandboxdConfig } from '../services/sandboxd/src/config.js';
 import { loadTerminalConfig } from '../services/terminal/src/config.js';
 
@@ -141,6 +142,60 @@ function apiEnvironment(config: ResolvedCompose): NodeJS.ProcessEnv {
   );
 }
 
+/** Where a secret reaches a container under another name. */
+const SECRET_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  GRAFANA_ADMIN_PASSWORD: ['GF_SECURITY_ADMIN_PASSWORD'],
+};
+
+/**
+ * Each loader refuses two equal secrets that it holds itself; none can see a
+ * secret it does not hold. SANDBOXD_ATTACH_SECRET equal to OIDC_CLIENT_SECRET
+ * or to the database password passed every loader, and would have put the
+ * api's credentials inside the terminal, the process students type into. Only
+ * this check sees every service at once. Names only, never a value.
+ */
+function evaluateSecretDistinctness(config: ResolvedCompose): CheckResult[] {
+  const resolved = new Map<string, string>();
+  for (const name of SECRET_NAMES) {
+    for (const service of Object.values(config.services ?? {})) {
+      for (const variable of [name, ...(SECRET_ALIASES[name] ?? [])]) {
+        const value = service.environment?.[variable];
+        if (typeof value === 'string' && value.trim() !== '' && !resolved.has(name)) resolved.set(name, value.trim());
+      }
+    }
+  }
+  const results: CheckResult[] = [];
+  const owners = new Map<string, string>();
+  const shared: string[] = [];
+  for (const [name, value] of resolved) {
+    const owner = owners.get(value);
+    if (owner) shared.push(`${owner} and ${name}`);
+    else owners.set(value, name);
+  }
+  results.push(
+    shared.length > 0
+      ? {
+          id: 'secrets.distinct',
+          status: 'FAIL',
+          detail: `the same value serves ${shared.join('; ')}: each must be generated separately (make secrets), or one service holds another's credential`,
+        }
+      : { id: 'secrets.distinct', status: 'PASS', detail: `${resolved.size} secrets, each a distinct value across every service` },
+  );
+  // No service loader reads it, so no loader can refuse the value .env.example ships.
+  const grafana = resolved.get('GRAFANA_ADMIN_PASSWORD');
+  const weakness = grafana === undefined ? 'missing' : secretWeakness(grafana);
+  results.push(
+    weakness
+      ? {
+          id: 'secrets.grafana-admin',
+          status: 'FAIL',
+          detail: `GRAFANA_ADMIN_PASSWORD is ${weakness === 'missing' ? 'not set' : `not a generated secret (${weakness})`}: make secrets generates one`,
+        }
+      : { id: 'secrets.grafana-admin', status: 'PASS', detail: 'GRAFANA_ADMIN_PASSWORD meets the production secret policy' },
+  );
+  return results;
+}
+
 /** Every check for one resolved configuration. */
 function evaluate(config: ResolvedCompose, dockerSocketGid: number | undefined): CheckResult[] {
   const results = [
@@ -149,6 +204,7 @@ function evaluate(config: ResolvedCompose, dockerSocketGid: number | undefined):
       ...(dockerSocketGid !== undefined ? { hostDockerSocketGid: dockerSocketGid } : {}),
     }),
     ...evaluateServiceLoaders(config, LOADERS, SECRET_NAMES),
+    ...evaluateSecretDistinctness(config),
   ];
   try {
     const digest = networkPolicyContractDigest(loadNetworkPolicyConfig(apiEnvironment(config)));
@@ -238,9 +294,22 @@ function scenarios(base: Record<string, string>): Scenario[] {
     {
       name: 'one value for two secrets is refused',
       change: { INTERNAL_SERVICE_SECRET: base.TERMINAL_SESSION_SECRET! },
-      expectFail: ['loader.api', 'loader.terminal'],
+      expectFail: ['loader.api', 'loader.terminal', 'secrets.distinct'],
     },
     { name: 'a weak broker secret is refused', change: { SANDBOXD_ATTACH_SECRET: 'short' }, expectFail: ['loader.terminal', 'loader.sandboxd'] },
+    {
+      // Every loader accepts this: no single service holds both.
+      name: "one value for two services' secrets is refused",
+      change: { SANDBOXD_ATTACH_SECRET: base.OIDC_CLIENT_SECRET! },
+      expectFail: ['secrets.distinct'],
+    },
+    { name: 'the default Grafana admin password is refused', change: { GRAFANA_ADMIN_PASSWORD: 'admin' }, expectFail: ['secrets.grafana-admin'] },
+    {
+      // Compose keeps a quoted value's whitespace; the api trimmed this key and sandboxd did not.
+      name: 'a secret with trailing whitespace is refused',
+      change: { NAMESPACE_DERIVATION_SECRET: `"${base.NAMESPACE_DERIVATION_SECRET} "` },
+      expectFail: ['loader.api', 'loader.sandboxd'],
+    },
     { name: 'a missing runtime owner is refused by compose', change: { RUNTIME_OWNER_ID: null }, expectFail: ['compose'] },
     { name: 'a Docker socket group mismatch is refused', change: { DOCKER_SOCKET_GID: null }, dockerSocketGid: 998, expectFail: ['runtime.docker-socket-gid'] },
     {

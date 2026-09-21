@@ -4,6 +4,8 @@
 p95 > 1s), `EventLoopLagHigh` (warning, p99 > 200ms)
 **Blast radius:** everything the API serves.
 
+Commands use `prod` and `q` from [private-beta-operations.md §1](private-beta-operations.md).
+
 ## 1. Confirm it is real
 
 ```promql
@@ -39,12 +41,13 @@ One route or all of them?
 - **All routes, high event-loop lag** → the process is CPU-bound; everything is
   slow including `/livez`.
 - **All routes, normal lag** → a shared dependency, usually the database
-  (RB-02 — and `DatabaseDown` inhibits this alert for exactly that reason).
+  (RB-02 — `DatabaseDown` inhibits `ApiErrorRateHigh` for exactly that reason;
+  `ApiLatencyHigh` and `EventLoopLagHigh` still fire beside it).
 
 ## 3. Immediate mitigation
 
 ```bash
-docker compose restart api
+prod restart api
 ```
 
 Safe: sessions and sign-ins are durable, sandboxes survive. It buys time; it is
@@ -54,7 +57,7 @@ not a diagnosis, and a leak will come back.
 
 1. Find the errors — they are never sampled:
    ```bash
-   docker compose logs api | grep '"event":"http.request.failed"' | jq -s 'group_by(.route) | map({route: .[0].route, n: length})'
+   prod logs --no-log-prefix api | grep '"event":"http.request.failed"' | jq -s 'group_by(.route) | map({route: .[0].route, n: length})'
    ```
 2. Pick a `requestId` and follow it across services.
 3. **Memory:** `jtt_nodejs_heap_size_used_bytes` climbing without falling back
@@ -84,8 +87,9 @@ Per section 4.
 ## 7. What this does NOT mean
 
 - **Not `ProvisioningSlow`.** Start Lab is excluded here.
-- **Not a database outage** unless `jtt_db_up == 0`, in which case that alert
-  fired first and inhibited this one.
+- **Not a database outage** unless `jtt_db_up == 0`, in which case
+  `DatabaseDown` fired first and inhibited `ApiErrorRateHigh` (not the latency
+  alerts: read those as symptoms of it).
 - A 4xx spike is not this alert. 401s on `/auth/session` from unauthenticated
   browsers are entirely normal.
 

@@ -54,6 +54,16 @@ inhibit_rules:
     target_matchers:
       - alertname=~"ApiErrorRateHigh|LabStartsFailingHard|LabStartFailureRateElevated|AuthFailureSpike|DatabasePoolSaturated|VerificationErrorRate"
 
+  # The api's readiness includes the database, and sandboxd's is the container
+  # runtime: the dependency's own alert names the fix. Readiness is measured at
+  # every scrape, so these fire together.
+  - source_matchers: [alertname="DatabaseDown"]
+    target_matchers: [alertname="ServiceNotReady"]
+    equal: ['service']
+  - source_matchers: [alertname="SandboxdRuntimeDown"]
+    target_matchers: [alertname="ServiceNotReady"]
+    equal: ['service']
+
   # BETA-P0-018. The session store, the reaper's listing and sign-in all live in
   # the database; every one of these is DatabaseDown seen from another angle.
   - source_matchers: [alertname="DatabaseDown"]

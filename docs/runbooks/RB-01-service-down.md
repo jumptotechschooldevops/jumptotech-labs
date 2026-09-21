@@ -6,6 +6,11 @@
 **Blast radius:** `api` → everything. `terminal` → shells only; running
 sandboxes survive. `sandboxd` → six tracks; Kubernetes labs keep working.
 
+Commands use `prod`, `q` and `ready` from [private-beta-operations.md §1](private-beta-operations.md).
+On the production host a bare `docker compose` finds no sandboxd and re-creates
+services without the production overlays; `curl localhost:94xx` reaches nothing,
+because production publishes only 443 and 80.
+
 ## 1. Confirm it is real
 
 ```promql
@@ -44,20 +49,21 @@ you nothing; the exit reason does.
 ## 2. Scope it
 
 ```bash
-docker compose ps
-curl -s localhost:9400/livez   # api      — is the process alive at all?
-curl -s localhost:9401/livez   # terminal
-curl -s localhost:9402/livez   # sandboxd
-curl -s localhost:9400/readyz | jq .   # which dependency is refusing?
+prod ps                        # running? healthy? a low uptime against an old CREATED is a restart
+ready api 9400                 # the status code and every readiness check, from inside the container
+ready terminal 9401
+ready sandboxd 9402
 ```
 
-`/livez` answering while `/readyz` refuses tells you the process is fine and
-something it depends on is not. Go to that dependency's runbook, not this one.
+`ready` failing to run at all (`service "api" is not running`, or no answer)
+means the process is down: §4. A 503 that names a failed check means the
+process is fine and something it depends on is not. Go to that dependency's
+runbook, not this one.
 
 ## 3. Immediate mitigation
 
 ```bash
-docker compose restart <service>
+prod restart <service>
 ```
 
 For `api` and `terminal` a restart is cheap: sessions are durable in PostgreSQL
@@ -70,26 +76,27 @@ wedged and the wrong move if you are merely impatient.
 
 ## 4. Diagnose
 
-1. `docker compose logs --tail=200 <service>` — the last line before the exit is
+1. `prod logs --tail=200 <service>` — the last line before the exit is
    almost always the answer.
 2. **Config refusals look like crashes.** Each service fails closed at startup
    on: a scrape token equal to another secret, `AUTH_MODE=development` with
    `NODE_ENV=production`, two equal `SANDBOXD_*` scope secrets, a secret whose
    shape the log redactor does not recognise, or a metric violating the label
    policy. All of these name the variable and exit 1.
-3. Crash loop? `docker compose ps` shows the restart count, and
-   `docker inspect <container> | jq '.[0].RestartCount'` the number since the
-   container was created. With `restart: unless-stopped` Docker backs off
+3. Crash loop? `docker inspect -f '{{.RestartCount}}' <container>` is the
+   number of restarts since the container was created (`prod ps` shows only
+   the uptime; `ServiceRestartLoop` counts them for you). With `restart: unless-stopped` Docker backs off
    between attempts — 100ms doubling to a one-minute ceiling — so a service
    failing instantly settles at about one attempt a minute rather than spinning.
-4. OOM? `docker inspect <container> | jq '.[0].State'` — look for `OOMKilled`.
+4. OOM? `docker inspect -f '{{.State.OOMKilled}} exit={{.State.ExitCode}}' <container>`.
 5. `jtt_nodejs_heap_size_used_bytes` climbing without falling before the restart
    points at a leak rather than a spike.
 
 ## 5. Fix
 
 Whatever step 4 named. A configuration refusal is fixed in `.env` and needs a
-`docker compose up -d` to take effect, not a restart.
+`prod up -d <service>` to take effect, not a restart: a restart keeps the old
+environment.
 
 ## 6. Verify recovery
 

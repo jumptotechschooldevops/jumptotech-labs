@@ -262,7 +262,9 @@ export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): Sandbo
    * safe — and one that silently fell back to the *internal* secret would make
    * two unrelated secrets load-bearing for each other. Say so at startup.
    */
-  const derivationSecret = env.NAMESPACE_DERIVATION_SECRET ?? '';
+  // Trimmed, as the api trims it (apps/api/src/config.ts): the two must derive
+  // the same sandbox reference from one .env line.
+  const derivationSecret = env.NAMESPACE_DERIVATION_SECRET?.trim() ?? '';
   if (derivationSecret.length < 8) {
     throw new Error(
       'NAMESPACE_DERIVATION_SECRET must be set to at least 8 characters and must match the API exactly; sandbox references are derived from it.',

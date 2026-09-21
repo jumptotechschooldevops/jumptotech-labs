@@ -158,10 +158,11 @@ else
 fi
 
 section 'tools'
-for tool in docker git curl openssl; do
+for tool in docker git curl openssl jq; do
   if have "$tool"; then pass "tools.$tool" 'installed'; else
     case $tool in
       docker | git) fail "tools.$tool" 'not installed' ;;
+      jq) warn "tools.$tool" 'not installed: the runbooks read JSON logs and /health with it (RB-03, RB-08, RB-11)' ;;
       *) warn "tools.$tool" 'not installed (scripts/private-beta-smoke.sh and the TLS runbook use it)' ;;
     esac
   fi

@@ -264,7 +264,6 @@ describe('thresholds are sane', () => {
       'ScopeDenialDetected',
       'ReaperStalled',
       'ReaperDeleteFailures',
-      'ReaperRefusingForeignOwner',
       'SecurityEventBurst',
       'MetricsScrapeDenied',
     ];

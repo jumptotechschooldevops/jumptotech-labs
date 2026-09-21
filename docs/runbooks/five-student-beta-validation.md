@@ -247,8 +247,13 @@ and exits 130. Ctrl-C twice, a killed process or a crash leaves them. Then:
 3. **Anything still carrying the runtime owner** once no session is live:
    `RUNTIME_OWNER_ID=<owner> npm run sandbox:clean` (owner-scoped), and
    `kubectl delete ns -l jumptotech.io/runtime-owner=<owner>`.
-4. `jtt-netprobe-b<runid>-*` namespaces, if the probe was interrupted:
-   `kubectl delete ns -l jumptotech.io/test-run` for that run id.
+4. `jtt-netprobe-b<runid>-*` namespaces, if the probe was interrupted. They
+   carry `jumptotech.io/network-probe=b<the first 5 characters of the run id>`
+   (the id the harness passes to `verify-network-policy --run-id`); delete
+   only that run's:
+   `kubectl --kubeconfig … delete ns -l jumptotech.io/network-probe=b<first 5 of runid>`.
+   Not `-l jumptotech.io/test-run`: that label is on the sentinel namespaces,
+   and without a value it matches every run's on a shared cluster.
 
 The next run refuses to start while anything carries the owner (§3, phase 0).
 

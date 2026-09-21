@@ -37,8 +37,9 @@ docker stats --no-stream
 - **Stop new launches** if a critical alert fires (operations runbook §3).
 - **Disk:** reclaim only what is safe.
   ```bash
-  docker container prune --filter "label=jumptotech.io/runtime-owner=$RUNTIME_OWNER_ID"   # stopped platform sandboxes
+  docker container prune --filter "label=jumptotech.io/runtime-owner=$(grep -E '^RUNTIME_OWNER_ID=' .env | tail -1 | cut -d= -f2-)"   # stopped platform sandboxes
   docker image prune            # dangling layers only
+  docker builder prune          # build cache: every `prod up --build` upgrade adds to it
   ```
   **Never** `docker volume prune` or `docker system prune --volumes`: with the
   stack stopped they delete the PostgreSQL volume. Do not remove
@@ -51,9 +52,16 @@ docker stats --no-stream
 
 1. Leaked sandboxes: `q 'jtt:sandbox_leak:count'` ([RB-05](RB-05-cleanup-and-leaks.md)).
 2. Container logs filling the disk:
-   `du -sh /var/lib/docker/containers/* | sort -h | tail`.
-3. Prometheus data: 15 days of retention, normally small at this scale.
-4. A process outside the stack: `ps aux --sort=-%mem | head`.
+   `sudo du -sh "$(docker info -f '{{.DockerRootDir}}')"/containers/* | sort -h | tail`
+   (root-owned). The production services rotate theirs at 10 MB × 5
+   (`docker-compose.production.yml`, config check `durability.log-rotation`);
+   a large one belongs to something compose does not manage — the kind node
+   container, a sandbox, a leftover validation stack.
+3. `docker system df`: images, containers, volumes and **build cache** — the
+   last grows with every upgrade and is safe to prune.
+4. Prometheus data: 15 days of retention by time, with no size cap, normally
+   small at this scale.
+5. A process outside the stack: `ps aux --sort=-%mem | head`.
 
 ## 5. Fix
 

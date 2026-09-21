@@ -141,7 +141,13 @@ USER root
 WORKDIR /app
 EXPOSE 4001
 
-HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+# The start period is the api's (api.Dockerfile): this service also compiles
+# its TypeScript at start, which took minutes on a loaded host, and a failing
+# check inside the period costs a healthy start nothing. With 10 s, `up --wait`
+# failed a slow start, and a service waiting on this one never started.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=300s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.TERMINAL_PORT||4001)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-CMD ["node", "/app/node_modules/.bin/tsx", "/app/services/terminal/src/index.ts"]
+# One process, so SIGTERM from tini reaches the shutdown handler: the tsx CLI
+# ran it as a child and ended it before the handler ran (api.Dockerfile).
+CMD ["node", "--import", "tsx", "/app/services/terminal/src/index.ts"]

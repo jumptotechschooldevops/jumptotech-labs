@@ -50,8 +50,14 @@ groups:
       # already holding their MAX_ACTIVE_SESSIONS_PER_STUDENT sessions, and that
       # student pressing Start ten times must not page anyone. It still counts
       # as an attempt below, so it dilutes the ratio rather than hiding.
+      #
+      # `capacity_reached` is not a failure either: it is the platform full by
+      # design, and CapacityExhausted (RB-04) pages on the first one. Counted
+      # here it also fired LabStartsFailingHard — a second critical page, sending
+      # the operator to RB-03's images, disks and providers — as soon as three
+      # students pressed Start on a full five-seat platform.
       - record: jtt:lab_start_failures:increase10m
-        expr: sum(increase(jtt_lab_start_outcome_total{outcome!~"success|student_limit_reached"}[10m])) or vector(0)
+        expr: sum(increase(jtt_lab_start_outcome_total{outcome!~"success|student_limit_reached|capacity_reached"}[10m])) or vector(0)
 
       - record: jtt:lab_start_attempts:increase10m
         expr: sum(increase(jtt_lab_start_outcome_total[10m])) or vector(0)
@@ -219,20 +225,28 @@ groups:
   #
   # Each keeps the source series' labels, so an alert on it still names the
   # instance, and the filesystem or backup operation it is about.
+  #
+  # A gauge with no labels is exported as 0 before anything sets it (prom-client
+  # 14). `> 0` keeps "never measured" absent instead of reading it as a
+  # certificate that expired in 1970 or a host with no memory or disk left: those
+  # zeros paged TlsCertificateExpiresWithin7Days, HostMemoryCritical and
+  # HostDiskSpaceCritical on any stack that had not measured them, and an edge
+  # that failed its first handshake paged as an expired certificate, whose
+  # inhibit rule then hid TlsEdgeUnhealthy — the alert that names the cause.
   - name: jtt-operations
     interval: 15s
     rules:
       - record: jtt:tls_certificate_expiry:seconds
-        expr: jtt_tls_certificate_not_after_timestamp_seconds - time()
+        expr: (jtt_tls_certificate_not_after_timestamp_seconds > 0) - time()
 
       - record: jtt:backup_age:seconds
         expr: time() - jtt_backup_last_success_timestamp_seconds
 
       - record: jtt:host_memory_available:ratio
-        expr: jtt_host_memory_available_bytes / clamp_min(jtt_host_memory_total_bytes, 1)
+        expr: jtt_host_memory_available_bytes / (jtt_host_memory_total_bytes > 0)
 
       - record: jtt:host_filesystem_available:ratio
-        expr: jtt_host_filesystem_available_bytes / clamp_min(jtt_host_filesystem_size_bytes, 1)
+        expr: jtt_host_filesystem_available_bytes / (jtt_host_filesystem_size_bytes > 0)
 
       - record: jtt:host_load5_per_cpu:ratio
         expr: jtt_host_load_average{window="5m"} / ignoring(window) clamp_min(jtt_host_cpus, 1)

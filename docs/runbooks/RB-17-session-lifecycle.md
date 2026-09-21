@@ -64,7 +64,7 @@ One session, one provider, or every session? `provider` in the query above.
    (RB-05), or the database (RB-02).
 4. **ENDING / EXPIRING.** The provider keeps reporting the sandbox as present:
    ```bash
-   docker ps -a --filter label=jumptotech.io/managed=true --filter "label=jumptotech.io/runtime-owner=$RUNTIME_OWNER_ID"
+   docker ps -a --filter label=jumptotech.io/managed=true --filter "label=jumptotech.io/runtime-owner=$(grep -E '^RUNTIME_OWNER_ID=' .env | tail -1 | cut -d= -f2-)"
    kubectl get ns -l jumptotech.io/managed=true
    ```
    A namespace stuck `Terminating` on a finalizer is a cluster problem.

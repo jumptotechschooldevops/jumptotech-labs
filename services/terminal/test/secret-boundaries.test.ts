@@ -63,6 +63,14 @@ describe('terminal secrets under NODE_ENV=production', () => {
     ).toMatch(/same value/);
   });
 
+  it('refuses a padded secret instead of trimming it one way here and another in sandboxd or the api', () => {
+    for (const name of ['TERMINAL_SESSION_SECRET', 'INTERNAL_SERVICE_SECRET', 'SANDBOXD_ATTACH_SECRET'] as const) {
+      expect(refusal({ ...PRODUCTION, [name]: `${PRODUCTION[name]} ` })).toMatch(
+        new RegExp(`${name} has leading or trailing whitespace`),
+      );
+    }
+  });
+
   it('refuses the placeholder .env.example ships', () => {
     expect(
       refusal({ ...PRODUCTION, TERMINAL_SESSION_SECRET: 'dev-only-insecure-secret-change-me' }),

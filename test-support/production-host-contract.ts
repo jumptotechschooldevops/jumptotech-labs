@@ -112,6 +112,8 @@ export interface ResolvedService {
   privileged?: boolean;
   cap_add?: string[];
   restart?: string;
+  stop_grace_period?: string;
+  logging?: { driver?: string; options?: Record<string, string> };
   healthcheck?: { test?: string[] | string; disable?: boolean };
   command?: string[] | string;
   group_add?: Array<string | number>;
@@ -488,6 +490,35 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
     ),
   );
 
+  // Unrotated json-file logs grow on the disk the PostgreSQL volume shares.
+  const unrotated = Object.entries(services)
+    .filter(([, service]) => !['json-file', 'local'].includes(service.logging?.driver ?? '') || !service.logging?.options?.['max-size'])
+    .map(([name]) => name)
+    .sort();
+  results.push(
+    one(
+      'durability.log-rotation',
+      unrotated.length ? [`${unrotated.join(', ')}: container logs are not rotated (logging max-size), so they grow until the disk is full`] : [],
+      'every service rotates its container logs (json-file, max-size)',
+    ),
+  );
+
+  // Compose renders a duration as e.g. "1m0s"; anything under 30 s risks a
+  // SIGKILL during PostgreSQL's final checkpoint.
+  const grace = services.postgres?.stop_grace_period;
+  const graceSeconds = grace ? composeDurationSeconds(grace) : 10;
+  results.push(
+    one(
+      'durability.database-shutdown',
+      graceSeconds === undefined
+        ? [`postgres stop_grace_period is ${grace}, which is not a duration this check can read`]
+        : graceSeconds < 30
+          ? [`postgres stop_grace_period is ${grace ?? 'the 10 s default'}: its final checkpoint can be cut short by SIGKILL`]
+          : [],
+      `postgres is given ${graceSeconds} s to shut down cleanly`,
+    ),
+  );
+
   const status = (services.api?.volumes ?? []).find((volume) => volume.target === '/var/lib/jumptotech/backup-status');
   if (!status || !status.source) {
     results.push(fail('backup.status-dir', 'the api does not mount the backup status directory (docker-compose.production-observability.yml)'));
@@ -507,6 +538,50 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
   }
 
   return results;
+}
+
+const DURATION_UNIT_SECONDS: Readonly<Record<string, number>> = Object.freeze({
+  h: 3600,
+  m: 60,
+  s: 1,
+  ms: 1e-3,
+  us: 1e-6,
+  'µs': 1e-6,
+  ns: 1e-9,
+});
+
+/**
+ * Seconds in a Go duration as `docker compose config` renders it ("60s",
+ * "1m0s", "1h2m3s", "1m30.5s", "500ms"), or `undefined` for anything else.
+ *
+ * A single left-to-right scan with no regular expression: every character is
+ * looked at once, so an operator's `.env` cannot make the check slow.
+ */
+export function composeDurationSeconds(text: string): number | undefined {
+  const isDigit = (index: number): boolean => index < text.length && text[index]! >= '0' && text[index]! <= '9';
+  let seconds = 0;
+  let index = 0;
+  if (text.length === 0) return undefined;
+  while (index < text.length) {
+    const start = index;
+    while (isDigit(index)) index += 1;
+    if (index === start) return undefined;
+    if (text[index] === '.') {
+      index += 1;
+      const fraction = index;
+      while (isDigit(index)) index += 1;
+      if (index === fraction) return undefined;
+    }
+    const value = Number(text.slice(start, index));
+    // Two-character units first, so "ms" is not read as minutes.
+    const two = text.slice(index, index + 2);
+    const unit = Object.hasOwn(DURATION_UNIT_SECONDS, two) ? two : text[index] ?? '';
+    if (!Object.hasOwn(DURATION_UNIT_SECONDS, unit)) return undefined;
+    const scale = DURATION_UNIT_SECONDS[unit]!;
+    index += unit.length;
+    seconds += value * scale;
+  }
+  return seconds;
 }
 
 /**

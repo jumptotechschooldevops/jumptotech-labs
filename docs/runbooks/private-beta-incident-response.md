@@ -94,8 +94,9 @@ instead of trying the next step.
   database that stores browser sessions?
 - **Commands.**
   ```bash
-  prod logs --since 30m api | grep -E '"event":"auth\.(callback|login)' | tail -20
-  q 'sum by (outcome) (increase(jtt_auth_callback_total[30m]))'
+  q 'sum by (outcome) (increase(jtt_auth_callback_total[30m]))'   # the sign-in round trip
+  q 'sum by (outcome) (increase(jtt_auth_attempts_total[30m]))'   # AUTH_UNAVAILABLE is the database
+  prod logs --since 30m api | grep -E '"event":"authn\.failed"|"authorizationResult":"unauthenticated"' | tail -20
   q 'jtt_db_up'
   ```
 - **Likely component.** The identity provider, OIDC settings in `.env`, JWKS
@@ -187,9 +188,10 @@ instead of trying the next step.
   (RB-10 has the step breakdown).
 - **Recovery.** A start is bounded by the provider's ready timeout (180 s plus
   the image pull). It either succeeds or records FAILED on its own. An api
-  restart during a start leaves the row `CREATING`; idle expiry reclaims it
-  after 20 minutes, or end it now with `ops end <session> --yes`, which
-  deletes whatever the start built.
+  restart during a start leaves the row `CREATING`; the reaper tears it down
+  after 10 minutes (EXPIRED, "the lab did not finish starting";
+  `jtt_reaper_recoveries_total{reason="abandoned_start"}`), or end it now with
+  `ops end <session> --yes`, which deletes whatever the start built.
 - **Stop when.** Every start is stuck: the provider is down (RB-06, RB-09).
 - **Evidence.** The session's log lines by `sessionId`, and
   `jtt_lab_provision_step_duration_seconds` for the slow step.
@@ -368,8 +370,8 @@ tracks) and the kind cluster (Kubernetes track).
 - **Recovery.** A stalled reaper is restarted with the api (J). A sweep that
   runs but keeps failing is a provider or the database: RB-05 §4e.
 - **Stop when.** Sweeps complete but the leak count keeps rising
-  (`SandboxLeakSuspected`), or you see `foreign_owner` refusals, which are a
-  security question: RB-08.
+  (`SandboxLeakSuspected`), or RB-05 §4b finds managed sandboxes of another
+  owner on a one-deployment host, which is a security question: RB-08.
 - **Evidence.** The reaper lines, `jtt_reaper_last_sweep_errors`.
 - **Follow-up.** RB-05, RB-17.
 

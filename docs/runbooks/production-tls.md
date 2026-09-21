@@ -26,7 +26,7 @@ in [runtime-architecture.md §12](../runtime-architecture.md).
   wrong, the container exits with a line starting `jtt-tls-preflight: REFUSED:`
   and nginx never listens. There is no plaintext fallback.
 - **Every 60 seconds**, the health check confirms that the served certificate is
-  the installed one and has not expired. `docker compose ps` shows `unhealthy`
+  the installed one and has not expired. `prod ps web` shows `unhealthy`
   otherwise. Being unhealthy does not stop traffic.
 
 ## 2. DNS and the public host name
@@ -100,7 +100,7 @@ runs: the health check will report the drift until nginx reloads.
 Verify:
 
 ```bash
-docker compose ... logs web | grep jtt-tls-preflight    # "certificate OK: host=… notAfter=… sha256=…"
+prod logs web | grep jtt-tls-preflight    # "certificate OK: host=… notAfter=… sha256=…"
 npm run tls:check -- --origin https://<host> --cert-dir infrastructure/docker/nginx/tls --expect-acme
 ```
 
@@ -250,12 +250,21 @@ Browsers refuse the site now. Do **not** try to bypass the gate: production pins
 
 1. **If the web container is still running**, port 80 still serves ACME tokens.
    Renew in webroot mode (§3.2), and the deploy hook installs the certificate.
-2. **If it has stopped** (a restart hit the gate), port 80 is free. Renew in
-   standalone mode, then run `tls-install.sh` and `up -d`.
+2. **If the gate refused a restart**, the container does not stay stopped:
+   production's `restart: unless-stopped` retries it about once a minute, and
+   every attempt publishes port 80 again. Stop it first — `prod stop web` — then
+   renew in standalone mode, run `tls-install.sh`, and `prod up -d web`.
 3. **If no new certificate can be had quickly**, a still-valid `*.previous` pair
    can be reinstalled. Copy it out of the directory first, because
-   `tls-install.sh` refuses to install from the live directory:
-   `cp infrastructure/docker/nginx/tls/fullchain.pem.previous /tmp/fc.pem` (likewise the key, then `chmod 600`), then install from `/tmp`.
+   `tls-install.sh` refuses to install from the live directory, into a private
+   directory rather than the shared `/tmp`:
+   ```bash
+   install -d -m 0700 ~/tls-restore
+   cp infrastructure/docker/nginx/tls/fullchain.pem.previous ~/tls-restore/fullchain.pem
+   (umask 077 && cp infrastructure/docker/nginx/tls/privkey.pem.previous ~/tls-restore/privkey.pem)
+   make tls-install CERT=~/tls-restore/fullchain.pem KEY=~/tls-restore/privkey.pem
+   rm -r ~/tls-restore
+   ```
 
 ### 7.4 Verify recovery
 
