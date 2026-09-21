@@ -132,6 +132,57 @@ export function createOutputFlow(
   };
 }
 
+/*
+ * The same mechanism, facing the other way: student input.
+ *
+ * `pty.write` never refuses either. When the program in the shell is not
+ * reading its terminal — `sleep`, a hung command, anything between prompts —
+ * the kernel's small tty buffer fills and node-pty queues every further write
+ * in this process. A client that keeps sending `input` frames then grows the
+ * relay by exactly what it sends: probed with node-pty 1.1.0 behind
+ * `sleep 30`, 60 000 frames left 469 MiB queued and nothing dropped. So each
+ * relay runs `createOutputFlow` with the roles swapped: the shell's pending
+ * input is the queue, and the socket the input arrives on is the source it
+ * pauses — which stops reading the peer and pushes the backpressure back to it,
+ * one hop at a time, as far as the browser.
+ */
+
+/**
+ * Bytes a node-pty terminal has accepted from `write` and not yet handed to the
+ * kernel.
+ *
+ * node-pty exposes no count, so this reads the write queue its Unix terminal
+ * keeps (`_writeStream._writeQueue` of `{ buffer, offset }`, node-pty ≥ 1.1).
+ * A terminal without that shape reports 0 — no backpressure, the behaviour
+ * before this existed — and `ptyInputQueueReadable` says whether the shape was
+ * found, which `test/pty-input-queue-integration.test.ts` in the terminal
+ * service asserts against the real module, so an upgrade that moves it fails a
+ * test rather than silently removing the bound.
+ */
+export function ptyPendingInputBytes(term: unknown): number {
+  const queue = ptyWriteQueue(term);
+  if (!queue) return 0;
+  let pending = 0;
+  for (const task of queue) {
+    const length = task?.buffer?.length;
+    if (typeof length === 'number') pending += Math.max(0, length - (task?.offset ?? 0));
+  }
+  return pending;
+}
+
+/** True when `term` carries the write queue `ptyPendingInputBytes` reads. */
+export function ptyInputQueueReadable(term: unknown): boolean {
+  return ptyWriteQueue(term) !== null;
+}
+
+type PtyWriteTask = { buffer?: { length?: number }; offset?: number } | undefined;
+
+function ptyWriteQueue(term: unknown): readonly PtyWriteTask[] | null {
+  const stream = (term as { _writeStream?: { _writeQueue?: unknown } } | null)?._writeStream;
+  const queue = stream?._writeQueue;
+  return Array.isArray(queue) ? (queue as PtyWriteTask[]) : null;
+}
+
 /** Merge overrides onto the defaults, refusing an ordering that cannot work. */
 export function resolveOutputFlowOptions(overrides: Partial<OutputFlowOptions> = {}): OutputFlowOptions {
   const options = { ...DEFAULT_OUTPUT_FLOW, ...overrides };

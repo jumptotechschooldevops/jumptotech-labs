@@ -175,6 +175,8 @@ export function createTerminalServer(
   const bySessionId = new Map<string, WebSocket>();
   /** The output flow control for each socket's current shell. */
   const outputFlows = new Map<WebSocket, OutputFlow>();
+  /** The input flow control for each socket's current shell: pauses reading the browser. */
+  const inputFlows = new Map<WebSocket, OutputFlow>();
   /*
    * sessionId → the one attach allowed to register a shell for it.
    *
@@ -647,6 +649,39 @@ export function createTerminalServer(
     );
     outputFlows.set(ws, flow);
 
+    /*
+     * And bounded the other way, because the shell decides how fast input
+     * drains. A program that is not reading its terminal leaves every `input`
+     * frame queued in this process, so a client that keeps sending — a runaway
+     * paste loop, or a student's own script — grew the service exactly as an
+     * unread `yes` did. While the shell is behind, this socket is not read at
+     * all, which pushes the backpressure back to the browser; nothing typed is
+     * dropped.
+     *
+     * A replaced shell starts with a fresh flow, so a pause the old one left
+     * on the socket is lifted here or the socket would never be read again.
+     */
+    const previousInput = inputFlows.get(ws);
+    previousInput?.dispose();
+    if (previousInput?.paused) ws.resume();
+    inputFlows.set(
+      ws,
+      createOutputFlow(
+        { get bufferedAmount() { return term.pendingInputBytes(); } },
+        { pause: () => ws.pause(), resume: () => ws.resume() },
+        () => {
+          securityMetrics?.securityEvents.inc({ service: 'terminal', event: 'input_backlog' });
+          obs.warn('security.event', {
+            securityEvent: 'input_backlog',
+            sessionId: sessions.get(ws)?.claims.sid,
+          });
+          endSession(ws);
+          ws.terminate();
+        },
+        config.inputFlow,
+      ),
+    );
+
     term.onData((data) => {
       terminalMetrics?.bytes.inc({ direction: 'out' }, data.length);
       send(ws, { type: 'output', data });
@@ -813,6 +848,7 @@ export function createTerminalServer(
           // is kept out of activity to prevent.
           reportActivity(session);
           session.term.write(message.data);
+          inputFlows.get(ws)?.afterSend();
           break;
         }
         case 'resize':
@@ -1217,6 +1253,8 @@ export function createTerminalServer(
     if (attachClaims.get(session.claims.sid) === session.attachClaim) attachClaims.delete(session.claims.sid);
     outputFlows.get(ws)?.dispose();
     outputFlows.delete(ws);
+    inputFlows.get(ws)?.dispose();
+    inputFlows.delete(ws);
     clearTimeout(session.idleTimer);
     clearTimeout(session.maxTimer);
     try {

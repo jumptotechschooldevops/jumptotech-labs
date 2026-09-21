@@ -186,6 +186,12 @@ export interface SandboxdConfig {
    * exists so a test can prove the bound without streaming megabytes.
    */
   outputFlow?: Partial<OutputFlowOptions>;
+  /**
+   * Overrides for the input flow-control limits, the same mechanism facing the
+   * other way (see "student input" in `output-flow.ts`). Same defaults, same
+   * reason for not being read from the environment.
+   */
+  inputFlow?: Partial<OutputFlowOptions>;
 }
 
 function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {

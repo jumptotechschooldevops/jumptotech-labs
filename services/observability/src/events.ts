@@ -162,6 +162,9 @@ export const SECURITY_EVENTS = [
   // A shell's output outran its reader past the hard limit, so that one
   // connection was closed (lab-orchestrator/src/output-flow.ts).
   'output_backlog',
+  // A client's input outran its shell past the hard limit, so that one
+  // connection was closed (the "student input" half of output-flow.ts).
+  'input_backlog',
 ] as const;
 
 export type SecurityEventKind = (typeof SECURITY_EVENTS)[number];

@@ -63,6 +63,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import {
   BROKER_TLS_MIN_VERSION,
   createOutputFlow,
+  ptyPendingInputBytes,
   type ContainerRuntimePort,
   type OutputFlow,
 } from '@jumptotech/lab-orchestrator';
@@ -122,6 +123,13 @@ export interface BrokerPty {
    */
   pause?(): void;
   resume?(): void;
+  /**
+   * Input written and not yet taken by the shell, in bytes. While it is high
+   * the terminal service's socket is not read (see "student input" in
+   * `output-flow.ts`). Optional for test doubles; a PTY without it reports
+   * nothing pending and is not flow-controlled on input.
+   */
+  pendingInputBytes?(): number;
   onData(listener: (data: string) => void): void;
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): void;
 }
@@ -137,6 +145,7 @@ interface LiveShell {
   sandboxRef: string;
   term: BrokerPty;
   output: OutputFlow;
+  input: OutputFlow;
   idleTimer: NodeJS.Timeout;
   maxTimer: NodeJS.Timeout;
 }
@@ -168,6 +177,7 @@ function defaultSpawn(command: string, args: string[], options: { cols: number; 
     kill: () => term.kill(),
     pause: () => term.pause(),
     resume: () => term.resume(),
+    pendingInputBytes: () => ptyPendingInputBytes(term),
     onData: (listener) => {
       term.onData(listener);
     },
@@ -532,6 +542,7 @@ export function createSandboxd(deps: SandboxdDeps): Server {
         if (!shell) return;
         if (message.type === 'input') {
           shell.term.write(message.data);
+          shell.input.afterSend();
           shell.idleTimer.refresh();
         } else if (message.type === 'resize') {
           try {
@@ -686,11 +697,30 @@ export function createSandboxd(deps: SandboxdDeps): Server {
       config.outputFlow,
     );
 
+    /*
+     * And bounded the other way: input reaches this process as fast as the
+     * terminal service relays it, and a shell that is not reading leaves it
+     * queued here. While the shell is behind, the terminal's socket is not
+     * read, so the backpressure travels back through it to the browser.
+     */
+    const input = createOutputFlow(
+      { get bufferedAmount() { return term.pendingInputBytes?.() ?? 0; } },
+      { pause: () => ws.pause(), resume: () => ws.resume() },
+      () => {
+        common?.securityEvents.inc({ service: 'sandboxd', event: 'input_backlog' });
+        obs.warn('security.event', { securityEvent: 'input_backlog', sessionId });
+        endShell(ws);
+        ws.terminate();
+      },
+      config.inputFlow,
+    );
+
     const shell: LiveShell = {
       sessionId,
       sandboxRef: target.ref,
       term,
       output,
+      input,
       idleTimer: setTimeout(() => closeFor(ws, 'IDLE_TIMEOUT'), config.idleTimeoutMs),
       maxTimer: setTimeout(() => closeFor(ws, 'SESSION_EXPIRED'), config.maxSessionMs),
     };
@@ -744,6 +774,7 @@ export function createSandboxd(deps: SandboxdDeps): Server {
     shells.delete(ws);
     if (bySessionId.get(shell.sessionId) === ws) bySessionId.delete(shell.sessionId);
     shell.output.dispose();
+    shell.input.dispose();
     clearTimeout(shell.idleTimer);
     clearTimeout(shell.maxTimer);
     try {
