@@ -236,8 +236,9 @@ jtt_table_counts() {
 # Compare a database's migration ledger with the migration files in this
 # checkout. Pending files are normal for an older backup: the api applies them
 # at startup (DATABASE_AUTO_MIGRATE=true) or `npm run db:migrate` does. A file
-# whose checksum differs, or a version this checkout does not know, means the
-# code and the data disagree and the api will refuse to start.
+# whose checksum differs makes the api refuse to start. A version this checkout
+# does not know does not: the migrator ignores it, and older code then runs
+# against a newer schema — the code and the data disagree, silently.
 jtt_report_migrations() {
   local database=$1 applied file version line recorded pending=0 modified=0 unknown=0
   applied=$(jtt_psql "$database" -F ' ' -c 'SELECT version, checksum FROM schema_migrations ORDER BY version') \
@@ -261,7 +262,7 @@ jtt_report_migrations() {
     [ -n "$version" ] || continue
     if [ ! -f "$JTT_REPO_ROOT/services/progress/migrations/$version.sql" ]; then
       unknown=$((unknown + 1))
-      jtt_log "migration $version: recorded in the database but not in this checkout (the backup is newer than this code)"
+      jtt_log "migration $version: recorded in the database but not in this checkout (the backup is newer than this code; the api will start anyway, against a schema it does not know)"
     fi
   done <<EOF
 $applied

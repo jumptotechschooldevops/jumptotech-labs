@@ -422,7 +422,9 @@ for a command named after the whole string:
    printed which ones are pending.
    - **CHECKSUM DIFFERS** or **unknown** in that report means the code and the
      data disagree. Deploy the release that matches the archive; do not edit
-     migrations.
+     migrations. The api refuses to start on CHECKSUM DIFFERS, but **not** on
+     unknown: it starts against a schema newer than its code, so do not start
+     it until the release matches.
 7. **Validate** (§6.5).
 
 ### 6.5 Validate
