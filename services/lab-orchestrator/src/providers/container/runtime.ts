@@ -592,12 +592,26 @@ function daemonEnv(connection: DaemonConnection): Record<string, string> {
  * (exit 1, stderr "Command failed: …"), and callers that say something
  * different about a timeout never did.
  */
-export function execFileOutcome(error: unknown): { exitCode: number; timedOut: boolean } {
-  if (!error) return { exitCode: 0, timedOut: false };
-  const { code, killed } = error as { code?: unknown; killed?: unknown };
+export function execFileOutcome(
+  error: unknown,
+  child?: { readonly killed?: boolean },
+): { exitCode: number; timedOut: boolean } {
+  const { code, killed } = (error ?? {}) as { code?: unknown; killed?: unknown };
+  /*
+   * The error is not enough on its own. A child that handles the SIGTERM and
+   * exits 0 — measured: `docker exec` with Docker CLI 28.4.0 does exactly that
+   * — gives the callback no error at all, and a command stopped at its limit
+   * read as a success with empty output: a hung `script_runs` or
+   * `command_exit_code` expecting 0 passed. `child.killed` is set whenever Node
+   * itself sent the signal, which is the time limit or the output cap; the cap
+   * is told apart by its error code and stays an ordinary failure.
+   */
+  const stoppedByNode =
+    child?.killed === true && code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+  if (!error) return stoppedByNode ? { exitCode: 124, timedOut: true } : { exitCode: 0, timedOut: false };
   return {
     exitCode: typeof code === 'number' ? code : 1,
-    timedOut: killed === true || code === 'ETIMEDOUT',
+    timedOut: killed === true || code === 'ETIMEDOUT' || stoppedByNode,
   };
 }
 
@@ -622,7 +636,7 @@ function runProcess(
         },
       },
       (error, stdout, stderr) => {
-        const { exitCode, timedOut } = execFileOutcome(error);
+        const { exitCode, timedOut } = execFileOutcome(error, child);
         resolve({
           exitCode,
           stdout: String(stdout),

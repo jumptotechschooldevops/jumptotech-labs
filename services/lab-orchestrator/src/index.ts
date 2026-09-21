@@ -143,6 +143,7 @@ export {
   assertEnvName,
   assertImageReference,
   assertUserName,
+  execFileOutcome,
   type ContainerExecRequest,
   type ContainerExecResult,
   type ContainerInfo,

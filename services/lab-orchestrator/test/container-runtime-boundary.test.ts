@@ -124,5 +124,24 @@ describe('execFileOutcome — how a runner reads a finished child process', () =
 
   it('reports success as exit 0', () => {
     expect(execFileOutcome(null)).toEqual({ exitCode: 0, timedOut: false });
+    expect(execFileOutcome(null, { killed: false })).toEqual({ exitCode: 0, timedOut: false });
+  });
+
+  /*
+   * Measured with Docker CLI 28.4.0 on Node 22: a `docker exec` killed at its
+   * `timeout` catches the SIGTERM and exits 0, so the callback gets no error
+   * at all — only the child's own `killed` says Node stopped it. Read from the
+   * error alone, a hung `script_runs` or `command_exit_code` expecting 0
+   * PASSED, and its process stayed behind in the sandbox for every Check.
+   */
+  it('reports a child Node killed at its time limit as timed out, even when it exited 0', () => {
+    expect(execFileOutcome(null, { killed: true })).toEqual({ exitCode: 124, timedOut: true });
+  });
+
+  it('does not call output over the buffer cap a timeout, although Node kills that child too', () => {
+    const overflow = Object.assign(new RangeError('stdout maxBuffer length exceeded'), {
+      code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+    });
+    expect(execFileOutcome(overflow, { killed: true })).toEqual({ exitCode: 1, timedOut: false });
   });
 });
