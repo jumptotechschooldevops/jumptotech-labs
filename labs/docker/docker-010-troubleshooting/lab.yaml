@@ -93,6 +93,10 @@ task:
       - `ledger-web` must run the `nginx:1.27-alpine` image, with its container
         port `80` published on host port `8081`.
 
+    Both `nginx` containers must actually be serving with nginx, not merely
+    staying up: a container kept alive by some other command is running, but
+    it is not a web server.
+
     Keep the names exactly as they are. Anything else about how you get there
     is yours to decide — a container that cannot be repaired in place can be
     removed and recreated, and the checks read the state you leave behind, not
@@ -168,6 +172,15 @@ requirements:
     container_port: 80
     host_port: 8080
     label: ledger-api publishes container port 80 on host port 8080
+  # Running is not serving. Recreated "with those settings plus the
+  # correction", ledger-web keeps the seeded `sleep 3600` on the nginx image,
+  # and ledger-api's broken command can be swapped for the same keep-alive:
+  # both were running, on the right image and port, and passed. A container
+  # run without a command gets the image's own, which is this argv.
+  - type: docker_container_command
+    name: ledger-api
+    command: [nginx, -g, "daemon off;"]
+    label: ledger-api runs the nginx server
 
   # --- ledger-worker: started, then refused -------------------------------
   - type: docker_container_running
@@ -197,6 +210,10 @@ requirements:
     container_port: 80
     host_port: 8081
     label: ledger-web publishes container port 80 on host port 8081
+  - type: docker_container_command
+    name: ledger-web
+    command: [nginx, -g, "daemon off;"]
+    label: ledger-web runs the nginx server
 
 # `Reset Lab` restores this session's Docker environment to its baseline: every
 # container, volume, and network the student created is removed, and the three

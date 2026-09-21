@@ -208,6 +208,47 @@ describe('NET-022 — the diagnosis answers each question in its own field', () 
   });
 });
 
+// ---------------------------------------------------------------- DOCKER-010
+
+describe('DOCKER-010 — a repaired web container must be serving, not just up', () => {
+  const NGINX = ['nginx', '-g', 'daemon off;'];
+
+  async function repaired(web: { image: string; command: string[] }, api: string[] = NGINX) {
+    const lab = await started('DOCKER-010');
+    for (const name of ['ledger-api', 'ledger-worker', 'ledger-web']) await lab.daemon.removeContainer(name);
+    // The fake records a command only when one is given; the real daemon
+    // reports the image's own default, which for nginx is NGINX.
+    await lab.daemon.runContainer({
+      name: 'ledger-api', image: 'nginx:1.27-alpine', detach: true, command: api,
+      ports: [{ containerPort: 80, hostPort: 8080 }],
+    });
+    await lab.daemon.runContainer({
+      name: 'ledger-worker', image: 'alpine:3.20', detach: true, command: ['sleep', '3600'],
+      env: { LEDGER_MODE: 'live', LEDGER_API_URL: 'http://ledger-api' },
+    });
+    await lab.daemon.runContainer({
+      name: 'ledger-web', image: web.image, detach: true, command: web.command,
+      ports: [{ containerPort: 80, hostPort: 8081 }],
+    });
+    return lab;
+  }
+
+  it('passes all three repaired, both web containers running nginx', async () => {
+    expect(await grade(await repaired({ image: 'nginx:1.27-alpine', command: NGINX }))).toEqual([]);
+  });
+
+  it('fails ledger-web recreated on nginx but still running the seeded sleep', async () => {
+    // Before: running, right image, right port — all nine checks passed.
+    const lab = await repaired({ image: 'nginx:1.27-alpine', command: ['sleep', '3600'] });
+    expect(await grade(lab)).toEqual(['ledger-web runs the nginx server']);
+  });
+
+  it('fails ledger-api whose broken command was swapped for a keep-alive', async () => {
+    const lab = await repaired({ image: 'nginx:1.27-alpine', command: NGINX }, ['sleep', '3600']);
+    expect(await grade(lab)).toEqual(['ledger-api runs the nginx server']);
+  });
+});
+
 // ---------------------------------------------------------------- DOCKER-009
 
 describe('DOCKER-009 — each answer given once, and in its own field', () => {
