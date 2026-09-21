@@ -15,17 +15,27 @@
 #                   platform-managed sandbox containers, Kubernetes Pods, and
 #                   the saturation signals load alone hides: CPU busy, iowait
 #                   and steal % since the previous sample (steal is a noisy
-#                   neighbour on a VM), pressure-stall "some avg60" for CPU,
-#                   memory and I/O (/proc/pressure, Linux 4.20+), and the
-#                   kernel's cumulative OOM-kill count. A source the host lacks
-#                   leaves its field empty.
+#                   neighbour on a VM), pressure-stall avg60 for CPU some,
+#                   memory some and full, and I/O some (/proc/pressure, Linux
+#                   4.20+), the kernel's cumulative OOM-kill count since boot
+#                   (oom_kills_total, /proc/vmstat), Docker data root free
+#                   inodes, and the container OOM events the Docker daemon
+#                   reported since the sampler started (docker_oom_events).
+#                   A source the host lacks leaves its field empty.
+#   oom.csv         time, container — one row per Docker container OOM event
 #   containers.csv  time, container, CPU %, memory used (MiB), PIDs
+#
+# Load and "memory available" can look healthy while the kernel is killing a
+# student's sandbox or stalling every task on reclaim; OOM kills and PSI are
+# the numbers that say a run actually hit the host's limits. The kernel count
+# includes kills outside containers; the Docker events name the containers.
 #
 # It judges nothing and has no thresholds: acceptable limits are a product
 # decision (§13). At the end, or on Ctrl-C, it prints the peaks.
 #
-# Read-only: /proc, df, `docker ps`, `docker stats --no-stream`, `kubectl get
-# pods`. It starts, stops and creates nothing, and reads no secret.
+# Read-only: /proc, df, `docker ps`, `docker stats --no-stream`, `docker events
+# --until` (bounded, returns at once), `kubectl get pods`. It starts, stops and
+# creates nothing, and reads no secret.
 #
 # Exit: 0 sampled · 2 usage error or nothing could be sampled.
 set -Eeuo pipefail
@@ -67,16 +77,21 @@ fi
 mkdir -p "$out_dir"
 host_csv=$out_dir/host.csv
 containers_csv=$out_dir/containers.csv
-host_header='time,load1,load5,cpus,mem_total_mib,mem_available_mib,swap_used_mib,docker_root_size_mib,docker_root_available_mib,containers_running,sandbox_containers,pods,cpu_busy_pct,cpu_iowait_pct,cpu_steal_pct,psi_cpu_some_avg60,psi_memory_some_avg60,psi_io_some_avg60,oom_kills_total'
+oom_csv=$out_dir/oom.csv
+host_header='time,load1,load5,cpus,mem_total_mib,mem_available_mib,swap_used_mib,docker_root_size_mib,docker_root_available_mib,containers_running,sandbox_containers,pods,cpu_busy_pct,cpu_iowait_pct,cpu_steal_pct,psi_cpu_some_avg60,psi_memory_some_avg60,psi_io_some_avg60,oom_kills_total,psi_memory_full_avg60,docker_root_inodes_free,docker_oom_events'
 if [ -s "$host_csv" ] && [ "$(head -1 "$host_csv")" != "$host_header" ]; then
   echo "host-capacity-sample: $host_csv was written by another version of this sampler (different columns); use a new --out-dir" >&2
   exit 2
 fi
 [ -s "$host_csv" ] || echo "$host_header" >"$host_csv"
 [ -s "$containers_csv" ] || echo 'time,container,cpu_percent,memory_mib,pids' >"$containers_csv"
+[ -s "$oom_csv" ] || echo 'time,container' >"$oom_csv"
 
 docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
 cpus=$(nproc 2>/dev/null || docker info -f '{{.NCPU}}' 2>/dev/null || true)
+
+started=$(date +%s)
+oom_seen=0
 
 # A source this host lacks records an empty field; it never stops the sampler.
 meminfo() { awk -v k="$1:" '$1 == k {print int($2 / 1024)}' "$proc_root/meminfo" 2>/dev/null || true; }
@@ -113,11 +128,13 @@ cpu_percentages() {
   fi
   prev_cpu="$total $busy $iowait ${steal:-0}"
 }
-psi_some_avg60() { awk '$1 == "some" { sub(/^avg60=/, "", $3); print $3; exit }' "$proc_root/pressure/$1" 2>/dev/null || true; }
+# psi_avg60 RESOURCE some|full, e.g. "full avg10=0.00 avg60=0.10 …" -> 0.10
+psi_avg60() { awk -v k="$2" '$1 == k { for (i = 2; i <= NF; i++) if ($i ~ /^avg60=/) { sub(/^avg60=/, "", $i); print $i; exit } }' "$proc_root/pressure/$1" 2>/dev/null || true; }
 
 sample() {
-  local now load1= load5= total avail swap_total swap_free df_line size= available= running sandboxes pods= cpu oom
+  local now load1= load5= total avail swap_total swap_free df_line size= available= running sandboxes pods= cpu oom inodes= epoch oom_now
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  epoch=$(date +%s)
   if [ -r "$proc_root/loadavg" ]; then read -r load1 load5 _ <"$proc_root/loadavg"; fi
   total=$(meminfo MemTotal)
   avail=$(meminfo MemAvailable)
@@ -135,10 +152,20 @@ sample() {
   cpu=$(cat "$out_dir/.cpu.$$")
   rm -f "$out_dir/.cpu.$$"
   oom=$(awk '$1 == "oom_kill" {print $2; exit}' "$proc_root/vmstat" 2>/dev/null || true)
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$now" "$load1" "$load5" "$cpus" "$total" "$avail" \
+  inodes=$(df -Pi "$docker_root" 2>/dev/null | awk 'NR==2 {print $4}') || inodes=
+  # Every container OOM event since the sampler started; the daemon keeps the
+  # history, so one between two samples is not missed. `--until` makes it
+  # return at once.
+  oom_now=$( (docker events --since "$started" --until "$epoch" --filter event=oom --format '{{.Actor.Attributes.name}}' 2>/dev/null || true) | sed '/^$/d')
+  if [ -n "$oom_now" ]; then
+    printf '%s\n' "$oom_now" | tail -n "+$((oom_seen + 1))" | while read -r victim; do printf '%s,%s\n' "$now" "$victim"; done >>"$oom_csv"
+    oom_seen=$(printf '%s\n' "$oom_now" | wc -l | tr -d ' ')
+  fi
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$now" "$load1" "$load5" "$cpus" "$total" "$avail" \
     "$(if [ -n "$swap_total" ] && [ -n "$swap_free" ]; then echo $((swap_total - swap_free)); fi)" \
     "$size" "$available" "$running" "$sandboxes" "$pods" "$cpu" \
-    "$(psi_some_avg60 cpu)" "$(psi_some_avg60 memory)" "$(psi_some_avg60 io)" "$oom" >>"$host_csv"
+    "$(psi_avg60 cpu some)" "$(psi_avg60 memory some)" "$(psi_avg60 io some)" "$oom" \
+    "$(psi_avg60 memory full)" "$inodes" "$oom_seen" >>"$host_csv"
   { docker stats --no-stream --format '{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.PIDs}}' 2>/dev/null || true; } |
     while IFS='|' read -r name cpu mem pids; do
       [ -n "$name" ] || continue
@@ -161,7 +188,11 @@ summary() {
       if ($15 != "" && $15 + 0 > steal) steal = $15 + 0
       if ($14 != "" && $14 + 0 > iowait) iowait = $14 + 0
       if ($17 != "" && $17 + 0 > psimem) psimem = $17 + 0
+      if ($18 != "" && $18 + 0 > psiio) psiio = $18 + 0
       if ($19 != "") { if (oom_first == "") oom_first = $19 + 0; oom_last = $19 + 0 }
+      if ($20 != "" && $20 + 0 > psifull) psifull = $20 + 0
+      if ($21 != "" && (min_inodes == "" || $21 + 0 < min_inodes)) min_inodes = $21 + 0
+      if ($22 + 0 > dooms) dooms = $22 + 0
       total = $5; cpus = $4
     }
     END {
@@ -173,8 +204,11 @@ summary() {
       printf "peak containers       %s running, %s platform sandboxes\n", ctr, sbx
       printf "peak pods             %s\n", (pods == "" ? "not sampled" : pods)
       printf "peak CPU iowait/steal %s%% / %s%%\n", iowait + 0, steal + 0
-      printf "peak memory pressure  %s (PSI some avg60; empty file means the kernel has no /proc/pressure)\n", psimem + 0
-      printf "OOM kills in the run  %s\n", (oom_first == "" ? "not sampled" : oom_last - oom_first)
+      printf "peak memory pressure  some %s / full %s (PSI avg60, %%; empty file means the kernel has no /proc/pressure)\n", psimem + 0, psifull + 0
+      printf "peak io pressure      %s (PSI some avg60, %%)\n", psiio + 0
+      printf "lowest Docker inodes  %s free\n", (min_inodes == "" ? "not sampled" : min_inodes)
+      printf "OOM kills in the run  %s (kernel, any process)\n", (oom_first == "" ? "not sampled" : oom_last - oom_first)
+      printf "container OOM events  %s (Docker daemon, see oom.csv)\n", dooms + 0
     }' "$host_csv"
   echo 'peak memory per container (MiB):'
   awk -F, 'NR > 1 { if ($4 + 0 > m[$2]) m[$2] = $4 + 0 } END { for (c in m) printf "  %6d  %s\n", m[c], c }' "$containers_csv" | sort -rn | head -25
