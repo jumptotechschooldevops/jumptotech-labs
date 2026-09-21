@@ -34,7 +34,9 @@ import {
   issueTerminalGrant,
   noLimit,
   sessionErrorResponse,
+  studentEnvironment,
   studentMessage,
+  studentSteps,
   toSessionPayload,
   type SessionRoutesDeps,
 } from './sessions.js';
@@ -438,8 +440,8 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
     sendOk(res, {
       session: toSessionPayload(sessions, started.session),
       ...(attempt ? { attempt: toAttemptPayload(attempt, registry) } : {}),
-      environment: started.environment,
-      steps: started.steps,
+      environment: studentEnvironment(started.environment),
+      steps: studentSteps(started.steps),
       terminal,
     });
   }));

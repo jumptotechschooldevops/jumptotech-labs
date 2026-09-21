@@ -141,10 +141,13 @@ export function sessionErrorResponse(
 ): void {
   if (error instanceof SessionError) {
     const forStudent = audience === 'student';
+    const remediation = forStudent
+      ? (STUDENT_REMEDIATION_BY_CODE[error.code] ?? error.remediation)
+      : error.remediation;
     sendError(res, STATUS_BY_CODE[error.code] ?? 500, {
       code: error.code,
       message: forStudent ? studentMessage(error.code, error.message) : error.message,
-      ...(error.remediation ? { remediation: error.remediation } : {}),
+      ...(remediation ? { remediation } : {}),
       ...(error.details ? { details: forStudent ? withoutProviderWords(error.details) : error.details } : {}),
     });
     return;
@@ -179,6 +182,16 @@ const STUDENT_MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   ENVIRONMENT_UNREACHABLE: 'The lab environment could not be read, so nothing was checked.',
 };
 
+/*
+ * A failed provision's remediation is the provider's too: "Rebuild the sandbox
+ * image: npm run sandbox:build", "Check that Docker is running …", "Check the
+ * setup files declared by …" — an operator's next step, which the operator
+ * has in the log beside the failure. The student is told theirs.
+ */
+const STUDENT_REMEDIATION_BY_CODE: Readonly<Record<string, string>> = {
+  SESSION_PROVISION_FAILED: 'Try again in a moment. If it keeps happening, tell your instructor.',
+};
+
 export function studentMessage(code: string | undefined, message: string): string {
   return (code && STUDENT_MESSAGE_BY_CODE[code]) ?? message;
 }
@@ -203,6 +216,36 @@ export function withoutProviderWords<T>(details: T): T {
     out.environment = rest;
   }
   return out as T;
+}
+
+/**
+ * An environment as its student sees it: every field but `message`.
+ *
+ * `message` is the provider's account of the sandbox — a failed `inspect`'s
+ * socket error with the broker's address, the Kubernetes API's own text, a
+ * container or namespace name — and the web client renders `phase` only. The
+ * operator reads the message from the provider directly (`ops sessions`, the
+ * session manager's log).
+ */
+export function studentEnvironment<T extends { message?: string } | null | undefined>(environment: T): T {
+  if (!environment || typeof environment !== 'object') return environment;
+  const { message: _message, ...rest } = environment;
+  return rest as T;
+}
+
+/**
+ * A successful operation's steps. The platform's own notes on steps that went
+ * well stay (the Docker daemon step's container budget); a step that failed on
+ * the way to an overall success — a peer that would not delete, a network the
+ * runtime refused — carries the runtime's text in `detail` exactly as a failed
+ * operation's does, and loses it the same way.
+ */
+export function studentSteps<T extends readonly { status?: string; detail?: string }[]>(steps: T): T {
+  return steps.map((step) => {
+    if (step.status !== 'failed') return step;
+    const { detail: _detail, ...rest } = step;
+    return rest;
+  }) as unknown as T;
 }
 
 /**
@@ -455,7 +498,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       environment = await sessions.status(session);
     }
 
-    sendOk(res, { session: toSessionPayload(sessions, session), environment });
+    sendOk(res, { session: toSessionPayload(sessions, session), environment: studentEnvironment(environment) });
   }));
 
   // POST /api/sessions/:sessionId/terminal ---------------------------------
@@ -769,8 +812,8 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         ...(attempt ? { attempt: toAttemptPayload(attempt, registry) } : {}),
         removed: result.removed,
         restored: result.restored,
-        steps: result.steps,
-        environment: result.environment,
+        steps: studentSteps(result.steps),
+        environment: studentEnvironment(result.environment),
         session: toSessionPayload(sessions, session),
         /** Tells the UI it is safe to clear the terminal scrollback. */
         clearTerminal: true,
@@ -835,7 +878,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         message: 'Lab environment released.',
         session: toSessionPayload(sessions, session),
         ...(attempt ? { attempt: toAttemptPayload(attempt, registry) } : {}),
-        steps: destroy.steps,
+        steps: studentSteps(destroy.steps),
       });
     } catch (error) {
       const code = error instanceof SessionError ? error.code : undefined;
