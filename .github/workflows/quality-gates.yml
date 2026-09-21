@@ -76,6 +76,14 @@ concurrency:
 permissions:
   contents: read
 
+# Without this, a `run:` block is `bash -e {0}`: no pipefail, so the status of
+# `a | b` is b's alone and a failing `a` passes. Naming the shell makes it
+# `bash --noprofile --norc -eo pipefail {0}` for every step. Diagnostics and
+# cleanup steps that must not fail already end their pipelines in `|| true`.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   gates:
     runs-on: ubuntu-latest

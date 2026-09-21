@@ -302,6 +302,14 @@ describe('the workflows', () => {
     }
   });
 
+  it('run every quality-gate step with pipefail', () => {
+    // GitHub's default `run:` shell is `bash -e {0}`: `a | b` succeeds when
+    // `a` fails. `shell: bash` is `bash --noprofile --norc -eo pipefail {0}`.
+    expect(workflow).toMatch(/^defaults:\n {2}run:\n {4}shell: bash\n/m);
+    // A step may not opt back out to a pipefail-less shell.
+    expect(workflow).not.toMatch(/^\s+shell: (sh|bash -e \{0\})\s*$/m);
+  });
+
   it('verify every binary they download before installing it', () => {
     for (const [file, text] of files) {
       for (const [, target] of text.matchAll(/curl -fsSLo (\S+)/g)) {
