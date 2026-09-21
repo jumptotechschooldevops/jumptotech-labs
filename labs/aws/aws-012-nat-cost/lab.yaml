@@ -139,10 +139,18 @@ requirements:
     via: Ref
     label: S3Endpoint is associated with the private route table
 
-  - type: cfn_resource_property
+  # The service itself, not merely a ServiceName: copying the S3 block and
+  # renaming only the logical ID gave two endpoints to S3, left the DynamoDB
+  # traffic on the NAT gateway, and passed. `!Sub` with ${AWS::Region} and the
+  # literal for this VPC's Region are the same name; `!Join` forms evaluate
+  # to the same template.
+  - type: cfn_property_resolves_to
     path: /home/student/network/vpc.yaml
     logical_id: S3Endpoint
     property: ServiceName
+    any_of:
+      - com.amazonaws.${AWS::Region}.s3
+      - com.amazonaws.eu-west-1.s3
     label: S3Endpoint names the service it points at
 
   # --- the DynamoDB endpoint ------------------------------------------------
@@ -158,6 +166,15 @@ requirements:
     property: VpcEndpointType
     equals: Gateway
     label: DynamoDbEndpoint is the endpoint type that attaches to route tables
+
+  - type: cfn_property_resolves_to
+    path: /home/student/network/vpc.yaml
+    logical_id: DynamoDbEndpoint
+    property: ServiceName
+    any_of:
+      - com.amazonaws.${AWS::Region}.dynamodb
+      - com.amazonaws.eu-west-1.dynamodb
+    label: DynamoDbEndpoint names the service it points at
 
   - type: cfn_resource_reference
     path: /home/student/network/vpc.yaml

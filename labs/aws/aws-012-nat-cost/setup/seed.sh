@@ -189,6 +189,7 @@ BACKUP_TRAFFIC_VIA=FILL_ME
 PATCHING_TRAFFIC_VIA=FILL_ME
 
 # Percentage share of NAT-processed bytes your change removes, from the report.
+# Write the number only, without the % sign (for example 42).
 NAT_SHARE_REMOVED=FILL_ME
 DOC
 
