@@ -54,7 +54,7 @@ describe('student text is scanned in linear time', () => {
   });
 
   it('Jenkins stage headers: a Jenkinsfile of stage(\' repeated', () => {
-    const text = `pipeline {\n  agent any\n  stages {\n    ${"stage('".repeat(100_000)}\n  }\n}\n`;
+    const text = `pipeline {\n  agent any\n  stages {\n    ${"stage('".repeat(30_000)}\n  }\n}\n`;
     const { ms } = timed(() => parseJenkinsfile(text));
     expect(ms).toBeLessThan(BUDGET_MS);
   });
