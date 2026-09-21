@@ -13,6 +13,11 @@
  * drift apart on what "a production secret" means:
  *
  *   · **present** when the service needs it;
+ *   · **exactly the value** — no leading or trailing whitespace. The services
+ *     do not all strip it: the api trims NAMESPACE_DERIVATION_SECRET and
+ *     sandboxd did not, so `"<key> "` in .env named every sandbox one way at
+ *     creation and another at attach, and every container lab failed with
+ *     what looked like an ownership refusal;
  *   · **not a placeholder** — no `change-me`, `dev-only`, `example`…;
  *   · **long enough** — 32 characters for secrets this platform generates
  *     (`openssl rand -hex 16` is the shortest `make setup` writes);
@@ -57,10 +62,11 @@ export const PLACEHOLDER_MARKERS: readonly string[] = [
 /** Fewer distinct characters than this is a pattern, not a key. */
 const MIN_DISTINCT_CHARACTERS = 8;
 
-export type SecretWeakness = 'missing' | 'placeholder' | 'too-short' | 'low-entropy';
+export type SecretWeakness = 'missing' | 'whitespace' | 'placeholder' | 'too-short' | 'low-entropy';
 
 const WEAKNESS_TEXT: Readonly<Record<SecretWeakness, string>> = {
   missing: 'is not set',
+  whitespace: 'has leading or trailing whitespace (a quoted .env value keeps it); remove it',
   placeholder: 'is a placeholder value',
   'too-short': 'is too short',
   'low-entropy': 'has too little variety to be a generated secret',
@@ -73,6 +79,7 @@ export function secretWeakness(
 ): SecretWeakness | null {
   const trimmed = value?.trim() ?? '';
   if (trimmed.length === 0) return 'missing';
+  if (trimmed !== value) return 'whitespace';
   const lower = trimmed.toLowerCase();
   if (PLACEHOLDER_MARKERS.some((marker) => lower.includes(marker))) return 'placeholder';
   if (trimmed.length < minLength) return 'too-short';
@@ -142,7 +149,11 @@ export function assertProductionSecrets(options: ProductionSecretOptions): void 
   for (const secret of options.secrets) {
     const present = (secret.value?.trim() ?? '').length > 0;
     if (!present && !secret.required) continue;
-    const weakness = secretWeakness(secret.value, secret.minLength);
+    // Some loaders trim before they get here and some do not, so the variable
+    // itself is judged too: a padded value is one the services disagree on.
+    const raw = options.env[secret.name];
+    const padded = typeof raw === 'string' && raw.trim() !== '' && raw !== raw.trim();
+    const weakness = padded ? 'whitespace' : secretWeakness(secret.value, secret.minLength);
     if (weakness) problems.push(`${secret.name} ${WEAKNESS_TEXT[weakness]}`);
   }
 

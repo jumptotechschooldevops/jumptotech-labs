@@ -92,6 +92,22 @@ describe('sandboxd in every environment', () => {
     ).toThrow(/NAMESPACE_DERIVATION_SECRET and SANDBOXD_ATTACH_SECRET are the same value/);
   });
 
+  it('refuses a padded secret: the api trims the derivation key and the terminal does not trim the attach secret', () => {
+    for (const name of ['NAMESPACE_DERIVATION_SECRET', 'SANDBOXD_ATTACH_SECRET', 'SANDBOXD_RUNTIME_SECRET'] as const) {
+      expect(refusal({ ...PRODUCTION, [name]: `${PRODUCTION[name]} ` })).toMatch(
+        new RegExp(`${name} has leading or trailing whitespace`),
+      );
+    }
+  });
+
+  it('derives sandbox references from the same trimmed key as the api', () => {
+    const config = loadSandboxdConfig({
+      SANDBOXD_ATTACH_SECRET: 'terminal-attach-credential',
+      NAMESPACE_DERIVATION_SECRET: ' dev-derivation-key ',
+    } as NodeJS.ProcessEnv);
+    expect(config.derivationSecret).toBe('dev-derivation-key');
+  });
+
   it('still accepts short development credentials outside production', () => {
     expect(() =>
       loadSandboxdConfig({

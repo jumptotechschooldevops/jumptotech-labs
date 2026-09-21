@@ -93,6 +93,14 @@ describe('API secrets under NODE_ENV=production', () => {
     });
   }
 
+  it('refuses a padded secret: the api trims NAMESPACE_DERIVATION_SECRET, and sandboxd used not to', () => {
+    for (const name of ['NAMESPACE_DERIVATION_SECRET', 'INTERNAL_SERVICE_SECRET', 'TERMINAL_SESSION_SECRET'] as const) {
+      expect(refusal({ ...PRODUCTION, [name]: `${PRODUCTION[name]} ` })).toMatch(
+        new RegExp(`${name} has leading or trailing whitespace`),
+      );
+    }
+  });
+
   it('refuses the TERMINAL_SESSION_SECRET placeholder .env.example ships', () => {
     expect(refusal({ ...PRODUCTION, TERMINAL_SESSION_SECRET: 'dev-only-insecure-secret-change-me' })).toMatch(
       /TERMINAL_SESSION_SECRET is a placeholder/,
