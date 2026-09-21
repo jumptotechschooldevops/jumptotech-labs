@@ -307,6 +307,11 @@ if [ "$stack" = production ]; then
 fi
 
 # --- logs -----------------------------------------------------------------------------
+# This deployment's own secret values, for the sanitizer and the final scan. A
+# production bundle is always checked for them: an env file that cannot be read
+# fails the scan ("could not run"). A development stack without .env has none.
+secrets_env=()
+if [ "$stack" = production ] || [ -r "$env_file" ]; then secrets_env=(--secrets-env "$env_file"); fi
 if [ "$collect_logs" -eq 1 ]; then
   if have_tsx; then
     for entry in api:structured terminal:structured sandboxd:structured postgres:postgres web:nginx; do
@@ -314,7 +319,7 @@ if [ "$collect_logs" -eq 1 ]; then
       source=${entry##*:}
       {
         compose logs --no-color --no-log-prefix --since "$since" "$service" 2>/dev/null || true
-      } | tsx scripts/diagnostics-sanitize-logs.ts --source "$source" --max-lines "$max_lines" --env-file "$env_file" \
+      } | tsx scripts/diagnostics-sanitize-logs.ts --source "$source" --max-lines "$max_lines" ${secrets_env[@]+"${secrets_env[@]}"} \
         >"$bundle/logs/$service.log" 2>"$bundle/logs/$service.summary" || echo "sanitizer failed for $service" >"$bundle/logs/$service.summary"
     done
   else
@@ -326,9 +331,15 @@ fi
 
 # --- the gate -------------------------------------------------------------------------
 if have_tsx; then
-  if ! tsx scripts/diagnostics-sanitize-logs.ts --scan-dir "$bundle" --env-file "$env_file"; then
+  scan_status=0
+  tsx scripts/diagnostics-sanitize-logs.ts --scan-dir "$bundle" ${secrets_env[@]+"${secrets_env[@]}"} || scan_status=$?
+  if [ "$scan_status" -eq 1 ]; then
     rm -rf "$bundle"
     echo 'private-beta-diagnostics: a secret was found in the collected files. Nothing was kept. Report this as a bug; do not collect by hand.' >&2
+    exit 1
+  elif [ "$scan_status" -ne 0 ]; then
+    rm -rf "$bundle"
+    echo "private-beta-diagnostics: the secret scan could not run (exit $scan_status), so nothing was kept. Its reason is above." >&2
     exit 1
   fi
 else

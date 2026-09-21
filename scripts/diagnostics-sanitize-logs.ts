@@ -2,24 +2,29 @@
  * Sanitise one service's log for the support bundle: stdin → stdout.
  *
  *   docker compose logs --no-color --no-log-prefix api \
- *     | npx tsx scripts/diagnostics-sanitize-logs.ts --source structured --max-lines 300 --env-file .env
+ *     | npx tsx scripts/diagnostics-sanitize-logs.ts --source structured --max-lines 300 --secrets-env .env
  *
  * Called by scripts/private-beta-diagnostics.sh; the rules are in
  * services/observability/src/support-bundle.ts.
  *
- * `--env-file` is read as data, never sourced and never printed: the values of
+ * `--secrets-env` is read as data, never sourced and never printed: the values of
  * the secrets named in infrastructure/secret-distribution.json are registered
  * with the redactor, so one of this deployment's own secrets is replaced even
  * if it reached a log line in a shape no pattern recognises.
  *
  * One summary line goes to stderr. Exit 0, or 2 on a usage error.
  *
- *   npx tsx scripts/diagnostics-sanitize-logs.ts --scan-dir DIR --env-file .env
+ *   npx tsx scripts/diagnostics-sanitize-logs.ts --scan-dir DIR --secrets-env .env
  *
  * is the gate the bundle passes before it is packaged: every file under DIR is
  * searched for the configured secrets' literal values and for shapes that are
  * never innocent (`findSecretLeaks`). Exit 1 names the file and the kind found,
- * never the value.
+ * never the value. Exit 2: the scan could not run.
+ *
+ * Not `--env-file`: Node 22 takes that flag as its own wherever it appears on
+ * the command line, even after the script name. A missing file stopped Node
+ * (exit 9) before this script ran, which the bundle reported as "a secret was
+ * found"; a present one was loaded into this process's environment.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -91,7 +96,7 @@ async function main(): Promise<void> {
   const scanAt = args.indexOf('--scan-dir');
   if (scanAt >= 0) {
     const dir = args[scanAt + 1];
-    const envAt = args.indexOf('--env-file');
+    const envAt = args.indexOf('--secrets-env');
     if (!dir) fail('--scan-dir needs a directory');
     scan(dir, envAt >= 0 ? args[envAt + 1] : undefined);
   }
@@ -108,7 +113,7 @@ async function main(): Promise<void> {
     } else if (arg === '--max-lines' && value && /^\d{1,5}$/.test(value)) {
       maxLines = Number(value);
       i += 1;
-    } else if (arg === '--env-file' && value) {
+    } else if (arg === '--secrets-env' && value) {
       envFile = value;
       i += 1;
     } else {
