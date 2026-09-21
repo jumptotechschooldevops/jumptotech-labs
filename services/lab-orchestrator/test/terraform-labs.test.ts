@@ -956,8 +956,10 @@ describe('TF-017 — Complex Types', () => {
     const shapes = environments.map((r) => r.type_contains);
     expect(shapes).toContain('map(object(');
     // Matched against the type expression with whitespace collapsed, so a
-    // student's layout does not decide.
-    expect(shapes).toContain('optional(');
+    // student's layout does not decide. The default is part of it: with
+    // `optional(bool)` debug is null, and the only way to the right manifest
+    // is to edit the platform team's tfvars.
+    expect(shapes).toContain('optional(bool,false)');
     expect(declared.some((r) => r.name === 'target' && r.has_type === true)).toBe(true);
   });
 
@@ -1073,8 +1075,9 @@ describe('TF-025 — Custom Conditions', () => {
         : [],
     );
     // `self` is how a postcondition names what was read — an identifier the
-    // task itself gives, not a function.
-    expect(mentioned.sort()).toEqual(['environment', 'production', 'replicas', 'self', 'staging']);
+    // task itself gives, not a function — and `region` is what the task says
+    // it must assert was read.
+    expect(mentioned.sort()).toEqual(['environment', 'production', 'region', 'replicas', 'self', 'staging']);
     for (const fn of ['contains', 'regex', 'startswith', 'can', 'length']) {
       expect(mentioned).not.toContain(fn);
     }

@@ -158,6 +158,14 @@ requirements:
       - gold_services
       - replica_factor
       - scaled_replicas
+    # Each value computed rather than typed in. The task prints the answer
+    # (`gold: auth, ledger`, `replicas: 12`), so without these a student stuck
+    # on `sum()` could write `scaled_replicas = 12` and every check passed.
+    references:
+      service_summary: [var.services]
+      gold_services: [var.services]
+      replica_factor: [var.environment]
+      scaled_replicas: [var.services, local.replica_factor]
     label: The four derived values are named local values
 
   # A hand-typed manifest refers to nothing. These two are what make retyping

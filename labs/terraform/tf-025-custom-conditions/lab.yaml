@@ -174,8 +174,13 @@ requirements:
     condition: postcondition
     # "Inside a postcondition you refer to what was read as `self`": a
     # postcondition that never mentions self asserts nothing about the read.
+    # And about the region: the task asks it to assert that what was read
+    # contains one, and `length(self.content) > 0` asserted nothing of the kind.
+    # Words match inside string literals too, so can(jsondecode(self.content).region)
+    # and strcontains(self.content, "region") both qualify.
     condition_mentions:
       - self
+      - region
     label: The data source asserts what it actually read
 
   - type: terraform_check_declared

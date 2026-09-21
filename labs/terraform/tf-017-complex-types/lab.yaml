@@ -83,8 +83,8 @@ task:
     `replicas` number, and a `debug` boolean. Look at `production` before you
     decide how to declare `debug` — it is not there. Most environments will not
     have it, so the type has to allow the attribute to be omitted and supply a
-    value when it is, rather than forcing every environment to spell out a
-    default.
+    value when it is — debugging off — rather than forcing every environment
+    to spell out a default.
 
     Keep `target`, still typed as a string; it selects which environment to
     build.
@@ -142,10 +142,13 @@ requirements:
     label: The environments variable is typed as a map of objects
 
   # Graded here as a declaration, and below through its effect.
+  # The default itself, not only `optional(`: with `optional(bool)` debug is
+  # null, and adding `debug = false` to the platform team's tfvars (the file the
+  # task says not to edit) then produced the right manifest and passed.
   - type: terraform_variable_declared
     dir: terraform
     name: environments
-    type_contains: optional(
+    type_contains: optional(bool,false)
     label: The debug attribute is declared optional rather than required
 
   - type: terraform_variable_declared
