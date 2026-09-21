@@ -114,6 +114,42 @@ export const deploymentRolloutComplete: VerifierHandler<'deployment_rollout_comp
   },
 };
 
+export const deploymentRevisionHistory: VerifierHandler<'deployment_revision_history'> = {
+  type: 'deployment_revision_history',
+  label: (r) =>
+    r.current_is_rollback
+      ? `Deployment ${r.name} was rolled back to an earlier revision`
+      : `Deployment ${r.name} rolled out the expected release`,
+  async run(r, reader) {
+    const deployment = await reader.deployment(r.name);
+    if (!deployment) return missing('Deployment', r.name, reader.namespace);
+    const history = await reader.replicaSets(r.name);
+
+    // Neither failure names the image or the command: in a rollback lab the
+    // release and the recovery are the exercise.
+    if (r.rolled_out_image !== undefined) {
+      const wanted = r.rolled_out_image;
+      if (!history.some((rs) => rs.images.some((image) => imageMatches(wanted, image)))) {
+        return fail(
+          `none of the ${history.length} revision${history.length === 1 ? '' : 's'} in Deployment '${r.name}''s history ran the release this lab asks you to roll out`,
+        );
+      }
+    }
+
+    if (r.current_is_rollback) {
+      const numbered = history.filter((rs) => rs.revision !== undefined);
+      const current = numbered.sort((a, b) => (b.revision ?? 0) - (a.revision ?? 0))[0];
+      if (!current) return fail(`Deployment '${r.name}' has no recorded revisions`);
+      if (current.revisionHistory.length === 0) {
+        return fail(
+          `the current revision of Deployment '${r.name}' is a new template, not an earlier one brought back`,
+        );
+      }
+    }
+    return pass();
+  },
+};
+
 /**
  * Kubernetes IntOrString, parsed into something comparable.
  *

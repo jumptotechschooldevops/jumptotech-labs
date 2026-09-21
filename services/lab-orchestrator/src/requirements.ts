@@ -664,6 +664,30 @@ const kubernetesRequirementSchemas = {
     .object({ type: z.literal('deployment_rollout_complete'), name: resourceName, ...common })
     .strict(),
 
+  /**
+   * The Deployment's own rollout history, read from the ReplicaSets it owns.
+   *
+   * `rolled_out_image`: some template the Deployment rolled out ran this
+   * image — the bad release really went out (its ReplicaSet survives, scaled
+   * to zero, as history). `current_is_rollback`: the live template is an
+   * earlier one re-used — the controller records the revisions a re-used
+   * ReplicaSet held in `deployment.kubernetes.io/revision-history`, which
+   * `rollout undo` and an edit back to an identical template both produce,
+   * and `rollout restart` (a new template every time) never does.
+   */
+  deployment_revision_history: z
+    .object({
+      type: z.literal('deployment_revision_history'),
+      name: resourceName,
+      rolled_out_image: imageReference.optional(),
+      current_is_rollback: z.boolean().optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.rolled_out_image !== undefined || v.current_is_rollback === true, {
+      message: 'must assert a rolled-out image, a rollback, or both',
+    }),
+
   deployment_selector: z
     .object({
       type: z.literal('deployment_selector'),
@@ -2436,7 +2460,7 @@ const sandboxRequirementSchemas = {
        * a valid way to retire a value, not a value still in use. A comment
        * after a value on the same line still counts: the reader sees it too.
        */
-      ignore_comment_lines: z.boolean().default(false),
+      ignore_comment_lines: z.boolean().optional(),
       ...common,
     })
     .strict(),
@@ -4062,6 +4086,7 @@ export const REQUIREMENT_FAMILIES = {
   deployment_replicas: 'kubernetes',
   deployment_available: 'kubernetes',
   deployment_rollout_complete: 'kubernetes',
+  deployment_revision_history: 'kubernetes',
   deployment_selector: 'kubernetes',
   deployment_resources: 'kubernetes',
   deployment_probe: 'kubernetes',

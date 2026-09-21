@@ -32,6 +32,7 @@ import type {
   ServiceReachabilityResult,
   ServiceSnapshot,
   StatefulSetSnapshot,
+  ReplicaSetSnapshot,
   StorageClassSnapshot,
 } from '@jumptotech/lab-orchestrator';
 
@@ -109,6 +110,11 @@ export class VerifyReader {
 
   networkPolicy(name: string): Promise<NetworkPolicySnapshot | null> {
     return this.#once(`networkpolicy/${name}`, () => this.k8s.getNetworkPolicy(this.namespace, name));
+  }
+
+  /** The ReplicaSets Deployment `name` owns: its rollout history. */
+  replicaSets(name: string): Promise<ReplicaSetSnapshot[]> {
+    return this.#once(`replicasets/${name}`, () => this.k8s.listDeploymentReplicaSets(this.namespace, name));
   }
 
   statefulSet(name: string): Promise<StatefulSetSnapshot | null> {

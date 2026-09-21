@@ -41,6 +41,7 @@ import type {
   ServiceReachabilityResult,
   ServiceSnapshot,
   StatefulSetSnapshot,
+  ReplicaSetSnapshot,
   StorageClassSnapshot,
 } from '../src/index.js';
 import { KubernetesUnreachableError } from '../src/index.js';
@@ -69,6 +70,8 @@ export interface FakeK8sOptions {
   ingresses?: Record<string, IngressSnapshot[]>;
   networkPolicies?: Record<string, NetworkPolicySnapshot[]>;
   statefulSets?: Record<string, StatefulSetSnapshot[]>;
+  /** ReplicaSets keyed `namespace/deployment`. */
+  replicaSets?: Record<string, ReplicaSetSnapshot[]>;
   daemonSets?: Record<string, DaemonSetSnapshot[]>;
   horizontalPodAutoscalers?: Record<string, HorizontalPodAutoscalerSnapshot[]>;
   storageClasses?: Record<string, StorageClassSnapshot>;
@@ -110,6 +113,7 @@ export class FakeKubernetes implements KubernetesPort {
   ingresses: Map<string, IngressSnapshot[]>;
   networkPolicies: Map<string, NetworkPolicySnapshot[]>;
   statefulSets: Map<string, StatefulSetSnapshot[]>;
+  replicaSets: Map<string, ReplicaSetSnapshot[]>;
   daemonSets: Map<string, DaemonSetSnapshot[]>;
   horizontalPodAutoscalers: Map<string, HorizontalPodAutoscalerSnapshot[]>;
   storageClasses: Map<string, StorageClassSnapshot>;
@@ -146,6 +150,7 @@ export class FakeKubernetes implements KubernetesPort {
     this.ingresses = new Map(Object.entries(options.ingresses ?? {}));
     this.networkPolicies = new Map(Object.entries(options.networkPolicies ?? {}));
     this.statefulSets = new Map(Object.entries(options.statefulSets ?? {}));
+    this.replicaSets = new Map(Object.entries(options.replicaSets ?? {}));
     this.daemonSets = new Map(Object.entries(options.daemonSets ?? {}));
     this.horizontalPodAutoscalers = new Map(Object.entries(options.horizontalPodAutoscalers ?? {}));
     this.storageClasses = new Map(Object.entries(options.storageClasses ?? {}));
@@ -354,6 +359,11 @@ export class FakeKubernetes implements KubernetesPort {
   async getNetworkPolicy(namespace: string, name: string): Promise<NetworkPolicySnapshot | null> {
     this.#guard();
     return (this.networkPolicies.get(namespace) ?? []).find((n) => n.name === name) ?? null;
+  }
+
+  async listDeploymentReplicaSets(namespace: string, deploymentName: string): Promise<ReplicaSetSnapshot[]> {
+    this.#guard();
+    return this.replicaSets.get(`${namespace}/${deploymentName}`) ?? [];
   }
 
   async getStatefulSet(namespace: string, name: string): Promise<StatefulSetSnapshot | null> {

@@ -58,8 +58,36 @@ function seeded(overrides: Parameters<typeof deploymentSnapshot>[0] = {}) {
 const rolledBack = (overrides: Parameters<typeof deploymentSnapshot>[0] = {}) =>
   seeded({ annotations: { [REVISION]: '3' }, generation: 3, observedGeneration: 3, ...overrides });
 
-const clusterWith = (...d: ReturnType<typeof deploymentSnapshot>[]) =>
-  new FakeKubernetes({ deployments: { [NS]: d } });
+type History = Array<{ revision: number; image: string; revisionHistory?: number[] }>;
+
+/**
+ * The ReplicaSets the Deployment controller keeps as history, as each fixture
+ * would really have them: revision 1 only when nothing rolled; revision 2 on
+ * the broken image while stuck; and after `rollout undo`, the broken release's
+ * ReplicaSet (scaled to zero) beside the original one re-used as revision 3+,
+ * which the controller marks with the revision it held before.
+ */
+function historyFor(revision: number): History {
+  if (revision <= 1) return [{ revision: 1, image: GOOD }];
+  if (revision === 2) return [{ revision: 1, image: GOOD }, { revision: 2, image: BAD }];
+  return [{ revision: 2, image: BAD }, { revision, image: GOOD, revisionHistory: [1] }];
+}
+
+const replicaSets = (namespace: string, history: History) => ({
+  [`${namespace}/payments-api`]: history.map((h, i) => ({
+    name: `payments-api-${i}`,
+    namespace,
+    revision: h.revision,
+    revisionHistory: h.revisionHistory ?? [],
+    images: [h.image],
+  })),
+});
+
+const clusterWith = (d: ReturnType<typeof deploymentSnapshot>, history?: History) =>
+  new FakeKubernetes({
+    deployments: { [NS]: [d] },
+    replicaSets: replicaSets(NS, history ?? historyFor(Number(d.annotations?.[REVISION] ?? '1'))),
+  });
 
 const run = (k8s: FakeKubernetes, namespace = NS) => verifyLab({ k8s, lab, namespace });
 
@@ -83,6 +111,7 @@ describe('K8S-014 — the shipped lab', () => {
       'deployment_selector',
       'deployment_replicas',
       'workload_annotation',
+      'deployment_revision_history',
       'deployment_image',
       'deployment_rollout_complete',
       'deployment_available',
@@ -98,6 +127,7 @@ describe('K8S-014 — the shipped lab', () => {
      */
     expect(await failures(clusterWith(seeded()))).toEqual([
       'A new revision was rolled out and then rolled back',
+      'The history shows the broken release and a return to an earlier revision',
     ]);
   });
 
@@ -131,6 +161,7 @@ describe('K8S-014 — the shipped lab', () => {
     // Right image, right everything — but revision 1 says nothing ever rolled.
     expect(await failures(clusterWith(seeded({ generation: 1, observedGeneration: 1 })))).toEqual([
       'A new revision was rolled out and then rolled back',
+      'The history shows the broken release and a return to an earlier revision',
     ]);
   });
 
@@ -144,10 +175,56 @@ describe('K8S-014 — the shipped lab', () => {
   it('does not pass on another session"s recovered namespace', async () => {
     const k8s = new FakeKubernetes({
       deployments: { [NS_B]: [rolledBack({ namespace: NS_B })] },
+      replicaSets: replicaSets(NS_B, historyFor(3)),
     });
 
     expect((await run(k8s, NS)).passed).toBe(false);
     expect((await run(k8s, NS_B)).passed).toBe(true);
+  });
+});
+
+// ------------------------------------------- the rollout history (2026-09-20)
+
+describe('K8S-014 — the history must show the release and the rollback', () => {
+  const LABEL = 'The history shows the broken release and a return to an earlier revision';
+
+  it('passes `rollout undo --to-revision=1` after a fumbled second attempt', async () => {
+    const history: History = [
+      { revision: 2, image: BAD },
+      { revision: 3, image: 'nginx:1.29-rc2-jumptotech' },
+      { revision: 4, image: GOOD, revisionHistory: [1] },
+    ];
+    expect(await failures(clusterWith(rolledBack({ annotations: { [REVISION]: '4' } }), history))).toEqual([]);
+  });
+
+  it('fails two `rollout restart`s: revision 3 and the right image, but nothing rolled out or back', async () => {
+    // Before: all seven checks passed. Each restart is a new template, so no
+    // ReplicaSet ever ran the broken image and none was re-used.
+    const restarted: History = [
+      { revision: 1, image: GOOD },
+      { revision: 2, image: GOOD },
+      { revision: 3, image: GOOD },
+    ];
+    expect(await failures(clusterWith(rolledBack(), restarted))).toEqual([LABEL]);
+  });
+
+  it('fails the broken release rolled out and then replaced by a new template rather than rolled back', async () => {
+    // e.g. `kubectl set image` back with a changed annotation: a third, new
+    // template on the right image — recovered, but not from the history.
+    const forward: History = [{ revision: 1, image: GOOD }, { revision: 2, image: BAD }, { revision: 3, image: GOOD }];
+    const result = await run(clusterWith(rolledBack(), forward));
+    const check = result.checks.find((c) => c.label === LABEL);
+    expect(check?.status).toBe('fail');
+    expect(check?.detail).toContain('new template');
+    expect(check?.detail).not.toContain(BAD);
+  });
+
+  it('reads only this session’s history', async () => {
+    const k8s = new FakeKubernetes({
+      deployments: { [NS]: [rolledBack()] },
+      replicaSets: replicaSets(NS_B, historyFor(3)),
+    });
+    expect((await run(k8s, NS)).checks.find((c) => c.label === LABEL)?.status).toBe('fail');
   });
 });
 
