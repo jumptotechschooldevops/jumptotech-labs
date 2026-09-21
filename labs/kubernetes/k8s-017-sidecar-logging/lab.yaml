@@ -103,6 +103,12 @@ task:
     time the application is — not only before it starts — because the
     application appends to the file continuously.
 
+    Use Kubernetes' native sidecar mechanism, described on the Sidecar
+    Containers page of the documentation, rather than a second ordinary entry
+    under `containers`. Older guides, including the streaming-sidecar example
+    on the Logging Architecture page, show the ordinary form; it runs, but it is
+    not what this lab teaches or checks.
+
     The two containers need to see the same directory. A container's filesystem
     is private to it; making a path shared between them is something you declare
     on the Pod.

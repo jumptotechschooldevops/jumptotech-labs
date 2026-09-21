@@ -206,3 +206,18 @@ describe('"still running after the change" means the changed template is running
     expect(lab.requirements.some((r) => r.type === 'deployment_rollout_complete')).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------- K8S-017
+
+describe('K8S-017 — the task names the mechanism it grades', () => {
+  it('tells the student to use a native sidecar, which is what the checks require', async () => {
+    const { lab } = await setup('K8S-017');
+    const graded = lab.requirements.filter(
+      (r) => 'collection' in r && r.collection === 'initContainers',
+    );
+    expect(graded.length).toBeGreaterThan(0);
+    // Before: only hints 2 and 3 said so, and the lab's own Logging Architecture
+    // reference shows the ordinary-container form, which fails two checks.
+    expect(lab.task.description).toMatch(/native sidecar/i);
+  });
+});
