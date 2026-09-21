@@ -126,6 +126,9 @@ requirements:
   - type: file_content_absent
     path: /etc/payments/api.conf
     contains: "127.0.0.1"
+    # The service reads only `key = value` lines, so the old value kept as a
+    # comment above the new line is retired, not in use.
+    ignore_comment_lines: true
     label: The loopback bind address is no longer configured
 
   # --- and the healthy services are still healthy --------------------------

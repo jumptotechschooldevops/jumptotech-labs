@@ -134,6 +134,9 @@ requirements:
   - type: file_content_absent
     path: /etc/ledger/api.conf
     contains: "127.0.0.1"
+    # The service reads only `key = value` lines, so the old value kept as a
+    # comment above the new line is retired, not in use.
+    ignore_comment_lines: true
     label: The loopback address is gone from the configuration
 
   # --- the evidence the incident review will read ---------------------------
@@ -141,13 +144,15 @@ requirements:
     path: /home/student/incident/evidence/local.txt
     contains: "200"
     label: The result from this host was captured
-  - type: file_content
-    path: /home/student/incident/diagnosis.txt
-    contains: "refused"
+  # "In whatever sentences you like", so in whatever case: `Connection
+  # Refused` at the start of a sentence is the same word.
+  - type: command_exit_code
+    command: grep
+    args: ["-qi", "refused", "/home/student/incident/diagnosis.txt"]
     label: The diagnosis names what the far side actually observed
-  - type: file_content
-    path: /home/student/incident/diagnosis.txt
-    contains: "bind"
+  - type: command_exit_code
+    command: grep
+    args: ["-qi", "bind", "/home/student/incident/diagnosis.txt"]
     label: The diagnosis names what was actually wrong
 
 hints:

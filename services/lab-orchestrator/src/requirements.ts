@@ -2430,6 +2430,13 @@ const sandboxRequirementSchemas = {
       path: sandboxPath,
       contains: literalText,
       ignore_case: z.boolean().default(false),
+      /**
+       * Skip whole-line `#` comments. For a configuration file whose reader
+       * ignores them, `# bind_address = 127.0.0.1` kept above the new line is
+       * a valid way to retire a value, not a value still in use. A comment
+       * after a value on the same line still counts: the reader sees it too.
+       */
+      ignore_comment_lines: z.boolean().default(false),
       ...common,
     })
     .strict(),
