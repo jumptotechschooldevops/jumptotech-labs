@@ -97,6 +97,15 @@ requirements:
     not_contains:
       - app_port=8080
     label: Both nodes serve the ledger on port 9090
+  # Where the task says the value lives. Typing `app_port=9090` into site.yml
+  # rendered the same file on both nodes while group_vars still said 8080 —
+  # the next playbook that reads the group's variables would put it back.
+  - type: file_key_value
+    path: group_vars/web.yml
+    key: app_port
+    separator: ':'
+    equals: "9090"
+    label: The web group's variables set the new port
   - type: managed_file_content
     path: /var/log/jumptotech/reload.log
     hosts: all
