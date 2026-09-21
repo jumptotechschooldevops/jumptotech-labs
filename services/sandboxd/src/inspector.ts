@@ -22,6 +22,15 @@ export interface DockerInspectorOptions {
   timeoutMs?: number;
 }
 
+/** The runtime could not say whether the container exists. */
+export class InspectorUnavailableError extends Error {
+  readonly code = 'SANDBOX_UNAVAILABLE';
+  constructor(detail: string) {
+    super(`the container runtime did not answer an inspect: ${detail}`);
+    this.name = 'InspectorUnavailableError';
+  }
+}
+
 export class DockerSandboxInspector implements SandboxInspectorPort {
   readonly #binary: string;
   readonly #timeoutMs: number;
@@ -44,7 +53,7 @@ export class DockerSandboxInspector implements SandboxInspectorPort {
 
   async inspect(ref: string): Promise<SandboxSnapshot | null> {
     assertValidContainerSandboxRef(ref);
-    const { code, stdout } = await this.#run([
+    const { code, stdout, stderr } = await this.#run([
       'inspect',
       '--type',
       'container',
@@ -54,7 +63,15 @@ export class DockerSandboxInspector implements SandboxInspectorPort {
     ]);
     // "No such container" is a null, not an error: an expired session asking
     // for its sandbox is ordinary, and the caller renders it as a refusal.
-    if (code !== 0) return null;
+    // Anything else — the daemon down or restarting, a timeout, a TLS error —
+    // is not an answer about the container. Reported as "no sandbox" it told
+    // every container-track student in a daemon blip that their lab had none,
+    // a refusal the web client never retries, and counted each as an
+    // ownership refusal on the security-events alert.
+    if (code !== 0) {
+      if (/no such (container|object)/i.test(stderr)) return null;
+      throw new InspectorUnavailableError(stderr.trim() || `docker inspect exited ${code}`);
+    }
 
     const [state, user, workdir, labelsJson] = stdout.trim().split('\t');
     if (state === undefined) return null;
