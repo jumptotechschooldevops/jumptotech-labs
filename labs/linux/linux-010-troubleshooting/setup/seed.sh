@@ -86,11 +86,12 @@ cat > /usr/local/bin/legacy-exporter <<'SH'
 #!/bin/bash
 # Decommissioned in the 2026-08-12 migration. Still running on this host, and
 # still holding the port the ledger API needs.
-socat -T 60 TCP-LISTEN:9105,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-edge-banner &
-child=$!
-trap 'kill "$child" 2>/dev/null' TERM INT
-wait "$child"
+exec -a /usr/local/bin/legacy-exporter socat -T 60 TCP-LISTEN:9105,reuseaddr,fork SYSTEM:/usr/local/bin/jtt-edge-banner
 SH
+# One process, not a wrapper with a child: the listener *is* legacy-exporter,
+# named so in `ps` (and still `socat` in `ss -ltnp`). With a background child,
+# `kill -9` on the wrapper orphaned a listener that kept 9105 while matching no
+# check, and the lab passed whenever ledger-api's crash loop was mid-restart.
 chmod 0755 /usr/local/bin/legacy-exporter
 setsid nohup /usr/local/bin/legacy-exporter >/dev/null 2>&1 &
 disown || true
