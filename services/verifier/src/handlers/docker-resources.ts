@@ -11,6 +11,7 @@
 import path from 'node:path';
 import type { DockerVerifierHandler } from '../contract.js';
 import { fail, missingDocker, pass } from '../contract.js';
+import { resolveEntrypoint } from '../docker-argv.js';
 import { imageMatches } from '../image.js';
 
 /** Render an argv the way a Dockerfile would, for a readable detail. */
@@ -89,7 +90,7 @@ export const dockerImageConfig: DockerVerifierHandler<'docker_image_config'> = {
     // Exact, and separately: the point of asserting these rather than
     // `cmd_contains` is to show which half a value came from, and to tell exec
     // form from shell form.
-    if (r.entrypoint !== undefined && !sameArgv(image.entrypoint, r.entrypoint)) {
+    if (r.entrypoint !== undefined && !sameArgv(resolveEntrypoint(image.entrypoint, image.workingDir), r.entrypoint)) {
       problems.push(`ENTRYPOINT is ${showArgv(image.entrypoint)}`);
     }
     if (r.cmd !== undefined && !sameArgv(image.cmd, r.cmd)) {

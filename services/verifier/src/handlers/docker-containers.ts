@@ -12,6 +12,7 @@
  */
 import type { DockerVerifierHandler } from '../contract.js';
 import { fail, missingDocker, pass } from '../contract.js';
+import { resolveEntrypoint } from '../docker-argv.js';
 import { imageMatches } from '../image.js';
 import { parseDockerMemory, parseDockerCpus, formatBytes, formatNanoCpus } from '../docker-quantity.js';
 
@@ -153,7 +154,7 @@ export const dockerContainerCommand: DockerVerifierHandler<'docker_container_com
     if (!container) return missingDocker('container', r.name);
     const problems: string[] = [];
 
-    if (r.entrypoint !== undefined && !sameArgv(container.entrypoint, r.entrypoint)) {
+    if (r.entrypoint !== undefined && !sameArgv(resolveEntrypoint(container.entrypoint, container.workingDir), r.entrypoint)) {
       problems.push(`its entrypoint is ${showArgv(container.entrypoint)}`);
     }
     if (r.command !== undefined && !sameArgv(container.command, r.command)) {
