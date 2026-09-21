@@ -20,6 +20,13 @@ infrastructure/kind/generated/
 infrastructure/observability/secrets/
 infrastructure/observability/alertmanager/secrets/
 backups/
+# A database archive holds every student's data, and BACKUP_DIR can point
+# anywhere: .gitignore already keeps these names out of git wherever they are
+# written. The Dockerfiles copy whole service directories, so the same names
+# stay out of every build context too (CI/CD supply-chain audit).
+**/*.dump
+**/*.dump.sha256
+**/*.dump.partial
 # Per-run secrets e2e/stack.sh generates for the browser E2E stack.
 e2e/.stack/
 

@@ -32,6 +32,9 @@ const EXCLUDED = [
   'infrastructure/observability/secrets/',
   'infrastructure/observability/alertmanager/secrets/',
   'backups/',
+  '**/*.dump',
+  '**/*.dump.sha256',
+  '**/*.dump.partial',
   'e2e/.stack/',
 ];
 
@@ -89,5 +92,13 @@ describe('git', () => {
     expect(present).toContain('!.env.example');
     // The negation must come after the rule it carves out of.
     expect(present.indexOf('!.env.example')).toBeGreaterThan(present.indexOf('.env.*'));
+  });
+
+  it('and Docker ignore the same database archive names, wherever they are written', () => {
+    const git = rules('.gitignore');
+    const docker = rules('.dockerignore');
+    const archives = git.filter((rule) => /\.dump/.test(rule));
+    expect(archives.length).toBeGreaterThan(0);
+    for (const rule of archives) expect(docker, rule).toContain(`**/${rule}`);
   });
 });
