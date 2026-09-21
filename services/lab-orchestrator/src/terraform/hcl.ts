@@ -28,17 +28,19 @@
 
 export interface HclArgument {
   name: string;
-  /** Raw source of the right-hand side, trimmed. Never evaluated. */
+  /**
+   * Source of the right-hand side, trimmed, with comments left out and each
+   * gap between tokens collapsed to one space. Never evaluated.
+   */
   value: string;
   /**
    * The string literals in the right-hand side — quoted strings and heredoc
    * bodies — as the lexer read them, in order.
    *
-   * Taken from the tokens rather than from `value`, because comments never
-   * become tokens: a `# production` note inside a multi-line expression is not
-   * a literal here, and it cannot hide one that follows it either (in the
-   * whitespace-collapsed `value`, a `#` swallows the rest of the expression).
-   * An interpolated template is one literal whose text includes the `${…}`.
+   * Taken from the tokens, like `value`, so a `# production` note inside a
+   * multi-line expression is not a literal here and cannot hide one that
+   * follows it. An interpolated template is one literal whose text includes
+   * the `${…}`.
    */
   literals: string[];
   line: number;
@@ -455,12 +457,21 @@ class Parser {
   }
 
   /**
-   * Consume one expression, returning its source text verbatim.
+   * Consume one expression, returning its source text.
    *
-   * Sliced from the original document rather than rebuilt from tokens: joining
-   * tokens with spaces would turn `var.environment` into `var . environment`
-   * and `==` into `= =`, which would then break anything that reads the
-   * expression back — `referencedNames` most obviously.
+   * Each token is sliced from the original document, never re-rendered, and
+   * tokens that touch in the source touch in the result: joining every token
+   * with a space would turn `var.environment` into `var . environment` and
+   * `==` into `= =`, which would then break anything that reads the
+   * expression back — `referencedNames` most obviously. Where the source had
+   * a gap (spaces, a newline, a comment) the result has one space.
+   *
+   * Comments are not tokens, so they are not part of the expression. Slicing
+   * the whole span instead kept them, and once newlines were collapsed a `#`
+   * or `//` comment on any line but the last swallowed everything after it:
+   * a comment inside a `depends_on` list or a `jsonencode({ … })` hid every
+   * reference that followed, and comment text counted as condition or type
+   * content.
    *
    * Bracket, paren, and brace depth are tracked so an object or list literal
    * spanning several lines is read whole. The scan stops at the first newline
@@ -471,9 +482,14 @@ class Parser {
     if (!first) return { value: '', literals: [] };
 
     const literals: string[] = [];
-    let start = -1;
+    const pieces: string[] = [];
     let end = -1;
     let depth = 0;
+    const take = (token: { start: number; end: number }) => {
+      const text = this.source.slice(token.start, token.end).replace(/\s+/g, ' ');
+      pieces.push(pieces.length > 0 && token.start !== end ? ` ${text}` : text);
+      end = token.end;
+    };
 
     for (;;) {
       const token = this.#peek();
@@ -482,14 +498,13 @@ class Parser {
       if (token.kind === 'newline') {
         if (depth === 0) break;
         this.#index += 1;
-        end = token.end;
         continue;
       }
       if (token.kind === 'rbrace') {
         if (depth === 0) break;
         depth -= 1;
         this.#index += 1;
-        end = token.end;
+        take(token);
         continue;
       }
       if (token.kind === 'lbrace') depth += 1;
@@ -500,15 +515,13 @@ class Parser {
       if (token.kind === 'symbol' && token.value === ',' && depth === 0) break;
 
       if (token.kind === 'string') literals.push(token.value);
-      if (start === -1) start = token.start;
-      end = token.end;
+      take(token);
       this.#index += 1;
     }
 
-    if (start === -1) return { value: '', literals };
-    // Collapse runs of whitespace so a multi-line literal is one comparable
-    // string, but keep every other character exactly as written.
-    return { value: this.source.slice(start, end).replace(/\s+/g, ' ').trim(), literals };
+    // Runs of whitespace inside a token (a multi-line heredoc) collapse too, so
+    // the value is one comparable string.
+    return { value: pieces.join('').trim(), literals };
   }
 
   /** Skip an unrecognised statement without losing brace balance. */

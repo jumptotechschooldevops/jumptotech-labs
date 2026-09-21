@@ -270,3 +270,85 @@ describe('reading configuration never runs it', () => {
     expect(value).toBe('file("/etc/shadow")');
   });
 });
+
+// ------------------------------------------ comments inside an expression
+
+describe('a comment inside a multi-line expression is not part of it', () => {
+  const argument = (hcl: string, block: string, name: string) => {
+    const doc = scanHcl(hcl);
+    const found = findBlock(doc, 'resource', ...block.split('.'));
+    return argumentValue(found!, name) ?? '';
+  };
+
+  it('does not hide the references after a comment line in a depends_on list', () => {
+    // Before: newlines collapsed to spaces, the `#` then ran to the end of the
+    // value, and the dependency the student wrote was reported missing.
+    const value = argument(
+      [
+        'resource "local_file" "app_manifest" {',
+        '  depends_on = [',
+        '    # the fleet must not see a release before its migrations are recorded',
+        '    local_file.migration_marker,',
+        '  ]',
+        '}',
+      ].join('\n'),
+      'local_file.app_manifest',
+      'depends_on',
+    );
+    expect(refs(value)).toEqual(['local_file.migration_marker']);
+    expect(value).not.toContain('fleet');
+  });
+
+  it('does not hide the references after an end-of-line comment in jsonencode', () => {
+    const value = argument(
+      [
+        'resource "local_file" "config" {',
+        '  content = jsonencode({',
+        '    service     = "ledger-api" # does not vary between environments',
+        '    environment = var.environment // set per workspace',
+        '    replicas    = var.replicas /* two in staging */',
+        '  })',
+        '}',
+      ].join('\n'),
+      'local_file.config',
+      'content',
+    );
+    expect(refs(value)).toEqual(['var.environment', 'var.replicas']);
+    expect(value).not.toMatch(/vary|workspace|staging/);
+  });
+
+  it('keeps adjacent tokens adjacent, and one space where the source had a gap', () => {
+    const value = argument(
+      [
+        'resource "local_file" "x" {',
+        '  content = var.environment == "production" ? upper(var.name) : [',
+        '    local.a,  # first',
+        '    local.b,',
+        '  ][0]',
+        '}',
+      ].join('\n'),
+      'local_file.x',
+      'content',
+    );
+    expect(value).toBe('var.environment == "production" ? upper(var.name) : [ local.a, local.b, ][0]');
+  });
+
+  it('does not count comment text as expression text', () => {
+    // A do-nothing validation used to pass a check for the words a comment named.
+    const doc = scanHcl(
+      [
+        'variable "environment" {',
+        '  validation {',
+        '    condition = (',
+        '      # TODO: restrict to staging / production',
+        '      length(var.environment) > 0',
+        '    )',
+        '    error_message = "Unknown environment."',
+        '  }',
+        '}',
+      ].join('\n'),
+    );
+    const validation = findBlock(doc, 'variable', 'environment')!.blocks.find((b) => b.type === 'validation')!;
+    expect(argumentValue(validation, 'condition')).toBe('( length(var.environment) > 0 )');
+  });
+});
