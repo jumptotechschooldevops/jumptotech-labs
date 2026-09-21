@@ -112,6 +112,8 @@ export interface ResolvedService {
   privileged?: boolean;
   cap_add?: string[];
   restart?: string;
+  stop_grace_period?: string;
+  logging?: { driver?: string; options?: Record<string, string> };
   healthcheck?: { test?: string[] | string; disable?: boolean };
   command?: string[] | string;
   group_add?: Array<string | number>;
@@ -485,6 +487,31 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
           ]
         : [],
       `every service is restart: ${PRODUCTION_RESTART_POLICY}`,
+    ),
+  );
+
+  // Unrotated json-file logs grow on the disk the PostgreSQL volume shares.
+  const unrotated = Object.entries(services)
+    .filter(([, service]) => !['json-file', 'local'].includes(service.logging?.driver ?? '') || !service.logging?.options?.['max-size'])
+    .map(([name]) => name)
+    .sort();
+  results.push(
+    one(
+      'durability.log-rotation',
+      unrotated.length ? [`${unrotated.join(', ')}: container logs are not rotated (logging max-size), so they grow until the disk is full`] : [],
+      'every service rotates its container logs (json-file, max-size)',
+    ),
+  );
+
+  // Compose renders a duration as e.g. "1m0s"; anything under 30 s risks a
+  // SIGKILL during PostgreSQL's final checkpoint.
+  const grace = services.postgres?.stop_grace_period;
+  const graceSeconds = grace ? [...grace.matchAll(/(\d+)(h|m|s)/g)].reduce((sum, [, n, unit]) => sum + Number(n) * (unit === 'h' ? 3600 : unit === 'm' ? 60 : 1), 0) : 10;
+  results.push(
+    one(
+      'durability.database-shutdown',
+      graceSeconds < 30 ? [`postgres stop_grace_period is ${grace ?? 'the 10 s default'}: its final checkpoint can be cut short by SIGKILL`] : [],
+      `postgres is given ${graceSeconds} s to shut down cleanly`,
     ),
   );
 

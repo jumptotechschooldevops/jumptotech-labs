@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
 # JumpToTech Labs — the production exposure overlay (BETA-P0-012, BETA-P0-017).
 #
-#   docker compose -f docker-compose.yml -f docker-compose.runtime.yml \
-#                  -f docker-compose.production.yml up -d
+#   prod up -d --build --wait     (all five files and --profile observability:
+#                                  docs/runbooks/private-beta-operations.md §1)
 #
 # The base and runtime files are the development stack. Every port they publish
 # is bound to 127.0.0.1, which is right on a laptop and not enough on a host
@@ -71,15 +71,37 @@
 # tls-edge-contract.test.ts. See docs/runtime-architecture.md §11 and §12.
 # ---------------------------------------------------------------------------
 
+# ## Bounded container logs
+#
+# Docker's default json-file driver keeps every line a container ever wrote, on
+# the disk the PostgreSQL volume shares, and nothing on main rotated it: a beta
+# that ran for weeks grew the logs until HostDiskSpaceCritical. Rotation at
+# 10 MB, five files kept, bounds each service at 50 MB and still covers the
+# `prod logs --since` windows the runbooks and `make private-beta-diagnostics`
+# read. Longer retention is decision D12 (ship the logs off the host).
+x-rotated-logs: &rotated-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     restart: unless-stopped
+    logging: *rotated-logs
+    # The image stops on SIGINT, PostgreSQL's fast shutdown: it ends sessions
+    # and writes a final checkpoint. Docker's default 10 s grace can cut that
+    # short on a slow disk, and the SIGKILL that follows means crash recovery
+    # at the next start. `prod down`, `prod restart postgres` and a host
+    # shutdown all wait this long before killing it.
+    stop_grace_period: 60s
     # The development loopback port goes. The api reaches `postgres:5432` on
     # the internal `database` network; nothing on the host needs to.
     ports: !reset []
 
   api:
     restart: unless-stopped
+    logging: *rotated-logs
     environment:
       # Pinned, so every production gate — owner, secrets, broker transport and
       # database transport — runs. `.env` cannot turn them back off.
@@ -94,10 +116,12 @@ services:
 
   terminal:
     restart: unless-stopped
+    logging: *rotated-logs
     ports: !reset []
 
   web:
     restart: unless-stopped
+    logging: *rotated-logs
     environment:
       # Pinned: the certificate gate runs, and a failure stops the container.
       WEB_TLS: required
@@ -139,6 +163,7 @@ services:
   # published them.
   sandboxd:
     restart: unless-stopped
+    logging: *rotated-logs
 
 networks:
   # No route off the host for PostgreSQL, and no published port can reach it.

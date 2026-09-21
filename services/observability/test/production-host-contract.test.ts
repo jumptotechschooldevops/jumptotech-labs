@@ -104,7 +104,11 @@ function shipped(): ResolvedCompose {
       volumes: [{ type: 'volume', source: 'grafana-data', target: '/var/lib/grafana' }],
     },
   };
-  for (const service of Object.values(services)) service.restart = 'unless-stopped';
+  for (const service of Object.values(services)) {
+    service.restart = 'unless-stopped';
+    service.logging = { driver: 'json-file', options: { 'max-size': '10m', 'max-file': '5' } };
+  }
+  services.postgres!.stop_grace_period = '1m0s';
   return { services, networks: { database: { internal: true }, default: {}, kind: { external: true }, sandboxes: {} } };
 }
 
@@ -140,6 +144,9 @@ describe('each unsafe variation is a FAIL', () => {
   const cases: Array<[string, string, (config: ResolvedCompose) => void]> = [
     ['a missing overlay or profile', 'compose.services', (c) => delete c.services!.grafana],
     ['an unreviewed service', 'compose.services', (c) => (c.services!.debug = {})],
+    ['PostgreSQL killed at the default 10 s stop grace', 'durability.database-shutdown', (c) => delete c.services!.postgres!.stop_grace_period],
+    ['unrotated container logs', 'durability.log-rotation', (c) => delete c.services!.postgres!.logging],
+    ['a log driver with no size bound', 'durability.log-rotation', (c) => (c.services!.api!.logging = { driver: 'json-file' })],
     ['PostgreSQL published on loopback', 'exposure.published-ports', (c) => (c.services!.postgres!.ports = [{ target: 5432, published: 5432, host_ip: '127.0.0.1' }])],
     ['the api published', 'exposure.published-ports', (c) => (c.services!.api!.ports = [{ target: 4000, published: 4000, host_ip: '127.0.0.1' }])],
     ['plaintext on the HTTPS port', 'exposure.published-ports', (c) => (c.services!.web!.ports = [{ target: 3000, published: 443 }, { target: 8080, published: 80 }])],
