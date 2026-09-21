@@ -17,8 +17,15 @@
  * Every hop is real, as in `output-backpressure.test.ts`. The PTY is a fake
  * that behaves like node-pty's write queue: it accepts every write and counts
  * it as pending until the test lets the shell read.
+ *
+ * The terminal service also rate-limits each socket's input (`input-budget.ts`,
+ * proven in `input-budget.test.ts`), and a flood this size is over it. The two
+ * bound different things: the budget, how fast a socket may type; this, how
+ * much of what it admitted may queue behind a shell that is not reading — which
+ * at the sustained rate takes far too long to build to the limit here. So the
+ * budget stays in place, with a burst larger than any flood in this file.
  */
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -49,6 +56,18 @@ import { defaultObservabilityConfig, type SandboxdConfig } from '@jumptotech/san
 import type { SandboxSnapshot } from '@jumptotech/sandboxd/attach';
 import { loadTerminalConfig } from '../src/config.js';
 import { createTerminalServer } from '../src/server.js';
+
+vi.mock('../src/input-budget.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/input-budget.js')>();
+  return {
+    ...actual,
+    InputBudget: class extends actual.InputBudget {
+      constructor() {
+        super({ ...actual.DEFAULT_INPUT_BUDGET, burstBytes: 128 * 1024 * 1024 });
+      }
+    },
+  };
+});
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 

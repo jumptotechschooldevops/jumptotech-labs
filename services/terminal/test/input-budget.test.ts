@@ -30,6 +30,10 @@ vi.mock('../src/shell.js', async (importOriginal) => {
       kill: () => {
         written.killed += 1;
       },
+      pause: () => undefined,
+      resume: () => undefined,
+      // A shell that takes every write at once: nothing is ever left pending.
+      pendingInputBytes: () => 0,
       onData: () => undefined,
       onExit: () => undefined,
     }),
