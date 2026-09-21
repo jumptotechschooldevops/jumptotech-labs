@@ -1432,7 +1432,12 @@ const kubernetesRequirementSchemas = {
   workload_volume_mount: z
     .object({
       type: z.literal('workload_volume_mount'),
-      kind: z.enum(['pod', 'deployment']),
+      /**
+       * `statefulset` checks the Pod template's containers. Its volumes come
+       * from `volumeClaimTemplates` rather than `spec.volumes`, so `source`
+       * cannot be asserted for it — a claim template is always a claim.
+       */
+      kind: z.enum(['pod', 'deployment', 'statefulset']),
       name: resourceName,
       container: resourceName,
       collection: z.enum(['containers', 'initContainers']).default('containers'),

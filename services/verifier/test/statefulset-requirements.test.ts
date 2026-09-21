@@ -52,7 +52,16 @@ const statefulSet = (over: Partial<StatefulSetSnapshot> = {}): StatefulSetSnapsh
   serviceName: 'ledger-db',
   labels: {},
   selector: { app: 'ledger-db' },
-  containers: [{ name: 'db', image: IMAGE, ready: true, restartCount: 0, state: 'running' }],
+  containers: [
+    {
+      name: 'db',
+      image: IMAGE,
+      ready: true,
+      restartCount: 0,
+      state: 'running',
+      volumeMounts: [{ name: 'data', mountPath: '/var/lib/ledger' }],
+    },
+  ],
   volumeClaimTemplates: [
     { name: 'data', accessModes: ['ReadWriteOnce'], storage: '1Gi' },
   ],
@@ -166,7 +175,7 @@ describe('service_headless — reads spec.clusterIP, nothing else', () => {
 // ------------------------------------------------------------------- the lab
 
 describe('K8S-019 — the shipped lab', () => {
-  it('reuses the StatefulSet primitives and adds only service_headless', () => {
+  it('reuses the StatefulSet primitives and adds only service_headless and the mount check', () => {
     expect(lab.id).toBe('K8S-019');
     expect(lab.level).toBe('challenge');
     expect(new Set(lab.requirements.map((r) => r.type))).toEqual(
@@ -182,6 +191,7 @@ describe('K8S-019 — the shipped lab', () => {
         'statefulset_ready',
         'service_endpoints',
         'resource_absent',
+        'workload_volume_mount',
       ]),
     );
   });
@@ -229,7 +239,7 @@ describe('K8S-019 — the shipped lab', () => {
 
   it('fails a wrong image and a wrong replica count', async () => {
     expect(
-      await failed(solved({ sts: { containers: [{ name: 'db', image: 'postgres:16', ready: true, restartCount: 0, state: 'running' }] } })),
+      await failed(solved({ sts: { containers: [{ name: 'db', image: 'postgres:16', ready: true, restartCount: 0, state: 'running', volumeMounts: [{ name: 'data', mountPath: '/var/lib/ledger' }] }] } })),
     ).toEqual(['The StatefulSet runs the ledger image']);
 
     expect(await failed(solved({ sts: { desiredReplicas: 3 } }))).toEqual(['Two replicas are requested']);
@@ -334,5 +344,38 @@ describe('K8S-019 — unrelated objects cannot satisfy the checks together', () 
     expect((await run(mine)).passed).toBe(true);
     expect((await run(theirs, NS)).passed).toBe(false);
     expect((await run(theirs, NS_B)).passed).toBe(true);
+  });
+});
+
+// ------------------------------------------- the claim template is mounted
+
+describe('K8S-019 — each replica must actually use its own volume', () => {
+  const unmounted = { name: 'db', image: IMAGE, ready: true, restartCount: 0, state: 'running' };
+
+  it('passes the solved StatefulSet, whose db container mounts data', async () => {
+    expect(await failed(solved())).toEqual([]);
+  });
+
+  it('fails a claim template that no container mounts', async () => {
+    // Before: every check passed. The controller still creates data-ledger-db-N,
+    // but the container never sees it and keeps writing to its own filesystem.
+    const k8s = solved({ sts: { containers: [unmounted] } });
+    expect(await failed(k8s)).toEqual(['The db container writes to its own volume']);
+    const check = (await run(k8s)).checks.find((c) => c.label === 'The db container writes to its own volume');
+    expect(check?.detail).toContain('exists on the Pod but container');
+  });
+
+  it('fails the claim mounted somewhere the application does not write', async () => {
+    const k8s = solved({
+      sts: { containers: [{ ...unmounted, volumeMounts: [{ name: 'data', mountPath: '/data' }] }] },
+    });
+    expect(await failed(k8s)).toEqual(['The db container writes to its own volume']);
+  });
+
+  it('fails when only a different volume is mounted at the path', async () => {
+    const k8s = solved({
+      sts: { containers: [{ ...unmounted, volumeMounts: [{ name: 'scratch', mountPath: '/var/lib/ledger' }] }] },
+    });
+    expect(await failed(k8s)).toEqual(['The db container writes to its own volume']);
   });
 });
