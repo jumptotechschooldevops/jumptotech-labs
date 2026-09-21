@@ -317,6 +317,47 @@ export function expandsVariable(code: string, name: string): boolean {
 }
 
 /**
+ * `expandsVariable` for a shell script, as the shell reads it.
+ *
+ * `$NAME` inside single quotes, or written `\$NAME`, is the literal text
+ * `$NAME`: `docker build -t 'image:$IMAGE_TAG' .` tags the image
+ * `image:$IMAGE_TAG`, and used to pass "the image tag comes from IMAGE_TAG".
+ * `${{ env.NAME }}` is substituted by the runner before the shell sees the
+ * script, so quotes do not matter to it and it is read from the whole text.
+ * Not for a Jenkinsfile: there `sh '… $NAME'` is the Groovy string that hands
+ * `$NAME` to the shell to expand.
+ */
+export function shellExpandsVariable(script: string, name: string): boolean {
+  if (new RegExp(`(^|[^A-Za-z0-9_.])env\\.${name}(?![A-Za-z0-9_])`).test(script)) return true;
+  return expandsVariable(withoutShellLiterals(script), name);
+}
+
+/**
+ * The script with every single-quoted span and every backslash-escaped
+ * character blanked, offsets kept. One pass; double quotes still expand.
+ */
+function withoutShellLiterals(script: string): string {
+  const out = script.split('');
+  let quote: '' | "'" | '"' = '';
+  for (let i = 0; i < out.length; i += 1) {
+    const ch = script[i];
+    if (quote === "'") {
+      if (ch === "'") quote = '';
+      else if (ch !== '\n') out[i] = ' ';
+      continue;
+    }
+    if (ch === '\\') {
+      if (i + 1 < out.length && script[i + 1] !== '\n') out[i + 1] = ' ';
+      i += 1;
+      continue;
+    }
+    if (ch === '"') quote = quote === '"' ? '' : '"';
+    else if (ch === "'" && quote === '') quote = "'";
+  }
+  return out.join('');
+}
+
+/**
  * Does a `run:` block contain every fragment, ignoring case and whitespace
  * runs? Returns the fragments it lacks.
  *

@@ -667,3 +667,38 @@ describe('CI/CD shortcuts found by the final hardening pass', () => {
     expect(failing(result)).toContain(BOUND);
   });
 });
+
+describe('CICD-009: a variable the shell never expands is not a tag', () => {
+  const IMAGE = 'The image job builds the container image, tagged from IMAGE_TAG';
+  const DEPLOY = 'The deploy job writes the new tag into the deployment manifest';
+
+  it.each([
+    [
+      'single quotes',
+      "docker build -t 'jumptotech/statements:$IMAGE_TAG' .",
+      "sed -i 's|jumptotech/statements:.*|jumptotech/statements:$IMAGE_TAG|' deploy/app.yml",
+    ],
+    [
+      'a backslash',
+      'docker build -t "jumptotech/statements:\\$IMAGE_TAG" .',
+      'sed -i "s|jumptotech/statements:.*|jumptotech/statements:\\$IMAGE_TAG|" deploy/app.yml',
+    ],
+  ])('fails $IMAGE_TAG behind %s', async (_name, image, deploy) => {
+    const result = await grade('CICD-009', (files) => cicd009(files, { image, deploy }));
+    expect(failing(result)).toEqual(expect.arrayContaining([IMAGE, DEPLOY]));
+  });
+
+  it.each([
+    ['${IMAGE_TAG} in double quotes', 'docker build -t "jumptotech/statements:${IMAGE_TAG}" .'],
+    ['a quote closed before it', "docker build -t 'jumptotech/statements':$IMAGE_TAG ."],
+    ['the runner expression, in single quotes', "docker build -t 'jumptotech/statements:${{ env.IMAGE_TAG }}' ."],
+  ])('passes %s', async (_name, image) => {
+    const result = await grade('CICD-009', (files) =>
+      cicd009(files, {
+        image,
+        deploy: `sed -i "s|jumptotech/statements:.*|jumptotech/statements:$IMAGE_TAG|" deploy/app.yml`,
+      }),
+    );
+    expect(failing(result)).toEqual([]);
+  });
+});
