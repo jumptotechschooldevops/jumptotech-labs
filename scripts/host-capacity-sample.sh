@@ -12,7 +12,13 @@
 #
 #   host.csv        time, load 1/5, CPUs, memory total/available, swap used,
 #                   Docker data root size/available, running containers,
-#                   platform-managed sandbox containers, Kubernetes Pods
+#                   platform-managed sandbox containers, Kubernetes Pods, and
+#                   the saturation signals load alone hides: CPU busy, iowait
+#                   and steal % since the previous sample (steal is a noisy
+#                   neighbour on a VM), pressure-stall "some avg60" for CPU,
+#                   memory and I/O (/proc/pressure, Linux 4.20+), and the
+#                   kernel's cumulative OOM-kill count. A source the host lacks
+#                   leaves its field empty.
 #   containers.csv  time, container, CPU %, memory used (MiB), PIDs
 #
 # It judges nothing and has no thresholds: acceptable limits are a product
@@ -61,7 +67,12 @@ fi
 mkdir -p "$out_dir"
 host_csv=$out_dir/host.csv
 containers_csv=$out_dir/containers.csv
-[ -s "$host_csv" ] || echo 'time,load1,load5,cpus,mem_total_mib,mem_available_mib,swap_used_mib,docker_root_size_mib,docker_root_available_mib,containers_running,sandbox_containers,pods' >"$host_csv"
+host_header='time,load1,load5,cpus,mem_total_mib,mem_available_mib,swap_used_mib,docker_root_size_mib,docker_root_available_mib,containers_running,sandbox_containers,pods,cpu_busy_pct,cpu_iowait_pct,cpu_steal_pct,psi_cpu_some_avg60,psi_memory_some_avg60,psi_io_some_avg60,oom_kills_total'
+if [ -s "$host_csv" ] && [ "$(head -1 "$host_csv")" != "$host_header" ]; then
+  echo "host-capacity-sample: $host_csv was written by another version of this sampler (different columns); use a new --out-dir" >&2
+  exit 2
+fi
+[ -s "$host_csv" ] || echo "$host_header" >"$host_csv"
 [ -s "$containers_csv" ] || echo 'time,container,cpu_percent,memory_mib,pids' >"$containers_csv"
 
 docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
@@ -78,8 +89,34 @@ to_mib() {
     printf "%d", n }'
 }
 
+# CPU time from /proc/stat's aggregate line, as percentages of the interval
+# since the previous sample; empty on the first sample.
+prev_cpu=
+cpu_percentages() {
+  local line user nice system idle iowait irq softirq steal total busy delta_total
+  line=$(awk '$1 == "cpu" {print $2, $3, $4, $5, $6, $7, $8, $9; exit}' "$proc_root/stat" 2>/dev/null || true)
+  [ -n "$line" ] || { printf ',,'; return; }
+  read -r user nice system idle iowait irq softirq steal <<<"$line"
+  total=$((user + nice + system + idle + iowait + irq + softirq + ${steal:-0}))
+  busy=$((user + nice + system + irq + softirq))
+  if [ -n "$prev_cpu" ]; then
+    set -- $prev_cpu
+    delta_total=$((total - $1))
+    if [ "$delta_total" -gt 0 ]; then
+      awk -v b=$((busy - $2)) -v w=$((iowait - $3)) -v s=$((${steal:-0} - $4)) -v t="$delta_total" \
+        'BEGIN { printf "%.1f,%.1f,%.1f", 100 * b / t, 100 * w / t, 100 * s / t }'
+    else
+      printf ',,'
+    fi
+  else
+    printf ',,'
+  fi
+  prev_cpu="$total $busy $iowait ${steal:-0}"
+}
+psi_some_avg60() { awk '$1 == "some" { sub(/^avg60=/, "", $3); print $3; exit }' "$proc_root/pressure/$1" 2>/dev/null || true; }
+
 sample() {
-  local now load1= load5= total avail swap_total swap_free df_line size= available= running sandboxes pods=
+  local now load1= load5= total avail swap_total swap_free df_line size= available= running sandboxes pods= cpu oom
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   if [ -r "$proc_root/loadavg" ]; then read -r load1 load5 _ <"$proc_root/loadavg"; fi
   total=$(meminfo MemTotal)
@@ -94,9 +131,14 @@ sample() {
   if [ -n "$kubeconfig" ]; then
     pods=$( (KUBECONFIG=$kubeconfig kubectl get pods -A --no-headers 2>/dev/null || true) | wc -l | tr -d ' ')
   fi
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$now" "$load1" "$load5" "$cpus" "$total" "$avail" \
+  cpu_percentages >"$out_dir/.cpu.$$"
+  cpu=$(cat "$out_dir/.cpu.$$")
+  rm -f "$out_dir/.cpu.$$"
+  oom=$(awk '$1 == "oom_kill" {print $2; exit}' "$proc_root/vmstat" 2>/dev/null || true)
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$now" "$load1" "$load5" "$cpus" "$total" "$avail" \
     "$(if [ -n "$swap_total" ] && [ -n "$swap_free" ]; then echo $((swap_total - swap_free)); fi)" \
-    "$size" "$available" "$running" "$sandboxes" "$pods" >>"$host_csv"
+    "$size" "$available" "$running" "$sandboxes" "$pods" "$cpu" \
+    "$(psi_some_avg60 cpu)" "$(psi_some_avg60 memory)" "$(psi_some_avg60 io)" "$oom" >>"$host_csv"
   { docker stats --no-stream --format '{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.PIDs}}' 2>/dev/null || true; } |
     while IFS='|' read -r name cpu mem pids; do
       [ -n "$name" ] || continue
@@ -116,6 +158,10 @@ summary() {
       if ($10 + 0 > ctr) ctr = $10 + 0
       if ($11 + 0 > sbx) sbx = $11 + 0
       if ($12 != "" && $12 + 0 > pods) pods = $12 + 0
+      if ($15 != "" && $15 + 0 > steal) steal = $15 + 0
+      if ($14 != "" && $14 + 0 > iowait) iowait = $14 + 0
+      if ($17 != "" && $17 + 0 > psimem) psimem = $17 + 0
+      if ($19 != "") { if (oom_first == "") oom_first = $19 + 0; oom_last = $19 + 0 }
       total = $5; cpus = $4
     }
     END {
@@ -126,6 +172,9 @@ summary() {
       printf "lowest Docker disk    %s MiB available\n", min_disk
       printf "peak containers       %s running, %s platform sandboxes\n", ctr, sbx
       printf "peak pods             %s\n", (pods == "" ? "not sampled" : pods)
+      printf "peak CPU iowait/steal %s%% / %s%%\n", iowait + 0, steal + 0
+      printf "peak memory pressure  %s (PSI some avg60; empty file means the kernel has no /proc/pressure)\n", psimem + 0
+      printf "OOM kills in the run  %s\n", (oom_first == "" ? "not sampled" : oom_last - oom_first)
     }' "$host_csv"
   echo 'peak memory per container (MiB):'
   awk -F, 'NR > 1 { if ($4 + 0 > m[$2]) m[$2] = $4 + 0 } END { for (c in m) printf "  %6d  %s\n", m[c], c }' "$containers_csv" | sort -rn | head -25
