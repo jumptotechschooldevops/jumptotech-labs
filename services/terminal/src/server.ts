@@ -950,7 +950,9 @@ export function createTerminalServer(
         dockerCertDir = await writeSessionDockerCerts(config.credentialsDir, claims.sid, context);
         // The workspace is where `docker build` finds its context, so it has to
         // exist — and hold the lab's baseline files — before the shell opens.
-        const workspaceDir = await workspaces.seed(claims.sid, context.workspaceFiles ?? []);
+        // Only what is missing: this runs on every attach, and a reconnect must
+        // not put back the baseline over the student's work (Reset restores it).
+        const workspaceDir = await workspaces.seed(claims.sid, context.workspaceFiles ?? [], 'fill');
         plan = dockerSpawnPlan(context, dockerCertDir, workspaceDir, planOptions);
         log(
           `session ${claims.sid}: issued sandbox-scoped Docker credentials (sandbox=${context.sandboxRef} host=${context.dockerHost} expires=${context.expiresAt})`,
