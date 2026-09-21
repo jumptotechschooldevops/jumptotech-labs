@@ -114,4 +114,6 @@ EXPOSE 4002
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
   CMD node -e "const p=+(process.env.SANDBOXD_PORT||4002);if(process.env.SANDBOXD_TLS_CERT_FILE){require('node:net').connect(p,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))}else{fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))}"
 
-CMD ["node", "/app/node_modules/.bin/tsx", "/app/services/sandboxd/src/index.ts"]
+# One process, so SIGTERM from tini reaches the shutdown handler: the tsx CLI
+# ran it as a child and ended it before the handler ran (api.Dockerfile).
+CMD ["node", "--import", "tsx", "/app/services/sandboxd/src/index.ts"]

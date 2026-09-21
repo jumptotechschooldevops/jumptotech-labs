@@ -55,13 +55,19 @@ describe('a slow api start is not an unhealthy one', () => {
 });
 
 describe('a stopped api shuts down, rather than being killed', () => {
-  it('starts under node, so SIGTERM reaches the handler that stops the reaper and closes the pool', () => {
-    const cmd = /^CMD (\[.*\])$/m.exec(code(read('infrastructure/docker/api.Dockerfile')));
-    expect(cmd, 'api.Dockerfile has an exec-form CMD').not.toBeNull();
+  it.each([
+    ['api', 'apps/api/src/index.ts'],
+    ['terminal', 'services/terminal/src/index.ts'],
+    ['sandboxd', 'services/sandboxd/src/index.ts'],
+  ])('%s runs as one node process, so SIGTERM reaches its own shutdown handler', (service, entry) => {
+    const cmd = /^CMD (\[.*\])$/m.exec(code(read(`infrastructure/docker/${service}.Dockerfile`)));
+    expect(cmd, `${service}.Dockerfile has an exec-form CMD`).not.toBeNull();
     const argv = JSON.parse(cmd![1]!) as string[];
-    // Under `npx`, npm receives the signal and exits without passing it on.
-    expect(argv[0]).toBe('node');
-    expect(argv).not.toContain('npx');
-    expect(read('apps/api/src/index.ts')).toMatch(/for \(const signal of \['SIGINT', 'SIGTERM'\] as const\)/);
+    // Under `npx`, npm receives the signal and exits without passing it on;
+    // under the tsx CLI, the child was ended before its handler ran.
+    expect(argv.slice(0, 3)).toEqual(['node', '--import', 'tsx']);
+    expect(argv.join(' ')).not.toMatch(/npx|\.bin\/tsx/);
+    expect(argv[3]!.replace(/^\/app\//, '')).toBe(entry);
+    expect(read(entry)).toMatch(/for \(const signal of \['SIGINT', 'SIGTERM'\] as const\)/);
   });
 });

@@ -104,10 +104,14 @@ EXPOSE 4000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=300s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.API_PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# `node …/tsx`, not `npx tsx`: under `npx` the process that receives SIGTERM
-# is npm, which exits without passing it on, so the api's shutdown handler —
-# stop the reaper, close the listeners, release the database pool — never ran
-# (measured: exit 143 in 4 s and no `process.stopping` line). tsx relays the
-# signal to the one child it runs, as it does for sandboxd; the api does not
-# change uid, so the relay is permitted. It also skips npm's own start-up.
-CMD ["node", "/app/node_modules/.bin/tsx", "apps/api/src/index.ts"]
+# One process: `node --import tsx`, neither `npx tsx` nor `node …/.bin/tsx`.
+# Under `npx` the process that receives SIGTERM is npm, which exits without
+# passing it on (measured: exit 143 in 4 s, no `process.stopping` line). The
+# tsx CLI is no better: it runs the api as a child, and on SIGTERM it ended
+# that child before the child's handler ran — measured in this image under
+# tini (`init: true`), `docker stop` gave exit 137 and no handler output. So
+# the shutdown handler — stop the reaper, close the listeners, release the
+# database pool — never ran. With `--import tsx` the api is the process tini
+# signals: the same measurement gave the handler's output and exit 0, and the
+# start was faster by one node process.
+CMD ["node", "--import", "tsx", "apps/api/src/index.ts"]
