@@ -107,6 +107,13 @@ requirements:
     name: statements
     min_available: 1
     label: statements is still running after the change
+  # Availability alone is satisfied by the previous ReplicaSet's Pod: when the
+  # edited template's Pods never become ready, the controller keeps the old
+  # one serving, so a change that broke the app would still pass. The rollout
+  # must have finished on the new template.
+  - type: deployment_rollout_complete
+    name: statements
+    label: The changed Deployment has rolled out
 
 hints:
   - level: 1

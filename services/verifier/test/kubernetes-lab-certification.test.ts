@@ -150,3 +150,59 @@ describe('K8S-003 — a Service with a stable cluster address', () => {
     expect(await graded('None')).toEqual(['The Service answers requests on its stable cluster address']);
   });
 });
+
+// --------------------------------------------------- K8S-004, K8S-005, K8S-011
+
+describe('"still running after the change" means the changed template is running', () => {
+  /**
+   * The controller's real state when the edited template never becomes ready:
+   * one Pod of the new ReplicaSet (not available) beside the old one, which the
+   * default strategy keeps serving because maxUnavailable rounds down to 0.
+   */
+  const STUCK = {
+    replicas: 2,
+    updatedReplicas: 1,
+    readyReplicas: 1,
+    availableReplicas: 1,
+    conditions: [
+      { type: 'Available', status: 'True' },
+      { type: 'Progressing', status: 'True', reason: 'ReplicaSetUpdated' },
+    ],
+  };
+  const DONE = { replicas: 1, updatedReplicas: 1, readyReplicas: 1, availableReplicas: 1 };
+
+  async function k8s004(status: Manifest) {
+    const { lab, manifests } = await setup('K8S-004');
+    const dep = manifests.find((m) => m.kind === 'Deployment')!;
+    const template = structuredClone(dep.spec.template);
+    const container = template.spec.containers[0];
+    delete container.env;
+    // The ConfigMap mounted over nginx's own config directory — a plausible
+    // reading of "a mounted volume", and one that hides nginx.conf, so every
+    // new Pod crash-loops.
+    container.volumeMounts = [{ name: 'config', mountPath: '/etc/nginx' }];
+    template.spec.volumes = [{ name: 'config', configMap: { name: 'statements-config' } }];
+    const k8s = new Cluster({
+      namespaces: [NS],
+      deployments: { [NS]: [deployment({ ...dep, spec: { ...dep.spec, template } }, status, '2')] },
+      configMaps: {
+        [NS]: [{ name: 'statements-config', namespace: NS, data: { STATEMENT_FORMAT: 'pdf', RETENTION_DAYS: '90' } }],
+      },
+    });
+    return failing(await verifyLab({ lab, namespace: NS, k8s }));
+  }
+
+  it('K8S-004 passes once the ConfigMap-backed template has rolled out', async () => {
+    expect(await k8s004(DONE)).toEqual([]);
+  });
+
+  it('K8S-004 fails while only the previous ReplicaSet is serving', async () => {
+    // Before: all eight checks passed, because availability counted the old Pod.
+    expect(await k8s004(STUCK)).toEqual(['The changed Deployment has rolled out']);
+  });
+
+  it.each(['K8S-005', 'K8S-011'])('%s grades the rollout, not just availability', async (labId) => {
+    const { lab } = await setup(labId);
+    expect(lab.requirements.some((r) => r.type === 'deployment_rollout_complete')).toBe(true);
+  });
+});
