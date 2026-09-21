@@ -33,10 +33,15 @@ function sandbox(files: Record<string, string>): SandboxReader {
   return new SandboxReader(port);
 }
 
+/**
+ * The lab's first requirement of this type — the direct check on the
+ * resource. TF-006 and TF-018 add a second, through-locals one after it,
+ * which `terraform-lab-certification.test.ts` covers.
+ */
 async function rule(labId: string, type: string) {
   const lab = (await realCatalog()).get(labId);
   const found = lab.requirements.filter((r) => r.type === type);
-  expect(found, `${labId} ${type}`).toHaveLength(1);
+  expect(found.length, `${labId} ${type}`).toBeGreaterThanOrEqual(1);
   return found[0]!;
 }
 

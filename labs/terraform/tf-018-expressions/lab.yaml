@@ -222,6 +222,17 @@ requirements:
     name: release_manifest
     literals: [production]
     label: The environment line is not typed into the resource
+  # Nor into a local the resource reads (`env_line = "PRODUCTION"`). Case
+  # matters here: the solution's replica factor compares against the
+  # lower-case "production", which is input, not output.
+  - type: terraform_resource_literal_absent
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    literals: [PRODUCTION]
+    through_locals: true
+    case_sensitive: true
+    label: The environment line is not typed into a local either
 
   - type: terraform_resource_exists
     dir: terraform

@@ -181,6 +181,7 @@ requirements:
     resource_type: local_file
     name: environment_manifest
     literals: [eu-central-1, eu-west-1, production, staging]
+    through_locals: true
     label: The manifest types in none of the settings it now reads
 
   - type: terraform_resource_exists

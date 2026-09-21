@@ -1823,6 +1823,15 @@ const sandboxRequirementSchemas = {
         )
         .min(1)
         .max(10),
+      /**
+       * Also read the string literals of every local value the resource's
+       * arguments reach. Moving `region = "eu-west-1"` one hop into a local
+       * is still typing it in. Opt-in, because many correct solutions keep a
+       * constant in a local on purpose.
+       */
+      through_locals: z.boolean().optional(),
+      /** Compare case-sensitively (the default ignores case). */
+      case_sensitive: z.boolean().optional(),
       ...common,
     })
     .strict(),

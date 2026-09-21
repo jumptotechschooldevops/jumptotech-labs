@@ -207,6 +207,7 @@ requirements:
     resource_type: local_file
     name: service_config
     literals: [staging, production]
+    through_locals: true
     label: The resource names no particular environment
   - type: file_exists
     path: terraform/build/production.json

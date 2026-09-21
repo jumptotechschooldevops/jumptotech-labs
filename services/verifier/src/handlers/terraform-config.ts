@@ -183,19 +183,35 @@ export const terraformResourceLiteralAbsent: SandboxVerifierHandler<'terraform_r
        * message names the argument and leaves the text out: the student can
        * see their own file, and the list is the lab's to state.
        */
-      const forbidden = requirement.literals.map((literal) => literal.toLowerCase());
-      const offending = block.arguments
-        .filter((argument) =>
-          argument.literals.some((literal) => {
-            const text = literal.toLowerCase();
-            return forbidden.some((needle) => text.includes(needle));
-          }),
-        )
-        .map((argument) => argument.name);
+      const fold = (text: string) => (requirement.case_sensitive ? text : text.toLowerCase());
+      const forbidden = requirement.literals.map(fold);
+      const hardCodes = (literals: readonly string[]) =>
+        literals.some((literal) => forbidden.some((needle) => fold(literal).includes(needle)));
+
+      const offending = block.arguments.filter((argument) => hardCodes(argument.literals)).map((argument) => argument.name);
       if (offending.length > 0) {
         return fail(
           `${requirement.resource_type}.${requirement.name} still hard-codes a value this lab asks it to take from input, in: ${offending.join(', ')}`,
         );
+      }
+
+      if (requirement.through_locals) {
+        const localArguments = new Map(
+          blocksOfType(config, 'locals').flatMap((locals) => locals.arguments.map((a) => [a.name, a] as const)),
+        );
+        const reached = new Set(
+          block.arguments.flatMap((argument) =>
+            reachableReferences(config, argument.value)
+              .filter((reference) => reference.kind === 'local')
+              .map((reference) => reference.target.slice('local.'.length)),
+          ),
+        );
+        const parked = [...reached].filter((name) => hardCodes(localArguments.get(name)?.literals ?? [])).sort();
+        if (parked.length > 0) {
+          return fail(
+            `${requirement.resource_type}.${requirement.name} reads a value this lab asks it to take from input out of a local that types it in: ${parked.map((n) => `local.${n}`).join(', ')}`,
+          );
+        }
       }
       return pass();
     });

@@ -227,3 +227,65 @@ output "deploy_token" {
     expect(await grade(main)).toEqual(['fail', 'fail', 'fail', 'fail']);
   });
 });
+
+// ------------------------------------------------- one hop into a local
+
+describe('TF-006 / TF-018 — a value parked in a local is still typed in', () => {
+  it('TF-006 passes the solution, whose local keeps the prefix on purpose', async () => {
+    const main = `
+data "local_file" "platform" { filename = "\${path.module}/platform.json" }
+locals {
+  service_prefix = "jumptotech"
+  service_slug   = "\${local.service_prefix}-ledger-prod"
+  platform       = jsondecode(data.local_file.platform.content)
+}
+resource "local_file" "service_manifest" {
+  filename = "build/\${local.service_slug}.json"
+  content  = jsonencode({ slug = local.service_slug, region = local.platform.region, tier = local.platform.tier })
+}
+`;
+    expect(await status('TF-006', 'No value it reads is typed into a local instead', { 'main.tf': main })).toBe('pass');
+  });
+
+  it('TF-006 fails the region typed into a local the manifest reads', async () => {
+    // Before: every configuration check passed, and the file was byte-identical.
+    const main = `
+data "local_file" "platform" { filename = "\${path.module}/platform.json" }
+locals {
+  settings = jsondecode(data.local_file.platform.content)
+  region   = "eu-west-1"
+}
+resource "local_file" "service_manifest" {
+  filename = "build/jumptotech-ledger-prod.json"
+  content  = jsonencode({ region = local.region, tier = local.settings.tier })
+}
+`;
+    expect(await status('TF-006', 'No value it reads is typed into a local instead', { 'main.tf': main })).toBe('fail');
+  });
+
+  const TF018 = (locals: string, environment: string) => `
+variable "environment" { default = "production" }
+variable "services" { default = {} }
+locals {
+${locals}
+}
+resource "local_file" "release_manifest" {
+  filename = "build/manifest.txt"
+  content  = templatefile("\${path.module}/manifest.tftpl", { environment = ${environment}, replicas = local.replica_factor })
+}
+`;
+  const LABEL = 'The environment line is not typed into a local either';
+
+  it('TF-018 passes upper(var.environment), with the lower-case comparison in a local', async () => {
+    const main = TF018('  replica_factor = var.environment == "production" ? 2 : 1', 'upper(var.environment)');
+    expect(await status('TF-018', LABEL, { 'main.tf': main })).toBe('pass');
+  });
+
+  it('TF-018 fails PRODUCTION typed into a local the resource reads', async () => {
+    const main = TF018(
+      '  replica_factor = var.environment == "production" ? 2 : 1\n  env_line       = "PRODUCTION"',
+      'local.env_line',
+    );
+    expect(await status('TF-018', LABEL, { 'main.tf': main })).toBe('fail');
+  });
+});
