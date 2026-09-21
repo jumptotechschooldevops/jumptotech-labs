@@ -30,6 +30,10 @@ export function AuthGate({ children }: AuthGateProps) {
         <p className="auth-gate__status auth-gate__status--error" role="alert">
           Cannot reach the labs API.
         </p>
+        <p className="auth-gate__lede">
+          Check your internet connection, then press Try again. If the platform is restarting, this can take a
+          minute. A lab you have running is not affected.
+        </p>
         {/* The cause, not a guess at it — an operator reads this too. */}
         {auth.error ? <p className="auth-gate__detail">{auth.error}</p> : null}
         <button type="button" className="btn btn--ghost" onClick={() => void auth.refresh()}>

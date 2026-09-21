@@ -93,6 +93,8 @@ describe('the sign-in gate', () => {
     // Crucially not a sign-in button: the problem is not that nobody signed in.
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    // And what a student can do about it: check their side, then wait and retry.
+    expect(screen.getByText(/Check your internet connection, then press Try again/)).toBeTruthy();
   });
 
   it('gives up on an API that accepts the session query and never answers', async () => {
