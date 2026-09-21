@@ -626,6 +626,21 @@ setup:
     expect(await workspace.read(context.sessionId, 'Dockerfile')).toBeNull();
   });
 
+  it("forgets the sandbox's cached engine once it is gone, and only then", async () => {
+    const { provider, engines } = build();
+    const context = contextFor(docker001);
+    await provider.create(context);
+    // A refused destroy leaves the sandbox, so its engine is still needed.
+    await provider.destroySandbox(SANDBOX_A, 'sess-00000000000000ff');
+    expect(engines.forgotten).toEqual([]);
+
+    await provider.destroy(context);
+    expect(engines.forgotten).toEqual([SANDBOX_A]);
+    // A re-entered teardown of an absent sandbox forgets it again, harmlessly.
+    await provider.destroySandbox(SANDBOX_A);
+    expect(engines.forgotten).toEqual([SANDBOX_A, SANDBOX_A]);
+  });
+
   it('treats an already-absent sandbox as done, so teardown can be re-entered', async () => {
     const { provider } = build();
 

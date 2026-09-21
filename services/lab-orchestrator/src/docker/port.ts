@@ -422,6 +422,15 @@ export interface DockerEngineFactory {
    */
   bindSession?(sandbox: string, sessionId: string): void;
   /**
+   * Drop what this factory keeps for a sandbox that is verifiably gone.
+   *
+   * A factory caches a session port and, when brokered, a sandbox → session
+   * binding per sandbox. Nothing removed them, so a long-running api held one
+   * of each for every Docker-track session it ever served. Optional: a
+   * factory that keeps nothing has nothing to drop.
+   */
+  forget?(sandbox: string): void;
+  /**
    * A port bound to the isolated daemon inside one sandbox container.
    *
    * `sessionId` is optional only because a local-daemon factory has no use for
