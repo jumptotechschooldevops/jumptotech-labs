@@ -30,7 +30,7 @@
  */
 
 import { matchLineValue } from '../line-value.js';
-import { withoutShellComments } from './workflow.js';
+import { commandsMissing, withoutShellComments } from './workflow.js';
 
 export interface JenkinsStep {
   /** The step's text, one entry per non-empty line inside `steps { }`. */
@@ -459,7 +459,8 @@ export function findStage(pipeline: JenkinsPipeline, name: string): JenkinsStage
 }
 
 /** Fragments not found in a stage's steps block. Whitespace- and case-insensitive. */
-export function stepsMissing(stage: JenkinsStage, fragments: readonly string[]): string[] {
+export function stepsMissing(stage: JenkinsStage, fragments: readonly string[], asCommand = false): string[] {
+  if (asCommand) return commandsMissing(stepsCode(stage), fragments);
   const haystack = stepsCode(stage).replace(/\s+/g, ' ').toLowerCase();
   return fragments.filter((f) => !haystack.includes(f.replace(/\s+/g, ' ').toLowerCase()));
 }

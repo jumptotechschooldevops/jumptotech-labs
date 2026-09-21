@@ -110,6 +110,7 @@ requirements:
     job: build
     run_contains:
       - node build.mjs
+    as_command: true
     # "In that order": a build before the checkout builds an empty directory.
     after:
       - uses: actions/checkout
@@ -120,6 +121,7 @@ requirements:
     job: build
     run_contains:
       - node --test
+    as_command: true
     after:
       - run_contains: [node build.mjs]
     label: A step runs the tests, after the build

@@ -199,7 +199,7 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
     const candidates = job.steps.filter((step) => {
       if (requirement.uses !== undefined && !usesAction(step.uses, requirement.uses)) return false;
       if (requirement.run_contains !== undefined) {
-        if (runContains(step.run, requirement.run_contains).length > 0) return false;
+        if (runContains(step.run, requirement.run_contains, requirement.as_command).length > 0) return false;
       }
       if (requirement.run_expands !== undefined) {
         const code = withoutShellComments(step.run ?? '');
@@ -273,7 +273,7 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
     const fragments = requirement.run_contains ?? [];
     const runningSteps = job.steps.filter((s) => s.run !== undefined);
     if (requirement.run_expands !== undefined) {
-      const near = runningSteps.find((s) => runContains(s.run, fragments).length === 0);
+      const near = runningSteps.find((s) => runContains(s.run, fragments, requirement.as_command).length === 0);
       if (near) {
         const code = withoutShellComments(near.run ?? '');
         const unexpanded = requirement.run_expands.filter((name) => !shellExpandsVariable(code, name));
@@ -286,7 +286,7 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
     }
     return fail(
       runningSteps.length > 0
-        ? `no 'run:' step in job '${requirement.job}' includes ${fragments.map((f) => `'${f}'`).join(' and ')}`
+        ? `no 'run:' step in job '${requirement.job}' ${requirement.as_command ? 'runs' : 'includes'} ${fragments.map((f) => `'${f}'`).join(' and ')}${requirement.as_command ? ' as a command' : ''}`
         : `job '${requirement.job}' has no 'run:' step at all`,
     );
   },

@@ -789,3 +789,51 @@ describe('CICD-002 — a step must run something to count', () => {
     expect(result.checks.find((c) => c.status !== 'pass')?.detail).toContain("neither 'run' nor 'uses'");
   });
 });
+
+// ---------------------------------- a command, not a mention (certification)
+
+describe('a graded command must be run, not echoed', () => {
+  const cicd003Steps = (build: string, test: string) => (files: Map<string, string>) => {
+    files.set(
+      '.github/workflows/ci.yml',
+      files.get('.github/workflows/ci.yml')! +
+        `
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: ${build}
+      - run: ${test}
+`,
+    );
+    withBuild(files);
+  };
+
+  it.each([
+    ['node build.mjs', 'node --test'],
+    ['npm ci && node build.mjs', 'NODE_ENV=test node --test --test-reporter=spec'],
+    ['time node build.mjs', "node --test || (echo 'tests failed' && exit 1)"],
+  ])('CICD-003 passes `%s` / `%s`', async (build, test) => {
+    expect(failing(await grade('CICD-003', cicd003Steps(build, test)))).toEqual([]);
+  });
+
+  it('CICD-003 fails the commands echoed instead of run', async () => {
+    // Before: `echo Running node build.mjs` passed as running the build (8/8).
+    const result = await grade('CICD-003', cicd003Steps('echo Running node build.mjs', 'echo Running node --test'));
+    expect(failing(result).length).toBeGreaterThan(0);
+    expect(failing(result).every((label) => !/project builds|suite passes/i.test(label))).toBe(true);
+  });
+
+  it('CICD-007 fails `sh "echo TODO node --test"`, and passes the command in an sh string', async () => {
+    const pipeline = (test: string) => (files: Map<string, string>) => {
+      files.set(
+        'Jenkinsfile',
+        `pipeline {\n  agent any\n  stages {\n    stage('Checkout') { steps { checkout scm } }\n    stage('Build') { steps { sh 'node build.mjs' } }\n    stage('Test') { steps { ${test} } }\n    stage('Package') { steps { sh 'ls -l dist' } }\n  }\n}\n`,
+      );
+      withBuild(files);
+    };
+    expect(failing(await grade('CICD-007', pipeline(`sh "node --test"`)))).toEqual([]);
+    expect(failing(await grade('CICD-007', pipeline(`sh script: 'node --test', label: 'tests'`)))).toEqual([]);
+    expect(failing(await grade('CICD-007', pipeline(`sh 'echo TODO node --test'`)))).toEqual(['Test runs the test suite, after Build']);
+  });
+});

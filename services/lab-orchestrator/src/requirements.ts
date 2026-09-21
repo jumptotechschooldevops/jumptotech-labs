@@ -3795,6 +3795,12 @@ const cicdRequirementSchemas = {
       uses: z.string().min(1).max(160).optional(),
       run_contains: z.array(z.string().min(1).max(120)).max(6).optional(),
       /**
+       * `run_contains` fragments must each *start* a command — not appear in
+       * `echo node build.mjs`. For fragments that are commands; an argument
+       * such as a file path keeps the plain substring match.
+       */
+      as_command: z.boolean().optional(),
+      /**
        * Require the step's `run:` to expand each of these variables — `$NAME`,
        * `${NAME}`, `${{ env.NAME }}` — rather than merely spell the name. A
        * bare `IMAGE_NAME` is literal text to the shell.
@@ -3865,6 +3871,8 @@ const cicdRequirementSchemas = {
       stage: z.string().min(1).max(64),
       /** Require the stage's `steps` block to mention all of these substrings. */
       steps_contain: z.array(z.string().min(1).max(120)).max(6).optional(),
+      /** `steps_contain` fragments must each start a command (see `as_command`). */
+      steps_as_command: z.boolean().optional(),
       /**
        * Require the stage's steps to expand each of these variables — `$NAME`,
        * `${NAME}`, `env.NAME` — rather than merely spell the name.

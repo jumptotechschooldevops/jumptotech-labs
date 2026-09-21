@@ -88,7 +88,7 @@ export const jenkinsStageExists: CicdVerifierHandler<'jenkins_stage_exists'> = {
     }
 
     if (requirement.steps_contain) {
-      const missing = stepsMissing(stage, requirement.steps_contain);
+      const missing = stepsMissing(stage, requirement.steps_contain, requirement.steps_as_command);
       if (missing.length > 0) {
         return fail(
           `stage '${stage.name}' does not run ${missing.map((m) => `'${m}'`).join(' or ')}`,

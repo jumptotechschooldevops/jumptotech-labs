@@ -126,6 +126,7 @@ requirements:
     job: image
     run_contains:
       - docker build
+    as_command: true
     run_expands:
       - IMAGE_NAME
     after:
