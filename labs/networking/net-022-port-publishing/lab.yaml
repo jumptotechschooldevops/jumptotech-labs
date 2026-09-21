@@ -271,11 +271,16 @@ requirements:
       - "listen       8080;"
     label: The recreated container still configures the application the way the deployment did
 
+  # Each answer read from its own field and compared whole. A substring check
+  # for the listening port passed the two port answers swapped, and a sheet
+  # with only one of them filled in.
   - type: workspace_file_exists
     path: diagnosis.txt
-    contains:
-      - "8080"
-    label: diagnosis.txt records the port the application is listening on
+    separator: ':'
+    key_values:
+      mapping_sends_traffic_to_container_port: "80"
+      application_is_listening_on_port: "8080"
+    label: diagnosis.txt records where the mapping sends traffic and where the application listens
 
   - type: workspace_file_exists
     path: model.txt

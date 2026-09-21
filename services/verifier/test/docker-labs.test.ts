@@ -117,7 +117,8 @@ describe('NET-022 — the recreated container keeps the deployment command', () 
     '-c',
     "sed -i 's/listen       80;/listen       8080;/' /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'",
   ];
-  const DIAGNOSIS = 'port: 8080\n';
+  const DIAGNOSIS =
+    'mapping_sends_traffic_to_container_port: 80\napplication_is_listening_on_port: 8080\nwhy_the_request_fails: nothing listens on 80\n';
   const MODEL = 'mapping: 3000 -> 8080\ncarried_by: DNAT\n';
 
   async function recreated(options: { command?: string[]; config: string }) {
@@ -176,6 +177,34 @@ describe('the first Check does not hand over a diagnosis', () => {
   it('NET-022 never names the port the application listens on', async () => {
     const text = await details('NET-022');
     expect(text).not.toMatch(/\b8080\b/);
+  });
+});
+
+describe('NET-022 — the diagnosis answers each question in its own field', () => {
+  const LABEL = 'diagnosis.txt records where the mapping sends traffic and where the application listens';
+  async function diagnosisStatus(diagnosis: string) {
+    const lab = await started('NET-022');
+    await lab.workspace.seed(SESSION, [{ path: 'diagnosis.txt', content: diagnosis }]);
+    const result = await verifyLab({ lab: lab.lab, namespace: SANDBOX, docker: lab.daemon, workspace: { port: lab.workspace, sessionId: SESSION } });
+    return result.checks.find((c) => c.label === LABEL);
+  }
+  const sheet = (mapping: string, listening: string) =>
+    `# 1. Which container port ...\nmapping_sends_traffic_to_container_port: ${mapping}\n` +
+    `# 2. Which TCP port ...\napplication_is_listening_on_port: ${listening}\nwhy_the_request_fails: ____\n`;
+
+  it('passes the two ports, each in its own field, with the comments left in', async () => {
+    expect((await diagnosisStatus(sheet('80', '8080')))?.status).toBe('pass');
+  });
+
+  it('fails the two ports swapped', async () => {
+    // Before: `contains: ["8080"]` passed this.
+    const check = await diagnosisStatus(sheet('8080', '80'));
+    expect(check?.status).toBe('fail');
+    expect(check?.detail).not.toMatch(/\b8080\b/);
+  });
+
+  it('fails a sheet that answers only the listening port', async () => {
+    expect((await diagnosisStatus(sheet('____', '8080')))?.status).toBe('fail');
   });
 });
 
