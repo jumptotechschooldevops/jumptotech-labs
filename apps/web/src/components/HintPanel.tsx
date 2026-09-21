@@ -19,18 +19,29 @@
  * goes backwards, so re-rendering cannot replay it. The server is idempotent
  * per (attempt, level) anyway, because a component contract is not somewhere to
  * put a correctness guarantee.
+ *
+ * `alreadyRevealed` is how many hints this attempt had open before this page
+ * was loaded (the workspace reads it from the attempt). Those are shown again
+ * without being reported again, so a reload no longer hides the hints a
+ * student has already read. It only ever opens hints — never closes one.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { LabHint } from '../lib/types';
 
 export interface HintPanelProps {
   hints: LabHint[];
   /** Called with the hint that was just revealed, and how many are now open. */
   onReveal?: (hint: LabHint, revealedCount: number) => void;
+  /** Hints revealed earlier in this attempt: shown, not reported again. */
+  alreadyRevealed?: number;
 }
 
-export function HintPanel({ hints, onReveal }: HintPanelProps) {
-  const [revealed, setRevealed] = useState(0);
+export function HintPanel({ hints, onReveal, alreadyRevealed = 0 }: HintPanelProps) {
+  const [revealed, setRevealed] = useState(() => Math.min(alreadyRevealed, hints.length));
+
+  useEffect(() => {
+    setRevealed((current) => Math.max(current, Math.min(alreadyRevealed, hints.length)));
+  }, [alreadyRevealed, hints.length]);
 
   const revealNext = useCallback(() => {
     if (revealed >= hints.length) return;

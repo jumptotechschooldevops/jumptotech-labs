@@ -188,6 +188,25 @@ describe('before launch', () => {
     expect(screen.queryByRole('button', { name: /Launch/ })).toBeNull();
   });
 
+  it('never shows a student the provider probe\'s own reason, which names hosts and addresses', async () => {
+    // What the kind provider really reports when the cluster is down, and a
+    // Docker daemon error: operator words for the log and `ops status`.
+    apiMock.getLab.mockResolvedValue(
+      labDetail({
+        availability: {
+          available: false,
+          reason: 'the Kubernetes cluster is not reachable (connect ECONNREFUSED 127.0.0.1:6443)',
+          remediation: 'Start the substrate with: npm run cluster:up',
+        },
+      }),
+    );
+    await renderDetail();
+    expect(screen.getByText('This lab cannot be started right now')).toBeTruthy();
+    expect(screen.getByText(/Labs in other tracks may still work/)).toBeTruthy();
+    const page = document.body.textContent ?? '';
+    expect(page).not.toMatch(/ECONNREFUSED|127\.0\.0\.1|6443|cluster:up|Kubernetes cluster is not reachable/);
+  });
+
   it('is honest that AWS labs are simulated', async () => {
     apiMock.getLab.mockResolvedValue(labDetail({ id: 'AWS-001', track: 'aws', title: 'Files and Directories' }));
     await renderDetail('AWS-001');

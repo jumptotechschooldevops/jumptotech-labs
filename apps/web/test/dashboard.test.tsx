@@ -33,6 +33,18 @@ beforeEach(() => {
 const panel = (name: string | RegExp) => screen.getByRole('heading', { name }).closest('section')!;
 
 describe('the dashboard', () => {
+  it('never greets a first-time student as a returning one, even before their history loads', async () => {
+    let answer!: (value: unknown) => void;
+    apiMock.listAttempts.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    renderWithProviders(<DashboardPage />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Welcome, Test Student' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 1, name: /Welcome back/ })).toBeNull();
+
+    await act(async () => answer({ student: progressSnapshot().student, attempts: [], count: 0 }));
+    expect(screen.getByRole('heading', { level: 1, name: 'Welcome, Test Student' })).toBeTruthy();
+  });
+
   it('welcomes a first-time student and shows how a lab works', async () => {
     renderWithProviders(<DashboardPage />);
 
@@ -165,5 +177,24 @@ describe('the dashboard', () => {
     renderWithProviders(<DashboardPage />);
 
     expect(await screen.findByText('We could not check whether you have a lab running')).toBeTruthy();
+  });
+
+  it('keeps showing a running lab it already knew when a later re-read fails', async () => {
+    apiMock.listMySessions.mockResolvedValue(
+      sessionsResponse([{ session: sessionInfo(), labTitle: 'Files and Directories', attempt: attemptSummary() }]),
+    );
+    renderWithProviders(<DashboardPage />);
+    expect(await screen.findByRole('heading', { name: 'You have a lab running' })).toBeTruthy();
+
+    // The student comes back to the tab while the API is briefly unreachable.
+    apiMock.listMySessions.mockRejectedValue(new ApiRequestError(0, { code: 'API_UNREACHABLE', message: 'x' }));
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(apiMock.listMySessions).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByRole('heading', { name: 'You have a lab running' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Continue lab' }).getAttribute('href')).toBe('#/labs/LINUX-001/workspace');
+    expect(screen.queryByText('We could not check whether you have a lab running')).toBeNull();
   });
 });

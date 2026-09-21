@@ -42,6 +42,7 @@ import type {
   CheckResult,
   LabDetail,
   LabHint,
+  LearningRecommendation,
   ProvisionStep,
   SessionInfo,
 } from '../lib/types';
@@ -52,6 +53,7 @@ import { LabBrief } from '../components/LabBrief';
 import { LabTerminal, type LabTerminalHandle, type TerminalEvent } from '../components/LabTerminal';
 import { FLAGSHIP_PATH_ID } from '../lib/learningPath';
 import { LabTimer } from '../components/LabTimer';
+import { Recommendation, recommendsLab } from '../components/LearningPath';
 import { VerificationPanel, type VerifyState } from '../components/VerificationPanel';
 import { Badge, EmptyState, LoadingState } from '../components/ui';
 
@@ -250,7 +252,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const [resetting, setResetting] = useState(false);
   const [ending, setEnding] = useState(false);
   const [continuing, setContinuing] = useState(false);
-  const [actionError, setActionError] = useState<{ error: ApiError; context: 'reset' | 'end' | 'terminal' } | null>(null);
+  const [actionError, setActionError] = useState<{
+    error: ApiError;
+    context: 'reset' | 'end' | 'terminal' | 'activity';
+  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pollTrouble, setPollTrouble] = useState(false);
 
@@ -265,15 +270,40 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const refreshedToken = useRef(false);
   const verifying = useRef(false);
 
+  /** Mirrors `reconnectTimer` for rendering: the page says it is retrying. */
+  const [retryPending, setRetryPending] = useState(false);
+  /** Why the last attempt failed, until the terminal first connects. */
+  const [connectFailure, setConnectFailure] = useState<string | null>(null);
   const cancelAutoReconnect = useCallback(() => {
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
     reconnectTimer.current = null;
+    setRetryPending(false);
   }, []);
   useEffect(() => cancelAutoReconnect, [cancelAutoReconnect]);
+
+  /*
+   * What the page last showed, for the one rule a late answer must not break: a
+   * session that has ended never comes back. A check started before End answers
+   * after it with the copy it read before it ran — ACTIVE — and applying that
+   * brought the ended lab's controls, timer and "press End lab" back.
+   */
+  const shown = useRef<{ session: SessionInfo | null; gone: boolean }>({ session: null, gone: false });
+  shown.current = { session, gone };
 
   /** Take a newer copy of the session, and share it with the rest of the app. */
   const updateSession = useCallback(
     (next: SessionInfo, nextAttempt?: AttemptSummary | null) => {
+      const current = shown.current;
+      if (
+        current.session?.sessionId === next.sessionId &&
+        (current.gone || !isLiveStatus(current.session.status)) &&
+        isLiveStatus(next.status)
+      ) {
+        if (nextAttempt) setAttempt(nextAttempt);
+        return;
+      }
+      // Before the re-render, so a second answer in the same tick is judged against this one.
+      shown.current = { ...current, session: next };
       setSession(next);
       setTimerSeed(Date.now());
       setTimeExpired(
@@ -301,6 +331,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     setActionError(null);
     setNotice(null);
     setEverConnected(false);
+    setConnectFailure(null);
     setGrantError(null);
     autoReconnects.current = 0;
     cancelAutoReconnect();
@@ -321,6 +352,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
       .catch((cause: unknown) => {
         const error = toApiError(cause);
         if (error.code === 'SESSION_NOT_FOUND') {
+          shown.current = { ...shown.current, gone: true };
           setGone(true);
           // The app-wide list still names it; left there it keeps an Active lab
           // link alive and blocks Launch on every other lab page.
@@ -355,6 +387,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
           if (cancelled) return;
           const error = toApiError(cause);
           if (error.code === 'SESSION_NOT_FOUND') {
+            shown.current = { ...shown.current, gone: true };
             setGone(true);
             void refreshSessionList();
             return;
@@ -384,6 +417,9 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const reconnect = useCallback(
     (freshToken: boolean) => {
       if (!sessionId) return;
+      // Whatever asked for this connection, an automatic one still pending
+      // would replace it — and the shell the student is typing in — later.
+      cancelAutoReconnect();
       setActionError(null);
       if (!freshToken) {
         setConnectKey((n) => n + 1);
@@ -397,7 +433,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
           else setActionError({ error, context: 'terminal' });
         });
     },
-    [sessionId, obtainGrant, refreshSession],
+    [sessionId, obtainGrant, refreshSession, cancelAutoReconnect],
   );
 
   const handleTerminalEvent = useCallback(
@@ -405,11 +441,14 @@ export function WorkspacePage({ labId }: { labId: string }) {
       setTerminal(event);
       if (event.status === 'connected') {
         setEverConnected(true);
+        setConnectFailure(null);
+        cancelAutoReconnect();
         autoReconnects.current = 0;
         refreshedToken.current = false;
         return;
       }
       if (event.status !== 'disconnected') return;
+      setConnectFailure(event.code ?? 'CONNECTION_LOST');
 
       switch (event.code) {
         case 'SESSION_ENDED':
@@ -436,8 +475,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
           if (delay !== undefined) {
             autoReconnects.current += 1;
             cancelAutoReconnect();
+            setRetryPending(true);
             reconnectTimer.current = setTimeout(() => {
               reconnectTimer.current = null;
+              setRetryPending(false);
               reconnect(false);
             }, delay);
           }
@@ -468,8 +509,11 @@ export function WorkspacePage({ labId }: { labId: string }) {
       }
       setVerify({ kind: 'result', result, newlyCompleted: result.newlyCompleted === true });
       setLastChecks(result.checks);
-      if (result.session) updateSession(result.session, result.attempt ?? null);
-      else if (result.attempt) setAttempt(result.attempt);
+      if (result.attempt) setAttempt(result.attempt);
+      // Not `result.session`: it is the copy the API read *before* the check,
+      // so it still carries the idle warning the check itself just cleared, and
+      // can be older than a poll that answered meanwhile. Read it fresh.
+      refreshSession();
       if (result.newlyCompleted) catalog.reloadProgress();
     } catch (cause) {
       const error = toApiError(cause);
@@ -478,7 +522,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
     } finally {
       verifying.current = false;
     }
-  }, [sessionId, updateSession, catalog, refreshSession]);
+  }, [sessionId, catalog, refreshSession]);
 
   const handleReset = useCallback(async () => {
     if (!sessionId || resetting) return;
@@ -545,7 +589,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
       const response = await api.recordActivity(sessionId);
       updateSession(response.session);
     } catch (cause) {
-      setActionError({ error: toApiError(cause), context: 'terminal' });
+      setActionError({ error: toApiError(cause), context: 'activity' });
     } finally {
       setContinuing(false);
     }
@@ -561,6 +605,38 @@ export function WorkspacePage({ labId }: { labId: string }) {
     },
     [sessionId],
   );
+
+  /*
+   * Hints this attempt already revealed, so a reload or a return to the lab
+   * shows them again instead of starting the panel closed. Read from the
+   * student's own attempt; hints unlock in the lab's order, so the count is how
+   * many of the lab's hints, from the first, were recorded. Best effort:
+   * without it the panel simply starts closed, as it always did.
+   */
+  const attemptId = attempt?.attemptId ?? null;
+  // Kept with the attempt they were read for: a relaunch's first render must not
+  // open the new attempt's hints from the old one's record.
+  const [revealedLevels, setRevealedLevels] = useState<{ attemptId: string; levels: Set<number> } | null>(null);
+  useEffect(() => {
+    if (!attemptId) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.getAttempt(attemptId))
+      .then(({ attempt: detail }) => {
+        if (cancelled || !Array.isArray(detail?.hints)) return;
+        setRevealedLevels({ attemptId, levels: new Set(detail.hints.map((hint) => hint.level)) });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [attemptId]);
+  const hintsRevealed = useMemo(() => {
+    if (!lab || !revealedLevels || revealedLevels.attemptId !== attemptId) return 0;
+    let count = 0;
+    while (count < lab.hints.length && revealedLevels.levels.has(lab.hints[count]!.level)) count += 1;
+    return count;
+  }, [lab, revealedLevels, attemptId]);
 
   const handleExpire = useCallback(() => setTimeExpired(true), []);
   const handleTimeLow = useCallback(() => setTimeLow(true), []);
@@ -676,6 +752,12 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const canReset = (status === 'ACTIVE' || status === 'DEGRADED') && !resetting && !ending && verify.kind !== 'checking';
   const canEnd = (status === 'ACTIVE' || status === 'DEGRADED') && !resetting && !ending;
 
+  // A dialog opened while the action was possible must not outlive that: a
+  // poll that finds the lab expired, ending or needing a reset closes it rather
+  // than leaving a confirm button that sends a request the API will refuse.
+  if (resetOpen && !resetting && !canReset) setResetOpen(false);
+  if (endOpen && !ending && !canEnd) setEndOpen(false);
+
   let overlay: ReactNode = null;
   if (relaunching) {
     overlay = (
@@ -690,7 +772,16 @@ export function WorkspacePage({ labId }: { labId: string }) {
     if (resetting || status === 'RESETTING') {
       overlay = <Overlay title="Resetting your lab environment…" busy />;
     } else if (status === 'CREATING') {
-      overlay = <Overlay title="Preparing your lab environment…" busy />;
+      // Reached after a reload or from another tab, when this page did not send
+      // the start itself: same reassurance as the launch overlay above.
+      overlay = (
+        <Overlay title="Preparing your lab environment…" busy>
+          <p className="overlay__text">
+            Creating your {environment?.name.toLowerCase() ?? 'environment'}. This can take a little while, and this page
+            updates by itself. You can leave this page; the lab keeps starting.
+          </p>
+        </Overlay>
+      );
     } else if (status === 'DEGRADED') {
       overlay = (
         <Overlay title="Your environment needs a reset">
@@ -729,12 +820,21 @@ export function WorkspacePage({ labId }: { labId: string }) {
             </div>
           </div>
         );
-      } else if (terminal.status === 'disconnected') {
+      } else if (connectFailure) {
+        // Once an attempt has failed this stays up, with Try again, through the
+        // automatic retries: flipping back to "Connecting…" for each one made
+        // the page flash between two states, and hid the button for a minute.
+        const retrying = retryPending || terminal.status === 'connecting';
         overlay = (
           <div className="overlay">
             <div className="overlay__card" role="alert">
               <p className="overlay__title">The terminal could not connect</p>
-              <p className="overlay__text">{TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST}</p>
+              <p className="overlay__text">{TERMINAL_TEXT[connectFailure] ?? TERMINAL_TEXT.CONNECTION_LOST}</p>
+              {retrying ? (
+                <p className="overlay__text" aria-live="off">
+                  <span className="spinner spinner--sm" aria-hidden="true" /> Trying again automatically…
+                </p>
+              ) : null}
               <button type="button" className="btn btn--primary" onClick={() => reconnect(true)}>
                 Try again
               </button>
@@ -763,7 +863,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
         : resetInFlight
           ? 'Resetting your environment…'
           : terminal.status === 'disconnected'
-            ? (TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST)
+            ? `${TERMINAL_TEXT[terminal.code ?? ''] ?? TERMINAL_TEXT.CONNECTION_LOST}${retryPending ? ' Reconnecting…' : ''}`
             : 'Not connected';
   const showReconnect =
     // Including SESSION_ENDED: while the session is still ACTIVE that means another
@@ -877,14 +977,28 @@ export function WorkspacePage({ labId }: { labId: string }) {
           gone={gone}
           attempt={attempt}
           otherRunning={active.entries.find((e) => e.session.labId !== lab.id)?.session.labId}
-          onLaunchAgain={() => void launch(lab.id, lab.title)}
+          onLaunchAgain={() => {
+            // The new environment is judged afresh: the last verdict belongs to
+            // the lab that just ended, not to the one being prepared.
+            setVerify({ kind: 'idle' });
+            setLastChecks(undefined);
+            void launch(lab.id, lab.title);
+          }}
           launching={active.launching !== null}
           launchError={launchError}
         />
       ) : (
         <div className="workspace__body">
           <aside className="workspace__instructions" aria-label="Instructions">
-            <LabBrief lab={lab} showHeader={false} checks={lastChecks} onHintReveal={handleHintReveal} />
+            <LabBrief
+              // Hints belong to an attempt; a relaunch is a new one and starts closed.
+              key={attempt?.attemptId ?? 'no-attempt'}
+              lab={lab}
+              showHeader={false}
+              checks={lastChecks}
+              onHintReveal={handleHintReveal}
+              hintsRevealed={hintsRevealed}
+            />
           </aside>
 
           <section className="workspace__main" aria-label="Terminal and verification">
@@ -954,6 +1068,35 @@ export function WorkspacePage({ labId }: { labId: string }) {
   );
 }
 
+/**
+ * After a completed lab: the path's next lab, straight from the API's rule.
+ *
+ * Read when the summary appears, which is after End, so the lab just finished
+ * is already counted and no longer running. Anything but a lab to open next —
+ * the student still has a lab running (the end has not finished), the path is
+ * complete, progress cannot be read — shows nothing, and the summary keeps its
+ * link to the path page.
+ */
+function useNextLabAfter(labId: string, enabled: boolean): LearningRecommendation | null {
+  const [next, setNext] = useState<LearningRecommendation | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.getLearningPathProgress(FLAGSHIP_PATH_ID))
+      .then((progress) => {
+        const recommendation = progress?.recommendation;
+        if (cancelled || !recommendation || !recommendsLab(recommendation) || recommendation.labId === labId) return;
+        setNext(recommendation);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [labId, enabled]);
+  return enabled ? next : null;
+}
+
 function FinalSummary({
   lab,
   session,
@@ -973,6 +1116,8 @@ function FinalSummary({
   launching: boolean;
   launchError: ApiError | null;
 }) {
+  const passed = attempt?.status === 'PASSED';
+  const next = useNextLabAfter(lab.id, passed && !otherRunning);
   const title = gone
     ? 'This lab environment no longer exists'
     : session && session.status === 'EXPIRED' && removedForInactivity(session)
@@ -1008,15 +1153,20 @@ function FinalSummary({
           </p>
         )}
         {launchError ? <ErrorNotice error={describeError(launchError, 'launch')} headingLevel={3} /> : null}
+        {next ? <Recommendation recommendation={next} /> : null}
         <div className="final__actions">
           {otherRunning ? (
             <a className="btn btn--primary" href={hrefFor({ name: 'workspace', labId: otherRunning })}>
               Continue {otherRunning}
             </a>
-          ) : attempt?.status === 'PASSED' ? (
+          ) : passed ? (
             <>
-              {/* A completed lab leads on: the path page names the next lab. */}
-              <a className="btn btn--primary" href={hrefFor({ name: 'path', pathId: FLAGSHIP_PATH_ID })}>
+              {/* A completed lab leads on: to the next lab when the path names
+                  one (above), and to the path page either way. */}
+              <a
+                className={`btn ${next ? 'btn--secondary' : 'btn--primary'}`}
+                href={hrefFor({ name: 'path', pathId: FLAGSHIP_PATH_ID })}
+              >
                 Continue the learning path
               </a>
               <button type="button" className="btn btn--secondary" onClick={onLaunchAgain} disabled={launching}>

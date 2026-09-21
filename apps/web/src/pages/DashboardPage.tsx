@@ -51,7 +51,10 @@ function ActiveLabPanel() {
     );
   }
 
-  if (status === 'error' && error) {
+  // Only when nothing is known. A later re-read that fails (the tab came back
+  // during an API blip) must not hide a running lab the student already saw —
+  // the top bar keeps showing it, and Continue re-reads it anyway.
+  if (status === 'error' && error && entries.length === 0) {
     return (
       <section className="panel" aria-labelledby="active-lab-heading">
         <h2 id="active-lab-heading" className="visually-hidden">
@@ -230,12 +233,15 @@ export function DashboardPage() {
 
   const name = auth.identity ? displayNameFor(auth.identity) : null;
   const firstTime = attempts !== null && attempts.length === 0;
+  // "back" only once the history says so: until it loads, a first-time student
+  // was greeted as a returning one.
+  const returning = attempts !== null && attempts.length > 0;
 
   return (
     <div className="page">
       <PageHeader
         eyebrow="Dashboard"
-        title={name ? `Welcome${firstTime ? '' : ' back'}, ${name}` : 'Welcome'}
+        title={name ? `Welcome${returning ? ' back' : ''}, ${name}` : 'Welcome'}
         description="Hands-on DevOps practice in real, temporary environments — checked against what you actually built."
       />
 

@@ -135,7 +135,7 @@ The launch panel shows exactly one of:
 | This lab is running for the student | **Continue lab** |
 | A launch is in flight | "Preparing your lab environment…" |
 | Another of the student's labs uses their quota | "You already have a lab running" + **Continue *LAB-ID*** |
-| The platform cannot run this lab (`availability.available: false`) | "This lab cannot be started right now" + the API's reason; no button |
+| The platform cannot run this lab (`availability.available: false`) | "This lab cannot be started right now" and what to do; no button. The provider's own `availability.reason` (hosts, addresses, daemon errors) is for operators and is not shown |
 | Otherwise | **Launch lab** |
 
 Launch is single-flight (`ActiveSessionContext.launch`): repeated clicks, or two
@@ -177,7 +177,7 @@ simulates output.
 | Connected | shell ready | keystrokes go to the PTY |
 | The shell exited. | the student typed `exit` | **Reconnect** opens a new shell in the same environment |
 | Disconnected after a period of inactivity. | the terminal service's idle timer | **Reconnect** |
-| Connection to the terminal was lost. | abnormal close (e.g. network) | up to three automatic reconnects (1 s, 3 s, 6 s), then **Reconnect** |
+| Connection to the terminal was lost. Reconnecting… | abnormal close (e.g. network), or a terminal/broker restart | up to six automatic reconnects (1, 3, 6, 10, 15, 25 s — about a minute), then **Reconnect**. Before the first connection, a failed attempt shows *The terminal could not connect* with **Try again** at once, and the overlay stays (saying *Trying again automatically…*) through the automatic retries rather than flashing back to *Connecting…*. A reconnect that succeeds, or one the student asks for, cancels the pending automatic one |
 | The terminal’s access expired. | token refused | one new token is minted automatically |
 | Disconnected — this terminal was opened in another tab or window. | close 4410 while the session is still running: the terminal service keeps one shell per session, so opening the workspace elsewhere takes the terminal over | **Reconnect** takes it back |
 | (ended summary) | close 4410 because the lab ended | the session is re-read and the ended summary replaces the terminal; no reconnect |
@@ -230,6 +230,15 @@ replaces the terminal and every control with a summary: whether the lab was
 completed, **Launch a fresh environment** (or Continue, if another lab is
 running), **Back to labs** and **Dashboard**.
 
+A completed lab leads on. The summary reads the path's recommendation
+(`GET /api/me/learning-paths/devops-engineer`) after End, so the finished lab is
+counted, and when it names a lab to open next it shows that lab, the API's
+reason, and **Continue learning** straight to its page; **Continue the learning
+path** stays as the secondary link. When it names none (the end has not finished,
+the path is complete, progress cannot be read) the path link is the main action.
+A passing Verify says the same thing ahead of time: press End lab when you are
+done to free the environment and see the next lab.
+
 If cleanup is still running (`503 DESTROY_FAILED` with the session `ENDING`) the
 workspace shows "Your lab is still shutting down — you do not need to press End
 lab again", keeps polling, and moves to the summary when the API reports
@@ -240,6 +249,19 @@ lab again", keeps polling, and moves to the summary when the API reports
 The workspace renders the last payload the API returned and never advances a
 status on its own. Transitional states are polled every 3 seconds, steady ones
 every 15. Polling is not activity.
+
+Answers can arrive out of order, so three rules hold regardless:
+
+- A session the page has seen end (or vanish) never becomes live again. A
+  Verify that answers after End cannot bring back the controls; the attempt it
+  recorded is still shown.
+- Verify does not apply the session copy in the check's response — the API reads
+  it *before* checking — but re-reads the session, so an idle warning the check
+  answered goes away at once.
+- A Reset or End dialog closes by itself once its action is no longer possible
+  (the lab expired, is ending, or needs a reset), rather than sending a request
+  the API would refuse. *Launch again* starts with no verdict, and with the new
+  attempt's hints (none), not the previous attempt's.
 
 | Status | Student sees | Actions |
 |---|---|---|
@@ -266,6 +288,11 @@ The private beta runs with `MAX_ACTIVE_SESSIONS=5` and
   instead of Launch. If another tab started a lab after the page loaded, the
   refusal refreshes the session list and turns into the same Continue link.
   The UI never suggests starting another lab.
+
+A refusal describes the moment it was made. It is shown on the lab's page and
+workspace, and forgotten as soon as the student navigates anywhere else, so it is
+never announced again later as if it were new (`ActiveSessionContext`). A
+per-student refusal is also dropped once no other lab is running.
 
 Operators still see both as distinct metric outcomes and log fields
 (`capacity_reached` vs `student_limit_reached`); nothing about that changed.
@@ -300,7 +327,11 @@ Every error shows a title, what happened, what to do, and a small **Reference**
 | `SESSION_RESET_FAILED` | The reset did not finish — Reset again or End lab |
 | `DESTROY_FAILED` | Your lab is still shutting down — no need to press End again |
 | `PROGRESS_UNAVAILABLE` | Progress is unavailable right now |
-| anything else | the API's own message, never a generic "Something went wrong" |
+| `RATE_LIMITED` | Too many requests — wait a minute |
+| `CHECK_IN_PROGRESS` | A check is already running — press Verify again in a few seconds |
+| `INTERNAL_ERROR`, `UNEXPECTED_ERROR` | Something went wrong on the platform / in this page — try again or reload |
+| anything else, on an action (launch, verify, reset, end, terminal) | plain words for that action — never the provider's message, which is raw kubectl or exec output (`SETUP_FAILED`, `EXEC_FAILED`, `KUBECTL_UNAVAILABLE` …); an unknown Verify error is always "not a mistake in your work" |
+| anything else, while reading a page | the API's own message, never a generic "Something went wrong" |
 
 Operator remediation text that names commands (`docker compose ps`, …) is not
 shown to students; the reference code leads operators to the runbooks
@@ -351,12 +382,19 @@ Storage, IndexedDB or cookies (enforced by `apps/web/test/token-storage.test.tsx
 | `navigation.test.tsx` | nav, `aria-current`, titles, focus, active-lab indicator, not found |
 | `dashboard.test.tsx` | every dashboard panel, including unavailable sources |
 | `student-flow.test.tsx` | dashboard → catalog → launch → verify → reset → verify → end → dashboard |
+| `launch-refusal.test.tsx` | a refused launch is forgotten once the student moves on |
+| `LabTerminal.test.tsx` | what the terminal puts on the wire, typed-ahead input, close reasons, safe error lines |
 
-**Browser E2E.** The repository has no browser test runner, and a real launch
-needs the full runtime (kind and/or the sandbox broker), which ordinary CI does
-not have. Rather than add Playwright for a suite CI cannot run, the routed-app
-flow above runs in jsdom on every `npm test`, and the real-browser check is this
-release smoke against the stack `make beta-validate` already brings up:
+**Browser E2E.** Playwright runs the real stack in a real browser: `npm run
+test:e2e` locally and the `browser-e2e` job in CI (`e2e/`, and
+[docs/development/browser-e2e-private-beta.md](development/browser-e2e-private-beta.md)).
+The critical path (`e2e/tests/student-critical-path.spec.ts`) signs in, finds
+LINUX-001, launches it, fails and then passes Verify, opens a hint, reloads (the
+session, the result and the hint survive), ends the lab and follows the
+summary's next lab to its page. Other specs cover Reset, reload while creating,
+a second tab, five students plus a refused sixth, isolation, and injected
+failures. The manual release smoke below remains useful against a stack that is
+already up (`make beta-validate`):
 
 1. `make up`, open http://localhost:3000 and sign in. **Development mode has no
    browser sign-in:** `/auth/session` answers signed-out and the gate reads *no
@@ -387,9 +425,10 @@ release smoke against the stack `make beta-validate` already brings up:
   workspace shows elapsed time, then the steps the API reports once it returns.
 - **The countdown is re-seeded on each poll**, so it can drift by up to one poll
   interval between polls; the server's deadline is authoritative.
-- **No real-browser E2E in CI** (see above).
-- **Hint reveals are per page view.** Revealed hints are recorded server-side,
-  but the panel starts collapsed again after a reload.
+- **Hints are per attempt.** The workspace reopens the hints this attempt already
+  revealed (read from `GET /api/me/attempts/:attemptId`, not reported again), so
+  a reload or a return to the lab keeps them. A fresh launch is a new attempt and
+  starts with none. When progress cannot be read, the panel starts closed.
 - **The next lab is a fixed rule**, not personalised guidance (see
   [docs/learning-paths.md](learning-paths.md#what-should-i-do-next--the-recommendation-rule)).
 - **An API outage is slow to show.** When the API is unreachable, the web proxy

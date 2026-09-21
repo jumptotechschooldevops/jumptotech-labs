@@ -733,6 +733,16 @@ main:focus {
   border: 1px solid #28527a;
   color: #cfe6fb;
 }
+.catalog__progress-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+.catalog__progress-note p {
+  margin: 0;
+}
 .callout--warning {
   background: var(--warn-bg);
   border: 1px solid var(--warn-dim);

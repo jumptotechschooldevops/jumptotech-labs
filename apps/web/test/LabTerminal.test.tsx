@@ -214,6 +214,39 @@ describe('LabTerminal close reasons', () => {
 
     expect(onEvent).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'disconnected', code: 'SESSION_ENDED' }));
   });
+
+  it('writes words for the code into the terminal, never the service\'s raw exception text', () => {
+    const { socket, onEvent } = mount();
+    act(() => socket.serverOpens());
+    // What the terminal service really sends when the credentials fetch fails:
+    // the fetch error's message, passed through (services/terminal/src/credentials.ts).
+    act(() =>
+      socket.serverSends({
+        type: 'error',
+        code: 'CREDENTIALS_UNAVAILABLE',
+        message: 'Could not reach the lab API to obtain session credentials: connect ECONNREFUSED 172.18.0.4:4000',
+      }),
+    );
+    act(() => socket.onclose?.({ code: 4403 }));
+
+    const written = xterm.terms[0]!.written.join('\n');
+    expect(written).toContain('The terminal could not attach to your environment.');
+    expect(written).not.toMatch(/ECONNREFUSED|172\.18|lab API|credentials/);
+    // The workspace still learns the code, which is what decides a retry.
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'disconnected', code: 'CREDENTIALS_UNAVAILABLE' }),
+    );
+  });
+
+  it('says something neutral for a code it does not know', () => {
+    const { socket } = mount();
+    act(() => socket.serverOpens());
+    act(() => socket.serverSends({ type: 'error', code: 'SOMETHING_NEW', message: 'Error: spawn /usr/bin/docker ENOENT' }));
+
+    const written = xterm.terms[0]!.written.join('\n');
+    expect(written).toContain('The terminal connection was interrupted.');
+    expect(written).not.toMatch(/ENOENT|docker/);
+  });
 });
 
 /*

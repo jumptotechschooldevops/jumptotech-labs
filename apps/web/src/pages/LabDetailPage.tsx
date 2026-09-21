@@ -9,7 +9,7 @@
  *   - this lab is already running for them       → Continue lab
  *   - another lab of theirs uses their quota      → Continue that lab
  *   - a launch is already in flight               → shown as in progress
- *   - the platform cannot run this kind of lab    → the reason, no button
+ *   - the platform cannot run this kind of lab    → says so, no button
  *
  * Global capacity cannot be known in advance without telling students how busy
  * everyone else is, so it is handled when the API answers — with a message that
@@ -49,7 +49,9 @@ function LaunchPanel({ lab }: { lab: LabDetail }) {
     return () => clearInterval(timer);
   }, [otherShuttingDown, refresh]);
   const unavailable = lab.availability?.available === false;
-  const error = launchError?.labId === lab.id ? launchError.error : null;
+  const refusal = launchError?.labId === lab.id ? launchError.error : null;
+  // "You already have a lab running" is no longer true once no other lab is.
+  const error = refusal?.code === 'STUDENT_SESSION_LIMIT_REACHED' && !other ? null : refusal;
 
   const onLaunch = () => {
     if (sessions.launching) return;
@@ -128,9 +130,11 @@ function LaunchPanel({ lab }: { lab: LabDetail }) {
         <p className="notice__message">
           The platform cannot create this kind of environment at the moment. You can still read the lab.
         </p>
-        {lab.availability?.reason ? (
-          <p className="notice__reference">Details: {lab.availability.reason}</p>
-        ) : null}
+        {/* Not `availability.reason`: that is the provider probe's own words, for
+            operators — it names hosts, addresses and daemon errors. */}
+        <p className="notice__guidance">
+          Labs in other tracks may still work. If this lasts, let your instructor know.
+        </p>
       </div>
     );
   } else {

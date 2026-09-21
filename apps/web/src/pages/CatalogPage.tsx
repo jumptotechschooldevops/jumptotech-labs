@@ -211,6 +211,20 @@ export function CatalogPage({ initialFilters = {} }: { initialFilters?: CatalogF
             ) : null}
           </form>
 
+          {catalog.progressStatus === 'error' ? (
+            // Without this the Completed and In progress badges, and the Status
+            // filter, simply vanish — which reads as progress that was lost.
+            <div className="callout callout--warning catalog__progress-note">
+              <p>
+                Your progress could not be loaded just now, so labs are shown without Completed or In progress. Your
+                saved progress is not affected.
+              </p>
+              <button type="button" className="btn btn--secondary btn--sm" onClick={catalog.reloadProgress}>
+                Try again
+              </button>
+            </div>
+          ) : null}
+
           <p className="results-count" role="status" aria-live="polite">
             {filtered
               ? `Showing ${visible.length} of ${plural(catalog.labs.length, 'lab')}`

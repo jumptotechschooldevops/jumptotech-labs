@@ -23,6 +23,8 @@ import { renderWithProviders } from './app-harness';
 import {
   apiMock,
   attemptSummary,
+  labDetail,
+  learningPathProgress,
   resetApiMock,
   sessionInfo,
   sessionsResponse,
@@ -161,6 +163,8 @@ describe('finding the running lab', () => {
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
 
     expect(await screen.findByText('Preparing your lab environment…')).toBeTruthy();
+    // Found after a reload: the page did not send the start, and still says what is going on.
+    expect(screen.getByText(/This can take a little while, and this page updates by itself/)).toBeTruthy();
     await waitFor(() => expect(apiMock.getSession).toHaveBeenCalledTimes(1));
     expect(button('Verify').disabled).toBe(true);
     expect(button('Reset').disabled).toBe(true);
@@ -244,6 +248,62 @@ describe('Verify', () => {
     expect(apiMock.checkSolution).toHaveBeenCalledTimes(1);
     expect((bar().getByRole('button', { name: 'Verifying…' }) as HTMLButtonElement).disabled).toBe(true);
     await act(async () => resolve(verification(false)));
+  });
+});
+
+describe('hints', () => {
+  beforeEach(() => {
+    apiMock.getLab.mockImplementation((id: string) =>
+      Promise.resolve(
+        labDetail({
+          id,
+          hints: [
+            { level: 1, text: 'A gentle nudge.' },
+            { level: 2, text: 'A closer look.' },
+            { level: 3, text: 'Concrete guidance.' },
+          ],
+        }),
+      ),
+    );
+  });
+
+  it('shows again, after a reload, the hints this attempt already revealed — without recording them twice', async () => {
+    apiMock.getAttempt.mockResolvedValue({
+      student: { studentId: 'dev-student', displayName: 'Dev Student' },
+      attempt: {
+        ...attemptSummary(),
+        hints: [
+          { level: 1, revealedAt: '2026-09-14T10:05:00Z' },
+          { level: 2, revealedAt: '2026-09-14T10:09:00Z' },
+        ],
+        hintsUsed: 2,
+      },
+    });
+    await renderConnected();
+
+    const hints = within(screen.getByRole('region', { name: 'Hints' }));
+    expect(await hints.findByText('Hint 2')).toBeTruthy();
+    expect(hints.getByText('Hint 1')).toBeTruthy();
+    expect(hints.queryByText('Hint 3')).toBeNull();
+    expect(hints.getByText('2 of 3')).toBeTruthy();
+    expect(apiMock.getAttempt).toHaveBeenCalledWith('attempt-1');
+    expect(apiMock.recordHint).not.toHaveBeenCalled();
+
+    // The next reveal is the next hint, and only that one is recorded.
+    fireEvent.click(hints.getByRole('button', { name: /Show hint 3/ }));
+    expect(hints.getByText('Hint 3')).toBeTruthy();
+    await waitFor(() => expect(apiMock.recordHint).toHaveBeenCalledTimes(1));
+    expect(apiMock.recordHint).toHaveBeenCalledWith(SESSION_ID, 3);
+  });
+
+  it('starts closed when the attempt cannot be read', async () => {
+    apiMock.getAttempt.mockRejectedValue(new ApiRequestError(503, { code: 'PROGRESS_UNAVAILABLE', message: 'down' }));
+    await renderConnected();
+    const hints = within(screen.getByRole('region', { name: 'Hints' }));
+    await waitFor(() => expect(apiMock.getAttempt).toHaveBeenCalled());
+    expect(hints.getByText('0 of 3')).toBeTruthy();
+    expect(hints.getByRole('button', { name: /Show a hint/ })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
@@ -438,6 +498,66 @@ describe('after the lab has ended', () => {
     expect(screen.getByRole('button', { name: 'Launch again' }).className).not.toMatch(/btn--primary/);
   });
 
+  async function passAndEnd() {
+    apiMock.endLab.mockResolvedValue({
+      message: 'Lab environment released.',
+      session: sessionInfo({ status: 'ENDED' }),
+      attempt: attemptSummary({ status: 'PASSED' }),
+      steps: [],
+    });
+    await renderConnected();
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    fireEvent.click(button('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+  }
+
+  it('after a completed lab, names the next lab from the learning path and links straight to it', async () => {
+    apiMock.getLearningPathProgress.mockResolvedValue(
+      learningPathProgress({ 'LINUX-001': 'COMPLETED' }, {
+        kind: 'NEXT_IN_STAGE',
+        labId: 'LINUX-002',
+        labTitle: 'Permissions',
+        reason: 'LINUX-002 is the next lab in Linux.',
+      }),
+    );
+    await passAndEnd();
+
+    expect(await screen.findByRole('heading', { name: 'Next recommended lab' })).toBeTruthy();
+    expect(screen.getByText('LINUX-002 is the next lab in Linux.')).toBeTruthy();
+    const next = screen.getByRole('link', { name: /Continue learning.*LINUX-002/ });
+    expect(next.getAttribute('href')).toBe('#/labs/LINUX-002');
+    expect(next.className).toMatch(/btn--primary/);
+    // The path is still one click away, but it is no longer the main action.
+    expect(screen.getByRole('link', { name: 'Continue the learning path' }).className).not.toMatch(/btn--primary/);
+    // Read after End, so the finished lab is counted.
+    expect(apiMock.getLearningPathProgress).toHaveBeenCalledWith('devops-engineer');
+  });
+
+  it('after a completed lab, offers only the path when the path does not name a lab to open', async () => {
+    // The end has not finished yet, so the student still counts as running a lab.
+    apiMock.getLearningPathProgress.mockResolvedValue(
+      learningPathProgress({ 'LINUX-001': 'COMPLETED' }, {
+        kind: 'RESUME_ACTIVE',
+        labId: 'LINUX-001',
+        labTitle: 'Files and Directories',
+        reason: 'You have a lab running.',
+      }),
+    );
+    await passAndEnd();
+    await waitFor(() => expect(apiMock.getLearningPathProgress).toHaveBeenCalled());
+
+    expect(screen.queryByRole('heading', { name: 'Next recommended lab' })).toBeNull();
+    expect(screen.queryByText('You have a lab running.')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Continue the learning path' }).className).toMatch(/btn--primary/);
+  });
+
+  it('does not suggest a next lab for a lab that was not completed', async () => {
+    await endLab();
+    expect(apiMock.getLearningPathProgress).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: 'Next recommended lab' })).toBeNull();
+  });
+
   it('explains a relaunch the platform refused, on the summary', async () => {
     await endLab();
     apiMock.startLab.mockRejectedValue(
@@ -448,6 +568,140 @@ describe('after the lab has ended', () => {
 
     expect(await screen.findByText('All lab environments are in use')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Lab ended' })).toBeTruthy();
+  });
+});
+
+/*
+ * Late answers. Found by an independent review of this page and reproduced
+ * before the fixes; each test is the student's sequence.
+ */
+describe('answers that arrive late', () => {
+  it('a Verify that answers after End does not bring the ended lab back', async () => {
+    let answerCheck!: (value: unknown) => void;
+    apiMock.checkSolution.mockReturnValue(new Promise((resolve) => (answerCheck = resolve)));
+    apiMock.endLab.mockResolvedValue({ message: 'ok', session: sessionInfo({ status: 'ENDED' }), steps: [] });
+    await renderConnected();
+
+    fireEvent.click(button('Verify'));
+    fireEvent.click(button('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+
+    // The check answers with the session as the API read it before checking: ACTIVE.
+    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ status: 'ENDED' }), environment: null });
+    await act(async () =>
+      answerCheck(
+        verification(true, {
+          session: sessionInfo(),
+          attempt: attemptSummary({ status: 'PASSED', completedAt: '2026-09-14T10:30:00Z' }),
+          newlyCompleted: true,
+        }),
+      ),
+    );
+
+    expect(screen.getByRole('heading', { name: 'Lab ended' })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Lab actions' })).toBeNull();
+    expect(screen.queryByTestId('terminal')).toBeNull();
+    // What the check did record is still worth knowing.
+    expect(screen.getByText('You completed this lab. It is saved to your progress.')).toBeTruthy();
+  });
+
+  it('Verify clears an idle warning the check itself answered, instead of keeping the stale copy', async () => {
+    const idle = sessionInfo({ idleWarning: true, secondsUntilIdle: 60 });
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session: idle, labTitle: 'Files and Directories' }]));
+    apiMock.getSession.mockResolvedValue({ session: idle, environment: null });
+    await renderConnected();
+    expect(await screen.findByText(/Are you still working/)).toBeTruthy();
+
+    // The check counts as activity; its response still carries the copy read before it ran.
+    apiMock.checkSolution.mockResolvedValue(verification(false, { session: idle }));
+    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ idleWarning: false }), environment: null });
+    fireEvent.click(button('Verify'));
+    await screen.findByText(/Not complete yet/);
+
+    await waitFor(() => expect(screen.queryByText(/Are you still working/)).toBeNull());
+  });
+
+  it('a lab launched again starts with no verdict and no hints from the attempt before', async () => {
+    apiMock.getLab.mockImplementation((id: string) =>
+      Promise.resolve(
+        labDetail({ id, hints: [{ level: 1, text: 'N1' }, { level: 2, text: 'N2' }, { level: 3, text: 'N3' }] }),
+      ),
+    );
+    apiMock.getAttempt.mockImplementation((id: string) =>
+      Promise.resolve({
+        student: { studentId: 's', displayName: 'S' },
+        attempt: {
+          ...attemptSummary({ attemptId: id }),
+          hints: id === 'attempt-1' ? [{ level: 1, revealedAt: 'x' }, { level: 2, revealedAt: 'x' }] : [],
+          hintsUsed: id === 'attempt-1' ? 2 : 0,
+        },
+      }),
+    );
+    apiMock.checkSolution.mockResolvedValue(verification(true, { attempt: attemptSummary({ status: 'PASSED' }), newlyCompleted: true }));
+    apiMock.endLab.mockResolvedValue({
+      message: 'ok',
+      session: sessionInfo({ status: 'ENDED' }),
+      attempt: attemptSummary({ status: 'PASSED' }),
+      steps: [],
+    });
+    await renderConnected();
+    await within(screen.getByRole('region', { name: 'Hints' })).findByText('Hint 2');
+    fireEvent.click(button('Verify'));
+    await screen.findByText('Lab passed — every check passes');
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    fireEvent.click(button('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+
+    let answerStart!: (value: unknown) => void;
+    apiMock.startLab.mockReturnValue(new Promise((resolve) => (answerStart = resolve)));
+    fireEvent.click(screen.getByRole('button', { name: 'Launch again' }));
+    await screen.findByText('Preparing your lab environment…');
+    expect(screen.queryByText('Lab passed — every check passes')).toBeNull();
+
+    await act(async () =>
+      answerStart({
+        session: sessionInfo({ sessionId: 'sess-0000000000000002' }),
+        attempt: attemptSummary({ attemptId: 'attempt-2' }),
+        environment: { environmentId: 'e', provider: 'docker-linux', phase: 'ready', namespace: '' },
+        steps: [],
+        terminal: { url: 'ws://t', token: 'second' },
+      }),
+    );
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('second'));
+    await waitFor(() => expect(apiMock.getAttempt).toHaveBeenCalledWith('attempt-2'));
+    const hints = within(screen.getByRole('region', { name: 'Hints' }));
+    await waitFor(() => expect(hints.getByText('0 of 3')).toBeTruthy());
+    expect(hints.queryByText('Hint 1')).toBeNull();
+  }, 20_000);
+
+  it('closes an End dialog left open when the lab expires, so it cannot send a refused request', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    fireEvent.click(button('End lab'));
+    expect(screen.getByRole('alertdialog', { name: 'End this lab?' })).toBeTruthy();
+
+    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ status: 'EXPIRED' }), environment: null });
+    await act(() => vi.advanceTimersByTimeAsync(15_100));
+    await screen.findByRole('heading', { name: 'Your lab environment expired' });
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(apiMock.endLab).not.toHaveBeenCalled();
+  });
+
+  it('closes a Reset dialog left open when the lab starts shutting down', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    fireEvent.click(button('Reset'));
+    expect(screen.getByRole('alertdialog', { name: 'Reset this lab?' })).toBeTruthy();
+
+    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ status: 'EXPIRING' }), environment: null });
+    await act(() => vi.advanceTimersByTimeAsync(15_100));
+    await screen.findByText('Time is up — removing your environment…');
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(apiMock.resetLab).not.toHaveBeenCalled();
   });
 });
 
@@ -569,6 +823,48 @@ describe('the terminal connection', () => {
     expect(AUTO_RECONNECTS.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(45_000);
   });
 
+  /*
+   * A drop schedules an automatic reconnect, up to 25 s out. A student who
+   * presses Reconnect meanwhile gets a working shell — and the pending timer
+   * used to fire later anyway, bump the connection and replace that shell with
+   * a new one: whatever they had typed, their working directory, a running
+   * command, gone.
+   */
+  it('cancels a pending automatic reconnect once the student reconnects by hand', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    const key = () => Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
+
+    // Five drops in a row: the next automatic attempt is 25 s away.
+    for (let i = 0; i < 4; i += 1) {
+      act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+      await act(() => vi.advanceTimersByTimeAsync(AUTO_RECONNECTS[i]! + 50));
+    }
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    await waitFor(() => expect(screen.getByText('Terminal: Connected')).toBeTruthy());
+    const working = key();
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(key()).toBe(working);
+    expect(screen.getByText('Terminal: Connected')).toBeTruthy();
+  });
+
+  it('cancels a pending automatic reconnect when a connection succeeds some other way', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await renderConnected();
+    const key = () => Number(screen.getByTestId('terminal').getAttribute('data-connect-key'));
+
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+    // The terminal reports connected before the retry fires (a reset's reconnect, a reattach).
+    act(() => terminal.last!.onEvent({ status: 'connected' }));
+    const working = key();
+
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(key()).toBe(working);
+  });
+
   it('never retries a sandbox mismatch; it re-reads the session instead', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     await renderConnected();
@@ -590,6 +886,45 @@ describe('the terminal connection', () => {
 
     await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('renewed'));
     expect(apiMock.issueTerminal).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps "could not connect" and Try again on screen through the automatic retries, saying it is retrying', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    terminal.autoConnect = false;
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByText('Connecting to your terminal…');
+    await waitFor(() => expect(terminal.last).not.toBeNull());
+
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+    // Stated at once, with the button — and it says a retry is on its way.
+    expect(screen.getByText('The terminal could not connect')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.getByText(/Trying again automatically…/)).toBeTruthy();
+    expect(screen.getByText(/Terminal: Connection to the terminal was lost\. Reconnecting…/)).toBeTruthy();
+
+    // The retry itself does not flip the page back to "Connecting…".
+    await act(() => vi.advanceTimersByTimeAsync(AUTO_RECONNECTS[0]! + 50));
+    act(() => terminal.last!.onEvent({ status: 'connecting' }));
+    expect(screen.getByText('The terminal could not connect')).toBeTruthy();
+    expect(screen.queryByText('Connecting to your terminal…')).toBeNull();
+
+    // Once the automatic attempts are spent, only the button is left.
+    act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+    for (const delay of AUTO_RECONNECTS.slice(1)) {
+      await act(() => vi.advanceTimersByTimeAsync(delay + 50));
+      act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CONNECTION_LOST' }));
+    }
+    expect(screen.getByText('The terminal could not connect')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByText(/Trying again automatically…/)).toBeNull();
+    expect(screen.queryByText(/Reconnecting…/)).toBeNull();
+
+    // And a connection that does get through clears it.
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(apiMock.issueTerminal).toHaveBeenCalledTimes(2));
+    act(() => terminal.last!.onEvent({ status: 'connected' }));
+    expect(screen.queryByText('The terminal could not connect')).toBeNull();
+    expect(screen.getByText('Terminal: Connected')).toBeTruthy();
   });
 
   it('explains a terminal that never connected, and lets the student try again', async () => {
