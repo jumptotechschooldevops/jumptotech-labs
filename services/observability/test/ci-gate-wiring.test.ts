@@ -391,3 +391,32 @@ describe('values the workflow repeats from elsewhere', () => {
     }
   });
 });
+
+describe('the lockfile', () => {
+  // `npm ci` installs exactly what this file names, so it is the supply chain.
+  // Every package comes from the public registry with an integrity hash: a git
+  // URL, a tarball URL or a second registry would install code npm cannot
+  // verify against the hash it recorded, and would arrive in a lockfile diff
+  // few reviewers read line by line.
+  const lock = JSON.parse(read('package-lock.json')) as {
+    lockfileVersion: number;
+    packages: Record<string, { resolved?: string; integrity?: string; link?: boolean }>;
+  };
+  const installed = Object.entries(lock.packages).filter(([key]) => key.includes('node_modules/'));
+
+  it('installs every package from the npm registry, pinned by integrity', () => {
+    expect(lock.lockfileVersion).toBe(3);
+    expect(installed.length).toBeGreaterThan(100);
+    const unverified = installed
+      .filter(([, entry]) => !entry.link)
+      .filter(([, entry]) => !entry.resolved?.startsWith('https://registry.npmjs.org/') || !/^sha512-/.test(entry.integrity ?? ''))
+      .map(([key, entry]) => `${key}: ${entry.resolved ?? 'no resolved URL'}`);
+    expect(unverified).toEqual([]);
+  });
+
+  it('links only to the repository\'s own workspaces', () => {
+    const links = installed.filter(([, entry]) => entry.link);
+    expect(links.length).toBe(workspaces().length);
+    expect(links.filter(([, entry]) => !workspaces().includes(entry.resolved ?? '')).map(([key]) => key)).toEqual([]);
+  });
+});
