@@ -161,3 +161,69 @@ variable "debug" {
     for (const label of labels) expect(await status('TF-002', label, files)).toBe('fail');
   });
 });
+
+// ------------------------------------------------------------------ TF-003
+
+describe('TF-003 — each output is taken from where the task says', () => {
+  const labels = [
+    'service_name is taken from a local value',
+    'release_channel is taken from the input variable',
+    "manifest_path is taken from the resource's own attribute",
+    'deploy_token is taken from its variable',
+  ];
+  const BASE = `
+variable "channel" { default = "stable" }
+variable "deploy_token" { default = "not-a-real-token-placeholder" }
+`;
+  const grade = async (main: string) => {
+    const out: string[] = [];
+    for (const label of labels) out.push(await status('TF-003', label, { 'main.tf': BASE + main }));
+    return out;
+  };
+
+  it('passes outputs built from the local, the variables and the resource', async () => {
+    const main = `
+locals { service = "ledger-api" }
+resource "local_file" "release_manifest" { filename = "build/release-manifest.txt" }
+output "service_name"    { value = local.service }
+output "release_channel" { value = var.channel }
+output "manifest_path"   { value = local_file.release_manifest.filename }
+output "deploy_token" {
+  value     = var.deploy_token
+  sensitive = true
+}
+`;
+    expect(await grade(main)).toEqual(['pass', 'pass', 'pass', 'pass']);
+  });
+
+  it('passes a renamed resource and restructured locals, as the task allows', async () => {
+    const main = `
+locals {
+  names   = { service = "ledger-api" }
+  service = local.names.service
+}
+resource "local_file" "manifest" { filename = "build/release-manifest.txt" }
+output "service_name"    { value = local.service }
+output "release_channel" { value = upper(var.channel) == "STABLE" ? var.channel : "stable" }
+output "manifest_path"   { value = abspath(local_file.manifest.filename) }
+output "deploy_token" {
+  value     = var.deploy_token
+  sensitive = true
+}
+`;
+    expect(await grade(main)).toEqual(['pass', 'pass', 'pass', 'pass']);
+  });
+
+  it('fails outputs typed out as literals, which passed every check on a real apply', async () => {
+    const main = `
+output "service_name"    { value = "ledger-api" }
+output "release_channel" { value = "stable" }
+output "manifest_path"   { value = "build/release-manifest.txt" }
+output "deploy_token" {
+  value     = "not-a-real-token-placeholder"
+  sensitive = true
+}
+`;
+    expect(await grade(main)).toEqual(['fail', 'fail', 'fail', 'fail']);
+  });
+});

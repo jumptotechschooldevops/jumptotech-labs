@@ -97,8 +97,9 @@ task:
     - `deploy_token` — the token, from its variable, and marked **sensitive**.
 
     Everything else is yours. Rename the resource, restructure the locals,
-    compose the summary however you prefer — only the output names and the
-    values behind them are being checked.
+    compose the summary however you prefer — what is checked is the output
+    names, the values behind them, and that each value is taken from where
+    the list above says rather than typed out.
 
     Apply again so the outputs reach state, then read them back: `terraform
     output` shows them all, and `terraform output NAME` shows one. Notice what
@@ -173,6 +174,31 @@ requirements:
     name: deploy_token
     value: not-a-real-token-placeholder
     label: Output deploy_token publishes the token from its variable
+
+  # Where each value comes from. The applied values alone were satisfied by
+  # five outputs typed as literals (measured: all fourteen checks passed on a
+  # real apply), which is exactly what the task says not to do. Prefixes,
+  # because the task lets the student rename the resource and the locals.
+  - type: terraform_output_references
+    dir: terraform
+    name: service_name
+    reaches: [local.]
+    label: service_name is taken from a local value
+  - type: terraform_output_references
+    dir: terraform
+    name: release_channel
+    reaches: [var.channel]
+    label: release_channel is taken from the input variable
+  - type: terraform_output_references
+    dir: terraform
+    name: manifest_path
+    reaches: [local_file.]
+    label: manifest_path is taken from the resource's own attribute
+  - type: terraform_output_references
+    dir: terraform
+    name: deploy_token
+    reaches: [var.deploy_token]
+    label: deploy_token is taken from its variable
 
   - type: file_exists
     path: terraform/build/release-manifest.txt

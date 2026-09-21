@@ -80,6 +80,33 @@ const resourceBlock = (config: HclDocument, type: string, name: string, mode: 'm
 
 // ============================================================ references
 
+export const terraformOutputReferences: SandboxVerifierHandler<'terraform_output_references'> = {
+  type: 'terraform_output_references',
+  label: (r) => `output ${r.name} is taken from ${r.reaches.join(', ')}`,
+  async run(requirement, reader) {
+    return withConfig(reader, requirement.dir, async (config) => {
+      const block = findBlock(config, 'output', requirement.name);
+      if (!block) return fail(`No output '${requirement.name}' is declared`);
+      const expression = argumentValue(block, 'value');
+      if (expression === null) return fail(`output '${requirement.name}' sets no 'value'`);
+
+      const targets = reachableReferences(config, expression).map((reference) => reference.target);
+      const missing = requirement.reaches.filter((wanted) =>
+        wanted.endsWith('.') ? !targets.some((t) => t.startsWith(wanted)) : !targets.includes(wanted),
+      );
+      // What is missing, never what was written: a literal in its place is
+      // the student's answer, and quoting it back hands over nothing useful.
+      return missing.length === 0
+        ? pass()
+        : fail(
+            `output '${requirement.name}' does not take its value from ${missing
+              .map((m) => (m.endsWith('.') ? `a ${m.slice(0, -1)} reference` : m))
+              .join(' or ')} — a value typed out is not a reference`,
+          );
+    });
+  },
+};
+
 export const terraformResourceReferences: SandboxVerifierHandler<'terraform_resource_references'> = {
   type: 'terraform_resource_references',
   label: (r) => `${r.resource_type}.${r.name} refers to ${r.references}`,

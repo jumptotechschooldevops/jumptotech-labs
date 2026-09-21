@@ -256,6 +256,7 @@ import {
   terraformResourceDependsOn,
   terraformResourceLiteralAbsent,
   terraformResourceReferences,
+  terraformOutputReferences,
   terraformVariableDeclared,
   terraformVariableValidation,
 } from './handlers/terraform-config.js';
@@ -454,6 +455,7 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_state_absent: terraformStateAbsent,
 
   terraform_resource_references: terraformResourceReferences,
+  terraform_output_references: terraformOutputReferences,
   terraform_resource_literal_absent: terraformResourceLiteralAbsent,
   terraform_variable_declared: terraformVariableDeclared,
   terraform_locals_declared: terraformLocalsDeclared,

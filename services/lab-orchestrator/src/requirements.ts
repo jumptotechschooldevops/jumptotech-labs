@@ -1846,6 +1846,32 @@ const sandboxRequirementSchemas = {
     })
     .strict(),
 
+  /**
+   * An `output` block's `value` reaches these objects — directly or through
+   * locals. An entry ending in `.` is a prefix: `local.` is "some local
+   * value", `local_file.` "some local_file resource", for a lab that lets the
+   * student rename them; anything else is an exact target (`var.channel`).
+   * A value typed out as a literal reaches nothing.
+   */
+  terraform_output_references: z
+    .object({
+      type: z.literal('terraform_output_references'),
+      dir: sandboxPath,
+      name: terraformLabel,
+      reaches: z
+        .array(
+          z
+            .string()
+            .min(2)
+            .max(160)
+            .regex(/^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*\.?$/, 'must be a reference target or a prefix ending in .'),
+        )
+        .min(1)
+        .max(8),
+      ...common,
+    })
+    .strict(),
+
   /** A `variable "name"` block is declared, optionally with a shape. */
   terraform_variable_declared: z
     .object({
@@ -4194,6 +4220,7 @@ export const REQUIREMENT_FAMILIES = {
   terraform_output_equals: 'terraform',
   terraform_state_absent: 'terraform',
   terraform_resource_references: 'terraform',
+  terraform_output_references: 'terraform',
   terraform_resource_literal_absent: 'terraform',
   terraform_variable_declared: 'terraform',
   terraform_locals_declared: 'terraform',
