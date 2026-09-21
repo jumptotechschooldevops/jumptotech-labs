@@ -422,6 +422,20 @@ describe('End lab', () => {
     expect(screen.getByRole('link', { name: 'Back to labs' })).toBeTruthy();
   });
 
+  it('puts keyboard focus on the outcome, since the dialog and the End button that had it are gone', async () => {
+    apiMock.endLab.mockResolvedValue({ message: 'ok', session: sessionInfo({ status: 'ENDED' }), steps: [] });
+    await renderConnected();
+    const end = button('End lab');
+    end.focus();
+    fireEvent.click(end);
+    const confirm = within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' });
+    confirm.focus();
+    fireEvent.click(confirm);
+
+    const heading = await screen.findByRole('heading', { name: 'Lab ended' });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+  });
+
   it('shows an End that is still cleaning up as shutting down, not as failed, and offers no second End', async () => {
     apiMock.endLab.mockRejectedValue(
       new ApiRequestError(503, {
