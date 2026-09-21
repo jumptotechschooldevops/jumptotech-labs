@@ -284,10 +284,24 @@ export function usesAction(actual: string | undefined, expected: string): boolea
 
 /** Shell comments removed: `#` at the start of a line or after whitespace. */
 export function withoutShellComments(text: string): string {
-  return text
-    .split('\n')
-    .map((line) => line.replace(/(^|\s)#.*$/, '$1'))
-    .join('\n');
+  return text.split('\n').map(withoutShellComment).join('\n');
+}
+
+/**
+ * One line with its shell comment cut: everything from the first `#` that
+ * starts the line or follows whitespace, to the end of the line.
+ *
+ * A scan, not `/(^|\s)#.*$/`. The regex's `.` stops at `\r`, U+2028 and
+ * U+2029, which the shell does not treat as line ends — so
+ * `# node build.mjs\rtrue` stayed "code" and passed a check for a build step
+ * that never runs. And it is quadratic on a line of ` #` repeated: 40 KB held
+ * the api for seconds.
+ */
+export function withoutShellComment(line: string): string {
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] === '#' && (i === 0 || /\s/.test(line[i - 1]!))) return line.slice(0, i);
+  }
+  return line;
 }
 
 /**

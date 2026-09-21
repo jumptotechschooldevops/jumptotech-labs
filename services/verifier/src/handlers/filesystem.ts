@@ -176,7 +176,10 @@ export const fileContent: SandboxVerifierHandler<'file_content'> = {
     const actual = read.content;
     if (requirement.equals !== undefined) {
       // Trailing whitespace is an editor artefact, not a mistake worth failing.
-      if (actual.replace(/\s+$/, '') !== requirement.equals.replace(/\s+$/, '')) {
+      // `trimEnd`, not `/\s+$/`: the regex is quadratic on a long whitespace
+      // run that does not end the file, and this runs in the api process — a
+      // 64 KiB answer file of spaces and one `x` held it for ~20 s per Check.
+      if (actual.trimEnd() !== requirement.equals.trimEnd()) {
         return fail(
           `'${requirement.path}' does not contain the expected text — found ${summarise(actual)}`,
         );
