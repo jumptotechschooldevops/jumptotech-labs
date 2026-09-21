@@ -98,8 +98,13 @@ task:
     tell you what it is unhappy about; it reports one problem at a time, so
     expect fixing the first to reveal a second.
 
-    Now the part that catches people. Run the program yourself, directly, from
-    this shell:
+    Now the part that catches people. This browser terminal opens a plain
+    shell that has not read your startup files, so first load them the way an
+    ordinary interactive shell on this host would:
+
+        source ~/.bashrc
+
+    Then run the program yourself, directly, from this shell:
 
         /usr/local/lib/jumptotech/report-runner
 
@@ -243,9 +248,13 @@ requirements:
     path: /var/lib/jumptotech/report-runner.status
     contains: JTT_ENV=production
     label: The service knows which deployment it belongs to
+  # The directory, not the whole path: `command -v` resolves the name
+  # `jtt-format`, so the file is always that one, but dash prints a PATH entry
+  # written with a trailing slash as `…/jumptotech//jtt-format`, and that
+  # service is just as healthy.
   - type: file_content
     path: /var/lib/jumptotech/report-runner.status
-    contains: FORMATTER=/usr/local/libexec/jumptotech/jtt-format
+    contains: FORMATTER=/usr/local/libexec/jumptotech/
     label: The service can resolve the formatter it shells out to
 
   # A file check is timeless: a status file written once and never updated
@@ -376,9 +385,11 @@ skills:
 #     shell that is not a login shell, it reads and executes commands from
 #     ~/.bashrc, if that file exists." A login shell instead reads /etc/profile
 #     then the first of ~/.bash_profile, ~/.bash_login, ~/.profile. The
-#     platform attaches a student with `docker exec … bash`, which is
-#     interactive and not a login shell — so the seed's .bashrc append is read
-#     by the student's shell and ~/.profile is not.
+#     platform attaches a student with `docker exec … bash --norc
+#     --noprofile` (services/terminal/src/spawn-plan.ts), which reads neither,
+#     so the task has the student `source ~/.bashrc` first. That is the same
+#     file an ordinary interactive shell on this host would read, and it makes
+#     the startup-file half of the lesson a step the student takes.
 #   environ(7): the environment "is made available to the process by the
 #     execve(2) call when a new program is started", and PATH is "the sequence
 #     of directory prefixes that sh(1) and many other programs employ when
