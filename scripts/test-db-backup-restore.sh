@@ -715,6 +715,25 @@ given_archive
 restore --into restored_copy "$case_dir/a.dump"
 expect 'a restore records no verification outcome' test ! -e "$(status_file db-verify.last-success)"
 
+# --- a large table of contents ----------------------------------------------------------
+
+echo '# a table of contents larger than a pipe buffer'
+# The schema, not the data, sets its size. Under pipefail `printf | grep -q`
+# SIGPIPEs the writer once grep has its match, and reads a line that is there
+# as missing: every backup would have been refused as "not custom format".
+large_toc() {
+  bash -c 'set -Eeuo pipefail
+    . "$1/scripts/db-lib.sh"
+    jtt_die() { echo "died: $*" >&2; exit 1; }
+    jtt_pg() {
+      printf ";\n; Archive created at 2026-09-21\n; Format: CUSTOM\n"
+      for i in $(seq 1 4000); do printf "%d; 1259 16400 TABLE public table_%d jumptotech\n" "$i" "$i"; done
+      printf "4001; 0 16390 TABLE DATA public schema_migrations jumptotech\n"
+    }
+    jtt_archive_toc archive.dump >/dev/null' _ "$repo"
+}
+expect 'a 200 KB table of contents is read as a custom-format backup' large_toc
+
 # --- secrets ---------------------------------------------------------------------------
 
 echo '# secrets'
