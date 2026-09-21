@@ -232,10 +232,17 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
       const route = parseRoute(window.location.hash);
       const labId = route.name === 'lab' || route.name === 'workspace' ? route.labId : null;
       setLaunchError((current) => (current && current.labId !== labId ? null : current));
+      // The list is otherwise read when the app loads and when the tab comes
+      // back into view. A lab the platform removed while the student browsed
+      // (idle, time limit) kept "you already have a lab running" — and no
+      // Launch — on every other lab's page. Not into a workspace, which reads
+      // its own session (and is where Launch goes), and not while a launch is
+      // in flight: an answer read before the new session existed would drop it.
+      if (route.name !== 'workspace' && !inFlightLaunch.current) void refresh();
     };
     window.addEventListener('hashchange', onNavigate);
     return () => window.removeEventListener('hashchange', onNavigate);
-  }, []);
+  }, [refresh]);
 
   const clearLaunchError = useCallback(
     (labId?: string) => setLaunchError((current) => (!labId || current?.labId === labId ? null : current)),

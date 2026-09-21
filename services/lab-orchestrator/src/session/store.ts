@@ -30,6 +30,13 @@ import {
  */
 export interface TransitionGuard {
   statusChangedAt?: string;
+  /**
+   * The activity stamp a decision was made on. The reaper decides a session
+   * is idle from a sweep-start read, then tears earlier sessions down for up
+   * to minutes before it claims this one; a student who pressed Stay active
+   * or typed meanwhile moved the stamp, and the claim must then not happen.
+   */
+  lastActivityAt?: string;
 }
 
 /**
@@ -267,6 +274,9 @@ export class InMemorySessionStore implements SessionStore {
     const current = this.#bySessionId.get(sessionId);
     if (!current || !from.includes(current.status)) return null;
     if (guard.statusChangedAt !== undefined && current.statusChangedAt !== guard.statusChangedAt) {
+      return null;
+    }
+    if (guard.lastActivityAt !== undefined && current.lastActivityAt !== guard.lastActivityAt) {
       return null;
     }
     const { statusChangedAt, ...rest } = patch;

@@ -284,10 +284,24 @@ export function usesAction(actual: string | undefined, expected: string): boolea
 
 /** Shell comments removed: `#` at the start of a line or after whitespace. */
 export function withoutShellComments(text: string): string {
-  return text
-    .split('\n')
-    .map((line) => line.replace(/(^|\s)#.*$/, '$1'))
-    .join('\n');
+  return text.split('\n').map(withoutShellComment).join('\n');
+}
+
+/**
+ * One line with its shell comment cut: everything from the first `#` that
+ * starts the line or follows whitespace, to the end of the line.
+ *
+ * A scan, not `/(^|\s)#.*$/`. The regex's `.` stops at `\r`, U+2028 and
+ * U+2029, which the shell does not treat as line ends — so
+ * `# node build.mjs\rtrue` stayed "code" and passed a check for a build step
+ * that never runs. And it is quadratic on a line of ` #` repeated: 40 KB held
+ * the api for seconds.
+ */
+export function withoutShellComment(line: string): string {
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] === '#' && (i === 0 || /\s/.test(line[i - 1]!))) return line.slice(0, i);
+  }
+  return line;
 }
 
 /**
@@ -300,6 +314,47 @@ export function withoutShellComments(text: string): string {
  */
 export function expandsVariable(code: string, name: string): boolean {
   return new RegExp(`\\$(\\{\\s*)?${name}(?![A-Za-z0-9_])|(^|[^A-Za-z0-9_.])env\\.${name}(?![A-Za-z0-9_])`).test(code);
+}
+
+/**
+ * `expandsVariable` for a shell script, as the shell reads it.
+ *
+ * `$NAME` inside single quotes, or written `\$NAME`, is the literal text
+ * `$NAME`: `docker build -t 'image:$IMAGE_TAG' .` tags the image
+ * `image:$IMAGE_TAG`, and used to pass "the image tag comes from IMAGE_TAG".
+ * `${{ env.NAME }}` is substituted by the runner before the shell sees the
+ * script, so quotes do not matter to it and it is read from the whole text.
+ * Not for a Jenkinsfile: there `sh '… $NAME'` is the Groovy string that hands
+ * `$NAME` to the shell to expand.
+ */
+export function shellExpandsVariable(script: string, name: string): boolean {
+  if (new RegExp(`(^|[^A-Za-z0-9_.])env\\.${name}(?![A-Za-z0-9_])`).test(script)) return true;
+  return expandsVariable(withoutShellLiterals(script), name);
+}
+
+/**
+ * The script with every single-quoted span and every backslash-escaped
+ * character blanked, offsets kept. One pass; double quotes still expand.
+ */
+function withoutShellLiterals(script: string): string {
+  const out = script.split('');
+  let quote: '' | "'" | '"' = '';
+  for (let i = 0; i < out.length; i += 1) {
+    const ch = script[i];
+    if (quote === "'") {
+      if (ch === "'") quote = '';
+      else if (ch !== '\n') out[i] = ' ';
+      continue;
+    }
+    if (ch === '\\') {
+      if (i + 1 < out.length && script[i + 1] !== '\n') out[i + 1] = ' ';
+      i += 1;
+      continue;
+    }
+    if (ch === '"') quote = quote === '"' ? '' : '"';
+    else if (ch === "'" && quote === '') quote = "'";
+  }
+  return out.join('');
 }
 
 /**

@@ -73,6 +73,8 @@ export const LOG_EVENTS = [
   'terminal.reattach.succeeded',
   'terminal.reattach.failed',
   'terminal.terminate.requested',
+  // A socket typed faster than a shell can take; it was closed (input-budget.ts).
+  'terminal.input.rate_exceeded',
 
   // --- verification ----------------------------------------------------------
   'verify.passed',

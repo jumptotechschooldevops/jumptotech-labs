@@ -68,6 +68,7 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import { AttachDeniedError, attachArgv, resolveAttachTarget, type SandboxInspectorPort } from './attach.js';
 import type { SandboxdConfig } from './config.js';
+import { InspectorUnavailableError } from './inspector.js';
 import { authorizeScope, scopeForEndpoint, type SandboxdScope } from './scopes.js';
 import { dockerErrorResponse, type DockerOps } from './docker-ops.js';
 import {
@@ -580,7 +581,14 @@ export function createSandboxd(deps: SandboxdDeps): Server {
         sandboxHome: config.sandboxHome,
       });
     } catch (error) {
-      const code = error instanceof AttachDeniedError ? error.code : 'ATTACH_FAILED';
+      // Not a refusal: the runtime could not be asked. SANDBOX_UNAVAILABLE is
+      // one the web client retries; the runtime's own words stay in this log.
+      const code =
+        error instanceof AttachDeniedError
+          ? error.code
+          : error instanceof InspectorUnavailableError
+            ? error.code
+            : 'ATTACH_FAILED';
       const message = error instanceof Error ? error.message : String(error);
       metrics?.attaches.inc({ outcome: 'denied', deny_reason: code });
       /*
@@ -603,7 +611,12 @@ export function createSandboxd(deps: SandboxdDeps): Server {
         denyReason: code,
         code,
       }, message);
-      send(ws, { type: 'error', code, message });
+      send(ws, {
+        type: 'error',
+        code,
+        message:
+          error instanceof AttachDeniedError ? message : 'The lab environment could not be reached. Try again shortly.',
+      });
       ws.close(4403, code);
       return;
     }

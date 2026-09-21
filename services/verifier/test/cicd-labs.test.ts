@@ -580,3 +580,125 @@ ${stageAgent}            steps {
     expect(result.checks.find((c) => c.status === 'fail')?.detail).not.toContain('sha');
   });
 });
+
+describe('CI/CD shortcuts found by the final hardening pass', () => {
+  const WF = '.github/workflows/ci.yml';
+  const BUILD = 'A step runs the build, once the code and Node.js are in place';
+  const TESTS = 'A step runs the tests, after the build';
+
+  it.each([
+    ['a carriage return', '"# node build.mjs\\rtrue"', '"# node --test\\rtrue"'],
+    ['U+2028', '|\n          # node build.mjs \u2028\n          true', '|\n          # node --test \u2028\n          true'],
+  ])('CICD-003: a commented-out command ending in %s does not run', async (_name, build, test) => {
+    const result = await grade('CICD-003', (files) => {
+      cicd003('        with:\n          node-version: 20')(files);
+      files.set(
+        WF,
+        files
+          .get(WF)!
+          .replace('        run: node build.mjs', `        run: ${build}`)
+          .replace('        run: node --test', `        run: ${test}`),
+      );
+    });
+    expect(failing(result)).toEqual(expect.arrayContaining([BUILD, TESTS]));
+  });
+
+  const BOUND = 'REGISTRY_PASSWORD is bound from the credential store by id';
+  const PLAIN = 'No credential is written in plain text';
+
+  it('CICD-008: a password still written in the file, with credentials() in a trailing comment, fails', async () => {
+    const result = await grade('CICD-008', (files) =>
+      cicd008(
+        files,
+        `    environment {
+        REGISTRY_URL = 'registry.jumptotech.example'
+        REGISTRY_PASSWORD = 'placeholder-do-not-ship-this' // credentials('statements-registry')
+    }
+`,
+        `sh 'echo "publishing to $REGISTRY_URL"'`,
+      ),
+    );
+    expect(failing(result)).toEqual(expect.arrayContaining([BOUND, PLAIN]));
+  });
+
+  it('CICD-008: a binding that exists only inside a block comment binds nothing', async () => {
+    const result = await grade('CICD-008', (files) =>
+      cicd008(
+        files,
+        `    environment {
+        REGISTRY_URL = 'registry.jumptotech.example'
+        /*
+        REGISTRY_PASSWORD = credentials('statements-registry')
+        */
+    }
+`,
+        `sh 'echo "publishing to $REGISTRY_URL"'`,
+      ),
+    );
+    expect(failing(result)).toContain(BOUND);
+  });
+
+  it('CICD-008: a password whose literal text contains credentials(…) is still a literal', async () => {
+    const result = await grade('CICD-008', (files) =>
+      cicd008(
+        files,
+        `    environment {
+        REGISTRY_URL = 'registry.jumptotech.example'
+        REGISTRY_PASSWORD = "hunter2 credentials('statements-registry')"
+    }
+`,
+        `sh 'echo "publishing to $REGISTRY_URL"'`,
+      ),
+    );
+    expect(failing(result)).toContain(BOUND);
+  });
+
+  it('CICD-008: withCredentials spelled inside a shell string binds nothing', async () => {
+    const result = await grade('CICD-008', (files) =>
+      cicd008(
+        files,
+        `    environment {
+        REGISTRY_URL = 'registry.jumptotech.example'
+    }
+`,
+        `sh "echo passwordVariable: 'REGISTRY_PASSWORD' to $REGISTRY_URL"`,
+      ),
+    );
+    expect(failing(result)).toContain(BOUND);
+  });
+});
+
+describe('CICD-009: a variable the shell never expands is not a tag', () => {
+  const IMAGE = 'The image job builds the container image, tagged from IMAGE_TAG';
+  const DEPLOY = 'The deploy job writes the new tag into the deployment manifest';
+
+  it.each([
+    [
+      'single quotes',
+      "docker build -t 'jumptotech/statements:$IMAGE_TAG' .",
+      "sed -i 's|jumptotech/statements:.*|jumptotech/statements:$IMAGE_TAG|' deploy/app.yml",
+    ],
+    [
+      'a backslash',
+      'docker build -t "jumptotech/statements:\\$IMAGE_TAG" .',
+      'sed -i "s|jumptotech/statements:.*|jumptotech/statements:\\$IMAGE_TAG|" deploy/app.yml',
+    ],
+  ])('fails $IMAGE_TAG behind %s', async (_name, image, deploy) => {
+    const result = await grade('CICD-009', (files) => cicd009(files, { image, deploy }));
+    expect(failing(result)).toEqual(expect.arrayContaining([IMAGE, DEPLOY]));
+  });
+
+  it.each([
+    ['${IMAGE_TAG} in double quotes', 'docker build -t "jumptotech/statements:${IMAGE_TAG}" .'],
+    ['a quote closed before it', "docker build -t 'jumptotech/statements':$IMAGE_TAG ."],
+    ['the runner expression, in single quotes', "docker build -t 'jumptotech/statements:${{ env.IMAGE_TAG }}' ."],
+  ])('passes %s', async (_name, image) => {
+    const result = await grade('CICD-009', (files) =>
+      cicd009(files, {
+        image,
+        deploy: `sed -i "s|jumptotech/statements:.*|jumptotech/statements:$IMAGE_TAG|" deploy/app.yml`,
+      }),
+    );
+    expect(failing(result)).toEqual([]);
+  });
+});

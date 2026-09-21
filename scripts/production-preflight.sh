@@ -207,7 +207,11 @@ if have docker && docker info >/dev/null 2>&1; then
   ostype=$(docker info -f '{{.OSType}}' 2>/dev/null || echo unknown)
   if [ "$ostype" = linux ]; then pass docker.ostype linux; else fail docker.ostype "$ostype: the images are Linux images"; fi
   info docker.cgroup "cgroup v$(docker info -f '{{.CgroupVersion}}' 2>/dev/null || echo '?') driver $(docker info -f '{{.CgroupDriver}}' 2>/dev/null || echo '?')"
-  if jtt_contains "$(docker info -f '{{json .SecurityOptions}}' 2>/dev/null || true)" rootless; then
+  # The query's own status decides: an error printed nothing, and "nothing
+  # says rootless" used to PASS.
+  if ! security_options=$(docker info -f '{{json .SecurityOptions}}' 2>/dev/null); then
+    fail docker.rootless 'could not read the daemon security options: rootful or rootless is unknown'
+  elif jtt_contains "$security_options" rootless; then
     warn docker.rootless 'rootless Docker is not proven: Docker-track sandboxes and the kind node need a privileged container'
   else
     pass docker.rootless 'rootful daemon (what kind and the Docker-track sandboxes were proven on)'
@@ -263,7 +267,9 @@ if have git && git -C "$repo" rev-parse HEAD >/dev/null 2>&1; then
   head=$(git -C "$repo" rev-parse HEAD)
   info git.head "$head"
   if tag=$(git -C "$repo" describe --tags --exact-match HEAD 2>/dev/null); then info git.tag "$tag"; fi
-  if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  if ! porcelain=$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null); then
+    fail git.clean 'git status failed: whether tracked files are modified is unknown'
+  elif [ -n "$porcelain" ]; then
     warn git.clean 'tracked files are modified: the deployed commit is not what is running'
   else
     pass git.clean 'no tracked file is modified'
@@ -521,8 +527,11 @@ else
 fi
 
 section 'network exposure'
-if have ss; then
-  listeners=$( (ss -Hltn 2>/dev/null || true) | awk '{print $4}')
+if have ss && ! ss_output=$(ss -Hltn 2>/dev/null); then
+  # Not "every port is free": an ss that failed listed nothing.
+  fail exposure.listeners 'ss failed: listening ports were not checked'
+elif have ss; then
+  listeners=$(printf '%s\n' "$ss_output" | awk '{print $4}')
   for port in 80 443; do
     if jtt_contains "$listeners" -E "[:.]$port\$"; then
       holder=

@@ -205,7 +205,9 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
     const aws = providers.find((p) => p.provider === 'aws');
 
     expect(docker?.available).toBe(false);
-    expect(docker?.reason).toContain('per-session Docker daemon');
+    // The probe's own words are the operator's (catalog.ts); a student is told
+    // only that it is unavailable.
+    expect(docker?.reason).toBeUndefined();
     expect(aws?.available).toBe(false);
     // AWS ships no lab at all. Every Docker lab there is says it cannot run
     // here rather than offering a button that was going to fail.
@@ -225,7 +227,7 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
     expect(dockerLabs).toHaveLength(disk.labs.filter((l) => l.provider === 'docker').length);
     expect(dockerLabs.length).toBeGreaterThan(0);
     expect(dockerLabs.every((l) => !l.availability.available)).toBe(true);
-    expect(dockerLabs[0]?.availability.reason).toContain('per-session Docker daemon');
+    expect(dockerLabs[0]?.availability.reason).toBeUndefined();
   });
 
   it('marks a track unavailable when its backend is missing, without hiding it', async () => {
@@ -244,11 +246,12 @@ describe('the catalog shows every track (test requirements 33–35)', () => {
 
     const linux = tracks.find((t) => t.track === 'linux');
     expect(linux?.availability.available).toBe(false);
-    expect(linux?.availability.reason).toContain('has not been built');
+    expect(linux?.availability.reason).toBeUndefined();
 
     const lab = labs.find((l) => l.id === 'LINUX-001');
     expect(lab?.availability.available).toBe(false);
-    expect(lab?.availability.remediation).toContain('npm run sandbox:build');
+    // An operator's command is not a student's next step.
+    expect(lab?.availability.remediation).toBeUndefined();
 
     // Kubernetes is unaffected: one backend being down does not take the
     // catalog with it.

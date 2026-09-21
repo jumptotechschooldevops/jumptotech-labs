@@ -136,8 +136,9 @@ function normaliseMode(mode: string): string {
   return digits.length === 0 ? '' : digits.padStart(4, '0');
 }
 
+/** `trimEnd`: the same characters as `/\s+$/`, in linear time on student text. */
 function trimTrailing(value: string): string {
-  return value.replace(/\s+$/, '');
+  return value.trimEnd();
 }
 
 function quote(value: string): string {

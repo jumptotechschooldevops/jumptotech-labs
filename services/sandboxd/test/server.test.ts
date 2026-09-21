@@ -6,6 +6,7 @@
  * input before it has attached, and that one session's shell is replaced rather
  * than duplicated.
  */
+import { InspectorUnavailableError } from '../src/inspector.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
@@ -308,6 +309,21 @@ describe('sandboxd attach', () => {
 
     const frame = await nextFrame(ws, ['attached', 'error']);
     expect(frame).toMatchObject({ type: 'error', code: 'SANDBOX_NOT_FOUND' });
+    expect(harness.ptys).toHaveLength(0);
+  });
+
+  it('reports a runtime that could not be asked as unavailable, not as a missing sandbox', async () => {
+    const harness = await start({}, undefined, async () => {
+      throw new InspectorUnavailableError('Cannot connect to the Docker daemon at unix:///var/run/docker.sock');
+    });
+    const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
+    await new Promise((resolve) => ws.on('open', resolve));
+    ws.send(JSON.stringify({ type: 'attach', sessionId: SESSION_A }));
+
+    const frame = await nextFrame(ws, ['attached', 'error']);
+    // A code the web client retries; the daemon's words stay in this log.
+    expect(frame).toMatchObject({ type: 'error', code: 'SANDBOX_UNAVAILABLE' });
+    expect(JSON.stringify(frame)).not.toContain('docker.sock');
     expect(harness.ptys).toHaveLength(0);
   });
 

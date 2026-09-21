@@ -253,26 +253,30 @@ export class OidcBrowserClient {
     what: string,
   ): Promise<Record<string, unknown>> {
     const controller = new AbortController();
+    // Covers the body as well as the headers: `fetch` resolves on headers, and
+    // a provider that stalled mid-body held the sign-in callback open.
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
-    let response: Response;
     try {
-      response = await this.#fetch(url, { ...init, signal: controller.signal });
-    } catch {
-      // The provider's error text may echo request parameters, so it is never
-      // included in what the caller sees.
-      throw new AuthError('AUTH_MISCONFIGURED', `Could not reach the identity provider to ${what}.`);
+      let response: Response;
+      try {
+        response = await this.#fetch(url, { ...init, signal: controller.signal });
+      } catch {
+        // The provider's error text may echo request parameters, so it is never
+        // included in what the caller sees.
+        throw new AuthError('AUTH_MISCONFIGURED', `Could not reach the identity provider to ${what}.`);
+      }
+
+      if (!response.ok) {
+        throw new AuthError('AUTH_INVALID_TOKEN', `The identity provider refused to ${what}.`);
+      }
+
+      try {
+        return (await response.json()) as Record<string, unknown>;
+      } catch {
+        throw new AuthError('AUTH_MISCONFIGURED', `The identity provider's response to ${what} was not JSON.`);
+      }
     } finally {
       clearTimeout(timer);
-    }
-
-    if (!response.ok) {
-      throw new AuthError('AUTH_INVALID_TOKEN', `The identity provider refused to ${what}.`);
-    }
-
-    try {
-      return (await response.json()) as Record<string, unknown>;
-    } catch {
-      throw new AuthError('AUTH_MISCONFIGURED', `The identity provider's response to ${what} was not JSON.`);
     }
   }
 }

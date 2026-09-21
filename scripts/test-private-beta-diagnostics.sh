@@ -203,6 +203,21 @@ if grep -q -- "--env-file $work/alt.env" "$calls" && grep -q -- "-f $work/alt-co
 if grep -q 'label=jumptotech.io/runtime-owner=beta-host-2' "$calls"; then pass "sandboxes are filtered by that stack's runtime owner"; else fail 'owner filter not from the env file'; fi
 
 echo
+echo 'private-beta-diagnostics: an env file that is missing is not a leak'
+# Node 22 took the sanitizer's old `--env-file` flag as its own, anywhere on the
+# command line: a missing file stopped it before it ran, and the bundle was
+# deleted as "a secret was found".
+run_case noenv -- --stack development --env-file "$work/does-not-exist.env" --compose-file "$work/alt-compose.yml"
+if [ "$status" -eq 0 ] && ls "$case_dir"/out/*.tar.gz >/dev/null 2>&1; then pass 'a development stack with no env file is collected'; else fail "no env file (development): exit $status: $(tail -3 "$case_dir/output")"; fi
+if grep -q 'a secret was found' "$case_dir/output"; then fail 'reported a leak that is not there'; else pass 'no false leak report'; fi
+run_case noenvprod -- --stack production --env-file "$work/does-not-exist.env"
+if [ "$status" -eq 1 ] && grep -q 'the secret scan could not run' "$case_dir/output" && [ -z "$(ls -A "$case_dir/out")" ]; then
+  pass 'a production bundle that cannot be checked for its own secrets is not kept, and says why'
+else
+  fail "no env file (production): exit $status: $(tail -3 "$case_dir/output")"
+fi
+
+echo
 echo 'private-beta-diagnostics: refusals'
 run_case inside -- --stack production --out-dir "$fixture/diagnostics/new"
 if [ "$status" -eq 2 ] && [ ! -e "$fixture/diagnostics" ]; then pass 'refuses to write inside the checkout, and creates nothing there'; else fail "inside checkout: exit $status"; fi

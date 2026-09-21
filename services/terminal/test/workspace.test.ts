@@ -25,7 +25,7 @@
  * session it was asked about.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -321,5 +321,66 @@ describe('SessionWorkspaces', () => {
     expect(await workspaces.read(SESSION_A, 'Dockerfile')).toBeNull();
     // Tearing one session down leaves the other's work exactly where it was.
     expect(await workspaces.read(SESSION_B, 'Dockerfile')).toBe('FROM alpine:3.20\n');
+  });
+
+  it('fill creates only what is missing, and leaves whatever the student put at a baseline path', async () => {
+    const root = await scratch();
+    const workspaces = new SessionWorkspaces({ root, secret: SECRET });
+    const files = [
+      { path: 'Dockerfile', content: 'FROM alpine:3.20\n' },
+      { path: 'app/main.sh', content: 'echo baseline\n' },
+      { path: 'notes.txt', content: 'baseline notes\n' },
+      { path: 'lib/util.sh', content: 'echo util\n' },
+    ];
+    const dir = await workspaces.seed(SESSION_A, files);
+
+    await writeFile(path.join(dir, 'Dockerfile'), 'FROM edited\n');
+    await rm(path.join(dir, 'app/main.sh'));
+    await rm(path.join(dir, 'notes.txt'));
+    await mkdir(path.join(dir, 'notes.txt'));
+    await rm(path.join(dir, 'lib'), { recursive: true });
+    await writeFile(path.join(dir, 'lib'), 'a file where a directory was\n');
+
+    await workspaces.seed(SESSION_A, files, 'fill');
+
+    expect(await workspaces.read(SESSION_A, 'Dockerfile')).toBe('FROM edited\n');
+    expect(await workspaces.read(SESSION_A, 'app/main.sh')).toBe('echo baseline\n');
+    expect((await lstat(path.join(dir, 'notes.txt'))).isDirectory()).toBe(true);
+    expect(await workspaces.read(SESSION_A, 'lib')).toBe('a file where a directory was\n');
+  });
+
+  it('fill never writes through a link the student planted at a baseline path', async () => {
+    const root = await scratch();
+    const workspaces = new SessionWorkspaces({ root, secret: SECRET });
+    const outside = path.join(path.dirname(root), 'outside.txt');
+    await writeFile(outside, 'untouched\n');
+    const dir = await workspaces.seed(SESSION_A, []);
+    await symlink(outside, path.join(dir, 'Dockerfile'));
+
+    await workspaces.seed(SESSION_A, [{ path: 'Dockerfile', content: 'FROM attacker\n' }], 'fill');
+
+    expect(await readFile(outside, 'utf8')).toBe('untouched\n');
+    expect((await lstat(path.join(dir, 'Dockerfile'))).isSymbolicLink()).toBe(true);
+  });
+
+  it('restore puts back a baseline file the student made read-only, or replaced with a directory', async () => {
+    // This service runs as the student's uid without CAP_DAC_OVERRIDE, so a
+    // read-only file used to fail the Reset — and every Reset after it.
+    const root = await scratch();
+    const workspaces = new SessionWorkspaces({ root, secret: SECRET });
+    const files = [
+      { path: 'Dockerfile', content: 'FROM alpine:3.20\n' },
+      { path: 'compose.yaml', content: 'services: {}\n' },
+    ];
+    const dir = await workspaces.seed(SESSION_A, files);
+    await writeFile(path.join(dir, 'Dockerfile'), 'FROM edited\n');
+    await chmod(path.join(dir, 'Dockerfile'), 0o444);
+    await rm(path.join(dir, 'compose.yaml'));
+    await mkdir(path.join(dir, 'compose.yaml', 'nested'), { recursive: true });
+
+    await workspaces.seed(SESSION_A, files);
+
+    expect(await workspaces.read(SESSION_A, 'Dockerfile')).toBe('FROM alpine:3.20\n');
+    expect(await workspaces.read(SESSION_A, 'compose.yaml')).toBe('services: {}\n');
   });
 });

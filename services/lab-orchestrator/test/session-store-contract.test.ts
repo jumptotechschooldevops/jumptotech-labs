@@ -209,6 +209,23 @@ export function sessionStoreContract(
       ).toBe('ACTIVE');
     });
 
+    it('refuses a claim fenced on an activity stamp that has since moved', async () => {
+      const store = await makeStore();
+      const created = session({ status: 'ACTIVE' });
+      await store.create(created);
+      const judged = created.lastActivityAt;
+      // The student was active after the reaper judged the session idle.
+      await store.touchActivity(created.sessionId, HOUR_LATER);
+
+      expect(
+        await store.transition(created.sessionId, ['ACTIVE'], 'EXPIRING', {}, { lastActivityAt: judged }),
+      ).toBeNull();
+      expect((await store.get(created.sessionId))?.status).toBe('ACTIVE');
+      expect(
+        (await store.transition(created.sessionId, ['ACTIVE'], 'EXPIRING', {}, { lastActivityAt: HOUR_LATER }))?.status,
+      ).toBe('EXPIRING');
+    });
+
     it('stores DEGRADED as occupying, expirable, and closed to activity', async () => {
       const store = await makeStore();
       const created = session({ status: 'DEGRADED', lastActivityAt: '2026-08-25T11:00:00.000Z', idleTimeoutSeconds: 600 });

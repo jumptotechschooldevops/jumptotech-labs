@@ -22,6 +22,7 @@
  *
  * Written from the CloudFormation template reference.
  */
+import { delimitedSpans } from './line-value.js';
 import { parse as parseYaml } from 'yaml';
 
 /** A resource declaration: its logical ID, its type, and its properties. */
@@ -226,8 +227,8 @@ export interface CfnReference {
 /** `${Foo}` and `${Foo.Bar}` inside a Sub string. `${!Literal}` is escaped. */
 function subVariables(template: string, where: string): CfnReference[] {
   const found: CfnReference[] = [];
-  for (const match of template.matchAll(/\$\{([^}]*)\}/g)) {
-    const body = match[1] ?? '';
+  // Linear: `/\$\{([^}]*)\}/g` is quadratic on a template of `${` repeated.
+  for (const { body } of delimitedSpans(template, '${', '}', '}')) {
     if (body.startsWith('!')) continue;
     const dot = body.indexOf('.');
     found.push(

@@ -45,7 +45,17 @@ export class HttpTerminalWorkspace implements WorkspacePort {
   async #post<T>(path: string, body: unknown): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 5_000);
+    // Armed until the body is read, not just the headers: `fetch` resolves on
+    // headers, and a terminal service that stalled mid-body held the Check —
+    // and with it the session's one check in flight — for good.
+    try {
+      return await this.#exchange<T>(path, body, controller.signal);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
+  async #exchange<T>(path: string, body: unknown, signal: AbortSignal): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`${this.options.baseUrl.replace(/\/$/, '')}${path}`, {
@@ -55,7 +65,7 @@ export class HttpTerminalWorkspace implements WorkspacePort {
           'x-internal-secret': this.options.secret,
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal,
       });
     } catch (error) {
       throw new WorkspaceUnavailableError(
@@ -64,8 +74,6 @@ export class HttpTerminalWorkspace implements WorkspacePort {
         }`,
         error,
       );
-    } finally {
-      clearTimeout(timer);
     }
 
     const payload = (await response.json().catch(() => null)) as InternalReply<T> | null;

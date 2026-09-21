@@ -231,6 +231,10 @@ export class PostgresSessionStore implements SessionStore {
       params.push(guard.statusChangedAt);
       where += ` AND status_changed_at = $${params.length}::timestamptz`;
     }
+    if (guard.lastActivityAt !== undefined) {
+      params.push(guard.lastActivityAt);
+      where += ` AND last_activity_at = $${params.length}::timestamptz`;
+    }
 
     const { rows } = await this.db.query<SessionRow>(
       `UPDATE lab_sessions SET ${sets.join(', ')}, revision = revision + 1

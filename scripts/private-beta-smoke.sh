@@ -146,6 +146,9 @@ for service in "${services[@]}"; do
     if [ "$policy" != unless-stopped ]; then
       fail "stack.$service-restart-policy" "restart policy '${policy:-no}', not unless-stopped as docker-compose.production.yml ships: was the stack started without the production overlays?"
     fi
+  else
+    # Said, rather than skipped with no line at all.
+    fail "stack.$service-restart-policy" "could not inspect $name: the restart policy is unknown"
   fi
 done
 

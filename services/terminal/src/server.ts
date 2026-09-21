@@ -49,6 +49,7 @@ import {
 import { createOutputFlow, type OutputFlow } from '@jumptotech/lab-orchestrator/output-flow';
 import { reportSessionActivity } from './activity.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
+import { InputBudget } from './input-budget.js';
 import { brokerShell, localShell, ShellStartError, type Shell } from './shell.js';
 import {
   containerSpawnPlan,
@@ -215,7 +216,13 @@ export function createTerminalServer(
       return;
     }
     if (req.url === '/internal/reattach' && req.method === 'POST') {
-      handleControl(req, res, async (sessionId) => ({ reattached: await reattachSession(sessionId) }));
+      // In turn with every other attach of the session: two reattaches that
+      // overlapped each killed the same old shell and each opened a new one,
+      // leaving one unkilled — and, behind the broker, sandboxd's one shell per
+      // session closed the other under the student.
+      handleControl(req, res, async (sessionId) => ({
+        reattached: await attachInTurn(sessionId, () => reattachSession(sessionId)),
+      }));
       return;
     }
 
@@ -791,7 +798,14 @@ export function createTerminalServer(
       if (!session) return;
 
       switch (message.type) {
-        case 'input':
+        case 'input': {
+          let budget = inputBudgets.get(ws);
+          if (!budget) inputBudgets.set(ws, (budget = new InputBudget()));
+          if (!budget.spend(Buffer.byteLength(message.data, 'utf8'))) {
+            obs.warn('terminal.input.rate_exceeded', { sessionId: session.claims.sid });
+            closeFor(ws, 'INPUT_RATE_EXCEEDED', 'More input was sent to the terminal than a shell can take.');
+            break;
+          }
           touch(session);
           // Only input is the student working. `resize` follows the window and
           // `ping` is the browser's keep-alive: counting either would let an
@@ -800,6 +814,7 @@ export function createTerminalServer(
           reportActivity(session);
           session.term.write(message.data);
           break;
+        }
         case 'resize':
           touch(session);
           applySize(session, message.cols, message.rows);
@@ -950,7 +965,9 @@ export function createTerminalServer(
         dockerCertDir = await writeSessionDockerCerts(config.credentialsDir, claims.sid, context);
         // The workspace is where `docker build` finds its context, so it has to
         // exist — and hold the lab's baseline files — before the shell opens.
-        const workspaceDir = await workspaces.seed(claims.sid, context.workspaceFiles ?? []);
+        // Only what is missing: this runs on every attach, and a reconnect must
+        // not put back the baseline over the student's work (Reset restores it).
+        const workspaceDir = await workspaces.seed(claims.sid, context.workspaceFiles ?? [], 'fill');
         plan = dockerSpawnPlan(context, dockerCertDir, workspaceDir, planOptions);
         log(
           `session ${claims.sid}: issued sandbox-scoped Docker credentials (sandbox=${context.sandboxRef} host=${context.dockerHost} expires=${context.expiresAt})`,
@@ -1178,6 +1195,9 @@ export function createTerminalServer(
     endSession(ws);
     if (ws.readyState === ws.OPEN) ws.close(4408, code);
   }
+
+  /** Each socket's input budget; see `input-budget.ts`. */
+  const inputBudgets = new WeakMap<WebSocket, InputBudget>();
 
   /** When each socket's shell opened, for the session-duration histogram. */
   const startedAtByWs = new Map<WebSocket, number>();

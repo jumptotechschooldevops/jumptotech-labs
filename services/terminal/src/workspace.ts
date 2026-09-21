@@ -154,10 +154,24 @@ export class SessionWorkspaces {
   /**
    * Create a session's workspace and write its baseline files.
    *
-   * Idempotent, because it runs both when a shell starts and on every lab
-   * reset, and both must leave the same result.
+   * Two modes, because two different things call it:
+   *
+   *   - `restore` (the lab's Reset, `/internal/workspace/seed`): every
+   *     baseline file is written back over whatever the student made of it.
+   *     Idempotent, and discarding their edits is the point.
+   *   - `fill` (every terminal attach): only files that are missing are
+   *     created. An attach is a page reload, a second tab, an automatic
+   *     reconnect after a network blip — and it used to restore, so each of
+   *     those silently put back the baseline Dockerfile the student had spent
+   *     the lab editing, and Check then graded the baseline. Nothing the
+   *     student left at a baseline path — an edited file, a directory, a
+   *     read-only file — stops the shell from opening.
    */
-  async seed(sessionId: string, files: readonly WorkspaceFileSpec[]): Promise<string> {
+  async seed(
+    sessionId: string,
+    files: readonly WorkspaceFileSpec[],
+    mode: 'restore' | 'fill' = 'restore',
+  ): Promise<string> {
     const dir = this.dirFor(sessionId);
     // 0711 on the root: a shell can enter its own workspace by name but cannot
     // list the root to discover anyone else's.
@@ -166,6 +180,10 @@ export class SessionWorkspaces {
 
     for (const file of files) {
       const target = resolveWorkspaceFile(dir, file.path);
+      if (mode === 'fill') {
+        await fillBaselineFile(dir, target, file.content);
+        continue;
+      }
       await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
       await writeBaselineFile(dir, target, file.content);
     }
@@ -244,6 +262,43 @@ const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const NON_BLOCK = fsConstants.O_NONBLOCK ?? 0;
 
 /**
+ * Create one baseline file only if nothing is at its path yet.
+ *
+ * `O_EXCL` is the whole decision: whatever the student left there — their
+ * edited file, a link, a directory — makes the open fail with EEXIST and is
+ * left exactly as it is (`O_EXCL` never follows a final symlink). A parent
+ * the student replaced with a file is theirs too: nothing is created under
+ * it. Any other failure is a real one and propagates.
+ */
+async function fillBaselineFile(dir: string, target: string, content: string): Promise<void> {
+  try {
+    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST' || code === 'ENOTDIR') return;
+    throw error;
+  }
+  const root = await realpath(dir);
+  const parent = await realpath(path.dirname(target));
+  if (parent !== root && !parent.startsWith(root + path.sep)) {
+    throw new WorkspacePathError('resolves outside the session workspace');
+  }
+
+  let handle;
+  try {
+    handle = await open(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | NO_FOLLOW, 0o644);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
+    throw error;
+  }
+  try {
+    await handle.writeFile(content, 'utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * Write one baseline file, never through a symlink.
  *
  * `O_NOFOLLOW` is the whole guarantee: the kernel refuses to open the final
@@ -273,12 +328,24 @@ async function writeBaselineFile(dir: string, target: string, content: string): 
       handle = await open(target, flags, 0o644);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
+      if (attempt > 0) throw error;
       // ELOOP on Linux, EMLINK on some BSDs: the final component is a symlink.
       const isLink = code === 'ELOOP' || code === 'EMLINK';
-      if (!isLink || attempt > 0) throw error;
+      /*
+       * Something the student made that cannot be written over: a file they
+       * made read-only (`chmod 444 Dockerfile` — this service runs as their
+       * uid, without CAP_DAC_OVERRIDE), or a directory at the baseline path.
+       * Reset failed on it, the session went DEGRADED, and every further
+       * Reset failed the same way until End. Removed, like a planted link:
+       * the parent is inside this workspace (checked above), and `rm` removes
+       * a link rather than following it.
+       */
+      const isInTheWay = code === 'EACCES' || code === 'EPERM' || code === 'EISDIR';
+      if (!isLink && !isInTheWay) throw error;
       const planted = await lstat(target).catch(() => null);
-      if (!planted?.isSymbolicLink()) throw error;
-      await rm(target, { force: true });
+      if (!planted) throw error;
+      if (isLink && !planted.isSymbolicLink()) throw error;
+      await rm(target, { force: true, recursive: planted.isDirectory() });
       continue;
     }
     try {

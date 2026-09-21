@@ -32,6 +32,7 @@ import { FakeKubernetes, fakeExec } from '@jumptotech/lab-orchestrator/testing';
 import { FakeContainerRuntime } from '@jumptotech/lab-orchestrator/testing/containers';
 import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 import { createApp } from '../src/app.js';
+import { studentSteps } from '../src/routes/sessions.js';
 import { loadConfig } from '../src/config.js';
 import { DevelopmentIdentityResolver } from '../src/auth/resolvers.js';
 import { InMemoryUserRepository } from '../src/auth/users.js';
@@ -63,7 +64,7 @@ beforeAll(async () => {
   registry = await realCatalog();
 });
 
-function harness() {
+function harness(runtimeOptions: ConstructorParameters<typeof FakeContainerRuntime>[0] = {}) {
   const config = loadConfig({
     TERMINAL_SESSION_SECRET: SECRET,
     INTERNAL_SERVICE_SECRET: SECRET,
@@ -71,7 +72,7 @@ function harness() {
     ALLOWED_ORIGINS: 'http://localhost:3000',
     AUTH_MODE: 'development',
   } as NodeJS.ProcessEnv);
-  const runtime = new DaemonWordsRuntime();
+  const runtime = new DaemonWordsRuntime(runtimeOptions);
   const k8s = new FakeKubernetes();
   const providers = new ProviderRegistry({ availabilityTtlMs: 0 });
   providers.register({ provider: new LinuxLabProvider({ runtime }) });
@@ -154,5 +155,62 @@ describe("a provider's own words stay on the server", () => {
     expect(res.status).toBe(503);
     expect(res.body.error.code).toBe('ENVIRONMENT_UNREACHABLE');
     expectNoInternals(res.body, 'the Check response');
+  });
+
+  /*
+   * The status poll. The web client reads it every few seconds while a lab is
+   * open, so during an outage every poll carried the provider's message — the
+   * API server URL, the broker's address — for as long as the outage lasted.
+   * The state survives: it is what the page renders.
+   */
+  it('the status poll reports an unreadable environment without the provider’s words', async () => {
+    const { app, k8s, sessions } = harness();
+    const started = await request(app).post('/api/labs/K8S-001/start').set('Authorization', STUDENT);
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const sessionId = started.body.data.session.sessionId as string;
+    k8s.unreachable = RAW;
+
+    const read = await request(app).get(`/api/sessions/${sessionId}`).set('Authorization', STUDENT);
+    expect(read.status).toBe(200);
+    expect(read.body.data.environment.phase).toBe('error');
+    expectNoInternals(read.body, 'the status poll');
+    // The operator's copy is untouched.
+    const [session] = await sessions.list();
+    expect((await sessions.status(session!)).message).toContain('172.18.0.5');
+  });
+
+  /*
+   * The catalog. Every student reads it, and it carried the availability
+   * probe's own reason — the runtime's socket error with its address — and an
+   * operator's remediation, for as long as a substrate was down.
+   */
+  it('the catalog says a backend is unavailable without the probe’s words', async () => {
+    const { app } = harness({ unreachable: RAW });
+    for (const route of ['/api/labs', '/api/labs/LINUX-001', '/api/tracks']) {
+      const res = await request(app).get(route).set('Authorization', STUDENT);
+      expect(res.status, route).toBe(200);
+      expectNoInternals(res.body, route);
+      expect(JSON.stringify(res.body), route).not.toMatch(/npm run|sandbox:build|Docker Desktop/);
+    }
+    const lab = await request(app).get('/api/labs/LINUX-001').set('Authorization', STUDENT);
+    expect(lab.body.data.lab?.availability?.available ?? lab.body.data.availability?.available).toBe(false);
+  });
+
+  it('a failed Start does not hand the student an operator’s remediation', async () => {
+    const { app, runtime } = harness();
+    runtime.failCreate = RAW;
+
+    const res = await request(app).post('/api/labs/LINUX-001/start').set('Authorization', STUDENT);
+    expect(res.status).toBe(503);
+    expect(res.body.error.remediation ?? '').not.toMatch(/npm run|sandbox:build|docker|kubectl/);
+  });
+
+  it('a step that failed on the way to a success loses its detail; the platform’s notes stay', () => {
+    const steps = studentSteps([
+      { id: 'docker-daemon', label: 'Docker daemon ready', status: 'ok', detail: '10 container budget' },
+      { id: 'delete-peer', label: 'Peer host deleted', status: 'failed', detail: RAW },
+    ]);
+    expect(steps[0]).toHaveProperty('detail', '10 container budget');
+    expect(steps[1]).toEqual({ id: 'delete-peer', label: 'Peer host deleted', status: 'failed' });
   });
 });

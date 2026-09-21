@@ -434,8 +434,12 @@ export class SessionReaper {
       // Teardown runs through `SessionManager.expire`, which dispatches to the
       // provider recorded on the session — so a Kubernetes namespace and a
       // Linux container both reach EXPIRED through the same state machine.
+      // An idle expiry is fenced on the activity it judged: this sweep may
+      // spend minutes on earlier teardowns first, and a student who pressed
+      // Stay active or typed in the meantime has been told the lab stays.
+      const fence = !inFlight && !expired ? { lastActivityAt: session.lastActivityAt } : undefined;
       await this.#finish(result, session, reason, () =>
-        this.options.sessions.expire(session.sessionId, detail),
+        this.options.sessions.expire(session.sessionId, detail, fence),
       );
     }
   }
@@ -451,6 +455,14 @@ export class SessionReaper {
     const ref = session.sandboxRef ?? session.namespace;
     try {
       const outcome = await teardown();
+      const { status } = outcome.session;
+      if (!outcome.destroy.namespaceGone && !isTerminalStatus(status) && status !== 'EXPIRING' && status !== 'ENDING') {
+        // Not claimed, and still live: the student was active after this
+        // sweep judged the session idle (the claim is fenced on it). Kept.
+        result.retained += 1;
+        this.#log(`kept ${ref}: active again since this sweep judged it idle`);
+        return;
+      }
       if (outcome.destroy.namespaceGone) {
         result.removed.push(ref);
         result.reasons[ref] = reason;

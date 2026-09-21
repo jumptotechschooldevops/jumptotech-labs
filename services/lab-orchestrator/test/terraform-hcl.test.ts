@@ -285,3 +285,39 @@ describe('hcl — merging several files', () => {
  * not exist. They are replaced by `terraform-hcl-references.test.ts`, which
  * scans the workspaces this branch actually ships.
  */
+
+describe('hcl — comments inside a multi-line expression', () => {
+  it('are not part of its value, and hide nothing after them', () => {
+    const doc = scanHcl(`
+resource "local_file" "cfg" {
+  content = jsonencode({
+    environment = var.environment # set per workspace
+    /* a block
+       comment */ replicas = var.replicas
+    debug       = var.debug // the last one
+  })
+}
+`);
+    const value = argumentValue(doc.blocks[0]!, 'content')!;
+    expect(value).not.toMatch(/workspace|block|comment|last one/);
+    expect(referencedNames(value)).toEqual(expect.arrayContaining(['var.environment', 'var.replicas', 'var.debug']));
+  });
+
+  it('do not lend their words to the expression', () => {
+    const doc = scanHcl(`
+variable "environment" {
+  validation {
+    condition = (
+      # contains(["staging", "production"], var.environment)
+      length(var.environment) > 0
+    )
+    error_message = "bad"
+  }
+}
+`);
+    const validation = doc.blocks[0]!.blocks.find((block) => block.type === 'validation')!;
+    const condition = argumentValue(validation, 'condition')!;
+    expect(condition).not.toContain('contains');
+    expect(condition).toContain('length(var.environment) > 0');
+  });
+});

@@ -12,9 +12,9 @@ import {
   findJob,
   findTrigger,
   parseWorkflow,
-  expandsVariable,
   runContains,
   usesAction,
+  shellExpandsVariable,
   withoutShellComments,
   type WorkflowModel,
   type WorkflowStep,
@@ -195,7 +195,7 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
       }
       if (requirement.run_expands !== undefined) {
         const code = withoutShellComments(step.run ?? '');
-        if (!requirement.run_expands.every((name) => expandsVariable(code, name))) return false;
+        if (!requirement.run_expands.every((name) => shellExpandsVariable(code, name))) return false;
       }
       if (requirement.with_keys !== undefined) {
         if (!requirement.with_keys.every((key) => step.withKeys.includes(key))) return false;
@@ -268,7 +268,7 @@ export const githubWorkflowStepExists: CicdVerifierHandler<'github_workflow_step
       const near = runningSteps.find((s) => runContains(s.run, fragments).length === 0);
       if (near) {
         const code = withoutShellComments(near.run ?? '');
-        const unexpanded = requirement.run_expands.filter((name) => !expandsVariable(code, name));
+        const unexpanded = requirement.run_expands.filter((name) => !shellExpandsVariable(code, name));
         return fail(
           `step ${near.index}${near.name ? ` — ${near.name}` : ''} does not expand ${unexpanded
             .map((n) => `$${n}`)

@@ -81,3 +81,40 @@ export function valueAfterSeparator(line: string): string | undefined {
   const after = trimmed.slice(lastTerminator + 1).search(/[:=]/);
   return after < 0 ? undefined : valueFrom(lastTerminator + 1 + after);
 }
+
+/** One `open … close` span found by `delimitedSpans`. */
+export interface DelimitedSpan {
+  /** The whole span, delimiters included. */
+  text: string;
+  /** What is between the delimiters. */
+  body: string;
+}
+
+/**
+ * Every `open [^stop]* close` span, left to right — what
+ * `/\{\{[^}]*\}\}/g` finds, in linear time.
+ *
+ * `close` starts with `stop`. The regex form retries from every opener and
+ * scans to the next `stop` each time, so text that is nothing but openers
+ * (`{{{{…`, `${${…`) costs the square of its length; here the next `stop` is
+ * found once and reused by every opener before it.
+ */
+export function delimitedSpans(text: string, open: string, stop: string, close: string): DelimitedSpan[] {
+  const spans: DelimitedSpan[] = [];
+  let from = 0;
+  let nextStop = -1;
+  for (;;) {
+    const start = text.indexOf(open, from);
+    if (start < 0) break;
+    const bodyStart = start + open.length;
+    if (nextStop < bodyStart) nextStop = text.indexOf(stop, bodyStart);
+    if (nextStop < 0) break;
+    if (text.startsWith(close, nextStop)) {
+      spans.push({ text: text.slice(start, nextStop + close.length), body: text.slice(bodyStart, nextStop) });
+      from = nextStop + close.length;
+    } else {
+      from = start + 1;
+    }
+  }
+  return spans;
+}

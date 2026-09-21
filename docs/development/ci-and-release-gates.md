@@ -18,9 +18,11 @@ most drift fails `npm test` before it reaches a reader.
 Two workflows run on every pull request (any target branch for Quality gates,
 `main` for CodeQL) and on every push to `main`. CodeQL also runs weekly.
 
-- **`gates`** is hermetic — no daemon, cluster or database — and every runtime
-  job `needs:` it, so a branch that does not typecheck spends no runner time on
-  image builds.
+- **`gates`** needs no cluster and no database, and every runtime job
+  `needs:` it, so a branch that does not typecheck spends no runner time on
+  image builds. It is not daemon-free: where promtool and amtool are not
+  installed, the observability step runs them as containers on the runner's
+  Docker daemon (`scripts/check-observability.sh`).
 - **Nine runtime jobs** each get a fresh runner: their own Docker daemon, kind
   cluster and image store, torn down afterwards. Every object they create is
   named after a run-scoped `RUNTIME_OWNER_ID` / `JTT_TEST_RUN_ID`, and every

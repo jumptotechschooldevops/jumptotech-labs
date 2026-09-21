@@ -109,6 +109,7 @@ const TERMINAL_TEXT: Record<string, string> = {
   UNAUTHORIZED: 'The terminal’s access expired.',
   CREDENTIALS_UNAVAILABLE: 'The terminal could not attach to your environment.',
   CONNECTION_LOST: 'Connection to the terminal was lost.',
+  INPUT_RATE_EXCEEDED: 'Disconnected — more was pasted or typed at once than the terminal accepts. Reconnect to carry on.',
 };
 
 /**
@@ -268,7 +269,8 @@ export function WorkspacePage({ labId }: { labId: string }) {
   /** The pending automatic reconnect, so it cannot fire into a later session or an unmounted page. */
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshedToken = useRef(false);
-  const verifying = useRef(false);
+  /** The session a Verify is running for, so one cannot be sent twice — nor answer into a later session. */
+  const verifying = useRef<string | null>(null);
 
   /** Mirrors `reconnectTimer` for rendering: the page says it is retrying. */
   const [retryPending, setRetryPending] = useState(false);
@@ -294,6 +296,9 @@ export function WorkspacePage({ labId }: { labId: string }) {
   const updateSession = useCallback(
     (next: SessionInfo, nextAttempt?: AttemptSummary | null) => {
       const current = shown.current;
+      // A copy of a session this page no longer shows — a late answer for the
+      // lab that ended before Launch again — is not news about the one it does.
+      if (current.session && current.session.sessionId !== next.sessionId) return;
       if (
         current.session?.sessionId === next.sessionId &&
         (current.gone || !isLiveStatus(current.session.status)) &&
@@ -336,6 +341,8 @@ export function WorkspacePage({ labId }: { labId: string }) {
     autoReconnects.current = 0;
     cancelAutoReconnect();
     refreshedToken.current = false;
+    // A check still running belongs to the previous session; it must not hold Verify on this one.
+    verifying.current = null;
     // Only a *different* session is adopted here; updates to the same one flow
     // through `updateSession`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -346,10 +353,14 @@ export function WorkspacePage({ labId }: { labId: string }) {
 
   const refreshSession = useCallback(() => {
     if (!sessionId) return;
+    // Called from callbacks that can outlive the session they were made for.
+    const stale = () => shown.current.session?.sessionId !== sessionId;
+    if (stale()) return;
     Promise.resolve()
       .then(() => api.getSession(sessionId))
       .then((response) => updateSession(response.session))
       .catch((cause: unknown) => {
+        if (stale()) return;
         const error = toApiError(cause);
         if (error.code === 'SESSION_NOT_FOUND') {
           shown.current = { ...shown.current, gone: true };
@@ -492,12 +503,17 @@ export function WorkspacePage({ labId }: { labId: string }) {
 
   // --- actions ---------------------------------------------------------------
   const handleVerify = useCallback(async () => {
-    if (!sessionId || verifying.current) return;
-    verifying.current = true;
+    if (!sessionId || verifying.current === sessionId) return;
+    verifying.current = sessionId;
     setVerify({ kind: 'checking' });
     setNotice(null);
+    // Launch again adopts a new session while a check of the old one may still
+    // run; its answer — a verdict, or the 409 for an ended environment — is
+    // about a lab no longer on screen.
+    const stale = () => shown.current.session?.sessionId !== sessionId;
     try {
       const result = await api.checkSolution(sessionId);
+      if (stale()) return;
       if (!result || !Array.isArray(result.checks) || typeof result.passed !== 'boolean') {
         // A 200 that is not a verification result — an intermediary's body, a
         // half-deployed API — is a platform fault. It is never a verdict, and it
@@ -516,11 +532,12 @@ export function WorkspacePage({ labId }: { labId: string }) {
       refreshSession();
       if (result.newlyCompleted) catalog.reloadProgress();
     } catch (cause) {
+      if (stale()) return;
       const error = toApiError(cause);
       setVerify({ kind: 'error', error });
       if (error.code === 'SESSION_NOT_ACTIVE' || error.code === 'SESSION_NOT_FOUND') refreshSession();
     } finally {
-      verifying.current = false;
+      if (verifying.current === sessionId) verifying.current = null;
     }
   }, [sessionId, catalog, refreshSession]);
 
@@ -956,7 +973,8 @@ export function WorkspacePage({ labId }: { labId: string }) {
         </div>
       ) : null}
 
-      {actionError ? (
+      {/* An action's failure is about a running lab: once it has ended (or a new one is being prepared) the summary says what is true now. */}
+      {actionError && live ? (
         <div className="workspace__notice">
           <ErrorNotice
             error={describeError(actionError.error, actionError.context)}
@@ -995,6 +1013,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
               key={attempt?.attemptId ?? 'no-attempt'}
               lab={lab}
               showHeader={false}
+              // While Launch again prepares, the session on hand is the ended one:
+              // a hint revealed now would be recorded on its closed attempt, and
+              // the panel would forget it when the new attempt arrives.
+              showHints={!relaunching}
               checks={lastChecks}
               onHintReveal={handleHintReveal}
               hintsRevealed={hintsRevealed}
