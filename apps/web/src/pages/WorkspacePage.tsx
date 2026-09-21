@@ -109,6 +109,7 @@ const TERMINAL_TEXT: Record<string, string> = {
   UNAUTHORIZED: 'The terminal’s access expired.',
   CREDENTIALS_UNAVAILABLE: 'The terminal could not attach to your environment.',
   CONNECTION_LOST: 'Connection to the terminal was lost.',
+  INPUT_RATE_EXCEEDED: 'Disconnected — more was pasted or typed at once than the terminal accepts. Reconnect to carry on.',
 };
 
 /**

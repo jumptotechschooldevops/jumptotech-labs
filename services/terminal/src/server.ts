@@ -49,6 +49,7 @@ import {
 import { createOutputFlow, type OutputFlow } from '@jumptotech/lab-orchestrator/output-flow';
 import { reportSessionActivity } from './activity.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
+import { InputBudget } from './input-budget.js';
 import { brokerShell, localShell, ShellStartError, type Shell } from './shell.js';
 import {
   containerSpawnPlan,
@@ -791,7 +792,14 @@ export function createTerminalServer(
       if (!session) return;
 
       switch (message.type) {
-        case 'input':
+        case 'input': {
+          let budget = inputBudgets.get(ws);
+          if (!budget) inputBudgets.set(ws, (budget = new InputBudget()));
+          if (!budget.spend(Buffer.byteLength(message.data, 'utf8'))) {
+            obs.warn('terminal.input.rate_exceeded', { sessionId: session.claims.sid });
+            closeFor(ws, 'INPUT_RATE_EXCEEDED', 'More input was sent to the terminal than a shell can take.');
+            break;
+          }
           touch(session);
           // Only input is the student working. `resize` follows the window and
           // `ping` is the browser's keep-alive: counting either would let an
@@ -800,6 +808,7 @@ export function createTerminalServer(
           reportActivity(session);
           session.term.write(message.data);
           break;
+        }
         case 'resize':
           touch(session);
           applySize(session, message.cols, message.rows);
@@ -1180,6 +1189,9 @@ export function createTerminalServer(
     endSession(ws);
     if (ws.readyState === ws.OPEN) ws.close(4408, code);
   }
+
+  /** Each socket's input budget; see `input-budget.ts`. */
+  const inputBudgets = new WeakMap<WebSocket, InputBudget>();
 
   /** When each socket's shell opened, for the session-duration histogram. */
   const startedAtByWs = new Map<WebSocket, number>();

@@ -48,6 +48,13 @@ else needs step 4 first.
    to RB-06.
 5. **`origin_rejected`:** the rejected origin is in the log *message* — it is
    attacker-chosen and unbounded, so it is deliberately not a field or a label.
+6. **A student says the terminal disconnected with "more was pasted or typed
+   at once than the terminal accepts":** `"event":"terminal.input.rate_exceeded"`
+   names the session. A socket may send a 256 KiB burst and 8 KiB/s after it
+   (`services/terminal/src/input-budget.ts`); beyond that the socket and its
+   shell are closed, so nothing queues in the terminal service or sandboxd.
+   Reconnect restores the shell. Repeated lines for one session are a flood,
+   not a paste — RB-08.
 
 ## 4b. PTY drift
 
