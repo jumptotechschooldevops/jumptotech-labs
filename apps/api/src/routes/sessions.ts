@@ -590,6 +590,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
 
   async function runCheck(res: Response, session: LabSession): Promise<void> {
     const lab = registry.get(session.labId);
+    // Checking is activity from the moment it starts: stamped only when it
+    // finished, a check that ran across the idle deadline could be expired by
+    // the reaper under it. The read-back after verifying stays the fence.
+    await sessions.touch(session.sessionId, 'check');
     const verifyStartedAt = Date.now();
     const result = await verifyLab({
       lab,

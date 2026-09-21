@@ -1018,7 +1018,11 @@ export class SessionManager {
     if (!RESETTABLE_STATUSES.includes(session.status)) throw notActive(session.status);
     const context = this.#contextFor(this.#registry.get(session.labId), session);
 
-    const claimed = await this.#transition(sessionId, RESETTABLE_STATUSES, 'RESETTING');
+    // Pressing Reset is activity. Stamped only when the reset ends, a reset
+    // started near the idle deadline was expired by the reaper mid-rebuild.
+    const claimed = await this.#transition(sessionId, RESETTABLE_STATUSES, 'RESETTING', {
+      lastActivityAt: new Date(this.#now()).toISOString(),
+    });
     if (!claimed) throw await this.#resetConflict(sessionId);
     const fence: TransitionGuard = { statusChangedAt: claimed.statusChangedAt };
 
@@ -1234,10 +1238,16 @@ export class SessionManager {
     return this.#teardown(session, [...LIVE_STATUSES, 'ENDING'], 'ENDING', 'ENDED', 'ended by student');
   }
 
-  /** Reaper collected the session. */
-  async expire(sessionId: string, reason: string): Promise<TeardownResult> {
+  /**
+   * Reaper collected the session.
+   *
+   * `claimGuard` fences the claim on what the reaper decided from: an idle
+   * expiry passes the activity stamp it saw, so a student active since then
+   * keeps their lab.
+   */
+  async expire(sessionId: string, reason: string, claimGuard?: TransitionGuard): Promise<TeardownResult> {
     const session = await this.require(sessionId);
-    return this.#teardown(session, [...LIVE_STATUSES, 'EXPIRING'], 'EXPIRING', 'EXPIRED', reason);
+    return this.#teardown(session, [...LIVE_STATUSES, 'EXPIRING'], 'EXPIRING', 'EXPIRED', reason, claimGuard);
   }
 
   /**
@@ -1349,6 +1359,7 @@ export class SessionManager {
     inProgress: Extract<SessionStatus, 'ENDING' | 'EXPIRING'>,
     done: Extract<SessionStatus, 'ENDED' | 'EXPIRED'>,
     reason: string,
+    claimGuard?: TransitionGuard,
   ): Promise<TeardownResult> {
     if (isTerminalStatus(session.status)) {
       return {
@@ -1373,9 +1384,13 @@ export class SessionManager {
      * design rests on. An ENDING teardown whose owner is gone is resumed as an
      * End by `resumeAbandonedEnd`, never relabelled.
      */
-    const marked = await this.#transition(session.sessionId, claimable, inProgress, {
-      statusReason: reason,
-    });
+    const marked = await this.#transition(
+      session.sessionId,
+      claimable,
+      inProgress,
+      { statusReason: reason },
+      claimGuard,
+    );
 
     if (!marked) {
       // Someone else owns this teardown, or it already finished. Report what is
