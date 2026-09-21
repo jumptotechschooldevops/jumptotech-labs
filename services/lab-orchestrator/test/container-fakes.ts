@@ -299,6 +299,20 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
   }
 
   async exec(name: string, request: ContainerExecRequest): Promise<ContainerExecResult> {
+    const result = await this.#exec(name, request);
+    /*
+     * Model the real runner's output cap: `execFile` stops a command whose
+     * stdout passes `maxBuffer`, hands back what it had, and reports a failure
+     * whose code is ERR_CHILD_PROCESS_STDIO_MAXBUFFER — exit 1, not a timeout.
+     */
+    const cap = request.maxBufferBytes;
+    if (cap !== undefined && result.stdout.length > cap) {
+      return { exitCode: 1, stdout: result.stdout.slice(0, cap), stderr: '', timedOut: false, outputTruncated: true };
+    }
+    return result;
+  }
+
+  async #exec(name: string, request: ContainerExecRequest): Promise<ContainerExecResult> {
     if (this.unreachable) throw new Error(this.unreachable);
     this.execs.push({ container: name, request });
 

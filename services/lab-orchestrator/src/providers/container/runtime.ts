@@ -143,6 +143,12 @@ export interface ContainerExecResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /**
+   * stdout reached the request's `maxBufferBytes`, so the command was stopped
+   * and `stdout` is only its first part. Distinct from a failure of the
+   * command itself, which it otherwise looks exactly like (exit 1).
+   */
+  outputTruncated?: boolean;
 }
 
 export class ContainerRuntimeError extends Error {
@@ -637,11 +643,13 @@ function runProcess(
       },
       (error, stdout, stderr) => {
         const { exitCode, timedOut } = execFileOutcome(error, child);
+        const outputTruncated = (error as { code?: unknown } | null)?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
         resolve({
           exitCode,
           stdout: String(stdout),
-          stderr: String(stderr) || (error && exitCode !== 0 ? error.message : ''),
+          stderr: String(stderr) || (error && exitCode !== 0 && !outputTruncated ? error.message : ''),
           timedOut,
+          ...(outputTruncated ? { outputTruncated: true } : {}),
         });
       },
     );

@@ -1308,10 +1308,17 @@ export class ContainerLabProvider implements LabProvider {
       timeoutMs: 10_000,
       maxBufferBytes: maxBytes,
     });
-    if (cat.exitCode !== 0) return read;
+    /*
+     * A file longer than the cap stops `cat` at the cap: the runner reports it
+     * as `outputTruncated`, with the first `maxBytes` in hand. That is the
+     * truncated read this was always meant to return — before, the stopped
+     * `cat` looked like any failed one, and a large file came back with no
+     * content at all: a 70 KiB `terraform.tfstate` read as "no state".
+     */
+    if (cat.exitCode !== 0 && !cat.outputTruncated) return read;
 
     read.content = cat.stdout.slice(0, maxBytes);
-    if (cat.stdout.length > maxBytes) read.truncated = true;
+    if (cat.outputTruncated || cat.stdout.length > maxBytes) read.truncated = true;
     return read;
   }
 
