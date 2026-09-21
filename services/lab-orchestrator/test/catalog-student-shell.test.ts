@@ -88,3 +88,44 @@ describe('container labs tell the student what the shell needs', () => {
     expect(problems).toEqual([]);
   });
 });
+
+describe('worksheets graded by key ask each question once', () => {
+  it('never repeats a graded key in the template the lab seeds', async () => {
+    // NET-002's plan.txt repeated `broadcast = ` in four blocks, so its
+    // answers could only be substring-matched and were swappable between
+    // blocks. A key a check reads must appear once in the seeded template.
+    const registry = await realCatalog();
+    const problems: string[] = [];
+    for (const summary of registry.all()) {
+      const lab = registry.get(summary.id);
+      const seeded = new Map<string, string>();
+      for (const file of await loadSetupFiles(lab)) {
+        seeded.set(file.path, file.content.toString());
+        seeded.set(file.path.replace(/^\/home\/student\//, ''), file.content.toString());
+      }
+      for (const requirement of lab.requirements) {
+        const graded: Array<{ path: string; key: string; separator: string }> = [];
+        if (requirement.type === 'file_key_value') {
+          graded.push({ path: requirement.path, key: requirement.key, separator: requirement.separator });
+        }
+        if (requirement.type === 'workspace_file_exists' && requirement.key_values) {
+          for (const key of Object.keys(requirement.key_values)) {
+            graded.push({ path: requirement.path, key, separator: requirement.separator ?? '=' });
+          }
+        }
+        for (const { path, key, separator } of graded) {
+          const template = seeded.get(path) ?? seeded.get(path.replace(/^\/home\/student\//, ''));
+          if (template === undefined) continue;
+          const lines = template.split('\n').filter((raw) => {
+            const line = raw.trim();
+            if (line.startsWith('#')) return false;
+            const at = line.indexOf(separator);
+            return at > 0 && line.slice(0, at).trim().replace(/^export\s+/, '') === key;
+          });
+          if (lines.length > 1) problems.push(`${lab.id}: ${path} asks for '${key}' ${lines.length} times`);
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+});
