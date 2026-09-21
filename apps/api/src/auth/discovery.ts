@@ -80,19 +80,28 @@ export async function fetchDiscoveryDocument(
       signal: controller.signal,
     });
   } catch {
-    throw new AuthError('AUTH_MISCONFIGURED', 'Could not reach the identity provider for discovery.');
-  } finally {
     clearTimeout(timer);
+    throw new AuthError('AUTH_MISCONFIGURED', 'Could not reach the identity provider for discovery.');
   }
   if (!response.ok) {
+    clearTimeout(timer);
     throw new AuthError('AUTH_MISCONFIGURED', 'The identity provider refused the discovery request.');
   }
 
+  // Still under the deadline: `fetch` resolves at the headers, and a document
+  // that never finishes arriving must not hold the request reading it.
   let document: Record<string, unknown>;
   try {
     document = (await response.json()) as Record<string, unknown>;
   } catch {
-    throw new AuthError('AUTH_MISCONFIGURED', "The identity provider's discovery document was not JSON.");
+    throw new AuthError(
+      'AUTH_MISCONFIGURED',
+      controller.signal.aborted
+        ? 'The identity provider did not finish sending its discovery document in time.'
+        : "The identity provider's discovery document was not JSON.",
+    );
+  } finally {
+    clearTimeout(timer);
   }
   if (document === null || typeof document !== 'object') {
     throw new AuthError('AUTH_MISCONFIGURED', "The identity provider's discovery document was not an object.");

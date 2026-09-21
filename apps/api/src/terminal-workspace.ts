@@ -77,6 +77,9 @@ export class HttpTerminalWorkspace implements WorkspacePort {
     }
 
     const payload = (await response.json().catch(() => null)) as InternalReply<T> | null;
+    if (payload === null && signal.aborted) {
+      throw new WorkspaceUnavailableError('The terminal service did not finish replying in time.');
+    }
     if (!response.ok || !payload?.ok) {
       throw new WorkspaceUnavailableError(
         payload?.error?.message ?? `The terminal service replied ${response.status}.`,

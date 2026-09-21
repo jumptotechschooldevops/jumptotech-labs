@@ -273,7 +273,12 @@ export class OidcBrowserClient {
       try {
         return (await response.json()) as Record<string, unknown>;
       } catch {
-        throw new AuthError('AUTH_MISCONFIGURED', `The identity provider's response to ${what} was not JSON.`);
+        throw new AuthError(
+          'AUTH_MISCONFIGURED',
+          controller.signal.aborted
+            ? `The identity provider did not finish replying in time to ${what}.`
+            : `The identity provider's response to ${what} was not JSON.`,
+        );
       }
     } finally {
       clearTimeout(timer);
