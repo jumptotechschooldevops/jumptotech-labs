@@ -195,7 +195,13 @@ function Elapsed({ since }: { since: number }) {
     return () => clearInterval(interval);
   }, []);
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
-  return <span className="overlay__elapsed">{seconds}s</span>;
+  // It sits inside the preparing card's live region; left live, a screen reader
+  // would announce "12s", "13s", "14s"… every second while the lab starts.
+  return (
+    <span className="overlay__elapsed" aria-live="off">
+      {seconds}s
+    </span>
+  );
 }
 
 /**

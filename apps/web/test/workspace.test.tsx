@@ -469,6 +469,15 @@ describe('after the lab has ended', () => {
     await screen.findByRole('heading', { name: 'Lab ended' });
   }
 
+  it('keeps the ticking elapsed time out of the preparing card\'s announcements', async () => {
+    await endLab();
+    apiMock.startLab.mockReturnValue(new Promise(() => undefined));
+    fireEvent.click(screen.getByRole('button', { name: 'Launch a fresh environment' }));
+    const card = (await screen.findByText('Preparing your lab environment…')).closest('[role="status"]')!;
+    const elapsed = card.querySelector('.overlay__elapsed')!;
+    expect(elapsed.getAttribute('aria-live')).toBe('off');
+  });
+
   it('shows the new environment preparing when the student launches again — not the old summary', async () => {
     await endLab();
     let resolve!: (value: unknown) => void;
