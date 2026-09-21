@@ -176,6 +176,42 @@ export interface KubernetesClientOptions {
   kubeconfigPath?: string;
   /** Context name to select from the kubeconfig. */
   context?: string;
+  /** Deadline for one API request (default `DEFAULT_KUBERNETES_REQUEST_TIMEOUT_MS`). */
+  requestTimeoutMs?: number;
+}
+
+/**
+ * How long one Kubernetes API request may take before it is abandoned.
+ *
+ * `@kubernetes/client-node` sets no deadline of its own, so a request to an
+ * API server that accepted the connection and never answered — a paused or
+ * starved control-plane container behind kind's port-forward, a half-open TCP
+ * connection — waited forever. Everything above it waited too: a Start, a
+ * Reset, a Check (whose per-session lock then never cleared), and the reaper,
+ * whose one-sweep-at-a-time rule turned a single hung call into cleanup
+ * stopping for every provider. Requests here take milliseconds; thirty seconds
+ * is only ever reached by a server that is not going to answer.
+ */
+export const DEFAULT_KUBERNETES_REQUEST_TIMEOUT_MS = 30_000;
+
+type KubeRequestContext = Parameters<k8s.KubeConfig['applySecurityAuthentication']>[0];
+
+/**
+ * A KubeConfig that gives every request it authenticates a deadline.
+ *
+ * `applySecurityAuthentication` runs once per request, for the generated API
+ * clients and `KubernetesObjectApi` alike, so this is the one place every call
+ * passes through. A caller's own signal, where one was set, is left alone.
+ */
+class DeadlineKubeConfig extends k8s.KubeConfig {
+  constructor(private readonly requestTimeoutMs: number) {
+    super();
+  }
+
+  override async applySecurityAuthentication(context: KubeRequestContext): Promise<void> {
+    await super.applySecurityAuthentication(context);
+    if (!context.getSignal()) context.setSignal(AbortSignal.timeout(this.requestTimeoutMs));
+  }
 }
 
 /**
@@ -268,7 +304,7 @@ export class KubernetesClient implements KubernetesPort {
   readonly #endpoint: ClusterEndpoint;
 
   constructor(options: KubernetesClientOptions = {}) {
-    const kc = new k8s.KubeConfig();
+    const kc = new DeadlineKubeConfig(options.requestTimeoutMs ?? DEFAULT_KUBERNETES_REQUEST_TIMEOUT_MS);
     if (options.kubeconfigPath) {
       kc.loadFromFile(options.kubeconfigPath);
     } else {

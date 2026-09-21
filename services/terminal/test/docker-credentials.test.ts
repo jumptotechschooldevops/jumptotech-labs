@@ -182,7 +182,17 @@ describe('writeSessionDockerCerts', () => {
     const certDir = await writeSessionDockerCerts(dir, '../../etc/passwd', DOCKER_CREDENTIALS);
 
     expect(path.dirname(certDir)).toBe(dir);
-    expect(path.basename(certDir)).toBe('etcpasswd.docker');
+    expect(path.basename(certDir)).toMatch(/^etcpasswd-[0-9a-f]{8}\.docker$/);
+  });
+
+  it('gives two attaches of one session their own directory, so one cleanup cannot remove the other', async () => {
+    const dir = await scratch();
+    const winner = await writeSessionDockerCerts(dir, 'sess-abc', DOCKER_CREDENTIALS);
+    const loser = await writeSessionDockerCerts(dir, 'sess-abc', DOCKER_CREDENTIALS);
+    expect(loser).not.toBe(winner);
+
+    await removeSessionDockerCerts(loser);
+    expect((await stat(path.join(winner, 'key.pem'))).isFile()).toBe(true);
   });
 
   it('refuses a session id with nothing usable in it', async () => {

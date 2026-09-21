@@ -85,6 +85,8 @@ interface Session {
   maxTimer: NodeJS.Timeout;
   /** When this socket last reported lab-session activity; unset until it types. */
   activityReportedAt: number | undefined;
+  /** The attach claim this shell was registered under; see `attachClaims`. */
+  attachClaim: symbol;
 }
 
 /**
@@ -172,6 +174,23 @@ export function createTerminalServer(
   const bySessionId = new Map<string, WebSocket>();
   /** The output flow control for each socket's current shell. */
   const outputFlows = new Map<WebSocket, OutputFlow>();
+  /*
+   * sessionId → the one attach allowed to register a shell for it.
+   *
+   * An attach spends most of its life waiting — on the API for the binding, on
+   * the broker for the PTY — and `bySessionId` only learns about it once it
+   * registers. Closing "the session's shell" before then closed nothing: two
+   * sockets authenticating together both registered a shell, one of them
+   * unreachable from `bySessionId`, and a Terminate that arrived mid-attach
+   * (End Lab, the reaper) was followed by a shell being opened anyway. Either
+   * way a PTY outlived what it belonged to until its idle timer, 30 minutes.
+   *
+   * So each attach takes a claim when it starts, and registers only if the
+   * claim is still the current one. `closeSession` revokes it. The newest
+   * attach for a session always wins, matching "a second connection replaces
+   * the first". Holds one entry per session with a live or attaching shell.
+   */
+  const attachClaims = new Map<string, symbol>();
   const workspaces = new SessionWorkspaces({
     root: config.workspaceRoot,
     secret: config.sessionSecret,
@@ -425,10 +444,11 @@ export function createTerminalServer(
     });
   }
 
-  /** Close the shell belonging to one session. Idempotent. */
+  /** Close the shell belonging to one session, and cancel any attach in flight. Idempotent. */
   function closeSession(sessionId: string): boolean {
+    const attaching = attachClaims.delete(sessionId);
     const ws = bySessionId.get(sessionId);
-    if (!ws) return false;
+    if (!ws) return attaching;
     send(ws, {
       type: 'error',
       code: 'SESSION_ENDED',
@@ -477,6 +497,15 @@ export function createTerminalServer(
       return false;
     }
 
+    /*
+     * Still this socket's session, and still open? Both waits above and below
+     * can outlast it: the student closes the tab mid-Reset, or an End closes
+     * the shell. `endSession` has then already run for this socket and will
+     * not run again, so anything wired to it now is never closed.
+     */
+    const stillLive = (): boolean => sessions.get(ws) === session && ws.readyState === ws.OPEN;
+    if (!stillLive()) return false;
+
     // Detach the old shell quietly: its exit is expected, not a session end.
     const previous = session.term;
     previous.onData(() => undefined);
@@ -522,6 +551,17 @@ export function createTerminalServer(
         code: 'SANDBOX_UNAVAILABLE',
         message: 'The lab environment was reset, but the terminal could not reconnect.',
       });
+      // The old shell is already gone. Left open, this socket held a dead
+      // terminal until its idle timer; closed, the workspace treats
+      // SANDBOX_UNAVAILABLE as transient and attaches afresh.
+      endSession(ws);
+      if (ws.readyState === ws.OPEN) ws.close(1011, 'reattach failed');
+      return false;
+    }
+
+    if (!stillLive()) {
+      term.kill();
+      log(`session ${sessionId}: reattach abandoned — the socket closed while the new shell was opened`);
       return false;
     }
 
@@ -829,9 +869,27 @@ export function createTerminalServer(
     if (ws.readyState !== ws.OPEN) return false;
 
     // One shell per session. A second connection for the same session replaces
-    // the first rather than running two shells against one sandbox. Exact,
-    // because `attachInTurn` never runs two of these for one session at once.
+    // the first rather than running two shells against one sandbox. `attachInTurn`
+    // serializes same-session attaches, while the claim below lets close/reset/end
+    // invalidate an attach that became stale while it was in flight.
     closeSession(claims.sid);
+    const claim = Symbol(claims.sid);
+    attachClaims.set(claims.sid, claim);
+    const superseded = (): boolean => attachClaims.get(claims.sid) !== claim;
+    const releaseClaim = (): void => {
+      if (!superseded()) attachClaims.delete(claims.sid);
+    };
+    /** Refuse an attach whose session was closed, or re-attached elsewhere, while it waited. */
+    const abandonSuperseded = (): void => {
+      terminalMetrics?.connections.inc({ outcome: 'superseded' });
+      log(`session ${claims.sid}: attach abandoned — the session was closed or attached again meanwhile`);
+      send(ws, {
+        type: 'error',
+        code: 'SESSION_ENDED',
+        message: 'This lab session has ended. The environment has been released.',
+      });
+      if (ws.readyState === ws.OPEN) ws.close(4410, 'session ended');
+    };
 
     /*
      * Resolve *what this socket attaches to* from the API, keyed by the session
@@ -923,6 +981,7 @@ export function createTerminalServer(
         code,
         err: error,
       });
+      releaseClaim();
       await discardCredentials();
       send(ws, { type: 'error', code, message: browserMessage(code, msg, 'credentials') });
       ws.close(4403, 'no credentials');
@@ -930,7 +989,13 @@ export function createTerminalServer(
     }
 
     if (ws.readyState !== ws.OPEN) {
+      releaseClaim();
       await discardCredentials();
+      return false;
+    }
+    if (superseded()) {
+      await discardCredentials();
+      abandonSuperseded();
       return false;
     }
 
@@ -975,6 +1040,7 @@ export function createTerminalServer(
       const code = error instanceof ShellStartError ? error.code : 'PTY_SPAWN_FAILED';
       const message = error instanceof Error ? error.message : String(error);
       log(`failed to start shell for ${claims.sid}: ${code} — ${message}`);
+      releaseClaim();
       await discardCredentials();
       send(ws, {
         type: 'error',
@@ -995,8 +1061,15 @@ export function createTerminalServer(
     // already run and found no session to end, so a shell registered now would
     // hold a sandbox PTY and a capacity slot for a socket nobody reads.
     if (ws.readyState !== ws.OPEN) {
+      releaseClaim();
       term.kill();
       await discardCredentials();
+      return false;
+    }
+    if (superseded()) {
+      term.kill();
+      await discardCredentials();
+      abandonSuperseded();
       return false;
     }
 
@@ -1018,6 +1091,7 @@ export function createTerminalServer(
         config.maxSessionMs,
       ),
       activityReportedAt: undefined,
+      attachClaim: claim,
     };
     sessions.set(ws, session);
     bySessionId.set(claims.sid, ws);
@@ -1120,6 +1194,7 @@ export function createTerminalServer(
     terminalMetrics?.connectionsOpen.set(sessions.size);
     terminalMetrics?.closes.inc({ code: String(ws.readyState === ws.OPEN ? 'server' : 'client') });
     if (bySessionId.get(session.claims.sid) === ws) bySessionId.delete(session.claims.sid);
+    if (attachClaims.get(session.claims.sid) === session.attachClaim) attachClaims.delete(session.claims.sid);
     outputFlows.get(ws)?.dispose();
     outputFlows.delete(ws);
     clearTimeout(session.idleTimer);

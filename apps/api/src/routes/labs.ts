@@ -304,33 +304,13 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       return;
     }
 
-    /*
-     * The attempt is opened *before* the sandbox exists.
-     *
-     * That order is the architecture rule made executable: the attempt is the
-     * parent of the session, not a footnote on it. A start that never gets an
-     * environment still leaves an honest FAILED record, and the sandbox that
-     * follows can be destroyed without taking anything with it.
-     *
-     * It is best-effort on purpose. If the progress store is down the lab still
-     * starts — the student loses the record, not the lesson.
-     */
-    let identityUsed;
+    let identityUsed: ReturnType<typeof resolveStudent>;
     try {
       identityUsed = resolveStudent(identity, req);
     } catch (error) {
       if (progressErrorResponse(res, error)) return;
       throw error;
     }
-
-    const attempt = await record(log, 'open attempt', () =>
-      progress.startAttempt({
-        studentId: identityUsed.studentId,
-        labId: def.id,
-        track: def.track,
-        identitySource: identityUsed.source,
-      }),
-    );
 
     /*
      * The session belongs to the authenticated caller, decided here.
@@ -350,10 +330,50 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       return;
     }
 
+    /*
+     * The attempt is opened once the session is admitted, *before* the sandbox
+     * exists.
+     *
+     * That order is the architecture rule made executable: the attempt is the
+     * parent of the session, not a footnote on it. A start that never gets an
+     * environment still leaves an honest FAILED record, and the sandbox that
+     * follows can be destroyed without taking anything with it.
+     *
+     * Not before admission. A start refused because the student already holds
+     * a lab, the platform is full or the lab's substrate is down never became
+     * an attempt, and opening one first left a FAILED row and an extra
+     * `attempt_count` behind every refusal — a double-clicked Start, a retry
+     * after a slow answer, a second tab — and marked a lab the student never
+     * got into as in progress.
+     *
+     * Bound to the session in the same step, so an attempt is never left
+     * without its session: if this process dies while the sandbox is being
+     * built, the session's eventual teardown still closes it.
+     *
+     * It is best-effort on purpose. If the progress store is down the lab still
+     * starts — the student loses the record, not the lesson.
+     */
+    let attempt: LabAttempt | undefined;
+    const openAttempt = async (session: { sessionId: string }): Promise<void> => {
+      const opened = await record(log, 'open attempt', () =>
+        progress.startAttempt({
+          studentId: identityUsed.studentId,
+          labId: def.id,
+          track: def.track,
+          identitySource: identityUsed.source,
+        }),
+      );
+      if (!opened) return;
+      attempt =
+        (await record(log, 'bind session to attempt', () =>
+          progress.bindSession(opened.attemptId, session.sessionId),
+        )) ?? opened;
+    };
+
     const startedAt = Date.now();
     let started;
     try {
-      started = await sessions.start(def.id, owner.userId);
+      started = await sessions.start(def.id, owner.userId, { onAdmitted: openAttempt });
     } catch (error) {
       /*
        * The outcome label is a closed enum derived from the error *code*, never
@@ -384,28 +404,19 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       recordStart(def, outcome, { durationMs: Date.now() - startedAt, code });
       // The sandbox never came up. Close the attempt honestly rather than
       // leaving a row that says the student is still working on it.
-      if (attempt) {
+      const opened = attempt;
+      if (opened) {
         await record(log, 'close failed attempt', () =>
           progress.failAttempt(
-            attempt.attemptId,
-            // The student's history keeps the platform's words for why; the
-            // provider's are in the session manager's log.
-            studentMessage(code, error instanceof Error ? error.message : String(error)),
+              opened.attemptId,
+              // The student's history keeps the platform's words for why; the
+              // provider's are in the session manager's log.
+              studentMessage(code, error instanceof Error ? error.message : String(error)),
           ),
         );
       }
       sessionErrorResponse(res, error);
       return;
-    }
-
-    // Bind the sandbox to the attempt. From here on every session-scoped write
-    // finds its attempt through this one column.
-    let bound: LabAttempt | undefined = attempt;
-    if (attempt) {
-      bound =
-        (await record(log, 'bind session to attempt', () =>
-          progress.bindSession(attempt.attemptId, started.session.sessionId),
-        )) ?? attempt;
     }
 
     /*
@@ -426,7 +437,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
 
     sendOk(res, {
       session: toSessionPayload(sessions, started.session),
-      ...(bound ? { attempt: toAttemptPayload(bound, registry) } : {}),
+      ...(attempt ? { attempt: toAttemptPayload(attempt, registry) } : {}),
       environment: started.environment,
       steps: started.steps,
       terminal,

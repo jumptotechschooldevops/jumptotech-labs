@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# A cancelled attach is not a failed connection.
+#
+# The terminal service counts an attach it abandoned because the session was
+# closed (End Lab, the reaper) or attached again from another tab while it
+# waited as `outcome="superseded"`. Nothing failed: the student either ended
+# the lab or is now looking at the newer tab. `TerminalConnectionFailures`
+# reads every outcome other than `established` as a failure, so without the
+# exclusion a student flicking between two tabs could page someone.
+#
+#   1. established and superseded attaches only → no alert, ratio 0;
+#   2. the same traffic with real refusals instead → the alert still fires.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../rules/recording.yml
+  - ../alerts/terminal.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ------------------------------------------ 1. tabs replacing one another
+  - interval: 15s
+    name: superseded attaches are not counted as terminal failures
+    input_series:
+      - series: 'jtt_terminal_connections_total{outcome="established"}'
+        values: '0+1x160'
+      - series: 'jtt_terminal_connections_total{outcome="superseded"}'
+        values: '0+1x160'
+      # Present and flat, so the ratio is computed rather than empty.
+      - series: 'jtt_terminal_connections_total{outcome="no_credentials"}'
+        values: '0+0x160'
+    promql_expr_test:
+      - expr: jtt:terminal_connection_failure:ratio10m
+        eval_time: 30m
+        exp_samples:
+          - labels: 'jtt:terminal_connection_failure:ratio10m'
+            value: 0
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TerminalConnectionFailures
+        exp_alerts: []
+
+  # ------------------------------------------------- 2. genuine refusals
+  - interval: 15s
+    name: refused attaches still fire the alert
+    input_series:
+      - series: 'jtt_terminal_connections_total{outcome="established"}'
+        values: '0+1x160'
+      - series: 'jtt_terminal_connections_total{outcome="no_credentials"}'
+        values: '0+1x160'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TerminalConnectionFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'more than 20% of terminal connections are failing'
+              description: >-
+                Break it down by outcome: origin_rejected is configuration,
+                unauthorized is token or clock skew, no_credentials and
+                shell_start_failed are the sandbox path.
+              runbook_url: docs/runbooks/RB-12-terminal.md

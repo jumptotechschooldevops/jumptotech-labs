@@ -23,6 +23,7 @@ sum by (outcome) (rate(jtt_terminal_connections_total[10m]))
 | `capacity` | `TERMINAL_MAX_SESSIONS` reached | Capacity |
 | `no_credentials` | The API would not release session credentials | API / ownership |
 | `shell_start_failed` | The PTY would not start | `sandboxd` — RB-06 |
+| `superseded` | The attach was cancelled: its session ended, or was opened in another tab, while it waited. Not a failure, and not counted as one by `TerminalConnectionFailures` | Nothing, unless it is most of the traffic |
 
 ## 3. Immediate mitigation
 

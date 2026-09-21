@@ -194,6 +194,17 @@ export function createSessionGuard(
         });
         return null;
       }
+      /*
+       * A lookup that could not run is not "no such session".
+       *
+       * Only SESSION_NOT_FOUND says anything about the id. Anything else — the
+       * store's connection dropped, its pool timed out — is the platform's
+       * failure, and answering it 404 told a student their running lab was
+       * gone and audited them as reaching for somebody else's, which is the
+       * signal the ownership-denial alert pages on. It goes to the central
+       * error handler instead: logged, and a generic retryable 500.
+       */
+      if ((error as { code?: unknown })?.code !== 'SESSION_NOT_FOUND') throw error;
       audit({
         requestId: requestId(req),
         authenticatedUserId: user.userId,

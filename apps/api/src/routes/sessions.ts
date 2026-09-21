@@ -553,7 +553,42 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       namespace: session.sandboxRef ?? session.namespace,
       ...verificationTargets(session),
     });
-    await sessions.touch(session.sessionId, 'check');
+    // Also the read-back of the row as it is now: `touch` returns it either way.
+    const now = await sessions.touch(session.sessionId, 'check');
+
+    /*
+     * Was the sandbox this check read still the session's, unchanged, when it
+     * finished?
+     *
+     * A check is dozens of reads over seconds, and it holds no claim: a Reset
+     * or an End can start while it runs. It then graded a sandbox being purged,
+     * rebuilt or destroyed — a "must not exist" requirement passes against a
+     * half-deleted namespace — and recorded that verdict on the attempt,
+     * including PASSED on an attempt End had already closed.
+     *
+     * Every status change stamps `statusChangedAt`, activity never does, so an
+     * ACTIVE row still carrying the stamp the check started from has not been
+     * reset, degraded or claimed by a teardown in between. Anything else is
+     * discarded unrecorded, and the student is asked to check again.
+     */
+    if (!now || now.status !== 'ACTIVE' || now.statusChangedAt !== session.statusChangedAt) {
+      obs.warn('verify.discarded', {
+        sessionId: session.sessionId,
+        labId: lab.id,
+        track: lab.track,
+        provider: session.provider,
+        durationMs: Date.now() - verifyStartedAt,
+        // What the session had become: RESETTING, DEGRADED, ENDING, … or gone.
+        reason: now?.status ?? 'removed',
+      });
+      sendError(res, 409, {
+        code: 'SESSION_NOT_ACTIVE',
+        message: 'The lab environment changed while it was being checked, so that result was not recorded.',
+        remediation: 'Wait until the environment shows as Ready, then check again.',
+        ...(now ? { details: { status: now.status } } : {}),
+      });
+      return;
+    }
 
     /*
      * `pass`, `fail` and `error` are three different things, and collapsing any
@@ -636,7 +671,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     // A failing lab is a successful *check*: HTTP 200 with passed:false.
     sendOk(res, {
       ...result,
-      session: toSessionPayload(sessions, session),
+      session: toSessionPayload(sessions, now),
       ...(outcome
         ? {
             attempt: toAttemptPayload(outcome.attempt, registry),

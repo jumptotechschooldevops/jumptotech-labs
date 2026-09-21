@@ -295,9 +295,18 @@ export interface SessionMetricsHooks {
 /** The `statusReason` of a session an operator ended. */
 export const OPERATOR_END_REASON = 'ended by operator';
 
+/**
+ * The `statusReason` of a session the reaper tore down because its start
+ * never finished — the process building it died, or lost the database, before
+ * it could record ACTIVE or FAILED.
+ */
+export const ABANDONED_START_REASON = 'the lab did not finish starting';
+
 function endReasonFor(done: 'ENDED' | 'EXPIRED', detail: string): string {
   if (done === 'ENDED') return 'student';
   if (detail === OPERATOR_END_REASON) return 'operator';
+  // A start that never finished is a failed start, whoever cleaned it up.
+  if (detail === ABANDONED_START_REASON) return 'failed';
   const lowered = detail.toLowerCase();
   if (lowered.includes('idle')) return 'idle';
   if (lowered.includes('lifetime') || lowered.includes('expired')) return 'expired';
@@ -309,6 +318,21 @@ export interface StartSessionResult {
   lab: LoadedLabDefinition;
   environment: EnvironmentInfo;
   steps: ProvisionStep[];
+}
+
+/** What a caller of `start` is told along the way. */
+export interface StartHooks {
+  /**
+   * The session was admitted — its row exists, CREATING, holding a slot — and
+   * nothing has been built yet.
+   *
+   * The one point at which a start is known to be an attempt rather than a
+   * refusal: every refusal (the lab's provider is down, the platform is full,
+   * the student already holds their share) happens before it and never calls
+   * it. Awaited, so whatever it records exists before the sandbox does. A hook
+   * that throws is logged and ignored: bookkeeping must never stop a lab.
+   */
+  onAdmitted?(session: LabSession): Promise<void> | void;
 }
 
 export interface TeardownResult {
@@ -356,14 +380,6 @@ export class SessionManager {
   readonly #availabilityCheckTimeoutMs: number;
   readonly #log: (message: string) => void;
   readonly #metrics: SessionMetricsHooks;
-
-  /**
-   * Capacity is reserved synchronously, before the first `await`, so two
-   * simultaneous Start Lab requests cannot both slip past the limit. (A
-   * multi-instance deployment will need the same guard inside a database
-   * transaction — noted in the README.)
-   */
-  readonly #released = new Set<string>();
 
   constructor(options: SessionManagerOptions) {
     if (!options.providers && !options.provider) {
@@ -453,7 +469,7 @@ export class SessionManager {
    * request body — the route passes what the auth layer resolved, and there is
    * no field a browser could use to name someone else.
    */
-  async start(labId: string, ownerUserId?: string): Promise<StartSessionResult> {
+  async start(labId: string, ownerUserId?: string, hooks: StartHooks = {}): Promise<StartSessionResult> {
     // Throws LabNotFoundError / InvalidLabIdError before anything is reserved.
     const lab = this.#registry.get(labId);
 
@@ -525,6 +541,14 @@ export class SessionManager {
     const session = await this.#insertSession(lab, provider, ownerUserId);
     this.#emit((m) => m.onTransition?.('none', 'CREATING'));
 
+    if (hooks.onAdmitted) {
+      try {
+        await hooks.onAdmitted(session);
+      } catch (error) {
+        this.#log(`session ${session.sessionId}: admission hook failed — ${describeError(error)}`);
+      }
+    }
+
     const context = this.#contextFor(lab, session);
     const provisionStartedAt = this.#now();
     let result: CreateResult;
@@ -571,11 +595,14 @@ export class SessionManager {
     }
     this.#emit((m) => m.onTransition?.('CREATING', 'ACTIVE'));
 
+    // The count is for the log line only. The session is ACTIVE and its
+    // sandbox built, so a store that fails this read must not turn the start
+    // into an error: the student would be refused a lab that is running and
+    // holding their one slot.
+    const inUse = await this.#store.countOccupying().then(String, () => '?');
     this.#log(
       `session ${session.sessionId} ACTIVE (lab=${lab.id} provider=${session.provider} ` +
-        `sandbox=${session.sandboxRef}, ${await this.#store.countOccupying()}/${
-          this.#lifetimes.maxActiveSessions
-        } in use)`,
+        `sandbox=${session.sandboxRef}, ${inUse}/${this.#lifetimes.maxActiveSessions} in use)`,
     );
 
     return {
@@ -749,7 +776,6 @@ export class SessionManager {
       );
       return;
     }
-    this.#release(session.sessionId);
     this.#emit((m) => m.onTransition?.(session.status, 'FAILED'));
     this.#emit((m) =>
       m.onSessionEnded?.({
@@ -1424,7 +1450,6 @@ export class SessionManager {
       );
       return { session: current, destroy };
     }
-    this.#release(session.sessionId);
     this.#emit((m) => m.onTransition?.(inProgress, done));
     this.#emit((m) =>
       m.onSessionEnded?.({
@@ -1482,24 +1507,20 @@ export class SessionManager {
     }
   }
 
-  /**
-   * Release a capacity slot exactly once per session.
+  /*
+   * There is no "release a capacity slot" step anywhere in this class. A slot
+   * is released by the session's status leaving the occupying set, which the
+   * finishing transition has already written: capacity is counted from those
+   * rows (`createWithinLimits`), so there is no tally to decrement and nothing
+   * a re-entered teardown could hand back twice.
    *
-   * The `#released` marker is never cleared: teardown is re-entrant, and a
-   * second pass over an already-released session must not hand back a slot
-   * that was already handed back.
+   * A per-process set of released session ids used to stand in for one. It
+   * was never read, and it grew by one entry for every session this process
+   * ever finished, for the life of the process.
    */
-  #release(sessionId: string): void {
-    // The slot is released by the session's status leaving the occupying set,
-    // which the store already recorded — capacity is derived from those rows,
-    // so there is no separate tally to decrement. The marker is kept because
-    // teardown is re-entrant and callers still ask whether this ran.
-    this.#released.add(sessionId);
-  }
 
   /** Forget a finished session record (used by the reaper's retention sweep). */
   async forget(sessionId: string): Promise<void> {
-    this.#release(sessionId);
     await this.#store.delete(sessionId);
   }
 
