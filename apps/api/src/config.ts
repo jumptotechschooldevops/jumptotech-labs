@@ -467,10 +467,23 @@ function strFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: string): str
   return raw && raw.trim().length > 0 ? raw.trim() : fallback;
 }
 
+/**
+ * A switch the operator sets in .env. Anything that is not a recognisable
+ * yes or no is refused at startup rather than read as `false`: that reading
+ * made `LAB_LAUNCHES_PAUSED=ture` — the runbook's stop-launches switch, typed
+ * during an incident — leave Start Lab open while the operator believed it
+ * shut, and `DOCKER_TRACK_ENABLED=flase` switch a track off instead of on.
+ */
+const TRUE_WORDS = ['1', 'true', 'yes', 'on'];
+const FALSE_WORDS = ['0', 'false', 'no', 'off'];
+
 function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
   const raw = env[name];
   if (raw === undefined || raw.trim() === '') return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+  const word = raw.trim().toLowerCase();
+  if (TRUE_WORDS.includes(word)) return true;
+  if (FALSE_WORDS.includes(word)) return false;
+  throw new Error(`${name} must be true or false (also accepted: ${[...TRUE_WORDS, ...FALSE_WORDS].join(', ')}); it is set to something else.`);
 }
 
 /** `k=v,k2=v2` → labels. Refuses anything else rather than guessing. */
