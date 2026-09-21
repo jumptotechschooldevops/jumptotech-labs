@@ -3623,8 +3623,11 @@ TEST_DATABASE_URL=postgresql://user:password@localhost:5432/jumptotech_labs_test
   npm run test:db
 ```
 
-Without `RUN_DB_TESTS=1` they skip themselves with a message, exactly like the
-cluster and sandbox suites.
+Without `RUN_DB_TESTS=1` they skip themselves with a message under `npm test`,
+exactly like the cluster and sandbox suites. `npm run test:db` runs them through
+`test-support/strict-vitest.ts`, so there a skip fails the run instead of
+passing it: that script exists to test against a database, and a run in which
+every suite skipped itself proved nothing.
 
 ### Running the catalog tests only
 

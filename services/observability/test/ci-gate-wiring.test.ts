@@ -85,9 +85,9 @@ function makeRecipe(target: string): string {
  * expanded (recursively), and the terminal test image's default command for
  * the targets that run that image without naming a suite.
  */
-function expandedWorkflow(): string {
+function expandedWorkflow(source = workflow, { imageCommands = true } = {}): string {
   const seen = new Set<string>();
-  let text = workflow;
+  let text = source;
   for (let pass = 0; pass < 5; pass += 1) {
     let added = '';
     for (const [, target] of text.matchAll(/\bmake ([a-z][a-z0-9-]*)/g)) {
@@ -100,7 +100,7 @@ function expandedWorkflow(): string {
       seen.add(`npm:${script}`);
       added += `\n${rootScripts[script!]}`;
     }
-    if (text.includes('terminal-test.Dockerfile') && !seen.has('image:terminal-test')) {
+    if (imageCommands && text.includes('terminal-test.Dockerfile') && !seen.has('image:terminal-test')) {
       seen.add('image:terminal-test');
       const cmd = /^CMD \[(.+)\]$/m.exec(read('infrastructure/docker/terminal-test.Dockerfile'));
       added += `\n${(cmd?.[1] ?? '').replace(/[",]/g, ' ')}`;
@@ -200,7 +200,9 @@ describe('every integration suite', () => {
   it('is run by some CI job', () => {
     const text = expandedWorkflow();
     // `vitest run --root <ws>` with no file filter runs the whole workspace.
-    const wholeWorkspaces = [...text.matchAll(/vitest run --root (\S+?)(?=\s*(?:&&|$|\n))/gm)].map(([, ws]) => ws);
+    const wholeWorkspaces = [
+      ...text.matchAll(/(?:vitest run|strict-vitest\.ts) --root (\S+?)(?=\s*(?:&&|$|\n))/gm),
+    ].map(([, ws]) => ws);
     const unwired = integrationSuites().filter((suite) => {
       const file = path.basename(suite);
       const stem = file.replace(/-integration\.test\.tsx?$/, '');
@@ -221,6 +223,30 @@ describe('every integration suite', () => {
     for (const target of ['test-terminal-container', 'test-sandboxd-container']) {
       expect(makeRecipe(target), target).toContain('npx tsx test-support/strict-vitest.ts');
     }
+  });
+
+  it('runs strictly behind every Make target and npm script a runtime job calls, too', () => {
+    // The check above reads the workflow's own lines. `postgres-integration`
+    // runs `make test-db` → `npm run test:db`, which was bare `vitest run`: all
+    // four persistence suites `describe.skip` themselves without RUN_DB_TESTS
+    // and TEST_DATABASE_URL, and vitest exits 0 on an all-skipped run, so a
+    // drifted variable name would have left that job green having tested
+    // nothing. Every job but the hermetic `gates` one exists to provide the
+    // infrastructure its suites would otherwise skip without.
+    //
+    // The terminal test image's own CMD is left out: both Make targets that run
+    // the image replace it with a strict command (asserted above).
+    const jobs = workflow.slice(workflow.indexOf('\njobs:\n')).split(/\n(?=  [a-z][a-z0-9-]*:\n)/).slice(1);
+    const runtimeJobs = jobs.filter((job) => !job.startsWith('  gates:'));
+    expect(runtimeJobs.length).toBeGreaterThanOrEqual(9);
+    const bare = runtimeJobs.flatMap((job) => {
+      const name = job.slice(2, job.indexOf(':'));
+      return expandedWorkflow(job, { imageCommands: false })
+        .split('\n')
+        .filter((line) => /\bvitest run\b/.test(line) && !/^\s*#/.test(line))
+        .map((line) => `${name}: ${line.trim()}`);
+    });
+    expect(bare, 'a runtime job reaches a bare `vitest run`; use npx tsx test-support/strict-vitest.ts').toEqual([]);
   });
 
   it('includes the sandbox-image binaries suite, in the job that builds those images', () => {
