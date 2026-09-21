@@ -71,32 +71,32 @@ function failures(checks: Array<{ status: string; label: string; detail?: string
 const SEEDED_PLAN = `JumpToTech Bank — addressing plan
 
 BLOCK A  10.20.16.0/20
-  network =
-  broadcast =
-  first_usable =
-  last_usable =
-  usable_count =
+  a_network =
+  a_broadcast =
+  a_first_usable =
+  a_last_usable =
+  a_usable_count =
 
 BLOCK B  10.20.5.128/26
-  network =
-  broadcast =
-  first_usable =
-  last_usable =
-  usable_count =
+  b_network =
+  b_broadcast =
+  b_first_usable =
+  b_last_usable =
+  b_usable_count =
 
 BLOCK C  172.16.8.0/22
-  network =
-  broadcast =
-  first_usable =
-  last_usable =
-  usable_count =
+  c_network =
+  c_broadcast =
+  c_first_usable =
+  c_last_usable =
+  c_usable_count =
 
 BLOCK D  192.168.100.64/28
-  network =
-  broadcast =
-  first_usable =
-  last_usable =
-  usable_count =
+  d_network =
+  d_broadcast =
+  d_first_usable =
+  d_last_usable =
+  d_usable_count =
 
   prod =
   staging =
@@ -121,32 +121,32 @@ const SEEDED_CLASSIFY = `10.20.31.254 =
 const SOLVED_PLAN = `JumpToTech Bank — addressing plan
 
 BLOCK A  10.20.16.0/20
-  network = 10.20.16.0
-  broadcast = 10.20.31.255
-  first_usable = 10.20.16.1
-  last_usable = 10.20.31.254
-  usable_count = 4094
+  a_network = 10.20.16.0
+  a_broadcast = 10.20.31.255
+  a_first_usable = 10.20.16.1
+  a_last_usable = 10.20.31.254
+  a_usable_count = 4094
 
 BLOCK B  10.20.5.128/26
-  network = 10.20.5.128
-  broadcast = 10.20.5.191
-  first_usable = 10.20.5.129
-  last_usable = 10.20.5.190
-  usable_count = 62
+  b_network = 10.20.5.128
+  b_broadcast = 10.20.5.191
+  b_first_usable = 10.20.5.129
+  b_last_usable = 10.20.5.190
+  b_usable_count = 62
 
 BLOCK C  172.16.8.0/22
-  network = 172.16.8.0
-  broadcast = 172.16.11.255
-  first_usable = 172.16.8.1
-  last_usable = 172.16.11.254
-  usable_count = 1022
+  c_network = 172.16.8.0
+  c_broadcast = 172.16.11.255
+  c_first_usable = 172.16.8.1
+  c_last_usable = 172.16.11.254
+  c_usable_count = 1022
 
 BLOCK D  192.168.100.64/28
-  network = 192.168.100.64
-  broadcast = 192.168.100.79
-  first_usable = 192.168.100.65
-  last_usable = 192.168.100.78
-  usable_count = 14
+  d_network = 192.168.100.64
+  d_broadcast = 192.168.100.79
+  d_first_usable = 192.168.100.65
+  d_last_usable = 192.168.100.78
+  d_usable_count = 14
 
   prod = 10.20.0.0/20
   staging = 10.20.16.0/20
