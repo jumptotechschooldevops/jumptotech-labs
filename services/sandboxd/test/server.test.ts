@@ -377,10 +377,14 @@ describe('an attach whose caller leaves while the container is inspected', () =>
     let release!: () => void;
     const inspecting = new Promise<void>((resolve) => (entered = resolve));
     const released = new Promise<void>((resolve) => (release = resolve));
-    const harness = await start({ [refFor(SESSION_A)]: snapshotFor(SESSION_A) }, async () => {
-      entered();
-      await released;
-    });
+    const harness = await start(
+      { [refFor(SESSION_A)]: snapshotFor(SESSION_A) },
+      undefined,
+      async () => {
+        entered();
+        await released;
+      },
+    );
 
     const ws = connect(harness.url, { 'x-internal-secret': SECRET + '-attach' });
     await new Promise((resolve) => ws.on('open', resolve));

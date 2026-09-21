@@ -108,28 +108,45 @@ async function listen(server: Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
-/** A pause point a test opens by hand: whoever reaches it waits for `release`. */
+/** A pause point a test opens by hand: whoever reaches it waits for a release. */
 interface Gate {
   /** Resolves once `n` callers have reached the gate. */
   reached(n: number): Promise<void>;
+  /** Let everyone through, those parked here and those still to arrive. */
   release(): void;
+  /**
+   * Let through only whoever is parked here right now, and shut the gate again.
+   *
+   * Same-session attaches are taken in turn, so a second attach reaches a gate
+   * only after the first has finished. Releasing one arrival at a time is how a
+   * test steps through that order without pausing for it.
+   */
+  releaseArrived(): void;
   wait(): Promise<void>;
 }
 
 function gate(): Gate {
   let arrivals = 0;
-  const waiters: Array<{ n: number; resolve: () => void }> = [];
-  let open!: () => void;
-  const opened = new Promise<void>((resolve) => (open = resolve));
+  let openToAll = false;
+  const counters: Array<{ n: number; resolve: () => void }> = [];
+  const parked: Array<() => void> = [];
+  const resumeParked = (): void => {
+    for (const resume of parked.splice(0)) resume();
+  };
   return {
     reached(n) {
-      return arrivals >= n ? Promise.resolve() : new Promise((resolve) => waiters.push({ n, resolve }));
+      return arrivals >= n ? Promise.resolve() : new Promise((resolve) => counters.push({ n, resolve }));
     },
-    release: () => open(),
+    release() {
+      openToAll = true;
+      resumeParked();
+    },
+    releaseArrived: resumeParked,
     async wait() {
       arrivals += 1;
-      for (const w of waiters.filter((w) => arrivals >= w.n)) w.resolve();
-      await opened;
+      for (const c of counters.filter((c) => arrivals >= c.n)) c.resolve();
+      if (openToAll) return;
+      await new Promise<void>((resume) => parked.push(resume));
     },
   };
 }
@@ -556,7 +573,15 @@ describe('one shell per session, even while attaches are still in flight', () =>
   async function authOnly(stack: Stack): Promise<WebSocket> {
     const ws = open(stack.terminalUrl);
     await new Promise((resolve) => ws.on('open', resolve));
-    ws.send(JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }));
+    // Resolves once the frame has been written to the socket, so a test that
+    // steps a gate afterwards knows the token is on its way rather than still
+    // sitting in this process.
+    await new Promise<void>((resolve, reject) =>
+      ws.send(
+        JSON.stringify({ type: 'auth', token: tokenFor(SESSION_A, OWNER_A), cols: 80, rows: 24 }),
+        (err) => (err ? reject(err) : resolve()),
+      ),
+    );
     return ws;
   }
 
@@ -565,28 +590,48 @@ describe('one shell per session, even while attaches are still in flight', () =>
     const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiGate });
 
     const first = await authOnly(stack);
-    const firstError = frame(first, ['error', 'ready']);
+    // Only the end: this socket is given a shell, and then loses it to the
+    // newer connection. `frame` ignores the types it was not asked for.
+    const firstEnded = frame(first, ['error']);
     const firstClosed = closeCode(first);
     await apiGate.reached(1);
 
+    /*
+     * A second socket authenticates with the same token while the first attach
+     * is parked in the credentials fetch.
+     *
+     * It cannot reach the API — cannot do anything this test can observe — until
+     * the first turn is over, so the ordering is stepped rather than waited for:
+     * let through only the attach already parked here, then wait for the second
+     * to arrive. That arrival is the proof it queued behind the first.
+     */
     const second = await authOnly(stack);
     const secondReady = frame(second, ['ready', 'error']);
+    apiGate.releaseArrived();
     await apiGate.reached(2);
+
+    // Serialized: the first attach ran to completion — one shell, the first
+    // socket's — before the second one asked the API for anything.
+    expect(stack.ptys).toHaveLength(1);
     apiGate.release();
 
     expect(await secondReady).toMatchObject({ type: 'ready', sandboxRef: refFor(SESSION_A) });
-    expect(await firstError).toMatchObject({ type: 'error', code: 'SESSION_ENDED' });
+    expect(await firstEnded).toMatchObject({ type: 'error', code: 'SESSION_ENDED' });
     expect(await firstClosed).toBe(4410);
 
-    // The older attach stopped before the broker: only one PTY was ever opened.
-    expect(stack.ptys).toHaveLength(1);
-    expect(stack.ptys[0]!.killed).toBe(false);
+    // The newer attach replaced the older shell as it started: two PTYs were
+    // opened over the session's life and exactly one of them is live.
+    await eventually(
+      () => stack.ptys.length === 2 && stack.ptys[0]!.killed,
+      "the older socket's shell to be closed",
+    );
+    expect(stack.ptys[1]!.killed).toBe(false);
     second.send(JSON.stringify({ type: 'input', data: 'B\r' }));
-    await eventually(() => stack.ptys[0]!.written.includes('B\r'), 'input to reach the shell');
+    await eventually(() => stack.ptys[1]!.written.includes('B\r'), 'input to reach the shell');
 
     // And that one shell is the session's, so ending the session reaches it.
     expect(await terminate(stack, SESSION_A)).toEqual({ terminated: true });
-    await eventually(() => stack.ptys[0]!.killed, 'the shell to be closed');
+    await eventually(() => stack.ptys.every((p) => p.killed), 'the shell to be closed');
   });
 
   it('a second socket arriving during the first one’s broker attach replaces it', async () => {
@@ -597,9 +642,15 @@ describe('one shell per session, even while attaches are still in flight', () =>
     const firstClosed = closeCode(first);
     await inspectGate.reached(1);
 
+    // The same race one step later: the first attach is past the credentials
+    // fetch and inside the broker's inspect when the second socket
+    // authenticates. It still waits its turn, so the gate is stepped the same
+    // way, and the second arrival is again the proof that it did.
     const second = await authOnly(stack);
     const secondReady = frame(second, ['ready', 'error']);
+    inspectGate.releaseArrived();
     await inspectGate.reached(2);
+    expect(stack.ptys).toHaveLength(1);
     inspectGate.release();
 
     expect(await secondReady).toMatchObject({ type: 'ready' });
