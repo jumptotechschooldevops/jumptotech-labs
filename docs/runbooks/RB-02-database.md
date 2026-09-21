@@ -6,11 +6,15 @@
 **Blast radius:** effectively the whole API. Sessions, ownership, progress and
 browser sign-ins all live in the database — and because `authenticate` resolves
 the caller through the Postgres-backed user store, **every `/api/*` route
-returns 401**, including the catalogue.
+answers 503 `AUTH_UNAVAILABLE`** ("Your sign-in could not be checked right
+now"), including the catalogue. Students stay signed in; nothing is served.
 
-That is worth knowing in advance, because 401 across the board looks like an
-authentication incident (RB-14) rather than a database one. `jtt_db_up` is what
-tells the two apart. Measured during incident exercise 1, not assumed.
+It used to answer 401, which looked like an authentication incident (RB-14) and
+sent browsers to sign in again (incident exercise 1). Now
+`jtt_auth_attempts_total{outcome="AUTH_UNAVAILABLE"}` rising together with
+`jtt_db_up == 0` is this runbook, not RB-14.
+
+Commands use `prod`, `q` and `ready` from [private-beta-operations.md §1](private-beta-operations.md).
 
 ## 1. Confirm it is real
 
@@ -33,8 +37,8 @@ completely different fixes. This is the distinction the dashboard exists for.
 ## 2. Scope it
 
 ```bash
-docker compose ps postgres
-curl -s localhost:9400/readyz | jq '.data.checks[] | select(.name=="database")'
+prod ps postgres
+ready api 9400                 # the "database" check, and why it failed
 ```
 
 Use **`/readyz` on :9400, not `/health` on :4000.** `/health` reads the session
@@ -46,8 +50,8 @@ student-facing one.
 ## 3. Immediate mitigation
 
 ```bash
-docker compose restart postgres
-docker compose restart api      # only after postgres is accepting connections
+prod restart postgres
+prod restart api      # only after `prod ps postgres` shows healthy
 ```
 
 The API does **not** need a restart for the database to come back — the pool
@@ -56,12 +60,12 @@ is stuck.
 
 ## 4a. Diagnose — unreachable
 
-1. `docker compose logs --tail=100 postgres`.
-2. `docker compose exec postgres pg_isready` — running but refusing connections
-   is different from not running.
-3. **Disk.** `df -h`, and `docker system df`. A full disk is the commonest cause
+1. `prod logs --tail=100 postgres`.
+2. `prod exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`
+   — running but refusing connections is different from not running.
+3. **Disk.** `df -h` on the host, and `docker system df`. A full disk is the commonest cause
    of a Postgres that starts and then refuses writes.
-4. Memory: `docker inspect ... State.OOMKilled`.
+4. Memory: `docker inspect -f '{{.State.OOMKilled}}' <postgres container>`.
 5. A dirty shutdown recovering WAL can take minutes. The logs say so; wait
    rather than restarting into the middle of it.
 
@@ -75,8 +79,9 @@ is stuck.
      FROM pg_stat_activity
     WHERE state <> 'idle' ORDER BY age DESC LIMIT 20;
    ```
-3. `DB_MAX_CONNECTIONS` too low for the instance count, or a query with no
-   index. `statement_timeout` is configured; a query surviving it is a lock.
+3. The pool is too small (`DATABASE_POOL_MAX`, default 10 — no compose file
+   passes it to the api, so a `.env` line alone changes nothing), or a query
+   with no index. `statement_timeout` is configured; a query surviving it is a lock.
 
 ## 4c. Diagnose — `ProgressStoreIsMemory`
 

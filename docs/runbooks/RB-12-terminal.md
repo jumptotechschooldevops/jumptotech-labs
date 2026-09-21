@@ -5,6 +5,8 @@
 **Blast radius:** students cannot open a shell. Their sandbox and their progress
 are unaffected.
 
+Commands use `prod` and `q` from [private-beta-operations.md §1](private-beta-operations.md).
+
 ## 1. Confirm it is real
 
 ```promql
@@ -28,12 +30,12 @@ sum by (outcome) (rate(jtt_terminal_connections_total[10m]))
 ## 3. Immediate mitigation
 
 For `origin_rejected` after a deploy, correcting `ALLOWED_ORIGINS` and running
-`docker compose up -d api terminal` restores service immediately. Everything
+`prod up -d api terminal` restores service immediately. Everything
 else needs step 4 first.
 
 ## 4. Diagnose
 
-1. `docker compose logs terminal | grep '"event":"terminal.connection.rejected"'`
+1. `prod logs terminal | grep '"event":"terminal.connection.rejected"'`
    — one line per refusal with its outcome.
 2. **`unauthorized`:** `TERMINAL_SESSION_SECRET` must match between `api` and
    `terminal` exactly. Tokens are time-bounded, so host clock skew presents the

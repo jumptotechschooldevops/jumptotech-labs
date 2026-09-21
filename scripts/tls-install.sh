@@ -125,7 +125,7 @@ mv -f "$staged_cert" "$tls_dir/fullchain.pem"
 mv -f "$staged_key" "$tls_dir/privkey.pem"
 
 if ! $running; then
-  echo "==> installed. The web container is not running; \`docker compose ... up -d\` starts it, and its startup gate checks this pair again."
+  echo "==> installed. The web container is not running; \`prod up -d web\` (docs/runbooks/private-beta-operations.md §1) starts it, and its startup gate checks this pair again."
   exit 0
 fi
 

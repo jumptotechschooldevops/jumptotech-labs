@@ -1,8 +1,9 @@
 # RB-08 — Security events
 
 **Alerts:** `ScopeDenialDetected` (critical), `AuthzOwnershipDenialSpike`
-(warning), `SecurityEventBurst` (warning), `MetricsScrapeDenied` (warning),
-`ReaperRefusingForeignOwner` (warning)
+(warning), `SecurityEventBurst` (warning), `MetricsScrapeDenied` (warning)
+
+Commands use `prod` and `q` from [private-beta-operations.md §1](private-beta-operations.md).
 
 Every alert here fires on a boundary that **held**. The platform refused
 something. The question is never "did it get through" — it did not — but "who
@@ -49,7 +50,7 @@ session that does not exist, so this is not an enumeration oracle. Nothing was
 disclosed.
 
 ```bash
-docker compose logs api | grep '"authorizationResult":"denied-not-owner"' \
+prod logs --no-log-prefix api | grep '"authorizationResult":"denied-not-owner"' \
   | jq -r '[.userId, .action] | @tsv' | sort | uniq -c | sort -rn
 ```
 
@@ -62,22 +63,27 @@ more likely a broken client retrying a stale id.
 against `PUBLIC_ORIGIN` and the tunnel hostname before reaching for anything
 more exciting.
 
-### `foreign_owner` from the reaper
+### A sandbox this deployment does not own
 
-Something wearing `jumptotech.io/managed=true` that this deployment does not
-own. Two deployments sharing a runtime with different `RUNTIME_OWNER_ID` is the
-benign explanation and the common one — see `docs/runtime-ownership.md`. If
-there is only one deployment on that host, it is not benign.
+No alert reports one: the reaper discovers only this deployment's own
+sandboxes. RB-05 §4b lists the rest by hand. Something wearing
+`jumptotech.io/managed=true` with another `RUNTIME_OWNER_ID` is benign when two
+deployments share a runtime (`docs/runtime-ownership.md`). If there is only one
+deployment on that host, it is not benign.
 
 ### `scrape_unauthorized`
 
-Something is probing `/metrics` without a valid token. The endpoint is bound to
-loopback and requires a bearer token, so a burst from outside means the port is
-more reachable than intended. Check the compose port binding.
+Something is probing `/metrics` without a valid token. The listeners (api 9400,
+terminal 9401, sandboxd 9402) bind every interface **inside their containers**,
+because Prometheus scrapes them across the compose network; production
+publishes none of them. So a refused scrape comes from a container on that
+network — which includes the terminal, where Kubernetes- and Docker-track
+student shells run — or, if `prod ps` shows a 94xx publication, from anywhere
+that can reach the host. Check both before deciding it is noise.
 
 ## 3. Immediate mitigation
 
-For a credential mismatch: correct `.env` and `docker compose up -d`. For
+For a credential mismatch: correct `.env` and `prod up -d`. For
 suspected probing, nothing needs to be shut off — the boundary is holding — but
 it is worth knowing what can reach the port before deciding that.
 
@@ -86,7 +92,7 @@ it is worth knowing what can reach the port before deciding that.
 Every one of these is logged with a `requestId`. Follow it across services:
 
 ```bash
-docker compose logs --no-log-prefix | grep '"requestId":"<id>"' | jq -s 'sort_by(.ts)'
+prod logs --no-log-prefix | grep '"requestId":"<id>"' | jq -s 'sort_by(.ts)'
 ```
 
 ## 5. Fix

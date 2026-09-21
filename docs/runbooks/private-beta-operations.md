@@ -100,7 +100,8 @@ The backup schedule from
 directory added, and a weekly verification of the newest archive:
 
 ```cron
-# /etc/cron.d/jumptotech-db — backups daily 03:17 UTC, verification Sundays 05:17
+# /etc/cron.d/jumptotech-db — backups daily 03:17, verification Sundays 05:17,
+# in the host's time zone (cron's; UTC only if the host runs in UTC)
 17 3 * * *  jtt-ops  cd /srv/jumptotech-labs && BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status scripts/db-backup.sh >>/var/log/jumptotech/db-backup.log 2>&1
 17 5 * * 0  jtt-ops  cd /srv/jumptotech-labs && BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status scripts/db-restore.sh --verify-only "$(ls -1t /srv/jumptotech/backups/postgres/*.dump | head -1)" >>/var/log/jumptotech/db-verify.log 2>&1
 ```
@@ -206,7 +207,7 @@ platform allows (below), when any of these is true:
 | Condition | Why | Runbook |
 |---|---|---|
 | `DatabaseDown` | Nothing a student does is recorded | RB-02 |
-| `ScopeDenialDetected`, or `ReaperRefusingForeignOwner` you cannot explain | A boundary is being tested | RB-08 |
+| `ScopeDenialDetected`, or managed sandboxes of another owner you cannot explain (RB-05 §4b) | A boundary is being tested | RB-08 |
 | `NetworkIsolationNotAttested` | Kubernetes labs already refuse — say so; other tracks may continue | RB-18 |
 | `TlsEdgeUnhealthy` or the certificate has expired | Browsers refuse the site anyway | RB-15 |
 | `HostDiskSpaceCritical` or `HostMemoryCritical` | New sandboxes make it worse and can take PostgreSQL down | RB-19 |
@@ -326,9 +327,13 @@ an operator. Three things follow from the exact policy:
   restarted while students were working lost their in-flight work exactly as
   the table below describes.
 
-`prod ps` shows a restart as a low uptime against an old `CREATED`. Nothing
-counts restarts today — a restart-count metric would need a host exporter,
-which is DECISION REQUIRED (§8).
+`prod ps` shows a restart as a low uptime against an old `CREATED`.
+`ServiceRestartLoop` alerts on api, terminal or sandboxd going down and up
+repeatedly (`changes(up[15m]) >= 6`, [RB-01 §1.1](RB-01-service-down.md)), and
+the smoke warns on Docker's own count (`stack.*-restarts`, from
+`docker inspect -f '{{.RestartCount}}'`). What needs a host exporter, DECISION
+REQUIRED (§8), is a per-container restart series for postgres, web and the
+monitoring containers, which Prometheus does not scrape.
 
 Development has no restart policy at all, on purpose: a container that died on
 a laptop should stay dead where it can be read.
@@ -450,6 +455,7 @@ finds one. Send the archive, never `.env`, `docker inspect`,
 - One host, one instance of each service: no failover. `restart: unless-stopped`
   (§6.1) brings a service back **on this host**; it moves nothing anywhere, and
   a host that is gone stays gone.
-- Restarts are not counted or alerted on. A service that crash-loops shows as
-  repeated gaps in `up{job=...}` and in the readiness gauges; there is no
-  "container restarted N times" series without a host exporter (§8).
+- Restarts are alerted on for the three scraped services only
+  (`ServiceRestartLoop`). A crash-looping postgres, web or monitoring container
+  shows in `prod ps` and the smoke's `stack.*-restarts`, not in an alert: there
+  is no per-container restart series without a host exporter (§8).

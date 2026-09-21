@@ -34,14 +34,14 @@ diagnosis, and the alerts that look alike are known in advance.
 
 | Runbook | Alerts |
 |---|---|
-| [RB-01 Service down](RB-01-service-down.md) | `ServiceDown`, `ServiceNotReady` |
+| [RB-01 Service down](RB-01-service-down.md) | `ServiceDown`, `ServiceNotReady`, `ServiceRestartLoop` |
 | [RB-02 Database](RB-02-database.md) | `DatabaseDown`, `DatabasePoolSaturated`, `ProgressStoreIsMemory` |
 | [RB-03 Lab start failures](RB-03-lab-start-failures.md) | `LabStartsFailingHard`, `LabStartFailureRateElevated` |
 | [RB-04 Capacity](RB-04-capacity.md) | `CapacityExhausted`, `CapacityNearExhausted` |
 | [RB-05 Cleanup and leaks](RB-05-cleanup-and-leaks.md) | `ReaperStalled`, `SandboxLeakSuspected`, `OrphansPersisting`, `ReaperDeleteFailures` |
 | [RB-06 sandboxd](RB-06-sandboxd.md) | `SandboxdRuntimeDown` |
 | [RB-07 No labs loaded](RB-07-no-labs-loaded.md) | `NoLabsLoaded`, `LabDefinitionErrors` |
-| [RB-08 Security events](RB-08-security-events.md) | `ScopeDenialDetected`, `AuthzOwnershipDenialSpike`, `SecurityEventBurst`, `MetricsScrapeDenied`, `ReaperRefusingForeignOwner` |
+| [RB-08 Security events](RB-08-security-events.md) | `ScopeDenialDetected`, `AuthzOwnershipDenialSpike`, `SecurityEventBurst`, `MetricsScrapeDenied` |
 | [RB-09 Provider unavailable](RB-09-provider-unavailable.md) | `ProviderUnavailable` |
 | [RB-10 Provisioning slow](RB-10-provisioning-slow.md) | `ProvisioningSlow` |
 | [RB-11 API errors and latency](RB-11-api-errors-and-latency.md) | `ApiErrorRateHigh`, `ApiLatencyHigh`, `EventLoopLagHigh` |
@@ -54,6 +54,7 @@ diagnosis, and the alerts that look alike are known in advance.
 | [RB-18 Network isolation](RB-18-network-isolation.md) | `NetworkIsolationNotAttested`, `NetworkIsolationAttestationAging` |
 | [RB-19 Host pressure](RB-19-host-pressure.md) | `HostMemoryPressure`, `HostMemoryCritical`, `HostDiskSpaceLow`, `HostDiskSpaceCritical`, `HostCpuSaturated` |
 | [RB-21 Launches paused](RB-21-launches-paused.md) | `LabLaunchesPaused` |
+| [Private beta operations §8](private-beta-operations.md) | `AlertNotificationsFailing`, `AlertmanagerUnreachable` |
 
 `ReaperSweepErrorsPersisting` is in RB-05.
 
@@ -63,11 +64,16 @@ Two commands worth knowing by heart:
 
 ```bash
 # Follow one request across every service it touched.
-docker compose logs --no-log-prefix | grep '"requestId":"<id>"' | jq -s 'sort_by(.ts)'
+prod logs --no-log-prefix | grep '"requestId":"<id>"' | jq -s 'sort_by(.ts)'
 
-# What is this instance's own opinion of its health?
-curl -s localhost:9400/readyz | jq .
+# What is this instance's own opinion of its health? (api 9400, terminal 9401, sandboxd 9402)
+ready api 9400
 ```
+
+`prod`, `q`, `ready`, `alerts` and `ops` are defined in
+[private-beta-operations.md §1](private-beta-operations.md). On the production
+host a bare `docker compose` reads only the development files: it finds no
+sandboxd, and `up` re-creates services without the production overlays.
 
 Correlation is the thing PLATFORM-003 added that changes how debugging feels:
 before it, "the API logged an error" and "sandboxd logged an error" were two

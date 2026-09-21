@@ -20,8 +20,8 @@ five students each holding one lab is exactly full. A sixth start, or a sixth
 session that is really a stuck teardown or a DEGRADED session nobody ended, is a
 refusal. Check `max by (status) (jtt_sessions_oldest_status_age_seconds)` before
 anything else: a slot held by a stuck session is [RB-17](RB-17-session-lifecycle.md),
-not demand. On the production host every `docker compose` below is `prod`
-([private-beta-operations.md §1](private-beta-operations.md)).
+not demand. Commands use `prod` and `q` from
+[private-beta-operations.md §1](private-beta-operations.md).
 
 The alert is on **refusals**, not utilisation. 100% utilisation with nobody
 being turned away is a full platform working exactly as designed; a refusal is
@@ -46,9 +46,9 @@ jtt:sandbox_leak:count
 Raise the cap only if the host can carry it:
 
 ```bash
-# .env
-MAX_ACTIVE_SESSIONS=40
-docker compose up -d api
+# in .env — and agreed for the beta first: the contract is 5 (§1)
+MAX_ACTIVE_SESSIONS=<n>
+prod up -d api
 ```
 
 Each session is a real container or namespace with real CPU and memory. Raising
@@ -76,7 +76,7 @@ the cap past what the host can serve converts "some students are refused" into
 
 Raise `MAX_ACTIVE_SESSIONS` within host capacity, or lower
 `IDLE_TIMEOUT_MINUTES` so abandoned sessions return sooner. Both take effect on
-`docker compose up -d api` and neither disturbs a running session.
+`prod up -d api` and neither disturbs a running session.
 
 ## 5b. Fix — not being reclaimed
 

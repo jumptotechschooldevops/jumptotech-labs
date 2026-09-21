@@ -5,6 +5,8 @@
 and the container-backed AWS/CS/Networking labs. **Kubernetes labs are
 unaffected**, and so are the catalogue, progress and sign-in.
 
+Commands use `prod`, `q` and `ready` from [private-beta-operations.md §1](private-beta-operations.md).
+
 ## 1. Confirm it is real — and which of the two this is
 
 ```promql
@@ -24,8 +26,8 @@ is the first question incident exercise 2 asks.
 ## 2. Scope it
 
 ```bash
-docker compose ps sandboxd
-curl -s localhost:9402/readyz | jq .
+prod ps sandboxd
+ready sandboxd 9402
 ```
 
 `/readyz` here **does** gate on the runtime, unlike the API's — for this service
@@ -39,7 +41,7 @@ daemon achieves nothing and drops every live shell.
 
 ## 4a. Diagnose — the broker is down
 
-1. `docker compose logs --tail=100 sandboxd`.
+1. `prod logs --tail=100 sandboxd`.
 2. **Startup refusals.** `sandboxd` fails closed on: two equal `SANDBOXD_*`
    scope secrets, a missing `NAMESPACE_DERIVATION_SECRET`, a scrape token equal
    to one of its secrets. Each names the variable and exits 1.
@@ -50,7 +52,8 @@ daemon achieves nothing and drops every live shell.
 ## 4b. Diagnose — the runtime is unreachable
 
 1. `docker info` on the runtime host.
-2. `docker compose exec sandboxd docker version` if the socket is mounted.
+2. `prod exec -T sandboxd docker version` — the daemon as sandboxd sees it,
+   through its socket and group.
 3. Disk: `docker system df`. A full daemon refuses creates while still
    answering pings, which shows as healthy `runtime_up` and failing `create`
    ops — that is RB-03, not this.
@@ -59,7 +62,7 @@ daemon achieves nothing and drops every live shell.
 
 ## 5. Fix
 
-Restore the daemon, then `docker compose restart sandboxd`.
+Restore the daemon, then `prod restart sandboxd`.
 
 ## 6. Verify recovery
 

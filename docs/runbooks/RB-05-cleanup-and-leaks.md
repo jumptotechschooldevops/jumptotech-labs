@@ -48,24 +48,26 @@ the delete. Section 4d.
 
 ## 3. Immediate mitigation
 
-A stalled reaper does not self-resolve. Restarting the API restarts it:
+A stalled reaper does not self-resolve. Restarting the API restarts it (`prod`,
+`q` and `ready` are [private-beta-operations.md §1](private-beta-operations.md)):
 
 ```bash
-docker compose restart api
+prod restart api
 ```
 
 If the host is close to full, reclaim by hand — but **only what the platform
 owns**, using the same label the reaper uses:
 
 ```bash
+owner=$(grep -E '^RUNTIME_OWNER_ID=' .env | tail -1 | cut -d= -f2-)   # from the checkout; not a secret
 docker ps -a --filter label=jumptotech.io/managed=true \
-             --filter label=jumptotech.io/runtime-owner=$RUNTIME_OWNER_ID
+             --filter "label=jumptotech.io/runtime-owner=$owner"
 # inspect before deleting; this removes live student work
 ```
 
 ## 4a. Diagnose — the sweep is not completing
 
-1. `docker compose logs api | grep '"event":"reaper'` — a sweep that throws
+1. `prod logs api | grep '"event":"reaper'` — a sweep that throws
    logs `reaper.sweep.failed`.
 2. A sweep that hangs on one unreachable provider blocks the pass. Check
    `jtt_provider_available` and `jtt_sandboxd_runtime_up`.
@@ -84,8 +86,11 @@ stopped it:
 |---|---|
 | `within_grace_period` | Normal. A sandbox created moments ago is not an orphan. |
 | `no_expiry_label` | A managed sandbox with no expiry. The platform will not guess a deadline; delete by hand after inspecting. |
-| `foreign_owner` | **Security signal.** Something wearing this platform's labels that this deployment does not own. RB-08. |
-| `name_shape` | A container whose name is not `jtt-lab-*` / `lab-*`. Never deleted, by design. |
+
+Those are the only two reasons the reaper records. A sandbox another deployment
+owns, or one imitating this platform's labels, never reaches it — discovery is
+owner-scoped — so no metric or alert reports one. The listing below is how you
+find them.
 
 **Unowned sandboxes are not counted at all.** Discovery returns only resources
 whose `jumptotech.io/runtime-owner` label equals this deployment's
@@ -125,8 +130,8 @@ the signature. The reaper re-enters `EXPIRING` teardowns every pass, and resumes
 an `ENDING` End every pass once it is past the abandoned-End grace period
 (recorded `ENDED`, reason `abandoned` in `jtt_reaper_reclaimed_total`) — that is
 the idempotence guarantee — so a session stuck there means the provider keeps
-reporting the sandbox as not-yet-gone, or refuses it (a `foreign_owner` refusal
-is never overridden).
+reporting the sandbox as not-yet-gone, or refuses the delete
+(`jtt_reaper_delete_failures_total`, §4c).
 
 Related recoveries that need no operator:
 
@@ -142,7 +147,7 @@ Related recoveries that need no operator:
    ```bash
    docker ps -a --filter label=jumptotech.io/managed=true
    ```
-2. `docker compose logs api | grep '"event":"reaper' | tail -40` — the teardown
+2. `prod logs api | grep '"event":"reaper' | tail -40` — the teardown
    line says what the provider reported.
 3. For a Kubernetes session, a namespace stuck `Terminating` on a finalizer
    produces exactly this and is a cluster problem, not a platform one.
@@ -161,7 +166,7 @@ sum by (reason) (increase(jtt_reaper_recoveries_total[1h]))
 ```
 
 ```bash
-docker compose logs --since 30m api | grep -E '"event":"reaper' | tail -40
+prod logs --since 30m api | grep -E '"event":"reaper' | tail -40
 ```
 
 `listing sessions` in the errors is the database (RB-02). `listing <provider>
@@ -195,9 +200,10 @@ destroyed.
 
 ## 8. Escalate when
 
-The leak count keeps climbing after a successful sweep, or `foreign_owner`
-refusals appear — the second is a security question (RB-08) before it is a
-capacity one.
+The leak count keeps climbing after a successful sweep, or the §4b listing
+finds managed sandboxes whose owner is neither empty nor this deployment's
+`RUNTIME_OWNER_ID` on a host that runs one deployment — a security question
+(RB-08) before it is a capacity one.
 
 ## 9. Follow-up
 

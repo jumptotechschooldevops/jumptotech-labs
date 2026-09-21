@@ -75,9 +75,9 @@ than offering a lab that dies on Start.
 2. **Follow one request across the boundary.** Take a `requestId` from a failed
    start and read the whole chain:
    ```bash
-   docker compose logs --no-log-prefix \
+   prod logs --no-log-prefix api \
      | grep '"event":"lab.start.failed"' | tail -1 | jq -r .requestId
-   docker compose logs --no-log-prefix | grep '"requestId":"<that id>"' | jq -s 'sort_by(.ts)'
+   prod logs --no-log-prefix | grep '"requestId":"<that id>"' | jq -s 'sort_by(.ts)'
    ```
    The API line says the start failed; the `sandboxd` line says why. That join
    is the core skill this runbook is teaching.

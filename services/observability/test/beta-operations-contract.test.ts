@@ -143,3 +143,106 @@ describe('runbook code blocks hold no destructive command', () => {
     for (const { text } of drops) expect(text).toMatch(ALLOWED[0]!);
   });
 });
+
+describe('runbook commands run against the production stack', () => {
+  /*
+   * The alert runbooks predate the production overlays, and their commands had
+   * drifted: `docker compose restart sandboxd` finds no such service (it lives
+   * in the runtime overlay), `docker compose up -d api` re-creates the api from
+   * the development files — no pinned NODE_ENV/AUTH_MODE, no restart policy, no
+   * backup-status mount — and `curl localhost:9400` reaches nothing, because
+   * production publishes only 443 and 80. What an operator pastes must name
+   * things that exist, through `prod`.
+   */
+  const RUNBOOKS = readdirSync(path.join(REPO_ROOT, 'docs/runbooks')).filter((f) => f.endsWith('.md'));
+  const DOCS = [
+    ...RUNBOOKS.map((f) => `docs/runbooks/${f}`),
+    'docs/development/production-host-readiness.md',
+    'docs/releases/private-beta-release-gate.md',
+    'docs/releases/production-host-evidence-template.md',
+  ];
+
+  /** Every line an operator might paste: fenced code, and inline `code` spans. */
+  const commands: Array<{ file: string; line: number; text: string }> = [];
+  for (const file of DOCS) {
+    let inBlock = false;
+    read(file)
+      .split('\n')
+      .forEach((text, index) => {
+        if (text.trim().startsWith('```')) {
+          inBlock = !inBlock;
+          return;
+        }
+        if (inBlock) {
+          commands.push({ file, line: index + 1, text: text.replace(/\s+#\s.*$/, '') });
+        } else {
+          for (const match of text.matchAll(/`([^`]+)`/g)) commands.push({ file, line: index + 1, text: match[1]! });
+        }
+      });
+  }
+  const where = ({ file, line, text }: { file: string; line: number; text: string }): string => `${file}:${line} ${text.trim()}`;
+
+  const productionServices = new Set(
+    ['docker-compose.yml', 'docker-compose.runtime.yml', 'docker-compose.observability.yml'].flatMap((file) => {
+      const services = /^services:\n([\s\S]*?)(?=^[a-z])/m.exec(`${read(file)}\nend:\n`)?.[1] ?? '';
+      return [...services.matchAll(/^ {2}([a-z][a-z0-9-]*):\s*$/gm)].map((m) => m[1]!);
+    }),
+  );
+
+  it('finds the commands it polices', () => {
+    expect(commands.length).toBeGreaterThan(500);
+    expect([...productionServices].sort()).toEqual(
+      ['alertmanager', 'api', 'grafana', 'postgres', 'prometheus', 'sandboxd', 'terminal', 'web'].sort(),
+    );
+  });
+
+  it('never drives the stack with a bare `docker compose`, which reads only the development files', () => {
+    const bare = commands.filter(
+      ({ text }) =>
+        /(^|[;&|(\s])docker compose (up|restart|logs|exec|ps|stop|start|kill|rm|run)\b/.test(text) && !/ -f docker-compose/.test(text),
+    );
+    expect(bare.map(where)).toEqual([]);
+  });
+
+  it('never curls a port production does not publish', () => {
+    const unpublished = commands.filter(({ text }) => /curl[^|;]*\b(localhost|127\.0\.0\.1):(400[0-2]|940[0-2])\b/.test(text));
+    expect(unpublished.map(where)).toEqual([]);
+  });
+
+  it('names only services the production stack has', () => {
+    const unknown: string[] = [];
+    const check = (command: (typeof commands)[number], names: string): void => {
+      for (const service of names.trim().split(/\s+/)) {
+        if (service && !productionServices.has(service)) unknown.push(`${where(command)} → ${service}`);
+      }
+    };
+    for (const command of commands) {
+      // `exec` takes one service, then the command to run in it.
+      for (const m of command.text.matchAll(/\bprod exec (?:-T )?([a-z][a-z0-9-]*)/g)) check(command, m[1]!);
+      // The others take a list of services after their flags.
+      const flags = String.raw`(?: (?:--since|--tail) [^ ]+| --tail=[^ ]+| --no-log-prefix| -f| -d| --wait| --build| --wait-timeout [0-9]+| -s HUP)*`;
+      for (const m of command.text.matchAll(new RegExp(String.raw`\bprod (?:logs|restart|stop|start|up|ps|kill)${flags}((?: [a-z][a-z0-9-]*)+)(?= *$| *[|;#&)]| <)`, 'g'))) {
+        check(command, m[1]!);
+      }
+    }
+    expect(unknown).toEqual([]);
+  });
+
+  it('names only make targets, npm scripts and scripts that exist', () => {
+    const targets = new Set([...read('Makefile').matchAll(/^([a-z][a-z0-9-]*):/gm)].map((m) => m[1]!));
+    const scripts = new Set(Object.keys((JSON.parse(read('package.json')) as { scripts: Record<string, string> }).scripts));
+    const missing: string[] = [];
+    for (const command of commands) {
+      for (const m of command.text.matchAll(/(?:^|[;&|(\s])make ([a-z][a-z0-9-]*)/g)) {
+        if (!targets.has(m[1]!)) missing.push(`${where(command)} → make ${m[1]}`);
+      }
+      for (const m of command.text.matchAll(/npm run (?:-s |--silent )?([a-z][a-z0-9:-]*)/g)) {
+        if (!scripts.has(m[1]!)) missing.push(`${where(command)} → npm run ${m[1]}`);
+      }
+      for (const m of command.text.matchAll(/(?:^|[\s"'(=])(scripts\/[A-Za-z0-9_./-]+\.(?:sh|ts|mjs))/g)) {
+        if (!existsSync(path.join(REPO_ROOT, m[1]!))) missing.push(`${where(command)} → ${m[1]}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+});

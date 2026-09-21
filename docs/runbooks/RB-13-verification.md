@@ -41,9 +41,9 @@ is readable — the check is a pure read.
 
 ## 4. Diagnose
 
-1. The error codes are the substrate saying it is unreachable —
-   `KubernetesUnreachable`, `DockerUnreachable` and friends. Follow to RB-09 or
-   RB-06.
+1. The error code is `ENVIRONMENT_UNREACHABLE` — the substrate could not be
+   read (`jtt_verification_errors_total`, and the api's `verify.errored` log
+   line, whose message names the substrate). Follow to RB-09 or RB-06.
 2. Per requirement *type*, which is the dimension that finds a broken handler:
    ```promql
    sum by (requirement_type, result) (increase(jtt_verification_requirement_total[1h]))

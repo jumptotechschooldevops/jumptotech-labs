@@ -37,7 +37,7 @@ docker stats --no-stream
 - **Stop new launches** if a critical alert fires (operations runbook §3).
 - **Disk:** reclaim only what is safe.
   ```bash
-  docker container prune --filter "label=jumptotech.io/runtime-owner=$RUNTIME_OWNER_ID"   # stopped platform sandboxes
+  docker container prune --filter "label=jumptotech.io/runtime-owner=$(grep -E '^RUNTIME_OWNER_ID=' .env | tail -1 | cut -d= -f2-)"   # stopped platform sandboxes
   docker image prune            # dangling layers only
   ```
   **Never** `docker volume prune` or `docker system prune --volumes`: with the
