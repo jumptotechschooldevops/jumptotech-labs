@@ -254,5 +254,13 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     clearInterval(runtimeProbeTimer);
     observabilityServer.close();
     server.close(() => process.exit(0));
+    // `close` waits for every connection, and an attached shell's WebSocket
+    // never ends by itself, so with one student connected this never finished
+    // and Docker SIGKILLed the broker at its 10 s grace. Exiting ends the PTYs
+    // with the process; the terminal reconnects to the next broker.
+    setTimeout(() => {
+      logger.info('process.stopped', { reason: 'shutdown_deadline' }, 'open shells did not close within 5 s; exiting');
+      process.exit(0);
+    }, 5_000).unref();
   });
 }
