@@ -86,3 +86,42 @@ describe('NET-004 — findings.txt holds the neighbour table', () => {
     expect(await status('NET-004', LABEL, file(PATH, route))).toBe('fail');
   });
 });
+
+describe('NET-002 — each Part 1 answer is read from its own field', () => {
+  const PLAN = '/home/student/subnets/plan.txt';
+  const ANSWERS: Record<string, string> = {
+    a_network: '10.20.16.0', a_broadcast: '10.20.31.255', a_first_usable: '10.20.16.1', a_last_usable: '10.20.31.254', a_usable_count: '4094',
+    b_network: '10.20.5.128', b_broadcast: '10.20.5.191', b_first_usable: '10.20.5.129', b_last_usable: '10.20.5.190', b_usable_count: '62',
+    c_network: '172.16.8.0', c_broadcast: '172.16.11.255', c_first_usable: '172.16.8.1', c_last_usable: '172.16.11.254', c_usable_count: '1022',
+    d_network: '192.168.100.64', d_broadcast: '192.168.100.79', d_first_usable: '192.168.100.65', d_last_usable: '192.168.100.78', d_usable_count: '14',
+  };
+
+  async function part1(overrides: Record<string, string> = {}) {
+    const { readFile } = await import('node:fs/promises');
+    const lab = (await realCatalog()).get('NET-002');
+    const seeded = await readFile(`${lab.directory}/setup/plan.txt`, 'utf8');
+    const answers = { ...ANSWERS, ...overrides };
+    // Filled in the way the task asks: the value typed after "= ".
+    const plan = seeded.replace(/^(\s+)([a-d]_[a-z_]+) = $/gm, (_m, indent: string, key: string) => `${indent}${key} = ${answers[key]}`);
+    expect(plan).not.toBe(seeded);
+    const labels = lab.requirements.filter((r) => r.label.startsWith('Block ')).map((r) => r.label);
+    expect(labels).toHaveLength(8);
+    const failing: string[] = [];
+    for (const label of labels) if ((await status('NET-002', label, file(PLAN, plan))) !== 'pass') failing.push(label);
+    return failing;
+  }
+
+  it('passes the correct plan written into the seeded worksheet', async () => {
+    expect(await part1()).toEqual([]);
+  });
+
+  it('fails answers swapped between fields', async () => {
+    // Before: every one of these passed, because each value appeared somewhere.
+    expect(await part1({ b_broadcast: '10.20.5.190', b_last_usable: '10.20.5.191', a_usable_count: '1022', c_usable_count: '4094' })).toEqual([
+      'Block A: the number of assignable addresses',
+      'Block B: the broadcast address of 10.20.5.128/26',
+      'Block B: the last assignable address',
+      'Block C: the number of assignable addresses',
+    ]);
+  });
+});
