@@ -193,13 +193,15 @@ say "7. --verify-only, then --into a scratch database"
 restore_as_operator --verify-only "$archive" 2>"$work/verify.log" || { indent "$work/verify.log"; fail "--verify-only failed"; }
 indent "$work/verify.log"
 # A copy cut short, fetched back without its sidecar, and a copy corrupted
-# after its table of contents, whose sidecar was made from the corrupt bytes:
-# both still list with pg_restore --list, and both must be refused.
+# after its table of contents, whose sidecar was made from the corrupt bytes.
+# The table of contents is at the front, so both still list with
+# pg_restore --list (a cut into the table of contents itself is refused by
+# that earlier check), and both must be refused.
 size=$(wc -c <"$archive" | tr -d ' ')
-head -c $((size / 2)) "$archive" >"$work/truncated.dump"
+head -c $((size - 64)) "$archive" >"$work/truncated.dump"
 if restore_as_operator --verify-only --allow-missing-checksum "$work/truncated.dump" 2>"$work/truncated.log"; then
   indent "$work/truncated.log"
-  fail "--verify-only accepted an archive cut to half its length"
+  fail "--verify-only accepted an archive missing its last 64 bytes"
 fi
 grep -q 'truncated or corrupt' "$work/truncated.log" || { indent "$work/truncated.log"; fail "--verify-only did not name a truncated archive"; }
 cp "$archive" "$work/corrupt.dump"
@@ -212,7 +214,7 @@ fi
 grep -q 'truncated or corrupt' "$work/corrupt.log" || { indent "$work/corrupt.log"; fail "--into did not name a corrupt archive"; }
 [ "$(psql_in target postgres -c "SELECT count(*) FROM pg_database WHERE datname = 'jumptotech_labs_drill_corrupt'")" = 0 ] \
   || fail "a refused --into created its database"
-echo "    refused: a half-length copy (--verify-only) and a corrupted copy with a matching sidecar (--into); nothing created"
+echo "    refused: a copy missing its last 64 bytes (--verify-only) and a corrupted copy with a matching sidecar (--into); nothing created"
 restore_as_operator --into jumptotech_labs_drill_check "$archive" 2>"$work/into.log" || { indent "$work/into.log"; fail "--into failed"; }
 indent "$work/into.log"
 fingerprint target jumptotech_labs_drill_check >"$work/into.fingerprint"
