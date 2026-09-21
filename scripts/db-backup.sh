@@ -13,7 +13,7 @@
 #
 # Built to be called by cron or any external scheduler. It takes a lock, exits
 # non-zero on every failure, and leaves nothing that looks like a backup unless
-# the archive was dumped, read back by pg_restore, and checksummed on both sides
+# the archive was dumped, read back in full by pg_restore, and checksummed on both sides
 # of the copy out of the container. Then it applies retention.
 #
 # Configuration, from the environment only (this script never reads .env):
@@ -185,8 +185,9 @@ if ! jtt_pg pg_dump --format=custom --compress=6 -U "$JTT_ROLE" -d "$database" -
 fi
 
 toc=$(jtt_archive_toc "$JTT_STAGE/archive.dump")
+jtt_archive_read_all "$JTT_STAGE/archive.dump"
 tables=$(jtt_archive_tables "$toc" | grep -c . || true)
-jtt_log "pg_restore read the archive back: $tables table(s) with data"
+jtt_log "pg_restore read the whole archive back: $tables table(s) with data"
 
 container_sum=$(jtt_sha256_in_container "$JTT_STAGE/archive.dump")
 partial="$backup_dir/.$name.partial"

@@ -137,10 +137,12 @@ cat >"$fakebin/pg_restore" <<'FAKE'
 set -euo pipefail
 { printf 'pg_restore'; printf ' %s' "$@"; printf '\n'; } >>"$FAKE_LOG"
 list=
+read_all=
 archive=
 while [ $# -gt 0 ]; do
   case $1 in
     --list) list=1; shift ;;
+    --file=/dev/null) read_all=1; shift ;;
     -d | -U) shift 2 ;;
     -*) shift ;;
     *) archive=$1; shift ;;
@@ -154,6 +156,14 @@ if [ -n "$list" ]; then
   printf ';\n; Archive created at 2026-09-14 03:17:00 UTC\n;     dbname: jumptotech_labs\n;     Format: CUSTOM\n;\n'
   [ -n "${FAKE_TOC_NO_MIGRATIONS-}" ] || printf '3001; 0 16400 TABLE DATA public schema_migrations jumptotech\n'
   printf '3002; 0 16401 TABLE DATA public students jumptotech\n'
+  exit 0
+fi
+# A truncated or corrupted archive: its table of contents lists, its data does not read.
+if [ -n "$read_all" ]; then
+  if [ -n "${FAKE_ARCHIVE_TRUNCATED-}" ]; then
+    echo 'pg_restore: error: could not read from input file: end of file' >&2
+    exit 1
+  fi
   exit 0
 fi
 if [ -n "${FAKE_PG_RESTORE_FAIL-}" ]; then
@@ -201,7 +211,7 @@ new_case() {
   export JTT_DB_CONTAINER=fake-postgres FAKE_DATABASES="postgres jumptotech_labs"
   unset FAKE_PS_IDS FAKE_RUNNING FAKE_MOUNT_SOURCE FAKE_SERVER_DOWN FAKE_SESSIONS \
     FAKE_CREATE_FAIL FAKE_SWAP_FAIL FAKE_PG_DUMP_FAIL FAKE_PG_DUMP_GARBAGE \
-    FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG \
+    FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG FAKE_ARCHIVE_TRUNCATED \
     BACKUP_LABEL BACKUP_RETENTION_DAYS BACKUP_RETENTION_MIN_KEEP BACKUP_COPY_HOOK
 }
 
@@ -269,6 +279,7 @@ clean_ok() { [ -z "$(find "$BACKUP_DIR" -name '*.partial' -o -name '.db-backup.l
 expect 'leaves no partial file, no lock, and nothing staged in the container' clean_ok
 expect 'dumps in PostgreSQL custom format as the container postgres account' logged 'pg_dump --format=custom --compress=6 -U jumptotech -d jumptotech_labs'
 expect 'reads the archive back with pg_restore --list before keeping it' logged '^pg_restore --list '
+expect 'reads every data block back, not only the table of contents' logged '^pg_restore --file=/dev/null '
 
 new_case
 backup --label pre-migration
@@ -286,6 +297,13 @@ export FAKE_PG_DUMP_GARBAGE=1
 backup
 expect 'unreadable archive: exits non-zero, names the cause' says 'pg_restore cannot read the archive'
 expect 'unreadable archive: leaves nothing in BACKUP_DIR' nothing_written
+
+new_case
+export FAKE_ARCHIVE_TRUNCATED=1
+backup
+expect 'archive whose table of contents lists but whose data does not read: refused' says 'truncated or corrupt'
+expect 'archive whose data does not read: leaves nothing in BACKUP_DIR' nothing_written
+expect 'archive whose data does not read: records a failed backup for monitoring' test -f "$BACKUP_STATUS_DIR/db-backup.last-failure"
 
 new_case
 export FAKE_TOC_NO_MIGRATIONS=1
@@ -490,6 +508,24 @@ given_archive
 restore --verify-only "$case_dir/a.dump"
 expect '--verify-only: succeeds on a good archive' succeeded
 expect '--verify-only: changes nothing' no_change
+expect '--verify-only: reads every data block, not only the table of contents' logged '^pg_restore --file=/dev/null '
+
+# A copy fetched back from off-host storage without its sidecar, cut short:
+# its table of contents still lists.
+new_case
+given_archive
+rm "$case_dir/a.dump.sha256"
+export FAKE_ARCHIVE_TRUNCATED=1
+restore --verify-only --allow-missing-checksum "$case_dir/a.dump"
+expect '--verify-only on a truncated archive: refused' says 'truncated or corrupt'
+expect '--verify-only on a truncated archive: recorded as a failed verification' test -f "$BACKUP_STATUS_DIR/db-verify.last-failure"
+expect '--verify-only on a truncated archive: no success recorded' test ! -e "$BACKUP_STATUS_DIR/db-verify.last-success"
+new_case
+given_archive
+export FAKE_ARCHIVE_TRUNCATED=1
+restore --into jtt_restore_check "$case_dir/a.dump"
+expect '--into a truncated archive: refused before any database is created' no_change
+expect '--into a truncated archive: nothing left staged in the container' nothing_staged
 
 new_case
 given_archive

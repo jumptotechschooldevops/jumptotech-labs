@@ -193,13 +193,27 @@ jtt_archive_toc() {
   local toc
   toc=$(jtt_pg pg_restore --list "$1") \
     || jtt_die "pg_restore cannot read the archive; it is not a usable backup"
-  if ! printf '%s\n' "$toc" | grep -q '^; *Format: CUSTOM'; then
+  # Here-strings, not `printf | grep -q`: under pipefail grep's early exit can
+  # SIGPIPE the writer once the table of contents outgrows a pipe buffer, and a
+  # line that is there would read as missing.
+  if ! grep -q '^; *Format: CUSTOM' <<<"$toc"; then
     jtt_die "the archive is not in PostgreSQL custom format"
   fi
-  if ! printf '%s\n' "$toc" | grep -q ' TABLE DATA public schema_migrations '; then
+  if ! grep -q ' TABLE DATA public schema_migrations ' <<<"$toc"; then
     jtt_die "the archive has no schema_migrations data; it is not a backup of the application database"
   fi
   printf '%s\n' "$toc"
+}
+
+# Every data block of the archive, read and decompressed by pg_restore into
+# /dev/null. `pg_restore --list` reads only the table of contents at the front
+# of the file: measured on postgres:16-alpine, an archive cut to half its length
+# and one with eight bytes overwritten near its end both listed with exit 0,
+# and each failed this read ("end of file", "incorrect data check"). Nothing is
+# restored anywhere.
+jtt_archive_read_all() {
+  jtt_pg pg_restore --file=/dev/null "$1" >/dev/null \
+    || jtt_die "pg_restore could not read every data block of the archive; it is truncated or corrupt and not a usable backup"
 }
 
 # Tables whose data the archive carries, one name per line.

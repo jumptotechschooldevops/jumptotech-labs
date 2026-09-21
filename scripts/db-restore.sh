@@ -9,7 +9,8 @@
 # There is no default mode: a file on its own does nothing.
 #
 #   --verify-only  Checks the checksum sidecar, and that the target server's
-#                  pg_restore can read the archive. Changes nothing.
+#                  pg_restore can read the whole archive, every data block
+#                  included. Changes nothing.
 #
 #   --into         Restores into a database that does not exist yet, beside
 #                  whatever is running. Changes nothing that already exists.
@@ -29,7 +30,7 @@
 #   --allow-missing-checksum
 #                  Accept an archive with no .sha256 sidecar, such as a copy
 #                  fetched from off-host storage without one. It is still read
-#                  back with pg_restore before anything changes.
+#                  back in full with pg_restore before anything changes.
 #
 # The target server is chosen as in db-backup.sh: JTT_DB_CONTAINER, or the
 # running `postgres` service of COMPOSE_PROJECT_NAME; JTT_DB_USER defaults to
@@ -168,6 +169,7 @@ jtt_pg_stdin sh -c 'umask 077 && cat > "$1"' sh "$JTT_STAGE/archive.dump" <"$fil
   || jtt_die "the archive changed on its way into $JTT_CONTAINER. Nothing was changed."
 
 toc=$(jtt_archive_toc "$JTT_STAGE/archive.dump")
+jtt_archive_read_all "$JTT_STAGE/archive.dump"
 archive_tables=$(jtt_archive_tables "$toc")
 created=$(printf '%s\n' "$toc" | sed -n 's/^; *Archive created at //p' | head -1)
 source_db=$(printf '%s\n' "$toc" | sed -n 's/^; *dbname: //p' | head -1)
@@ -199,7 +201,7 @@ check_restored() {
   present=$(jtt_table_counts "$database") || jtt_die "cannot count rows in $database"
   while IFS= read -r table; do
     [ -n "$table" ] || continue
-    printf '%s\n' "$present" | grep -q "^$table " || jtt_die "table $table is in the archive but not in the restored database"
+    grep -q "^$table " <<<"$present" || jtt_die "table $table is in the archive but not in the restored database"
   done <<EOF
 $archive_tables
 EOF
