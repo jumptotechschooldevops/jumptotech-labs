@@ -3654,7 +3654,7 @@ npx vitest run test/docker-requirements.test.ts --root services/verifier
 npx vitest run test/docker-credentials.test.ts test/workspace.test.ts \
   --root services/terminal
 npx vitest run test/docker-api.test.ts --root apps/api
-npx vitest run test/multi-track-catalog.test.ts --root apps/web
+npx vitest run test/catalog.test.tsx --root apps/web
 ```
 
 ### PLATFORM-001 coverage
@@ -3832,7 +3832,7 @@ check that no command-execution endpoint exists.
 | Workspace path safety, per-session directories, size cap | `terminal/test/workspace.test.ts` |
 | Docker credential parsing, file modes, per-session material | `terminal/test/docker-credentials.test.ts` |
 | Start / check / reset / end a Docker lab over HTTP; cross-session checks | `apps/api/test/docker-api.test.ts` |
-| Multi-track catalog, track order and taglines, substrate wording | `apps/web/test/multi-track-catalog.test.tsx` |
+| Multi-track catalog: labs grouped under their track, in the API's track order | `apps/web/test/catalog.test.tsx` |
 | **Separate daemons, mutual-TLS rejection, real limits, real teardown** | `lab-orchestrator/test/docker-integration.test.ts` (real Docker) |
 
 The same rule as the Kubernetes track applies to what a fake may be used for.
