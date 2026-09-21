@@ -170,9 +170,9 @@ jobs:
       - name: Observability containers hold no container runtime
         run: |
           set -euo pipefail
-          files="docker-compose.yml docker-compose.runtime.yml docker-compose.observability.yml
-                 docker-compose.production.yml docker-compose.production-observability.yml"
-          for file in $files; do
+          files=(docker-compose.yml docker-compose.runtime.yml docker-compose.observability.yml
+                 docker-compose.production.yml docker-compose.production-observability.yml)
+          for file in "${files[@]}"; do
             test -f "$file" || { echo "$file is missing: nothing was checked" >&2; exit 1; }
           done
           for file in docker-compose.observability.yml docker-compose.production-observability.yml; do
@@ -189,7 +189,7 @@ jobs:
             /^  [a-z][a-z0-9_-]*:/ { service = $1; sub(/:$/, "", service); next }
             service ~ /^(prometheus|grafana|alertmanager)$/ &&
               /(^|[^a-z0-9_-])(kind|sandboxes)([^a-z0-9_-]|$)/ { print FILENAME ": " service ": " $0 }
-          ' $files)
+          ' "${files[@]}")
           if [ -n "$joined" ]; then
             printf '%s\n' "$joined" >&2
             echo "an observability container joins the kind or sandboxes network" >&2
