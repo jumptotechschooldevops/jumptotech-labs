@@ -146,6 +146,14 @@ requirements:
     action: s3:DeleteObject
     resource: arn:aws:s3:::jumptotech-ledger-exports/*
     label: The job may not delete objects
+  # Ticket line 5: nothing outside the export bucket. The checks above ask
+  # about the payroll bucket and a bare "*" only, so an Allow written with
+  # NotResource (every bucket except payroll) passed.
+  - type: iam_policy_not_allows
+    path: /home/student/aws-iam/policy.json
+    action: s3:GetObject
+    resource: arn:aws:s3:::jumptotech-unrelated-bucket/report.csv
+    label: The job cannot read from a bucket the ticket never mentions
 
   - type: iam_policy_not_allows
     path: /home/student/aws-iam/policy.json

@@ -77,6 +77,7 @@ describe('AWS-002 — the seeded policy does not pass', () => {
         'The job may not delete objects',
         'The job may not upload objects without KMS encryption',
         'The job may not upload objects encrypted any other way',
+        'The job cannot read from a bucket the ticket never mentions',
       ].sort(),
     );
   });
@@ -365,7 +366,7 @@ describe('AWS-002 — adversarial attempts', () => {
     const result = await verifyLab({ lab, sandbox, namespace: 'jtt-lab-000000000002' });
 
     expect(result.passed).toBe(false);
-    expect(failed(result.checks)).toHaveLength(12);
+    expect(failed(result.checks)).toHaveLength(13);
   });
 
   it('refuses a symlink standing in for the policy file', async () => {
@@ -430,5 +431,23 @@ describe('AWS-002 — second audit: every documented form passes, every other bu
       'The job cannot list the payroll bucket',
       'The job cannot upload into the payroll bucket, even encrypted',
     ]);
+  });
+});
+
+describe('AWS-002 — nothing outside the export bucket (certification pass)', () => {
+  it('fails an Allow written with NotResource: every bucket except payroll', async () => {
+    // Before: every check passed, because they asked about payroll and "*".
+    const notResource = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        ...JSON.parse(SOLVED).Statement,
+        { Effect: 'Allow', Action: 's3:GetObject', NotResource: 'arn:aws:s3:::jumptotech-payroll/*' },
+      ],
+    });
+    expect(failed((await run(notResource)).checks)).toEqual(['The job cannot read from a bucket the ticket never mentions']);
+  });
+
+  it('still passes the reference solution', async () => {
+    expect(failed((await run(SOLVED)).checks)).toEqual([]);
   });
 });

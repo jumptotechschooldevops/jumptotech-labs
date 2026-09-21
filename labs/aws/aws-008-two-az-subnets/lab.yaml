@@ -300,12 +300,17 @@ requirements:
     path: /home/student/network/vpc.yaml
     name: PublicSubnetBId
     references: PublicSubnetB
+    # The subnet's ID, not merely something about the subnet: an output of its
+    # AvailabilityZone or CidrBlock, or a list joining two subnets, referenced
+    # it too and passed. !Ref and !GetAtt …SubnetId both resolve to the ID.
+    resolves_to: ['${PublicSubnetB}', '${PublicSubnetB.SubnetId}']
     label: A7 — PublicSubnetBId is published and identifies PublicSubnetB
 
   - type: cfn_output_exists
     path: /home/student/network/vpc.yaml
     name: PrivateSubnetBId
     references: PrivateSubnetB
+    resolves_to: ['${PrivateSubnetB}', '${PrivateSubnetB.SubnetId}']
     label: A7 — PrivateSubnetBId is published and identifies PrivateSubnetB
 
   - type: cfn_references_resolve
