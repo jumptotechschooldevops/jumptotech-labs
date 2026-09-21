@@ -184,6 +184,11 @@ task:
     Give the program a `#!/usr/bin/env python3` first line and make it
     executable.
 
+    The program must work its answers out. Its source is checked for the
+    results it should print, so do not paste expected output into it — not
+    even in a comment or a docstring — or it cannot be told apart from a
+    program that prints a stored answer.
+
 setup:
   seed_scripts:
     - setup/seed.sh
