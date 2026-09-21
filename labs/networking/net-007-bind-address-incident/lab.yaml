@@ -75,7 +75,9 @@ task:
     do not need one: repair the service so it is reachable from the segment
     rather than only from this host, restart it through the supervisor, and the
     platform will ask that machine whether it can reach you. That answer is the
-    grade — not a file, and not a description of what you did.
+    grade — not a file, and not a description of what you did. The
+    configuration and the supervisor both belong to root: edit with
+    `sudoedit` or `sudo nano`, and run `sv` with `sudo`.
 
     Finally write `diagnosis.txt` containing the word `refused` and the word
     `bind`, in whatever sentences you like.
@@ -170,7 +172,7 @@ hints:
       `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/health`
       gives you the local result to save. The service reads
       `/etc/ledger/api.conf` at startup, so change the address there and then
-      `sv restart ledger-api`.
+      `sudo sv restart ledger-api`.
 
 references:
   - title: RFC 1122 — Requirements for Internet Hosts, section 3.2.1.3 (addressing)

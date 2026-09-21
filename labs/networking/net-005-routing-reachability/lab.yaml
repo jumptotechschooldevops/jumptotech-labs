@@ -84,7 +84,8 @@ task:
     assumption. Then correct
     `/etc/ledger/settlement.conf` so the poller points somewhere this host can
     actually reach, and leave it running. The poller re-reads its configuration
-    each cycle, so no restart is required.
+    each cycle, so no restart is required. The file is owned by root, so edit
+    it with `sudoedit` or `sudo nano`.
 
     You cannot change this machine's routing table: the sandbox does not grant
     the privilege, and that is the point. Routing is what you are diagnosing.

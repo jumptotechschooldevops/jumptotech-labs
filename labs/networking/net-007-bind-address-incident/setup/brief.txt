@@ -35,8 +35,9 @@ that explains a refusal from anywhere else.
 
 Then repair it: make the service reachable from the segment rather than only
 from this host, and restart it through the supervisor so the change takes
-effect. `sv restart ledger-api` and `sv status ledger-api` are the two forms
-you are likely to want.
+effect. `sudo sv restart ledger-api` and `sudo sv status ledger-api` are the
+two forms you are likely to want. The configuration file belongs to root:
+edit it with sudoedit or sudo nano.
 
 Finally write `diagnosis.txt`, in whatever words you like, containing:
 

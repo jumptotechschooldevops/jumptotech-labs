@@ -34,7 +34,8 @@ nothing.
 
 You have the privilege to capture on this sandbox. That is deliberate and it
 is narrow: this session has its own private segment with nothing else on it,
-so the only traffic you can see is your own.
+so the only traffic you can see is your own. Capturing needs root: run
+tcpdump with sudo. Reading a saved capture with tcpdump -r does not.
 
 
 THE THREE EXCHANGES
