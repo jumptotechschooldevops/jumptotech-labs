@@ -1043,3 +1043,104 @@ describe('a lab the platform removed', () => {
     expect(await screen.findByRole('heading', { name: 'Your lab environment expired' })).toBeTruthy();
   });
 });
+
+/*
+ * Answers that arrive after the lab they were about has ended.
+ *
+ * End during a Verify is allowed, and Launch again can adopt a new session
+ * before a slow check of the old one answers. Each of these reproduced against
+ * the page before it was fixed.
+ */
+describe('late answers after a lab ended', () => {
+  const bar = () => within(screen.getByRole('group', { name: 'Lab actions' }));
+  const actionButton = (name: string) => bar().getByRole('button', { name }) as HTMLButtonElement;
+  const SECOND = 'sess-0000000000000002';
+  const secondStart = () => ({
+    session: sessionInfo({ sessionId: SECOND }),
+    attempt: attemptSummary({ attemptId: 'attempt-2' }),
+    environment: { environmentId: 'e', provider: 'docker-linux', phase: 'ready' as const, namespace: '' },
+    steps: [],
+    terminal: { url: 'ws://t', token: 'second' },
+  });
+
+  it('does not keep "still shutting down" on screen once the lab has ended', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.endLab.mockRejectedValue(
+      new ApiRequestError(503, {
+        code: 'DESTROY_FAILED',
+        message: 'The lab environment is still shutting down.',
+        details: { session: sessionInfo({ status: 'ENDING' }), steps: [] },
+      }),
+    );
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByText('Terminal: Connected');
+    fireEvent.click(actionButton('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    expect(await screen.findByText('Your lab is still shutting down')).toBeTruthy();
+
+    apiMock.getSession.mockResolvedValue({ session: sessionInfo({ status: 'ENDED' }), environment: null });
+    await act(() => vi.advanceTimersByTimeAsync(3_100));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+    expect(screen.queryByText('Your lab is still shutting down')).toBeNull();
+  });
+
+  it('offers no hints while Launch again prepares, so none is recorded on the ended attempt', async () => {
+    apiMock.getLab.mockImplementation((id: string) =>
+      Promise.resolve(labDetail({ id, hints: [{ level: 1, text: 'N1' }, { level: 2, text: 'N2' }] })),
+    );
+    apiMock.endLab.mockResolvedValue({ message: 'ok', session: sessionInfo({ status: 'ENDED' }), steps: [] });
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByText('Terminal: Connected');
+    expect(screen.getByRole('region', { name: 'Hints' })).toBeTruthy();
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    fireEvent.click(actionButton('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+
+    let answerStart!: (value: unknown) => void;
+    apiMock.startLab.mockReturnValue(new Promise((resolve) => (answerStart = resolve)));
+    fireEvent.click(screen.getByRole('button', { name: 'Launch a fresh environment' }));
+    await screen.findByText('Preparing your lab environment…');
+    expect(screen.queryByRole('region', { name: 'Hints' })).toBeNull();
+
+    await act(async () => answerStart(secondStart()));
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('second'));
+    expect(screen.getByRole('region', { name: 'Hints' })).toBeTruthy();
+    expect(apiMock.recordHint).not.toHaveBeenCalled();
+  });
+
+  it('a Verify of the ended lab that answers after Launch again leaves the new lab running and checkable', async () => {
+    let answerCheck!: (reason: unknown) => void;
+    apiMock.checkSolution.mockReturnValueOnce(new Promise((_resolve, reject) => (answerCheck = reject)));
+    apiMock.endLab.mockResolvedValue({ message: 'ok', session: sessionInfo({ status: 'ENDED' }), steps: [] });
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByText('Terminal: Connected');
+    fireEvent.click(actionButton('Verify'));
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    fireEvent.click(actionButton('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+
+    apiMock.getSession.mockImplementation((id: string) =>
+      Promise.resolve({
+        session: sessionInfo({ sessionId: id, status: id === SESSION_ID ? 'ENDED' : 'ACTIVE' }),
+        environment: null,
+      }),
+    );
+    apiMock.startLab.mockResolvedValue(secondStart());
+    fireEvent.click(screen.getByRole('button', { name: 'Launch a fresh environment' }));
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('second'));
+
+    // The old check still runs; Verify on the new lab is not held by it.
+    apiMock.checkSolution.mockResolvedValueOnce(verification(false));
+    fireEvent.click(actionButton('Verify'));
+    await waitFor(() => expect(apiMock.checkSolution).toHaveBeenLastCalledWith(SECOND));
+
+    // The server discards the old check: its session changed while it ran.
+    await act(async () => answerCheck(new ApiRequestError(409, { code: 'SESSION_NOT_ACTIVE', message: 'changed' })));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(screen.queryByRole('heading', { name: 'Lab ended' })).toBeNull();
+    expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('second');
+    expect(bar().getByRole('button', { name: /Verify/ })).toBeTruthy();
+  });
+});
