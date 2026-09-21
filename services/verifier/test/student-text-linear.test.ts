@@ -11,6 +11,8 @@
 import { describe, expect, it } from 'vitest';
 import { verifyLab } from '../src/index.js';
 import { withoutShellComment, withoutShellComments } from '../src/ci/workflow.js';
+import { parseJenkinsfile } from '../src/ci/jenkinsfile.js';
+import { delimitedSpans } from '../src/line-value.js';
 import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 import { FakeSandbox } from './sandbox-fake.js';
 
@@ -40,6 +42,47 @@ describe('student text is scanned in linear time', () => {
     const { value, ms } = timed(() => withoutShellComments(`${line}\r\n${line}`));
     expect(ms).toBeLessThan(BUDGET_MS);
     expect(value).toBe(' \n ');
+  });
+
+  it('Jinja2 and ${…} spans: text of nothing but openers', () => {
+    const { value, ms } = timed(() => [
+      delimitedSpans('{'.repeat(1_000_000), '{{', '}', '}}'),
+      delimitedSpans('${'.repeat(500_000), '${', '}', '}'),
+    ]);
+    expect(ms).toBeLessThan(BUDGET_MS);
+    expect(value).toEqual([[], []]);
+  });
+
+  it('Jenkins stage headers: a Jenkinsfile of stage(\' repeated', () => {
+    const text = `pipeline {\n  agent any\n  stages {\n    ${"stage('".repeat(100_000)}\n  }\n}\n`;
+    const { ms } = timed(() => parseJenkinsfile(text));
+    expect(ms).toBeLessThan(BUDGET_MS);
+  });
+});
+
+describe('the linear scans find what the patterns found', () => {
+  it('delimitedSpans matches /\\{\\{[^}]*\\}\\}/g', () => {
+    const text = '{{ a }} {{ b } }} {{{ c }} {% if d %} {{ e %} ${X} ${!Y} ${Z.Arn} {{ unclosed';
+    const regex = [...text.matchAll(/\{\{[^}]*\}\}/g)].map((m) => m[0]);
+    expect(delimitedSpans(text, '{{', '}', '}}').map((s) => s.text)).toEqual(regex);
+    const statements = [...text.matchAll(/\{%[^%]*%\}/g)].map((m) => m[0]);
+    expect(delimitedSpans(text, '{%', '%', '%}').map((s) => s.text)).toEqual(statements);
+    const subs = [...text.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1]);
+    expect(delimitedSpans(text, '${', '}', '}').map((s) => s.body)).toEqual(subs);
+  });
+
+  it('reads stage names as before', () => {
+    const parsed = parseJenkinsfile(`pipeline {
+  agent any
+  stages {
+    stage('Build') { steps { sh 'make' } }
+    stage("Test it") {
+      steps { sh "make test" }
+    }
+  }
+}
+`);
+    expect(parsed.ok && parsed.pipeline.stages.map((stage) => stage.name)).toEqual(['Build', 'Test it']);
   });
 });
 

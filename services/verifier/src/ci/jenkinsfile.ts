@@ -384,16 +384,29 @@ function readEnvironmentBlock(
 /** Read the `stage('Name') { … }` blocks inside a `stages { }` body, in order. */
 function readStages(maskedStages: string, stagesBody: string): JenkinsStage[] {
   const stages: JenkinsStage[] = [];
-  const header = /(^|[^\w.])stage\s*\(\s*(['"])(.*?)\2\s*\)\s*\{/g;
+  // `stage(` and its opening quote; the name and the rest of the header are
+  // read by hand. `(['"])(.*?)\2\s*\)\s*\{` tried every later quote on the
+  // line for every header, and a Jenkinsfile of `stage('` repeated cost the
+  // square of its length. A stage name cannot contain its own quote unescaped,
+  // so the first one closes it.
+  const header = /(^|[^\w.])stage\s*\(\s*(['"])/g;
+  const afterName = /\s*\)\s*\{/y;
 
   // The stage *name* lives inside a string literal, which the mask blanked out,
   // so headers are located in the original text and only the brace walk that
   // follows uses the mask.
   let match: RegExpExecArray | null;
   while ((match = header.exec(stagesBody)) !== null) {
-    const name = match[3] ?? '';
-    const open = stagesBody.indexOf('{', match.index + match[0].length - 1);
-    if (open === -1) continue;
+    const nameStart = match.index + match[0].length;
+    const quote = stagesBody.indexOf(match[2]!, nameStart);
+    // A name does not span lines. Only the name is searched: looking for the
+    // next newline from here is itself a scan to the end of a long line.
+    if (quote === -1 || stagesBody.slice(nameStart, quote).includes('\n')) continue;
+    afterName.lastIndex = quote + 1;
+    const tail = afterName.exec(stagesBody);
+    if (!tail) continue;
+    const name = stagesBody.slice(nameStart, quote);
+    const open = afterName.lastIndex - 1;
 
     let depth = 0;
     let close = -1;
