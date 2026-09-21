@@ -90,7 +90,7 @@ export class HclScanError extends Error {
   }
 }
 
-function tokenize(text: string): Token[] {
+function tokenize(text: string, comments: Array<[number, number]> = []): Token[] {
   if (text.length > MAX_INPUT_BYTES) {
     throw new HclScanError(`configuration file is larger than ${MAX_INPUT_BYTES} bytes`);
   }
@@ -120,16 +120,20 @@ function tokenize(text: string): Token[] {
 
     // --- comments ---------------------------------------------------------
     if (ch === '#' || (ch === '/' && text[i + 1] === '/')) {
+      const start = i;
       while (i < n && text[i] !== '\n') i += 1;
+      comments.push([start, i]);
       continue;
     }
     if (ch === '/' && text[i + 1] === '*') {
+      const start = i;
       i += 2;
       while (i < n && !(text[i] === '*' && text[i + 1] === '/')) {
         if (text[i] === '\n') line += 1;
         i += 1;
       }
       i += 2;
+      comments.push([start, Math.min(i, n)]);
       continue;
     }
 
@@ -288,12 +292,13 @@ function readHeredoc(
  */
 export function scanHcl(text: string, file?: string): HclDocument {
   let tokens: Token[];
+  const comments: Array<[number, number]> = [];
   try {
-    tokens = tokenize(text);
+    tokens = tokenize(text, comments);
   } catch {
     return { blocks: [], arguments: [] };
   }
-  const parser = new Parser(tokens, text, file);
+  const parser = new Parser(tokens, withoutComments(text, comments), file);
   return parser.parseBody(true);
 }
 
@@ -309,12 +314,31 @@ export function scanHclFiles(files: ReadonlyArray<{ path: string; text: string }
   return { blocks, arguments: args };
 }
 
+/**
+ * The source with every comment blanked to spaces, newlines kept, so offsets
+ * still index it. An expression's `value` is sliced from this: sliced from the
+ * original, a `# note` inside a multi-line `jsonencode({ … })` became — once
+ * whitespace was collapsed onto one line — a comment swallowing every
+ * reference after it (correct TF-002 work failed), and words inside a comment
+ * read as the expression's own (`condition = ( # length(var.x) … )`).
+ */
+function withoutComments(text: string, comments: ReadonlyArray<[number, number]>): string {
+  if (comments.length === 0) return text;
+  let out = '';
+  let from = 0;
+  for (const [start, end] of comments) {
+    out += text.slice(from, start) + text.slice(start, end).replace(/[^\n]/g, ' ');
+    from = end;
+  }
+  return out + text.slice(from);
+}
+
 class Parser {
   #index = 0;
 
   constructor(
     private readonly tokens: Token[],
-    /** The original source, so an expression can be returned verbatim. */
+    /** The source, comments blanked, so an expression can be returned verbatim. */
     private readonly source: string,
     private readonly file: string | undefined,
   ) {}

@@ -226,3 +226,26 @@ resource "local_file" "service_config" {
     expect(result.status).toBe('fail');
   });
 });
+
+describe('TF-002 — a comment inside a multi-line expression is not part of it', () => {
+  it('passes a correct solution with an end-of-line comment inside jsonencode', async () => {
+    // Collapsed onto one line, the comment used to swallow every reference
+    // after it: replicas and debug read as not taken from their variables.
+    const commented = `${VARIABLES}
+resource "local_file" "service_config" {
+  filename = "build/\${var.environment}.json"
+
+  content = jsonencode({
+    service     = "ledger-api"
+    environment = var.environment   # set per workspace
+    replicas    = var.replicas
+    debug       = var.debug
+  })
+}
+`;
+    for (const rule of await configRules()) {
+      const result = await verifyRequirement(rule, config({ 'main.tf': commented }));
+      expect(result.status, `${rule.type}: ${result.detail ?? ''}`).toBe('pass');
+    }
+  });
+});
