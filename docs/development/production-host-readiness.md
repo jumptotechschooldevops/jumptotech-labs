@@ -122,7 +122,7 @@ D2, not a default.
 | Docker Compose | v2 with `!reset`/`!override` | used by the production overlays; proven by rendering (`production-config-check`) |
 | kind / kubectl | v0.31.0 / v1.34.2; node image `kindest/node:v1.34.0` | CI pins; `infrastructure/kind/cluster.yaml` |
 | Node.js | 22 + `npm ci` | `.nvmrc`; host tooling is Node |
-| Tools | git, openssl, curl, iproute2 (`ss`), coreutils `timeout` | `make secrets`, smoke, preflight |
+| Tools | git, openssl, curl, jq, iproute2 (`ss`), coreutils `timeout` | `make secrets`, smoke, preflight, the runbooks' log and `/health` reading |
 | Registry and download access at build and first start | Docker Hub, `registry.npmjs.org`, `download.docker.com`, `dl.k8s.io` | Dockerfiles; lab images pulled on first start |
 | Checkout readable by container users | files other-readable, directories other-executable | uids 1000 (api, sandboxd), 65534 (Prometheus, Alertmanager), 472 (Grafana), 101 (nginx) read bind mounts |
 | Clock | NTP-synchronized | OIDC allows 5 s skew; certificates and the attestation are time-bound |
@@ -188,6 +188,7 @@ pressure alarms, not sizing: a host that passes them may still be too small.
 | `capacity.launches` | WARN when `LAB_LAUNCHES_PAUSED` is on: the stack would start refusing every Start Lab |
 | `durability.volumes` | named volumes for postgres, prometheus, alertmanager, grafana |
 | `durability.healthchecks` | postgres, api, terminal, web |
+| `durability.log-rotation` | every service's container logs rotate (json-file `max-size`; the overlays ship 10 MB × 5), so logs cannot grow until the disk the PostgreSQL volume shares is full |
 | `durability.restart-policy` | every service exactly `restart: unless-stopped` (PR #34); `always` is a FAIL because it would undo `prod stop web` |
 | `backup.status-dir` | absolute host directory, read-only in the api; WARN on the in-checkout default |
 | `loader.api/terminal/sandboxd` | the real loaders accept the resolved environment (secrets present, strong, distinct; https OIDC; Secure cookie; https CORS including the origin; broker/database transport; runtime owner) |
@@ -385,7 +386,7 @@ No provider is chosen here. The smoke's `backup.offhost` is a FAIL until
 | Session creation and sandbox startup latency per provider | harness `concurrentStart[].ms`; `histogram_quantile(0.95, sum by (le, provider) (rate(jtt_lab_provision_duration_seconds_bucket[30m])))` |
 | Verification latency and results | harness `solveTimings`; `histogram_quantile(0.95, sum by (le, provider) (rate(jtt_verification_duration_seconds_bucket[30m])))` |
 | Terminal connectivity | harness phase 2 (five PTYs, per-shell markers); echo latency is **not instrumented** — testers record it in §13.2 |
-| CPU, memory, swap, disk | `host-capacity-sample.sh` → `host.csv` |
+| CPU, memory, swap, disk; CPU iowait and steal, pressure stall (PSI) and OOM kills | `host-capacity-sample.sh` → `host.csv` |
 | Container, sandbox and Pod counts; per-container memory | `host.csv`, `containers.csv` |
 | Session cleanup | harness after-End phase (active 0, nothing orphaned); `docker ps --filter label=jumptotech.io/managed=true` empty |
 | Failure rate | `sum by (outcome) (increase(jtt_lab_start_outcome_total[1h]))`; alerts that fired |
@@ -579,7 +580,7 @@ section header names its proof class:
 
 | Proof class | Checks |
 |---|---|
-| **LOCAL ENDPOINT PROOF** (127.0.0.1 inside containers) | `/readyz` of api, terminal, sandboxd; api `/health`: labs loaded, durable PostgreSQL progress store, `maxActive` 5, providers available (AWS informational); `pg_isready`; Prometheus targets up; firing alerts; Alertmanager and Grafana answer; deployed 5/1 gauges; attestation valid; certificate days left; backup age, verification age, off-host copy |
+| **LOCAL ENDPOINT PROOF** (127.0.0.1 inside containers) | `/readyz` of api, terminal, sandboxd; api `/health`: labs loaded, durable PostgreSQL progress store, `maxActive` 5, providers available (AWS informational); `pg_isready`; Prometheus targets up; firing alerts; Alertmanager and Grafana answer; deployed 5/1 gauges; attestation valid; certificate days left; backup age, verification age, off-host copy; `release.commit` — api, terminal and sandboxd report the checkout's commit (`jtt_build_info`), FAIL on another, WARN on `unknown` |
 | **HOST-LOCAL PROOF** (Docker on this host) | every service running and healthy; Docker restart counts (WARN); restart policy exactly `unless-stopped` (FAIL otherwise); only 443/80/loopback Grafana published; **no other container on the daemon** — the kind node, a leftover §13.1 validation stack, a debug container — publishing beyond loopback (`exposure.host-containers`); postgres only on internal networks; optional `--public-ip` probe of forbidden ports **from the host** |
 | **PUBLIC-ENDPOINT PROOF, from this host** | HTTPS 200 with a trusted chain; HSTS; `http://` → 301 to the same path; `tls:check --expect-acme`; `/auth/config` reports oidc with sign-in; `/api/me`, `/api/labs`, `/api/sessions` → 401; `Authorization: Developer` and `x-dev-student-id` → 401; `/auth/login` → 302 to the provider; `/internal`, `/metrics`, `/readyz`, `/health` not routed. **These requests may never leave the host; they do not prove internet reachability.** |
 | **EXTERNAL-INFRASTRUCTURE / PERSON** (always MANUAL CHECK REQUIRED) | scan from another network; restore beside production; a real student flow; a non-beta account refused; an alert received by a person; Grafana through the tunnel |
@@ -603,7 +604,7 @@ None of them deletes data.
 | interrupted Reset/End | restart the api mid-operation | ENDING resumed at 5 min; RESETTING → DEGRADED at 10 min ([RB-17](../runbooks/RB-17-session-lifecycle.md)) | PROVEN IN CI |
 | Docker daemon restart / host reboot (maintenance window) | `sudo systemctl restart docker` / `sudo reboot` | platform containers return (`unless-stopped`) unless an operator had stopped them. **Unmeasured:** whether the kind node container returns and becomes Ready, and whether the attestation still validates. Record `docker inspect -f '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' jumptotech-labs-control-plane` | NOT PROVEN |
 | Certificate failure | [RB-15](../runbooks/RB-15-tls-edge.md), [production-tls.md §7](../runbooks/production-tls.md); `tls-install.sh` refuses bad renewals and rolls back | web restarts in a loop until a valid certificate is installed (runbook §6.1) | PROVEN IN CI (edge suite) |
-| Failed deployment | §21 | — | PROCEDURE READY |
+| Failed deployment | §21.2 | — | PROCEDURE READY |
 | Backup restore | `--verify-only`, `--into`; `--replace` only in a real recovery ([§6.4](../runbooks/postgres-backup-restore.md)) | — | PROVEN IN CI; never on a host |
 | Disk pressure | [RB-19](../runbooks/RB-19-host-pressure.md); stop launches (runbook §3) | `HostDiskSpaceLow/Critical` fire | rules PROVEN IN CI; REQUIRES PRODUCTION HOST |
 
@@ -818,14 +819,49 @@ machine when it passes, so the timeout is local Docker contention, not this chan
 With the fix, `tls-edge-integration` passed in PR #38's CI at `5d486ef` (base
 `fa6f109`); on `c00ec48` it has passed locally (§20) and awaits PR #38's CI.
 
-## 21. Rollback procedure
+## 21. Upgrade and rollback procedure
+
+### 21.1 Upgrading to a new release (PROCEDURE READY; never run on a host)
+
+With no students active; `prod`, `q`, `ops` from the operations runbook §1.
+Record each step's output in `/srv/jumptotech/evidence/upgrade-<new commit>/`.
+
+1. **Record what runs now:** `git rev-parse HEAD > previous-commit`,
+   `cp -p .env .env.previous` (`0600`), and the smoke
+   (`make private-beta-smoke ARGS="--report-dir …"`): the rollback target and
+   its evidence.
+2. **Fetch and inspect:** `git fetch origin`, then
+   `git diff --name-only HEAD <new commit> -- services/progress/migrations .env.example 'docker-compose*.yml' infrastructure/docker`.
+   A migration file in that list means the database changes shape at the
+   next api start (forward-only: step 3 is then the only way back). A changed
+   `.env.example` or compose file may need a new `.env` line (§6).
+3. **Back up:** `scripts/db-backup.sh --label pre-upgrade` (with `BACKUP_DIR`
+   and `BACKUP_STATUS_DIR` exported), then `scripts/db-restore.sh --verify-only`
+   on the printed archive. Always, migration or not.
+4. **Check out and prepare:** `git checkout <new commit>`, `npm ci`; set
+   `JTT_COMMIT` in `.env` to `git rev-parse HEAD` — the services report it, and
+   the smoke's `release.commit` fails when a running service reports another.
+   If `infrastructure/docker/sandbox-*.Dockerfile` changed, `make sandbox-build`.
+5. **Validate before starting:** `make production-config-check` (0 FAIL),
+   `make production-preflight` (RESULT: PASS). A FAIL here: `git checkout
+   $(cat previous-commit)`, restore `.env.previous`; nothing was started.
+6. **Deploy:** `prod up -d --build --wait --wait-timeout 900`. A non-zero exit
+   is a failed deployment even if some services are healthy: go to §21.2.
+7. **Verify:** `make private-beta-smoke` — the same lines PASS as in step 1,
+   and `release.commit` PASS; `ops status`; start and End one LINUX-001 and
+   one K8S-001 lab.
+8. **Observe:** `alerts` and the dashboard for the next hour; keep
+   `previous-commit`, `.env.previous` and the pre-upgrade archive until the
+   next release.
+
+### 21.2 Rollback
 
 | Situation | Rollback |
 |---|---|
 | A configuration change broke startup | restore `.env.previous` (`0600`), `prod up -d --wait`, preflight |
 | Certificate renewal refused | `tls-install.sh` changes nothing when it refuses, and rolls back itself |
-| New release misbehaves, no new migration | `git checkout <previous commit>`, `npm ci`, `prod up -d --build --wait`, preflight, smoke |
-| New release applied a migration | migrations are forward-only: always take `scripts/db-backup.sh --label pre-upgrade` first; roll back by checking out the previous commit and restoring that archive per [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (renames, never drops; its own rollback is §6.6) |
+| New release misbehaves, no new migration | `git checkout $(cat previous-commit)`, `npm ci`, restore `.env.previous` (it holds the previous `JTT_COMMIT`), `prod up -d --build --wait --wait-timeout 900`, preflight, smoke (`release.commit` PASS on the previous commit) |
+| New release applied a migration | migrations are forward-only. The previous api **starts** on the newer database without complaint — the migrator refuses a modified migration but ignores a version it does not know — and runs untested against a schema it was not written for. So do not stop at the code rollback: check out the previous commit and restore `.env.previous` as above, then restore the step-3 `pre-upgrade` archive per [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (renames, never drops; its own rollback is §6.6). Anything students wrote after the backup is lost (§8 there) |
 | Security incident | `prod stop web` (stays stopped across reboots with `unless-stopped`); running labs are reclaimed by idle expiry |
 | Stop launches only | tell the cohort; `LAB_LAUNCHES_PAUSED=true` and `prod up -d api` refuses every Start Lab and keeps running labs (runbook §3) |
 

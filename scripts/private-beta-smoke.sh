@@ -423,6 +423,35 @@ else
   fail k8s.attestation "jtt_network_isolation_attestation_valid is ${attested:-absent}: Kubernetes labs are refused (RB-18)"
 fi
 
+# What is running, against the checkout. Each service reports JTT_COMMIT from
+# the environment it was created with (jtt_build_info). A service that was not
+# re-created after an upgrade or a rollback, or a JTT_COMMIT left from the last
+# release, reports another commit while every health check passes.
+if [ -n "$up" ]; then
+  build_info=$(q 'jtt_build_info' || true)
+  reported=$(printf '%s\n' "$build_info" | sed -nE 's/.*commit="([^"]*)".*service="([^"]*)".*/\2=\1/p; s/.*service="([^"]*)".*commit="([^"]*)".*/\1=\2/p' | sort -u)
+  mismatched=() unknown=()
+  for pair in $reported; do
+    svc=${pair%%=*} sha=${pair#*=}
+    if [ -z "$sha" ] || [ "$sha" = unknown ]; then
+      unknown+=("$svc")
+    elif [ "$head" = unknown ] || [ "${head:0:${#sha}}" != "$sha" ] || [ "${#sha}" -lt 7 ]; then
+      mismatched+=("$svc=$sha")
+    fi
+  done
+  if [ -z "$reported" ]; then
+    fail release.commit 'no service reports jtt_build_info: which software is running cannot be established'
+  elif [ ${#mismatched[@]} -gt 0 ]; then
+    fail release.commit "running services report another commit than the checkout (${head:0:12}): ${mismatched[*]}. Set JTT_COMMIT in .env to \`git rev-parse HEAD\` and \`prod up -d --build --wait\`"
+  elif [ ${#unknown[@]} -gt 0 ]; then
+    warn release.commit "${unknown[*]} report commit unknown: set JTT_COMMIT in .env to \`git rev-parse HEAD\` and \`prod up -d --wait\`, so the running release can be attested"
+  else
+    pass release.commit "api, terminal and sandboxd report the checkout's commit ${head:0:12}"
+  fi
+else
+  fail release.commit 'could not check: Prometheus did not answer (see observability.targets)'
+fi
+
 days=$(q_first 'jtt:tls_certificate_expiry:seconds / 86400' || true)
 if [ -z "$days" ]; then
   fail tls.expiry-metric 'no certificate expiry is measured'
@@ -439,7 +468,10 @@ if [ -z "$backup_age" ]; then
   fail backup.recent 'no successful backup has been recorded (run scripts/db-backup.sh and schedule it)'
 else
   hours=$(( ${backup_age%%.*} / 3600 ))
-  if [ "${backup_age%%.*}" -le 86400 ]; then pass backup.recent "last successful backup ${hours}h ago (RPO 24h)"; else fail backup.recent "last successful backup ${hours}h ago: past the 24h RPO"; fi
+  # BackupStale's 26 hours, not a bare 24: a daily job's last success is a
+  # little over 24 hours old just before the next run, and a smoke at that
+  # minute failed a schedule that was working.
+  if [ "${backup_age%%.*}" -le 93600 ]; then pass backup.recent "last successful backup ${hours}h ago (daily schedule, 24h RPO; BackupStale at 26h)"; else fail backup.recent "last successful backup ${hours}h ago: past BackupStale's 26h, so a daily run was missed"; fi
 fi
 verify_age=$(q_first 'jtt:backup_age:seconds{operation="verify"}' || true)
 if [ -z "$verify_age" ]; then

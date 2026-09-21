@@ -227,6 +227,13 @@ promql() {
     'jtt:backup_age:seconds{operation="backup"}') [ -n "${FAKE_NO_BACKUP-}" ] || echo "{operation=\"backup\"} => ${FAKE_BACKUP_AGE:-3600} @[1]" ;;
     'jtt:backup_age:seconds{operation="verify"}') echo '{operation="verify"} => 86400 @[1]' ;;
     jtt_backup_last_success_offhost) echo "jtt_backup_last_success_offhost{operation=\"backup\"} => ${FAKE_OFFHOST:-1} @[1]" ;;
+    jtt_build_info)
+      for svc in api terminal sandboxd; do
+        commit=${FAKE_BUILD_COMMIT-0123456789ab}
+        [ "$svc" = "${FAKE_STALE_SERVICE-}" ] && commit=fedcba987654
+        echo "jtt_build_info{commit=\"$commit\", instance=\"$svc:9400\", job=\"$svc\", node_version=\"v22\", service=\"$svc\", version=\"0.1.0\"} => 1 @[1]"
+      done
+      ;;
     *) echo "fake promql: unexpected $1" >&2; return 1 ;;
   esac
 }
@@ -372,6 +379,12 @@ fixture() {
     printf 'clusters: []\n' >"$root/repo/infrastructure/kind/generated/kubeconfig-host-jumptotech-labs.yaml"
     printf 'MemTotal: 16000000 kB\nMemAvailable: 12000000 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' >"$root/proc/meminfo"
     printf '0.50 0.40 0.30 1/200 999\n' >"$root/proc/loadavg"
+    printf 'cpu  1000 0 500 8000 300 0 50 150 0 0\ncpu0 1000 0 500 8000 300 0 50 150 0 0\n' >"$root/proc/stat"
+    mkdir -p "$root/proc/pressure"
+    printf 'some avg10=0.00 avg60=1.25 avg300=0.50 total=100\n' >"$root/proc/pressure/cpu"
+    printf 'some avg10=0.00 avg60=3.50 avg300=0.50 total=100\nfull avg10=0.00 avg60=0.10 avg300=0.00 total=10\n' >"$root/proc/pressure/memory"
+    printf 'some avg10=0.00 avg60=0.75 avg300=0.50 total=100\n' >"$root/proc/pressure/io"
+    printf 'pgfault 12345\noom_kill 2\n' >"$root/proc/vmstat"
     {
       echo '17 3 * * * jtt-ops BACKUP_COPY_HOOK=/usr/local/sbin/copy scripts/db-backup.sh'
       echo '17 5 * * 0 jtt-ops scripts/db-restore.sh --verify-only /srv/backups/newest.dump'
@@ -831,6 +844,19 @@ check 'an evidence file is written' bash -c 'ls "$1"/evidence/private-beta-smoke
 check 'the evidence says which host it proves' bash -c 'grep -q "proves nothing about any other host" "$1"/evidence/private-beta-smoke-*.txt' _ "$root"
 common_properties
 
+scenario 'smoke: a service running another commit than the checkout fails; an unattested commit warns'
+root=$(fixture releasestale)
+FAKE_STALE_SERVICE=terminal smoke "$root"
+check 'release.commit FAIL' has_fail 'release\.commit'
+check 'names the stale service' has_line 'release\.commit .*terminal=fedcba987654'
+root=$(fixture releaseunknown)
+FAKE_BUILD_COMMIT=unknown smoke "$root"
+check 'an unset JTT_COMMIT warns' has_line '^WARN +release\.commit '
+check 'and does not fail by itself' lacks_line '^FAIL +release\.commit'
+root=$(fixture releasehealthy)
+smoke "$root"
+check 'the checkout commit passes' has_line '^PASS +release\.commit '
+
 scenario 'smoke: a plaintext origin is refused before anything runs'
 root=$(fixture smokeusage)
 smoke "$root" --origin http://labs.test.invalid
@@ -956,10 +982,17 @@ root=$(fixture sampler)
 run host-capacity-sample.sh "$root" --out-dir "$root/capacity" --interval 1 --duration 0 --kubeconfig "$root/kubeconfig"
 check 'exit 0' exit_is 0
 check 'host.csv has a header and a sample' bash -c '[ "$(wc -l <"$1/capacity/host.csv")" -eq 2 ]' _ "$root"
-check 'memory, containers and pods are recorded' bash -c 'tail -1 "$1/capacity/host.csv" | grep -Eq ",15625,11718,.*,1,1,3$"' _ "$root"
+check 'memory, containers and pods are recorded' bash -c 'tail -1 "$1/capacity/host.csv" | grep -Eq ",15625,11718,.*,1,1,3,"' _ "$root"
+check 'the first sample has no CPU interval yet; pressure and OOM kills are recorded' bash -c 'tail -1 "$1/capacity/host.csv" | grep -Eq ",3,,,,1.25,3.50,0.75,2$"' _ "$root"
+check 'the header names the saturation columns' bash -c 'head -1 "$1/capacity/host.csv" | grep -q ",cpu_steal_pct,psi_cpu_some_avg60,psi_memory_some_avg60,psi_io_some_avg60,oom_kills_total$"' _ "$root"
+check 'the peaks include memory pressure and OOM kills' has_line '^peak memory pressure +3.5'
 check 'container memory is converted to MiB' grep -q ',jumptotech-labs-postgres-1,0.20,1126,12$' "$root/capacity/containers.csv"
 check 'the peaks are printed' has_line '^peak containers +1 running'
 check 'only read-only calls' only_read_only_calls
+printf 'time,load1\n2026-01-01T00:00:00Z,1\n' >"$root/old.csv"
+mkdir -p "$root/oldrun" && cp "$root/old.csv" "$root/oldrun/host.csv"
+run host-capacity-sample.sh "$root" --out-dir "$root/oldrun" --interval 1 --duration 0
+check 'appending to a host.csv with other columns is refused' exit_is 2
 
 scenario 'sampler: usage errors exit 2'
 root=$(fixture samplerusage)
