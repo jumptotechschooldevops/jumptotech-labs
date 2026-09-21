@@ -41,7 +41,12 @@ export function statusClass(status: number): string {
 export function routeTemplate(req: Request): string {
   const route = (req as Request & { route?: { path?: string } }).route;
   if (!route?.path) return 'unmatched';
-  const base = req.baseUrl || '';
+  // `baseUrl` is the request's own spelling of the mount path, and Express
+  // matches mounts case-insensitively: `/api/LABS`, `/api/lAbS`, … each made
+  // a new label value — 8192 casings of `/api/learning-paths` alone, fifteen
+  // series each, from one signed-in student. Every mount is a lowercase
+  // literal, so lowercasing gives back the template.
+  const base = (req.baseUrl || '').toLowerCase();
   const path = route.path === '/' ? '' : route.path;
   const combined = `${base}${path}`;
   return combined.length > 0 ? combined : '/';
