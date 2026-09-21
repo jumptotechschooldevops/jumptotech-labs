@@ -74,8 +74,14 @@ groups:
       # expired attestation looks exactly like the cluster being down
       # (ProviderUnavailable). Critical: the Kubernetes track admits no student,
       # and the fix is a probe run, not a restart.
+      #
+      # The api sets the maximum age with every decision, and makes decisions
+      # only when the attestation is required. Without that join, the gauge's
+      # unset 0 paged critically on every stack that does not require one.
       - alert: NetworkIsolationNotAttested
-        expr: jtt_network_isolation_attestation_valid == 0
+        expr: |
+          jtt_network_isolation_attestation_valid == 0
+            and on(instance) jtt_network_isolation_attestation_max_age_seconds > 0
         for: 2m
         labels:
           severity: critical
@@ -85,7 +91,7 @@ groups:
 
       - alert: NetworkIsolationAttestationAging
         expr: |
-          (time() - jtt_network_isolation_attestation_verified_timestamp_seconds)
+          (time() - (jtt_network_isolation_attestation_verified_timestamp_seconds > 0))
             > 0.75 * jtt_network_isolation_attestation_max_age_seconds
         for: 10m
         labels:

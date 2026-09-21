@@ -129,8 +129,9 @@ describe('the certificate alerts use BETA-P0-017 certificate health', () => {
   });
 
   it('measures expiry from the served certificate notAfter', () => {
+    // `> 0`: the unset gauge reads 0, which is "never measured", not 1970.
     expect(record('jtt:tls_certificate_expiry:seconds').expr).toBe(
-      'jtt_tls_certificate_not_after_timestamp_seconds - time()',
+      '(jtt_tls_certificate_not_after_timestamp_seconds > 0) - time()',
     );
     // The API sets that gauge from P0-017's CertificateSummary.notAfter.
     expect(read('apps/api/src/operations.ts')).toMatch(

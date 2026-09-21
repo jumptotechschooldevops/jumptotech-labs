@@ -565,9 +565,11 @@ tests:
     input_series:
       - series: 'jtt_network_isolation_attestation_valid{instance="api:9400"}'
         values: '1+0x8 0+0x40'
-      # Verified at the start; a one-hour maximum age.
+      - series: 'jtt_network_isolation_attestation_max_age_seconds{instance="api:9400"}'
+        values: '3600+0x48'
+      # Verified one second in (a timestamp of 0 is "never"); a one-hour maximum age.
       - series: 'jtt_network_isolation_attestation_verified_timestamp_seconds{instance="other:9400"}'
-        values: '0+0x300'
+        values: '1+0x300'
       - series: 'jtt_network_isolation_attestation_max_age_seconds{instance="other:9400"}'
         values: '3600+0x300'
     alert_rule_test:
@@ -596,6 +598,75 @@ tests:
             exp_annotations:
               summary: 'the enforcement attestation is past 75% of its maximum age; re-run the probe before admission stops'
               runbook_url: docs/runbooks/RB-18-network-isolation.md
+
+  # ------------------------------------ 10b. gauges that were never measured
+  # prom-client exports a gauge with no labels as 0 until it is set. A stack
+  # that does not measure these (no edge probe, no attestation required, no
+  # host readings) must page about none of them.
+  - interval: 15s
+    name: gauges that were never set raise nothing
+    input_series:
+      - series: 'jtt_tls_certificate_not_after_timestamp_seconds{instance="api:9400"}'
+        values: '0+0x160'
+      - series: 'jtt_host_memory_total_bytes{instance="api:9400"}'
+        values: '0+0x160'
+      - series: 'jtt_host_memory_available_bytes{instance="api:9400"}'
+        values: '0+0x160'
+      - series: 'jtt_host_filesystem_size_bytes{instance="api:9400",filesystem="container_root"}'
+        values: '0+0x160'
+      - series: 'jtt_host_filesystem_available_bytes{instance="api:9400",filesystem="container_root"}'
+        values: '0+0x160'
+      - series: 'jtt_network_isolation_attestation_valid{instance="api:9400"}'
+        values: '0+0x160'
+      - series: 'jtt_network_isolation_attestation_verified_timestamp_seconds{instance="api:9400"}'
+        values: '0+0x160'
+      - series: 'jtt_network_isolation_attestation_max_age_seconds{instance="api:9400"}'
+        values: '0+0x160'
+    alert_rule_test:
+      - eval_time: 39m
+        alertname: TlsCertificateExpiresWithin7Days
+        exp_alerts: []
+      - eval_time: 39m
+        alertname: HostMemoryCritical
+        exp_alerts: []
+      - eval_time: 39m
+        alertname: HostMemoryPressure
+        exp_alerts: []
+      - eval_time: 39m
+        alertname: HostDiskSpaceCritical
+        exp_alerts: []
+      - eval_time: 39m
+        alertname: NetworkIsolationNotAttested
+        exp_alerts: []
+      - eval_time: 39m
+        alertname: NetworkIsolationAttestationAging
+        exp_alerts: []
+
+  # An edge that failed its first handshake never learned a notAfter. It pages
+  # as what it is, not as a certificate that expired in 1970 (whose inhibit
+  # rule would hide this one).
+  - interval: 15s
+    name: an edge that never answered pages as unhealthy, not as an expired certificate
+    input_series:
+      - series: 'jtt_tls_certificate_not_after_timestamp_seconds{instance="api:9400"}'
+        values: '0+0x80'
+      - series: 'jtt_tls_check_status{check="served",instance="api:9400"}'
+        values: '2+0x80'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: TlsCertificateExpiresWithin7Days
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: TlsEdgeUnhealthy
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              check: served
+              instance: api:9400
+            exp_annotations:
+              summary: 'the HTTPS edge fails a browser-equivalent TLS check'
+              description: 'jtt_tls_check_findings{check="served"} names the finding code. Run npm run tls:check on the host for the full message.'
+              runbook_url: docs/runbooks/RB-15-tls-edge.md
 
   # ------------------------------------------------------ 11. authentication
   - interval: 15s
