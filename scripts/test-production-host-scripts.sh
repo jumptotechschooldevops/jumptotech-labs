@@ -789,6 +789,23 @@ check 'the selected project is named' has_line "compose project 'jtt-hostval'"
 CONFIRM_DESTROY=jtt-hostval guard "$root"
 check 'its own name does' exit_is 0
 
+scenario 'guard: make up / rebuild / db-up re-create the stack from the development files, and are refused on production'
+root=$(fixture guardrecreates)
+run refuse-on-production.sh "$root" --recreates rebuild
+check 'exit 1' exit_is 1
+check 'names the target' has_line '^REFUSED: make rebuild on a production checkout'
+check 'says what it would do' has_line 'development files only'
+check 'points at the production command' has_line 'prod up -d'
+check 'does not claim to destroy anything' lacks_line 'would destroy'
+common_properties_guard
+rm -f "$root/repo/infrastructure/docker/nginx/tls/privkey.pem"
+run refuse-on-production.sh "$root" --recreates rebuild
+check 'a development checkout may rebuild' exit_is 0
+FAKE_PROJECT_POLICY=unless-stopped run refuse-on-production.sh "$root" --recreates up
+check 'a running production stack refuses make up even without the key' exit_is 1
+run refuse-on-production.sh "$root" --recreates
+check '--recreates without a target is a usage error' exit_is 2
+
 scenario 'guard: usage errors exit 2'
 root=$(fixture guardusage)
 run refuse-on-production.sh "$root" clean

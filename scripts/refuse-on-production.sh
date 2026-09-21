@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 #
-# Refuse a development-only destructive make target on a checkout that runs, or
-# has run, the production stack.
+# Refuse a development-only make target on a checkout that runs, or has run,
+# the production stack.
 #
 #   scripts/refuse-on-production.sh TARGET WHAT-IT-DESTROYS
+#   scripts/refuse-on-production.sh --recreates TARGET
+#
+# `--recreates` is for the targets that start or rebuild the stack from the
+# development compose files (`make up`, `make rebuild`, `make up-kubernetes-only`,
+# `make db-up`). They delete nothing, but on the production project they
+# re-create each service without the production overlays: no pinned NODE_ENV or
+# AUTH_MODE (the development default is AUTH_MODE=development), no restart
+# policy, the edge off 443/80, PostgreSQL published on loopback. The site goes
+# down and what comes back is the development configuration over the student
+# database.
 #
 # `make clean` runs `docker compose down -v`, which deletes this project's
 # PostgreSQL volume (every student's progress) and then the kind cluster;
@@ -31,9 +41,18 @@
 # Exit: 0 not production, or confirmed · 1 refused · 2 usage.
 set -euo pipefail
 
-[ $# -eq 2 ] || { echo "usage: $0 TARGET WHAT-IT-DESTROYS" >&2; exit 2; }
-target=$1
-destroys=$2
+recreates=0
+if [ "${1:-}" = --recreates ]; then
+  recreates=1
+  shift
+  [ $# -eq 1 ] || { echo "usage: $0 --recreates TARGET" >&2; exit 2; }
+  target=$1
+  destroys=
+else
+  [ $# -eq 2 ] || { echo "usage: $0 TARGET WHAT-IT-DESTROYS" >&2; exit 2; }
+  target=$1
+  destroys=$2
+fi
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 # shellcheck source=scripts/production-host-lib.sh
@@ -63,6 +82,18 @@ fi
 if [ "${CONFIRM_DESTROY:-}" = "$project" ]; then
   echo "make $target: confirmed for production project '$project' (CONFIRM_DESTROY)." >&2
   exit 0
+fi
+
+if [ $recreates -eq 1 ]; then
+  {
+    echo "REFUSED: make $target on a production checkout."
+    for reason in "${reasons[@]}"; do echo "  - $reason"; done
+    echo "It would re-create compose project '$project' from the development files only:"
+    echo "no production overlays (AUTH_MODE/NODE_ENV pins, restart policy, TLS edge on 443/80)."
+    echo "Use the production command instead (docs/runbooks/private-beta-operations.md §1):"
+    echo "  prod up -d --build --wait     # or: prod up -d <service>"
+  } >&2
+  exit 1
 fi
 
 {

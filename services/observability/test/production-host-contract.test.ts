@@ -450,6 +450,25 @@ describe('the gates that prove this contract actually run', () => {
     }
   });
 
+  it('refuses the development start targets on a production checkout before they re-create anything', () => {
+    // On the production project these re-create every service from the
+    // development files: no AUTH_MODE/NODE_ENV pins, no restart policy, no edge.
+    const makefile = read('Makefile');
+    for (const [target, starts] of [
+      ['up', '$(COMPOSE) up'],
+      ['up-kubernetes-only', 'docker compose up'],
+      ['rebuild', '$(COMPOSE) up'],
+      ['db-up', 'docker compose up'],
+    ] as const) {
+      const start = makefile.indexOf(`\n${target}: ## `);
+      expect(start, target).toBeGreaterThan(-1);
+      const recipe = makefile.slice(start, makefile.indexOf('\n\n', start + 1));
+      const guard = recipe.indexOf(`scripts/refuse-on-production.sh --recreates ${target}\n`);
+      expect(guard, `${target} runs the guard`).toBeGreaterThan(-1);
+      expect(recipe.indexOf(starts), `${target} still does its work`).toBeGreaterThan(guard);
+    }
+  });
+
   it('never tells an operator to delete volumes', () => {
     for (const file of [
       'scripts/production-preflight.sh',
