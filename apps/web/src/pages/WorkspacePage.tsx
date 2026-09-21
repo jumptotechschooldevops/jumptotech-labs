@@ -800,6 +800,10 @@ export function WorkspacePage({ labId }: { labId: string }) {
       );
     }
     const other = active.entries[0];
+    // Reached again after a reload of the ended summary, or Back from the next
+    // lab: the summary is gone, and "not running" alone read as if the work had
+    // been lost. Only what saved progress says; nothing when it could not be read.
+    const completed = catalog.progressFor(lab.id)?.status === 'COMPLETED';
     return (
       <div className="page page--narrow">
         <EmptyState
@@ -817,10 +821,17 @@ export function WorkspacePage({ labId }: { labId: string }) {
             )
           }
         >
+          {completed ? (
+            <p>
+              <span aria-hidden="true">✓ </span>You have completed this lab. It is saved to your progress.
+            </p>
+          ) : null}
           <p>
             {other
               ? `You have a different lab running: ${other.session.labId} ${other.labTitle}.`
-              : 'There is no environment for this lab right now. Launch it from the lab page.'}
+              : completed
+                ? 'Its environment has been removed. Launch it again from the lab page for more practice.'
+                : 'There is no environment for this lab right now. Launch it from the lab page.'}
           </p>
         </EmptyState>
       </div>

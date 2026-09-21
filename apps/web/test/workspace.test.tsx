@@ -25,6 +25,7 @@ import {
   attemptSummary,
   labDetail,
   learningPathProgress,
+  progressSnapshot,
   resetApiMock,
   sessionInfo,
   sessionsResponse,
@@ -150,6 +151,22 @@ describe('finding the running lab', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Go to the lab page' }).getAttribute('href')).toBe('#/labs/LINUX-001');
     expect(screen.queryByTestId('terminal')).toBeNull();
+  });
+
+  it('says a lab that is not running was completed, when it was — after a reload of the ended summary, say', async () => {
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    apiMock.getProgress.mockResolvedValue(progressSnapshot({ 'LINUX-001': 'COMPLETED' }));
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' })).toBeTruthy();
+    expect(await screen.findByText(/You have completed this lab/)).toBeTruthy();
+  });
+
+  it('does not claim a completion it has not read', async () => {
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' });
+    expect(screen.queryByText(/You have completed this lab/)).toBeNull();
   });
 
   it('does not allow Verify, or ask for a terminal, before the environment is ready — and polls until it is', async () => {
