@@ -111,7 +111,11 @@ EXPOSE 4002
 # checks that the listener accepts a connection instead of performing a
 # handshake, so it never needs to skip certificate verification. It sends no
 # credential either way.
-HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+# The start period is the api's (api.Dockerfile): this service also compiles
+# its TypeScript at start, which took minutes on a loaded host, and a failing
+# check inside the period costs a healthy start nothing. With 10 s, `up --wait`
+# failed a slow start, and a service waiting on this one never started.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=300s --retries=5 \
   CMD node -e "const p=+(process.env.SANDBOXD_PORT||4002);if(process.env.SANDBOXD_TLS_CERT_FILE){require('node:net').connect(p,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))}else{fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))}"
 
 # One process, so SIGTERM from tini reaches the shutdown handler: the tsx CLI

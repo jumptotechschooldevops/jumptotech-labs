@@ -47,6 +47,18 @@ describe('a slow api start is not an unhealthy one', () => {
     expect(Number(match![1])).toBeGreaterThanOrEqual(MIN_START_PERIOD_SECONDS);
   });
 
+  it.each(['terminal', 'sandboxd'])('gives %s, which also compiles at start and is waited on, the same', (service) => {
+    const match = /HEALTHCHECK[^\n]*--start-period=(\d+)s/.exec(read(`infrastructure/docker/${service}.Dockerfile`));
+    expect(match, `${service}.Dockerfile has a HEALTHCHECK with a start period`).not.toBeNull();
+    expect(Number(match![1])).toBeGreaterThanOrEqual(MIN_START_PERIOD_SECONDS);
+  });
+
+  it('keeps the terminal overlay healthcheck as patient', () => {
+    const match = /start_period:\s*(\d+)s/.exec(serviceBlock('docker-compose.observability.yml', 'terminal'));
+    expect(match, 'the observability overlay sets the terminal start_period').not.toBeNull();
+    expect(Number(match![1])).toBeGreaterThanOrEqual(MIN_START_PERIOD_SECONDS);
+  });
+
   it('is why: web and terminal wait for the api to be healthy', () => {
     for (const service of ['web', 'terminal']) {
       expect(serviceBlock('docker-compose.yml', service)).toMatch(/api:\n\s+condition: service_healthy/);
