@@ -69,6 +69,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# BETA-P0-018. A refusal of the scheduled job's own configuration — a relative
+# BACKUP_DIR, a bad retention value, a BACKUP_COPY_HOOK left non-executable —
+# is a failed backup too, and must reach BackupLastRunFailed tonight rather
+# than BackupStale a day later. `cleanup` replaces this trap once it exists.
+trap 'jtt_record_failure_on_exit backup' EXIT
+
 backup_dir=${BACKUP_DIR:-$JTT_REPO_ROOT/backups/postgres}
 retention_days=${BACKUP_RETENTION_DAYS:-14}
 min_keep=${BACKUP_RETENTION_MIN_KEEP:-7}

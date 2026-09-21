@@ -657,6 +657,19 @@ expect 'a failed backup still leaves nothing in BACKUP_DIR' nothing_written
 expect 'a failed backup keeps its own non-zero exit status' failed
 
 new_case
+export BACKUP_COPY_HOOK="$case_dir/copy-hook"
+printf '#!/bin/sh\nexit 0\n' >"$BACKUP_COPY_HOOK"
+chmod 644 "$BACKUP_COPY_HOOK"
+backup
+expect 'a BACKUP_COPY_HOOK that is not executable: refused' says 'not an executable file'
+expect 'a configuration refusal before the dump is recorded as a failed backup' recent_timestamp db-backup.last-failure
+expect 'a configuration refusal records no success' test ! -e "$(status_file db-backup.last-success)"
+
+new_case
+backup --no-such-flag
+expect 'a usage error is not recorded as a backup outcome' test ! -e "$(status_file db-backup.last-failure)"
+
+new_case
 export BACKUP_STATUS_DIR=relative/status
 backup
 expect 'a relative BACKUP_STATUS_DIR does not fail the backup' succeeded
