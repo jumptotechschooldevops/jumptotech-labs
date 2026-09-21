@@ -166,9 +166,10 @@ export function productionAuthProblems(input: ProductionAuthInput): string[] {
   } else {
     publicOrigin = bareOrigin(input.publicOrigin);
     if (!publicOrigin) {
-      problems.push(
-        `PUBLIC_ORIGIN '${input.publicOrigin}' is not a bare origin (scheme://host[:port], nothing else).`,
-      );
+      // Not echoed: a malformed origin is exactly where a pasted credential
+      // sits (`https://user:password@host`), and this message reaches the
+      // container log and `make production-config-check`.
+      problems.push('PUBLIC_ORIGIN is not a bare origin (scheme://host[:port], nothing else).');
     } else if (!publicOrigin.startsWith('https://')) {
       problems.push(`PUBLIC_ORIGIN must use https: (got '${publicOrigin}').`);
       publicOrigin = null;
@@ -194,10 +195,11 @@ export function productionAuthProblems(input: ProductionAuthInput): string[] {
   }
 
   // --- who may call with credentials --------------------------------------
-  for (const origin of input.allowedOrigins) {
+  for (const [index, origin] of input.allowedOrigins.entries()) {
     const parsed = bareOrigin(origin);
     if (!parsed) {
-      problems.push(`ALLOWED_ORIGINS entry '${origin}' is not a bare origin.`);
+      // By position, not value — as for PUBLIC_ORIGIN above.
+      problems.push(`ALLOWED_ORIGINS entry ${index + 1} is not a bare origin (scheme://host[:port], nothing else).`);
     } else if (!parsed.startsWith('https://')) {
       problems.push(`ALLOWED_ORIGINS entry '${origin}' must use https:.`);
     }

@@ -211,6 +211,14 @@ describe('production rejects an unsafe callback or origin', () => {
     }
   });
 
+  it('never repeats a malformed origin, which is where a pasted credential sits', () => {
+    const pasted = 'https://ops:HunterPastedPassw0rd@labs.example.com';
+    const message = refusal({ ...PRODUCTION, PUBLIC_ORIGIN: pasted, ALLOWED_ORIGINS: `https://labs.example.com,${pasted}` });
+    expect(message).toContain('PUBLIC_ORIGIN is not a bare origin');
+    expect(message).toContain('ALLOWED_ORIGINS entry 2 is not a bare origin');
+    expect(message).not.toContain('HunterPastedPassw0rd');
+  });
+
   it('refuses a callback on any origin but the public one', () => {
     for (const hostile of [
       'https://evil.example/auth/callback',
@@ -247,7 +255,7 @@ describe('production rejects an unsafe callback or origin', () => {
       "entry 'http://labs.example.com' must use https:",
     );
     expect(refusal({ ...PRODUCTION, ALLOWED_ORIGINS: 'https://labs.example.com,*' })).toContain(
-      "entry '*' is not a bare origin",
+      'entry 2 is not a bare origin',
     );
     expect(refusal({ ...PRODUCTION, ALLOWED_ORIGINS: 'https://other.example.com' })).toContain(
       'ALLOWED_ORIGINS must include PUBLIC_ORIGIN',
