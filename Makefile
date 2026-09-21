@@ -58,12 +58,22 @@ secrets-check: ## Prove secrets, mounts, published ports and private networks pe
 # alertmanager webhook-url file follows the same rule (its README). What keeps
 # other local accounts out is the checkout directory's own mode — see
 # docs/development/production-host-readiness.md §5.
+#
+# The value is read the way Compose and the preflight read it (the last
+# assignment wins, surrounding quotes removed), and a missing or empty one is
+# an error. The recipe was a `grep | head | cut` pipeline under /bin/sh: it
+# took the first assignment, kept the quotes, and with no .env at all wrote an
+# empty file and said it had written the token — the preflight then failed
+# `scrape-token-match` and told the operator to run this target again.
 observability-token: ## Write the scrape token where Prometheus reads it
 	@mkdir -p infrastructure/observability/secrets
 	@chmod 0711 infrastructure/observability/secrets
-	@(umask 077; grep -E '^OBSERVABILITY_SCRAPE_TOKEN=' .env \
-		| head -1 | cut -d= -f2- | tr -d '\n' \
-		> infrastructure/observability/secrets/scrape-token)
+	@bash -c 'set -eu; . scripts/production-host-lib.sh; \
+		value=$$(jtt_env_value .env OBSERVABILITY_SCRAPE_TOKEN) || value=; \
+		if [ -z "$$value" ]; then \
+			echo "OBSERVABILITY_SCRAPE_TOKEN is not set in .env: run make secrets first" >&2; exit 1; \
+		fi; \
+		(umask 077; printf "%s" "$$value" > infrastructure/observability/secrets/scrape-token)'
 	@chmod 0644 infrastructure/observability/secrets/scrape-token
 	@echo "wrote infrastructure/observability/secrets/scrape-token (git-ignored)"
 

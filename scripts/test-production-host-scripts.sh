@@ -73,6 +73,7 @@ FAKE
 
 cat >"$fakebin/ss" <<'FAKE'
 #!/usr/bin/env bash
+[ -z "${FAKE_SS_BROKEN-}" ] || exit 1
 [ -n "${FAKE_SS_NO_SSH-}" ] || echo 'LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*'
 echo 'LISTEN 0 4096 127.0.0.1:16443 0.0.0.0:*'
 if [ -n "${FAKE_SS_EXTRA-}" ]; then printf '%s\n' "$FAKE_SS_EXTRA"; fi
@@ -84,7 +85,7 @@ while [ "${1:-}" = -C ]; do shift 2; done
 case ${1:-} in
   rev-parse) [ -z "${FAKE_KIND_BROKEN-}" ] || true; echo 0123456789abcdef0123456789abcdef01234567 ;;
   describe) exit 1 ;;
-  status) printf '%s' "${FAKE_GIT_DIRTY-}" ;;
+  status) [ -z "${FAKE_GIT_STATUS_BROKEN-}" ] || exit 128; printf '%s' "${FAKE_GIT_DIRTY-}" ;;
   *) exit 1 ;;
 esac
 FAKE
@@ -244,7 +245,7 @@ case ${1:-} in
       *OSType*) echo linux ;;
       *CgroupVersion*) echo 2 ;;
       *CgroupDriver*) echo systemd ;;
-      *SecurityOptions*) echo '["name=apparmor","name=seccomp,profile=builtin"]' ;;
+      *SecurityOptions*) [ -z "${FAKE_SECOPTS_BROKEN-}" ] || exit 1; echo '["name=apparmor","name=seccomp,profile=builtin"]' ;;
       *DockerRootDir*) echo "$FAKE_DOCKER_ROOT" ;;
       *NCPU*) echo 8 ;;
     esac
@@ -276,7 +277,7 @@ case ${1:-} in
     ;;
   inspect)
     case "$*" in
-      *RestartCount*) echo "${FAKE_RESTARTS:-0} ${FAKE_RESTART_POLICY:-unless-stopped}" ;;
+      *RestartCount*) [ -z "${FAKE_INSPECT_BROKEN-}" ] || exit 1; echo "${FAKE_RESTARTS:-0} ${FAKE_RESTART_POLICY:-unless-stopped}" ;;
       *'{{.HostConfig.RestartPolicy.Name}}'*) echo "${FAKE_PROJECT_POLICY:-no}" ;;
       *'{{.Name}}'*) echo "/jumptotech-labs-${!##id-}-1" ;;
       *Networks*) echo 'jumptotech-labs-database ' ;;
@@ -974,6 +975,36 @@ check 'restart policy FAIL' has_fail 'stack\.api-restart-policy'
 root=$(fixture always)
 FAKE_RESTART_POLICY=always smoke "$root"
 check 'restart: always FAIL' has_fail 'stack\.web-restart-policy'
+
+scenario 'smoke: a restart policy that could not be read is a FAIL, not a silent skip'
+root=$(fixture inspectbroken)
+FAKE_INSPECT_BROKEN=1 smoke "$root"
+check 'restart policy FAIL' has_fail 'stack\.api-restart-policy'
+
+scenario 'preflight: a check whose own command failed is a FAIL, never a PASS'
+root=$(fixture commandsfail)
+FAKE_SECOPTS_BROKEN=1 FAKE_SS_BROKEN=1 FAKE_GIT_STATUS_BROKEN=1 preflight "$root"
+check 'docker.rootless FAIL' has_fail 'docker\.rootless'
+check 'exposure.listeners FAIL' has_fail 'exposure\.listeners'
+check 'no port is declared free' lacks_line '^PASS +exposure\.'
+check 'git.clean FAIL' has_fail 'git\.clean'
+check 'RESULT is not PASS' lacks_line '^RESULT: PASS'
+
+# --- make observability-token ------------------------------------------------------------------
+
+scenario 'make observability-token: reads .env as Compose does, and refuses to write nothing'
+root=$work/token
+mkdir -p "$root/scripts"
+cp "$source_repo/scripts/production-host-lib.sh" "$root/scripts/"
+token_file=$root/infrastructure/observability/secrets/scrape-token
+token() { (cd "$root" && make -s -f "$source_repo/Makefile" observability-token >/dev/null 2>&1); }
+token_refused() { ! token; }
+check 'no .env: refused' token_refused
+check 'no .env: nothing written' test ! -s "$token_file"
+printf 'OBSERVABILITY_SCRAPE_TOKEN=\n' >"$root/.env"
+check 'an empty value: refused' token_refused
+printf 'OBSERVABILITY_SCRAPE_TOKEN=first\nOBSERVABILITY_SCRAPE_TOKEN="second"\n' >"$root/.env"
+check 'the last assignment, unquoted' bash -c 'cd "$1" && make -s -f "$2/Makefile" observability-token >/dev/null && [ "$(cat "$3")" = second ]' _ "$root" "$source_repo" "$token_file"
 
 # --- host-capacity-sample.sh --------------------------------------------------------------------
 
