@@ -216,7 +216,13 @@ export function createTerminalServer(
       return;
     }
     if (req.url === '/internal/reattach' && req.method === 'POST') {
-      handleControl(req, res, async (sessionId) => ({ reattached: await reattachSession(sessionId) }));
+      // In turn with every other attach of the session: two reattaches that
+      // overlapped each killed the same old shell and each opened a new one,
+      // leaving one unkilled — and, behind the broker, sandboxd's one shell per
+      // session closed the other under the student.
+      handleControl(req, res, async (sessionId) => ({
+        reattached: await attachInTurn(sessionId, () => reattachSession(sessionId)),
+      }));
       return;
     }
 
