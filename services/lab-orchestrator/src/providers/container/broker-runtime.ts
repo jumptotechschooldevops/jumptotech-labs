@@ -160,19 +160,28 @@ export class BrokerRuntime implements ContainerRuntimePort {
         signal: controller.signal,
       });
     } catch (error) {
+      clearTimeout(timer);
+      if (controller.signal.aborted) throw this.#late(op);
       const message = error instanceof Error ? error.message : String(error);
       throw new ContainerRuntimeError(`the runtime broker is unreachable: ${message}`);
-    } finally {
-      clearTimeout(timer);
     }
 
+    /*
+     * The deadline stays armed until the body is in. Plain `fetch` resolves at
+     * the headers, so clearing it there left the body — the part a stalled or
+     * frozen broker never finishes — with no bound at all, and the caller (a
+     * Start, a Check, a reaper sweep) waiting on it forever.
+     */
     let envelope: BrokerEnvelope;
     try {
       envelope = (await response.json()) as BrokerEnvelope;
     } catch {
+      if (controller.signal.aborted) throw this.#late(op);
       throw new ContainerRuntimeError(
         `the runtime broker returned a non-JSON response (HTTP ${response.status})`,
       );
+    } finally {
+      clearTimeout(timer);
     }
 
     if (!response.ok || !envelope.ok) {
@@ -184,5 +193,9 @@ export class BrokerRuntime implements ContainerRuntimePort {
       );
     }
     return (envelope.data ?? {}) as T;
+  }
+
+  #late(op: string): ContainerRuntimeError {
+    return new ContainerRuntimeError(`the runtime broker did not answer in time ('${op}', ${this.#timeoutMs} ms)`);
   }
 }

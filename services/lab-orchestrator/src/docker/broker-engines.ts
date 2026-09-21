@@ -147,19 +147,23 @@ class BrokerCall {
        * against the right provisioning step, and a student sees "environment
        * unreachable" instead of a stack trace.
        */
+      clearTimeout(timer);
+      if (controller.signal.aborted) throw this.#late(op);
       const message = error instanceof Error ? error.message : String(error);
       throw new DockerUnreachableError(`the runtime broker is unreachable: ${message}`);
-    } finally {
-      clearTimeout(timer);
     }
 
+    // The deadline covers the body too — see `BrokerRuntime.#call`.
     let envelope: Envelope;
     try {
       envelope = (await response.json()) as Envelope;
     } catch {
+      if (controller.signal.aborted) throw this.#late(op);
       throw new DockerUnreachableError(
         `the runtime broker returned a non-JSON response (HTTP ${response.status})`,
       );
+    } finally {
+      clearTimeout(timer);
     }
 
     if (!response.ok || !envelope.ok) {
@@ -172,6 +176,10 @@ class BrokerCall {
       throw new Error(message);
     }
     return (envelope.data ?? {}) as T;
+  }
+
+  #late(op: string): DockerUnreachableError {
+    return new DockerUnreachableError(`the runtime broker did not answer in time ('${op}', ${this.#timeoutMs} ms)`);
   }
 }
 
