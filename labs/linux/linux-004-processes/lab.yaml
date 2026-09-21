@@ -45,8 +45,8 @@ task:
     come back.
 
     `ledger-sync` is installed at `/usr/local/bin/ledger-sync` but is not
-    running. Start it so that it keeps running in the background after you get
-    your prompt back. It never exits on its own; that is expected, and it means
+    running. Start it by its full path, so that it keeps running in the
+    background after you get your prompt back. It never exits on its own; that is expected, and it means
     running it in the foreground will simply take over your terminal.
 
     Finally, write evidence of what you did. Capture the process-table line for
@@ -76,6 +76,8 @@ requirements:
   # The script is run by a shell — by its own `#!/bin/bash` line, or by `bash`
   # or `sh` — so its command line reads `…sh /usr/local/bin/ledger-sync`. The
   # bare path also matched `tail -f` or `less` on the file, which run nothing.
+  # Started as `./ledger-sync` from /usr/local/bin the line reads
+  # `/bin/bash ./ledger-sync`, which is why the task says "by its full path".
   - type: process_running
     pattern: sh /usr/local/bin/ledger-sync
     label: The ledger sync job is running

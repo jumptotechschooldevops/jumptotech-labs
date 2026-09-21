@@ -429,3 +429,16 @@ describe('LINUX-010 — the process squatting on 9105 is one process', () => {
     expect(exporter).not.toMatch(/&\s*$/m);
   });
 });
+
+// ------------------------------------------ LINUX-015's forbidden argument
+
+describe('LINUX-015 — the probe asks about another service however it is spelled', () => {
+  it('also asks for `restart payments-api ledger-api`, which a `* ledger-api` rule permits', async () => {
+    // Measured in the lab-linux image: sudoers `*` matches spaces, so
+    // `jtt-service-control * ledger-api` refused `restart payments-api` and
+    // permitted `restart payments-api ledger-api`, which restarts payments-api.
+    const lab = (await realRegistry()).get('LINUX-015');
+    const [seed] = await loadSeedScripts(lab);
+    expect(seed!.content).toContain('ask "$CTL" restart payments-api ledger-api');
+  });
+});

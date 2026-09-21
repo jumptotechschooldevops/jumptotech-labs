@@ -93,6 +93,12 @@ requirements:
   - type: file_exists
     path: /var/log/jumptotech/archive/index.txt
     label: The archive index survived the cleanup
+  # Its contents too: clearing the directory and then `touch index.txt` left a
+  # file of that name that indexes nothing.
+  - type: file_content
+    path: /var/log/jumptotech/archive/index.txt
+    contains: required by the archival tooling
+    label: The archive index still holds its entries
   - type: directory_exists
     path: /srv/jumptotech/data
     label: The application data tree was left alone

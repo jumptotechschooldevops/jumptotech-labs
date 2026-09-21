@@ -294,6 +294,8 @@ requirements:
   - type: file_content_absent
     path: /home/student/ops/depots.yaml
     contains: "country: no"
+    # YAML 1.1 reads NO, No and no alike as false.
+    ignore_case: true
     label: The leeds country is quoted, so it stays the country code it was meant to be
   - type: file_content_absent
     path: /home/student/ops/depots.yaml

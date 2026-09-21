@@ -221,6 +221,9 @@ requirements:
     section: Service
     directive: Group
     equals: ledger
+    # Left out, systemd runs the service under User='s primary group, which for
+    # the ledger account is ledger — the same process as writing it.
+    default: ledger
     label: The service runs under its own group
   - type: systemd_unit_directive
     path: /etc/systemd/system/ledger-api.service
