@@ -25,8 +25,8 @@
  * brace or a `stage` written outside `stages`, which is what CICD-010 injects.
  *
  * Does NOT prove: that Jenkins would run it, that a step would succeed, or that
- * a Groovy expression evaluates. Labs never claim otherwise; the README lists
- * each Jenkins exercise as syntax-verified, locally-executed, or future work.
+ * a Groovy expression evaluates. Labs never claim otherwise: each Jenkins
+ * lab's task says which of its checks read the file and which run a command.
  */
 
 import { matchLineValue } from '../line-value.js';

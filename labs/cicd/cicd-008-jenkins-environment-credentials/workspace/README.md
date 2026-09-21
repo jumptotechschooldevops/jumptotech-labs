@@ -23,6 +23,11 @@ node src/cli.mjs --selftest   # end-to-end self-check; exit code 0 means healthy
 | Test  | `node --test`                 | the library still behaves as specified |
 | Smoke | `node src/cli.mjs --selftest` | the built thing actually runs          |
 
+Write these commands in your pipelines exactly as they appear in this table.
+`npm run build` and `npm test` run the same thing through `package.json`, but
+the labs read your pipeline file for the commands above, so the npm forms are
+not recognised.
+
 ## Layout
 
 ```
