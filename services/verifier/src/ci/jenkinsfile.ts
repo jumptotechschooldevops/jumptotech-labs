@@ -154,6 +154,16 @@ export function stripComments(text: string): string {
   return masked.ok ? masked.masked : text;
 }
 
+/**
+ * The text with comments *and* string bodies blanked, offsets preserved: where
+ * a match found in `stripComments(text)` is real syntax, this is not a space.
+ * An unterminated comment or string leaves the text as it is.
+ */
+export function blankCommentsAndStrings(text: string): string {
+  const masked = mask(text, true);
+  return masked.ok ? masked.masked : text;
+}
+
 function mask(
   text: string,
   blankStrings: boolean,
@@ -356,9 +366,13 @@ function readEnvironmentBlock(
   if (!block) return [];
 
   const assignments: JenkinsAssignment[] = [];
-  for (const line of block.body.split('\n')) {
+  // Comments blanked by the lexer, not by a line-start test: a trailing
+  // `// credentials('…')` stayed part of a plain-text password's value, and a
+  // `/* … */` block of commented-out bindings read as bindings — both passed
+  // "bound from the credential store" with the password still in the file.
+  for (const line of stripComments(block.body).split('\n')) {
     const trimmed = line.trim();
-    if (trimmed.length === 0 || trimmed.startsWith('//')) continue;
+    if (trimmed.length === 0) continue;
     // Linear: the Jenkinsfile is the student's, and `(.+?)\s*$` was not.
     const match = matchLineValue(trimmed, /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*/);
     if (!match?.groups[1]) continue;

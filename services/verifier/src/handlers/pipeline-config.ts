@@ -12,8 +12,8 @@
  */
 import { fail, pass, type HandlerOutcome, type CicdVerifierHandler } from '../contract.js';
 import type { CicdVerifyReader } from '../cicd-reader.js';
-import { parseWorkflow } from '../ci/workflow.js';
-import { allAssignments, parseJenkinsfile, stripComments } from '../ci/jenkinsfile.js';
+import { parseWorkflow, withoutShellComment } from '../ci/workflow.js';
+import { allAssignments, blankCommentsAndStrings, parseJenkinsfile, stripComments } from '../ci/jenkinsfile.js';
 import {
   findHardcodedSecrets,
   isSecretReference,
@@ -152,7 +152,10 @@ function matchesVia(via: string, assignment: CandidateAssignment): boolean {
     case 'workflow_secret':
       return value !== null && /\$\{\{\s*secrets\./i.test(value);
     case 'jenkins_credentials':
-      return value !== null && /\bcredentials\s*\(/i.test(value);
+      // The whole value is the binding: `KEY = credentials('id')` is the only
+      // form an environment block binds with. Unanchored, a string that merely
+      // contained the words — `'hunter2 credentials(x)'` — counted as one.
+      return value !== null && /^credentials\s*\(/i.test(value.trim());
     case 'workflow_env':
       // `with:` inputs are recorded as assignments too — so that a token
       // passed to an action inline is still caught as hardcoded — but an
@@ -207,8 +210,15 @@ function referencedInCode(text: string, path: string, name: string, via: string 
     case undefined:
       return mentionsName(lines, name);
     case 'jenkins_credentials': {
-      const binding = new RegExp(`\\b[A-Za-z]*[Vv]ariable\\s*:\\s*['"]${escaped}['"]`);
-      return lines.some((line) => binding.test(line));
+      const binding = new RegExp(`\\b[A-Za-z]*[Vv]ariable\\s*:\\s*['"]${escaped}['"]`, 'g');
+      if (!isJenkinsPath(path)) return lines.some((line) => new RegExp(binding.source).test(line));
+      // The `…Variable:` key has to be syntax, not text inside a string:
+      // `sh "echo passwordVariable: 'NAME'"` binds nothing.
+      const syntax = blankCommentsAndStrings(text);
+      for (const match of stripComments(text).matchAll(binding)) {
+        if (syntax[match.index] !== ' ') return true;
+      }
+      return false;
     }
     case 'workflow_secret': {
       const secret = new RegExp(`\\$\\{\\{[^}]*\\bsecrets\\.${escaped}\\b`);
@@ -251,7 +261,7 @@ function mentionsName(lines: readonly string[], name: string): boolean {
  */
 function codeLines(text: string, path: string): string[] {
   if (isJenkinsPath(path)) return stripComments(text).split('\n');
-  return text.split('\n').map((line) => line.replace(/(^|\s)#.*$/, '$1'));
+  return text.split('\n').map(withoutShellComment);
 }
 
 /** The key a `KEY = value` / `KEY: value` line assigns to, list dash and quotes removed. */
