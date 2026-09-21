@@ -64,7 +64,7 @@ beforeAll(async () => {
   registry = await realCatalog();
 });
 
-function harness() {
+function harness(runtimeOptions: ConstructorParameters<typeof FakeContainerRuntime>[0] = {}) {
   const config = loadConfig({
     TERMINAL_SESSION_SECRET: SECRET,
     INTERNAL_SERVICE_SECRET: SECRET,
@@ -72,7 +72,7 @@ function harness() {
     ALLOWED_ORIGINS: 'http://localhost:3000',
     AUTH_MODE: 'development',
   } as NodeJS.ProcessEnv);
-  const runtime = new DaemonWordsRuntime();
+  const runtime = new DaemonWordsRuntime(runtimeOptions);
   const k8s = new FakeKubernetes();
   const providers = new ProviderRegistry({ availabilityTtlMs: 0 });
   providers.register({ provider: new LinuxLabProvider({ runtime }) });
@@ -177,6 +177,23 @@ describe("a provider's own words stay on the server", () => {
     // The operator's copy is untouched.
     const [session] = await sessions.list();
     expect((await sessions.status(session!)).message).toContain('172.18.0.5');
+  });
+
+  /*
+   * The catalog. Every student reads it, and it carried the availability
+   * probe's own reason — the runtime's socket error with its address — and an
+   * operator's remediation, for as long as a substrate was down.
+   */
+  it('the catalog says a backend is unavailable without the probe’s words', async () => {
+    const { app } = harness({ unreachable: RAW });
+    for (const route of ['/api/labs', '/api/labs/LINUX-001', '/api/tracks']) {
+      const res = await request(app).get(route).set('Authorization', STUDENT);
+      expect(res.status, route).toBe(200);
+      expectNoInternals(res.body, route);
+      expect(JSON.stringify(res.body), route).not.toMatch(/npm run|sandbox:build|Docker Desktop/);
+    }
+    const lab = await request(app).get('/api/labs/LINUX-001').set('Authorization', STUDENT);
+    expect(lab.body.data.lab?.availability?.available ?? lab.body.data.availability?.available).toBe(false);
   });
 
   it('a failed Start does not hand the student an operator’s remediation', async () => {

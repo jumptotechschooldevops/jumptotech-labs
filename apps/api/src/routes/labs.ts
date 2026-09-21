@@ -142,10 +142,20 @@ export type ProviderReadiness = Map<string, LabProviderReadiness>;
 export interface LabProviderReadiness {
   provider: string;
   available: boolean;
+  /** Why not, in words safe for a student: the probe's `studentReason`. */
   reason?: string;
-  remediation?: string;
 }
 
+/*
+ * Every student's catalog read carries this. The probe's own `reason` is its
+ * error text — "no container runtime is reachable (connect ECONNREFUSED
+ * 172.18.0.5:2376 …)", a namespace, a daemon path — and its `remediation` is an
+ * operator's command (`npm run sandbox:build`); both are for the log and `ops
+ * status` (catalog.ts), and the web client never rendered either. A student
+ * sees the probe's `studentReason` where it has one (the network-isolation
+ * gate says it is a security refusal), and otherwise only that it is
+ * unavailable.
+ */
 async function providerReadiness(sessions: SessionManager): Promise<ProviderReadiness> {
   const statuses = await sessions.providers.statuses();
   return new Map(
@@ -154,8 +164,7 @@ async function providerReadiness(sessions: SessionManager): Promise<ProviderRead
       {
         provider: status.providerId,
         available: status.available,
-        ...(status.reason ? { reason: status.reason } : {}),
-        ...(status.remediation ? { remediation: status.remediation } : {}),
+        ...(status.studentReason ? { reason: status.studentReason } : {}),
       },
     ]),
   );
@@ -193,9 +202,6 @@ function withTrackAvailability(
     availability: {
       available: statuses.some((status) => status.available),
       ...(blocked.length > 0 && blocked[0]?.reason ? { reason: blocked[0].reason } : {}),
-      ...(blocked.length > 0 && blocked[0]?.remediation
-        ? { remediation: blocked[0].remediation }
-        : {}),
     },
   };
 }

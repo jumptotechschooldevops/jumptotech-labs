@@ -35,10 +35,11 @@ export function createTrackRoutes(deps: {
       ...track,
       availability: {
         available: track.providers.some((p) => byId.get(p)?.available === true),
-        ...(track.providers.map((p) => byId.get(p)).find((s) => s && !s.available)?.reason
+        // The student-safe words only; see providerReadiness in labs.ts.
+        ...(track.providers.map((p) => byId.get(p)).find((s) => s && !s.available)?.studentReason
           ? {
               reason: track.providers.map((p) => byId.get(p)).find((s) => s && !s.available)!
-                .reason,
+                .studentReason,
             }
           : {}),
       },
