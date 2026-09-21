@@ -12,7 +12,7 @@ import type { CicdVerifyReader } from '../cicd-reader.js';
 import { expandsVariable } from '../ci/workflow.js';
 import {
   findStage,
-  stripComments,
+  stepsCode,
   parseJenkinsfile,
   stepsMissing,
   type JenkinsPipeline,
@@ -99,7 +99,7 @@ export const jenkinsStageExists: CicdVerifierHandler<'jenkins_stage_exists'> = {
     if (requirement.steps_expand) {
       // `REGISTRY_URL` alone is literal text to the shell and to Groovy; the
       // value arrives only through `$REGISTRY_URL`, `${…}` or `env.…`.
-      const code = stripComments(stage.stepsBody ?? '');
+      const code = stepsCode(stage);
       const unexpanded = requirement.steps_expand.filter((name) => !expandsVariable(code, name));
       if (unexpanded.length > 0) {
         return fail(

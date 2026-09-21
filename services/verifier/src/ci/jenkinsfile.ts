@@ -30,6 +30,7 @@
  */
 
 import { matchLineValue } from '../line-value.js';
+import { withoutShellComments } from './workflow.js';
 
 export interface JenkinsStep {
   /** The step's text, one entry per non-empty line inside `steps { }`. */
@@ -393,18 +394,22 @@ function readStages(maskedStages: string, stagesBody: string): JenkinsStage[] {
   const afterName = /\s*\)\s*\{/y;
 
   // The stage *name* lives inside a string literal, which the mask blanked out,
-  // so headers are located in the original text and only the brace walk that
-  // follows uses the mask.
+  // so headers are located in the text with only its comments blanked — the
+  // same offsets, strings intact — and only the brace walk that follows uses
+  // the mask. Not the raw text: `// stage('Lint') {` kept as a note was read
+  // as a stage, took the next real stage's body, and hid that stage.
+  const uncommented = stripComments(stagesBody);
   let match: RegExpExecArray | null;
-  while ((match = header.exec(stagesBody)) !== null) {
+  while ((match = header.exec(uncommented)) !== null) {
     const nameStart = match.index + match[0].length;
-    const quote = stagesBody.indexOf(match[2]!, nameStart);
+    const quote = uncommented.indexOf(match[2]!, nameStart);
     // A name does not span lines. Only the name is searched: looking for the
     // next newline from here is itself a scan to the end of a long line.
-    if (quote === -1 || stagesBody.slice(nameStart, quote).includes('\n')) continue;
+    if (quote === -1 || uncommented.slice(nameStart, quote).includes('\n')) continue;
     afterName.lastIndex = quote + 1;
-    const tail = afterName.exec(stagesBody);
-    if (!tail) continue;
+    if (afterName.exec(uncommented) === null) continue;
+    // `uncommented` blanks comments in place, so the name reads the same in
+    // either text; take it from the original.
     const name = stagesBody.slice(nameStart, quote);
     const open = afterName.lastIndex - 1;
 
@@ -455,9 +460,20 @@ export function findStage(pipeline: JenkinsPipeline, name: string): JenkinsStage
 
 /** Fragments not found in a stage's steps block. Whitespace- and case-insensitive. */
 export function stepsMissing(stage: JenkinsStage, fragments: readonly string[]): string[] {
-  // A comment in a stage is not a step: `// docker push` does not push.
-  const haystack = stripComments(stage.stepsBody ?? '').replace(/\s+/g, ' ').toLowerCase();
+  const haystack = stepsCode(stage).replace(/\s+/g, ' ').toLowerCase();
   return fragments.filter((f) => !haystack.includes(f.replace(/\s+/g, ' ').toLowerCase()));
+}
+
+/**
+ * A stage's steps as code: Groovy comments and shell comments both removed.
+ *
+ * A comment in a stage is not a step: `// docker push` does not push, and
+ * neither does `# node --test` inside an `sh '''…'''` block — the shell reads
+ * that line and runs nothing. Groovy has no `#` comment, so a `#` after
+ * whitespace in a stage body can only be the shell's.
+ */
+export function stepsCode(stage: JenkinsStage): string {
+  return withoutShellComments(stripComments(stage.stepsBody ?? ''));
 }
 
 /** Every `environment` assignment in the pipeline, at any level. */

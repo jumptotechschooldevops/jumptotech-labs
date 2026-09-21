@@ -702,3 +702,50 @@ describe('CICD-009: a variable the shell never expands is not a tag', () => {
     expect(failing(result)).toEqual([]);
   });
 });
+
+// ------------------------------------ Jenkins comments (certification pass)
+
+describe('CICD-007 — a commented line in a Jenkinsfile is not code', () => {
+  const pipeline = (stages: string) => (files: Map<string, string>) => {
+    files.set('Jenkinsfile', `pipeline {\n    agent any\n    stages {\n${stages}\n    }\n}\n`);
+    withBuild(files);
+  };
+  const CHECKOUT = "        stage('Checkout') { steps { checkout scm } }";
+  const BUILD = "        stage('Build') { steps { sh 'node build.mjs' } }";
+  const TEST = "        stage('Test') { steps { sh 'node --test' } }";
+  const PACKAGE = "        stage('Package') { steps { sh 'ls -l dist' } }";
+
+  it('passes the four stages in order', async () => {
+    expect(failing(await grade('CICD-007', pipeline([CHECKOUT, BUILD, TEST, PACKAGE].join('\n'))))).toEqual([]);
+  });
+
+  it('passes with an old stage kept in a // comment between two real ones', async () => {
+    // Before: the commented header was read as a stage called Lint, took the
+    // Test stage's body, and the real Test stage was reported missing.
+    const lint = "        // stage('Lint') {\n        //     steps { sh 'npx eslint .' }\n        // }";
+    expect(failing(await grade('CICD-007', pipeline([CHECKOUT, BUILD, lint, TEST, PACKAGE].join('\n'))))).toEqual([]);
+  });
+
+  it('passes with an old stage kept in a block comment', async () => {
+    const old = "        /* kept for reference:\n        stage('Package') {\n            steps { sh 'tar czf out.tgz dist' }\n        }\n        */";
+    expect(failing(await grade('CICD-007', pipeline([CHECKOUT, BUILD, old, TEST, PACKAGE].join('\n'))))).toEqual([]);
+  });
+
+  it('fails a commented-out Checkout, rather than crediting it with Build', async () => {
+    const result = await grade(
+      'CICD-007',
+      pipeline(["        // stage('Checkout') {\n        //     steps { checkout scm }\n        // }", BUILD, TEST, PACKAGE].join('\n')),
+    );
+    // Before: Checkout passed with Build's body, and Build was reported missing.
+    expect(failing(result)).toEqual(['A Checkout stage gets the source', 'Build runs the build command, after Checkout']);
+    const build = result.checks.find((c) => c.label.startsWith('Build runs'));
+    expect(build?.detail ?? '').not.toMatch(/no stage called 'Build'/);
+  });
+
+  it('fails a test command left behind a shell comment inside sh', async () => {
+    // Before: `# node --test` inside the sh block counted as running the tests.
+    const skipped = "        stage('Test') {\n            steps {\n                sh '''\n                    # node --test   (flaky, re-enable later)\n                    echo \"tests skipped\"\n                '''\n            }\n        }";
+    const result = await grade('CICD-007', pipeline([CHECKOUT, BUILD, skipped, PACKAGE].join('\n')));
+    expect(failing(result).some((label) => /test/i.test(label))).toBe(true);
+  });
+});
