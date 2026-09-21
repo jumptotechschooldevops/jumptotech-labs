@@ -435,6 +435,8 @@ export interface StatementSelector {
   exactPrincipals?: boolean;
   /** Every principal listed must appear in the statement's `NotPrincipal`. */
   notPrincipals?: IamPrincipal[];
+  /** The statement has no `Condition` block. */
+  unconditional?: boolean;
   sid?: string;
 }
 
@@ -469,6 +471,7 @@ export function findStatements(policy: IamPolicy, selector: StatementSelector): 
       return false;
     }
     if (selector.notPrincipals?.some((p) => !statementHasNotPrincipal(statement, p))) return false;
+    if (selector.unconditional && statement.conditions.length > 0) return false;
     return true;
   });
 }

@@ -236,6 +236,7 @@ describe('AWS-003 — adversarial attempts', () => {
       'Customer exports cannot be read',
       'Customer exports cannot be overwritten',
       'No other customer export can be read either',
+      'Customer exports are protected by an explicit Deny, not merely by omission',
     ]);
   });
 
@@ -382,5 +383,36 @@ describe('AWS-003 — adversarial attempts', () => {
 
     expect(result.passed).toBe(false);
     expect(result.checks.find((c) => c.status === 'fail')?.detail).toContain('not a regular file');
+  });
+});
+
+// -------------------------------------------- the Deny applies every time
+
+describe('AWS-003 — the protection is a Deny that always applies', () => {
+  const LABEL = 'Customer exports are protected by an explicit Deny, not merely by omission';
+  const withDenyCondition = (Condition: unknown) =>
+    JSON.stringify({
+      ...JSON.parse(SOLVED),
+      Statement: JSON.parse(SOLVED).Statement.map((s: { Sid: string }) =>
+        s.Sid === 'ProtectCustomerExports' ? { ...s, Condition } : s,
+      ),
+    });
+
+  it('passes the unconditional Deny', async () => {
+    expect(failed((await run(SOLVED)).checks)).toEqual([]);
+  });
+
+  it.each([
+    ['plain HTTP only', { Bool: { 'aws:SecureTransport': 'false' } }],
+    ['a tag nobody has', { StringEquals: { 'aws:PrincipalTag/team': 'nobody' } }],
+  ])('fails a Deny that applies only for %s', async (_what, condition) => {
+    // Before: with the narrow Allow, every request the lab asks about is
+    // refused anyway, so the conditional Deny passed every check — and a
+    // later broad Allow would get straight past it.
+    const result = await run(withDenyCondition(condition));
+    expect(failed(result.checks)).toEqual([LABEL]);
+    const detail = result.checks.find((c) => c.label === LABEL)?.detail ?? '';
+    expect(detail).toContain('carries a Condition');
+    expect(detail).not.toMatch(/SecureTransport|PrincipalTag/);
   });
 });

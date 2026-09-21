@@ -2051,6 +2051,13 @@ const sandboxRequirementSchemas = {
       exact_principals: z.boolean().optional(),
       /** Every principal listed must appear in the statement's `NotPrincipal`. */
       not_principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
+      /**
+       * The statement carries no `Condition` at all. A Deny that applies only
+       * when some condition holds (`aws:SecureTransport` false, a principal
+       * tag nobody has) is not a protection that a later broad Allow cannot
+       * get past; asking one request with a context cannot prove "always".
+       */
+      unconditional: z.boolean().optional(),
       ...common,
     })
     .strict(),
