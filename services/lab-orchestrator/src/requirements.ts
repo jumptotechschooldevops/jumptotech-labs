@@ -3824,6 +3824,9 @@ const cicdRequirementSchemas = {
    * `via` pins the mechanism where the lab teaches one specific pattern:
    *
    *   `workflow_env`        `env:` in a GitHub Actions workflow
+   *   `workflow_env_global` the workflow's top-level `env:` only — a value
+   *                         every job reads, where a job's own `env` is
+   *                         invisible to the others
    *   `workflow_secret`     `${{ secrets.NAME }}`
    *   `jenkins_environment` an `environment { }` entry in a Jenkinsfile
    *   `jenkins_credentials` `credentials('id')` in a Jenkinsfile
@@ -3835,7 +3838,7 @@ const cicdRequirementSchemas = {
       /** The variable name, e.g. `REGISTRY_URL` or `DEPLOY_TOKEN`. */
       name: envVarName,
       via: z
-        .enum(['workflow_env', 'workflow_secret', 'jenkins_environment', 'jenkins_credentials'])
+        .enum(['workflow_env', 'workflow_env_global', 'workflow_secret', 'jenkins_environment', 'jenkins_credentials'])
         .optional(),
       /**
        * Require the declaration's value to contain this text, e.g.

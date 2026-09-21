@@ -162,6 +162,11 @@ function matchesVia(via: string, assignment: CandidateAssignment): boolean {
       // action input is not an environment variable. Only an `env:` mapping,
       // at workflow, job or step level, declares one.
       return isWorkflowEnvLocation(assignment.location);
+    case 'workflow_env_global':
+      // The workflow's own `env:`. A job's `env` is invisible to every other
+      // job, so a value two jobs read declared in one of them leaves the
+      // other expanding an empty string.
+      return assignment.location === 'env';
     case 'jenkins_environment':
       // "Declared in the pipeline's environment block": a stage-level
       // `environment` is invisible to every other stage.
@@ -184,6 +189,8 @@ function viaDescription(via: string): string {
       return "bound with credentials('…')";
     case 'workflow_env':
       return "declared in the workflow's env";
+    case 'workflow_env_global':
+      return "declared in the workflow-level env that every job reads";
     case 'jenkins_environment':
       return "declared in the pipeline's environment block";
     default:

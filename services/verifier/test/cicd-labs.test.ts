@@ -749,3 +749,43 @@ describe('CICD-007 — a commented line in a Jenkinsfile is not code', () => {
     expect(failing(result).some((label) => /test/i.test(label))).toBe(true);
   });
 });
+
+// ------------------------------- workflow scope and inert steps (certification)
+
+describe('CICD-009 — IMAGE_TAG is workflow-level, so both jobs read it', () => {
+  it('fails IMAGE_TAG declared only in the image job, which leaves deploy with an empty tag', async () => {
+    const result = await grade('CICD-009', (files) => {
+      cicd009(files, {
+        image: 'docker build -t "jumptotech/statements:$IMAGE_TAG" .',
+        deploy: `sed -i "s|jumptotech/statements:.*|jumptotech/statements:$IMAGE_TAG|" deploy/app.yml`,
+      });
+      const ci = files.get('.github/workflows/ci.yml')!;
+      files.set(
+        '.github/workflows/ci.yml',
+        ci
+          .replace('\nenv:\n  IMAGE_TAG: ${{ github.sha }}\n', '\n')
+          .replace('  image:\n    runs-on: ubuntu-latest\n', '  image:\n    runs-on: ubuntu-latest\n    env:\n      IMAGE_TAG: ${{ github.sha }}\n'),
+      );
+    });
+    // Before: all fourteen checks passed.
+    expect(failing(result)).toEqual(['The image tag comes from a workflow variable that identifies the commit']);
+  });
+});
+
+describe('CICD-002 — a step must run something to count', () => {
+  const workflow = (steps: string) =>
+    `name: CI\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n${steps}`;
+
+  it('passes one step that runs a command', async () => {
+    const result = await grade('CICD-002', (files) => files.set('.github/workflows/ci.yml', workflow('      - run: echo hello\n')));
+    expect(failing(result)).toEqual([]);
+  });
+
+  it('fails a job whose only step has a name and nothing else, which GitHub rejects', async () => {
+    const result = await grade('CICD-002', (files) =>
+      files.set('.github/workflows/ci.yml', workflow('      - name: Say hello\n')),
+    );
+    expect(failing(result)).toEqual(['A build job runs on ubuntu-latest with at least one step']);
+    expect(result.checks.find((c) => c.status !== 'pass')?.detail).toContain("neither 'run' nor 'uses'");
+  });
+});

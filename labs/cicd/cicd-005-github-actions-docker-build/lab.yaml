@@ -78,7 +78,7 @@ task:
     `docker build` command itself is **not executed** — the sandbox has no
     Docker daemon and is never given one, since handing a student shell access
     to a Docker socket would give it the host. This lab is configuration-
-    verified, and the lab list in the README says so.
+    verified.
 
 setup:
   workspace_dir: workspace
@@ -134,7 +134,9 @@ requirements:
   - type: environment_reference_exists
     path: .github/workflows/ci.yml
     name: IMAGE_NAME
-    via: workflow_env
+    # Workflow-level, as the task says: declared in one job's env, the value
+    # is empty in the other job that reads it.
+    via: workflow_env_global
     label: The image name comes from a workflow variable
   - type: secret_not_hardcoded
     path: .github/workflows/ci.yml

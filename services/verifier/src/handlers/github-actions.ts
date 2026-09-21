@@ -140,10 +140,18 @@ export const githubWorkflowJobExists: CicdVerifierHandler<'github_workflow_job_e
       }
     }
 
-    if (requirement.min_steps !== undefined && job.steps.length < requirement.min_steps) {
-      return fail(
-        `job '${job.id}' has ${job.steps.length} step${job.steps.length === 1 ? '' : 's'}; this lab expects at least ${requirement.min_steps}`,
-      );
+    if (requirement.min_steps !== undefined) {
+      // A step that neither runs a command nor uses an action does nothing,
+      // and GitHub rejects the workflow that contains it: `- name: Say hello`
+      // on its own is not a step.
+      const real = job.steps.filter((step) => step.uses?.trim() || step.run?.trim());
+      if (real.length < requirement.min_steps) {
+        const inert = job.steps.length - real.length;
+        return fail(
+          `job '${job.id}' has ${real.length} step${real.length === 1 ? '' : 's'} that run${real.length === 1 ? 's' : ''} something; this lab expects at least ${requirement.min_steps}` +
+            (inert > 0 ? ` (${inert} step${inert === 1 ? ' has' : 's have'} neither 'run' nor 'uses')` : ''),
+        );
+      }
     }
 
     if (requirement.needs) {
