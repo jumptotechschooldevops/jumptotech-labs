@@ -348,3 +348,46 @@ describe('one Node version', () => {
     }
   });
 });
+
+describe('values the workflow repeats from elsewhere', () => {
+  // Each of these is written twice. Nothing broke when one copy moved and the
+  // other did not until a runner failed for a reason no diff showed.
+  const envValues = (name: string): string[] =>
+    [...workflow.matchAll(new RegExp(`^ {6}${name}: (\\S+)$`, 'gm'))].map(([, value]) => value!);
+
+  it('install one kind and one kubectl, the same in every job that installs them', () => {
+    for (const name of ['KIND_VERSION', 'KIND_SHA256', 'KUBECTL_VERSION', 'KUBECTL_SHA256']) {
+      const values = envValues(name);
+      expect(values.length, name).toBeGreaterThanOrEqual(2);
+      expect(new Set(values).size, `${name} differs between jobs: ${values.join(', ')}`).toBe(1);
+    }
+  });
+
+  it('install the kubectl the images carry, checked against the same amd64 checksum', () => {
+    const dockerDir = path.join(REPO_ROOT, 'infrastructure/docker');
+    const images = readdirSync(dockerDir)
+      .filter((file) => file.endsWith('.Dockerfile'))
+      .map((file) => readFileSync(path.join(dockerDir, file), 'utf8'))
+      .filter((text) => /^ARG KUBECTL_VERSION=/m.test(text));
+    expect(images.length).toBeGreaterThan(0);
+    for (const text of images) {
+      expect(/^ARG KUBECTL_VERSION=(\S+)$/m.exec(text)![1]).toBe(envValues('KUBECTL_VERSION')[0]);
+      expect(/^ARG KUBECTL_SHA256_AMD64=(\S+)$/m.exec(text)![1]).toBe(envValues('KUBECTL_SHA256')[0]);
+    }
+  });
+
+  it('point the browser suite at the ports e2e/stack.sh starts the stack on', () => {
+    // The job runs `stack.sh up` with no port overrides, then hands Playwright
+    // literal URLs: they must be stack.sh's defaults.
+    const stack = read('e2e/stack.sh');
+    const job = workflow.slice(workflow.indexOf('\n  browser-e2e:'));
+    expect(job).not.toMatch(/E2E_(WEB|API)_PORT/);
+    for (const [variable, port] of [
+      ['E2E_BASE_URL', /^WEB_PORT="\$\{E2E_WEB_PORT:-(\d+)\}"$/m.exec(stack)?.[1]],
+      ['E2E_API_URL', /^API_PORT="\$\{E2E_API_PORT:-(\d+)\}"$/m.exec(stack)?.[1]],
+    ] as const) {
+      expect(port, `stack.sh default behind ${variable}`).toBeDefined();
+      expect(job).toContain(`${variable}=http://127.0.0.1:${port} `);
+    }
+  });
+});
