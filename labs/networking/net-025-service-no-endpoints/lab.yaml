@@ -51,6 +51,8 @@ task:
 
     Fix both Services. Both must select the ledger-api Pods and successfully
     route HTTP traffic to the application listening on container port 3000.
+    Repair the Services rather than the application: the application keeps
+    listening on 3000, and each Service keeps its port 80.
 
     Finally, create a ConfigMap named `diagnosis` with two keys: `selector`
     and `targetPort`. The `selector` value should explain why an empty
@@ -105,6 +107,14 @@ requirements:
     name: ledger-port-broken
     min_ready: 1
     label: The second Service has ready backend endpoints
+
+  # Without this, moving the application to the broken Service's targetPort
+  # also satisfies the HTTP check — and teaches the opposite of the lesson.
+  - type: service_port
+    name: ledger-port-broken
+    port: 80
+    target_port: 3000
+    label: The second Service forwards to the port the application listens on
 
   - type: service_http
     service: ledger-port-broken
