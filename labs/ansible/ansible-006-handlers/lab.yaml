@@ -50,8 +50,10 @@ task:
     ```
 
     The name in `notify:` and the handler's `name:` must match exactly. That
-    string is the entire wiring, and a typo in it is silent — the playbook
-    succeeds and the handler simply never runs.
+    string is the entire wiring. Ansible reports a `notify:` that names no
+    handler — as soon as the notifying task changes something, the run stops
+    with "The requested handler ... was not found" — but a handler that
+    exists and is never notified is silent: it simply never runs.
 
     Make these true:
 
