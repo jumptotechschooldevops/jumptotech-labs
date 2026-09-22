@@ -449,7 +449,10 @@ describe('TF-003 — Outputs and Exposed Values', () => {
     const listing = requirements.filter((r) => 'path' in r && r.path === 'terraform/outputs.txt');
     // `terraform output` redacts a sensitive value; both halves are asserted.
     expect(
-      listing.some((r) => r.type === 'file_content' && 'contains' in r && r.contains === '<sensitive>'),
+      // file_contains: its failure reports counts, never the listing's text.
+      listing.some(
+        (r) => r.type === 'file_contains' && 'contains' in r && (r.contains as string[]).includes('<sensitive>'),
+      ),
     ).toBe(true);
     expect(
       listing.some(
