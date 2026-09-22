@@ -69,7 +69,7 @@ Result values: `PASS`, `FAIL`, `NOT DONE`, `BLOCKED (decision D#)`.
 
 | Step (readiness §15) | Result | Evidence file / note |
 |---|---|---|
-| 16 `prod up -d --wait` succeeded; `prod ps` all running/healthy | | |
+| 16 `prod up -d --build --wait --wait-timeout 900` succeeded; `prod ps` all running/healthy | | |
 | 16 First backup + `--verify-only`; cron installed | | archive name |
 | 16 Restore beside production (`--into`) validated | | database name |
 | 17 `make private-beta-smoke`: every line PASS except `backup.offhost` until D7; `exposure.host-containers` PASS | | `private-beta-smoke-*.txt` |

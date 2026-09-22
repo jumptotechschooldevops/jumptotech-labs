@@ -75,7 +75,7 @@ ConfigMap in `kube-system`. Exit 0 is PASS. Details and the choice of
 
 - **Not the cluster being down** when `valid` is 1 and the provider is
   unavailable: RB-09.
-- **`AttestationAging` is not a failure.** It is the reminder to re-probe before
+- **`NetworkIsolationAttestationAging` is not a failure.** It is the reminder to re-probe before
   admission stops.
 
 ## 8. Escalate when

@@ -836,7 +836,7 @@ Record each step's output in `/srv/jumptotech/evidence/upgrade-<new commit>/`.
    A migration file in that list means the database changes shape at the
    next api start (forward-only: step 3 is then the only way back). A changed
    `.env.example` or compose file may need a new `.env` line (§6).
-3. **Back up:** `scripts/db-backup.sh --label pre-upgrade` (with `BACKUP_DIR`
+3. **Back up:** `scripts/db-backup.sh --label pre-migration` (with `BACKUP_DIR`
    and `BACKUP_STATUS_DIR` exported), then `scripts/db-restore.sh --verify-only`
    on the printed archive. Always, migration or not.
 4. **Check out and prepare:** `git checkout <new commit>`, `npm ci`; set
@@ -852,7 +852,7 @@ Record each step's output in `/srv/jumptotech/evidence/upgrade-<new commit>/`.
    and `release.commit` PASS; `ops status`; start and End one LINUX-001 and
    one K8S-001 lab.
 8. **Observe:** `alerts` and the dashboard for the next hour; keep
-   `previous-commit`, `.env.previous` and the pre-upgrade archive until the
+   `previous-commit`, `.env.previous` and the `pre-migration` archive until the
    next release.
 
 ### 21.2 Rollback
@@ -862,7 +862,7 @@ Record each step's output in `/srv/jumptotech/evidence/upgrade-<new commit>/`.
 | A configuration change broke startup | restore `.env.previous` (`0600`), `prod up -d --wait`, preflight |
 | Certificate renewal refused | `tls-install.sh` changes nothing when it refuses, and rolls back itself |
 | New release misbehaves, no new migration | `git checkout $(cat previous-commit)`, `npm ci`, restore `.env.previous` (it holds the previous `JTT_COMMIT`), `prod up -d --build --wait --wait-timeout 900`, preflight, smoke (`release.commit` PASS on the previous commit) |
-| New release applied a migration | migrations are forward-only. The previous api **starts** on the newer database without complaint — the migrator refuses a modified migration but ignores a version it does not know — and runs untested against a schema it was not written for. So do not stop at the code rollback: check out the previous commit and restore `.env.previous` as above, then restore the step-3 `pre-upgrade` archive per [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (renames, never drops; its own rollback is §6.6). Anything students wrote after the backup is lost (§8 there) |
+| New release applied a migration | migrations are forward-only. The previous api **starts** on the newer database without complaint — the migrator refuses a modified migration but ignores a version it does not know — and runs untested against a schema it was not written for. So do not stop at the code rollback: check out the previous commit and restore `.env.previous` as above, then restore the step-3 `pre-migration` archive per [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (renames, never drops; its own rollback is §6.6). Anything students wrote after the backup is lost (§8 there) |
 | Security incident | `prod stop web` (stays stopped across reboots with `unless-stopped`); running labs are reclaimed by idle expiry |
 | Stop launches only | tell the cohort; `LAB_LAUNCHES_PAUSED=true` and `prod up -d api` refuses every Start Lab and keeps running labs (runbook §3) |
 

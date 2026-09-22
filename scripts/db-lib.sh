@@ -97,7 +97,7 @@ jtt_resolve_container() {
       || jtt_die "docker ps failed; is the Docker daemon reachable?"
     count=$(printf '%s' "$ids" | grep -c . || true)
     if [ "$count" != 1 ]; then
-      jtt_die "expected one running postgres container for compose project '$project', found $count. Start it (docker compose up -d postgres) or name one with JTT_DB_CONTAINER."
+      jtt_die "expected one running postgres container for compose project '$project', found $count. Start it (development: make db-up; production host: prod up -d postgres, docs/runbooks/private-beta-operations.md §1) or name one with JTT_DB_CONTAINER."
     fi
     JTT_CONTAINER=$ids
   fi

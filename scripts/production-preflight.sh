@@ -413,7 +413,7 @@ if have kind && jtt_contains "$(kind get clusters 2>/dev/null || true)" -x "$clu
   pass kind.cluster "$cluster exists"
   cluster_ok=1
 else
-  fail kind.cluster "$cluster does not exist: npm run cluster:up (docs/runbooks/private-beta-operations.md §1)"
+  fail kind.cluster "$cluster does not exist: npm run cluster:up (docs/development/production-host-readiness.md §15)"
 fi
 if [ $docker_ok -eq 1 ] && docker network inspect kind >/dev/null 2>&1; then
   pass kind.network "the external 'kind' network exists"

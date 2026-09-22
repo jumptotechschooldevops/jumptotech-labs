@@ -9,7 +9,8 @@
 #
 # The order matters: the production overlay's `ports: !reset []` must come after
 # the observability overlay's loopback metrics ports, and this file after both.
-# docs/runbooks/private-beta-operations.md §1 names the command once as $PROD.
+# docs/runbooks/private-beta-operations.md §1 names the command once, as the
+# shell function `prod`.
 #
 # ## What it adds to the P0-012/P0-017 production stack
 #
