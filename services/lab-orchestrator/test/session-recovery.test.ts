@@ -331,6 +331,40 @@ export function sessionRecovery(
       expect((await w.read(session.sessionId)).status).toBe('ACTIVE');
     });
 
+    it('a start that finishes while the sweep is busy elsewhere is not torn down as abandoned', async () => {
+      const w = await world();
+
+      // An older session the sweep will spend its time tearing down first.
+      const older = await w.a.manager.start('LINUX-001', 'student-older');
+      w.clock.now += 21 * MINUTE; // idle past the 20-minute limit
+
+      // A slow start, CREATING past the abandoned-start grace when the sweep reads it.
+      const building = w.provider.holdNextCreate();
+      const slow = w.b.manager.start('LINUX-001', 'student-slow');
+      await building.entered;
+      w.clock.now += 10 * MINUTE + 1_000;
+
+      const destroying = w.provider.holdNextDestroy();
+      const sweep = w.reaper.sweep();
+      await destroying.entered;
+
+      // While the sweep waits on the older teardown, the slow start completes.
+      building.release();
+      const { session } = await slow;
+      expect((await w.read(session.sessionId)).status).toBe('ACTIVE');
+
+      destroying.release();
+      const result = await sweep;
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual([older.session.sandboxRef]);
+
+      // The CREATING row the sweep judged no longer exists: the lab it became
+      // is working, and must keep running.
+      expect(await w.read(session.sessionId)).toMatchObject({ status: 'ACTIVE' });
+      expect(w.runtime.containers.has(session.sandboxRef)).toBe(true);
+      expect(w.recoveries).toEqual([]);
+    });
+
     // --------------------------------------------- 3. failed reset
 
     it('a reset whose replacement provisioning fails is DEGRADED, never a healthy ACTIVE', async () => {

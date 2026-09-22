@@ -370,6 +370,11 @@ export class SessionReaper {
        * "Preparing…" for the rest of the idle window. Past its deadline or idle,
        * it is torn down below exactly as before. If the start was alive after
        * all, its CREATING → ACTIVE write now fails and it discards what it built.
+       *
+       * The claim is fenced on the CREATING stamp this sweep read. The sweep may
+       * spend minutes on earlier teardowns first, and a start that reached
+       * ACTIVE meanwhile re-stamped the row: `expire` claims from any live
+       * status, so unfenced it tore down a lab that had just finished starting.
        */
       if (
         session.status === 'CREATING' &&
@@ -381,7 +386,10 @@ export class SessionReaper {
           result,
           session,
           'abandoned',
-          () => this.options.sessions.expire(session.sessionId, ABANDONED_START_REASON),
+          () =>
+            this.options.sessions.expire(session.sessionId, ABANDONED_START_REASON, {
+              statusChangedAt: session.statusChangedAt,
+            }),
           'abandoned_start',
         );
         continue;
