@@ -172,6 +172,17 @@ describe('CICD-009 — a deploy job that never runs does not count', () => {
     expect(failing(await grade('CICD-009', (f) => cicd009(f, '[main]')))).toEqual([]);
   });
 
+  it("refuses branches [main, '**'], which also runs on every other branch", async () => {
+    // Before: passed "Delivery runs only on pushes to main".
+    expect(failing(await grade('CICD-009', (f) => cicd009(f, "[main, '**']")))).toEqual([
+      'Delivery runs only on pushes to main',
+    ]);
+  });
+
+  it('passes [main] narrowed further by a negated pattern', async () => {
+    expect(failing(await grade('CICD-009', (f) => cicd009(f, "[main, '!main-archive']")))).toEqual([]);
+  });
+
   it('refuses a deploy job disabled with `if: false`', async () => {
     // Before: passed.
     expect((await grade('CICD-009', (f) => cicd009(f, '[main]', '    if: false\n'))).passed).toBe(false);

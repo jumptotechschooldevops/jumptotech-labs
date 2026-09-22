@@ -107,6 +107,8 @@ requirements:
     trigger: push
     branches:
       - main
+    # "Only": `branches: [main, '**']` includes main and every other branch.
+    only_branches: true
     label: Delivery runs only on pushes to main
   - type: github_workflow_job_exists
     path: .github/workflows/ci.yml

@@ -3758,9 +3758,18 @@ const cicdRequirementSchemas = {
       trigger: eventName,
       /** Require the trigger to be filtered to these branches. */
       branches: z.array(branchName).max(10).optional(),
+      /**
+       * And to no other branch pattern. `branches: [main, '**']` includes
+       * main and also every branch; a lab that says "only on main" needs
+       * this. A `!pattern` entry only narrows the filter, so it is allowed.
+       */
+      only_branches: z.literal(true).optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((r) => !(r.only_branches && r.branches === undefined), {
+      message: 'only_branches needs branches',
+    }),
 
   github_workflow_job_exists: z
     .object({
