@@ -333,6 +333,17 @@ export class DockerOps {
           }
         }
 
+        /*
+         * The volume above is this create's own, and nothing else can remove
+         * it if the run fails: the failed start's destroy finds no container,
+         * and `removeSandbox` stops when the container is absent. Left behind,
+         * each one holds a whole inner daemon's image store.
+         */
+        const discardVolume = async (error: unknown): Promise<never> => {
+          await this.#engines.host.removeVolume(volume, true).catch(() => undefined);
+          throw error;
+        };
+
         await this.#engines.host.runContainer({
           name: ref,
           image: this.#policy.image,
@@ -350,7 +361,7 @@ export class DockerOps {
           volumes: [{ volume, destination: '/var/lib/docker' }],
           labels,
           args: daemonArgs,
-        });
+        }).catch(discardVolume);
 
         return {
           sandboxRef: ref,
