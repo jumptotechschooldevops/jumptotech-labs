@@ -102,7 +102,7 @@ describe('NET-002 — each Part 1 answer is read from its own field', () => {
     const seeded = await readFile(`${lab.directory}/setup/plan.txt`, 'utf8');
     const answers = { ...ANSWERS, ...overrides };
     // Filled in the way the task asks: the value typed after "= ".
-    const plan = seeded.replace(/^(\s+)([a-d]_[a-z_]+) = $/gm, (_m, indent: string, key: string) => `${indent}${key} = ${answers[key]}`);
+    const plan = seeded.replace(/^(\s+)([a-d]_[a-z_]+) =\s*$/gm, (_m, indent: string, key: string) => `${indent}${key} = ${answers[key]}`);
     expect(plan).not.toBe(seeded);
     const labels = lab.requirements.filter((r) => r.label.startsWith('Block ')).map((r) => r.label);
     expect(labels).toHaveLength(8);
