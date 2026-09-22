@@ -136,3 +136,61 @@ describe('DOCKER-006 — the two containers run the images the task names', () =
     expect(await on({ api: 'alpine:3.20', worker: 'alpine:3.20' })).toEqual(['ledger-api runs the nginx:1.27-alpine image']);
   });
 });
+
+// ---------------------------------------------------------------- DOCKER-008
+describe('DOCKER-008 — the stack is the one Compose brought up', () => {
+  const COMPOSE = (services: string) => `services:
+  api:
+    image: nginx:1.27-alpine
+    container_name: ledger-api
+    networks: [ledger-net]
+${services}
+networks:
+  ledger-net:
+    name: ledger-net
+    driver: bridge
+`;
+  const WORKER = `  worker:
+    image: alpine:3.20
+    container_name: ledger-worker
+    command: ["sleep", "infinity"]
+    environment:
+      LEDGER_API_URL: http://ledger-api
+    networks: [ledger-net]
+`;
+
+  async function stack(file: string, labels: { api?: string; worker?: string }) {
+    const s = await started('DOCKER-008');
+    s.workspace.write(SESSION, 'compose.yaml', file);
+    await s.daemon.createNetwork({ name: 'ledger-net' });
+    const compose = (service?: string): Record<string, string> => (service ? { 'com.docker.compose.service': service } : {});
+    s.daemon.addContainer(
+      containerSpec({ name: 'ledger-api', image: 'nginx:1.27-alpine', network: 'ledger-net', labels: compose(labels.api) }),
+      'running',
+    );
+    s.daemon.addContainer(
+      containerSpec({
+        name: 'ledger-worker',
+        image: 'alpine:3.20',
+        command: ['sleep', 'infinity'],
+        network: 'ledger-net',
+        env: { LEDGER_API_URL: 'http://ledger-api' },
+        labels: compose(labels.worker),
+      }),
+      'running',
+    );
+    return failing(s);
+  }
+
+  it('passes the stack docker compose up created', async () => {
+    expect(await stack(COMPOSE(WORKER), { api: 'api', worker: 'worker' })).toEqual([]);
+  });
+
+  it('refuses containers started by hand beside a file that only mentions ledger-worker in a comment', async () => {
+    // Before: passed every check.
+    expect(await stack(COMPOSE('  # TODO ledger-worker\n'), {})).toEqual([
+      'Container ledger-api is running, started by Compose',
+      'Container ledger-worker is running, started by Compose as the worker service',
+    ]);
+  });
+});

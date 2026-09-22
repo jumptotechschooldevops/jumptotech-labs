@@ -2899,7 +2899,24 @@ const dockerRequirementSchemas = {
     .strict(),
 
   docker_container_running: z
-    .object({ type: z.literal('docker_container_running'), name: dockerObjectName, ...common })
+    .object({
+      type: z.literal('docker_container_running'),
+      name: dockerObjectName,
+      /**
+       * The container was created by Docker Compose for this service key:
+       * Compose labels every container it makes with
+       * `com.docker.compose.service`. A Compose lab needs it, or containers
+       * started by hand with `docker run` beside a file that merely mentions
+       * the service pass.
+       */
+      compose_service: z
+        .string()
+        .min(1)
+        .max(64)
+        .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/, 'must be a Compose service name')
+        .optional(),
+      ...common,
+    })
     .strict(),
 
   /**

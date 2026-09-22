@@ -31,7 +31,16 @@ export const dockerContainerRunning: DockerVerifierHandler<'docker_container_run
   async run(r, reader) {
     const container = await reader.container(r.name);
     if (!container) return missingDocker('container', r.name);
-    if (container.running) return pass();
+    if (container.running) {
+      if (r.compose_service === undefined) return pass();
+      const service = container.labels['com.docker.compose.service'];
+      if (service === r.compose_service) return pass();
+      return fail(
+        service === undefined
+          ? `Container '${r.name}' is running, but Docker Compose did not create it — it has no Compose service label`
+          : `Container '${r.name}' was created by Compose for service '${service}', not '${r.compose_service}'`,
+      );
+    }
     // An exit code is the single most useful fact about a container that
     // stopped, so it is surfaced without being told what caused it.
     return fail(

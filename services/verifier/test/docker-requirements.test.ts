@@ -1049,9 +1049,16 @@ function solve(lab: LoadedLabDefinition): {
   for (const requirement of lab.requirements as readonly Requirement[]) {
     switch (requirement.type) {
       case 'docker_container_exists':
-      case 'docker_container_running':
         specFor(requirement.name);
         break;
+      case 'docker_container_running': {
+        const spec = specFor(requirement.name);
+        // What `docker compose up` stamps on every container it creates.
+        if (requirement.compose_service !== undefined) {
+          spec.labels = { ...(spec.labels ?? {}), 'com.docker.compose.service': requirement.compose_service };
+        }
+        break;
+      }
       case 'docker_container_state':
         specFor(requirement.name);
         states.set(requirement.name, {

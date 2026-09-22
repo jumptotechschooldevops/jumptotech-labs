@@ -106,16 +106,21 @@ requirements:
   - type: docker_network_exists
     name: ledger-net
     label: Network ledger-net exists
+  # compose_service: Compose labels what it creates. Two containers started
+  # by hand with `docker run`, beside a compose.yaml that only mentioned
+  # ledger-worker in a comment, passed before.
   - type: docker_container_running
     name: ledger-api
-    label: Container ledger-api is running
+    compose_service: api
+    label: Container ledger-api is running, started by Compose
   - type: docker_container_network
     name: ledger-api
     network: ledger-net
     label: Container ledger-api is on ledger-net
   - type: docker_container_running
     name: ledger-worker
-    label: Container ledger-worker is running
+    compose_service: worker
+    label: Container ledger-worker is running, started by Compose as the worker service
   - type: docker_container_network
     name: ledger-worker
     network: ledger-net
