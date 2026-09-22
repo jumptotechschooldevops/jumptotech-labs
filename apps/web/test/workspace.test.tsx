@@ -606,6 +606,72 @@ describe('answers that arrive late', () => {
     expect(screen.getByText('You completed this lab. It is saved to your progress.')).toBeTruthy();
   });
 
+  it('a Verify still running from the ended lab neither blocks nor overwrites the lab launched after it', async () => {
+    const FIRST = SESSION_ID;
+    const SECOND = 'sess-0000000000000002';
+    let answerOldCheck!: (value: unknown) => void;
+    let refuseOldCheck!: (reason: unknown) => void;
+    apiMock.checkSolution.mockImplementation((id: string) =>
+      id === FIRST
+        ? new Promise((resolve, reject) => {
+            answerOldCheck = resolve;
+            refuseOldCheck = reject;
+          })
+        : Promise.resolve(verification(false, { session: sessionInfo({ sessionId: SECOND }) })),
+    );
+    let firstEnded = false;
+    apiMock.getSession.mockImplementation((id: string) =>
+      Promise.resolve({
+        session:
+          id === FIRST ? sessionInfo({ status: firstEnded ? 'ENDED' : 'ACTIVE' }) : sessionInfo({ sessionId: SECOND }),
+        environment: null,
+      }),
+    );
+    apiMock.endLab.mockResolvedValue({ message: 'ok', session: sessionInfo({ status: 'ENDED' }), steps: [] });
+    await renderConnected();
+
+    // A slow check (an Ansible playbook runs for minutes); the student gives up
+    // on it, ends the lab and launches a fresh one.
+    fireEvent.click(button('Verify'));
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    fireEvent.click(button('End lab'));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
+    await screen.findByRole('heading', { name: 'Lab ended' });
+    firstEnded = true;
+    apiMock.startLab.mockResolvedValue({
+      session: sessionInfo({ sessionId: SECOND }),
+      environment: { environmentId: 'e', provider: 'docker-linux', phase: 'ready', namespace: '' },
+      steps: [],
+      terminal: { url: 'ws://t', token: 'second' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Launch a fresh environment' }));
+    await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('second'));
+
+    // The new lab's Verify works while the old check is still out.
+    fireEvent.click(button('Verify'));
+    await waitFor(() => expect(apiMock.checkSolution).toHaveBeenLastCalledWith(SECOND));
+    await screen.findByText(/Not complete yet/);
+
+    // The old check finally answers — refused, because its lab ended under it.
+    const readsBefore = apiMock.getSession.mock.calls.length;
+    await act(async () =>
+      refuseOldCheck(
+        new ApiRequestError(409, {
+          code: 'SESSION_NOT_ACTIVE',
+          message: 'The lab environment changed while it was being checked, so that result was not recorded.',
+        }),
+      ),
+    );
+    void answerOldCheck;
+
+    // Nothing about the ended lab comes back over the running one.
+    expect(screen.queryByRole('heading', { name: 'Lab ended' })).toBeNull();
+    expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('second');
+    expect(screen.getByText(/Not complete yet/)).toBeTruthy();
+    expect(apiMock.getSession.mock.calls.slice(readsBefore).some(([id]) => id === FIRST)).toBe(false);
+    expect(button('Verify').disabled).toBe(false);
+  }, 20_000);
+
   it('Verify clears an idle warning the check itself answered, instead of keeping the stale copy', async () => {
     const idle = sessionInfo({ idleWarning: true, secondsUntilIdle: 60 });
     apiMock.listMySessions.mockResolvedValue(sessionsResponse([{ session: idle, labTitle: 'Files and Directories' }]));

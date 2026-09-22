@@ -113,12 +113,12 @@ export type ProviderExecRunner = (
 /** The production runner: a real child process, argv array, never a shell. */
 export const execFileExecRunner: ProviderExecRunner = (command, args, options) =>
   new Promise<ExecResult>((resolve) => {
-    execFile(
+    const child = execFile(
       command,
       args,
       { timeout: options.timeoutMs, env: options.env, maxBuffer: 1024 * 1024, shell: false },
       (error, stdout, stderr) => {
-        const { exitCode, timedOut } = execFileOutcome(error);
+        const { exitCode, timedOut } = execFileOutcome(error, child);
         resolve({
           exitCode,
           stdout: String(stdout),

@@ -387,6 +387,7 @@ No provider is chosen here. The smoke's `backup.offhost` is a FAIL until
 | Verification latency and results | harness `solveTimings`; `histogram_quantile(0.95, sum by (le, provider) (rate(jtt_verification_duration_seconds_bucket[30m])))` |
 | Terminal connectivity | harness phase 2 (five PTYs, per-shell markers); echo latency is **not instrumented** — testers record it in §13.2 |
 | CPU, memory, swap, disk; CPU iowait and steal, pressure stall (PSI) and OOM kills | `host-capacity-sample.sh` → `host.csv` |
+| Which containers were OOM-killed; memory "full" pressure stall; Docker-root free inodes | `host.csv` (`oom_kills_total` — kernel, any process, since boot; `docker_oom_events` — container OOM events since the sampler started; `psi_*_avg60`; `docker_root_inodes_free`) and `oom.csv` (one row per container) — a run with any OOM kill did not fit, whatever its peaks say |
 | Container, sandbox and Pod counts; per-container memory | `host.csv`, `containers.csv` |
 | Session cleanup | harness after-End phase (active 0, nothing orphaned); `docker ps --filter label=jumptotech.io/managed=true` empty |
 | Failure rate | `sum by (outcome) (increase(jtt_lab_start_outcome_total[1h]))`; alerts that fired |

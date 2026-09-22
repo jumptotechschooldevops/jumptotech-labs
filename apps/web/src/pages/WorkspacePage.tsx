@@ -269,7 +269,13 @@ export function WorkspacePage({ labId }: { labId: string }) {
   /** The pending automatic reconnect, so it cannot fire into a later session or an unmounted page. */
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshedToken = useRef(false);
-  /** The session a Verify is running for, so one cannot be sent twice — nor answer into a later session. */
+  /**
+   * The session a Verify is running for, so one cannot be sent twice — nor answer into a later session.
+   *
+   * A session id rather than a flag: a slow check can outlive its lab (End,
+   * then Launch again), and a flag it still held refused every Verify on the
+   * new lab — silently — until the old check answered.
+   */
   const verifying = useRef<string | null>(null);
 
   /** Mirrors `reconnectTimer` for rendering: the page says it is retrying. */
@@ -353,12 +359,21 @@ export function WorkspacePage({ labId }: { labId: string }) {
 
   const refreshSession = useCallback(() => {
     if (!sessionId) return;
-    // Called from callbacks that can outlive the session they were made for.
+    /*
+     * Called from callbacks that can outlive the session they were made for.
+     * Only while this page still shows that session: a refresh asked for by
+     * something that belonged to an earlier session — a check or a terminal
+     * that outlived its lab — answered with that session, ENDED, and put it
+     * over the lab launched since: the page showed the old summary while the
+     * new environment ran, and nothing moved it back.
+     */
     const stale = () => shown.current.session?.sessionId !== sessionId;
     if (stale()) return;
     Promise.resolve()
       .then(() => api.getSession(sessionId))
-      .then((response) => updateSession(response.session))
+      .then((response) => {
+        if (!stale()) updateSession(response.session);
+      })
       .catch((cause: unknown) => {
         if (stale()) return;
         const error = toApiError(cause);

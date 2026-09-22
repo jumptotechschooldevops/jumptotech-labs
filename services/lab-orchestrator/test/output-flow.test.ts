@@ -3,7 +3,12 @@
  * relay hold. See `src/output-flow.ts`.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createOutputFlow, resolveOutputFlowOptions } from '../src/output-flow.js';
+import {
+  createOutputFlow,
+  ptyInputQueueReadable,
+  ptyPendingInputBytes,
+  resolveOutputFlowOptions,
+} from '../src/output-flow.js';
 
 const LIMITS = { highWaterBytes: 100, lowWaterBytes: 40, hardLimitBytes: 1_000, pollIntervalMs: 10 };
 
@@ -122,5 +127,47 @@ describe('output flow control', () => {
     expect(() => resolveOutputFlowOptions({ highWaterBytes: 1_000, hardLimitBytes: 1_000 })).toThrow(RangeError);
     expect(() => resolveOutputFlowOptions({ pollIntervalMs: 0 })).toThrow(RangeError);
     expect(resolveOutputFlowOptions()).toMatchObject({ highWaterBytes: 1024 * 1024 });
+  });
+});
+
+describe('pending input of a node-pty terminal', () => {
+  /** node-pty 1.1's Unix terminal: a write stream holding `{ buffer, offset }` tasks. */
+  const ptyWith = (queue: Array<{ buffer: Buffer; offset: number }>) => ({ _writeStream: { _writeQueue: queue } });
+
+  it('counts what is queued and not yet written, net of a partial write', () => {
+    const term = ptyWith([
+      { buffer: Buffer.alloc(8_192), offset: 4_096 },
+      { buffer: Buffer.alloc(8_192), offset: 0 },
+    ]);
+    expect(ptyInputQueueReadable(term)).toBe(true);
+    expect(ptyPendingInputBytes(term)).toBe(12_288);
+  });
+
+  it('reports an empty queue as nothing pending', () => {
+    expect(ptyPendingInputBytes(ptyWith([]))).toBe(0);
+  });
+
+  it('reports nothing pending, and says so, for a terminal without that queue', () => {
+    for (const term of [{}, null, undefined, { _writeStream: {} }, { _writeStream: { _writeQueue: 'x' } }]) {
+      expect(ptyInputQueueReadable(term)).toBe(false);
+      expect(ptyPendingInputBytes(term)).toBe(0);
+    }
+  });
+
+  it('drives the flow control with the roles swapped: the queue pauses the socket input arrives on', () => {
+    const queue: Array<{ buffer: Buffer; offset: number }> = [];
+    const term = ptyWith(queue);
+    const socket = { pause: vi.fn(), resume: vi.fn() };
+    const flow = createOutputFlow(
+      { get bufferedAmount() { return ptyPendingInputBytes(term); } },
+      socket,
+      vi.fn(),
+      LIMITS,
+    );
+    queue.push({ buffer: Buffer.alloc(150), offset: 0 });
+    flow.afterSend();
+    expect(socket.pause).toHaveBeenCalledTimes(1);
+    expect(flow.paused).toBe(true);
+    flow.dispose();
   });
 });

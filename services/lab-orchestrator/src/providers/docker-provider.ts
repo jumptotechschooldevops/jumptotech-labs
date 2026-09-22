@@ -737,6 +737,7 @@ export class DockerLabProvider implements LabProvider {
       // Already gone. Still sweep the data volume: a crash between container
       // removal and volume removal would otherwise leak disk forever.
       await this.#removeDataVolume(sandbox);
+      this.#engines.forget?.(sandbox);
       steps.push({
         id: 'delete-sandbox',
         label: 'Sandbox deleted',
@@ -788,7 +789,10 @@ export class DockerLabProvider implements LabProvider {
     }
 
     const gone = await this.#waitForSandboxGone(sandbox);
-    if (gone) await this.#removeDataVolume(sandbox);
+    if (gone) {
+      await this.#removeDataVolume(sandbox);
+      this.#engines.forget?.(sandbox);
+    }
 
     steps.push({
       id: 'delete-sandbox',

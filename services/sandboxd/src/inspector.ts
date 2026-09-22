@@ -12,7 +12,7 @@
  * dedicated runtime node rather than a local socket.
  */
 import { execFile } from 'node:child_process';
-import { assertValidContainerSandboxRef } from '@jumptotech/lab-orchestrator';
+import { assertValidContainerSandboxRef, execFileOutcome } from '@jumptotech/lab-orchestrator';
 import type { SandboxInspectorPort, SandboxSnapshot } from './attach.js';
 
 const FORMAT = '{{.State.Status}}\t{{.Config.User}}\t{{.Config.WorkingDir}}\t{{json .Config.Labels}}';
@@ -42,18 +42,19 @@ export class DockerSandboxInspector implements SandboxInspectorPort {
 
   /** Resolves to the daemon's version, or throws. Used by `/health`. */
   async ping(): Promise<string> {
-    const { code, stdout, stderr } = await this.#run([
+    const { code, stdout, stderr, timedOut } = await this.#run([
       'version',
       '--format',
       '{{.Server.Version}}',
     ]);
+    if (timedOut) throw new Error('the container runtime did not answer in time');
     if (code !== 0) throw new Error(stderr.trim() || 'the container runtime did not respond');
     return stdout.trim();
   }
 
   async inspect(ref: string): Promise<SandboxSnapshot | null> {
     assertValidContainerSandboxRef(ref);
-    const { code, stdout, stderr } = await this.#run([
+    const { code, stdout, stderr, timedOut } = await this.#run([
       'inspect',
       '--type',
       'container',
@@ -61,6 +62,12 @@ export class DockerSandboxInspector implements SandboxInspectorPort {
       FORMAT,
       ref,
     ]);
+    // A runtime that did not answer is not an absent sandbox, whatever the
+    // stopped CLI exited with: the attach fails as unavailable (retried),
+    // rather than telling the student their sandbox is gone.
+    if (timedOut) {
+      throw new InspectorUnavailableError(`docker inspect did not finish within ${this.#timeoutMs}ms`);
+    }
     // "No such container" is a null, not an error: an expired session asking
     // for its sandbox is ordinary, and the caller renders it as a refusal.
     // Anything else — the daemon down or restarting, a timeout, a TLS error —
@@ -83,9 +90,9 @@ export class DockerSandboxInspector implements SandboxInspectorPort {
     };
   }
 
-  #run(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  #run(argv: string[]): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
     return new Promise((resolve) => {
-      execFile(
+      const child = execFile(
         this.#binary,
         argv,
         {
@@ -105,12 +112,10 @@ export class DockerSandboxInspector implements SandboxInspectorPort {
           },
         },
         (error, stdout, stderr) => {
-          let code = 0;
-          if (error) {
-            const raw = (error as { code?: unknown }).code;
-            code = typeof raw === 'number' ? raw : 1;
-          }
-          resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+          // A `docker inspect` stopped at its limit can exit 0 with nothing on
+          // stdout, which read as "no such sandbox" (see `execFileOutcome`).
+          const { exitCode, timedOut } = execFileOutcome(error, child);
+          resolve({ code: exitCode, stdout: String(stdout), stderr: String(stderr), timedOut });
         },
       );
     });

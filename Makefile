@@ -266,7 +266,7 @@ test-terminal-container: ## Run the terminal integration suite inside a containe
 		-v "$(CURDIR)/test-support:/app/test-support" \
 		-v "$(CURDIR)/infrastructure:/app/infrastructure" \
 		jumptotech/terminal-test \
-		npx tsx test-support/strict-vitest.ts test/terminal-integration.test.ts --root services/terminal
+		npx tsx test-support/strict-vitest.ts test/terminal-integration.test.ts test/pty-input-queue-integration.test.ts --root services/terminal
 
 # The Linux sandbox image the suite creates its containers from. Built here from
 # the canonical Dockerfile rather than assumed: a fresh runner has no

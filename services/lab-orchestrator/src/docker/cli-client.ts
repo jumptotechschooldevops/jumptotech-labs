@@ -32,6 +32,7 @@
 import { execFile } from 'node:child_process';
 import { isContainerSandboxRef } from '../session/identifiers.js';
 import { readSingleFile } from './tar.js';
+import { execFileOutcome } from '../providers/container/runtime.js';
 import {
   DockerCommandError,
   DockerUnreachableError,
@@ -115,7 +116,7 @@ export type CliBinaryRunner = (
 /** Spawn a process with an explicit argv array, capturing stdout as bytes. Never a shell. */
 export const execFileBinaryRunner: CliBinaryRunner = (binary, argv, options) =>
   new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       binary,
       argv,
       {
@@ -127,14 +128,8 @@ export const execFileBinaryRunner: CliBinaryRunner = (binary, argv, options) =>
         windowsHide: true,
       },
       (error, stdout, stderr) => {
-        const killed = Boolean(error && (error as { killed?: boolean }).killed);
-        const timedOut =
-          killed || Boolean(error && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
-        let exitCode = 0;
-        if (error) {
-          const code = (error as { code?: unknown }).code;
-          exitCode = typeof code === 'number' ? code : 1;
-        }
+        // See `execFileOutcome`: a `docker` killed at its limit may exit 0.
+        const { exitCode, timedOut } = execFileOutcome(error, child);
         resolve({
           exitCode,
           stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout)),
@@ -148,7 +143,7 @@ export const execFileBinaryRunner: CliBinaryRunner = (binary, argv, options) =>
 /** Spawn a process with an explicit argv array. Never a shell. */
 export const execFileRunner: CliRunner = (binary, argv, options) =>
   new Promise<DockerExecResult>((resolve) => {
-    execFile(
+    const child = execFile(
       binary,
       argv,
       {
@@ -159,14 +154,8 @@ export const execFileRunner: CliRunner = (binary, argv, options) =>
         windowsHide: true,
       },
       (error, stdout, stderr) => {
-        const killed = Boolean(error && (error as { killed?: boolean }).killed);
-        const timedOut =
-          killed || Boolean(error && (error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
-        let exitCode = 0;
-        if (error) {
-          const code = (error as { code?: unknown }).code;
-          exitCode = typeof code === 'number' ? code : 1;
-        }
+        // See `execFileOutcome`: a `docker` killed at its limit may exit 0.
+        const { exitCode, timedOut } = execFileOutcome(error, child);
         resolve({
           exitCode,
           stdout: String(stdout),

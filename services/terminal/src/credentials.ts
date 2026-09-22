@@ -204,24 +204,38 @@ async function fetchInternal(options: FetchOptions): Promise<Record<string, unkn
       },
     );
   } catch (error) {
+    clearTimeout(timer);
     throw new CredentialsUnavailableError(
       'CREDENTIALS_UNAVAILABLE',
       `Could not reach the lab API to obtain session credentials: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+
+  /*
+   * The deadline covers the body as well. `fetch` resolves at the headers, and
+   * an attach waiting on a reply that never finishes holds its session's attach
+   * queue — every later attach for that session queues behind it — for good.
+   *
+   * Typed as a loose record on purpose: this is untrusted network input, and it
+   * is narrowed to a credential shape by the explicit field checks below rather
+   * than by a cast the compiler cannot verify.
+   */
+  let body: {
+    ok?: boolean;
+    data?: Record<string, unknown>;
+    error?: { code?: string; message?: string };
+  } | null;
+  try {
+    body = (await response.json().catch(() => null)) as typeof body;
   } finally {
     clearTimeout(timer);
   }
-
-  // Typed as a loose record on purpose: this is untrusted network input, and it
-  // is narrowed to a credential shape by the explicit field checks below rather
-  // than by a cast the compiler cannot verify.
-  const body = (await response.json().catch(() => null)) as
-    | {
-        ok?: boolean;
-        data?: Record<string, unknown>;
-        error?: { code?: string; message?: string };
-      }
-    | null;
+  if (body === null && controller.signal.aborted) {
+    throw new CredentialsUnavailableError(
+      'CREDENTIALS_UNAVAILABLE',
+      'The lab API did not finish replying to the credential request in time.',
+    );
+  }
 
   if (!response.ok || !body?.ok || !body.data) {
     throw new CredentialsUnavailableError(

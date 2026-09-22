@@ -28,7 +28,7 @@
  * to the live session.
  */
 import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
-import { brokerTlsOptions } from '@jumptotech/lab-orchestrator';
+import { brokerTlsOptions, ptyPendingInputBytes } from '@jumptotech/lab-orchestrator';
 import * as pty from 'node-pty';
 import WebSocket from 'ws';
 
@@ -52,6 +52,16 @@ export interface Shell {
    */
   pause(): void;
   resume(): void;
+  /**
+   * Input written and not yet taken by the shell, in bytes.
+   *
+   * The server stops reading the browser while this is high (see "student
+   * input" in `output-flow.ts`), so a client that keeps typing at a shell that
+   * is not reading cannot pile its input up in this process. For a local PTY
+   * it is node-pty's own write queue; for a broker shell, what the broker
+   * socket has not yet sent — which grows once `sandboxd` stops reading.
+   */
+  pendingInputBytes(): number;
   /** Replaces any previous listener. */
   onData(listener: (data: string) => void): void;
   /** Replaces any previous listener. */
@@ -94,6 +104,7 @@ export function localShell(
     kill: () => term.kill(),
     pause: () => term.pause(),
     resume: () => term.resume(),
+    pendingInputBytes: () => ptyPendingInputBytes(term),
     onData: (listener) => {
       onData = listener;
     },
@@ -219,6 +230,7 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
               },
               pause: () => ws.pause(),
               resume: () => ws.resume(),
+              pendingInputBytes: () => ws.bufferedAmount,
               onData: (listener) => {
                 onData = listener;
               },

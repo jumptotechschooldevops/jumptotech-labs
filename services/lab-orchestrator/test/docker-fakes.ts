@@ -545,6 +545,8 @@ export class FakeDockerDaemon implements DockerEnginePort {
  */
 export class FakeDockerEngines implements DockerEngineFactory {
   readonly host: FakeDockerDaemon;
+  /** Every sandbox `forget` was called for, in order. */
+  readonly forgotten: string[] = [];
 
   constructor(options: Omit<FakeDockerOptions, 'isHost'> = {}) {
     this.host = new FakeDockerDaemon({ ...options, isHost: true });
@@ -558,6 +560,10 @@ export class FakeDockerEngines implements DockerEngineFactory {
       return unreachableDaemon(`sandbox ${sandbox} has no running daemon`);
     }
     return nested;
+  }
+
+  forget(sandbox: string): void {
+    this.forgotten.push(sandbox);
   }
 
   /** The isolated daemon inside a sandbox, for assertions. */

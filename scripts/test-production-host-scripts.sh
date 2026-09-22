@@ -296,6 +296,7 @@ case ${1:-} in
     esac
     ;;
   stats) printf 'jumptotech-labs-api-1|1.50%%|211.4MiB / 7.6GiB|40\njumptotech-labs-postgres-1|0.20%%|1.1GiB / 7.6GiB|12\n' ;;
+  events) [ -z "${FAKE_OOM-}" ] || printf '%s\n' $FAKE_OOM ;;
   compose)
     [ -z "${FAKE_COMPOSE_DOWN-}" ] || { echo 'no configuration file provided: not found' >&2; exit 1; }
     shift
@@ -488,7 +489,7 @@ no_secret_leaked() {
 only_read_only_calls() {
   local violations
   violations=$(grep -E '^docker ' "$root/log" | sed -E 's/ -f [^ ]+//g; s/ --profile [^ ]+//g' |
-    grep -vE '^docker (info|version|network inspect|image inspect|ps|inspect|port|stats|compose (version|ps|exec -T (prometheus promtool query instant|prometheus wget -qO- http://127\.0\.0\.1:3000/api/health|alertmanager amtool alert query|postgres sh -c pg_isready|(api|terminal|sandboxd) node -e)))( |$)' |
+    grep -vE '^docker (info|version|network inspect|image inspect|ps|inspect|port|stats|events --since [0-9]+ --until [0-9]+|compose (version|ps|exec -T (prometheus promtool query instant|prometheus wget -qO- http://127\.0\.0\.1:3000/api/health|alertmanager amtool alert query|postgres sh -c pg_isready|(api|terminal|sandboxd) node -e)))( |$)' |
     cat || true)
   violations+=$(grep -E '^kubectl ' "$root/log" | { grep -vE '^kubectl( -n kube-system)? (version|get)( |$)' || true; } || true)
   [ -z "$violations" ]
@@ -1014,9 +1015,10 @@ run host-capacity-sample.sh "$root" --out-dir "$root/capacity" --interval 1 --du
 check 'exit 0' exit_is 0
 check 'host.csv has a header and a sample' bash -c '[ "$(wc -l <"$1/capacity/host.csv")" -eq 2 ]' _ "$root"
 check 'memory, containers and pods are recorded' bash -c 'tail -1 "$1/capacity/host.csv" | grep -Eq ",15625,11718,.*,1,1,3,"' _ "$root"
-check 'the first sample has no CPU interval yet; pressure and OOM kills are recorded' bash -c 'tail -1 "$1/capacity/host.csv" | grep -Eq ",3,,,,1.25,3.50,0.75,2$"' _ "$root"
-check 'the header names the saturation columns' bash -c 'head -1 "$1/capacity/host.csv" | grep -q ",cpu_steal_pct,psi_cpu_some_avg60,psi_memory_some_avg60,psi_io_some_avg60,oom_kills_total$"' _ "$root"
-check 'the peaks include memory pressure and OOM kills' has_line '^peak memory pressure +3.5'
+check 'the first sample has no CPU interval yet; pressure and both OOM counts are recorded' bash -c 'tail -1 "$1/capacity/host.csv" | grep -Eq ",3,,,,1.25,3.50,0.75,2,0.10,[0-9]*,0$"' _ "$root"
+check 'the header names the saturation columns' bash -c 'head -1 "$1/capacity/host.csv" | grep -q ",cpu_steal_pct,psi_cpu_some_avg60,psi_memory_some_avg60,psi_io_some_avg60,oom_kills_total,psi_memory_full_avg60,docker_root_inodes_free,docker_oom_events$"' _ "$root"
+check 'the peaks include memory pressure and OOM kills' has_line '^peak memory pressure +some 3.5 / full 0.1 '
+check 'the kernel OOM kills in the run are printed' has_line '^OOM kills in the run +0 '
 check 'container memory is converted to MiB' grep -q ',jumptotech-labs-postgres-1,0.20,1126,12$' "$root/capacity/containers.csv"
 check 'the peaks are printed' has_line '^peak containers +1 running'
 check 'only read-only calls' only_read_only_calls
@@ -1024,6 +1026,17 @@ printf 'time,load1\n2026-01-01T00:00:00Z,1\n' >"$root/old.csv"
 mkdir -p "$root/oldrun" && cp "$root/old.csv" "$root/oldrun/host.csv"
 run host-capacity-sample.sh "$root" --out-dir "$root/oldrun" --interval 1 --duration 0
 check 'appending to a host.csv with other columns is refused' exit_is 2
+run host-capacity-sample.sh "$root" --out-dir "$root/capacity" --interval 1 --duration 0
+check 'a rerun by this version appends to its own host.csv' bash -c '[ "$(wc -l <"$1/capacity/host.csv")" -eq 3 ]' _ "$root"
+
+scenario 'sampler: a container the kernel OOM-killed is recorded, not only its peak memory'
+root=$(fixture sampleroom)
+FAKE_OOM='jtt-lab-aaaa jtt-lab-bbbb' run host-capacity-sample.sh "$root" --out-dir "$root/capacity" --interval 1 --duration 0
+check 'exit 0' exit_is 0
+check 'the Docker OOM event count is in host.csv, beside the kernel count' bash -c 'tail -1 "$1/capacity/host.csv" | grep -Eq ",2,0.10,[0-9]*,2$"' _ "$root"
+check 'each victim is in oom.csv' bash -c 'grep -q ",jtt-lab-aaaa$" "$1/capacity/oom.csv" && grep -q ",jtt-lab-bbbb$" "$1/capacity/oom.csv"' _ "$root"
+check 'the kill count is printed' has_line '^container OOM events +2 '
+check 'only read-only calls' only_read_only_calls
 
 scenario 'sampler: usage errors exit 2'
 root=$(fixture samplerusage)

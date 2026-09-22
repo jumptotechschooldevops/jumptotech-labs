@@ -9,16 +9,23 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const reply = vi.hoisted(() => ({ code: 0, stdout: '', stderr: '' }));
+// `killed` is what Node records when it stopped the child at its time limit.
+const reply = vi.hoisted(() => ({ code: 0, stdout: '', stderr: '', killed: false }));
 
 vi.mock('node:child_process', () => ({
   execFile: (
     _binary: string,
     _argv: string[],
     _options: unknown,
-    callback: (error: { code: number } | null, stdout: string, stderr: string) => void,
+    callback: (error: { code: number | null; killed?: boolean } | null, stdout: string, stderr: string) => void,
   ) => {
-    callback(reply.code === 0 ? null : { code: reply.code }, reply.stdout, reply.stderr);
+    const child = { killed: reply.killed };
+    // Asynchronous, as the real callback is: the caller holds `child` by then.
+    queueMicrotask(() => {
+      const error = reply.code === 0 ? null : { code: reply.code, killed: reply.killed };
+      callback(error, reply.stdout, reply.stderr);
+    });
+    return child;
   },
 }));
 
@@ -30,6 +37,7 @@ beforeEach(() => {
   reply.code = 0;
   reply.stdout = '';
   reply.stderr = '';
+  reply.killed = false;
 });
 
 describe('DockerSandboxInspector.inspect', () => {
@@ -49,6 +57,20 @@ describe('DockerSandboxInspector.inspect', () => {
     await expect(new DockerSandboxInspector().inspect(REF)).rejects.toBeInstanceOf(InspectorUnavailableError);
   });
 
+  // Docker CLI 28.4.0 catches the SIGTERM sent at the limit and exits 0 with
+  // nothing on stdout — which, read by exit code alone, was "no sandbox".
+  it('throws unavailable, not "no sandbox", for an inspect stopped at its limit that exited 0', async () => {
+    reply.killed = true;
+    await expect(new DockerSandboxInspector().inspect(REF)).rejects.toBeInstanceOf(InspectorUnavailableError);
+  });
+
+  it('throws unavailable for a timed-out inspect even if its stderr says "no such container"', async () => {
+    reply.code = 1;
+    reply.killed = true;
+    reply.stderr = 'Error: No such container: ' + REF;
+    await expect(new DockerSandboxInspector().inspect(REF)).rejects.toBeInstanceOf(InspectorUnavailableError);
+  });
+
   it('reads a container', async () => {
     reply.stdout = 'running\tstudent\t/home/student\t{"jumptotech.io/managed":"true"}\n';
     expect(await new DockerSandboxInspector().inspect(REF)).toEqual({
@@ -57,5 +79,17 @@ describe('DockerSandboxInspector.inspect', () => {
       workdir: '/home/student',
       labels: { 'jumptotech.io/managed': 'true' },
     });
+  });
+});
+
+describe('DockerSandboxInspector.ping', () => {
+  it('throws for a `docker version` stopped at its limit that exited 0', async () => {
+    reply.killed = true;
+    await expect(new DockerSandboxInspector().ping()).rejects.toThrow(/did not answer in time/);
+  });
+
+  it('returns the server version', async () => {
+    reply.stdout = '28.4.0\n';
+    expect(await new DockerSandboxInspector().ping()).toBe('28.4.0');
   });
 });

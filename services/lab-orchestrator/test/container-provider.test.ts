@@ -16,6 +16,7 @@ import {
   GRANTABLE_CAPABILITIES,
   LINUX_SANDBOX_CAPABILITIES,
   LinuxLabProvider,
+  MAX_SANDBOX_READ_BYTES,
   TerraformLabProvider,
   loadLabDefinition,
   type LabSessionContext,
@@ -378,6 +379,22 @@ describe('sandbox reads for the verifier', () => {
     // exactly what the student can see.
     const statCall = runtime.execs.find((e) => e.request.argv[0] === '/bin/stat');
     expect(statCall?.request.user).toBe('student');
+  });
+
+  it('returns the first part of a file longer than the read cap, marked truncated — not an empty read', async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+    const context = contextFor(lab);
+    await provider.create(context);
+    const big = 'x'.repeat(MAX_SANDBOX_READ_BYTES + 5_000);
+    runtime.put(SANDBOX_A, `${HOME}/deploy/big.log`, { content: big, mode: '644', owner: 'student', group: 'student' });
+
+    const read = await provider.readSandboxPath(context, 'deploy/big.log');
+
+    expect(read?.type).toBe('file');
+    expect(read?.truncated).toBe(true);
+    expect(read?.content).toBe(big.slice(0, MAX_SANDBOX_READ_BYTES));
   });
 
   it('returns null for a path that does not exist', async () => {
