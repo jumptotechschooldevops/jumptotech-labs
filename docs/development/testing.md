@@ -136,7 +136,9 @@ objects — provided you:
   others);
 - pick a free `TEST_DB_PORT` for `make test-db` (`docker ps` first);
 - remember the kind cluster itself is shared: `npm run cluster:down` deletes it
-  for everyone.
+  for everyone. Its lease check reads only this checkout's
+  `infrastructure/kind/generated/` lease file, so it does not see another
+  checkout's runs.
 
 Never run `docker system prune`, `docker image prune` or a label-wide
 `docker rm` on a shared machine: it removes other checkouts' sandboxes and

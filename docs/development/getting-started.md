@@ -126,7 +126,7 @@ creates, removes or rewrites something outside the checkout's working tree.
 | Script (make target / npm script) | Purpose | Changes state? |
 |---|---|---|
 | `cluster-up.sh` (`npm run cluster:up`, `make cluster-up`) | create the kind cluster, write kubeconfigs | creates the shared kind cluster |
-| `cluster-down.sh` (`npm run cluster:down`) | delete the kind cluster | **deletes the cluster** — every checkout on the machine uses it |
+| `cluster-down.sh` (`npm run cluster:down`) | delete the kind cluster | **deletes the cluster** every checkout on the machine uses. Refuses when this checkout's lease file (`infrastructure/kind/generated/cluster-<name>.lease`) names another `RUNTIME_OWNER_ID` (`-- --force` overrides); it cannot see leases recorded in *other* checkouts |
 | `cluster-status.sh` (`make status`) | health of cluster and services | no |
 | `sandbox-build.sh` (`npm run sandbox:build`) | build the four sandbox images | **writes `:latest` tags** unless all four `*_SANDBOX_IMAGE` are set |
 | `sandbox-clean.sh` (`make sandbox-clean`) | remove this `RUNTIME_OWNER_ID`'s sandboxes | **removes running sandboxes** without ending their sessions; refused on a production checkout |

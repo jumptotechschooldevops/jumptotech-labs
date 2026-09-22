@@ -21,7 +21,7 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-setup: ## First-time setup: .env + kind cluster
+setup: ## First-time setup: .env secrets + RUNTIME_OWNER_ID, scrape token, kind cluster, sandbox images (:latest)
 	@$(MAKE) secrets
 	@# One runtime owner for the whole stack: the api and sandboxd read this same
 	@# value, and compose refuses to start without it. Not a secret. An existing
