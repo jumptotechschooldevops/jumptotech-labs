@@ -514,11 +514,16 @@ export const systemdUnitDirective: SandboxVerifierHandler<'systemd_unit_directiv
       // systemd's leading `-` (optional file: `EnvironmentFile=-/etc/…`) and
       // `@`/`+`/`!` prefixes qualify a path; they do not change which path.
       // A scalar directive's words are also split on punctuation, so
-      // `Description=… (ledger-api)` names ledger-api.
+      // `Description=… (ledger-api)`, `ledger-api: …`, `… ledger-api.` and
+      // `… (ledger-api.service)` all name ledger-api. The word as written is
+      // kept too, so a check for `ledger-api.service` itself still matches.
       const members = (
         LIST_DIRECTIVES.has(directive)
           ? unit.value.tokens(section, directive)
-          : unit.value.tokens(section, directive).flatMap((token) => token.split(/[(),;"']+/))
+          : unit.value
+              .tokens(section, directive)
+              .flatMap((token) => token.split(/[(),;:"']+/))
+              .flatMap((token) => [token, token.replace(/\.$/, '').replace(/\.service$/, '')])
       )
         .map((token) => token.replace(/^[-@+!:]+/, ''))
         .filter((token) => token.length > 0);

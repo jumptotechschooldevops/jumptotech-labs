@@ -229,7 +229,8 @@ requirements:
     path: /etc/systemd/system/ledger-api.service
     section: Service
     directive: WorkingDirectory
-    equals: /srv/jumptotech
+    # systemd accepts the trailing slash; it is the same directory.
+    one_of: [/srv/jumptotech, /srv/jumptotech/]
     label: The service works from the directory the runbook names
   - type: systemd_unit_directive
     path: /etc/systemd/system/ledger-api.service
