@@ -130,7 +130,7 @@ RUN_INTEGRATION_TESTS=1 KUBECONFIG=infrastructure/kind/generated/kubeconfig-host
 It fails on any test that did not pass (skipped, todo) and on a run in which no
 test ran. A suite that cannot run must therefore call `context.skip(reason)`,
 never `return` — vitest counts a returned test as passed, and
-`services/observability/test/integration-skip-semantics.test.ts` fails the
+`services/observability/test/suite-skip-semantics.test.ts` fails the
 build for it. The full matrix is
 [docs/development/testing.md](../docs/development/testing.md).
 

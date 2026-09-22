@@ -35,7 +35,7 @@ Read this before reporting any result.
   `make test-terminal-container` and `make test-sandboxd-container`.
 - **A suite that cannot run must report skipped, not passed.** vitest counts a
   test that `return`s early as passed, which no runner can detect; use
-  `context.skip(reason)`. `services/observability/test/integration-skip-semantics.test.ts`
+  `context.skip(reason)`. `services/observability/test/suite-skip-semantics.test.ts`
   fails the build for the early-`return` pattern.
 
 When you write up a run, say which of these it was:

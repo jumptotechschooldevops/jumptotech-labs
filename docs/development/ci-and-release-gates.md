@@ -37,7 +37,7 @@ Two workflows run on every pull request (any target branch for Quality gates,
   `vitest run` in any runtime job. Unit runs (`npm test`) are not strict,
   because several suites skip there on purpose. A suite that cannot run must
   call `context.skip(reason)`, not `return`: vitest counts a returned test as
-  passed, which no runner can see; `integration-skip-semantics.test.ts`
+  passed, which no runner can see; `suite-skip-semantics.test.ts`
   enforces it. Local commands and what each one needs: [testing.md](testing.md).
 - **Every step runs with `pipefail`.** `defaults.run.shell: bash` makes each
   `run:` block `bash -eo pipefail`; GitHub's default (`bash -e`) reports only
