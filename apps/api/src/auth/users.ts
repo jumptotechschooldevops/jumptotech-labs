@@ -128,6 +128,11 @@ export class InMemoryUserRepository implements UserRepository {
     return this.#byId.get(userId) ?? null;
   }
 
+  /** Every account, in creation order — what the in-memory access store lists. */
+  async list(): Promise<AuthenticatedUser[]> {
+    return [...this.#byId.values()];
+  }
+
   async setRole(userId: string, role: Role): Promise<AuthenticatedUser | null> {
     const user = this.#byId.get(userId);
     if (!user) return null;
