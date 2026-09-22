@@ -178,6 +178,14 @@ describe('ACCESS_POLICY=entitlement: a signed-in account is not an entitled one'
     expect(h.audit).toContainEqual(
       expect.objectContaining({ action: 'session:start', authorizationResult: 'denied-access', accessState: 'NONE' }),
     );
+
+    // A request id is carried only when it is a safe token: a header cannot
+    // write a line break, or anything else, into the audit record.
+    h.audit.length = 0;
+    await request(h.app).post(`/api/labs/${LAB}/start`).set({ ...as('newcomer'), 'x-request-id': 'bad id\tlevel=error' });
+    await request(h.app).post(`/api/labs/${LAB}/start`).set({ ...as('newcomer'), 'x-request-id': 'req-123.ok' });
+    const ids = h.audit.filter((event) => event.action === 'session:start').map((event) => event.requestId);
+    expect(ids).toEqual(['req-unknown', 'req-123.ok']);
   });
 
   it('still shows the catalog, the student their own access, and their history', async () => {

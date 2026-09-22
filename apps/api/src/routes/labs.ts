@@ -31,6 +31,7 @@ import { progressErrorResponse, resolveStudent } from '../identity.js';
 import { record } from '../progress.js';
 import { toAttemptPayload } from './me.js';
 import { accessDeniedBody } from '../access/entitlements.js';
+import { requestId } from '../auth/middleware.js';
 import {
   issueTerminalGrant,
   noLimit,
@@ -352,7 +353,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       if (!entitled.allowed) {
         recordStart(def, 'access_denied', { code: 'ACCESS_NOT_ACTIVE' });
         deps.authAudit?.({
-          requestId: req.get('x-request-id') ?? 'req-unknown',
+          requestId: requestId(req),
           authenticatedUserId: owner.userId,
           action: 'session:start',
           authorizationResult: 'denied-access',

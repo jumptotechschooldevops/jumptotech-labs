@@ -41,7 +41,8 @@ export interface AuthAuditEvent {
 
 export type AuthAuditLogger = (event: AuthAuditEvent) => void;
 
-function requestId(req: Request): string {
+/** The caller's `x-request-id` when it is a safe token, for audit lines; never raw header text. */
+export function requestId(req: Request): string {
   const header = req.get('x-request-id');
   return header && /^[A-Za-z0-9._-]{1,128}$/.test(header) ? header : 'req-unknown';
 }
