@@ -5,8 +5,7 @@
   "type": "module",
   "description": "Structured logging, metrics, and the health/readiness listener (PLATFORM-003). Knows nothing about labs, sandboxes, or any provider.",
   "exports": {
-    ".": "./src/index.ts",
-    "./testing": "./test/fakes.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
