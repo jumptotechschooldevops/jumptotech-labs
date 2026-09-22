@@ -36,6 +36,7 @@ import {
   type StudentIdentityResolver,
 } from '@jumptotech/progress';
 import { asyncRoute, sendError, sendOk } from '../http.js';
+import type { AccessControl } from '../access/entitlements.js';
 import { progressErrorResponse, resolveStudent } from '../identity.js';
 import { record } from '../progress.js';
 import {
@@ -55,6 +56,8 @@ export interface MeRoutesDeps {
   /** For the learning-path route: the caller's running lab, and which labs can start. */
   sessions?: SessionManager;
   learningPaths?: LearningPathCatalog;
+  /** Lab access, for `GET /api/me/access`. Absent means the `open` policy. */
+  access?: AccessControl;
 }
 
 /** Per-lab standing, including labs the student has never opened. */
@@ -226,6 +229,33 @@ export function createMeRoutes(deps: MeRoutesDeps): Router {
             notice:
               'Development identity. Nobody proved who this is, so this history is not protected by a login.',
           }),
+    });
+  }));
+
+  // GET /api/me/access ------------------------------------------------------
+  /*
+   * The caller's own lab access — docs/commercial-access.md.
+   *
+   * So a signed-in student who cannot start a lab is told why before they
+   * press Start, rather than meeting an unexplained 403. It serves the state
+   * and the window — the facts about their own access — and never who granted
+   * it or an operator's reason. `policy: open` means this deployment does not
+   * require an entitlement at all; `active` is then always true.
+   *
+   * Available whatever the state: an expired or revoked student can still
+   * sign in, read this, and read their progress.
+   */
+  router.get('/access', asyncRoute(async (req, res) => {
+    const user = req.user;
+    if (!user) {
+      sendError(res, 401, { code: 'AUTH_REQUIRED', message: 'This request requires authentication.' });
+      return;
+    }
+    const access = deps.access;
+    sendOk(res, {
+      access: access
+        ? await access.describe(user.userId)
+        : { policy: 'open', state: 'NONE', active: true, startsAt: null, expiresAt: null },
     });
   }));
 

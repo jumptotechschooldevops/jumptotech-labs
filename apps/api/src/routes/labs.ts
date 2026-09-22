@@ -30,6 +30,7 @@ import { asyncRoute, sendError, sendOk } from '../http.js';
 import { progressErrorResponse, resolveStudent } from '../identity.js';
 import { record } from '../progress.js';
 import { toAttemptPayload } from './me.js';
+import { accessDeniedBody } from '../access/entitlements.js';
 import {
   issueTerminalGrant,
   noLimit,
@@ -336,6 +337,31 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
         message: 'Starting a lab requires authentication.',
       });
       return;
+    }
+
+    /*
+     * Signed in is not the same as entitled (docs/commercial-access.md).
+     *
+     * Refused before an attempt is opened or a slot is counted, like the pause
+     * switch above: a student without access leaves no FAILED attempt and
+     * takes no capacity. The reply names the state (NONE, EXPIRED, …) so the
+     * page can say what to do; it never carries an operator's reason.
+     */
+    if (deps.access) {
+      const entitled = await deps.access.decide(owner.userId);
+      if (!entitled.allowed) {
+        recordStart(def, 'access_denied', { code: 'ACCESS_NOT_ACTIVE' });
+        deps.authAudit?.({
+          requestId: req.get('x-request-id') ?? 'req-unknown',
+          authenticatedUserId: owner.userId,
+          action: 'session:start',
+          authorizationResult: 'denied-access',
+          accessState: entitled.state,
+          timestamp: new Date().toISOString(),
+        });
+        sendError(res, 403, accessDeniedBody(entitled.state));
+        return;
+      }
     }
 
     /*

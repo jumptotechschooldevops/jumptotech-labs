@@ -57,6 +57,8 @@ import { progressErrorResponse } from '../identity.js';
 import { record } from '../progress.js';
 import { resolveTerminalWsBaseForClient } from '../public-origin.js';
 import { toAttemptPayload } from './me.js';
+import type { AccessControl } from '../access/entitlements.js';
+import type { AuthAuditLogger } from '../auth/middleware.js';
 
 /** The metric groups the browser-facing routers write to. */
 export interface RouteMetrics {
@@ -76,6 +78,14 @@ export interface SessionRoutesDeps {
    * session to every caller, and that must not be expressible.
    */
   sessionGuard: SessionGuard;
+  /**
+   * Lab access (docs/commercial-access.md). Start Lab asks it directly; every
+   * other lab-use route asks it through `sessionGuard`. Optional so existing
+   * suites compose unchanged; absent means the `open` policy.
+   */
+  access?: AccessControl;
+  /** The authorization audit line, for the refusals Start Lab makes itself. */
+  authAudit?: AuthAuditLogger;
   k8s: KubernetesPort;
   engines?: DockerEngineFactory;
   /**

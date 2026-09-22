@@ -33,10 +33,16 @@ import type { LabSession, SessionManager } from '@jumptotech/lab-orchestrator';
 import type { ApiConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { sessionErrorResponse } from './sessions.js';
+import { accessDeniedBody, type AccessControl } from '../access/entitlements.js';
 
 export interface InternalRoutesDeps {
   sessions: SessionManager;
   config: ApiConfig;
+  /**
+   * Lab access (docs/commercial-access.md). Optional so existing suites
+   * compose unchanged; absent means the `open` policy.
+   */
+  access?: AccessControl;
 }
 
 function secretsMatch(presented: unknown, expected: string): boolean {
@@ -169,6 +175,22 @@ export function createInternalRoutes(deps: InternalRoutesDeps): Router {
         message: 'That terminal token is not valid for this session.',
       });
       return null;
+    }
+
+    /*
+     * A terminal token outlives nothing the browser routes would refuse.
+     *
+     * The token was minted while the owner had access; it is presented on
+     * every attach and every reconnect, possibly long after that access was
+     * suspended, revoked or ran out. Checking here, against the live
+     * entitlement, is what makes a stale token open no new shell.
+     */
+    if (deps.access) {
+      const entitled = await deps.access.decide(session.ownerUserId);
+      if (!entitled.allowed) {
+        sendError(res, 403, accessDeniedBody(entitled.state));
+        return null;
+      }
     }
     return session;
   }

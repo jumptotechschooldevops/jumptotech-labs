@@ -59,6 +59,7 @@ import {
 } from './rate-limit.js';
 import { createMeRoutes } from './routes/me.js';
 import { createAuthRoutes } from './routes/auth.js';
+import { AccessControl, InMemoryAccessStore } from './access/entitlements.js';
 
 /**
  * The learning-history half of the graph.
@@ -110,6 +111,15 @@ export interface CreateAppDeps {
   identityResolver?: IdentityResolver;
   /** One line per authorization decision. Never carries a credential. */
   authAudit?: AuthAuditLogger;
+  /**
+   * Lab access — docs/commercial-access.md.
+   *
+   * Optional so existing suites compose unchanged. When absent, an in-memory
+   * store over the in-memory user store is used, under the configured
+   * `ACCESS_POLICY` (`open` unless NODE_ENV=production). The composition root
+   * always passes the PostgreSQL-backed one when a database is configured.
+   */
+  access?: AccessControl;
   /**
    * Structured logging and metrics — PLATFORM-003.
    *
@@ -399,7 +409,15 @@ export function createApp(deps: CreateAppDeps): Express {
     },
     (error) => observability.logger.error('authn.failed', { outcome: 'AUTH_UNAVAILABLE', err: error }),
   );
-  const sessionGuard = createSessionGuard(deps.sessions, audit);
+  const access =
+    deps.access ??
+    new AccessControl(
+      new InMemoryAccessStore({
+        list: async () => ('list' in users && typeof users.list === 'function' ? await users.list() : []),
+      }),
+      deps.config.accessPolicy ?? 'open',
+    );
+  const sessionGuard = createSessionGuard(deps.sessions, audit, access);
 
   /*
    * `/auth` is outside `authenticate` on purpose.
@@ -438,6 +456,8 @@ export function createApp(deps: CreateAppDeps): Express {
     ...learning,
     learningPaths,
     sessionGuard,
+    access,
+    authAudit: audit,
     identity: learning.identity,
     /*
      * The existing `(message: string) => void` seam, preserved.
@@ -471,7 +491,7 @@ export function createApp(deps: CreateAppDeps): Express {
    */
   app.use('/api/me/learning-paths', browserCors, learningPathLimiter);
   app.use('/api/me', browserCors, originGuard, authenticated, createMeRoutes(routes));
-  app.use('/internal', createInternalRoutes(deps));
+  app.use('/internal', createInternalRoutes({ ...deps, access }));
 
   app.use((_req, res) => {
     sendError(res, 404, { code: 'NOT_FOUND', message: 'No such endpoint' });

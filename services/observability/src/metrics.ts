@@ -174,6 +174,10 @@ export const LAB_START_OUTCOMES = [
   // A student at their own session limit. Not a platform failure, and kept out
   // of `jtt:lab_start_failures:increase10m` so one student cannot page anyone.
   'student_limit_reached',
+  // The caller's lab access is not ACTIVE (docs/commercial-access.md). A
+  // commercial state, not a platform failure: kept out of the failure count for
+  // the same reason as `student_limit_reached`.
+  'access_denied',
   'provider_unavailable',
   'provision_failed',
   'unauthorized',
@@ -1081,7 +1085,12 @@ export interface OperationsMetrics {
 }
 
 /** What the api's operator socket can be asked to do. */
-export const OPERATOR_ACTIONS = ['status', 'sessions', 'session', 'end_session'] as const;
+export const OPERATOR_ACTIONS = [
+  'status',
+  'sessions',
+  'session',
+  'end_session',
+] as const;
 /** How an operator request ended: served, refused (bad input, unknown session), or failed. */
 export const OPERATOR_OUTCOMES = ['ok', 'rejected', 'failed'] as const;
 
