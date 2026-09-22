@@ -140,6 +140,13 @@ function withCode(report: CatalogValidationReport, code: CatalogFinding['code'])
   return report.findings.filter((finding) => finding.code === code);
 }
 
+/** The default story, objectives and hints, for a fixture that also sets another field. */
+const BASE_EXTRA = {
+  story: 'The payments team needs a report file.',
+  objectives: ['Create a file'],
+  hints: [{ level: 1, text: 'Which command creates an empty file?' }],
+};
+
 const SEED_VERIFY = [{ type: 'file_exists', path: '/home/student/notes.txt', label: 'Notes are present' }];
 
 // --- the shipped catalog --------------------------------------------------------
@@ -224,6 +231,32 @@ describe('lab identity and prerequisites', () => {
     const messages = withCode(report, 'LAB_LOAD').map((f) => f.message);
     expect(messages.some((m) => /cycle: LINUX-90[12] → LINUX-90[12] → LINUX-90[12]/.test(m))).toBe(true);
     expect(report.errors).toBeGreaterThan(0);
+  });
+
+  it('fails when a track lists a lab before its own prerequisite', async () => {
+    // AWS shipped this way: AWS-007 and AWS-012 require AWS-018, whose
+    // `order: 18` put it last on the track page.
+    const report = await validateFixture({
+      labs: [
+        { id: 'LINUX-901', extra: { ...BASE_EXTRA, order: 9 } },
+        { id: 'LINUX-902', prerequisites: ['LINUX-901'], extra: { ...BASE_EXTRA, order: 2 } },
+      ],
+    });
+
+    expect(withCode(report, 'LAB_TRACK_ORDER')).toEqual([
+      expect.objectContaining({ severity: 'error', subject: 'LINUX-902', message: expect.stringMatching(/before its prerequisite LINUX-901/) }),
+    ]);
+  });
+
+  it('accepts a shared order, where the tie sorts on id (LINUX-011 and LINUX-014 share one)', async () => {
+    const report = await validateFixture({
+      labs: [
+        { id: 'LINUX-901', extra: { ...BASE_EXTRA, order: 3 } },
+        { id: 'LINUX-902', prerequisites: ['LINUX-901'], extra: { ...BASE_EXTRA, order: 3 } },
+      ],
+    });
+
+    expect(withCode(report, 'LAB_TRACK_ORDER')).toEqual([]);
   });
 
   it('fails on a lab that lists itself as a prerequisite', async () => {

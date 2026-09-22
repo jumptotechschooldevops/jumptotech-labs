@@ -45,7 +45,7 @@ topic: aws-networking
 difficulty: intermediate
 level: practice
 duration_minutes: 40
-order: 9
+order: 10
 
 environment:
   provider: linux
