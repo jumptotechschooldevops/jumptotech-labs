@@ -40,10 +40,9 @@ environment:
   sandbox_capabilities:
     - NET_RAW
 
-# NET-007 is designed but blocked: it needs a peer container and an HTTP
-# request primitive, neither of which is approved. NET-006 is the prerequisite
-# actually satisfied, and it is the one this lab builds on — a student who has
-# read a socket table can now watch how the sockets in it come and go.
+# NET-006 is the prerequisite this lab builds on — a student who has read a
+# socket table can now watch how the sockets in it come and go. NET-007 (which
+# now ships) is not needed for it, and the path places this lab after NET-007.
 prerequisites:
   - NET-006
 
