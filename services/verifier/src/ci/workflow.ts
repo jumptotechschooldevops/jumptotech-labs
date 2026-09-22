@@ -170,10 +170,27 @@ function readTriggers(map: Record<string, unknown>): WorkflowTrigger[] {
   });
 }
 
+/**
+ * An `if:` that can never be true: `false`, `'false'`, `${{ false }}`.
+ *
+ * GitHub skips such a job or step on every run, so it is not part of the
+ * workflow in any sense a check means. A disabled test step used to satisfy
+ * "the workflow runs the tests". Anything else — a real expression, however
+ * unlikely — is left alone: it is not this parser's place to evaluate it.
+ */
+export function neverRuns(condition: unknown): boolean {
+  if (condition === false) return true;
+  if (typeof condition !== 'string') return false;
+  return /^\s*(?:\$\{\{\s*false\s*\}\}|false)\s*$/i.test(condition);
+}
+
 function readJobs(raw: unknown, assignments: WorkflowAssignment[]): WorkflowJob[] {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return [];
 
-  return Object.entries(raw as Record<string, unknown>).map(([id, value]) => {
+  const jobs = Object.entries(raw as Record<string, unknown>).filter(
+    ([, value]) => !(value !== null && typeof value === 'object' && neverRuns((value as Record<string, unknown>).if)),
+  );
+  return jobs.map(([id, value]) => {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
       return { id, runsOn: [], needs: [], steps: [], env: [] };
     }
@@ -195,8 +212,13 @@ function readJobs(raw: unknown, assignments: WorkflowAssignment[]): WorkflowJob[
 function readSteps(raw: unknown, jobId: string, assignments: WorkflowAssignment[]): WorkflowStep[] {
   if (!Array.isArray(raw)) return [];
 
-  return raw.map((entry, i): WorkflowStep => {
-    const index = i + 1;
+  // A step that never runs is dropped, but keeps the numbering the student
+  // sees in the file, so messages still point at the right step.
+  const running = raw
+    .map((entry: unknown, i) => ({ entry, index: i + 1 }))
+    .filter(({ entry }) => !(entry !== null && typeof entry === 'object' && neverRuns((entry as Record<string, unknown>).if)));
+
+  return running.map(({ entry, index }): WorkflowStep => {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
       return { index, withKeys: [], withValues: {}, env: [] };
     }

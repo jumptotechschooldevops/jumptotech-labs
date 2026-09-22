@@ -3880,6 +3880,12 @@ const cicdRequirementSchemas = {
       steps_expand: z.array(envVarName).min(1).max(6).optional(),
       /** Require the stage to appear after these stages, in file order. */
       after: z.array(z.string().min(1).max(64)).max(10).optional(),
+      /**
+       * The stage has no `when { }` block, so it runs on every build. A Test
+       * stage behind `when { expression { return false } }` is declared and
+       * never runs.
+       */
+      unconditional: z.literal(true).optional(),
       ...common,
     })
     .strict(),

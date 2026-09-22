@@ -54,6 +54,130 @@ async function grade(labId: string, change: (files: Map<string, string>) => void
 }
 const failing = (r: Awaited<ReturnType<typeof grade>>) => r.checks.filter((c) => c.status !== 'pass').map((c) => c.label);
 
+const WF = '.github/workflows/ci.yml';
+
+// ---------------------------------------------------------------- CICD-003
+const cicd003 = (build: string, test: string, jobExtra = '') => (files: Map<string, string>) => {
+  let wf = files.get(WF)!;
+  if (jobExtra) wf = wf.replace('    runs-on: ubuntu-latest\n', `    runs-on: ubuntu-latest\n${jobExtra}`);
+  files.set(
+    WF,
+    `${wf}
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+${build}
+${test}
+`,
+  );
+  withBuild(files);
+};
+const BUILD_STEP = '      - name: Build\n        run: node build.mjs';
+const TEST_STEP = '      - name: Test\n        run: node --test';
+
+describe('CICD-003 — a step or job that never runs does not count', () => {
+  it('passes the correct workflow', async () => {
+    expect(failing(await grade('CICD-003', cicd003(BUILD_STEP, TEST_STEP)))).toEqual([]);
+  });
+
+  it.each(['if: false', 'if: ${{ false }}', "if: 'false'"])('refuses the test step disabled with `%s`', async (condition) => {
+    // Before: passed every check.
+    const r = await grade('CICD-003', cicd003(BUILD_STEP, `      - name: Test\n        ${condition}\n        run: node --test`));
+    expect(failing(r)).toContain('A step runs the tests, after the build');
+  });
+
+  it('refuses the whole build job disabled with a job-level `if: false`', async () => {
+    const r = await grade('CICD-003', cicd003(BUILD_STEP, TEST_STEP, '    if: false\n'));
+    expect(r.passed).toBe(false);
+  });
+
+  it('still counts a step behind a real condition — the parser does not evaluate expressions', async () => {
+    const r = await grade('CICD-003', cicd003(BUILD_STEP, "      - name: Test\n        if: github.event_name == 'push'\n        run: node --test"));
+    expect(failing(r)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------- CICD-007
+const JENKINS_007 = (test: string) => `pipeline {
+    agent any
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Build') {
+            steps {
+                sh 'node build.mjs'
+            }
+        }
+        stage('Test') {
+${test}
+        }
+        stage('Package') {
+            steps {
+                sh 'ls -l dist'
+            }
+        }
+    }
+}
+`;
+describe('CICD-007 — the Test stage runs on every build', () => {
+  const grade007 = (test: string) =>
+    grade('CICD-007', (files) => {
+      files.set('Jenkinsfile', JENKINS_007(test));
+      withBuild(files);
+    });
+
+  it('passes the correct four-stage pipeline', async () => {
+    expect(failing(await grade007("            steps {\n                sh 'node --test'\n            }"))).toEqual([]);
+  });
+
+  it('refuses a Test stage behind `when { expression { return false } }`', async () => {
+    // Before: passed.
+    const r = await grade007(
+      "            when {\n                expression { return false }\n            }\n            steps {\n                sh 'node --test'\n            }",
+    );
+    expect(failing(r)).toEqual(['Test runs the test suite, after Build']);
+  });
+});
+
+// ---------------------------------------------------------------- CICD-009
+function cicd009(files: Map<string, string>, branches: string, deployIf = '') {
+  const original = files.get(WF)!;
+  files.set(
+    WF,
+    original.replace('on:\n  push:\n  pull_request:\n', `on:\n  push:\n    branches: ${branches}\n  pull_request:\n\nenv:\n  IMAGE_TAG: \${{ github.sha }}\n`) +
+      `
+  image:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t "jumptotech/statements:$IMAGE_TAG" .
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: image
+${deployIf}    steps:
+      - uses: actions/checkout@v4
+      - run: sed -i "s|jumptotech/statements:.*|jumptotech/statements:$IMAGE_TAG|" deploy/app.yml
+`,
+  );
+  withBuild(files);
+}
+describe('CICD-009 — a deploy job that never runs does not count', () => {
+  it('passes branches [main] with every job enabled', async () => {
+    expect(failing(await grade('CICD-009', (f) => cicd009(f, '[main]')))).toEqual([]);
+  });
+
+  it('refuses a deploy job disabled with `if: false`', async () => {
+    // Before: passed.
+    expect((await grade('CICD-009', (f) => cicd009(f, '[main]', '    if: false\n'))).passed).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------- CICD-008
 function cicd008(files: Map<string, string>, environment: string, publish: string) {
   const original = files.get('Jenkinsfile')!;
