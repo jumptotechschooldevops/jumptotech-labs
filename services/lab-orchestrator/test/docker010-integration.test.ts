@@ -246,7 +246,7 @@ suite('DOCKER-010 against a real docker:27-dind sandbox', () => {
     const before = await verify();
     expect(before.passed).toBe(false);
     expect(before.summary).toBe('LAB NOT COMPLETE');
-    expect(before.checks).toHaveLength(9);
+    expect(before.checks).toHaveLength(11);
 
     /*
      * Exactly which six fail is worth pinning, because three checks legitimately
