@@ -93,6 +93,10 @@ case $sql in
   *'CREATE DATABASE'*) [ -z "${FAKE_CREATE_FAIL-}" ] || exit 3 ;;
   *'ALTER DATABASE'*) [ -z "${FAKE_SWAP_FAIL-}" ] || { echo 'ERROR: database is being accessed by other users' >&2; exit 3; } ;;
   *'count(*) FROM schema_migrations'*) echo 5 ;;
+  *'min(applied_at) >'*)
+    printf '%s\n' "$sql" >>"$FAKE_LOG"
+    if [ -n "${FAKE_LEDGER_NEWER-}" ]; then echo t; else echo f; fi
+    ;;
   *'SELECT version, checksum FROM schema_migrations'*)
     [ -z "${FAKE_LEDGER_READ_FAIL-}" ] || { echo 'psql: error: server closed the connection unexpectedly' >&2; exit 2; }
     for file in "$FAKE_REPO"/services/progress/migrations/*.sql; do
@@ -212,7 +216,8 @@ new_case() {
   export JTT_DB_CONTAINER=fake-postgres FAKE_DATABASES="postgres jumptotech_labs"
   unset FAKE_PS_IDS FAKE_RUNNING FAKE_MOUNT_SOURCE FAKE_SERVER_DOWN FAKE_SESSIONS \
     FAKE_CREATE_FAIL FAKE_SWAP_FAIL FAKE_PG_DUMP_FAIL FAKE_PG_DUMP_GARBAGE \
-    FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG FAKE_ARCHIVE_TRUNCATED FAKE_LEDGER_READ_FAIL \
+    FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG FAKE_ARCHIVE_TRUNCATED FAKE_LEDGER_READ_FAIL FAKE_LEDGER_NEWER \
+    BACKUP_ACCEPT_NEW_DATABASE \
     BACKUP_LABEL BACKUP_RETENTION_DAYS BACKUP_RETENTION_MIN_KEEP BACKUP_COPY_HOOK
 }
 
@@ -249,6 +254,11 @@ server_untouched() { [ ! -s "$FAKE_LOG" ]; }
 no_change() { ! grep -E -q 'CREATE DATABASE|ALTER DATABASE|DROP|^pg_restore .* -d ' "$FAKE_LOG"; }
 mode_of() { ls -ld "$1" | cut -c1-10; }
 
+recent_timestamp_of() {
+  local stamp
+  stamp=$(sed -n 's/^timestamp_seconds=//p' "$BACKUP_STATUS_DIR/$1" 2>/dev/null)
+  [ -n "$stamp" ] && [ $(($(date -u +%s) - stamp)) -lt 120 ]
+}
 stamp_days_ago() {
   local epoch=$(($(date -u +%s) - $1 * 86400))
   date -u -d "@$epoch" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -r "$epoch" +%Y%m%dT%H%M%SZ
@@ -424,6 +434,39 @@ new_case
 export FAKE_RUNNING=false
 backup
 expect 'a stopped container: refused' says 'is not running'
+
+# A database whose history begins after the newest archive was re-created
+# after it (a lost volume, auto-migrated at startup). Backing it up would add a
+# backup of the empty database, retention would count it toward MIN_KEEP, and
+# the good archives would age out. Refused until an operator decides.
+new_case
+fake_archive jtt-pg-jumptotech_labs-20260101T031700Z.dump
+fake_archive jtt-pg-jumptotech_labs-20260102T031700Z-pre-upgrade.dump
+export FAKE_LEDGER_NEWER=1
+backup
+expect 'history newer than the newest archive: refused' says 'it was re-created after that archive'
+expect 'history newer than the newest archive: compared with the newest archive by name' logged "to_timestamp('20260102T031700Z'"
+expect 'history newer than the newest archive: nothing dumped' bash -c "! grep -q '^pg_dump' '$FAKE_LOG'"
+expect 'history newer than the newest archive: the archives are all kept' test "$(ls "$BACKUP_DIR" | grep -c '\.dump$')" -eq 2
+expect 'history newer than the newest archive: recorded as a failed backup' recent_timestamp_of db-backup.last-failure
+new_case
+fake_archive jtt-pg-jumptotech_labs-20260101T031700Z.dump
+export FAKE_LEDGER_NEWER=1 BACKUP_ACCEPT_NEW_DATABASE=true
+backup
+expect 'history newer than the newest archive, BACKUP_ACCEPT_NEW_DATABASE=true: backed up' succeeded
+expect 'BACKUP_ACCEPT_NEW_DATABASE=true: says what it accepted' says 'BACKUP_ACCEPT_NEW_DATABASE'
+new_case
+fake_archive jtt-pg-jumptotech_labs-20260101T031700Z.dump
+export BACKUP_ACCEPT_NEW_DATABASE=yes
+backup
+expect 'BACKUP_ACCEPT_NEW_DATABASE other than true/false: refused before the server is touched' server_untouched
+new_case
+backup
+expect 'no earlier archive (a first backup): the history is not compared' bash -c "! grep -q 'min(applied_at)' '$FAKE_LOG'"
+new_case
+fake_archive jtt-pg-jumptotech_labs-20260101T031700Z.dump
+backup
+expect 'history older than the newest archive (a healthy or restored database): backed up' succeeded
 
 # Retention: this database's archives only, regular files only, the newest
 # BACKUP_RETENTION_MIN_KEEP always kept.

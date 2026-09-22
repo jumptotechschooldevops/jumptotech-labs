@@ -60,7 +60,8 @@ groups:
             database). Students' history is in the backup, not here, and
             anything they do now diverges from it. Stop the api and
             restore (postgres-backup-restore.md §7.1) before anyone signs
-            in. The alert clears at the next successful backup, which will
-            then be a backup of this database: hold the schedule until
-            the restore decision is made.
+            in. db-backup.sh refuses to back this database up (so
+            retention cannot age the good archives out), and this stays
+            firing, until it is restored or BACKUP_ACCEPT_NEW_DATABASE=true
+            accepts it.
           runbook_url: docs/runbooks/RB-02-database.md

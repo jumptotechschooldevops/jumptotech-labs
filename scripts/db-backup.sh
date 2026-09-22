@@ -33,6 +33,10 @@
 #                              the archive and its sidecar as arguments, to copy
 #                              them off-host. Its failure fails the run. Where it
 #                              copies to is a DECISION REQUIRED item.
+#   BACKUP_ACCEPT_NEW_DATABASE true once, to back up a database whose history
+#                              (its first migration's applied_at) begins after
+#                              the newest archive here: one re-created after that
+#                              archive. Refused otherwise; see RB-02 §4d.
 #   JTT_DB_CONTAINER           The PostgreSQL container. Default: the running
 #                              `postgres` service of COMPOSE_PROJECT_NAME
 #                              (default jumptotech-labs).
@@ -80,6 +84,7 @@ backup_dir=${BACKUP_DIR:-$JTT_REPO_ROOT/backups/postgres}
 retention_days=${BACKUP_RETENTION_DAYS:-14}
 min_keep=${BACKUP_RETENTION_MIN_KEEP:-7}
 copy_hook=${BACKUP_COPY_HOOK-}
+accept_new_database=${BACKUP_ACCEPT_NEW_DATABASE:-false}
 
 case $backup_dir in
   /*) ;;
@@ -102,6 +107,10 @@ refuse_checkout_path() {
 refuse_checkout_path "$backup_dir"
 [[ $retention_days =~ ^[0-9]+$ ]] || jtt_die "BACKUP_RETENTION_DAYS must be a whole number of days (0 disables retention)"
 [[ $min_keep =~ ^[1-9][0-9]*$ ]] || jtt_die "BACKUP_RETENTION_MIN_KEEP must be a positive whole number"
+case $accept_new_database in
+  true | false) ;;
+  *) jtt_die "BACKUP_ACCEPT_NEW_DATABASE must be true or false" ;;
+esac
 if [ -n "$label" ] && [[ ! $label =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
   jtt_die "the label may contain only a-z, 0-9 and -, at most 32 characters"
 fi
@@ -194,6 +203,38 @@ take_lock() {
 }
 take_lock
 
+# This database's archives, named exactly as this script names them, regular
+# files only (never a symlink or anything else in there), newest first.
+archive_names() {
+  local entry
+  for entry in "$backup_dir"/jtt-pg-"$database"-*.dump; do
+    if [ -f "$entry" ] && [ ! -L "$entry" ]; then basename "$entry"; fi
+  done | grep -E "^jtt-pg-$database-[0-9]{8}T[0-9]{6}Z(-[a-z0-9][a-z0-9-]*)?\.dump$" | sort -r || true
+}
+
+# A database whose history begins after the newest archive was re-created
+# after it: a lost or replaced volume, auto-migrated by the api at startup.
+# Backing it up would put an archive of the empty database first in line, and
+# retention would count it toward the minimum kept while the archives that hold
+# the students' history age out. So stop here — loudly, as a failed backup —
+# until an operator restores (RB-02 §4d) or accepts it. Compared by the archive
+# name's UTC timestamp, which is when that dump started.
+newest=$(archive_names | head -1)
+if [ -n "$newest" ]; then
+  newest_stamp=${newest#"jtt-pg-$database-"}
+  newest_stamp=${newest_stamp:0:16}
+  [[ $newest_stamp =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || jtt_die "unexpected archive name $newest"
+  recreated=$(jtt_psql "$database" -c "SELECT COALESCE(min(applied_at) > (to_timestamp('$newest_stamp', 'YYYYMMDD\"T\"HH24MISS\"Z\"')::timestamp AT TIME ZONE 'UTC'), false) FROM schema_migrations") \
+    || jtt_die "cannot read the migration ledger of $database; is it the application database?"
+  if [ "$recreated" = t ]; then
+    if [ "$accept_new_database" = true ]; then
+      jtt_log "WARNING: $database's history begins after the newest archive ($newest); backing it up anyway because BACKUP_ACCEPT_NEW_DATABASE=true. Unset it after this run."
+    else
+      jtt_die "$database's history begins after the newest archive ($newest): it was re-created after that archive, and its students' history is in the archives, not in the database. Not backing it up, so retention cannot age those archives out. Restore it (docs/runbooks/RB-02-database.md §4d), or, if a new database is intended, run once with BACKUP_ACCEPT_NEW_DATABASE=true"
+    fi
+  fi
+fi
+
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 name="jtt-pg-$database-$timestamp${label:+-$label}.dump"
 final="$backup_dir/$name"
@@ -255,13 +296,7 @@ apply_retention() {
   cutoff_epoch=$(($(date -u +%s) - retention_days * 86400))
   cutoff=$(date -u -d "@$cutoff_epoch" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -r "$cutoff_epoch" +%Y%m%dT%H%M%SZ)
 
-  # Only this database's archives, named exactly as this script names them, and
-  # only regular files: never a symlink, a directory or anything else in there.
-  names=$(
-    for entry in "$backup_dir"/jtt-pg-"$database"-*.dump; do
-      if [ -f "$entry" ] && [ ! -L "$entry" ]; then basename "$entry"; fi
-    done | grep -E "^jtt-pg-$database-[0-9]{8}T[0-9]{6}Z(-[a-z0-9][a-z0-9-]*)?\.dump$" | sort -r || true
-  )
+  names=$(archive_names)
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     rank=$((rank + 1))

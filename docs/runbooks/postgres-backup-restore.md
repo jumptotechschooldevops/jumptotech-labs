@@ -258,6 +258,17 @@ database** that are older than `BACKUP_RETENTION_DAYS`. It deletes an archive's
 sidecar with it. It always keeps the newest `BACKUP_RETENTION_MIN_KEEP`. Age comes
 from the UTC timestamp in the name, not from the file's mtime.
 
+Before dumping, the script refuses a database whose history — its first
+migration's `applied_at` — begins after the newest archive of it in
+`BACKUP_DIR`. That database was re-created after the archive (a lost volume the
+api auto-migrated at startup), and backing it up would put an archive of the
+empty database first in line while the ones holding students' history aged out.
+The run fails, so `BackupLastRunFailed` fires beside
+`DatabaseRecreatedSinceLastBackup` ([RB-02 §4d](RB-02-database.md)). A restored
+database keeps its original ledger and is backed up normally; a first backup has
+nothing to compare with. `BACKUP_ACCEPT_NEW_DATABASE=true`, for one run, accepts a
+new database on purpose.
+
 Retention never touches:
 
 - the archive just written;

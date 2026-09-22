@@ -104,12 +104,15 @@ database would. Students' history is in the backup, not here.
 
 1. Stop new writes now: `prod stop api` (students see the site unavailable,
    which is better than empty dashboards that then diverge from the backup).
-2. Do not let the next scheduled backup run over it unnoticed: it would be a
-   backup of the empty database, and retention counts it. Comment out the
-   `db-backup.sh` line in `/etc/cron.d/jumptotech-db` until step 3 is decided.
+2. The scheduled backup now refuses this database (`db-backup.sh`: "history
+   begins after the newest archive"), so `BackupLastRunFailed` joins this alert
+   and retention cannot age the good archives out. Leave it refusing until step
+   3 is decided.
 3. Restore per [postgres-backup-restore.md §7.1](postgres-backup-restore.md)
    (volume lost, host intact). Writes made since the re-creation stay in the
-   `jumptotech_labs_prerestore_<ts>` database `--replace` keeps.
+   `jumptotech_labs_prerestore_<ts>` database `--replace` keeps. Only if the new,
+   empty database is intended (the old data is deliberately abandoned), run one
+   backup with `BACKUP_ACCEPT_NEW_DATABASE=true`; the next run needs nothing.
 
 It does not fire on a first deployment (the first backup is newer than the
 ledger), after a restore (the original ledger comes back with the data), or
