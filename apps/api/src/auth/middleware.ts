@@ -42,6 +42,18 @@ export interface AuthAuditEvent {
 export type AuthAuditLogger = (event: AuthAuditEvent) => void;
 
 /** The caller's `x-request-id` when it is a safe token, for audit lines; never raw header text. */
+/**
+ * Bounds jtt_authz_decisions_total to a closed action label set.
+ * Requests that fail before authorization are recorded as "authenticate"
+ * rather than using an arbitrary request path as a metric label.
+ */
+export function authzDecisionLabels(event: AuthAuditEvent): { action: string; result: string } {
+  return {
+    action: event.authorizationResult === 'unauthenticated' ? 'authenticate' : event.action,
+    result: event.authorizationResult,
+  };
+}
+
 export function requestId(req: Request): string {
   const header = req.get('x-request-id');
   return header && /^[A-Za-z0-9._-]{1,128}$/.test(header) ? header : 'req-unknown';
