@@ -692,7 +692,29 @@ export function createTerminalServer(
       send(ws, { type: 'output', data });
       flow.afterSend();
     });
-    term.onExit(({ exitCode, signal }) => {
+    term.onExit(({ exitCode, signal, endedBy }) => {
+      // The broker's own timers mean what this service's do.
+      if (endedBy === 'IDLE_TIMEOUT') return closeFor(ws, endedBy, 'Terminal closed after inactivity.');
+      if (endedBy === 'SESSION_EXPIRED') {
+        return closeFor(ws, endedBy, 'Terminal session reached its maximum duration.');
+      }
+      /*
+       * Anything else that ended a broker shell without an exit — sandboxd
+       * restarted, crashed or was killed for memory — is not the student's
+       * doing and is worth retrying. Reported as an exit, it read "The shell
+       * exited (code 0)" and the workspace, rightly, did not reconnect.
+       */
+      if (endedBy !== undefined) {
+        log(`session ${sessions.get(ws)?.claims.sid ?? '?'}: shell lost — ${endedBy}`);
+        send(ws, {
+          type: 'error',
+          code: 'SANDBOX_UNAVAILABLE',
+          message: 'The connection to the lab environment was lost.',
+        });
+        endSession(ws);
+        if (ws.readyState === ws.OPEN) ws.close(1011, 'shell lost');
+        return;
+      }
       send(ws, { type: 'exit', exitCode, ...(signal !== undefined ? { signal } : {}) });
       endSession(ws);
       if (ws.readyState === ws.OPEN) ws.close(1000, 'shell exited');

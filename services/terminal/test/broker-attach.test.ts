@@ -21,7 +21,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import WebSocket from 'ws';
 import {
   CONTAINER_SANDBOX_PREFIX,
@@ -69,8 +69,10 @@ function fakePty(): BrokerPty & {
   resizes: [number, number][];
   killed: boolean;
   emit(d: string): void;
+  exit(exitCode: number): void;
 } {
   let onData: (d: string) => void = () => undefined;
+  let onExit: (e: { exitCode: number }) => void = () => undefined;
   return {
     written: [],
     resizes: [],
@@ -87,9 +89,14 @@ function fakePty(): BrokerPty & {
     onData(listener) {
       onData = listener;
     },
-    onExit() {},
+    onExit(listener) {
+      onExit = listener;
+    },
     emit(data) {
       onData(data);
+    },
+    exit(exitCode) {
+      onExit({ exitCode });
     },
   };
 }
@@ -159,6 +166,8 @@ interface Stack {
   argvs: string[][];
   /** Who the stub API says owns each session. */
   owners: Map<string, string>;
+  /** Every TCP connection the broker holds, so a test can drop them as a crash would. */
+  brokerConnections: Set<Socket>;
 }
 
 /**
@@ -253,6 +262,11 @@ async function bringUpStack(
     },
     log: () => undefined,
   });
+  const brokerConnections = new Set<Socket>();
+  broker.on('connection', (socket: Socket) => {
+    brokerConnections.add(socket);
+    socket.on('close', () => brokerConnections.delete(socket));
+  });
   const brokerPort = await listen(broker);
 
   const terminalConfig = loadTerminalConfig({
@@ -276,6 +290,7 @@ async function bringUpStack(
     ptys,
     argvs,
     owners,
+    brokerConnections,
   };
 }
 
@@ -418,6 +433,50 @@ describe('a container-backed lab gets a shell without this process holding a run
     const { first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
     expect(first).toMatchObject({ type: 'error' });
     expect(stack.ptys).toHaveLength(0);
+  });
+});
+
+/** Every frame and the close code a browser socket receives, from now on. */
+function record(ws: WebSocket): { frames: Record<string, unknown>[]; closed: Promise<number> } {
+  const frames: Record<string, unknown>[] = [];
+  ws.on('message', (raw) => frames.push(JSON.parse(String(raw)) as Record<string, unknown>));
+  return { frames, closed: new Promise((resolve) => ws.on('close', (code) => resolve(code))) };
+}
+
+/*
+ * A broker shell ends one of two ways, and a student has to be told which.
+ * The shell exiting — `exit`, a program that ended it — is final, and the
+ * browser does not reconnect. Losing the broker — sandboxd restarted, crashed
+ * or was killed for memory — is not the student's doing, and it is exactly what
+ * the workspace's automatic reconnect exists to ride out. Both used to reach
+ * the browser as an `exit` frame and close 1000: "The shell exited (code 0)",
+ * and no reconnect.
+ */
+describe('a broker shell that ends', () => {
+  it('reports the shell exiting as an exit', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) });
+    const { ws, first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
+    expect(first.type).toBe('ready');
+    const seen = record(ws);
+
+    stack.ptys[0]!.exit(3);
+
+    expect(await seen.closed).toBe(1000);
+    expect(seen.frames).toContainEqual({ type: 'exit', exitCode: 3 });
+    expect(seen.frames.some((f) => f.type === 'error')).toBe(false);
+  });
+
+  it('reports losing the broker as a transient failure, not as the shell exiting', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) });
+    const { ws, first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
+    expect(first.type).toBe('ready');
+    const seen = record(ws);
+
+    for (const socket of stack.brokerConnections) socket.destroy();
+
+    expect(await seen.closed).toBe(1011);
+    expect(seen.frames.some((f) => f.type === 'exit')).toBe(false);
+    expect(seen.frames).toContainEqual(expect.objectContaining({ type: 'error', code: 'SANDBOX_UNAVAILABLE' }));
   });
 });
 
