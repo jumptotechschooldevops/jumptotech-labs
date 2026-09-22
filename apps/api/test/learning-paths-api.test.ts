@@ -367,9 +367,11 @@ describe('GET /api/me/learning-paths/:pathId', () => {
 
   it('suggests no lab when it cannot tell whether one is already running', async () => {
     const { app, sessions } = harness();
-    (sessions as unknown as { listOccupying: () => Promise<never> }).listOccupying = async () => {
-      throw new Error('session store unavailable');
-    };
+    // The read the next-lab rule makes: one student's own live sessions.
+    (sessions as unknown as { listOccupyingForOwner: () => Promise<never> }).listOccupyingForOwner =
+      async () => {
+        throw new Error('session store unavailable');
+      };
 
     const data = await myPath(app, ALICE);
     expect(data.recommendation.kind).toBe('ACTIVE_SESSION_UNKNOWN');

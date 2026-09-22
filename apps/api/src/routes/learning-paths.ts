@@ -210,10 +210,7 @@ export async function activeLabIdsFor(
 ): Promise<string[] | null> {
   if (!userId) return [];
   try {
-    return (await sessions.listOccupying())
-      .filter((session) => session.ownerUserId !== undefined && session.ownerUserId === userId)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map((session) => session.labId);
+    return (await sessions.listOccupyingForOwner(userId)).map((session) => session.labId);
   } catch (error) {
     log(`could not read active sessions for the learning path: ${error instanceof Error ? error.message : String(error)}`);
     return null;
