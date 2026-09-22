@@ -636,7 +636,11 @@ everything written since the archive. So prefer this:
 - `db:migrate` and `db:status` report the database current;
 - the api's repository reads the restored history and writes a new attempt
   through the restored sequence;
-- the password is absent from the archive's name, the backup log and the SQL.
+- the password is absent from the archive's name, the backup log and the SQL;
+- `db-backup.sh` backs up the restored database (its ledger is the original),
+  refuses the same name re-created and migrated after that archive, and accepts
+  it only with `BACKUP_ACCEPT_NEW_DATABASE=true` (step 12; added by the
+  disaster-recovery audit and not yet run — it needs Docker).
 
 **Not proven by any of it:**
 - a restore on the production host, at production size, or from an off-host copy;
