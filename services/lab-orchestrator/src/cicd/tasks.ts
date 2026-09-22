@@ -101,6 +101,29 @@ export function workspaceTask(id: WorkspaceTaskId): WorkspaceTaskDefinition {
  */
 export const TASK_BINARY_ALLOWLIST: ReadonlySet<string> = new Set(['node']);
 
+/**
+ * Refuse a task table naming a binary outside the allow-list.
+ *
+ * Run over `WORKSPACE_TASKS` when this module loads, which is what makes the
+ * allow-list a gate rather than a comment: the CI/CD provider's inspection
+ * allow-list is *derived* from the task table, so without this a careless
+ * table edit would have been allow-listed there too.
+ */
+export function assertTaskBinariesAllowed(
+  table: Readonly<Record<string, { readonly argv: readonly string[] }>>,
+): void {
+  for (const [id, task] of Object.entries(table)) {
+    const binary = task.argv[0];
+    if (binary === undefined || !TASK_BINARY_ALLOWLIST.has(binary)) {
+      throw new Error(
+        `workspace task '${id}' runs '${String(binary)}', which is not in TASK_BINARY_ALLOWLIST`,
+      );
+    }
+  }
+}
+
+assertTaskBinariesAllowed(WORKSPACE_TASKS);
+
 /** The outcome of running one task in a session's sandbox. */
 export interface WorkspaceTaskResult {
   task: WorkspaceTaskId;

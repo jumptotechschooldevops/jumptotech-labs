@@ -268,6 +268,8 @@ export { isAllowedManagedPath, isSafeWorkspacePath } from './ansible/paths.js';
 export {
   WORKSPACE_TASKS,
   WORKSPACE_TASK_IDS,
+  TASK_BINARY_ALLOWLIST,
+  assertTaskBinariesAllowed,
   isWorkspaceTaskId,
   workspaceTask,
   type WorkspaceTaskDefinition,
