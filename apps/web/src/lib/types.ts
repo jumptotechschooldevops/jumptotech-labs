@@ -227,6 +227,22 @@ export interface StudentIdentity {
   durable: boolean;
 }
 
+/**
+ * The caller's own lab access — GET /api/me/access (docs/commercial-access.md).
+ *
+ * `policy: 'open'` means this deployment does not require an entitlement, and
+ * `active` is then always true. Never carries who granted it or why.
+ */
+export type AccessState = 'NONE' | 'SCHEDULED' | 'ACTIVE' | 'EXPIRED' | 'SUSPENDED' | 'REVOKED';
+
+export interface LabAccess {
+  policy: 'open' | 'entitlement';
+  state: AccessState;
+  active: boolean;
+  startsAt: string | null;
+  expiresAt: string | null;
+}
+
 /** A lab's standing for this student. Never a boolean. */
 export type LabProgressStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
 

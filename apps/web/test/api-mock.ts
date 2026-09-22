@@ -48,6 +48,7 @@ export const apiMock = {
   endLab: vi.fn(),
   recordHint: vi.fn(),
   getIdentity: vi.fn(),
+  getAccess: vi.fn(),
   getProgress: vi.fn(),
   listAttempts: vi.fn(),
   getAttempt: vi.fn(),
@@ -469,6 +470,9 @@ export function resetApiMock() {
   for (const fn of Object.values(apiMock)) fn.mockReset();
   apiMock.listLabs.mockResolvedValue({ labs: LABS, tracks: TRACKS, providers: [], count: LABS.length });
   apiMock.getProgress.mockResolvedValue(progressSnapshot());
+  apiMock.getAccess.mockResolvedValue({
+    access: { policy: 'open', state: 'NONE', active: true, startsAt: null, expiresAt: null },
+  });
   apiMock.listMySessions.mockResolvedValue(sessionsResponse());
   apiMock.listAttempts.mockResolvedValue({ student: progressSnapshot().student, attempts: [], count: 0 });
   apiMock.getLab.mockImplementation((id: string) => Promise.resolve(labDetail({ id })));

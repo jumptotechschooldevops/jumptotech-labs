@@ -136,4 +136,17 @@ describe("a refused attach tells the browser the code and the platform's words",
     const frame = await firstError(await terminal(api));
     expect(frame).toMatchObject({ code: 'SESSION_NOT_ACTIVE', message: 'This lab session is DEGRADED, not ACTIVE.' });
   });
+
+  it('forwards a lab-access refusal, so a student whose access ended is told so', async () => {
+    const api = await stubApi((res) =>
+      res.writeHead(403, { 'content-type': 'application/json' }).end(
+        JSON.stringify({
+          ok: false,
+          error: { code: 'ACCESS_NOT_ACTIVE', message: 'Your lab access has ended.', details: { accessState: 'EXPIRED' } },
+        }),
+      ),
+    );
+    const frame = await firstError(await terminal(api));
+    expect(frame).toMatchObject({ code: 'ACCESS_NOT_ACTIVE', message: 'Your lab access has ended.' });
+  });
 });

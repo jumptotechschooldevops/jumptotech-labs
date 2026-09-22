@@ -125,6 +125,9 @@ const PLATFORM_WORDED_CODES = new Set([
   'SESSION_NOT_FOUND',
   'OWNER_REQUIRED',
   'INVALID_SESSION_ID',
+  // The owner's lab access is not ACTIVE (docs/commercial-access.md): the
+  // API's own sentence, which names the state and nothing an operator wrote.
+  'ACCESS_NOT_ACTIVE',
   // This service.
   'CONTAINER_EXEC_DISABLED',
   'INVALID_WORKSPACE_PATH',

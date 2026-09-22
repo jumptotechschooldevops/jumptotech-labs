@@ -20,14 +20,49 @@ import { useAuth } from '../lib/AuthContext';
 import { displayNameFor } from '../lib/auth';
 import { useCatalog } from '../lib/CatalogContext';
 import { api } from '../lib/api';
-import { describeError, toApiError } from '../lib/errors';
+import { accessRefusal, describeError, toApiError } from '../lib/errors';
 import { ATTEMPT_LABEL, formatMoment, plural, sessionStatusText } from '../lib/format';
 import { hrefFor, usePageTitle } from '../lib/router';
 import { FLAGSHIP_PATH_ID, useLearningPath } from '../lib/learningPath';
-import type { ApiError, AttemptSummary } from '../lib/types';
+import type { ApiError, AttemptSummary, LabAccess } from '../lib/types';
 import { ErrorNotice } from '../components/ErrorNotice';
 import { PathProgressSummary, Recommendation } from '../components/LearningPath';
 import { Badge, LoadingState, PageHeader, ProgressBar } from '../components/ui';
+
+/**
+ * Why this signed-in account cannot use labs, before they press Start.
+ *
+ * Advisory: Start, Verify and the terminal each explain a refusal themselves,
+ * so a read that fails here shows nothing rather than a second error panel.
+ * Nothing is shown when access is active or the deployment does not require it.
+ */
+function AccessNotice() {
+  const [access, setAccess] = useState<LabAccess | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve(api.getAccess())
+      .then((data) => {
+        if (!cancelled && data?.access) setAccess(data.access);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (!access || access.active) return null;
+  return (
+    <section className="panel" aria-labelledby="access-heading">
+      <h2 id="access-heading" className="visually-hidden">
+        Lab access
+      </h2>
+      <ErrorNotice
+        error={{ ...accessRefusal(access.state), reference: `ACCESS_NOT_ACTIVE · ${access.state}` }}
+        headingLevel={3}
+        live={false}
+      />
+    </section>
+  );
+}
 
 function minutesLeft(expiresAt: string): number | null {
   const ms = Date.parse(expiresAt) - Date.now();
@@ -247,6 +282,8 @@ export function DashboardPage() {
 
       <div className="dashboard">
         <div className="dashboard__main">
+          <AccessNotice />
+
           <ActiveLabPanel />
 
           {firstTime ? <FirstSteps /> : null}

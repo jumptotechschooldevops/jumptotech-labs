@@ -1,4 +1,5 @@
 import type {
+  LabAccess,
   ApiEnvelope,
   ApiError,
   AttemptDetail,
@@ -190,6 +191,9 @@ export const api = {
    * the caller is.
    */
   getIdentity: () => request<{ student: StudentIdentity; notice?: string }>('/api/me'),
+
+  /** Whether this account may use labs, and until when. Read-only: nothing in the browser changes it. */
+  getAccess: () => request<{ access: LabAccess }>('/api/me/access'),
 
   getProgress: () => request<ProgressSnapshot>('/api/me/progress'),
 

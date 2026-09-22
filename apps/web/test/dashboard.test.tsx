@@ -197,4 +197,50 @@ describe('the dashboard', () => {
     expect(screen.getByRole('link', { name: 'Continue lab' }).getAttribute('href')).toBe('#/labs/LINUX-001/workspace');
     expect(screen.queryByText('We could not check whether you have a lab running')).toBeNull();
   });
+
+  describe('lab access (docs/commercial-access.md)', () => {
+    it('tells a signed-in student without access why, before they press Start', async () => {
+      apiMock.getAccess.mockResolvedValue({
+        access: { policy: 'entitlement', state: 'NONE', active: false, startsAt: null, expiresAt: null },
+      });
+      renderWithProviders(<DashboardPage />);
+
+      expect(await screen.findByText('Your account does not have lab access yet')).toBeTruthy();
+      expect(screen.getByText(/contact your instructor or JumpToTech support/)).toBeTruthy();
+      // The reference a student can quote to support names the state.
+      expect(screen.getByText('ACCESS_NOT_ACTIVE · NONE')).toBeTruthy();
+    });
+
+    it('says an ended access period is over and that progress is kept', async () => {
+      apiMock.getAccess.mockResolvedValue({
+        access: {
+          policy: 'entitlement',
+          state: 'EXPIRED',
+          active: false,
+          startsAt: '2026-09-01T00:00:00.000Z',
+          expiresAt: '2026-10-01T00:00:00.000Z',
+        },
+      });
+      renderWithProviders(<DashboardPage />);
+      expect(await screen.findByText('Your lab access has ended')).toBeTruthy();
+      expect(screen.getByText(/Your progress and history are kept/)).toBeTruthy();
+    });
+
+    it('shows nothing when access is active, open, or cannot be read', async () => {
+      for (const answer of [
+        () => Promise.resolve({ access: { policy: 'entitlement', state: 'ACTIVE', active: true, startsAt: null, expiresAt: null } }),
+        () => Promise.resolve({ access: { policy: 'open', state: 'NONE', active: true, startsAt: null, expiresAt: null } }),
+        () => Promise.reject(new ApiRequestError(0, { code: 'API_UNREACHABLE', message: 'x' })),
+      ]) {
+        apiMock.getAccess.mockImplementation(answer);
+        const { unmount } = renderWithProviders(<DashboardPage />);
+        expect(await screen.findByRole('heading', { level: 1, name: /Welcome/ })).toBeTruthy();
+        await waitFor(() => expect(apiMock.getAccess).toHaveBeenCalled());
+        expect(screen.queryByRole('heading', { name: 'Lab access' })).toBeNull();
+        expect(screen.queryByText(/lab access/i)).toBeNull();
+        unmount();
+        apiMock.getAccess.mockClear();
+      }
+    });
+  });
 });
