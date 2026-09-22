@@ -37,6 +37,10 @@
  *   GET  /v1/sessions/<id>          one session, in any status
  *   POST /v1/sessions/<id>/end      end one session through the same fenced
  *                                   teardown the reaper uses
+ *   /v1/access…                     lab access: list, find, show, grant,
+ *                                   suspend, restore, revoke — see
+ *                                   `access/operator-access.ts` and
+ *                                   docs/commercial-access.md
  *
  * Nothing else: no raw SQL, no status edits, no terminal, no workspace, no
  * credentials. A session is reported by its identifiers, lab, status and
@@ -60,7 +64,15 @@ import {
 } from '@jumptotech/lab-orchestrator';
 import type { Counter, Logger } from '@jumptotech/observability';
 
-type OperatorAction = 'status' | 'sessions' | 'session' | 'end_session';
+import {
+  accessActionFor,
+  accessRefusal,
+  handleAccessRequest,
+  type AccessRouteResult,
+  type OperatorAccessDeps,
+} from './access/operator-access.js';
+
+type OperatorAction = 'status' | 'sessions' | 'session' | 'end_session' | AccessRouteResult['action'];
 type OperatorOutcome = 'ok' | 'rejected' | 'failed';
 
 export interface OperatorDeps {
@@ -75,6 +87,11 @@ export interface OperatorDeps {
   reaperLastSuccessMs: () => number | undefined;
   /** The sweep interval, for judging whether the reaper is keeping up. */
   reaperIntervalSeconds: number;
+  /**
+   * Lab access management (docs/commercial-access.md): list, find, show,
+   * grant, suspend, restore, revoke. Absent: those endpoints answer 404.
+   */
+  access?: OperatorAccessDeps;
   now?: () => number;
 }
 
@@ -268,6 +285,8 @@ function send(res: ServerResponse, status: number, payload: unknown): void {
 
 /** A session-domain refusal, mapped to what the CLI prints. Never a stack. */
 function refusal(error: unknown): { status: number; code: string; message: string } | null {
+  const access = accessRefusal(error);
+  if (access) return access;
   if (!(error instanceof SessionError)) return null;
   const status = error.code === 'SESSION_NOT_FOUND' ? 404 : error.code === 'INVALID_SESSION_ID' ? 400 : 409;
   return { status, code: error.code, message: error.message };
@@ -313,6 +332,22 @@ export function createOperatorHandler(deps: OperatorDeps): (req: IncomingMessage
           }
           const sessions = await operatorSessions(deps, scope);
           send(res, 200, { ok: true, data: { scope, count: sessions.length, sessions } });
+        } else if (parts[0] === 'v1' && parts[1] === 'access' && deps.access) {
+          action = accessActionFor(method, parts) ?? undefined;
+          const served = await handleAccessRequest(
+            { ...deps.access, sessions: deps.sessions, logger: deps.logger, now: () => deps.now?.() ?? Date.now() },
+            req,
+            url,
+          );
+          if (!served) {
+            send(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'no such operator endpoint' } });
+            return;
+          }
+          action = served.action;
+          send(res, served.status, { ok: true, data: served.payload });
+          count(action, 'ok');
+          deps.logger.info('ops.operator.request', { action, outcome: 'ok', ...(served.logFields ?? {}) });
+          return;
         } else if (parts.length >= 3 && parts[0] === 'v1' && parts[1] === 'sessions') {
           const isEnd = parts.length === 4 && parts[3] === 'end' && method === 'POST';
           const isRead = parts.length === 3 && method === 'GET';

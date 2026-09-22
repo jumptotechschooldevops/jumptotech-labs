@@ -519,6 +519,7 @@ async function main(): Promise<void> {
           retentionSeconds: config.sessionRetentionMinutes * 60,
           reaperLastSuccessMs: () => reaperLastSuccessMs,
           reaperIntervalSeconds: config.reaperIntervalSeconds,
+          access: { store: accessStore, policy: config.accessPolicy },
         }),
       })
     : null;

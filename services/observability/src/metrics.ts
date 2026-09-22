@@ -1090,6 +1090,14 @@ export const OPERATOR_ACTIONS = [
   'sessions',
   'session',
   'end_session',
+  // Lab access (docs/commercial-access.md).
+  'access_list',
+  'access_find',
+  'access_show',
+  'access_grant',
+  'access_suspend',
+  'access_restore',
+  'access_revoke',
 ] as const;
 /** How an operator request ended: served, refused (bad input, unknown session), or failed. */
 export const OPERATOR_OUTCOMES = ['ok', 'rejected', 'failed'] as const;
