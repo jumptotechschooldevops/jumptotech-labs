@@ -2005,6 +2005,12 @@ const sandboxRequirementSchemas = {
       name: terraformLabel,
       /** Minimum number of `assert` blocks. Defaults to 1. */
       min_assertions: z.number().int().min(1).max(10).default(1),
+      /**
+       * Identifiers the assertions' conditions must between them mention, as
+       * on terraform_resource_condition. `assert { condition = true }` is an
+       * assert block that checks nothing.
+       */
+      condition_mentions: z.array(terraformLabel).min(1).max(10).optional(),
       ...common,
     })
     .strict(),

@@ -1079,8 +1079,9 @@ describe('TF-025 — Custom Conditions', () => {
     );
     // `self` is how a postcondition names what was read — an identifier the
     // task itself gives, not a function — and `region` is what the task says
-    // it must assert was read.
-    expect(mentioned.sort()).toEqual(['environment', 'production', 'region', 'replicas', 'self', 'staging']);
+    // it must assert was read. `content` is the attribute the check block's
+    // assertion must read, whichever object it reads it from.
+    expect(mentioned.sort()).toEqual(['content', 'environment', 'production', 'region', 'replicas', 'self', 'staging']);
     for (const fn of ['contains', 'regex', 'startswith', 'can', 'length']) {
       expect(mentioned).not.toContain(fn);
     }

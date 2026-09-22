@@ -110,3 +110,84 @@ describe('TF-003 — a forgotten sensitive = true is reported without printing t
   });
 });
 
+// ------------------------------------------------------------------ TF-025
+
+describe('TF-025 — the check block asserts something about the manifest', () => {
+  const BASE = `
+variable "environment" {
+  type    = string
+  default = "production"
+  validation {
+    condition     = contains(["staging", "production"], var.environment)
+    error_message = "environment must be staging or production."
+  }
+}
+
+data "local_file" "platform" {
+  filename = "platform.json"
+  lifecycle {
+    postcondition {
+      condition     = can(jsondecode(self.content).region)
+      error_message = "platform.json has no region."
+    }
+  }
+}
+
+locals {
+  settings = jsondecode(data.local_file.platform.content)
+}
+
+resource "local_file" "release_manifest" {
+  filename = "build/\${var.environment}.json"
+  content = jsonencode({
+    environment = var.environment
+    region      = local.settings.region
+    replicas    = local.settings.replicas
+  })
+  lifecycle {
+    precondition {
+      condition     = local.settings.replicas >= 0
+      error_message = "replicas must be positive."
+    }
+  }
+}
+`;
+  const world = (check: string): World => ({
+    files: {
+      ...INIT,
+      'terraform/main.tf': BASE + check,
+      'terraform/platform.json': '{"region":"eu-central-1","replicas":6}',
+      'terraform/build/production.json': '{"environment":"production","region":"eu-central-1","replicas":6}',
+      'terraform/terraform.tfstate': state([
+        { type: 'local_file', name: 'release_manifest' },
+        { type: 'local_file', name: 'platform', mode: 'data' },
+      ]),
+    },
+    dirs: INIT_DIRS,
+  });
+
+  const check = (condition: string, scoped = '') => `
+check "manifest_is_populated" {
+${scoped}  assert {
+    condition     = ${condition}
+    error_message = "The manifest is empty."
+  }
+}
+`;
+  const status = async (hcl: string) =>
+    (await run('TF-025', world(hcl))).find((c) => c.label === 'A check block reports on the manifest without blocking the apply')?.status;
+
+  it('refuses `assert { condition = true }`', async () => {
+    // Before: passed.
+    expect(await status(check('true'))).toBe('fail');
+  });
+
+  it('passes an assertion on the resource content', async () => {
+    expect(await status(check('length(local_file.release_manifest.content) > 0'))).toBe('pass');
+  });
+
+  it('passes an assertion through a data source scoped to the check', async () => {
+    const scoped = '  data "local_file" "manifest" {\n    filename = local_file.release_manifest.filename\n  }\n';
+    expect(await status(check('length(data.local_file.manifest.content) > 0', scoped))).toBe('pass');
+  });
+});
