@@ -181,9 +181,10 @@ function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): b
 
 function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
   const raw = env[name];
-  if (!raw) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!raw || raw.trim() === '') return fallback;
+  // Digits only: `parseInt` alone read `2h` as 2 and `1e3` as 1.
+  const parsed = /^\s*[0-9]+\s*$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`Environment variable ${name} must be a positive integer, got '${raw}'`);
   }
   return parsed;
