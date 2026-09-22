@@ -53,6 +53,29 @@ state machine. See [The Linux track](#the-linux-track).
 
 ---
 
+## Start here
+
+This README is the long-form product reference, and much of it is written as
+the history of how each story was delivered. For the current state, start with
+these instead; each is the authority for its subject:
+
+| You want to… | Read |
+|---|---|
+| know which document is authoritative for what | [docs/README.md](docs/README.md) |
+| set up a machine and make a first change | [docs/development/getting-started.md](docs/development/getting-started.md) |
+| understand the services and request flows | [docs/architecture.md](docs/architecture.md) |
+| know which test command needs what, and what a skip means | [docs/development/testing.md](docs/development/testing.md) |
+| know what CI proves | [docs/development/ci-and-release-gates.md](docs/development/ci-and-release-gates.md) |
+| add a lab or a verifier check | [docs/development/contributing-labs.md](docs/development/contributing-labs.md) |
+| run or troubleshoot the private beta | [docs/runbooks/operator-guide.md](docs/runbooks/operator-guide.md) |
+
+Today: 117 labs across nine tracks (`npm run validate:labs` prints the live
+count), OIDC sign-in in production (`AUTH_MODE=oidc`), and sessions stored in
+PostgreSQL. The *"Added by PLATFORM-…"* lists below describe what each story
+delivered at the time and are not a description of the current catalog.
+
+---
+
 ## Contents
 
 - [What is in scope](#what-is-in-scope)
@@ -232,14 +255,16 @@ Added by PLATFORM-LINUX-001:
   shell inside it dies; the browser is reconnected to a fresh one on the same
   socket instead of being left with a dead terminal.
 
-Deliberately **not** in scope: authentication, payments, subscriptions, AI,
-certificates, AWS, an instructor portal, the JumpToBank application. Sandbox
-session state is still in memory — it describes disposable environments and the
-reaper reconciles it against reality — while *learning* state is in PostgreSQL.
+Deliberately **not** in scope: payments, subscriptions, AI, certificates, real
+AWS accounts (the AWS track is simulated), an instructor portal, the JumpToBank
+application. Authentication and durable sessions were out of scope here and
+arrived later: OIDC sign-in in PLATFORM-009/010 and BETA-P0-014
+([docs/authentication.md](docs/authentication.md)), and sandbox sessions in
+PostgreSQL in PLATFORM-008 (in memory only when `DATABASE_URL` is unset).
 Prerequisites and skills remain **metadata only**: nothing gates a lab, and the
-API still says so explicitly (`prerequisitesEnforced: false`). Student identity
-is a **development identity**, not a login — see
-[Development student identity](#development-student-identity).
+API still says so explicitly (`prerequisitesEnforced: false`). Outside
+production, `AUTH_MODE=development` still offers a **development identity**, not
+a login — see [Development student identity](#development-student-identity).
 
 ---
 
@@ -353,7 +378,8 @@ honestly.
 
 **Learning state is not sandbox state.** They have different lifetimes, so they
 live in different places and in different packages. `services/lab-orchestrator`
-owns sessions and sandboxes, in memory, reconciled against the cluster on every
+owns sessions and sandboxes — sessions in PostgreSQL (`lab_sessions`; in memory
+only without `DATABASE_URL`), sandboxes reconciled against the runtime on every
 sweep. `services/progress` owns students, attempts and progress, in PostgreSQL,
 and imports nothing from the orchestrator — it has never heard of a namespace.
 The one arrow between them points *outward*: the session manager emits "this
@@ -377,7 +403,7 @@ with the exact command to fix it when the image is missing.
 container in `docker-compose.yml` is given it, the sandbox image contains no
 Docker client, and the terminal's container-exec path is switched off inside the
 Compose stack for exactly that reason. Honest limitation, stated here and in
-[Security model](#security-model): outside Compose the orchestrator process does
+[Security](#security): outside Compose the orchestrator process does
 drive the host's daemon, which is a development arrangement — production would
 put a rootless, per-tenant daemon behind a dedicated broker service.
 
@@ -1458,7 +1484,7 @@ not change: no host filesystem, no Docker socket, no network, the same resource
 ceilings, the same one-container-per-session derivation, and the same reaper.
 **The isolation boundary for a Linux lab is the container, not the account
 inside it** — and a container is not a virtual machine, which is stated plainly
-in [Security model](#security-model) as well.
+in [Security](#security) as well.
 
 ### Why root in the sandbox is also a *grading* concern
 
@@ -1676,7 +1702,7 @@ plainly what it does and does not protect against.
 > brokered as a closed list of named operations — `createSandbox` takes a
 > session id, a lab id and an expiry, and `sandboxd` supplies the image, the
 > `--privileged` flag and every resource ceiling from its own configuration — so
-> the API needs no socket for it either. All 114 labs now run with no Docker
+> the API needs no socket for it either. Every lab now runs with no Docker
 > socket in any browser-reachable service. See
 > [docs/runtime-architecture.md](docs/runtime-architecture.md) § 3.3.
 
@@ -1787,7 +1813,7 @@ PLATFORM-005 answers one question: *what survives?*
         │
    Lab attempt               lab_attempts        ← one try: checks, resets,
         │                    hint_usage            passed, ended
-   Temporary sandbox         session (in memory) ← deleted on End / expiry
+   Temporary sandbox         lab_sessions        ← sandbox deleted on End / expiry
         │
    Provider                  kubernetes | linux | terraform
 ```
@@ -1937,8 +1963,9 @@ you to run `npm run db:migrate`.
 ```
 
 There is one path no event can cover: the API restarting while a lab is open.
-Sandbox sessions are in memory, so a restart forgets the session that would have
-emitted `onSessionClosed`. A sweeper — the persistent-side counterpart of the
+When this was written sandbox sessions were in memory, so a restart forgot the
+session that would have emitted `onSessionClosed`; they are in PostgreSQL now
+(PLATFORM-008), but the sweeper still covers an attempt whose close was lost. A sweeper — the persistent-side counterpart of the
 reaper — closes attempts that have been `IN_PROGRESS` for longer than the
 absolute session lifetime plus a grace period. Past that deadline no sandbox can
 still exist, so it cannot close an attempt anyone is still working on, and a
@@ -2413,10 +2440,8 @@ that cannot run say so with the real reason.
 > holds a Docker socket. See
 > [docs/runtime-architecture.md](docs/runtime-architecture.md).
 >
-> Running the services on your host still works and is what a laptop wants:
->
-> To use them, run the services on your host, where they inherit your own
-> Docker context:
+> Running the services on your host, where they inherit your own Docker
+> context, still works:
 >
 > ```bash
 > npm run cluster:up          # for the Kubernetes track
@@ -2492,23 +2517,25 @@ git clone <repository-url>
 cd jumptotech-labs
 
 nvm use          # Node 22, from .nvmrc
-cp .env.example .env
+npm ci           # the lockfile is authoritative; CI and every image use npm ci
+make secrets     # creates .env from .env.example and generates every secret
 ```
 
-Generate a real session secret (the example value is a placeholder and the
-services refuse to start with a short one):
-
-```bash
-# macOS / Linux
-sed -i.bak "s|^TERMINAL_SESSION_SECRET=.*|TERMINAL_SESSION_SECRET=$(openssl rand -hex 32)|" .env && rm -f .env.bak
-```
+`make secrets` (`scripts/ensure-dev-secrets.sh`) generates each secret the
+compose files require — `TERMINAL_SESSION_SECRET`, `INTERNAL_SERVICE_SECRET`,
+`NAMESPACE_DERIVATION_SECRET`, the three `SANDBOXD_*_SECRET`s,
+`POSTGRES_PASSWORD`, `OBSERVABILITY_SCRAPE_TOKEN`, `GRAFANA_ADMIN_PASSWORD` —
+replaces any placeholder copied from `.env.example`, and prints names, never
+values. Copying `.env.example` by hand is not enough: several of those are empty
+there, and `docker compose` refuses to start without them. `make setup` runs
+`make secrets` and then the steps below.
 
 ---
 
 ## Running locally
 
-Two commands for the Kubernetes track, plus two more if you want the Linux
-track as well.
+Three steps: the kind cluster, the sandbox images, then the stack. `make setup`
+does the first two (and `make secrets`); `make up` is the third.
 
 **1. Create the Kubernetes substrate** (once; takes 1–3 minutes the first time):
 
@@ -2524,22 +2551,29 @@ two kubeconfigs into `infrastructure/kind/generated/`:
 - `kubeconfig-internal.yaml` — for the containers, pointing at
   `jumptotech-labs-control-plane:6443` on the shared `kind` Docker network
 
-**2. Build the sandbox images** (once; needed only for the Linux and Terraform
-tracks):
+**2. Build the sandbox images** (once; needed by every container-backed track):
 
 ```bash
 npm run sandbox:build
 ```
 
-This builds `jumptotech/lab-linux` and `jumptotech/lab-terraform` on your host.
-Skipping it is fine — the Kubernetes track still works, and the other two are
-marked unavailable in the catalog with a link to this command.
+This builds `jumptotech/lab-linux`, `jumptotech/lab-terraform`,
+`jumptotech/lab-ansible` and `jumptotech/lab-cicd` on your host, as `:latest`
+unless all four `*_SANDBOX_IMAGE` variables are set. Skipping it is fine — the
+Kubernetes track still works, and the tracks whose image is missing are marked
+unavailable in the catalog with a link to this command.
 
 **3. Start the application:**
 
 ```bash
-docker compose up --build
+make up
 ```
+
+`make up` is `docker compose -f docker-compose.yml -f docker-compose.runtime.yml
+up --build`: the base file plus the runtime overlay, which adds `sandboxd`, the
+only service given the Docker socket, and with it every track. A bare
+`docker compose up --build` (`make up-kubernetes-only`) starts the base file
+alone: the Kubernetes track, no container runtime anywhere.
 
 > **Rebuild after platform source changes.** The API, terminal, and web
 > services are baked into Docker images at build time — there is no bind-mount
@@ -2570,10 +2604,9 @@ startup:
 `docker compose down` keeps the data; `docker compose down -v` deletes it. See
 [Running PostgreSQL locally](#running-postgresql-locally).
 
-> The compose stack serves the **Kubernetes track**. The Linux and Terraform
-> tracks need the services running on your host, because no container in the
-> stack is given access to a container runtime. See
-> [Local development requirements](#local-development-requirements).
+> `make up` serves every track: the container-backed ones go through
+> `sandboxd`. See [Local development requirements](#local-development-requirements)
+> and [docs/runtime-architecture.md](docs/runtime-architecture.md).
 
 Then open:
 
@@ -2593,7 +2626,7 @@ npm run cluster:status
 ```
 
 A `Makefile` wraps the common commands — `make help` lists them, and
-`make setup && make up` is equivalent to the two steps above.
+`make setup && make up` is equivalent to the steps above.
 
 What a student sees once signed in — dashboard, catalog, tracks, Launch, the
 workspace, Verify, Reset, End, capacity messages and known UI limitations — is
@@ -2601,10 +2634,15 @@ described screen by screen in [docs/student-experience.md](docs/student-experien
 The DevOps Engineer learning path — stages, skills, curriculum gaps, verified
 progress and the next-lab rule — is described in [docs/learning-paths.md](docs/learning-paths.md).
 
-### Running without Docker
+### Running the services on the host
+
+Docker is still needed (kind, PostgreSQL and the sandboxes run in it); only the
+four Node services run on the host. They read no `.env` file — neither `tsx
+watch` nor the npm scripts load one — so everything they need is exported in
+the shell:
 
 ```bash
-npm install
+npm ci
 npm run cluster:up
 
 export KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml"
@@ -2624,10 +2662,14 @@ npm run dev:sandboxd   # :4002  (the runtime broker; the only process needing th
 ### Shutting down
 
 ```bash
-docker compose down          # stop the services, keep student progress
-docker compose down -v       # …and delete the progress volume too
-npm run cluster:down         # delete the kind cluster
+make down                    # stop the services, keep student progress
+make clean CONFIRM=delete-student-progress   # …and delete the progress volume and the cluster
+npm run cluster:down         # delete the kind cluster only
 ```
+
+`make down` and `make clean` refuse on a checkout that runs the production
+stack (`scripts/refuse-on-production.sh`); the production host uses `prod`
+([docs/runbooks/private-beta-operations.md](docs/runbooks/private-beta-operations.md) §1).
 
 Stop the broker with Ctrl-C. Any sandboxes still running are labelled with their
 expiry and are collected by the reaper on the next start; to clear this
@@ -3194,16 +3236,26 @@ spec:
           image: nginx:does-not-exist     # the bad release
 ```
 
-**3. Restart the API.**
+**3. Place it in the learning path.** Every catalog lab must appear exactly once
+in the flagship path, `labs/learning-paths/devops-engineer.yaml`, in a stage that
+comes after its prerequisites; otherwise `validate:labs` fails with
+`LEARNING_PATH_COVERAGE`. See [docs/learning-paths.md](docs/learning-paths.md).
+
+**4. Validate, then restart the API.**
 
 ```bash
-docker compose restart api
+npm run validate:labs      # the same loader the API uses; no Docker, cluster or database
+docker compose -f docker-compose.yml -f docker-compose.runtime.yml restart api
 curl -s localhost:4000/health | jq '.data | {labsLoaded, labLoadErrors}'
 ```
 
-`labsLoaded` becomes 11 and `labLoadErrors` stays empty. If the definition is
-invalid, the lab is skipped and the reason appears in `labLoadErrors`, naming
-the exact field that failed.
+`validate:labs` prints one line per defect and exits 1 on any error; it is the
+`gates` CI step, so a lab it rejects cannot merge green. `labs/` is bind-mounted
+into the api container, so a restart is enough: `labsLoaded` goes up by one and
+`labLoadErrors` stays empty. If the definition is invalid, the lab is skipped
+and the reason appears in `labLoadErrors`, naming the exact field that failed.
+The whole contributor workflow is
+[docs/development/contributing-labs.md](docs/development/contributing-labs.md).
 
 That is all. K8S-011 now:
 
@@ -3252,7 +3304,9 @@ references:                       # official Linux documentation, as validated
     url: https://man7.org/linux/man-pages/man1/chmod.1.html
 ```
 
-Restart the API; `labsLoaded` becomes 21. The lab appears under the Linux track,
+Place it in `labs/learning-paths/devops-engineer.yaml`, run
+`npm run validate:labs` and restart the API; `labsLoaded` goes up by one.
+The lab appears under the Linux track,
 provisions its own container, seeds its baseline root-only and then removes it,
 is graded against the live filesystem, and is reset by replacing the container.
 No application code is involved — the same rule, on the second track.
@@ -3497,13 +3551,23 @@ npm test                 # unit tests, no cluster required
 npm run build            # frontend production build
 ```
 
+> **A green bare `vitest run` of an integration suite does not mean it ran.**
+> Every integration suite skips itself when its gate variable or its
+> infrastructure (kubeconfig, Docker, image, PTY, database) is missing, and a
+> plain `vitest run` exits 0 on a run where everything skipped. Read the
+> `Tests … skipped` line, or run the suite through
+> `npx tsx test-support/strict-vitest.ts`, which is what CI does: it fails on
+> any skipped test and on a run in which no test ran. The full matrix — each
+> command, what it needs, and which CI job runs it — is
+> [docs/development/testing.md](docs/development/testing.md).
+
 Integration tests against a real kind cluster:
 
 ```bash
 npm run cluster:up
 RUN_INTEGRATION_TESTS=1 \
 KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml" \
-  npx vitest run test/integration.test.ts --root services/lab-orchestrator
+  npx tsx test-support/strict-vitest.ts test/integration.test.ts --root services/lab-orchestrator
 ```
 
 The PLATFORM-003 catalog suite runs every lab against the real cluster —
@@ -3512,38 +3576,27 @@ provisioning, solving, verifying, resetting and tearing down each one:
 ```bash
 RUN_INTEGRATION_TESTS=1 \
 KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml" \
-  npx vitest run test/labs-integration.test.ts --root services/lab-orchestrator
+  npx tsx test-support/strict-vitest.ts test/labs-integration.test.ts --root services/lab-orchestrator
 ```
 
-Integration tests against real Docker, for the Linux track. These need the
-training image and a reachable Docker socket, and they are where every claim a
-mock could only pretend to prove is settled — real commands against real state,
-real isolation between five concurrent sandboxes, real teardown:
+The end-to-end terminal suite additionally needs a working `node-pty`: Node 22
+on Linux. On macOS, or on another Node, `pty.spawn` fails and the suite skips
+itself, so run it in a container, which is the path CI takes (it needs the
+kind cluster too):
 
 ```bash
-npm run sandbox:build
-make test-sandbox
-```
-
-The end-to-end terminal suite additionally needs a working `node-pty`, which
-means Node 22 — run `nvm use` first (see [Requirements](#requirements)). On a
-host running a newer Node it skips itself with a message rather than failing,
-which is why `make test-terminal-container` below is the path CI takes:
-
-```bash
-RUN_INTEGRATION_TESTS=1 \
-KUBECONFIG="$PWD/infrastructure/kind/generated/kubeconfig-host.yaml" \
-  npx vitest run test/terminal-integration.test.ts --root services/terminal
+make test-terminal-container
 ```
 
 Integration tests against **real sandbox containers** — no cluster needed, but
-Docker and the sandbox images are:
+Docker and the sandbox images are. `make test-sandbox` runs the same file with a
+plain `vitest run`; the strict form below fails instead of skipping when Docker
+or an image is missing:
 
 ```bash
 npm run sandbox:build
 RUN_INTEGRATION_TESTS=1 \
-  npx vitest run test/sandbox-integration.test.ts --root apps/api
-# or: make test-sandbox
+  npx tsx test-support/strict-vitest.ts test/sandbox-integration.test.ts --root apps/api
 ```
 
 That suite creates real containers, runs real commands in them, solves
@@ -3564,15 +3617,19 @@ hardening by reading it back from the daemon:
 ✓ runs a Linux and a Terraform sandbox side by side, isolated
 ```
 
-It skips itself with an explanation when Docker or an image is missing, rather
-than failing a developer who has not built them.
+When Docker or an image is missing, every test reports itself **skipped**, with
+the reason printed once — not passed. Under the strict runner that is a failure.
 
 Integration tests against a real **Docker** daemon. No cluster is needed; the
 host must permit privileged containers, and the first run pulls `docker:dind`:
 
 ```bash
-npm run test:integration:docker
+RUN_DOCKER_INTEGRATION_TESTS=1 \
+  npx tsx test-support/strict-vitest.ts test/docker-integration.test.ts --root services/lab-orchestrator \
+  --testTimeout=900000 --hookTimeout=900000
 ```
+
+(`npm run test:integration:docker` runs the same file with a plain `vitest run`.)
 
 This suite exists because the Docker track's central claims are claims about
 Docker, not about our code — whether two sandboxes genuinely have separate image
@@ -4364,9 +4421,10 @@ Beyond the security items above:
 - **Sandbox capacity is bounded by one host.** `MAX_ACTIVE_SESSIONS` caps how
   many sessions exist at once; there is no scheduling across hosts and no queue
   past the cap.
-- Sandbox session state is in memory. Learning history is not — see
-  [Persistent progress](#persistent-progress) — but a restart still costs a
-  student their running environment.
+- Sandbox session state is in PostgreSQL when `DATABASE_URL` is set (always,
+  in compose and production) and in memory otherwise; the host-mode API without
+  a database still forgets running sessions — and progress — on restart. See
+  [When the database is unavailable](#when-the-database-is-unavailable).
 - **Progress is per development student, and there is no way to be a different
   one from the UI.** The dashboard shows whoever the server says you are.
   Multi-student testing needs `DEV_STUDENT_HEADER_ENABLED=true` and a header,
