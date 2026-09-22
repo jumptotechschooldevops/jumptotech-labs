@@ -31,8 +31,11 @@ order: 11
 environment:
   provider: linux
 
+# AWS-009 as well: this lab reads route tables, a NAT default route and
+# subnet associations, which AWS-009 is where a student first builds them.
 prerequisites:
   - AWS-018
+  - AWS-009
 
 story: >
   Finance has asked the JumpToTech Bank platform team why the NAT gateway bill
