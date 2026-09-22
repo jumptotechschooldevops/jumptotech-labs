@@ -104,7 +104,14 @@ export function parseWorkflow(text: string): WorkflowParseResult {
     };
   }
 
-  const root = document.toJS() as unknown;
+  // Building the value can refuse too: aliases that expand without bound
+  // ("Excessive alias count") are rejected here, not by the parse above.
+  let root: unknown;
+  try {
+    root = document.toJS() as unknown;
+  } catch (cause) {
+    return { ok: false, error: (cause as Error).message };
+  }
   if (root === null || root === undefined) return { ok: false, error: 'the file is empty' };
   if (typeof root !== 'object' || Array.isArray(root)) {
     return { ok: false, error: 'the top level of a workflow must be a mapping of keys' };
