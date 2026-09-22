@@ -699,7 +699,8 @@ export class ContainerLabProvider implements LabProvider {
       return { ok: false, namespaceGone: false, steps, error: this.#toLabError(error, 'DESTROY_FAILED') };
     }
 
-    const gone = (await this.#runtime.inspect(sandboxRef).catch(() => null)) === null;
+    // Unconfirmed is not gone: the next pass verifies again.
+    const gone = (await this.#runtime.inspect(sandboxRef).catch(() => undefined)) === null;
     steps.push({
       id: 'delete-sandbox',
       label: 'Sandbox deleted',
