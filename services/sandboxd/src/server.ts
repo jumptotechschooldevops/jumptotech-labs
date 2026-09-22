@@ -567,13 +567,28 @@ export function createSandboxd(deps: SandboxdDeps): Server {
     });
   });
 
+  /**
+   * Shells being opened right now.
+   *
+   * `shells.size` counts the ones that exist, and opening one is not instant:
+   * `resolveAttachTarget` below is a `docker inspect` of the student's
+   * container with a 15 s deadline. Attaches arriving together all measured
+   * the count before any of them had spawned anything, so the ceiling did not
+   * bind under the one burst it exists for — a class attaching at once.
+   */
+  let startingShells = 0;
+
   async function openShell(
     ws: WebSocket,
     sessionId: string,
     cols: number,
     rows: number,
   ): Promise<void> {
-    if (shells.size >= config.maxSessions) {
+    // A session that already holds a shell is replacing it (see below), so it
+    // is not asking for a second slot: a reattach after a reset still works
+    // while the broker is full.
+    const replacing = bySessionId.has(sessionId);
+    if (!replacing && shells.size + startingShells >= config.maxSessions) {
       send(ws, {
         type: 'error',
         code: 'BROKER_AT_CAPACITY',
@@ -582,7 +597,20 @@ export function createSandboxd(deps: SandboxdDeps): Server {
       ws.close(4429, 'at capacity');
       return;
     }
+    startingShells += 1;
+    try {
+      await attachShell(ws, sessionId, cols, rows);
+    } finally {
+      startingShells -= 1;
+    }
+  }
 
+  async function attachShell(
+    ws: WebSocket,
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
     let target;
     try {
       target = await resolveAttachTarget({
