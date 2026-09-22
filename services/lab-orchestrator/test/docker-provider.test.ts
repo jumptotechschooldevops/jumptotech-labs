@@ -482,6 +482,68 @@ reset:
     expect(result.removed).toContain('image/student-built:1');
   });
 
+  it('removes every name of a student image, not only the first (DOCKER-003)', async () => {
+    // `docker image rm --force <tag>` on an image with two names only untags
+    // it; removing by one tag left `jumptotech/toolbox:1.0` behind, and
+    // DOCKER-003's "the tag exists" check still passed after Reset.
+    const { provider, engines } = build();
+    const lab = dockerLab(`
+setup:
+  docker:
+    images:
+      - alpine:3.20
+  verify:
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: the image is present
+reset:
+  docker:
+    images: true
+`);
+    const context = contextFor(lab);
+    await provider.create(context);
+
+    const session = engines.daemon(SANDBOX_A);
+    session.addImage('busybox:1.36');
+    session.tagImage('busybox:1.36', 'jumptotech/toolbox:1.0');
+
+    await provider.reset(context);
+
+    const tags = (await session.listImages()).flatMap((i) => i.tags);
+    expect(tags).toContain('alpine:3.20');
+    expect(tags).not.toContain('busybox:1.36');
+    expect(tags).not.toContain('jumptotech/toolbox:1.0');
+  });
+
+  it("takes a student's extra name off one of the lab's images, and keeps the image", async () => {
+    const { provider, engines } = build();
+    const lab = dockerLab(`
+setup:
+  docker:
+    images:
+      - alpine:3.20
+  verify:
+    - type: docker_image_exists
+      image: alpine:3.20
+      label: the image is present
+reset:
+  docker:
+    images: true
+`);
+    const context = contextFor(lab);
+    await provider.create(context);
+
+    const session = engines.daemon(SANDBOX_A);
+    session.tagImage('alpine:3.20', 'jumptotech/base:1.0');
+
+    const result = await provider.reset(context);
+
+    const tags = (await session.listImages()).flatMap((i) => i.tags);
+    expect(tags).toContain('alpine:3.20');
+    expect(tags).not.toContain('jumptotech/base:1.0');
+    expect(result.removed).toContain('image/jumptotech/base:1.0');
+  });
+
   it('restores the workspace, discarding the student\'s edits', async () => {
     const workspace = new InMemoryWorkspace();
     const { provider } = build({ workspace });

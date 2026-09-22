@@ -180,6 +180,14 @@ export class FakeDockerDaemon implements DockerEnginePort {
     return image;
   }
 
+  /** `docker tag source target`: one image, one more name. */
+  tagImage(source: string, target: string): void {
+    const image = this.images.get(normalizeTag(source));
+    if (!image) throw new Error(`no image ${source}`);
+    image.tags.push(target);
+    this.images.set(normalizeTag(target), image);
+  }
+
   /** Pretend a container exists in whatever state a test needs. */
   addContainer(spec: RunContainerSpec, state = 'running', exitCode = 0, oomKilled = false): void {
     this.containers.set(spec.name, {
@@ -446,6 +454,8 @@ export class FakeDockerDaemon implements DockerEnginePort {
     for (const [tag, image] of [...this.images.entries()]) {
       if (tag === key || image.id === reference) {
         this.images.delete(tag);
+        // By tag, Docker only untags an image that has other names.
+        image.tags = image.tags.filter((t) => normalizeTag(t) !== tag);
         this.removed.push(`image/${tag}`);
       }
     }
