@@ -201,19 +201,38 @@ requirements:
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:AttachRolePolicy
     resource: arn:aws:iam::123456789012:role/AppServerRole
+    any_context: true
     label: The pipeline was not given IAM write permissions
 
   - type: iam_policy_not_allows
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:CreateRole
     resource: arn:aws:iam::123456789012:role/AppServerRole
+    any_context: true
     label: The pipeline cannot create roles either
 
   - type: iam_policy_not_allows
     path: /home/student/escalation-review/deployer-policy.json
     action: iam:PutRolePolicy
     resource: arn:aws:iam::123456789012:role/AppServerRole
+    any_context: true
     label: The pipeline cannot write inline role policies either
+
+  # Finding line 1: the EC2 statement stays exactly as it is. Rewriting it as
+  # `NotAction: iam:*` on "*" keeps every check above passing while granting
+  # everything outside IAM, and no wildcard check sees a NotAction.
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: ec2:TerminateInstances
+    resource: "*"
+    any_context: true
+    label: The EC2 statement grants no more than it did
+  - type: iam_policy_not_allows
+    path: /home/student/escalation-review/deployer-policy.json
+    action: s3:GetObject
+    resource: arn:aws:s3:::jumptotech-ledger-exports/statement.csv
+    any_context: true
+    label: The pipeline gained no access outside EC2 and PassRole
 
   - type: iam_policy_no_wildcard
     path: /home/student/escalation-review/deployer-policy.json
