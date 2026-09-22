@@ -137,7 +137,7 @@ creates, removes or rewrites something outside the checkout's working tree.
 | `check-secret-distribution.mjs` (`make secrets-check`) | compose secrets/ports/mounts contract | no |
 | `check-observability.sh` (`make observability-check`) | promtool/amtool/dashboards | no (may run tool containers) |
 | `test-db-backup-restore.sh`, `test-production-host-scripts.sh`, `test-private-beta-diagnostics.sh` | self-tests of the operator scripts, against fakes | no |
-| `db-restore-drill.sh` (`make db-restore-drill`) | backup → destroy → restore → verify on **disposable** servers it creates | creates and removes its own containers only |
+| `db-restore-drill.sh` + `db-restore-drill/` (`make db-restore-drill`) | backup → destroy → restore → verify on **disposable** servers it creates | creates and removes its own containers only |
 | `beta-validation/` (`make beta-validate`) | five synthetic students against the running stack | creates and ends sessions on the running stack |
 | `db-backup.sh` (`make db-backup`) | archive + checksum into `BACKUP_DIR` | writes an archive; prunes by retention |
 | `db-restore.sh --verify-only` (`make db-backup-verify`) | check an archive | no |
