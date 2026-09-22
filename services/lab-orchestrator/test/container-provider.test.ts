@@ -399,6 +399,19 @@ describe('sandbox reads for the verifier', () => {
     expect(read?.content).toBe(big.slice(0, MAX_SANDBOX_READ_BYTES));
   });
 
+  it("reads an empty regular file as a file, as GNU stat's 'regular empty file' spells it", async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+    const context = contextFor(lab);
+    await provider.create(context);
+    runtime.put(SANDBOX_A, `${HOME}/deploy/config.txt`, { content: '', mode: '644', owner: 'student', group: 'student' });
+
+    const read = await provider.readSandboxPath(context, 'deploy/config.txt');
+
+    expect(read).toMatchObject({ type: 'file', sizeBytes: 0 });
+  });
+
   it('returns null for a path that does not exist', async () => {
     const lab = await loadLabDefinition(LINUX_001);
     const runtime = new FakeContainerRuntime();
