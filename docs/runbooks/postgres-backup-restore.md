@@ -586,7 +586,7 @@ everything written since the archive. So prefer this:
 | `scripts/db-restore-drill.sh` (`make db-restore-drill`, CI `postgres-integration`) | two real `postgres:16-alpine` servers it creates and removes, labelled with the run id | See the list below this table. |
 | CI `gates` → "No database archive is committed" | `git ls-files` | no `.dump` / `.backup` / `.bak` file is tracked |
 
-**The stub suite** proves, for 152 cases:
+**The stub suite** proves, for 157 cases:
 - A failed dump, an unreadable archive, a non-application archive, a corrupted
   copy, an unreachable server, or a destination inside the database's storage
   each leaves nothing that looks like a backup.
@@ -598,7 +598,9 @@ everything written since the archive. So prefer this:
   or missing checksum, an unreadable or altered archive, an existing or system
   target, missing or wrong confirmation, a connected session.
 - `--replace` stages, restores, then swaps inside one `BEGIN`/`COMMIT` and drops
-  nothing.
+  nothing. Once the swap has committed, a later step that fails (the migration
+  report on a dropped connection) exits 0 with a warning and the undo command,
+  never "restore FAILED".
 - A password sentinel never appears in output, arguments or files.
 
 **The static test** proves:

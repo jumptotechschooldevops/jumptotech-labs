@@ -94,6 +94,7 @@ case $sql in
   *'ALTER DATABASE'*) [ -z "${FAKE_SWAP_FAIL-}" ] || { echo 'ERROR: database is being accessed by other users' >&2; exit 3; } ;;
   *'count(*) FROM schema_migrations'*) echo 5 ;;
   *'SELECT version, checksum FROM schema_migrations'*)
+    [ -z "${FAKE_LEDGER_READ_FAIL-}" ] || { echo 'psql: error: server closed the connection unexpectedly' >&2; exit 2; }
     for file in "$FAKE_REPO"/services/progress/migrations/*.sql; do
       sum=$(sha256sum "$file")
       printf '%s %s\n' "$(basename "$file" .sql)" "${sum%% *}"
@@ -211,7 +212,7 @@ new_case() {
   export JTT_DB_CONTAINER=fake-postgres FAKE_DATABASES="postgres jumptotech_labs"
   unset FAKE_PS_IDS FAKE_RUNNING FAKE_MOUNT_SOURCE FAKE_SERVER_DOWN FAKE_SESSIONS \
     FAKE_CREATE_FAIL FAKE_SWAP_FAIL FAKE_PG_DUMP_FAIL FAKE_PG_DUMP_GARBAGE \
-    FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG FAKE_ARCHIVE_TRUNCATED \
+    FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG FAKE_ARCHIVE_TRUNCATED FAKE_LEDGER_READ_FAIL \
     BACKUP_LABEL BACKUP_RETENTION_DAYS BACKUP_RETENTION_MIN_KEEP BACKUP_COPY_HOOK
 }
 
@@ -648,6 +649,20 @@ export FAKE_PG_RESTORE_FAIL=1
 restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
 expect '--replace when pg_restore fails: exits non-zero, target untouched' says 'jumptotech_labs is untouched'
 expect '--replace when pg_restore fails: no rename is attempted' bash -c "! grep -q 'ALTER DATABASE' '$FAKE_LOG'"
+
+# The swap is the point of no return. A step after it that fails — here the
+# migration report, on a connection that drops — must not print "restore
+# FAILED" and exit non-zero: the operator would believe the target untouched
+# and start the api, or run --replace again, over a database that was replaced.
+new_case
+given_archive
+export FAKE_LEDGER_READ_FAIL=1
+restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
+expect '--replace whose post-swap report fails: exits 0, because the swap happened' succeeded
+expect '--replace whose post-swap report fails: never says the restore failed' bash -c "! grep -q 'restore FAILED' '$case_dir/err'"
+expect '--replace whose post-swap report fails: says the database was replaced' says 'replaced jumptotech_labs with the archive'
+expect '--replace whose post-swap report fails: says the report is missing and how to get it' says 'migration report could not be read'
+expect '--replace whose post-swap report fails: still prints how to undo the swap' says 'To undo the swap'
 
 new_case
 given_archive
