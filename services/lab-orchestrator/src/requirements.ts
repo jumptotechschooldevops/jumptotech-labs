@@ -2575,9 +2575,23 @@ const sandboxRequirementSchemas = {
        * that sentence.
        */
       address: z.union([bindAddress, z.array(bindAddress).min(1).max(6)]).optional(),
+      /**
+       * Pass when any socket on the port is bound somewhere other than
+       * loopback (`127.0.0.0/8`, `::1`) — a wildcard *or* one of the host's
+       * own addresses.
+       *
+       * This is what "reachable from the segment" means when the lab cannot
+       * name the host's address, because it is allocated per session. A wildcard
+       * list in `address` would refuse a student who binds the segment address
+       * itself: the tighter exposure, and the one the peer can reach.
+       */
+      beyond_loopback: z.literal(true).optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((r) => !(r.beyond_loopback && r.address !== undefined), {
+      message: 'port_listening takes address or beyond_loopback, not both',
+    }),
 
   port_not_listening: z
     .object({

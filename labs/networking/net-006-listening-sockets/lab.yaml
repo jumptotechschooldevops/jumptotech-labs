@@ -115,7 +115,8 @@ requirements:
   # --- the repair, read from the kernel's socket table ---------------------
   - type: port_listening
     port: 9106
-    address: [0.0.0.0, "::"]
+    # A wildcard, or this host's own segment address: both reach the segment.
+    beyond_loopback: true
     label: The payments API is reachable from outside this host
   - type: port_not_listening
     port: 9106

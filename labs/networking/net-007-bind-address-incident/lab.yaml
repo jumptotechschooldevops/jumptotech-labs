@@ -125,7 +125,8 @@ requirements:
   # --- and the local state that explains it ---------------------------------
   - type: port_listening
     port: 8080
-    address: [0.0.0.0, "::"]
+    # A wildcard, or this host's own segment address: both reach the segment.
+    beyond_loopback: true
     label: The service listens where the segment can reach it
   - type: port_not_listening
     port: 8080
