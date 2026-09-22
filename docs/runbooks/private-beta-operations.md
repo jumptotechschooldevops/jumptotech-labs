@@ -49,7 +49,8 @@ ready() {
 alerts() { prod exec -T alertmanager amtool alert query --alertmanager.url=http://127.0.0.1:9093; }
 
 # The api's operator socket (apps/api/src/operator.ts): `ops status`,
-# `ops sessions [--recent]`, `ops session <id>`, `ops end <id> --yes`.
+# `ops sessions [--recent]`, `ops session <id>`, `ops end <id> --yes`, and
+# `ops access …` for lab access (docs/commercial-access.md §6).
 ops() { prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts "$@"; }
 ```
 
@@ -282,6 +283,11 @@ alone: their terminals, Verify, Reset and End keep working.
    - `platform_error` — the start failed before the substrate was asked;
      almost always the database (RB-02). The log line's `code` names it.
    - `unauthorized` — sign-in: RB-14.
+   - `access_denied` (`ACCESS_NOT_ACTIVE`) — signed in, but their lab access
+     is not ACTIVE: `ops access find --email <address>`, then `ops access show
+     <user-id>`, which says why and what to run
+     ([commercial-access.md §8](../commercial-access.md#8-diagnosing-an-access-problem)).
+     Not a platform fault.
    - No `lab.start.failed` line, and the student saw "Your sign-in could not be
      checked right now" (`AUTH_UNAVAILABLE`, 503): the request never reached
      Start. The database that holds sign-ins is unreachable. RB-02.
@@ -408,7 +414,15 @@ Never `docker rm` a sandbox or `kubectl delete` a lab namespace by hand while
 its session is live. The row keeps its slot, and the student's page keeps
 showing a lab that no longer exists.
 
-### 7.2 Collecting diagnostics
+### 7.2 Granting, suspending and revoking a student's access
+
+`ops access grant | suspend | restore | revoke <user-id> --by <you> --reason
+<why>`, after `ops access find --email <address>` to get the id. Every change is
+recorded with who and why; nothing is deleted. The full procedure, including
+mistakes and auditing, is [commercial-access.md §6](../commercial-access.md#6-operator-runbook).
+Never change access with SQL.
+
+### 7.3 Collecting diagnostics
 
 After any incident, before restarting anything if you can:
 
@@ -434,7 +448,7 @@ finds one. Send the archive, never `.env`, `docker inspect`,
 | **Off-host backup destination and encryption** (P0-013) | `jtt_backup_last_success_offhost` reads 0 and the dashboard says NO |
 | **CA / ACME client** (P0-017) | Manual renewal before `TlsCertificateRenewalDue` |
 | **Long-term metric and log retention** | 15 days of Prometheus data; logs are container stdout |
-| **Who may sign in** — the api admits any account the OIDC issuer authenticates ([authentication.md §4.7](../authentication.md)) | The identity provider itself must admit only the beta students. Blocks inviting anyone to a public host ([production-host-readiness.md §8](../development/production-host-readiness.md)) |
+| **Who may sign in** — the api admits any account the OIDC issuer authenticates ([authentication.md §4.7](../authentication.md)) | Under `ACCESS_POLICY=entitlement` (the production default) only accounts granted with `ops access grant` may **use** labs; anyone the issuer admits can still sign in and browse the catalog. The access decisions still open are [commercial-access.md §12](../commercial-access.md#12-operator-decisions-required) |
 | **Production host sizing and capacity acceptance** | Nothing is proven about any server. Measure with the five-student host procedure ([production-host-readiness.md §13](../development/production-host-readiness.md)) |
 
 ## 9. Limitations

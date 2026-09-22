@@ -411,6 +411,11 @@ reachable once `NODE_ENV=production`.
   authenticates is admitted and provisioned as `STUDENT`. For a private beta,
   restricting admission (a group/role claim, an email-domain rule, or an
   invitation table) has to be chosen; it is not provider-neutral to guess.
+  **Who may use labs is now separate:** under `ACCESS_POLICY=entitlement` (the
+  production default) signing in grants no lab access; an operator grants it
+  per account ([commercial-access.md](commercial-access.md)). An admitted but
+  ungranted account can sign in, browse the catalog and read its own (empty)
+  history, and nothing else.
 - **Durable sessions in production — resolved.** Production OIDC requires a
   PostgreSQL database and refuses to start without one (§4.2); there is no
   in-memory fallback for a private beta, where a restart would sign every

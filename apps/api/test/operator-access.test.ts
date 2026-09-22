@@ -7,9 +7,10 @@
  * recorded, what is refused, and that nothing in a reply is a credential.
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { request } from 'node:http';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_SESSION_POLICY,
   InMemorySessionStore,
@@ -317,6 +318,37 @@ describe('operator access — what is logged', () => {
       const reply = await call('GET', url);
       expect(reply.status).toBe(200);
       expect(reply.raw).not.toMatch(/token|secret|password|cookie|kubeconfig|subject/i);
+    }
+  });
+});
+
+describe('the documented commands exist', () => {
+  /**
+   * Every `ops access …` line in the runbooks, parsed by the real CLI parser.
+   * A documented command that the CLI refuses is a runbook that fails an
+   * operator mid-incident.
+   */
+  it('parses every `ops access` command in docs/commercial-access.md and the operations runbook', () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+    const docs = ['docs/commercial-access.md', 'docs/runbooks/private-beta-operations.md'].map((file) =>
+      readFileSync(path.join(repoRoot, file), 'utf8'),
+    );
+    const commands = docs
+      .flatMap((text) => text.split('\n'))
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('ops access '))
+      // A trailing `# comment` is the doc's, not the command's.
+      .map((line) => line.replace(/\s+#.*$/, ''));
+    expect(commands.length).toBeGreaterThanOrEqual(12);
+
+    for (const command of commands) {
+      const argv = (command.slice('ops '.length).match(/"[^"]*"|\S+/g) ?? [])
+        .map((word) => word.replace(/^"|"$/g, ''))
+        .map((word) =>
+          word === '<user-id>' ? '0f8fad5b-d9cb-469f-a165-70867728950e' : word === '<address>' ? 'a@example.com' : word,
+        );
+      const parsed = parseArgs(argv);
+      expect(parsed, command).not.toHaveProperty('error');
     }
   });
 });
