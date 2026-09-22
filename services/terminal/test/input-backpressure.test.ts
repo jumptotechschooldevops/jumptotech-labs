@@ -272,6 +272,21 @@ async function eventually<T>(check: () => T, timeoutMs = 20_000): Promise<NonNul
   }
 }
 
+async function eventuallyAsync(check: () => Promise<boolean>, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error('condition not met in time');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+/** The terminal service's own count of registered shells, from `/health`. */
+async function terminalOpenShells(terminalUrl: string): Promise<number> {
+  const response = await fetch(terminalUrl.replace(/^ws/, 'http').replace(/\/terminal$/, '/health'));
+  const body = (await response.json()) as { data: { activeSessions: number } };
+  return body.data.activeSessions;
+}
+
 /**
  * Resolves once `measure` has stopped changing for a few polls in a row — the
  * relays have stopped passing input on — or rejects at the deadline.
@@ -351,6 +366,32 @@ describe('shell input backpressure', () => {
     expect(/^x+$/.test(all)).toBe(true);
     expect(await flushed(client.ws)).toBe(true);
     expect(client.closed()).toBe(false);
+  }, 60_000);
+
+  /*
+   * A paused socket is not read, and a peer's close is something read: its
+   * close frame, or the end of the stream. So a client that left while its
+   * input was held back went unnoticed by both relays — the terminal kept the
+   * session, its capacity slot and the broker socket; sandboxd, which had
+   * paused that broker socket in turn, kept the PTY and its `docker exec` —
+   * until the next output, a replacing attach or the 30-minute idle timer.
+   */
+  it('releases the shell at both hops when a client leaves while its input is held back', async () => {
+    const stack = await bringUpStack();
+    const client = await attach(stack.terminalUrl, tokenFor(stack.a, OWNER_A));
+    const pty = stack.ptys[0]!;
+
+    typeFlood(client.ws, 64 * MiB);
+    await eventually(() => pty.pending > FLOW.highWaterBytes);
+    await quiescent(() => pty.pending);
+
+    client.ws.terminate();
+
+    // Seconds, not the idle timers (sandboxd's is 60 s here; both are 30 min in
+    // production): measured locally at about 3.5 s for the terminal and 9.5 s
+    // for the PTY behind the broker.
+    await eventuallyAsync(async () => (await terminalOpenShells(stack.terminalUrl)) === 0, 20_000);
+    await eventually(() => pty.killed, 20_000);
   }, 60_000);
 
   it('holds back only the student whose shell is behind', async () => {

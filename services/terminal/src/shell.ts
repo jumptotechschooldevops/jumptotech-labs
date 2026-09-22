@@ -136,6 +136,12 @@ export interface BrokerAttachment {
   workdir: string;
 }
 
+/** How long a killed broker shell waits for the broker to acknowledge the close. */
+const BROKER_CLOSE_TIMEOUT_MS = 2_000;
+
+/** `closeTimeout` is a client option of ws 8.21, not yet in `@types/ws`. */
+type BrokerClientOptions = WebSocket.ClientOptions & { closeTimeout: number };
+
 /**
  * A PTY inside `sandboxd`, bridged over an authenticated WebSocket.
  *
@@ -156,17 +162,25 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
     let onData: (data: string) => void = () => undefined;
     let onExit: (event: ShellExit) => void = () => undefined;
 
-    const ws = new WebSocket(url, {
+    const clientOptions: BrokerClientOptions = {
       // Over wss, certificate and hostname verification are always on, whatever
       // NODE_TLS_REJECT_UNAUTHORIZED says; the CA, when given, is this socket's only.
       ...(url.startsWith('wss:') ? brokerTlsOptions(options.ca ? { ca: options.ca } : {}) : {}),
+      /*
+       * `kill` closes this socket, and ws then waits this long for the broker's
+       * reply before destroying it (30 s by default). A broker that has paused
+       * this socket for input pressure never reads the close, so for all that
+       * time it kept the PTY; destroyed, its peer probe notices within seconds.
+       */
+      closeTimeout: BROKER_CLOSE_TIMEOUT_MS,
       headers: {
         'x-internal-secret': options.secret,
         // Correlation only. The broker's attach authorization is the `attach`
         // scope secret above and the ownership gates behind it.
         ...(currentRequestId() ? { [REQUEST_ID_HEADER]: currentRequestId()! } : {}),
       },
-    });
+    };
+    const ws = new WebSocket(url, clientOptions);
 
     const timer = setTimeout(() => {
       if (settled) return;

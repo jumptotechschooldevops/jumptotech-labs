@@ -147,6 +147,61 @@ export function createOutputFlow(
  * one hop at a time, as far as the browser.
  */
 
+/** The part of a WebSocket `pausableSocket` needs. */
+export interface ProbeableSocket {
+  readonly readyState: number;
+  readonly OPEN: number;
+  pause(): void;
+  resume(): void;
+  ping(): void;
+}
+
+/** How often a socket paused for input pressure checks that its peer is still there. */
+export const PAUSED_PEER_PROBE_MS = 2_000;
+
+/**
+ * A relayed socket as the source an input flow pauses — with one addition.
+ *
+ * A paused socket is not read at all, and a peer's departure is only ever
+ * learned by reading: its close frame, or the end of the stream. So a client
+ * that closed its tab while its input was held back went unnoticed until the
+ * shell next wrote something or the idle timer fired, 30 minutes, holding the
+ * shell, the relay's slot and, one hop on, the broker's PTY. Writing is
+ * independent of reading, and a write to a peer that has gone fails: so while
+ * paused this pings the peer, and the failed write closes the socket through
+ * its ordinary `close` path. A peer that is still there simply queues the
+ * pongs this side is not reading; nothing it sent is consumed or dropped.
+ */
+export function pausableSocket(
+  ws: ProbeableSocket,
+  probeIntervalMs: number = PAUSED_PEER_PROBE_MS,
+): PausableSource {
+  let probe: NodeJS.Timeout | undefined;
+  const stopProbe = (): void => {
+    if (probe !== undefined) clearInterval(probe);
+    probe = undefined;
+  };
+  return {
+    pause(): void {
+      ws.pause();
+      if (probe !== undefined) return;
+      probe = setInterval(() => {
+        if (ws.readyState !== ws.OPEN) return stopProbe();
+        try {
+          ws.ping();
+        } catch {
+          stopProbe();
+        }
+      }, probeIntervalMs);
+      probe.unref?.();
+    },
+    resume(): void {
+      stopProbe();
+      ws.resume();
+    },
+  };
+}
+
 /**
  * Bytes a node-pty terminal has accepted from `write` and not yet handed to the
  * kernel.

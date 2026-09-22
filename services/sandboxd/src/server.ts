@@ -63,6 +63,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import {
   BROKER_TLS_MIN_VERSION,
   createOutputFlow,
+  pausableSocket,
   ptyPendingInputBytes,
   type ContainerRuntimePort,
   type OutputFlow,
@@ -705,7 +706,8 @@ export function createSandboxd(deps: SandboxdDeps): Server {
      */
     const input = createOutputFlow(
       { get bufferedAmount() { return term.pendingInputBytes?.() ?? 0; } },
-      { pause: () => ws.pause(), resume: () => ws.resume() },
+      // Probes the terminal service while paused: a paused socket never reads the close.
+      pausableSocket(ws),
       () => {
         common?.securityEvents.inc({ service: 'sandboxd', event: 'input_backlog' });
         obs.warn('security.event', { securityEvent: 'input_backlog', sessionId });

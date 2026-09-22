@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createOutputFlow,
+  pausableSocket,
   ptyInputQueueReadable,
   ptyPendingInputBytes,
   resolveOutputFlowOptions,
@@ -169,5 +170,58 @@ describe('pending input of a node-pty terminal', () => {
     expect(socket.pause).toHaveBeenCalledTimes(1);
     expect(flow.paused).toBe(true);
     flow.dispose();
+  });
+});
+
+describe('a socket paused for input pressure', () => {
+  function socketDouble() {
+    return { readyState: 1, OPEN: 1, pause: vi.fn(), resume: vi.fn(), ping: vi.fn() };
+  }
+
+  it('probes its peer only while paused', async () => {
+    vi.useFakeTimers();
+    const ws = socketDouble();
+    const source = pausableSocket(ws, 100);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(ws.ping).not.toHaveBeenCalled();
+
+    source.pause();
+    source.pause();
+    expect(ws.pause).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(350);
+    // One probe timer however often it is paused.
+    expect(ws.ping).toHaveBeenCalledTimes(3);
+
+    source.resume();
+    expect(ws.resume).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(ws.ping).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops probing once the socket is no longer open', async () => {
+    vi.useFakeTimers();
+    const ws = socketDouble();
+    const source = pausableSocket(ws, 100);
+    source.pause();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(ws.ping).toHaveBeenCalledTimes(1);
+
+    ws.readyState = 3;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(ws.ping).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('stops probing if a probe throws', async () => {
+    vi.useFakeTimers();
+    const ws = socketDouble();
+    ws.ping.mockImplementation(() => {
+      throw new Error('not open');
+    });
+    pausableSocket(ws, 100).pause();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(ws.ping).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

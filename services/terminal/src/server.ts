@@ -46,7 +46,11 @@ import {
   writeSessionDockerCerts,
   writeSessionKubeconfig,
 } from './credentials.js';
-import { createOutputFlow, type OutputFlow } from '@jumptotech/lab-orchestrator/output-flow';
+import {
+  createOutputFlow,
+  pausableSocket,
+  type OutputFlow,
+} from '@jumptotech/lab-orchestrator/output-flow';
 import { reportSessionActivity } from './activity.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
 import { InputBudget } from './input-budget.js';
@@ -668,7 +672,8 @@ export function createTerminalServer(
       ws,
       createOutputFlow(
         { get bufferedAmount() { return term.pendingInputBytes(); } },
-        { pause: () => ws.pause(), resume: () => ws.resume() },
+        // Probes the browser while paused: a paused socket never reads the close.
+        pausableSocket(ws),
         () => {
           securityMetrics?.securityEvents.inc({ service: 'terminal', event: 'input_backlog' });
           obs.warn('security.event', {
