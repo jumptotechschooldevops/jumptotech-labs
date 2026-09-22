@@ -76,7 +76,12 @@ export async function buildProgressRuntime(
 
   if (settings.autoMigrate) {
     // Forward-only and idempotent. Never destructive — see the migrator.
-    const report = await migrate(database, { logger: (message) => log(`migration ${message}`) });
+    const report = await migrate(database, {
+      logger: (message) => log(`migration ${message}`),
+      // Production refuses a database a newer release migrated, unless the
+      // operator chose that rollback (DATABASE_ALLOW_NEWER_SCHEMA=true).
+      allowNewerSchema: settings.allowNewerSchema ?? true,
+    });
     log(
       report.applied.length > 0
         ? `applied ${report.applied.length} migration(s)`

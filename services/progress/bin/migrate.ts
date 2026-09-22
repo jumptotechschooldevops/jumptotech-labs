@@ -47,10 +47,20 @@ async function main(): Promise<void> {
       for (const migration of migrations) {
         console.log(`  ${applied.has(migration.version) ? 'applied' : 'PENDING'}  ${migration.version}`);
       }
+      // A version recorded by a newer release: this checkout is older than the
+      // database, and `db:migrate` (and the production api) will refuse it.
+      const shipped = new Set(migrations.map((migration) => migration.version));
+      for (const version of [...applied].filter((v) => !shipped.has(v)).sort()) {
+        console.log(`  UNKNOWN  ${version}  (applied by a newer release; not in this checkout)`);
+      }
       return;
     }
 
-    const report = await migrate(db, { logger: (message) => console.log(`[migrate] ${message}`) });
+    const report = await migrate(db, {
+      logger: (message) => console.log(`[migrate] ${message}`),
+      // An explicit operator tool: a newer schema is refused unless asked for.
+      allowNewerSchema: process.env.DATABASE_ALLOW_NEWER_SCHEMA === 'true',
+    });
     console.log(
       report.applied.length > 0
         ? `[migrate] applied ${report.applied.length} migration(s): ${report.applied.join(', ')}`

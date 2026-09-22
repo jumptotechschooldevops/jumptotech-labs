@@ -428,9 +428,11 @@ for a command named after the whole string:
    printed which ones are pending.
    - **CHECKSUM DIFFERS** or **unknown** in that report means the code and the
      data disagree. Deploy the release that matches the archive; do not edit
-     migrations. The api refuses to start on CHECKSUM DIFFERS, but **not** on
-     unknown: it starts against a schema newer than its code, so do not start
-     it until the release matches.
+     migrations. The api refuses to start on CHECKSUM DIFFERS. Under
+     `NODE_ENV=production` it also refuses on **unknown** (a schema newer than
+     its code) unless `DATABASE_ALLOW_NEWER_SCHEMA=true` — set that only as an
+     explicit decision to run older code on the newer schema, and remove it once
+     the release matches. Outside production it starts with a warning.
 7. **Validate** (§6.5).
 
 ### 6.5 Validate

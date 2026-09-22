@@ -291,6 +291,14 @@ export interface ProgressConfig {
    * Deployments that migrate from a pipeline instead can switch it off.
    */
   autoMigrate: boolean;
+  /**
+   * Start against a database migrated by a newer release (a code rollback after
+   * a migration). Off in production unless DATABASE_ALLOW_NEWER_SCHEMA=true: the
+   * rollback boundary is a decision, docs/development/production-host-readiness.md
+   * §21.2. On elsewhere, so switching branches on a laptop keeps working; the
+   * migrator still logs every version it does not know. Absent means on.
+   */
+  allowNewerSchema?: boolean;
   /** The development identity every request is attributed to. NOT a login. */
   devStudentId: string;
   /**
@@ -721,6 +729,7 @@ export function loadProgressConfig(env: NodeJS.ProcessEnv = process.env): Progre
   return {
     database: loadDatabaseConfig(env),
     autoMigrate: boolFromEnv(env, 'DATABASE_AUTO_MIGRATE', true),
+    allowNewerSchema: boolFromEnv(env, 'DATABASE_ALLOW_NEWER_SCHEMA', !isProductionEnv(env)),
     devStudentId: strFromEnv(env, 'DEV_STUDENT_ID', DEFAULT_DEV_STUDENT_ID),
     // Opt-in, and never on by default in production even if someone forgets.
     allowStudentHeader:

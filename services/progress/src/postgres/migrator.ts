@@ -11,7 +11,12 @@
  *     already-applied migration is reported as an error rather than silently
  *     ignored;
  *   - an advisory lock serialises the run, so two API instances starting
- *     together cannot apply the same migration twice.
+ *     together cannot apply the same migration twice;
+ *   - a database that records a version this release does not ship — it was
+ *     migrated by a newer release — is refused unless `allowNewerSchema` says
+ *     otherwise. That is the rollback boundary: older code on a newer schema is
+ *     a decision (restore the pre-upgrade backup, or accept it explicitly),
+ *     never something that happens because a rollback started cleanly.
  *
  * Nothing in this runner drops or truncates anything. The only statements
  * executed are the ones in the migration files, and reviewing those files is
@@ -51,6 +56,22 @@ export interface MigrationReport {
   applied: string[];
   /** Versions already present. */
   skipped: string[];
+  /**
+   * Versions the database records that this release does not ship: it was
+   * migrated by a newer release. Only ever non-empty when `allowNewerSchema`.
+   */
+  unknown: string[];
+}
+
+export interface MigrateOptions {
+  dir?: string;
+  logger?: (message: string) => void;
+  /**
+   * Run against a database migrated by a newer release. Off by default: that
+   * is older code on a schema it was never written for, and choosing it is a
+   * rollback decision (the api maps DATABASE_ALLOW_NEWER_SCHEMA=true here).
+   */
+  allowNewerSchema?: boolean;
 }
 
 export class MigrationError extends Error {
@@ -109,8 +130,8 @@ interface AppliedRow {
  * lock, one select, and nothing else.
  */
 export async function migrate(
-  db: PostgresDatabase,
-  options: { dir?: string; logger?: (message: string) => void } = {},
+  db: Pick<PostgresDatabase, 'session'>,
+  options: MigrateOptions = {},
 ): Promise<MigrationReport> {
   const log = options.logger ?? (() => undefined);
   const migrations = await loadMigrations(options.dir ?? MIGRATIONS_DIR);
@@ -118,7 +139,7 @@ export async function migrate(
   return db.session(async (client) => {
     await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
     try {
-      return await applyPending(client, migrations, log);
+      return await applyPending(client, migrations, log, options.allowNewerSchema === true);
     } finally {
       await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]).catch(() => undefined);
     }
@@ -129,6 +150,7 @@ async function applyPending(
   client: SqlExecutor,
   migrations: Migration[],
   log: (message: string) => void,
+  allowNewerSchema: boolean,
 ): Promise<MigrationReport> {
   await client.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -143,7 +165,27 @@ async function applyPending(
   );
   const applied = new Map(rows.map((row) => [row.version, row.checksum]));
 
-  const report: MigrationReport = { applied: [], skipped: [] };
+  // Before anything is applied: a pending file must not be run against a
+  // schema a newer release has already moved on from.
+  const shipped = new Set(migrations.map((migration) => migration.version));
+  const unknown = [...applied.keys()].filter((version) => !shipped.has(version)).sort();
+  if (unknown.length > 0) {
+    if (!allowNewerSchema) {
+      throw new MigrationError(
+        `The database records migration(s) this release does not ship: ${unknown.join(', ')}. ` +
+          'It was migrated by a newer release, and this code was not written for that schema.',
+        'Deploy the release that matches the database, or restore the pre-upgrade backup ' +
+          '(docs/runbooks/postgres-backup-restore.md §6.4). To run this release against the newer ' +
+          'schema anyway — an explicit rollback decision — set DATABASE_ALLOW_NEWER_SCHEMA=true.',
+      );
+    }
+    log(
+      `WARNING: running against a newer schema (DATABASE_ALLOW_NEWER_SCHEMA): ` +
+        `this release does not ship ${unknown.join(', ')}`,
+    );
+  }
+
+  const report: MigrationReport = { applied: [], skipped: [], unknown };
 
   for (const migration of migrations) {
     const known = applied.get(migration.version);
