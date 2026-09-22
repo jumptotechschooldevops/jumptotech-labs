@@ -56,7 +56,7 @@ const SECRETS = {
 describe('no credential reaches a log line from the composed app', () => {
   let lines: string[];
 
-  function buildApp() {
+  function buildApp(registry: LabRegistry = labs) {
     const metricRegistry = createRegistry({ service: 'api', defaultMetrics: false });
     const logger = createLogger({
       service: 'api',
@@ -88,7 +88,7 @@ describe('no credential reaches a log line from the composed app', () => {
     });
 
     const sessions = new SessionManager({
-      registry: labs,
+      registry,
       provider,
       store: new InMemorySessionStore(),
       policy: DEFAULT_SESSION_POLICY,
@@ -97,7 +97,7 @@ describe('no credential reaches a log line from the composed app', () => {
     });
 
     return createApp({
-      registry: labs,
+      registry,
       sessions,
       k8s,
       config,
@@ -199,11 +199,29 @@ describe('no credential reaches a log line from the composed app', () => {
   });
 
   it('never emits a stack trace, which is how paths and arguments leak', async () => {
-    const app = buildApp();
-    await request(app).get('/api/labs/NOT-A-LAB');
-    for (const line of lines) {
-      const parsed = JSON.parse(line) as { err?: Record<string, unknown> };
-      if (parsed.err) expect(parsed.err).not.toHaveProperty('stack');
+    // A handler that fails unexpectedly: the only path that logs an `err`.
+    // (A 404 logs none, so a request for an unknown lab asserted nothing.)
+    const failing = new Proxy(labs, {
+      get(target, property) {
+        if (property === 'list') {
+          return () => {
+            throw new Error('catalog index corrupt at /srv/jumptotech/labs/index');
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const app = buildApp(failing);
+    await request(app).get('/api/labs').expect(500);
+
+    const errors = lines
+      .map((line) => JSON.parse(line) as { err?: Record<string, unknown> })
+      .filter((parsed) => parsed.err !== undefined);
+    expect(errors.length).toBeGreaterThan(0);
+    for (const { err } of errors) {
+      expect(err).not.toHaveProperty('stack');
+      expect(JSON.stringify(err)).not.toMatch(/\bat .+:\d+:\d+/);
     }
   });
 
