@@ -5,6 +5,7 @@ import {
   type BrokerClientTransport,
 } from '@jumptotech/lab-orchestrator';
 import {
+  boolFromEnv,
   loadObservabilityConfig,
   assertProductionSecrets,
   assertScrapeTokenIsDistinct,
@@ -171,12 +172,6 @@ export interface TerminalConfig {
    * silently.
    */
   sandboxBrokerEnabled: boolean;
-}
-
-function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
-  const raw = env[name];
-  if (raw === undefined || raw.trim() === '') return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
 
 function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {

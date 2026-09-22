@@ -78,6 +78,7 @@ export function loadScopeSecrets(env: NodeJS.ProcessEnv): ScopeSecrets {
 }
 
 import {
+  boolFromEnv,
   loadObservabilityConfig,
   assertProductionSecrets,
   assertScrapeTokenIsDistinct,
@@ -192,12 +193,6 @@ export interface SandboxdConfig {
    * reason for not being read from the environment.
    */
   inputFlow?: Partial<OutputFlowOptions>;
-}
-
-function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
-  const raw = env[name];
-  if (raw === undefined || raw.trim() === '') return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
 
 /**
