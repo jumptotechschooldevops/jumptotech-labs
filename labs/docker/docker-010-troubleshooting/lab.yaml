@@ -261,7 +261,10 @@ hints:
       an image, a command, and a port binding are all fixed when a container is
       created. Read the settings you need to keep, remove the container, and
       create it again with those settings plus the correction. The checks read
-      the final state, so recreating is a completely legitimate repair.
+      the final state, so recreating is a completely legitimate repair. A port
+      binding is set when the container is created, by the `--publish` option
+      of `docker run` (short form `-p`), which maps a host port to a container
+      port.
 
 references:
   - title: Docker CLI reference — docker container ls

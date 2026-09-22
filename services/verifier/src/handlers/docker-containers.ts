@@ -79,7 +79,9 @@ export const dockerContainerExitCode: DockerVerifierHandler<'docker_container_ex
     }
     return container.exitCode === r.expected
       ? pass()
-      : fail(`Container '${r.name}' exited with code ${container.exitCode}, expected ${r.expected}`);
+      : // The code it got, never the one it wants: in DOCKER-009 that is a
+        // worksheet answer.
+        fail(`Container '${r.name}' exited with code ${container.exitCode}, which is not the exit this lab expects`);
   },
 };
 

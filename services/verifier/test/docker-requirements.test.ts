@@ -611,7 +611,8 @@ describe('docker verifier — the checks that surround the OOM signal', () => {
     } as Requirement);
 
     expect(result.status).toBe('fail');
-    expect(result.detail).toContain('exited with code 0, expected 137');
+    expect(result.detail).toContain('exited with code 0');
+    expect(result.detail).not.toContain('137');
   });
 
   it('fails a probe given no memory limit at all', async () => {

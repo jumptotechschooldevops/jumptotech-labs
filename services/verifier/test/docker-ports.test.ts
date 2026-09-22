@@ -49,11 +49,18 @@ const port = (name: string, containerPort: number, hostPort?: number) =>
     ...(hostPort === undefined ? {} : { host_port: hostPort }),
   }) as Requirement;
 
+/**
+ * nginx:1.27-alpine's own CMD. `docker inspect` reports it as the container's
+ * command when `docker run` names none, which the fake does not infer.
+ */
+const NGINX_CMD = ['nginx', '-g', 'daemon off;'];
+
 /** A container publishing HOST:CONTAINER, the way `-p` leaves it. */
 function published(name: string, containerPort: number, hostPort: number) {
   return containerSpec({
     name,
     image: 'nginx:1.27-alpine',
+    command: NGINX_CMD,
     ports: [{ containerPort, hostPort }],
   });
 }
@@ -160,7 +167,7 @@ describe('DOCKER-012 — two services, one host', () => {
     const docker = new FakeDockerDaemon();
     docker.addContainer(published('ledger-web', 80, 8080), 'running', 0);
     docker.addContainer(
-      containerSpec({ name: 'statements-web', image: 'nginx:1.27-alpine' }),
+      containerSpec({ name: 'statements-web', image: 'nginx:1.27-alpine', command: NGINX_CMD }),
       'exited',
       128,
     );
@@ -232,14 +239,22 @@ describe('DOCKER-012 — two services, one host', () => {
     const docker = new FakeDockerDaemon();
     docker.addContainer(published('ledger-web', 80, 8080), 'running', 0);
     docker.addContainer(
-      containerSpec({ name: 'statements-web', image: 'alpine:3.20', ports: [{ containerPort: 80, hostPort: 8081 }] }),
+      containerSpec({
+        name: 'statements-web',
+        image: 'alpine:3.20',
+        command: ['/bin/sh'],
+        ports: [{ containerPort: 80, hostPort: 8081 }],
+      }),
       'running',
       0,
     );
 
     const result = await verify(docker);
     expect(result.passed).toBe(false);
-    expect(failing(result)).toEqual(['statements-web runs the nginx:1.27-alpine image']);
+    expect(failing(result)).toEqual([
+      'statements-web runs the nginx:1.27-alpine image',
+      'statements-web runs nginx, the image\'s own command',
+    ]);
   });
 
   it('accepts a registry-qualified image, so an alternate workflow still passes', async () => {
@@ -251,6 +266,7 @@ describe('DOCKER-012 — two services, one host', () => {
       containerSpec({
         name: 'statements-web',
         image: 'docker.io/library/nginx:1.27-alpine',
+        command: NGINX_CMD,
         ports: [{ containerPort: 80, hostPort: 8081 }],
       }),
       'running',
@@ -267,7 +283,25 @@ describe('DOCKER-012 — two services, one host', () => {
 
     const sessionA = await verify(new FakeDockerDaemon(), SANDBOX_A);
     expect(sessionA.passed).toBe(false);
-    expect(failing(sessionA)).toHaveLength(6);
+    expect(failing(sessionA)).toHaveLength(7);
+  });
+
+  it('refuses statements-web recreated with the right binding but running sleep', async () => {
+    // Before: passed — the binding was right and nothing listened behind it.
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(published('ledger-web', 80, 8080), 'running', 0);
+    docker.addContainer(
+      containerSpec({
+        name: 'statements-web',
+        image: 'nginx:1.27-alpine',
+        command: ['sleep', '3600'],
+        ports: [{ containerPort: 80, hostPort: 8081 }],
+      }),
+      'running',
+      0,
+    );
+
+    expect(failing(await verify(docker))).toEqual(["statements-web runs nginx, the image's own command"]);
   });
 
   it('asserts port bindings only — no requirement claims HTTP reachability', () => {
