@@ -251,6 +251,16 @@ describe('each unsafe variation is a FAIL', () => {
     expect(onlyWarning(mutate((c) => (c.services!.api!.environment!.LAB_LAUNCHES_PAUSED = value)))).toEqual(['capacity.launches']);
   });
 
+  it('warns when production would admit every signed-in account to labs (ACCESS_POLICY=open)', () => {
+    expect(onlyWarning(mutate((c) => (c.services!.api!.environment!.ACCESS_POLICY = 'open')))).toEqual(['access.policy']);
+    expect(onlyWarning(mutate((c) => (c.services!.api!.environment!.ACCESS_POLICY = ' OPEN ')))).toEqual(['access.policy']);
+  });
+
+  it('passes access control when it is unset (entitlement in production) or entitlement', () => {
+    expect(statusOf(mutate((c) => (c.services!.api!.environment!.ACCESS_POLICY = '')), 'access.policy')).toBe('PASS');
+    expect(statusOf(mutate((c) => (c.services!.api!.environment!.ACCESS_POLICY = 'entitlement')), 'access.policy')).toBe('PASS');
+  });
+
   it('treats an unset or false pause the way the api does', () => {
     expect(statusOf(mutate((c) => (c.services!.api!.environment!.LAB_LAUNCHES_PAUSED = 'false')), 'capacity.launches')).toBe('PASS');
     expect(statusOf(mutate((c) => (c.services!.api!.environment!.LAB_LAUNCHES_PAUSED = '')), 'capacity.launches')).toBe('PASS');

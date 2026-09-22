@@ -339,6 +339,9 @@ function scenarios(base: Record<string, string>): Scenario[] {
     },
     { name: 'a parent-domain session cookie is a warning', change: { AUTH_COOKIE_DOMAIN: 'production-check.invalid' }, expectFail: [], expectWarn: ['gates.origins'] },
     { name: 'starting with launches paused is a warning', change: { LAB_LAUNCHES_PAUSED: 'true' }, expectFail: [], expectWarn: ['capacity.launches'] },
+    // docs/commercial-access.md: allowed, but the one setting that admits every signed-in account.
+    { name: 'ACCESS_POLICY=open is a warning', change: { ACCESS_POLICY: 'open' }, expectFail: [], expectWarn: ['access.policy'] },
+    { name: 'an ACCESS_POLICY the api does not know is refused', change: { ACCESS_POLICY: 'closed' }, expectFail: ['loader.api'] },
     // Compose passes no EDGE_PROBE_ENABLED to the api, so the probe keeps its
     // production default; the contract still warns if a compose edit ever does.
     { name: 'EDGE_PROBE_ENABLED=false in .env cannot switch the TLS alerts off', change: { EDGE_PROBE_ENABLED: 'false' }, expectFail: [], expectWarn: [] },

@@ -448,6 +448,20 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
       : pass('capacity.launches', 'new labs can start (LAB_LAUNCHES_PAUSED is off)'),
   );
 
+  // --- commercial access (docs/commercial-access.md) ------------------------------
+  // Unset is `entitlement` under NODE_ENV=production; a value the api does not
+  // know is its own loader refusal. `open` is allowed — it is an operator
+  // decision — but it is the one setting under which access is not controlled.
+  const accessPolicy = (env(services.api, 'ACCESS_POLICY') ?? '').trim().toLowerCase();
+  results.push(
+    accessPolicy === 'open'
+      ? warn(
+          'access.policy',
+          'ACCESS_POLICY=open: every account the identity provider signs in may use every lab; entitlements are recorded but not enforced',
+        )
+      : pass('access.policy', 'lab access requires an ACTIVE entitlement (ACCESS_POLICY=entitlement)'),
+  );
+
   // --- durability ----------------------------------------------------------------
   const durability: string[] = [];
   const postgresData = (services.postgres?.volumes ?? []).find((volume) => volume.target === '/var/lib/postgresql/data');
