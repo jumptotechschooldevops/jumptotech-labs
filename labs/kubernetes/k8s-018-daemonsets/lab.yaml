@@ -166,7 +166,7 @@ requirements:
     label: The controller wants a Pod on every eligible node
   - type: daemonset_ready
     name: node-agent
-    min_ready: 1
+    every_scheduled: true
     label: The agent is Ready on every node the controller scheduled it to
   - type: resource_absent
     kind: deployment

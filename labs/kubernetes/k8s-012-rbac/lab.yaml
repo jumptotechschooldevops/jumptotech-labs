@@ -112,6 +112,28 @@ requirements:
     apiGroup: ""
     name: inventory-config
     label: inventory-sync cannot rewrite ConfigMap inventory-config
+  # `patch` is what `kubectl apply` and `kubectl edit` use to rewrite an
+  # object, and `deletecollection` removes it; a Role granting them alongside
+  # get/list/watch passed before.
+  - type: auth_forbidden
+    serviceAccount: inventory-sync
+    verb: patch
+    resource: configmaps
+    apiGroup: ""
+    name: inventory-config
+    label: inventory-sync cannot patch ConfigMap inventory-config
+  - type: auth_forbidden
+    serviceAccount: inventory-sync
+    verb: create
+    resource: configmaps
+    apiGroup: ""
+    label: inventory-sync cannot create ConfigMaps
+  - type: auth_forbidden
+    serviceAccount: inventory-sync
+    verb: deletecollection
+    resource: configmaps
+    apiGroup: ""
+    label: inventory-sync cannot delete ConfigMaps in bulk
   - type: auth_forbidden
     serviceAccount: inventory-sync
     verb: get
