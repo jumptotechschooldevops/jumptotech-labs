@@ -61,6 +61,18 @@ export interface MigrationReport {
    * migrated by a newer release. Only ever non-empty when `allowNewerSchema`.
    */
   unknown: string[];
+  /**
+   * True when the ledger was empty: this run built the schema from nothing.
+   * Right on a first deployment; after a lost volume it is the only sign that
+   * the database was re-created rather than recovered, because afterwards it
+   * reports the same migration version a restored database does.
+   */
+  initialized: boolean;
+  /**
+   * When the ledger was started: the earliest applied_at. A restore keeps the
+   * original; a re-created database carries the time it was re-created.
+   */
+  ledgerStartedAt: Date | null;
 }
 
 export interface MigrateOptions {
@@ -185,7 +197,13 @@ async function applyPending(
     );
   }
 
-  const report: MigrationReport = { applied: [], skipped: [], unknown };
+  const report: MigrationReport = {
+    applied: [],
+    skipped: [],
+    unknown,
+    initialized: rows.length === 0,
+    ledgerStartedAt: null,
+  };
 
   for (const migration of migrations) {
     const known = applied.get(migration.version);
@@ -219,5 +237,10 @@ async function applyPending(
     log(`applied ${migration.version}`);
   }
 
+  const started = await client.query<{ started_at: Date | string | null }>(
+    'SELECT min(applied_at) AS started_at FROM schema_migrations',
+  );
+  const startedAt = started.rows[0]?.started_at;
+  report.ledgerStartedAt = startedAt === null || startedAt === undefined ? null : new Date(startedAt);
   return report;
 }

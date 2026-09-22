@@ -35,7 +35,7 @@ diagnosis, and the alerts that look alike are known in advance.
 | Runbook | Alerts |
 |---|---|
 | [RB-01 Service down](RB-01-service-down.md) | `ServiceDown`, `ServiceNotReady`, `ServiceRestartLoop` |
-| [RB-02 Database](RB-02-database.md) | `DatabaseDown`, `DatabasePoolSaturated`, `ProgressStoreIsMemory` |
+| [RB-02 Database](RB-02-database.md) | `DatabaseDown`, `DatabasePoolSaturated`, `ProgressStoreIsMemory`, `DatabaseRecreatedSinceLastBackup` |
 | [RB-03 Lab start failures](RB-03-lab-start-failures.md) | `LabStartsFailingHard`, `LabStartFailureRateElevated` |
 | [RB-04 Capacity](RB-04-capacity.md) | `CapacityExhausted`, `CapacityNearExhausted` |
 | [RB-05 Cleanup and leaks](RB-05-cleanup-and-leaks.md) | `ReaperStalled`, `SandboxLeakSuspected`, `OrphansPersisting`, `ReaperDeleteFailures` |

@@ -154,9 +154,13 @@ async function main(): Promise<void> {
   const learning = await buildProgressRuntime(
     config,
     logger.legacy('migration.applied'),
-    ({ applied, latest }) => {
+    ({ applied, latest, ledgerStartedAtSeconds }) => {
       metrics.database.migrationsApplied.set(applied);
       metrics.database.migrationVersion.set({ version: latest }, 1);
+      // Disaster-recovery audit: when this database's history begins. Newer
+      // than the last successful backup means it was re-created after that
+      // backup (DatabaseRecreatedSinceLastBackup, RB-02).
+      if (ledgerStartedAtSeconds !== null) metrics.database.ledgerStarted.set(ledgerStartedAtSeconds);
       logger.info('migration.applied', { count: applied, migrationVersion: latest });
     },
   );

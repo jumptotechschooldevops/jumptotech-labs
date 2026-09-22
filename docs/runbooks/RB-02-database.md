@@ -1,7 +1,7 @@
 # RB-02 — Database unhealthy
 
 **Alerts:** `DatabaseDown` (critical), `DatabasePoolSaturated` (warning),
-`ProgressStoreIsMemory` (critical)
+`ProgressStoreIsMemory` (critical), `DatabaseRecreatedSinceLastBackup` (critical)
 **Typical cause:** container stopped, disk full, connection exhaustion
 **Blast radius:** effectively the whole API. Sessions, ownership, progress and
 browser sign-ins all live in the database — and because `authenticate` resolves
@@ -92,6 +92,29 @@ so once at startup, in a line nobody re-reads three weeks later. Set
 state — it refuses to start without a database (BETA-P0-014) — so this firing
 means the deployment is not running as production.
 
+## 4d. Diagnose — `DatabaseRecreatedSinceLastBackup`
+
+The live database's history (`jtt_database_ledger_started_timestamp_seconds`,
+the first migration's `applied_at`) begins **after** the last successful backup.
+The api found an empty database and initialised it — its log says
+`WARNING: initialised an EMPTY database` — so the volume was lost or replaced,
+or `DATABASE_URL` names a new database. Every other signal is healthy, and
+`jtt_migration_version_info` reports the newest version exactly as a restored
+database would. Students' history is in the backup, not here.
+
+1. Stop new writes now: `prod stop api` (students see the site unavailable,
+   which is better than empty dashboards that then diverge from the backup).
+2. Do not let the next scheduled backup run over it unnoticed: it would be a
+   backup of the empty database, and retention counts it. Comment out the
+   `db-backup.sh` line in `/etc/cron.d/jumptotech-db` until step 3 is decided.
+3. Restore per [postgres-backup-restore.md §7.1](postgres-backup-restore.md)
+   (volume lost, host intact). Writes made since the re-creation stay in the
+   `jumptotech_labs_prerestore_<ts>` database `--replace` keeps.
+
+It does not fire on a first deployment (the first backup is newer than the
+ledger), after a restore (the original ledger comes back with the data), or
+where no backup has ever been recorded.
+
 ## 5. Fix
 
 Per section 4. If the volume is corrupt or lost, or a migration or a manual
@@ -110,8 +133,11 @@ statement damaged data, restore from backup:
 - `jtt_db_up == 1` for two scrapes.
 - `/readyz` 200 with `database: ok`.
 - `jtt_migration_version_info` reports the newest migration (`005_session_recovery`
-  at the time of writing) — the schema is intact and this is not a fresh, empty
-  volume.
+  at the time of writing) — the schema is intact. **That alone does not prove
+  the data survived:** an empty volume is auto-migrated at startup and reports the
+  same version. `jtt_database_ledger_started_timestamp_seconds` must be older
+  than the last successful backup (`DatabaseRecreatedSinceLastBackup` quiet),
+  and the api log must not say `initialised an EMPTY database`.
 - `jtt_db_pool_connections{state="waiting"} == 0`.
 - One lab starts; `jtt_lab_start_total{outcome="success"}` increments.
 - One sign-in works; `jtt_auth_sessions_active > 0`.

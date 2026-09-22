@@ -106,3 +106,58 @@ describe('a database migrated by a newer release', () => {
     expect(report).toMatchObject({ applied: [], skipped: ['001_one', '002_two'], unknown: [] });
   });
 });
+
+/**
+ * Recovered or re-created? (disaster-recovery audit)
+ *
+ * A database that comes back on an empty volume is healthy by every measure
+ * the api exported: it accepts connections, and once auto-migrate has run it
+ * reports the newest migration version — exactly what a restored database
+ * reports. The runner now says when it built the schema from nothing, and when
+ * the ledger was started: a restore keeps the original applied_at, a
+ * re-creation stamps a new one.
+ */
+describe('a database initialised from nothing', () => {
+  function ledgerDatabase(
+    recorded: Array<{ version: string; checksum: string }>,
+    startedAt: string | null,
+  ) {
+    const statements: string[] = [];
+    const client: SqlExecutor = {
+      async query<R>(text: string): Promise<QueryResult<R>> {
+        const sql = text.trim().replace(/\s+/g, ' ');
+        statements.push(sql);
+        if (sql.startsWith('SELECT version, checksum FROM schema_migrations')) {
+          return { rows: recorded as R[], rowCount: recorded.length } as QueryResult<R>;
+        }
+        if (sql.includes('min(applied_at)')) {
+          return { rows: [{ started_at: startedAt }] as R[], rowCount: 1 } as QueryResult<R>;
+        }
+        return { rows: [] as R[], rowCount: 0 } as QueryResult<R>;
+      },
+    };
+    return { statements, database: { session: <T>(work: (c: SqlExecutor) => Promise<T>) => work(client) } };
+  }
+
+  it('reports initialised when the ledger was empty, with the time the ledger started', async () => {
+    const dir = await migrationsDir(FILES);
+    const { database } = ledgerDatabase([], '2026-09-21T04:00:00.000Z');
+    const report = await migrate(database, { dir });
+    expect(report.initialized).toBe(true);
+    expect(report.applied).toEqual(['001_one', '002_two']);
+    expect(report.ledgerStartedAt?.toISOString()).toBe('2026-09-21T04:00:00.000Z');
+  });
+
+  it('a populated database is not initialised, and keeps its original ledger start', async () => {
+    const dir = await migrationsDir(FILES);
+    const shipped = await loadMigrations(dir);
+    const { database } = ledgerDatabase(
+      [{ version: '001_one', checksum: shipped[0]!.checksum }],
+      '2026-01-02T03:04:05.000Z',
+    );
+    const report = await migrate(database, { dir });
+    expect(report.initialized).toBe(false);
+    expect(report.applied).toEqual(['002_two']);
+    expect(report.ledgerStartedAt?.toISOString()).toBe('2026-01-02T03:04:05.000Z');
+  });
+});

@@ -567,6 +567,7 @@ export interface DatabaseMetrics {
   storeInfo: Gauge;
   migrationsApplied: Gauge;
   migrationVersion: Gauge;
+  ledgerStarted: Gauge;
   authSessionsActive: Gauge;
   authSessionsPurged: Counter;
 }
@@ -642,6 +643,20 @@ export function createDatabaseMetrics(registry: Registry): DatabaseMetrics {
       name: 'jtt_migration_version_info',
       help: 'Latest applied migration. Always 1; the version label carries it.',
       labelNames: ['version'],
+      ...common,
+    }),
+
+    /*
+     * Recovered, or re-created? (disaster-recovery audit)
+     *
+     * A database that returns on an empty volume is auto-migrated at startup
+     * and then reports the same migration version as a restored one. Its
+     * ledger's first applied_at is what differs: a restore carries the
+     * original, a re-creation the moment it happened.
+     */
+    ledgerStarted: new client.Gauge({
+      name: 'jtt_database_ledger_started_timestamp_seconds',
+      help: "Unix time this database's first migration was applied: when its history begins.",
       ...common,
     }),
 

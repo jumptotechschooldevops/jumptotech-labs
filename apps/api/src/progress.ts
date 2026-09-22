@@ -50,7 +50,14 @@ export async function buildProgressRuntime(
   config: ApiConfig,
   log: (message: string) => void = () => undefined,
   /** Reports the schema state once, after migrations run. */
-  onMigrations?: (state: { applied: number; latest: string }) => void,
+  onMigrations?: (state: {
+    applied: number;
+    latest: string;
+    /** This start built the schema from an empty database. */
+    initialized: boolean;
+    /** The earliest applied_at in the ledger, in Unix seconds; null if unreadable. */
+    ledgerStartedAtSeconds: number | null;
+  }) => void,
 ): Promise<ProgressRuntime> {
   const settings = config.progress;
   const identity = new DevStudentIdentity({
@@ -87,6 +94,16 @@ export async function buildProgressRuntime(
         ? `applied ${report.applied.length} migration(s)`
         : 'schema up to date',
     );
+    if (report.initialized) {
+      // Right on a first deployment. After a lost or replaced volume it is the
+      // only moment anything can tell "re-created" from "recovered": from here
+      // on this database reports the same migration version a restored one does.
+      log(
+        'WARNING: initialised an EMPTY database (no migration ledger). On a first deployment this is expected. ' +
+          'If this deployment had students, their history is not in this database: stop the api and restore ' +
+          '(docs/runbooks/postgres-backup-restore.md §7.1) before anyone signs in.',
+      );
+    }
     /*
      * The schema version, as a metric — PLATFORM-003.
      *
@@ -99,6 +116,9 @@ export async function buildProgressRuntime(
     onMigrations?.({
       applied: report.applied.length + report.skipped.length,
       latest: [...report.applied, ...report.skipped].sort().pop() ?? 'none',
+      initialized: report.initialized,
+      ledgerStartedAtSeconds:
+        report.ledgerStartedAt === null ? null : Math.floor(report.ledgerStartedAt.getTime() / 1000),
     });
   } else {
     await database.ping();

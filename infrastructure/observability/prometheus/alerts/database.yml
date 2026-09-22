@@ -36,3 +36,31 @@ groups:
         annotations:
           summary: 'learning history is IN MEMORY and will be lost on restart'
           runbook_url: docs/runbooks/RB-02-database.md
+
+      # Recovered, or re-created? (disaster-recovery audit) A database back on
+      # an empty volume is auto-migrated at startup and then reports the same
+      # migration version as a restored one, so every other signal says
+      # healthy. When its history begins is what differs: after the last good
+      # backup means it was re-created after that backup. Quiet on a first
+      # deployment (backed up afterwards), after a restore (the original ledger
+      # comes back with it), and where no backup is recorded.
+      - alert: DatabaseRecreatedSinceLastBackup
+        expr: |
+          max by (instance) (jtt_database_ledger_started_timestamp_seconds)
+            > on(instance)
+          max by (instance) (jtt_backup_last_success_timestamp_seconds{operation="backup"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'the database history begins after the last successful backup: it was re-created, not recovered'
+          description: >-
+            An empty database was initialised after the last good backup
+            (a lost or replaced volume, or DATABASE_URL pointing at a new
+            database). Students' history is in the backup, not here, and
+            anything they do now diverges from it. Stop the api and
+            restore (postgres-backup-restore.md §7.1) before anyone signs
+            in. The alert clears at the next successful backup, which will
+            then be a backup of this database: hold the schedule until
+            the restore decision is made.
+          runbook_url: docs/runbooks/RB-02-database.md
