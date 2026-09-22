@@ -142,7 +142,7 @@ requirements:
     name: reporting-api
     key: deployment.kubernetes.io/revision
     min_int: 2
-    label: The original Deployment was fixed, not replaced
+    label: The Deployment was fixed in place, as a new revision
   - type: workload_container
     kind: deployment
     name: reporting-api

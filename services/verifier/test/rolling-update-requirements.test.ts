@@ -110,7 +110,7 @@ describe('K8S-013 — the shipped lab', () => {
     // What is wrong before the student starts is the task: nothing has been
     // rolled out yet, and the image is still the old one.
     expect(result.checks.filter((c) => c.status !== 'pass').map((c) => c.label)).toEqual([
-      'The original Deployment was updated, not replaced',
+      'The Deployment was changed in place, as a new revision',
       'Image is now nginx:1.28-alpine',
     ]);
   });
@@ -215,7 +215,7 @@ describe('K8S-013 — the Deployment must be updated, not replaced', () => {
 
     expect(await failures(clusterWith(recreated))).toEqual([
       'The Deployment still selects the payments-api Pods',
-      'The original Deployment was updated, not replaced',
+      'The Deployment was changed in place, as a new revision',
     ]);
   });
 
@@ -230,7 +230,7 @@ describe('K8S-013 — the Deployment must be updated, not replaced', () => {
     });
 
     expect(await failures(clusterWith(reapplied))).toEqual([
-      'The original Deployment was updated, not replaced',
+      'The Deployment was changed in place, as a new revision',
     ]);
   });
 
@@ -273,7 +273,7 @@ describe('K8S-013 — the right change to the wrong object does not pass', () =>
     const decoy = solvedState({ name: 'payments-api-new' });
 
     expect(await failures(clusterWith(stale, decoy))).toEqual([
-      'The original Deployment was updated, not replaced',
+      'The Deployment was changed in place, as a new revision',
       'Image is now nginx:1.28-alpine',
     ]);
   });
