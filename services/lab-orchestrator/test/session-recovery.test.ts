@@ -134,17 +134,20 @@ export function sessionRecovery(
       const row = await w.onlySession();
       expect(row.status).toBe('CREATING');
 
-      // End arrives while the provider is still building, and finishes: its
-      // destroy finds nothing yet to remove.
+      // End arrives while the provider is still building. It claims the
+      // session but cannot finish: there is nothing yet to remove, and the row
+      // must keep its slot while the build goes on.
       const end = await w.b.manager.end(row.sessionId);
-      expect(end.session.status).toBe('ENDED');
-      const afterEnd = await w.read(row.sessionId);
+      expect(end.session.status).toBe('ENDING');
+      expect(await w.a.manager.activeCount()).toBe(1);
 
-      // Provisioning now completes and creates the container regardless.
+      // Provisioning now completes and creates the container regardless; the
+      // start discards it and records the End.
       building.release();
       await expect(starting).rejects.toMatchObject({ code: 'SESSION_NOT_ACTIVE' });
 
-      expect(await w.read(row.sessionId)).toEqual(afterEnd);
+      expect((await w.read(row.sessionId)).status).toBe('ENDED');
+      expect((await w.read(row.sessionId)).statusReason).toBe('ended by student');
       expect(w.runtime.containers.has(row.sandboxRef)).toBe(false);
       expect(w.transitions).not.toContain('CREATING->ACTIVE');
       expect(w.closed.map((e) => e.status)).toEqual(['ENDED']);
@@ -162,13 +165,14 @@ export function sessionRecovery(
       const row = await w.onlySession();
 
       await w.b.manager.end(row.sessionId);
-      const afterEnd = await w.read(row.sessionId);
 
       w.runtime.removeImage(image);
       building.release();
       await expect(starting).rejects.toMatchObject({ code: 'SESSION_PROVISION_FAILED' });
 
-      expect(await w.read(row.sessionId)).toEqual(afterEnd);
+      // The End stands — recorded ENDED once the start gave up — and FAILED
+      // did not overwrite it.
+      expect((await w.read(row.sessionId)).status).toBe('ENDED');
       expect(w.transitions).not.toContain('CREATING->FAILED');
       expect(w.ended).toEqual(['student']);
     });
@@ -217,6 +221,31 @@ export function sessionRecovery(
 
       // Nothing is left for later sweeps.
       expect(await w.reaper.sweep()).toMatchObject({ removed: [], errors: [], pending: [] });
+    });
+
+    it('finishes an End that waited on a start whose process then died', async () => {
+      const w = await world();
+
+      const dead = w.provider.holdNextCreate();
+      const abandoned = w.a.manager.start('LINUX-001');
+      abandoned.catch(() => undefined);
+      await dead.entered;
+      const row = await w.onlySession();
+
+      // End claims it and waits for the start, which never comes back.
+      expect((await w.b.manager.end(row.sessionId)).session.status).toBe('ENDING');
+      w.clock.now += 6 * MINUTE;
+      const sweep = await w.reaper.sweep();
+      expect(sweep.errors).toEqual([]);
+      expect(await w.read(row.sessionId)).toMatchObject({ status: 'ENDED', statusReason: 'ended by student' });
+      expect(await w.b.manager.activeCount()).toBe(0);
+      expect(w.closed.map((e) => e.status)).toEqual(['ENDED']);
+
+      // Had it only been stuck, what it builds late is removed, and recorded once.
+      dead.release();
+      await expect(abandoned).rejects.toMatchObject({ code: 'SESSION_NOT_ACTIVE' });
+      expect(w.runtime.containers.has(row.sandboxRef)).toBe(false);
+      expect(w.closed.map((e) => e.status)).toEqual(['ENDED']);
     });
 
     it('removes the sandbox of a start that built it but lost the database on its final write', async () => {
