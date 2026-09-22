@@ -119,18 +119,19 @@ export interface BrokerPty {
   /**
    * Stop and restart output while the terminal service falls behind.
    *
-   * Optional so a test double need not implement them; a PTY without them is
-   * bounded by the output hard limit alone, which closes its connection.
+   * Required, and so are `pendingInputBytes`: they were optional "so a test
+   * double need not implement them", and a PTY without them silently lost
+   * both backlog bounds — so deleting them from `defaultSpawn`, the one real
+   * PTY, still compiled and passed every test.
    */
-  pause?(): void;
-  resume?(): void;
+  pause(): void;
+  resume(): void;
   /**
    * Input written and not yet taken by the shell, in bytes. While it is high
    * the terminal service's socket is not read (see "student input" in
-   * `output-flow.ts`). Optional for test doubles; a PTY without it reports
-   * nothing pending and is not flow-controlled on input.
+   * `output-flow.ts`).
    */
-  pendingInputBytes?(): number;
+  pendingInputBytes(): number;
   onData(listener: (data: string) => void): void;
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): void;
 }
@@ -686,8 +687,8 @@ export function createSandboxd(deps: SandboxdDeps): Server {
     const output = createOutputFlow(
       ws,
       {
-        pause: () => term.pause?.(),
-        resume: () => term.resume?.(),
+        pause: () => term.pause(),
+        resume: () => term.resume(),
       },
       () => {
         common?.securityEvents.inc({ service: 'sandboxd', event: 'output_backlog' });
@@ -705,7 +706,7 @@ export function createSandboxd(deps: SandboxdDeps): Server {
      * read, so the backpressure travels back through it to the browser.
      */
     const input = createOutputFlow(
-      { get bufferedAmount() { return term.pendingInputBytes?.() ?? 0; } },
+      { get bufferedAmount() { return term.pendingInputBytes(); } },
       // Probes the terminal service while paused: a paused socket never reads the close.
       pausableSocket(ws),
       () => {
