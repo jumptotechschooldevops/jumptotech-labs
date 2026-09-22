@@ -145,6 +145,9 @@ export function AuthProvider({
       return;
     }
 
+    // A re-check still in flight was answered while signed in; landing after
+    // this it would put the signed-in app back.
+    generation.current += 1;
     setSession((current) => (current ? { ...current, authenticated: false } : current));
     setStatus('anonymous');
 
