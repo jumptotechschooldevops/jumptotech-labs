@@ -318,9 +318,12 @@ describe('neighbour_state fails safely', () => {
     // The platform's existing convention: a sandbox that cannot answer is an
     // environment fault, reported as such, and deliberately not dressed up as
     // a student who failed the lab. What matters here is that it never passes.
-    await expect(
-      verifyLab({ lab: labWith(RESOLVED_GATEWAY), sandbox: box, namespace: NS }),
-    ).rejects.toThrow(/Operation not permitted/);
+    // Reported as the verification error it is — it used to escape verifyLab
+    // and reach the student as HTTP 500.
+    const result = await verifyLab({ lab: labWith(RESOLVED_GATEWAY), sandbox: box, namespace: NS });
+    expect(result.passed).toBe(false);
+    expect(result.error).toMatchObject({ code: 'ENVIRONMENT_UNREACHABLE', message: expect.stringMatching(/Operation not permitted/) });
+    expect(result.checks.every((check) => check.status === 'skipped')).toBe(true);
   });
 
   it('does not pass when the sandbox cannot be inspected at all', async () => {

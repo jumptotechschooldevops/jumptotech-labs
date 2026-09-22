@@ -18,6 +18,7 @@
  * that. See `session/sandbox-paths.ts`.
  */
 import {
+  ContainerRuntimeError,
   scanHclFiles,
   type HclDocument,
   type SandboxInspectResult,
@@ -113,6 +114,17 @@ export class SandboxUnreachableError extends Error {
 }
 
 /**
+ * A read the runtime could not answer — a stopped or removed sandbox, a daemon
+ * that is down, a broker that timed out — is an unreadable environment, not a
+ * missing file: no check happened. Anything else (a path the lab may not name)
+ * is rethrown as it is.
+ */
+function unreachableIfRuntime(error: unknown): never {
+  if (error instanceof ContainerRuntimeError) throw new SandboxUnreachableError(error.message);
+  throw error;
+}
+
+/**
  * The slice of Terraform state the checks care about.
  *
  * Deliberately minimal, and deliberately read from the state file rather than
@@ -169,7 +181,7 @@ export class SandboxReader {
     const key = `${relativePath}#${options?.maxBytes ?? 'default'}`;
     const existing = this.#cache.get(key);
     if (existing) return existing;
-    const promise = this.port.read(relativePath, options);
+    const promise = this.port.read(relativePath, options).catch(unreachableIfRuntime);
     this.#cache.set(key, promise);
     return promise;
   }
@@ -369,7 +381,9 @@ export class SandboxReader {
    */
   async terraformConfigPaths(dir: string): Promise<string[]> {
     if (!this.port.list) throw new SandboxCapabilityMissingError('read Terraform configuration files');
-    return this.port.list(dir, { suffix: '.tf', maxDepth: 1, maxEntries: MAX_CONFIG_FILES });
+    return this.port
+      .list(dir, { suffix: '.tf', maxDepth: 1, maxEntries: MAX_CONFIG_FILES })
+      .catch(unreachableIfRuntime);
   }
 
   async #scanConfig(dir: string): Promise<HclDocument> {

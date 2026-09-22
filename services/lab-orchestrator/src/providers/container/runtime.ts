@@ -151,6 +151,20 @@ export interface ContainerExecResult {
   outputTruncated?: boolean;
 }
 
+/**
+ * True when a `docker exec` failed in Docker rather than in the command it ran.
+ *
+ * Both exit 1 (Docker 28.4.0, measured): `stat` of a missing file, and an exec
+ * into a stopped container, a removed one, or with the daemon down. Only the
+ * words tell them apart — the CLI prints the daemon's refusal as its whole
+ * stderr — plus an exec that ran out of time. A read that reports "not there"
+ * for either of the second kind lets a "must not exist" check pass against an
+ * environment nobody could read.
+ */
+export function execDidNotRun(result: Pick<ContainerExecResult, 'stderr' | 'timedOut'>): boolean {
+  return result.timedOut || /^\s*(Error response from daemon:|Cannot connect to the Docker daemon)/.test(result.stderr);
+}
+
 export class ContainerRuntimeError extends Error {
   readonly code = 'CONTAINER_RUNTIME_ERROR';
   constructor(message: string) {
