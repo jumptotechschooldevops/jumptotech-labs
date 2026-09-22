@@ -20,6 +20,7 @@
  * cluster*, immediately before the delete call — never against a name a caller
  * passed in, and never against a cached record.
  */
+import { isProductionEnv } from '@jumptotech/observability';
 import { isProtectedNamespace } from '../session/identifiers.js';
 
 export const MANAGED_LABEL = 'jumptotech.io/managed';
@@ -116,7 +117,7 @@ export function resolveRuntimeOwner(env: NodeJS.ProcessEnv): ResolvedRuntimeOwne
     }
     return { owner: raw, source: 'configured' };
   }
-  if (env.NODE_ENV === 'production') {
+  if (isProductionEnv(env)) {
     throw new Error(
       'RUNTIME_OWNER_ID must be set when NODE_ENV=production. Every service that manages sandboxes for this deployment (api, sandboxd) must be given the same value; cleanup refuses resources labelled with any other owner.',
     );

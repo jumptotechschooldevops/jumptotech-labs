@@ -459,7 +459,7 @@ export function assertPublicOriginConfigured(options: {
   appUrl: string;
   looksLocal: boolean;
 }): void {
-  if (options.nodeEnv !== 'production' || !options.looksLocal) return;
+  if (options.nodeEnv.trim() !== 'production' || !options.looksLocal) return;
   throw new Error(
     `NODE_ENV=production but the public origin resolved to '${options.appUrl}'. ` +
       'A production deployment cannot serve OIDC callbacks, logout redirects or ' +
@@ -718,14 +718,13 @@ export function loadDockerSandboxPolicy(
 
 /** Persistence + development identity settings. */
 export function loadProgressConfig(env: NodeJS.ProcessEnv = process.env): ProgressConfig {
-  const nodeEnv = env.NODE_ENV ?? 'development';
   return {
     database: loadDatabaseConfig(env),
     autoMigrate: boolFromEnv(env, 'DATABASE_AUTO_MIGRATE', true),
     devStudentId: strFromEnv(env, 'DEV_STUDENT_ID', DEFAULT_DEV_STUDENT_ID),
     // Opt-in, and never on by default in production even if someone forgets.
     allowStudentHeader:
-      nodeEnv === 'production'
+      isProductionEnv(env)
         ? boolFromEnv(env, 'DEV_STUDENT_HEADER_ENABLED', false)
         : boolFromEnv(env, 'DEV_STUDENT_HEADER_ENABLED', true),
   };
