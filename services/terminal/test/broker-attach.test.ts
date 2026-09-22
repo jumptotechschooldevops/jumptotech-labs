@@ -168,6 +168,8 @@ interface Stack {
   owners: Map<string, string>;
   /** Every TCP connection the broker holds, so a test can drop them as a crash would. */
   brokerConnections: Set<Socket>;
+  /** Credential exchanges the stub API has been asked for. */
+  credentialCalls(): number;
 }
 
 /**
@@ -187,6 +189,7 @@ async function bringUpStack(
     [SESSION_B, OWNER_B],
   ]);
 
+  let credentialCalls = 0;
   const api = createServer((req, res) => {
     const match = /^\/internal\/sessions\/(sess-[0-9a-f]+)\/credentials$/.exec(req.url ?? '');
     if (!match || req.method !== 'POST') {
@@ -198,6 +201,7 @@ async function bringUpStack(
       return;
     }
     const sessionId = match[1]!;
+    credentialCalls += 1;
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', async () => {
@@ -291,6 +295,7 @@ async function bringUpStack(
     argvs,
     owners,
     brokerConnections,
+    credentialCalls: () => credentialCalls,
   };
 }
 
@@ -691,6 +696,44 @@ describe('one shell per session, even while attaches are still in flight', () =>
     // And that one shell is the session's, so ending the session reaches it.
     expect(await terminate(stack, SESSION_A)).toEqual({ terminated: true });
     await eventually(() => stack.ptys.every((p) => p.killed), 'the shell to be closed');
+  });
+
+  /*
+   * Serializing a session's attaches bounded it to one in flight, but not the
+   * line behind it: every socket that authenticated with the session's token
+   * waited its turn with no timer — the auth grace is cleared once a token
+   * verifies — and then ran a whole attach, a credential mint and a PTY, only
+   * to be replaced by the next. Sixty sockets from one student were sixty
+   * mints and sixty spawns one after another, and a Reset's reattach queued
+   * behind them outlived the API's 20 s wait. The newest attach always wins,
+   * so one waiting behind the running one is all a session ever needs.
+   */
+  it('keeps only the newest attach waiting, and closes the ones it replaces at once', async () => {
+    const apiGate = gate();
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiGate });
+
+    const running = await authOnly(stack);
+    const runningClosed = closeCode(running);
+    await apiGate.reached(1);
+
+    // Each is replaced by the next one's auth, so its close is listened for
+    // before that auth is sent.
+    const replacedClosed: Promise<number>[] = [];
+    for (let i = 0; i < 20; i += 1) replacedClosed.push(closeCode(await authOnly(stack)));
+    const newest = await authOnly(stack);
+    const newestReady = frame(newest, ['ready', 'error']);
+
+    // Closed while still waiting — before the attach ahead of them has moved.
+    expect(new Set(await Promise.all(replacedClosed))).toEqual(new Set([4410]));
+    expect(stack.credentialCalls()).toBe(1);
+
+    apiGate.release();
+    expect(await newestReady).toMatchObject({ type: 'ready', sandboxRef: refFor(SESSION_A) });
+    expect(await runningClosed).toBe(4410);
+    // The attach that was already running, and the newest: nothing in between
+    // reached the API or the broker.
+    expect(stack.credentialCalls()).toBe(2);
+    expect(stack.ptys).toHaveLength(2);
   });
 
   it('a second socket arriving during the first one’s broker attach replaces it', async () => {

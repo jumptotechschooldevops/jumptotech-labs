@@ -842,7 +842,30 @@ export function createTerminalServer(
         clearTimeout(authTimer);
         const cols = message.cols ?? 80;
         const rows = message.rows ?? 24;
-        void attachInTurn(claims.sid, () => startSession(ws, claims, cols, rows))
+        /*
+         * Behind the attach running now, only the newest one waits. Every
+         * attach replaces the one before it, so one still waiting when a newer
+         * socket arrives would run a whole attach — a credential mint, a PTY —
+         * only to be replaced in turn; and the line had no length and no timer.
+         */
+        waitingAttaches.get(claims.sid)?.();
+        let replaced = false;
+        const replace = (): void => {
+          replaced = true;
+          if (ws.readyState !== ws.OPEN) return;
+          terminalMetrics?.connections.inc({ outcome: 'superseded' });
+          send(ws, {
+            type: 'error',
+            code: 'SESSION_ENDED',
+            message: 'This lab session has ended. The environment has been released.',
+          });
+          ws.close(4410, 'session ended');
+        };
+        waitingAttaches.set(claims.sid, replace);
+        void attachInTurn(claims.sid, () => {
+          if (waitingAttaches.get(claims.sid) === replace) waitingAttaches.delete(claims.sid);
+          return replaced ? Promise.resolve(false) : startSession(ws, claims, cols, rows);
+        })
           .then((started) => {
             if (!started) return;
             authenticated = true;
@@ -924,6 +947,8 @@ export function createTerminalServer(
    * flight. Different sessions never wait on each other.
    */
   const attachQueues = new Map<string, Promise<unknown>>();
+  /** sessionId → how to replace the browser attach waiting in that queue, if one is. */
+  const waitingAttaches = new Map<string, () => void>();
 
   function attachInTurn(sessionId: string, attach: () => Promise<boolean>): Promise<boolean> {
     const previous = attachQueues.get(sessionId) ?? Promise.resolve();
