@@ -243,6 +243,7 @@ export { LAB_NETWORK_MODES, type LabNetworkMode } from './providers/catalog.js';
 export {
   ALLOWED_MANAGED_ROOTS,
   MAX_READ_BYTES as ANSIBLE_MAX_READ_BYTES,
+  AnsibleSandboxUnreachableError,
   ForbiddenSandboxPathError,
   type AnsibleNodeName,
   type AnsiblePathInfo,

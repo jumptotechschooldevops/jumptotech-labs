@@ -18,6 +18,8 @@
  * by the caller from the session record — never by the browser.
  */
 import {
+  AnsibleSandboxUnreachableError,
+  ContainerRuntimeError,
   DockerUnreachableError,
   KubernetesUnreachableError,
   WorkspaceUnavailableError,
@@ -214,12 +216,17 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
       error instanceof KubernetesUnreachableError ||
       error instanceof DockerUnreachableError ||
       error instanceof WorkspaceUnavailableError ||
-      error instanceof SandboxUnreachableError;
+      error instanceof SandboxUnreachableError ||
+      error instanceof AnsibleSandboxUnreachableError ||
+      // The runtime broker or the daemon refusing an exec outright.
+      error instanceof ContainerRuntimeError;
     if (unreachable) {
       const substrate =
         error instanceof WorkspaceUnavailableError
           ? 'lab workspace'
-          : error instanceof SandboxUnreachableError
+          : error instanceof SandboxUnreachableError ||
+              error instanceof AnsibleSandboxUnreachableError ||
+              error instanceof ContainerRuntimeError
             ? 'lab environment'
             : lab.environment.provider === 'docker'
             ? 'Docker'
