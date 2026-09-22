@@ -54,7 +54,6 @@ import {
   type LabProvider,
   type LabProviderId,
   type LabSessionContext,
-  type SessionTeardownContext,
   type ManagedSandbox,
   type ProvisionStep,
   type ResetResult,
@@ -74,15 +73,14 @@ import { loadSetupFiles, type LoadedSetupFile } from '../../session/setup-files.
 import { loadSeedScripts, type LoadedSeedScript } from '../../session/seed-scripts.js';
 import { AVAILABLE, unavailable, type ProviderAvailability } from '../catalog.js';
 import {
-  execDidNotRun,
   CONTAINER_EXPIRES_LABEL,
   CONTAINER_LAB_LABEL,
   CONTAINER_PROVIDER_LABEL,
   CONTAINER_SESSION_LABEL,
+  ContainerRuntimeError,
   MANAGED_CONTAINER_LABEL,
   MANAGED_CONTAINER_SELECTOR,
   MAX_SANDBOX_READ_BYTES,
-  ContainerRuntimeError,
   type ContainerExecRequest,
   type ContainerExecResult,
   type ContainerInfo,
@@ -646,7 +644,7 @@ export class ContainerLabProvider implements LabProvider {
 
   // --------------------------------------------------------------- destroy
 
-  async destroy(context: SessionTeardownContext): Promise<DestroyResult> {
+  async destroy(context: LabSessionContext): Promise<DestroyResult> {
     return this.destroySandbox(this.#ref(context), context.sessionId);
   }
 
@@ -702,8 +700,7 @@ export class ContainerLabProvider implements LabProvider {
       return { ok: false, namespaceGone: false, steps, error: this.#toLabError(error, 'DESTROY_FAILED') };
     }
 
-    // Unconfirmed is not gone: the next pass verifies again.
-    const gone = (await this.#runtime.inspect(sandboxRef).catch(() => undefined)) === null;
+    const gone = (await this.#runtime.inspect(sandboxRef).catch(() => null)) === null;
     steps.push({
       id: 'delete-sandbox',
       label: 'Sandbox deleted',
@@ -1259,9 +1256,15 @@ export class ContainerLabProvider implements LabProvider {
       workdir: this.#home,
       timeoutMs: 15_000,
     });
-    if (result.exitCode !== 0) {
-      if (execDidNotRun(result)) throw unreadable(ref, result);
-      return [];
+    /*
+     * `find` exits 1 for a directory that does not exist *and* for one
+     * unreadable subdirectory in an otherwise listed tree; in both cases every
+     * stderr line is its own, and what it printed is what it found. Anything
+     * else — a timeout, a stopped container, a daemon error — is not a listing,
+     * and reading it as an empty one hid every file the student wrote.
+     */
+    if (result.exitCode !== 0 && !findReportedOnlyItsOwnErrors(result)) {
+      throw new ContainerRuntimeError(unansweredRead('find', result));
     }
 
     const prefix = `${absolute}/`;
@@ -1293,9 +1296,16 @@ export class ContainerLabProvider implements LabProvider {
       workdir: this.#home,
       timeoutMs: 10_000,
     });
+    /*
+     * `null` is "this path does not exist", and `path_absent` passes on it, so
+     * only stat's own "No such file or directory" / "Not a directory" is null.
+     * An unsearchable parent, a stopped container or a stat stopped at its
+     * deadline is not an answer about the path, and used to pass `path_absent`
+     * without anything having been deleted.
+     */
     if (stat.exitCode !== 0) {
-      if (execDidNotRun(stat)) throw unreadable(ref, stat);
-      return null;
+      if (statReportedAbsent(stat)) return null;
+      throw new ContainerRuntimeError(unansweredRead('stat', stat));
     }
 
     const [rawType, mode, owner, group, size] = stat.stdout.trim().split('|');
@@ -1325,10 +1335,7 @@ export class ContainerLabProvider implements LabProvider {
      * `cat` looked like any failed one, and a large file came back with no
      * content at all: a 70 KiB `terraform.tfstate` read as "no state".
      */
-    if (cat.exitCode !== 0 && !cat.outputTruncated) {
-      if (execDidNotRun(cat)) throw unreadable(ref, cat);
-      return read;
-    }
+    if (cat.exitCode !== 0 && !cat.outputTruncated) return read;
 
     read.content = cat.stdout.slice(0, maxBytes);
     if (cat.outputTruncated || cat.stdout.length > maxBytes) read.truncated = true;
@@ -1337,7 +1344,7 @@ export class ContainerLabProvider implements LabProvider {
 
   // --------------------------------------------------------------- helpers
 
-  #ref(context: Pick<LabSessionContext, 'sandboxRef' | 'namespace'>): string {
+  #ref(context: LabSessionContext): string {
     return assertValidContainerSandboxRef(sandboxRefOf(context));
   }
 
@@ -1790,6 +1797,24 @@ function refuse(steps: ProvisionStep[], reason: string): DestroyResult {
   };
 }
 
+/** stat's own report that the path, or a component of it, does not exist. */
+function statReportedAbsent(result: ContainerExecResult): boolean {
+  if (result.timedOut || result.exitCode !== 1) return false;
+  return /^stat: .*: (No such file or directory|Not a directory)\s*$/m.test(result.stderr);
+}
+
+/** A `find` that exited 1 with nothing on stderr but its own diagnostics. */
+function findReportedOnlyItsOwnErrors(result: ContainerExecResult): boolean {
+  if (result.timedOut || result.exitCode !== 1) return false;
+  const lines = result.stderr.split('\n').filter((line) => line.trim().length > 0);
+  return lines.length > 0 && lines.every((line) => line.startsWith('find: '));
+}
+
+function unansweredRead(what: string, result: ContainerExecResult): string {
+  if (result.timedOut) return `${what} did not finish in the lab environment in time`;
+  return result.stderr.trim() || `${what} exited with code ${result.exitCode} in the lab environment`;
+}
+
 function normalisePathType(raw: string | undefined): SandboxPathRead['type'] {
   switch (raw) {
     case 'regular file':
@@ -1836,15 +1861,6 @@ function versionFlagFor(binary: string): string {
 
 function firstLine(text: string): string {
   return text.split('\n')[0]?.trim() ?? '';
-}
-
-/** A sandbox read that Docker, not the file, answered. */
-function unreadable(ref: string, result: { stderr: string; timedOut: boolean }): ContainerRuntimeError {
-  return new ContainerRuntimeError(
-    result.timedOut
-      ? `sandbox ${ref} did not answer in time`
-      : `sandbox ${ref} could not be read: ${result.stderr.trim()}`,
-  );
 }
 
 function describe(error: unknown): string {
