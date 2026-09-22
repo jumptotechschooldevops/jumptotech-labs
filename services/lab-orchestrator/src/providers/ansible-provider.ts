@@ -50,6 +50,7 @@ import {
   type CreateResult,
   type DestroyResult,
   type LabSessionContext,
+  type SessionTeardownContext,
   type ResetResult,
 } from '../types.js';
 import type { ContainerRuntimePort } from './container/runtime.js';
@@ -501,7 +502,7 @@ export class AnsibleLabProvider extends ContainerLabProvider {
    * deletes — name shape first, then the live labels read back from the
    * daemon — so a node belonging to another session is left alone.
    */
-  override async destroy(context: LabSessionContext): Promise<DestroyResult> {
+  override async destroy(context: SessionTeardownContext): Promise<DestroyResult> {
     const sandboxRef = sandboxRefOf(context);
     for (let index = 1; index <= ANSIBLE_MANAGED_NODE_COUNT; index += 1) {
       await this.removeOwnedContainer(nodeRefForSandbox(sandboxRef, index), context.sessionId);

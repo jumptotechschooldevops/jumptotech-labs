@@ -28,6 +28,7 @@ import type {
   DestroyResult,
   EnvironmentInfo,
   LabSessionContext,
+  SessionTeardownContext,
   LabProvider,
   ProvisionStep,
   ResetResult,
@@ -870,6 +871,16 @@ export class SessionManager {
    * is what makes "possessing a namespace name grants nothing" true.
    */
   #contextFor(lab: LoadedLabDefinition, session: LabSession): LabSessionContext {
+    return { ...this.#teardownContextFor(session), lab };
+  }
+
+  /**
+   * The context a teardown is given: everything but the lab, all of it from the
+   * stored row. A session whose lab has since left the catalog must still be
+   * destroyable — `contextFor` would throw LabNotFoundError and leave the row
+   * ENDING / EXPIRING, holding its slot and its sandbox, for good.
+   */
+  #teardownContextFor(session: LabSession): SessionTeardownContext {
     return {
       sessionId: session.sessionId,
       labId: session.labId,
@@ -877,7 +888,6 @@ export class SessionManager {
       sandboxRef: session.sandboxRef ?? session.namespace,
       namespace: session.namespace,
       serviceAccountName: session.serviceAccountName,
-      lab,
       expiresAtMs: Date.parse(session.expiresAt),
       policy: this.#policy,
     };
@@ -1364,7 +1374,7 @@ export class SessionManager {
       };
     }
     try {
-      return await this.#providerFor(session).destroy(this.contextFor(session));
+      return await this.#providerFor(session).destroy(this.#teardownContextFor(session));
     } catch (error) {
       return {
         ok: false,
@@ -1481,7 +1491,7 @@ export class SessionManager {
 
     let destroy: DestroyResult;
     try {
-      destroy = await this.#providerFor(marked).destroy(this.contextFor(marked));
+      destroy = await this.#providerFor(marked).destroy(this.#teardownContextFor(marked));
     } catch (error) {
       // A throw is a failed delete like any other: the teardown stays in flight
       // for the reaper to resume, rather than escaping as a 500 mid-teardown.

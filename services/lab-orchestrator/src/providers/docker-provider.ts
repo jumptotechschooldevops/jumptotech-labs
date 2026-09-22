@@ -66,6 +66,7 @@ import type {
   LabProvider,
   LabProviderId,
   LabSessionContext,
+  SessionTeardownContext,
   ManagedSandbox,
   ProvisionStep,
   ResetResult,
@@ -292,7 +293,7 @@ export class DockerLabProvider implements LabProvider {
    * Called at every entry point rather than only at `create`, so a reset, a
    * destroy or a terminal binding after an API restart works too.
    */
-  #bind(context: LabSessionContext): string {
+  #bind(context: SessionTeardownContext): string {
     const ref = sandboxRefOf(context);
     this.#engines.bindSession?.(ref, context.sessionId);
     return ref;
@@ -673,7 +674,7 @@ export class DockerLabProvider implements LabProvider {
 
   // --------------------------------------------------------------- destroy
 
-  async destroy(context: LabSessionContext): Promise<DestroyResult> {
+  async destroy(context: SessionTeardownContext): Promise<DestroyResult> {
     this.#bind(context);
     // The workspace is the student's, and it dies with the session.
     await this.#workspace.destroy(context.sessionId).catch(() => undefined);

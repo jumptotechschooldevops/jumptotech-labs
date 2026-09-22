@@ -29,6 +29,7 @@ import {
   type SessionClosedEvent,
   type SessionStore,
 } from '../src/index.js';
+import { LabNotFoundError, type LabRegistry } from '../src/lab-registry.js';
 import { FakeContainerRuntime } from './container-fakes.js';
 import { GatedLinuxProvider, PausableStore } from './lifecycle-harness.js';
 import { realCatalog } from './real-catalog.js';
@@ -61,11 +62,28 @@ export function sessionRecovery(
       const reattached: string[] = [];
       const recoveries: string[] = [];
 
+      /**
+       * The catalog after a deploy that removed LINUX-001, or shipped it
+       * invalid: its sessions' rows survive in the store regardless.
+       */
+      const withoutLinux001 = new Proxy(registry, {
+        get(target, property) {
+          if (property === 'get') {
+            return (labId: string) => {
+              if (labId === 'LINUX-001') throw new LabNotFoundError(labId);
+              return target.get(labId);
+            };
+          }
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+        },
+      }) as LabRegistry;
+
       /** One API instance, over its own view of the shared store. */
-      const instance = () => {
+      const instance = (catalog: LabRegistry = registry) => {
         const view = new PausableStore(store);
         const manager = new SessionManager({
-          registry,
+          registry: catalog,
           provider,
           store: view,
           policy: DEFAULT_SESSION_POLICY,
@@ -118,7 +136,7 @@ export function sessionRecovery(
 
       return {
         store, runtime, provider, clock, closed, ended, transitions, reattached, recoveries,
-        a, b, reaper, read, onlySession,
+        a, b, reaper, read, onlySession, instance, withoutLinux001,
       };
     }
 
@@ -175,6 +193,41 @@ export function sessionRecovery(
       expect((await w.read(row.sessionId)).status).toBe('ENDED');
       expect(w.transitions).not.toContain('CREATING->FAILED');
       expect(w.ended).toEqual(['student']);
+    });
+
+    // ------------------------------------- 1c. a lab that left the catalog
+
+    /*
+     * A deploy can remove or rename a lab, or ship its lab.yaml invalid (load
+     * errors are warnings at boot), while sessions of it are running: their rows
+     * are durable. Teardown built its provider context through the catalog, so
+     * End, expiry and the reaper all failed with "Lab LINUX-001 not found" and
+     * the row stayed ENDING / EXPIRING, holding its slot and its sandbox, for
+     * good. Destroying a sandbox needs only what the row itself records.
+     */
+    it('ends, expires and reclaims a session whose lab left the catalog', async () => {
+      const w = await world();
+      const ended = (await w.a.manager.start('LINUX-001')).session;
+      const expiring = (await w.a.manager.start('LINUX-001')).session;
+      expect(w.runtime.containers.has(ended.sandboxRef!)).toBe(true);
+
+      const redeployed = w.instance(w.withoutLinux001);
+      const end = await redeployed.manager.end(ended.sessionId);
+      expect(end.session.status).toBe('ENDED');
+      expect(w.runtime.containers.has(ended.sandboxRef!)).toBe(false);
+
+      const reaper = new SessionReaper({
+        sessions: redeployed.manager,
+        provider: w.provider,
+        intervalMs: MINUTE,
+        now: () => w.clock.now,
+      });
+      w.clock.now += 61 * MINUTE;
+      const sweep = await reaper.sweep();
+      expect(sweep.errors).toEqual([]);
+      expect((await w.read(expiring.sessionId)).status).toBe('EXPIRED');
+      expect(w.runtime.containers.has(expiring.sandboxRef!)).toBe(false);
+      expect(await redeployed.manager.activeCount()).toBe(0);
     });
 
     // --------------------------------- 1b. process death during CREATING

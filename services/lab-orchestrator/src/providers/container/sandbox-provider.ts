@@ -54,6 +54,7 @@ import {
   type LabProvider,
   type LabProviderId,
   type LabSessionContext,
+  type SessionTeardownContext,
   type ManagedSandbox,
   type ProvisionStep,
   type ResetResult,
@@ -643,7 +644,7 @@ export class ContainerLabProvider implements LabProvider {
 
   // --------------------------------------------------------------- destroy
 
-  async destroy(context: LabSessionContext): Promise<DestroyResult> {
+  async destroy(context: SessionTeardownContext): Promise<DestroyResult> {
     return this.destroySandbox(this.#ref(context), context.sessionId);
   }
 
@@ -1325,7 +1326,7 @@ export class ContainerLabProvider implements LabProvider {
 
   // --------------------------------------------------------------- helpers
 
-  #ref(context: LabSessionContext): string {
+  #ref(context: Pick<LabSessionContext, 'sandboxRef' | 'namespace'>): string {
     return assertValidContainerSandboxRef(sandboxRefOf(context));
   }
 

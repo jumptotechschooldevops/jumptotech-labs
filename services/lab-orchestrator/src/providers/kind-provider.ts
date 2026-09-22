@@ -29,6 +29,7 @@ import type {
   LabError,
   LabProvider,
   LabSessionContext,
+  SessionTeardownContext,
   ManagedNamespace,
   ManagedSandbox,
   ProvisionStep,
@@ -581,7 +582,7 @@ export class KindLabProvider implements LabProvider {
    * The name is re-validated against the sandbox prefix immediately before the
    * call, so this path cannot reach `default` or a system namespace.
    */
-  async destroy(context: LabSessionContext): Promise<DestroyResult> {
+  async destroy(context: SessionTeardownContext): Promise<DestroyResult> {
     return this.destroyNamespace(context.namespace, context.sessionId);
   }
 
