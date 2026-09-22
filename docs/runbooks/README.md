@@ -106,6 +106,11 @@ shape above:
   — BETA-P0-013: manual and scheduled backups, retention, verification, restore
   into a disposable database, production replacement and rollback, and recovery
   from volume loss, host loss, corruption, a bad migration or an operator mistake.
+- [Disaster recovery](disaster-recovery.md) — the whole-host path: what must
+  survive and what may disappear, the secret recovery model, host reboot, bad
+  release, database loss, runtime loss and host loss, one numbered recovery
+  procedure, RPO/RTO factors, and the real-host drill plan. Evidence:
+  [disaster-recovery-drill-evidence-template.md](../releases/disaster-recovery-drill-evidence-template.md).
 - [Production TLS: domain, certificates, renewal](production-tls.md)
   — BETA-P0-017: DNS, initial provisioning, renewal and hot reload, expiry
   monitoring, staging validation, renewal failure, an expired certificate, key

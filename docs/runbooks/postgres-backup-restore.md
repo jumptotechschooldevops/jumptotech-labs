@@ -8,7 +8,9 @@ here from its "Fix" section.
 | **Proven** | `make db-restore-drill` passes against real PostgreSQL 16 servers. It backs up a seeded server, destroys it, restores into a fresh server, and checks the result: identical rows, schema, sequences and migration ledger. The real migrator and the api's repository then read and write the restored database. |
 | **Not proven** | A restore on a production host, at production data size, from an off-host copy, on a schedule. No production host exists yet. The CI job that runs the drill has not yet run on a GitHub runner. |
 
-Read §4 (targets) and §10 (open decisions) before relying on any of this.
+Read §4 (targets) and §10 (open decisions) before relying on any of this. For
+the whole-host path (configuration, secrets, runtime, validation), start from
+[disaster-recovery.md](disaster-recovery.md).
 
 ---
 
