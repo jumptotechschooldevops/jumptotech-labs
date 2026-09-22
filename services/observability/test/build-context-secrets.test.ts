@@ -32,6 +32,10 @@ const EXCLUDED = [
   'infrastructure/observability/secrets/',
   'infrastructure/observability/alertmanager/secrets/',
   'backups/',
+  // Disaster-recovery audit: a database archive written anywhere else in the tree.
+  '**/*.dump',
+  '**/*.dump.sha256',
+  '**/*.dump.partial',
   'e2e/.stack/',
 ];
 

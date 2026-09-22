@@ -273,8 +273,14 @@ host. Retention in the off-host copy is the off-host destination's job (§10).
 - The default is `backups/postgres` in the checkout. It is ignored by git, as are
   `*.dump`, `*.dump.sha256` and `*.dump.partial` everywhere, and CI fails if an
   archive is ever committed. The directory is `0700` and the files are `0600`.
-- On a host, use a dedicated directory. Ideally put it on a different filesystem
-  from Docker's data root.
+- On a host, use a dedicated directory outside the checkout. Ideally put it on a
+  different filesystem from Docker's data root.
+- `db-backup.sh` refuses a `BACKUP_DIR` inside the checkout anywhere but under
+  `backups/`: elsewhere an archive can be copied into a Docker image (the
+  Dockerfiles copy whole workspace directories), read by the api (`labs/` is
+  mounted into it), or served on port 80 (`infrastructure/docker/nginx/acme-webroot/`).
+  `.dockerignore` also excludes `*.dump`, `*.dump.sha256` and `*.dump.partial`
+  everywhere, as `.gitignore` does.
 - **A copy on the database host is not a disaster-recovery backup.** It survives a
   dropped table or a bad migration. It does not survive losing the host or its
   disk.
@@ -578,10 +584,12 @@ everything written since the archive. So prefer this:
 | `scripts/db-restore-drill.sh` (`make db-restore-drill`, CI `postgres-integration`) | two real `postgres:16-alpine` servers it creates and removes, labelled with the run id | See the list below this table. |
 | CI `gates` → "No database archive is committed" | `git ls-files` | no `.dump` / `.backup` / `.bak` file is tracked |
 
-**The stub suite** proves, for 88 cases:
+**The stub suite** proves, for 152 cases:
 - A failed dump, an unreadable archive, a non-application archive, a corrupted
   copy, an unreachable server, or a destination inside the database's storage
   each leaves nothing that looks like a backup.
+- A `BACKUP_DIR` inside the checkout but outside `backups/` — directly, through
+  `..` or through a symlink — is refused, and no archive is written there.
 - Retention deletes only this database's regular files, and keeps the minimum.
 - The lock and the copy hook behave.
 - A restore refuses each of these *before any database change*: no mode, a bad

@@ -20,8 +20,9 @@
 #
 #   BACKUP_DIR                 Where archives go. Default <repo>/backups/postgres
 #                              (git-ignored). Refused if it is inside any mount
-#                              of the database container. On a real host this
-#                              directory must be copied OFF the host.
+#                              of the database container, or inside this
+#                              checkout anywhere but backups/. On a real host
+#                              this directory must be copied OFF the host.
 #   BACKUP_RETENTION_DAYS      Delete this database's archives older than this.
 #                              0 keeps everything. Default 14.
 #   BACKUP_RETENTION_MIN_KEEP  Never delete below this many newest archives,
@@ -84,6 +85,21 @@ case $backup_dir in
   /*) ;;
   *) jtt_die "BACKUP_DIR must be an absolute path" ;;
 esac
+# Inside the checkout, only backups/ is kept out of every Docker build context
+# (.dockerignore) and out of every service mount. Anywhere else there, an
+# archive can be baked into an image (the Dockerfiles copy whole workspace
+# directories), read by the api (labs/ is mounted into it), or served on port
+# 80 (infrastructure/docker/nginx/acme-webroot/). Checked on the path as given,
+# before anything is created, and again once it is resolved (a symlink or ..).
+refuse_checkout_path() {
+  case "${1%/}/" in
+    "$JTT_REPO_ROOT"/backups/*) ;;
+    "$JTT_REPO_ROOT"/*)
+      jtt_die "BACKUP_DIR is inside the repository checkout but not under its backups/ directory; an archive there can reach a Docker image, a service mount or the public web root. Use $JTT_REPO_ROOT/backups/<name> or a directory outside the checkout"
+      ;;
+  esac
+}
+refuse_checkout_path "$backup_dir"
 [[ $retention_days =~ ^[0-9]+$ ]] || jtt_die "BACKUP_RETENTION_DAYS must be a whole number of days (0 disables retention)"
 [[ $min_keep =~ ^[1-9][0-9]*$ ]] || jtt_die "BACKUP_RETENTION_MIN_KEEP must be a positive whole number"
 if [ -n "$label" ] && [[ ! $label =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
@@ -146,6 +162,7 @@ mkdir -p "$backup_dir"
 chmod 700 "$backup_dir"
 backup_dir=$(cd "$backup_dir" && pwd -P)
 refuse_database_storage "$backup_dir"
+refuse_checkout_path "$backup_dir"
 
 mounts=$(docker inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' "$JTT_CONTAINER") \
   || jtt_die "cannot inspect the mounts of $JTT_CONTAINER"

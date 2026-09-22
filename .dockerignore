@@ -20,6 +20,12 @@ infrastructure/kind/generated/
 infrastructure/observability/secrets/
 infrastructure/observability/alertmanager/secrets/
 backups/
+# A database archive anywhere else in the tree (db-backup.sh refuses to write
+# one inside the checkout outside backups/, and .gitignore ignores the same
+# names everywhere; this is the build context's own copy of that rule).
+**/*.dump
+**/*.dump.sha256
+**/*.dump.partial
 # Per-run secrets e2e/stack.sh generates for the browser E2E stack.
 e2e/.stack/
 

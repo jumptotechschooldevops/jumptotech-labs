@@ -334,6 +334,48 @@ new_case
 BACKUP_DIR=/var/lib/postgresql/data/backups backup
 expect 'BACKUP_DIR under /var/lib/postgresql: refused before anything is created' says "PostgreSQL's own storage"
 
+# Inside the checkout, only backups/ is excluded from every Docker build
+# context and from every service mount. Anywhere else there an archive can be
+# baked into an image (the Dockerfiles copy whole workspace directories), be
+# read by the api (labs/ is mounted into it), or be served on port 80
+# (infrastructure/docker/nginx/acme-webroot/). Proven against a copy of the
+# scripts, so JTT_REPO_ROOT is a temporary checkout and nothing is written into
+# this one.
+checkout="$work/checkout"
+if [ ! -d "$checkout" ]; then
+  mkdir -p "$checkout/scripts" "$checkout/services/progress" "$checkout/labs"
+  cp "$repo/scripts/db-backup.sh" "$repo/scripts/db-lib.sh" "$checkout/scripts/"
+  cp -R "$repo/services/progress/migrations" "$checkout/services/progress/"
+  checkout=$(cd "$checkout" && pwd -P)
+fi
+backup_from_checkout() { run "$checkout/scripts/db-backup.sh" "$@"; }
+for inside in infrastructure/docker/nginx/acme-webroot/.well-known labs/linux/backups apps/api/backups services/progress backups-old; do
+  new_case
+  BACKUP_DIR="$checkout/$inside" backup_from_checkout
+  expect "BACKUP_DIR at <checkout>/$inside: refused" says 'inside the repository checkout'
+  expect "BACKUP_DIR at <checkout>/$inside: no archive written" test -z "$(find "$checkout" -name '*.dump*' | head -1)"
+  expect "BACKUP_DIR at <checkout>/$inside: refused before the server is touched" server_untouched
+done
+new_case
+BACKUP_DIR="$checkout/services/../labs/x" backup_from_checkout
+expect 'BACKUP_DIR spelled with .. into the checkout: refused' says 'inside the repository checkout'
+new_case
+mkdir -p "$case_dir/elsewhere"
+ln -s "$checkout/labs" "$case_dir/elsewhere/link"
+BACKUP_DIR="$case_dir/elsewhere/link/backups" backup_from_checkout
+expect 'BACKUP_DIR reaching into the checkout through a symlink: refused' says 'inside the repository checkout'
+expect 'BACKUP_DIR reaching into the checkout through a symlink: no archive written' test -z "$(find "$checkout" -name '*.dump*' | head -1)"
+new_case
+BACKUP_DIR="$checkout/backups/postgres" backup_from_checkout
+expect 'BACKUP_DIR at <checkout>/backups/postgres (the default): accepted' succeeded
+# Two archives in one second would share a name, which the script refuses.
+find "$checkout/backups" -mindepth 1 -delete
+new_case
+unset BACKUP_DIR
+backup_from_checkout
+expect 'no BACKUP_DIR: the default <checkout>/backups/postgres is accepted' succeeded
+find "$checkout/backups" -mindepth 1 -delete
+
 new_case
 BACKUP_DIR=relative/backups backup
 expect 'relative BACKUP_DIR: refused before the server is touched' failed
