@@ -12,6 +12,7 @@ const TONE: Record<ErrorKind, 'danger' | 'warning' | 'info'> = {
   capacity: 'warning',
   'student-limit': 'info',
   auth: 'warning',
+  access: 'warning',
   network: 'danger',
   'not-found': 'warning',
   'not-ready': 'warning',

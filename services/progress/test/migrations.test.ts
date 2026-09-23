@@ -16,7 +16,7 @@ describe('migration files', () => {
     const migrations = await loadMigrations(MIGRATIONS_DIR);
 
     // PLATFORM-008 added 002; PLATFORM-009 added 003; PLATFORM-010 added 004;
-    // BETA-P0-007 added 005.
+    // BETA-P0-007 added 005; commercial access (docs/commercial-access.md) added 006.
     // The list is asserted so a migration cannot be added without someone
     // noticing here, but the *safety* checks below apply to every file rather
     // than to a numbered one — that is the invariant.
@@ -26,6 +26,7 @@ describe('migration files', () => {
       '003_users_and_ownership',
       '004_auth_sessions',
       '005_session_recovery',
+      '006_access_entitlements',
     ]);
     for (const migration of migrations) {
       expect(migration.checksum, migration.version).toMatch(/^[0-9a-f]{64}$/);
@@ -91,6 +92,29 @@ describe('migration files', () => {
     // No credential is ever stored on a user record.
     for (const forbidden of ['password', 'access_token', 'refresh_token', 'client_secret']) {
       expect(users.toLowerCase(), forbidden).not.toContain(`${forbidden} `);
+    }
+
+    /*
+     * Commercial access (docs/commercial-access.md). Additive only — it must
+     * not alter a table that holds progress, sessions or accounts — and one
+     * entitlement per (user, scope) is the key, so two conflicting active
+     * grants for one student cannot be stored. Access is never removed as a
+     * side effect: no cascade from users. No credential column of any kind.
+     */
+    const access = migrations.find((m) => m.version === '006_access_entitlements')!.sql;
+    const accessStatements = access
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('--'))
+      .join('\n');
+    expect(accessStatements).toContain('CREATE TABLE IF NOT EXISTS access_entitlements');
+    expect(accessStatements).toContain('CREATE TABLE IF NOT EXISTS access_events');
+    expect(accessStatements).toContain('PRIMARY KEY (user_id, scope)');
+    expect(accessStatements).toContain('CHECK (expires_at IS NULL OR expires_at > starts_at)');
+    expect(accessStatements).not.toMatch(/\bALTER\s+TABLE\b/i);
+    expect(accessStatements).not.toMatch(/ON\s+DELETE\s+CASCADE/i);
+    expect(accessStatements).not.toMatch(/\bDELETE\b|\bUPDATE\b/i);
+    for (const forbidden of ['token', 'password', 'secret', 'cookie']) {
+      expect(accessStatements.toLowerCase(), forbidden).not.toContain(forbidden);
     }
 
     // Forward-only, and never destructive on startup — for every migration.

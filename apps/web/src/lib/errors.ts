@@ -36,6 +36,8 @@ export type ErrorKind =
   | 'student-limit'
   /** The browser's sign-in is gone. */
   | 'auth'
+  /** Signed in, but this account's lab access is not active. Not a platform fault. */
+  | 'access'
   /** The platform could not be reached at all. */
   | 'network'
   | 'not-found'
@@ -108,6 +110,8 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
   }
 
   switch (code) {
+    case 'ACCESS_NOT_ACTIVE':
+      return accessRefusal((error.details as { accessState?: unknown } | undefined)?.accessState);
     case 'LAB_CAPACITY_REACHED':
       return {
         kind: 'capacity',
@@ -307,6 +311,60 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
       };
     default:
       return null;
+  }
+}
+
+/**
+ * Signed in, but not entitled to use labs right now (docs/commercial-access.md).
+ *
+ * Checked before the verify/launch fallbacks, so an expired student pressing
+ * Verify is never told "this is a platform problem". The words say what the
+ * state means and who can change it; they promise nothing about price, renewal
+ * or length, which are not this page's to state.
+ */
+export function accessRefusal(state: unknown): Known {
+  const contact = 'If you think this is wrong, contact your instructor or JumpToTech support and quote the reference below.';
+  switch (state) {
+    case 'SCHEDULED':
+      return {
+        kind: 'access',
+        title: 'Your lab access has not started yet',
+        message: 'Your account has lab access, but it begins later. You can browse the labs in the meantime.',
+        guidance: contact,
+        retryable: false,
+      };
+    case 'EXPIRED':
+      return {
+        kind: 'access',
+        title: 'Your lab access has ended',
+        message: 'Your access period is over, so labs cannot be started or used. Your progress and history are kept.',
+        guidance: contact,
+        retryable: false,
+      };
+    case 'SUSPENDED':
+      return {
+        kind: 'access',
+        title: 'Your lab access is paused',
+        message: 'Lab access for this account is paused, so labs cannot be started or used. Your progress and history are kept.',
+        guidance: contact,
+        retryable: false,
+      };
+    case 'REVOKED':
+      return {
+        kind: 'access',
+        title: 'This account no longer has lab access',
+        message: 'Labs cannot be started or used from this account. Your progress and history are kept.',
+        guidance: contact,
+        retryable: false,
+      };
+    default:
+      return {
+        kind: 'access',
+        title: 'Your account does not have lab access yet',
+        message: 'You are signed in, but lab access has not been set up for this account. You can browse the labs in the meantime.',
+        guidance: 'If you have enrolled, contact your instructor or JumpToTech support and quote the reference below.',
+        retryable: false,
+      };
   }
 }
 

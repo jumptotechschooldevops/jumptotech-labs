@@ -38,6 +38,8 @@ import { buildApiObservability, jwksFetchMetricHook, sessionMetricsHooks } from 
 import { installRuntimeCollectors } from './observability-collectors.js';
 import { installOperationsCollectors } from './operations.js';
 import { createOperatorHandler, startOperatorSocket } from './operator.js';
+import { AccessControl, InMemoryAccessStore } from './access/entitlements.js';
+import { PostgresAccessStore } from './access/postgres-store.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -199,6 +201,24 @@ async function main(): Promise<void> {
   const users = learning.database
     ? new PostgresUserRepository(learning.database, config.auth.mode === 'oidc' ? 'oidc' : 'development')
     : new InMemoryUserRepository(config.auth.mode === 'oidc' ? 'oidc' : 'development');
+
+  /*
+   * Lab access, separate from sign-in — docs/commercial-access.md.
+   *
+   * Durable whenever the users are: an entitlement is a statement about a
+   * `users` row, and the two live and are backed up together.
+   */
+  const accessStore = learning.database
+    ? new PostgresAccessStore(learning.database)
+    : new InMemoryAccessStore({ list: async () => (users instanceof InMemoryUserRepository ? users.list() : []) });
+  const access = new AccessControl(accessStore, config.accessPolicy);
+  logger.info(
+    'config.loaded',
+    { accessPolicy: config.accessPolicy },
+    config.accessPolicy === 'entitlement'
+      ? 'lab access requires an ACTIVE entitlement (ACCESS_POLICY=entitlement)'
+      : 'lab access is OPEN to every signed-in account (ACCESS_POLICY=open)',
+  );
 
   const onJwksFetch = jwksFetchMetricHook(metrics.auth);
   const identityResolver = buildIdentityResolver({
@@ -382,6 +402,7 @@ async function main(): Promise<void> {
     learningPaths,
     identityResolver,
     browserAuth: { users, authSessions, client: browserClient, idTokenVerifier },
+    access,
     observability: {
       logger,
       metrics: {
@@ -410,6 +431,7 @@ async function main(): Promise<void> {
         ...(event.sessionId ? { sessionId: event.sessionId } : {}),
         action: event.action,
         authorizationResult: event.authorizationResult,
+        ...(event.accessState ? { accessState: event.accessState } : {}),
       });
       if (event.authorizationResult === 'denied-not-owner') {
         metrics.common.securityEvents.inc({
@@ -497,6 +519,7 @@ async function main(): Promise<void> {
           retentionSeconds: config.sessionRetentionMinutes * 60,
           reaperLastSuccessMs: () => reaperLastSuccessMs,
           reaperIntervalSeconds: config.reaperIntervalSeconds,
+          access: { store: accessStore, policy: config.accessPolicy },
         }),
       })
     : null;

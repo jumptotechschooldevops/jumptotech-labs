@@ -328,6 +328,33 @@ tests:
         alertname: LabStartFailureRateElevated
         exp_alerts: []
 
+  # ------------------------------------ 10. students without lab access
+  # docs/commercial-access.md. The same burst as case 9, but every refusal is a
+  # signed-in student whose entitlement is missing, expired, suspended or
+  # revoked. That is access control working: nothing may page.
+  - interval: 15s
+    name: students without lab access pressing Start do not page
+    input_series:
+      - series: 'jtt_lab_start_outcome_total{outcome="success"}'
+        values: '0+0x130'
+      - series: 'jtt_lab_start_outcome_total{outcome="provision_failed"}'
+        values: '0+0x130'
+      - series: 'jtt_lab_start_outcome_total{outcome="access_denied"}'
+        values: '0+0x24 2+2x7 16+0x100'
+    promql_expr_test:
+      - expr: jtt:lab_start_failures:increase10m
+        eval_time: 13m
+        exp_samples:
+          - labels: 'jtt:lab_start_failures:increase10m'
+            value: 0
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: LabStartsFailingHard
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: LabStartFailureRateElevated
+        exp_alerts: []
+
   # A full platform is CapacityExhausted's page (RB-04), not a start failure:
   # five students pressing Start on a full five-seat platform sent a second
   # critical page to RB-03.

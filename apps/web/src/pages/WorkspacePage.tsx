@@ -109,6 +109,8 @@ const TERMINAL_TEXT: Record<string, string> = {
   UNAUTHORIZED: 'The terminal’s access expired.',
   CREDENTIALS_UNAVAILABLE: 'The terminal could not attach to your environment.',
   CONNECTION_LOST: 'Connection to the terminal was lost.',
+  // Not retried: nothing a reconnect does changes it (docs/commercial-access.md).
+  ACCESS_NOT_ACTIVE: 'Your lab access is not active, so the terminal cannot open. Your progress is saved.',
   INPUT_RATE_EXCEEDED: 'Disconnected — more was pasted or typed at once than the terminal accepts. Reconnect to carry on.',
 };
 

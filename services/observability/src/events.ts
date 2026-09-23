@@ -131,6 +131,8 @@ export const LOG_EVENTS = [
   'ops.operator_socket.failed',
   'ops.operator.request',
   'ops.operator.session_ended',
+  // A grant, suspend, restore or revoke of a student's lab access (docs/commercial-access.md).
+  'ops.operator.access_changed',
 ] as const;
 
 export type LogEvent = (typeof LOG_EVENTS)[number];

@@ -220,6 +220,9 @@ services:
       # The stop-launches switch: true refuses every Start Lab, running labs keep
       # working. `prod up -d api` after changing it (operations runbook §3).
       LAB_LAUNCHES_PAUSED: ${LAB_LAUNCHES_PAUSED:-false}
+      # Lab access (docs/commercial-access.md): open | entitlement. Empty follows
+      # NODE_ENV — entitlement under production, open otherwise.
+      ACCESS_POLICY: ${ACCESS_POLICY:-}
       CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-60}
       SESSION_RETENTION_MINUTES: ${SESSION_RETENTION_MINUTES:-15}
       # The operator socket (apps/api/src/operator.ts): `ops status`, `ops

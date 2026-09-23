@@ -36,6 +36,7 @@ import {
   type DatabaseConfig,
   type DatabaseTransportMode,
 } from '@jumptotech/progress';
+import type { AccessPolicy } from './access/entitlements.js';
 import { DEFAULT_AUTH_SESSION_TTL_SECONDS } from './auth/browser-session.js';
 import {
   MAX_AUTH_SESSION_TTL_SECONDS,
@@ -162,6 +163,11 @@ export interface ApiConfig {
    * the only earlier options were telling the cohort or taking the site down.
    */
   launchesPaused?: boolean;
+  /**
+   * Whether lab use needs an entitlement (`ACCESS_POLICY`, docs/commercial-access.md).
+   * `entitlement` under NODE_ENV=production unless set; `open` otherwise.
+   */
+  accessPolicy: AccessPolicy;
   sessionRetentionMinutes: number;
   nodeEnv: string;
   /**
@@ -476,6 +482,22 @@ function strFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: string): str
  */
 const TRUE_WORDS = ['1', 'true', 'yes', 'on'];
 const FALSE_WORDS = ['0', 'false', 'no', 'off'];
+
+/**
+ * `ACCESS_POLICY` — open | entitlement.
+ *
+ * Production defaults to `entitlement`: a deployment that charges for access
+ * must not admit every account its identity provider knows because a variable
+ * was left out. Everywhere else the default is `open`, the behaviour before
+ * entitlements existed. Any other value refuses to start rather than guessing
+ * which of the two was meant.
+ */
+function accessPolicyFromEnv(env: NodeJS.ProcessEnv): AccessPolicy {
+  const raw = env.ACCESS_POLICY?.trim().toLowerCase();
+  if (!raw) return (env.NODE_ENV ?? '').trim() === 'production' ? 'entitlement' : 'open';
+  if (raw === 'open' || raw === 'entitlement') return raw;
+  throw new Error("ACCESS_POLICY must be 'open' or 'entitlement'; it is set to something else.");
+}
 
 function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
   const raw = env[name];
@@ -1020,6 +1042,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     progress: { ...progress, databaseTransport },
     reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
     launchesPaused: boolFromEnv(env, 'LAB_LAUNCHES_PAUSED', false),
+    accessPolicy: accessPolicyFromEnv(env),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',
     dockerEnabled,

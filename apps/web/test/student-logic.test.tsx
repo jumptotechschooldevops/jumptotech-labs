@@ -101,6 +101,28 @@ describe('what an API error means to a student', () => {
     expect(`${described.title} ${described.message} ${described.guidance ?? ''}`).not.toMatch(/expired|sign in again/i);
     // A real refusal still is one.
     expect(describeError({ code: 'AUTH_EXPIRED', message: 'Your session has expired.' }, 'verify').kind).toBe('auth');
+
+    // Lab access (docs/commercial-access.md): never "a platform problem", in any context.
+    for (const context of ['launch', 'verify', 'reset', 'terminal', 'activity'] as const) {
+      const denied = describeError(
+        { code: 'ACCESS_NOT_ACTIVE', message: 'Your lab access has ended.', details: { accessState: 'EXPIRED' } },
+        context,
+      );
+      expect(denied, context).toMatchObject({
+        kind: 'access',
+        title: 'Your lab access has ended',
+        reference: 'ACCESS_NOT_ACTIVE',
+        retryable: false,
+      });
+      expect(denied.message).not.toMatch(/platform problem/);
+    }
+    expect(
+      describeError({ code: 'ACCESS_NOT_ACTIVE', message: 'x', details: { accessState: 'SUSPENDED' } }, 'launch').title,
+    ).toBe('Your lab access is paused');
+    // A state this page does not know still gets the plain "no access" words.
+    expect(describeError({ code: 'ACCESS_NOT_ACTIVE', message: 'x' }, 'launch').title).toBe(
+      'Your account does not have lab access yet',
+    );
   });
 
   it('words an unreachable environment for the action that failed', () => {

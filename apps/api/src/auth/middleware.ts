@@ -11,6 +11,7 @@ import { AuthError, type AuthenticatedUser, type IdentityResolver } from './iden
 import type { BrowserSessionAuthenticator } from './browser-authenticator.js';
 import { authorize, type Action } from './policy.js';
 import { sendError } from '../http.js';
+import { accessDeniedBody, requiresLabAccess, type AccessControl } from '../access/entitlements.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -25,13 +26,23 @@ export interface AuthAuditEvent {
   authenticatedUserId: string | null;
   action: string;
   sessionId?: string;
-  authorizationResult: 'allowed' | 'denied-not-owner' | 'denied-unowned' | 'denied-role' | 'unauthenticated';
+  authorizationResult:
+    | 'allowed'
+    | 'denied-not-owner'
+    | 'denied-unowned'
+    | 'denied-role'
+    /** Owner or not, the caller's lab access is not ACTIVE (docs/commercial-access.md). */
+    | 'denied-access'
+    | 'unauthenticated';
+  /** Set with `denied-access`: NONE, SCHEDULED, EXPIRED, SUSPENDED or REVOKED. Never an operator's reason. */
+  accessState?: string;
   timestamp: string;
 }
 
 export type AuthAuditLogger = (event: AuthAuditEvent) => void;
 
-function requestId(req: Request): string {
+/** The caller's `x-request-id` when it is a safe token, for audit lines; never raw header text. */
+export function requestId(req: Request): string {
   const header = req.get('x-request-id');
   return header && /^[A-Za-z0-9._-]{1,128}$/.test(header) ? header : 'req-unknown';
 }
@@ -162,6 +173,14 @@ export type SessionGuard = (
 export function createSessionGuard(
   sessions: SessionManager,
   audit: AuthAuditLogger = () => {},
+  /**
+   * Lab access. Optional so every existing suite composes a guard unchanged;
+   * absent means the `open` policy. When present, an action that *uses* a lab
+   * (`requiresLabAccess`) is refused 403 `ACCESS_NOT_ACTIVE` for a caller whose
+   * access is not ACTIVE — after ownership, so a non-owner still gets the 404
+   * and learns nothing about whose session it is.
+   */
+  access?: AccessControl,
 ) {
   return async function guard(
     req: Request,
@@ -222,23 +241,39 @@ export function createSessionGuard(
       ownerUserId: session.ownerUserId,
     });
 
+    // Asked only of an owner (or a permitted role): one audit line per request,
+    // carrying the decision that actually answered it.
+    const entitled = decision.allowed && access && requiresLabAccess(action)
+      ? await access.decide(user.userId)
+      : null;
+    const denied = entitled && !entitled.allowed ? entitled : null;
+
     audit({
       requestId: requestId(req),
       authenticatedUserId: user.userId,
       action,
       sessionId: session.sessionId,
-      authorizationResult: decision.allowed
-        ? 'allowed'
-        : decision.reason === 'unowned'
-          ? 'denied-unowned'
-          : decision.reason === 'role'
-            ? 'denied-role'
-            : 'denied-not-owner',
+      authorizationResult: denied
+        ? 'denied-access'
+        : decision.allowed
+          ? 'allowed'
+          : decision.reason === 'unowned'
+            ? 'denied-unowned'
+            : decision.reason === 'role'
+              ? 'denied-role'
+              : 'denied-not-owner',
+      ...(denied ? { accessState: denied.state } : {}),
       timestamp: new Date().toISOString(),
     });
 
     if (!decision.allowed) {
       sendError(res, 404, { code: 'SESSION_NOT_FOUND', message: 'No such lab session.' });
+      return null;
+    }
+    if (denied) {
+      // 403, not 404: the caller owns this session, so there is nothing to
+      // hide, and "your access has ended" is what they need to hear.
+      sendError(res, 403, accessDeniedBody(denied.state));
       return null;
     }
 

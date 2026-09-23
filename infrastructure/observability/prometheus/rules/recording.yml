@@ -56,8 +56,12 @@ groups:
       # here it also fired LabStartsFailingHard — a second critical page, sending
       # the operator to RB-03's images, disks and providers — as soon as three
       # students pressed Start on a full five-seat platform.
+      #
+      # `access_denied` is not a failure either: the student's lab access is not
+      # ACTIVE (docs/commercial-access.md). An expired student pressing Start
+      # is a support conversation, not an incident.
       - record: jtt:lab_start_failures:increase10m
-        expr: sum(increase(jtt_lab_start_outcome_total{outcome!~"success|student_limit_reached|capacity_reached"}[10m])) or vector(0)
+        expr: sum(increase(jtt_lab_start_outcome_total{outcome!~"success|student_limit_reached|capacity_reached|access_denied"}[10m])) or vector(0)
 
       - record: jtt:lab_start_attempts:increase10m
         expr: sum(increase(jtt_lab_start_outcome_total[10m])) or vector(0)

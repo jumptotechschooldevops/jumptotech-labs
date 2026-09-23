@@ -101,6 +101,10 @@ export interface LogFields {
   securityEvent?: SecurityEventKind;
   authorizationResult?: string;
   action?: string;
+  /** Lab access state on a `denied-access` decision: NONE, SCHEDULED, EXPIRED, SUSPENDED, REVOKED. */
+  accessState?: string;
+  /** `open` or `entitlement` — ACCESS_POLICY, at startup. */
+  accessPolicy?: string;
 
   // --- errors ---------------------------------------------------------------
   err?: unknown;
@@ -130,7 +134,7 @@ const ALLOWED_FIELDS = [
   'step', 'op', 'scope', 'endpoint', 'requirementType', 'denyReason', 'operation', 'migrationVersion',
   'outcome', 'reason', 'result', 'code', 'status', 'count', 'durationMs',
   'route', 'method',
-  'securityEvent', 'authorizationResult', 'action',
+  'securityEvent', 'authorizationResult', 'action', 'accessState', 'accessPolicy',
   'err',
   'service', 'version', 'commit', 'port', 'store', 'authMode', 'labsLoaded', 'durable',
 ] as const;

@@ -53,7 +53,7 @@ const STRUCTURED_KEYS = [
   'labId', 'track', 'provider', 'implementation', 'sandboxKind', 'sandboxRef',
   'step', 'op', 'scope', 'endpoint', 'requirementType', 'denyReason', 'operation', 'migrationVersion',
   'outcome', 'reason', 'result', 'code', 'status', 'count', 'durationMs',
-  'route', 'method', 'securityEvent', 'authorizationResult', 'action',
+  'route', 'method', 'securityEvent', 'authorizationResult', 'action', 'accessState', 'accessPolicy',
   'version', 'commit', 'port', 'store', 'authMode', 'labsLoaded', 'durable', 'truncated',
 ] as const;
 
@@ -66,6 +66,7 @@ const LIFECYCLE_EVENTS = new Set([
   'ops.tls_edge.checked',
   'ops.network_attestation.checked',
   'ops.operator.session_ended',
+  'ops.operator.access_changed',
   'ops.operator_socket.started',
   'observability.listener.started',
 ]);

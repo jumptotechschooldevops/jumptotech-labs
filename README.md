@@ -4192,6 +4192,11 @@ This runs untrusted student commands, so the boundaries are drawn explicitly.
    the server verified; the development header is consulted only when nobody has
    authenticated at all. What remains true: there is **no role administration
    surface**, so roles change by direct SQL only.
+1c. ~~**An account is lab access.**~~ **Fixed.** Signing in no longer grants
+   lab use: under `ACCESS_POLICY=entitlement` (the production default) an
+   operator grants, suspends, restores and revokes each account's access with
+   `ops access …`, every change recorded with who and why. See
+   [docs/commercial-access.md](docs/commercial-access.md).
 2. **Container isolation is not VM-grade tenant isolation, for any track.**
    Namespaces and containers alike share one kernel; a container-escape or
    kernel vulnerability crosses every boundary described above. This is stated
