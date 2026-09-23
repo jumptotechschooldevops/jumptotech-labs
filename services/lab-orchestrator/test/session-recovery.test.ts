@@ -335,12 +335,12 @@ export function sessionRecovery(
       const w = await world();
 
       // An older session the sweep will spend its time tearing down first.
-      const older = await w.a.manager.start('LINUX-001', 'student-older');
+      const older = await w.a.manager.start('LINUX-001', '00000000-0000-4000-8000-000000000001');
       w.clock.now += 21 * MINUTE; // idle past the 20-minute limit
 
       // A slow start, CREATING past the abandoned-start grace when the sweep reads it.
       const building = w.provider.holdNextCreate();
-      const slow = w.b.manager.start('LINUX-001', 'student-slow');
+      const slow = w.b.manager.start('LINUX-001', '00000000-0000-4000-8000-000000000002');
       await building.entered;
       w.clock.now += 10 * MINUTE + 1_000;
 
