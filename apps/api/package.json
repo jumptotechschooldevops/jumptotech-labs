@@ -18,8 +18,8 @@
     "cors": "^2.8.5",
     "express": "^4.22.3",
     "express-rate-limit": "^8.7.0",
-    "jose": "^6.2.9",
-    "tsx": "^4.19.2"
+    "jose": "^6.2.12",
+    "tsx": "^4.23.13"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

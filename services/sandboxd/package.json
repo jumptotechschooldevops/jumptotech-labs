@@ -22,7 +22,7 @@
   "dependencies": {
     "@jumptotech/lab-orchestrator": "*",
     "node-pty": "^1.0.0",
-    "tsx": "^4.19.2",
+    "tsx": "^4.23.13",
     "ws": "^8.18.0",
     "@jumptotech/observability": "*"
   },
