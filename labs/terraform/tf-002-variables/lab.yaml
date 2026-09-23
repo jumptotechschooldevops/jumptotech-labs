@@ -138,6 +138,7 @@ requirements:
     dir: terraform
     name: environment
     has_type: true
+    type_contains: string
     has_default: false
     label: A typed environment variable is declared, with no default
 
@@ -145,6 +146,7 @@ requirements:
     dir: terraform
     name: replicas
     has_type: true
+    type_contains: number
     has_default: true
     label: A typed replicas variable is declared, with a default
 
@@ -152,6 +154,7 @@ requirements:
     dir: terraform
     name: debug
     has_type: true
+    type_contains: bool
     has_default: true
     label: A typed debug variable is declared, with a default
 
@@ -204,6 +207,7 @@ requirements:
     resource_type: local_file
     name: service_config
     literals: [staging, production]
+    through_locals: true
     label: The resource names no particular environment
   - type: file_exists
     path: terraform/build/production.json

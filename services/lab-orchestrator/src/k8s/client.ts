@@ -33,6 +33,7 @@ import {
   type PersistentVolumeClaimSnapshot,
   type PodSnapshot,
   type ProbeSnapshot,
+  type ReplicaSetSnapshot,
   type RoleBindingSnapshot,
   type RoleSnapshot,
   type SecretSnapshot,
@@ -858,6 +859,21 @@ export class KubernetesClient implements KubernetesPort {
     } catch (error) {
       if (statusCodeOf(error) === 404) return null;
       asUnreachable(`reading networkpolicy ${namespace}/${name}`, error);
+    }
+  }
+
+  async listDeploymentReplicaSets(namespace: string, deploymentName: string): Promise<ReplicaSetSnapshot[]> {
+    try {
+      const list = await this.#apps.listNamespacedReplicaSet({ namespace });
+      return list.items
+        .filter((rs) =>
+          (rs.metadata?.ownerReferences ?? []).some(
+            (owner) => owner.kind === 'Deployment' && owner.name === deploymentName,
+          ),
+        )
+        .map((rs) => toReplicaSetSnapshot(rs, namespace));
+    } catch (error) {
+      asUnreachable(`listing replicasets of deployment ${namespace}/${deploymentName}`, error);
     }
   }
 
@@ -1774,6 +1790,22 @@ function networkPolicyPortsOf(
       },
     ];
   });
+}
+
+export function toReplicaSetSnapshot(rs: k8s.V1ReplicaSet, namespace: string): ReplicaSetSnapshot {
+  const annotations = rs.metadata?.annotations ?? {};
+  const revision = Number.parseInt(annotations['deployment.kubernetes.io/revision'] ?? '', 10);
+  const history = (annotations['deployment.kubernetes.io/revision-history'] ?? '')
+    .split(',')
+    .map((value) => Number.parseInt(value.trim(), 10))
+    .filter((value) => Number.isInteger(value));
+  return {
+    name: rs.metadata?.name ?? '',
+    namespace: rs.metadata?.namespace ?? namespace,
+    ...(Number.isInteger(revision) ? { revision } : {}),
+    revisionHistory: history,
+    images: (rs.spec?.template?.spec?.containers ?? []).map((c) => c.image ?? ''),
+  };
 }
 
 function toStatefulSetSnapshot(

@@ -130,10 +130,20 @@ requirements:
     label: No statement in the trust policy uses "*" as its Action
 
   # --- the permissions policy, which must survive untouched -----------------
+  # "Accepted without change": still its one statement, which still lists
+  # the bucket. Only the object-level questions below were asked, so a
+  # permissions policy that lost ListBucket and gained a pasted trust
+  # statement passed.
   - type: iam_policy_document
     path: /home/student/role-setup/permissions-policy.json
     version: '2012-10-17'
+    statement_count: 1
     label: The permissions policy is still a valid document
+  - type: iam_policy_allows
+    path: /home/student/role-setup/permissions-policy.json
+    action: s3:ListBucket
+    resource: arn:aws:s3:::jumptotech-reconciliation
+    label: The role can still list the reconciliation bucket
 
   - type: iam_policy_allows
     path: /home/student/role-setup/permissions-policy.json

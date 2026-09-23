@@ -74,7 +74,9 @@ task:
     This sandbox can capture packets. That is a privilege the platform grants
     to this lab specifically, and it is narrow: the session has a private
     segment of its own with nothing else on it, so the only traffic you can see
-    is the traffic you generate.
+    is the traffic you generate. The privilege belongs to the sandbox, not to
+    your account: run the capture itself with `sudo`, as you would on a real
+    server. Reading a saved capture back needs no privilege.
 
     Produce three exchanges and capture each one. Open a TCP connection to
     `9200`, send something, and let it close. Try to connect to `9202`, where
@@ -209,9 +211,10 @@ hints:
   - level: 3
     text: >
       Capture on the loopback interface, because that is where traffic to this
-      host's own addresses is delivered. `tcpdump -i lo -nn` prints what you
-      need directly, and `-w` then `-r` lets you capture once and read it back
-      several times. `nc 127.0.0.1 9200` opens the connection, `nc -u` sends
+      host's own addresses is delivered. `sudo tcpdump -i lo -nn` prints what
+      you need directly, and `sudo tcpdump -i lo -nn -w cap.pcap` then
+      `tcpdump -nn -r cap.pcap` lets you capture once and read it back several
+      times. `nc 127.0.0.1 9200` opens the connection, `nc -u` sends
       the datagram, and `ss -tan` shows sockets in every state rather than only
       the listening ones.
 

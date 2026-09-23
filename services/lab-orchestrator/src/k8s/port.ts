@@ -476,6 +476,26 @@ export interface StatefulSetSnapshot {
   deleting: boolean;
 }
 
+/**
+ * One ReplicaSet a Deployment owns — one template it has rolled out.
+ *
+ * The Deployment controller keeps these, scaled to zero, as its rollout
+ * history (up to `revisionHistoryLimit`), which is what `kubectl rollout
+ * history` and `rollout undo` read. Re-using one for a later revision — which
+ * is what an undo, or an edit back to an identical template, does — moves the
+ * revision it held into `deployment.kubernetes.io/revision-history`.
+ */
+export interface ReplicaSetSnapshot {
+  name: string;
+  namespace: string;
+  /** `deployment.kubernetes.io/revision`, when present and numeric. */
+  revision?: number;
+  /** `deployment.kubernetes.io/revision-history`: earlier revisions this template held. */
+  revisionHistory: number[];
+  /** Every container image in the ReplicaSet's Pod template. */
+  images: string[];
+}
+
 export interface DaemonSetSnapshot {
   name: string;
   namespace: string;
@@ -610,6 +630,8 @@ export interface KubernetesPort {
   getPod(namespace: string, name: string): Promise<PodSnapshot | null>;
   listPods(namespace: string, labelSelector?: string): Promise<PodSnapshot[]>;
   getDeployment(namespace: string, name: string): Promise<DeploymentSnapshot | null>;
+  /** The ReplicaSets a Deployment owns (by ownerReference), in any order. */
+  listDeploymentReplicaSets(namespace: string, deploymentName: string): Promise<ReplicaSetSnapshot[]>;
   getService(namespace: string, name: string): Promise<ServiceSnapshot | null>;
   getEndpoints(namespace: string, serviceName: string): Promise<EndpointsSnapshot | null>;
   getConfigMap(namespace: string, name: string): Promise<ConfigMapSnapshot | null>;

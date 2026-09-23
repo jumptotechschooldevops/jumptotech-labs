@@ -53,7 +53,7 @@ Type your value immediately after the space, and do not change the labels or
 the addresses that are already there. A line should end up looking exactly
 like this, with one space either side of the "=":
 
-    usable_count = 30
+    example_usable_count = 30
 
 Nothing here needs the network. This machine has no route off itself, and
 none of this work needs one.

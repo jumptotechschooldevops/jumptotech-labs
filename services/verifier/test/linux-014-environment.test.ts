@@ -347,3 +347,36 @@ describe('LINUX-014 grades state, and never the route taken to it', () => {
     }
   });
 });
+
+// ------------------------------------------- certification pass, 2026-09-20
+
+describe('LINUX-014 works in the terminal students actually get', () => {
+  it('tells the student to load ~/.bashrc, which the browser terminal does not read', async () => {
+    // The terminal attaches with `bash --norc --noprofile`, so without this
+    // step the hand-run program was just as degraded as the service, and
+    // hint 3's `command -v jtt-format` printed nothing.
+    expect((await lab()).task.description).toContain('source ~/.bashrc');
+  });
+
+  it('passes a PATH entry written with a trailing slash', async () => {
+    // dash prints `…/jumptotech//jtt-format` for that entry; the service is
+    // exactly as healthy as with the entry written without one.
+    const withSlash: FakeWorld = {
+      ...HEALTHY,
+      files: {
+        ...HEALTHY.files,
+        [STATUS]: {
+          type: 'file',
+          content: [
+            'STATUS=OK',
+            'FORMATTER=/usr/local/libexec/jumptotech//jtt-format',
+            'JTT_ENV=production',
+            'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/libexec/jumptotech/',
+            '',
+          ].join('\n'),
+        },
+      },
+    };
+    expect(failedLabels((await verify(withSlash)).checks)).toEqual([]);
+  });
+});

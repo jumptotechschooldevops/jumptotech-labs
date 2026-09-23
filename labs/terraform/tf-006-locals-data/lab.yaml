@@ -187,6 +187,16 @@ requirements:
     name: service_manifest
     literals: [eu-west-1, gold, jumptotech]
     label: The manifest types in none of the values it now reads
+  # Nor one hop away: `locals { region = "eu-west-1" }` with
+  # `region = local.region` wrote the same file and passed. `jumptotech` is
+  # not listed here, because the solution keeps it in a local on purpose.
+  - type: terraform_resource_literal_absent
+    dir: terraform
+    resource_type: local_file
+    name: service_manifest
+    literals: [eu-west-1, gold]
+    through_locals: true
+    label: No value it reads is typed into a local instead
 
   - type: terraform_resource_exists
     dir: terraform

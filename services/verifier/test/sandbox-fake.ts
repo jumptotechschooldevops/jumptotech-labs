@@ -120,6 +120,30 @@ export class FakeSandbox implements SandboxPort {
         return notFound();
       }
 
+      // Two read-only commands answered from the files this world states, so
+      // a check that reads a file through them sees the same file a path read
+      // would. Only the argument shapes labs use; anything else is not found.
+      case 'tail': {
+        const [flag, count, file] = args;
+        const entry = file !== undefined ? this.world.files?.[file] : undefined;
+        if (flag !== '-n' || entry?.content === undefined) return notFound();
+        const all = entry.content.replace(/\n$/, '').split('\n');
+        return ok(lines(all.slice(-Number(count))));
+      }
+      case 'grep': {
+        const flags = args.filter((a) => a.startsWith('-')).join('');
+        const [pattern, file] = args.filter((a) => !a.startsWith('-'));
+        const entry = file !== undefined ? this.world.files?.[file] : undefined;
+        if (pattern === undefined || entry?.content === undefined) {
+          return { exitCode: 2, stdout: '', stderr: 'No such file or directory', timedOut: false };
+        }
+        const fold = (text: string) => (flags.includes('i') ? text.toLowerCase() : text);
+        const matching = entry.content.split('\n').filter((line) => fold(line).includes(fold(pattern)));
+        if (flags.includes('c')) return { exitCode: matching.length > 0 ? 0 : 1, stdout: `${matching.length}\n`, stderr: '', timedOut: false };
+        if (matching.length === 0) return { exitCode: 1, stdout: '', stderr: '', timedOut: false };
+        return ok(flags.includes('q') ? '' : lines(matching));
+      }
+
       default:
         return notFound();
     }

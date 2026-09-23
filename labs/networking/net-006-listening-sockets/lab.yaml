@@ -76,7 +76,9 @@ task:
     failure — it is the service doing what its configuration says. Find it,
     then change `/etc/payments/api.conf` so the service is reachable from the
     segment this host is on rather than only from the host itself, and restart
-    it through the supervisor so the change takes effect.
+    it through the supervisor so the change takes effect. The file and the
+    supervisor both belong to root: edit with `sudoedit` or `sudo nano`, and
+    run `sv` with `sudo`.
 
     Leave the other three alone. Nothing here asks you to write down what you
     found: the repair is the answer, and the socket table is where it shows.
@@ -124,6 +126,9 @@ requirements:
   - type: file_content_absent
     path: /etc/payments/api.conf
     contains: "127.0.0.1"
+    # The service reads only `key = value` lines, so the old value kept as a
+    # comment above the new line is retired, not in use.
+    ignore_comment_lines: true
     label: The loopback bind address is no longer configured
 
   # --- and the healthy services are still healthy --------------------------
@@ -157,7 +162,7 @@ hints:
       shows established connections alongside them. Compare the local address
       column across the rows. The service that stands out reads
       `/etc/payments/api.conf` at startup, so edit the address there and then
-      `sv restart payments-api`; `sv status payments-api` confirms it came back
+      `sudo sv restart payments-api`; `sudo sv status payments-api` confirms it came back
       up, and re-running your inventory confirms the row changed.
 
 references:

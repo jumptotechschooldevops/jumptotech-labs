@@ -127,6 +127,7 @@ requirements:
     job: image
     run_contains:
       - docker build
+    as_command: true
     run_expands:
       - IMAGE_TAG
     after:
@@ -156,7 +157,9 @@ requirements:
   - type: environment_reference_exists
     path: .github/workflows/ci.yml
     name: IMAGE_TAG
-    via: workflow_env
+    # Workflow-level, as the task says: declared in one job's env, the value
+    # is empty in the other job that reads it.
+    via: workflow_env_global
     # The objective: a tag derived from the commit, not a literal like latest.
     value_contains: github.sha
     label: The image tag comes from a workflow variable that identifies the commit

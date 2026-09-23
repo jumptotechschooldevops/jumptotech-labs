@@ -371,3 +371,25 @@ ${SEEDED}`;
     expect((await verifyLab({ lab, sandbox: unsolved, namespace: 'jtt-lab-00000000bbbb' })).passed).toBe(false);
   });
 });
+
+describe('AWS-008 — A7 publishes the subnet IDs (certification pass)', () => {
+  const A7 = 'A7 — PublicSubnetBId is published and identifies PublicSubnetB';
+  const outputs = (publicValue: string) => `  PublicSubnetBId:
+    Value: ${publicValue}
+  PrivateSubnetBId:
+    Value: !Ref PrivateSubnetB
+`;
+
+  it.each(['!Ref PublicSubnetB', '!GetAtt PublicSubnetB.SubnetId', "{ 'Ref': PublicSubnetB }"])('passes %s', async (value) => {
+    expect(failed((await run({ outputs: outputs(value) })).checks)).toEqual([]);
+  });
+
+  it.each([
+    '!GetAtt PublicSubnetB.AvailabilityZone',
+    '!GetAtt PublicSubnetB.CidrBlock',
+    "!Join [',', [!Ref PublicSubnetB, !Ref PrivateSubnetB]]",
+  ])('fails %s, which refers to the subnet but is not its ID', async (value) => {
+    // Before: each passed, because the check only asked that the subnet be referenced.
+    expect(failed((await run({ outputs: outputs(value) })).checks)).toEqual([A7]);
+  });
+});

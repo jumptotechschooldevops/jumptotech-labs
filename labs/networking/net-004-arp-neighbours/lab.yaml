@@ -125,7 +125,9 @@ requirements:
   # --- the record the student keeps ----------------------------------------
   - type: file_content
     path: /home/student/l2/findings.txt
-    contains: "eth0"
+    # Only the neighbour table prints a link-layer address. `eth0` was also in
+    # the `ip route` and `ip addr` output the hints have the student run.
+    contains: "lladdr"
     label: The neighbour table was captured
 
   # --- what it means --------------------------------------------------------

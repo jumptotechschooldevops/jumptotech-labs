@@ -61,7 +61,13 @@ export const fileContentAbsent: SandboxVerifierHandler<'file_content_absent'> = 
         `'${requirement.path}' is too large to check exhaustively; the platform only read the first part of it`,
       );
     }
-    return contains(read.content, requirement.contains, requirement.ignore_case)
+    const content = requirement.ignore_comment_lines
+      ? read.content
+          .split('\n')
+          .filter((line) => !line.trimStart().startsWith('#'))
+          .join('\n')
+      : read.content;
+    return contains(content, requirement.contains, requirement.ignore_case)
       ? fail(`'${requirement.path}' still contains that text`)
       : pass();
   },

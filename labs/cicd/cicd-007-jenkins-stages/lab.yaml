@@ -100,6 +100,7 @@ requirements:
     stage: Build
     steps_contain:
       - node build.mjs
+    steps_as_command: true
     after:
       - Checkout
     label: Build runs the build command, after Checkout
@@ -108,6 +109,7 @@ requirements:
     stage: Test
     steps_contain:
       - node --test
+    steps_as_command: true
     after:
       - Build
     label: Test runs the test suite, after Build

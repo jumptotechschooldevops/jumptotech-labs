@@ -112,6 +112,7 @@ requirements:
     stage: Build
     steps_contain:
       - node build.mjs
+    steps_as_command: true
     label: A Build stage runs the build command
   - type: project_builds
     produces: dist/build-info.json

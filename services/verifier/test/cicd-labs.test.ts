@@ -702,3 +702,138 @@ describe('CICD-009: a variable the shell never expands is not a tag', () => {
     expect(failing(result)).toEqual([]);
   });
 });
+
+// ------------------------------------ Jenkins comments (certification pass)
+
+describe('CICD-007 — a commented line in a Jenkinsfile is not code', () => {
+  const pipeline = (stages: string) => (files: Map<string, string>) => {
+    files.set('Jenkinsfile', `pipeline {\n    agent any\n    stages {\n${stages}\n    }\n}\n`);
+    withBuild(files);
+  };
+  const CHECKOUT = "        stage('Checkout') { steps { checkout scm } }";
+  const BUILD = "        stage('Build') { steps { sh 'node build.mjs' } }";
+  const TEST = "        stage('Test') { steps { sh 'node --test' } }";
+  const PACKAGE = "        stage('Package') { steps { sh 'ls -l dist' } }";
+
+  it('passes the four stages in order', async () => {
+    expect(failing(await grade('CICD-007', pipeline([CHECKOUT, BUILD, TEST, PACKAGE].join('\n'))))).toEqual([]);
+  });
+
+  it('passes with an old stage kept in a // comment between two real ones', async () => {
+    // Before: the commented header was read as a stage called Lint, took the
+    // Test stage's body, and the real Test stage was reported missing.
+    const lint = "        // stage('Lint') {\n        //     steps { sh 'npx eslint .' }\n        // }";
+    expect(failing(await grade('CICD-007', pipeline([CHECKOUT, BUILD, lint, TEST, PACKAGE].join('\n'))))).toEqual([]);
+  });
+
+  it('passes with an old stage kept in a block comment', async () => {
+    const old = "        /* kept for reference:\n        stage('Package') {\n            steps { sh 'tar czf out.tgz dist' }\n        }\n        */";
+    expect(failing(await grade('CICD-007', pipeline([CHECKOUT, BUILD, old, TEST, PACKAGE].join('\n'))))).toEqual([]);
+  });
+
+  it('fails a commented-out Checkout, rather than crediting it with Build', async () => {
+    const result = await grade(
+      'CICD-007',
+      pipeline(["        // stage('Checkout') {\n        //     steps { checkout scm }\n        // }", BUILD, TEST, PACKAGE].join('\n')),
+    );
+    // Before: Checkout passed with Build's body, and Build was reported missing.
+    expect(failing(result)).toEqual(['A Checkout stage gets the source', 'Build runs the build command, after Checkout']);
+    const build = result.checks.find((c) => c.label.startsWith('Build runs'));
+    expect(build?.detail ?? '').not.toMatch(/no stage called 'Build'/);
+  });
+
+  it('fails a test command left behind a shell comment inside sh', async () => {
+    // Before: `# node --test` inside the sh block counted as running the tests.
+    const skipped = "        stage('Test') {\n            steps {\n                sh '''\n                    # node --test   (flaky, re-enable later)\n                    echo \"tests skipped\"\n                '''\n            }\n        }";
+    const result = await grade('CICD-007', pipeline([CHECKOUT, BUILD, skipped, PACKAGE].join('\n')));
+    expect(failing(result).some((label) => /test/i.test(label))).toBe(true);
+  });
+});
+
+// ------------------------------- workflow scope and inert steps (certification)
+
+describe('CICD-009 — IMAGE_TAG is workflow-level, so both jobs read it', () => {
+  it('fails IMAGE_TAG declared only in the image job, which leaves deploy with an empty tag', async () => {
+    const result = await grade('CICD-009', (files) => {
+      cicd009(files, {
+        image: 'docker build -t "jumptotech/statements:$IMAGE_TAG" .',
+        deploy: `sed -i "s|jumptotech/statements:.*|jumptotech/statements:$IMAGE_TAG|" deploy/app.yml`,
+      });
+      const ci = files.get('.github/workflows/ci.yml')!;
+      files.set(
+        '.github/workflows/ci.yml',
+        ci
+          .replace('\nenv:\n  IMAGE_TAG: ${{ github.sha }}\n', '\n')
+          .replace('  image:\n    runs-on: ubuntu-latest\n', '  image:\n    runs-on: ubuntu-latest\n    env:\n      IMAGE_TAG: ${{ github.sha }}\n'),
+      );
+    });
+    // Before: all fourteen checks passed.
+    expect(failing(result)).toEqual(['The image tag comes from a workflow variable that identifies the commit']);
+  });
+});
+
+describe('CICD-002 — a step must run something to count', () => {
+  const workflow = (steps: string) =>
+    `name: CI\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n${steps}`;
+
+  it('passes one step that runs a command', async () => {
+    const result = await grade('CICD-002', (files) => files.set('.github/workflows/ci.yml', workflow('      - run: echo hello\n')));
+    expect(failing(result)).toEqual([]);
+  });
+
+  it('fails a job whose only step has a name and nothing else, which GitHub rejects', async () => {
+    const result = await grade('CICD-002', (files) =>
+      files.set('.github/workflows/ci.yml', workflow('      - name: Say hello\n')),
+    );
+    expect(failing(result)).toEqual(['A build job runs on ubuntu-latest with at least one step']);
+    expect(result.checks.find((c) => c.status !== 'pass')?.detail).toContain("neither 'run' nor 'uses'");
+  });
+});
+
+// ---------------------------------- a command, not a mention (certification)
+
+describe('a graded command must be run, not echoed', () => {
+  const cicd003Steps = (build: string, test: string) => (files: Map<string, string>) => {
+    files.set(
+      '.github/workflows/ci.yml',
+      files.get('.github/workflows/ci.yml')! +
+        `
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: ${build}
+      - run: ${test}
+`,
+    );
+    withBuild(files);
+  };
+
+  it.each([
+    ['node build.mjs', 'node --test'],
+    ['npm ci && node build.mjs', 'NODE_ENV=test node --test --test-reporter=spec'],
+    ['time node build.mjs', "node --test || (echo 'tests failed' && exit 1)"],
+  ])('CICD-003 passes `%s` / `%s`', async (build, test) => {
+    expect(failing(await grade('CICD-003', cicd003Steps(build, test)))).toEqual([]);
+  });
+
+  it('CICD-003 fails the commands echoed instead of run', async () => {
+    // Before: `echo Running node build.mjs` passed as running the build (8/8).
+    const result = await grade('CICD-003', cicd003Steps('echo Running node build.mjs', 'echo Running node --test'));
+    expect(failing(result).length).toBeGreaterThan(0);
+    expect(failing(result).every((label) => !/project builds|suite passes/i.test(label))).toBe(true);
+  });
+
+  it('CICD-007 fails `sh "echo TODO node --test"`, and passes the command in an sh string', async () => {
+    const pipeline = (test: string) => (files: Map<string, string>) => {
+      files.set(
+        'Jenkinsfile',
+        `pipeline {\n  agent any\n  stages {\n    stage('Checkout') { steps { checkout scm } }\n    stage('Build') { steps { sh 'node build.mjs' } }\n    stage('Test') { steps { ${test} } }\n    stage('Package') { steps { sh 'ls -l dist' } }\n  }\n}\n`,
+      );
+      withBuild(files);
+    };
+    expect(failing(await grade('CICD-007', pipeline(`sh "node --test"`)))).toEqual([]);
+    expect(failing(await grade('CICD-007', pipeline(`sh script: 'node --test', label: 'tests'`)))).toEqual([]);
+    expect(failing(await grade('CICD-007', pipeline(`sh 'echo TODO node --test'`)))).toEqual(['Test runs the test suite, after Build']);
+  });
+});

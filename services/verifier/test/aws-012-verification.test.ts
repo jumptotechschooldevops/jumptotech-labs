@@ -119,8 +119,8 @@ describe('AWS-012 — the seeded state does not pass', () => {
     const result = await run(BASE, SEEDED_FINDINGS);
 
     expect(result.passed).toBe(false);
-    // 9 endpoint checks + 5 findings + the placeholder check.
-    expect(failed(result.checks)).toHaveLength(15);
+    // 10 endpoint checks + 5 findings + the placeholder check.
+    expect(failed(result.checks)).toHaveLength(16);
   });
 
   it('still passes what already worked', async () => {
@@ -282,5 +282,41 @@ describe('AWS-012 — isolation', () => {
       [FINDINGS]: findings(),
     });
     expect((await verifyLab({ lab, sandbox, namespace: 'jtt-lab-x' })).passed).toBe(false);
+  });
+});
+
+describe('AWS-012 — each endpoint points at its own service', () => {
+  const S3 = "ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'";
+  const DDB = "ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'";
+
+  it('passes the service names written as literals for this Region', async () => {
+    const literal = SOLVED_TEMPLATE.replace(S3, 'ServiceName: com.amazonaws.eu-west-1.s3').replace(
+      DDB,
+      'ServiceName: com.amazonaws.eu-west-1.dynamodb',
+    );
+    expect(literal).not.toBe(SOLVED_TEMPLATE);
+    expect(failed((await run(literal, findings())).checks)).toEqual([]);
+  });
+
+  it('passes a !Join that builds the same name', async () => {
+    const joined = SOLVED_TEMPLATE.replace(DDB, "ServiceName: !Join ['', ['com.amazonaws.', !Ref 'AWS::Region', '.dynamodb']]");
+    expect(failed((await run(joined, findings())).checks)).toEqual([]);
+  });
+
+  it('fails the S3 block copied with only the logical ID renamed', async () => {
+    // Before: both endpoints to S3 passed every check, and the DynamoDB
+    // traffic the review names kept going through the NAT gateway.
+    const copied = SOLVED_TEMPLATE.replace(DDB, S3);
+    expect(failed((await run(copied, findings())).checks)).toEqual(['DynamoDbEndpoint names the service it points at']);
+  });
+
+  it('fails the two service names swapped, and a service in another Region', async () => {
+    const swapped = SOLVED_TEMPLATE.replace(S3, 'XX').replace(DDB, S3).replace('XX', DDB);
+    expect(failed((await run(swapped, findings())).checks)).toEqual([
+      'S3Endpoint names the service it points at',
+      'DynamoDbEndpoint names the service it points at',
+    ]);
+    const elsewhere = SOLVED_TEMPLATE.replace(S3, 'ServiceName: com.amazonaws.us-east-1.s3');
+    expect(failed((await run(elsewhere, findings())).checks)).toEqual(['S3Endpoint names the service it points at']);
   });
 });

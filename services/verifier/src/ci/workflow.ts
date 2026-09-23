@@ -366,9 +366,51 @@ function withoutShellLiterals(script: string): string {
  * would otherwise count as running the build. The rule is the one the pipeline
  * reference checks use: `#` at the start of a line or after whitespace.
  */
-export function runContains(run: string | undefined, fragments: readonly string[]): string[] {
+export function runContains(
+  run: string | undefined,
+  fragments: readonly string[],
+  asCommand = false,
+): string[] {
   if (!run) return [...fragments];
   const code = withoutShellComments(run);
+  if (asCommand) return commandsMissing(code, fragments);
   const haystack = code.replace(/\s+/g, ' ').toLowerCase();
   return fragments.filter((fragment) => !haystack.includes(fragment.replace(/\s+/g, ' ').toLowerCase()));
+}
+
+/** Words that run the command after them rather than being the command. */
+const COMMAND_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*|sudo|exec|time|env|then|do|else|!)\s+/;
+
+/**
+ * Which fragments do not *start* a command in this (comment-free) code?
+ *
+ * A substring test passed `echo node build.mjs` and `sh 'echo TODO node
+ * --test'` as running the build and the tests. Here the code is cut at the
+ * places a new command can begin — newlines, `;`, `&&`, `||`, `|`, `(`, `)`,
+ * `$(`, a backquote, and a quote, which is where a Jenkins `sh '…'` script
+ * starts — and a fragment counts only at the start of a piece, after any
+ * `VAR=value` assignments and `sudo`/`exec`/`time`/`env`. So
+ * `npm ci && node build.mjs`, `NODE_ENV=test node --test` and
+ * `sh "node --test"` run the command; `echo node --test` does not.
+ *
+ * Linear: one split and one prefix strip per piece, over at most the capped
+ * file the reader returns.
+ */
+export function commandsMissing(code: string, fragments: readonly string[]): string[] {
+  const pieces = code
+    .replace(/\\\r?\n/g, ' ')
+    .split(/\r?\n|;|&&|\|\||\||\$\(|[()`'"]/)
+    .map((piece) => {
+      let text = piece.trim();
+      for (let i = 0; i < 8; i += 1) {
+        const stripped = text.replace(COMMAND_PREFIX, '');
+        if (stripped === text) break;
+        text = stripped;
+      }
+      return text.replace(/\s+/g, ' ').toLowerCase();
+    });
+  return fragments.filter((fragment) => {
+    const wanted = fragment.replace(/\s+/g, ' ').trim().toLowerCase();
+    return !pieces.some((piece) => piece === wanted || piece.startsWith(`${wanted} `));
+  });
 }

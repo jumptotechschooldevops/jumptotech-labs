@@ -188,6 +188,10 @@ requirements:
       - s3:DeleteObject
     resources:
       - arn:aws:s3:::jumptotech-build-artifacts/customer-exports/*
+    # Always, not "when some condition holds": a Deny conditioned on
+    # aws:SecureTransport=false, or on a tag nobody has, passed every request
+    # this lab asks about, and a later broad Allow would get past it.
+    unconditional: true
     label: Customer exports are protected by an explicit Deny, not merely by omission
 
   # --- review rules ---------------------------------------------------------

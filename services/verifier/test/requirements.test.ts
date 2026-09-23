@@ -150,6 +150,8 @@ describe('verifier — Service checks (test requirement 18)', () => {
     new FakeKubernetes({
       services: { [NS]: [service] },
       pods: { [NS]: [podSnapshot({ name: 'a' }), podSnapshot({ name: 'b' })] },
+      // A request through the Service's cluster IP reaches a Pod.
+      httpChecks: { [`${NS}/accounts:80/`]: { ok: true, statusCode: 200 } },
     });
 
   it('checks type, selector, ports and endpoints', async () => {

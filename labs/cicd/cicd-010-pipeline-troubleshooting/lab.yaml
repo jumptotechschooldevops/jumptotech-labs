@@ -127,6 +127,7 @@ requirements:
     job: build
     run_contains:
       - node build.mjs
+    as_command: true
     after:
       - uses: actions/checkout
       - uses: actions/setup-node
@@ -136,6 +137,7 @@ requirements:
     job: build
     run_contains:
       - node --test
+    as_command: true
     after:
       - run_contains: [node build.mjs]
     label: The job runs the test suite, after the build
@@ -166,6 +168,7 @@ requirements:
     stage: Test
     steps_contain:
       - node --test
+    steps_as_command: true
     after:
       - Build
     label: The Jenkins pipeline tests after it builds

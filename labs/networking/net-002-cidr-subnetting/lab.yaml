@@ -62,7 +62,7 @@ task:
     `plan.txt` and `classify.txt` are templates that are already there. Every
     answer line ends with `= `; type your value immediately after that space
     and leave the labels and addresses alone. A completed line looks exactly
-    like `usable_count = 30`, with one space either side of the `=`.
+    like `example_usable_count = 30`, with one space either side of the `=`.
 
     In `plan.txt`, complete all four blocks — network address, broadcast
     address, first and last assignable host address, and the number of
@@ -133,37 +133,49 @@ setup:
 
 requirements:
   # --- plan.txt, part 1: the four existing blocks --------------------------
-  - type: file_content
+  # Each answer read from its own key and compared whole. With one set of
+  # keys repeated in every block, a substring check passed values swapped
+  # between fields (block B's broadcast and last address, A's and C's
+  # counts), and could not tell which block an answer belonged to.
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "10.20.31.255"
+    key: a_broadcast
+    equals: 10.20.31.255
     label: "Block A: the broadcast address of 10.20.16.0/20"
-  - type: file_content
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "usable_count = 4094"
+    key: a_usable_count
+    equals: "4094"
     label: "Block A: the number of assignable addresses"
-  - type: file_content
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "10.20.5.191"
+    key: b_broadcast
+    equals: 10.20.5.191
     label: "Block B: the broadcast address of 10.20.5.128/26"
-  - type: file_content
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "10.20.5.190"
+    key: b_last_usable
+    equals: 10.20.5.190
     label: "Block B: the last assignable address"
-  - type: file_content
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "172.16.11.255"
+    key: c_broadcast
+    equals: 172.16.11.255
     label: "Block C: the broadcast address of 172.16.8.0/22"
-  - type: file_content
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "usable_count = 1022"
+    key: c_usable_count
+    equals: "1022"
     label: "Block C: the number of assignable addresses"
-  - type: file_content
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "192.168.100.79"
+    key: d_broadcast
+    equals: 192.168.100.79
     label: "Block D: the broadcast address of 192.168.100.64/28"
-  - type: file_content
+  - type: file_key_value
     path: /home/student/subnets/plan.txt
-    contains: "192.168.100.65"
+    key: d_first_usable
+    equals: 192.168.100.65
     label: "Block D: the first assignable address"
 
   # --- plan.txt, part 2: the new allocation --------------------------------

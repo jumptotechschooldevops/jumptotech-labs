@@ -89,6 +89,13 @@ requirements:
   - type: directory_exists
     path: /home/ci-runner
     label: ci-runner has a home directory
+  # A home the account can use: `useradd` without -m followed by
+  # `sudo mkdir /home/ci-runner` leaves a root-owned directory the account
+  # cannot write to.
+  - type: file_owner
+    path: /home/ci-runner
+    owner: ci-runner
+    label: ci-runner owns its home directory
   - type: user_in_group
     user: ci-runner
     group: deployers

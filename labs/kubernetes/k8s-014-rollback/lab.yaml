@@ -153,6 +153,17 @@ requirements:
     key: deployment.kubernetes.io/revision
     min_int: 3
     label: A new revision was rolled out and then rolled back
+  # The revision number alone was satisfied by two `kubectl rollout restart`s:
+  # revision 3, the original image, and neither the broken release nor a
+  # rollback. The history says what actually happened: a ReplicaSet that ran
+  # the broken image survives (scaled to zero), and the live one is an earlier
+  # template brought back — `rollout undo`, `undo --to-revision`, or an edit
+  # back to the identical template all record that; a restart never does.
+  - type: deployment_revision_history
+    name: payments-api
+    rolled_out_image: nginx:1.29-rc1-jumptotech
+    current_is_rollback: true
+    label: The history shows the broken release and a return to an earlier revision
   - type: deployment_image
     name: payments-api
     image: nginx:1.28-alpine

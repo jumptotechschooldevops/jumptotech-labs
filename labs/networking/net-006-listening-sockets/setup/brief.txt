@@ -39,8 +39,9 @@ payments-api reads its own configuration at startup:
 
 Change it so the service is reachable from the segment this host is on, not
 only from the host itself, and restart it so the change takes effect. `sv` is
-the supervisor here; `sv restart <service>` and `sv status <service>` are the
-two forms you are likely to want. The services live in /etc/service.
+the supervisor here; `sudo sv restart <service>` and `sudo sv status <service>`
+are the two forms you are likely to want. The services live in /etc/service.
+The configuration files belong to root: edit them with sudoedit or sudo nano.
 
 Leave the other three alone. A repair that takes down a healthy service is not
 a repair, and the inventory you took at the start is how you will know.

@@ -135,7 +135,8 @@ task:
     once assigned;
 
     give each replica its own 1Gi ReadWriteOnce volume through a claim template
-    named `data`, rather than sharing one claim;
+    named `data`, rather than sharing one claim, mounted in the `db` container
+    at `/var/lib/ledger` where the application keeps its data today;
 
     and keep selecting Pods labelled `app=ledger-db`, so the Service and the
     workload still refer to each other.
@@ -197,6 +198,15 @@ requirements:
       - ReadWriteOnce
     storage: 1Gi
     label: Each replica gets its own 1Gi volume from a claim template
+  # A claim template nobody mounts still gets a claim per replica, but the
+  # container never sees it and keeps writing to its own ephemeral filesystem.
+  - type: workload_volume_mount
+    kind: statefulset
+    name: ledger-db
+    container: db
+    volume: data
+    mountPath: /var/lib/ledger
+    label: The db container writes to its own volume
   - type: statefulset_ready
     name: ledger-db
     min_ready: 2

@@ -197,17 +197,45 @@ function describeArgv(argv: string[] | undefined): string {
  * A volume declared in `spec.volumes` and mounted by nobody fails, which is the
  * point: an unmounted volume changes nothing about how the Pod runs.
  */
+const VOLUME_MOUNT_KIND = { pod: 'Pod', deployment: 'Deployment', statefulset: 'StatefulSet' } as const;
+
+/**
+ * The Pod template a volume-mount check reads, whatever owns it.
+ *
+ * A StatefulSet's per-replica volumes are declared by `volumeClaimTemplates`,
+ * not `spec.volumes`; the controller adds them to each Pod it creates. They
+ * count as declared, but a claim template that no container mounts gives the
+ * replica nothing — which is exactly what this check exists to catch.
+ */
+async function volumeMountWorkload(
+  kind: keyof typeof VOLUME_MOUNT_KIND,
+  name: string,
+  reader: Parameters<VerifierHandler<'workload_volume_mount'>['run']>[1],
+): Promise<{
+  containers: ContainerSnapshot[];
+  initContainers?: ContainerSnapshot[];
+  volumes?: VolumeSourceSnapshot[];
+  claimTemplates?: string[];
+} | null> {
+  if (kind === 'pod') return reader.pod(name);
+  if (kind === 'deployment') return reader.deployment(name);
+  const statefulSet = await reader.statefulSet(name);
+  if (!statefulSet) return null;
+  return {
+    containers: statefulSet.containers,
+    claimTemplates: statefulSet.volumeClaimTemplates.map((t) => t.name),
+  };
+}
+
 export const workloadVolumeMount: VerifierHandler<'workload_volume_mount'> = {
   type: 'workload_volume_mount',
   label: (r) => {
     const where = r.collection === 'initContainers' ? 'init container' : 'container';
-    const kind = r.kind === 'pod' ? 'Pod' : 'Deployment';
-    return `${kind} ${r.name} mounts volume ${r.volume} at ${r.mountPath} in ${where} ${r.container}`;
+    return `${VOLUME_MOUNT_KIND[r.kind]} ${r.name} mounts volume ${r.volume} at ${r.mountPath} in ${where} ${r.container}`;
   },
   async run(r, reader) {
-    const workload =
-      r.kind === 'pod' ? await reader.pod(r.name) : await reader.deployment(r.name);
-    if (!workload) return missing(r.kind === 'pod' ? 'Pod' : 'Deployment', r.name, reader.namespace);
+    const workload = await volumeMountWorkload(r.kind, r.name, reader);
+    if (!workload) return missing(VOLUME_MOUNT_KIND[r.kind], r.name, reader.namespace);
 
     const list: ContainerSnapshot[] =
       r.collection === 'initContainers' ? (workload.initContainers ?? []) : workload.containers;
@@ -229,7 +257,9 @@ export const workloadVolumeMount: VerifierHandler<'workload_volume_mount'> = {
        * exist at all". A student who declared the volume but forgot the mount
        * gets told that, rather than being sent hunting for a typo.
        */
-      const declared = (workload.volumes ?? []).some((v) => v.name === r.volume);
+      const declared =
+        (workload.volumes ?? []).some((v) => v.name === r.volume) ||
+        (workload.claimTemplates ?? []).includes(r.volume);
       const mounted = mounts.map((m) => `'${m.name}'`).join(', ') || 'nothing';
       return fail(
         declared

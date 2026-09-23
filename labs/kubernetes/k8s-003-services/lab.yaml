@@ -85,6 +85,16 @@ requirements:
     name: accounts
     min_ready: 2
     label: Both accounts Pods are registered as ready endpoints
+  # A headless Service (`clusterIP: None`, the second example in
+  # `kubectl create service clusterip --help`) still reports type ClusterIP and
+  # still gets endpoints, but it has no stable address — the point of the lab.
+  # Only a request through the Service's own cluster IP tells the two apart.
+  - type: service_http
+    service: accounts
+    port: 80
+    path: /
+    expected_status: 200
+    label: The Service answers requests on its stable cluster address
 
 hints:
   - level: 1

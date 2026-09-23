@@ -21,8 +21,8 @@ THE FOUR FAILURES
   refused       Open a TCP connection to port 9110 on this host's loopback
                 address. Nothing is bound there.
 
-  unreachable   Open a TCP connection to 10.99.99.99, or ping it. There is no
-                route to that address from here.
+  unreachable   Open a TCP connection to 10.99.99.99. There is no route to
+                that address from here.
 
   resolution    Look up the name ledger.bank.invalid.
 

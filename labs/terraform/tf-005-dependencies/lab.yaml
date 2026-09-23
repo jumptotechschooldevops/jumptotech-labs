@@ -98,7 +98,11 @@ task:
     looks for them:
 
     - `local_file.integrity_record` — writes `build/integrity.txt`. Its
-      content must carry the service configuration's SHA-256 checksum.
+      content must carry the service configuration's SHA-256 checksum. Write
+      its `filename` exactly as `build/integrity.txt`, the way the existing
+      configuration resource writes its own: a `${path.module}/` prefix
+      writes the same file but reports its path as `./build/integrity.txt`,
+      and the paths in the `deployment` output are compared as written.
     - `local_file.deploy_manifest` — writes `build/deploy-manifest.txt`.
       Its content must carry that same checksum **and** the path of the
       integrity record, taken from that resource rather than typed out.

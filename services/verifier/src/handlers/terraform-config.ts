@@ -80,6 +80,33 @@ const resourceBlock = (config: HclDocument, type: string, name: string, mode: 'm
 
 // ============================================================ references
 
+export const terraformOutputReferences: SandboxVerifierHandler<'terraform_output_references'> = {
+  type: 'terraform_output_references',
+  label: (r) => `output ${r.name} is taken from ${r.reaches.join(', ')}`,
+  async run(requirement, reader) {
+    return withConfig(reader, requirement.dir, async (config) => {
+      const block = findBlock(config, 'output', requirement.name);
+      if (!block) return fail(`No output '${requirement.name}' is declared`);
+      const expression = argumentValue(block, 'value');
+      if (expression === null) return fail(`output '${requirement.name}' sets no 'value'`);
+
+      const targets = reachableReferences(config, expression).map((reference) => reference.target);
+      const missing = requirement.reaches.filter((wanted) =>
+        wanted.endsWith('.') ? !targets.some((t) => t.startsWith(wanted)) : !targets.includes(wanted),
+      );
+      // What is missing, never what was written: a literal in its place is
+      // the student's answer, and quoting it back hands over nothing useful.
+      return missing.length === 0
+        ? pass()
+        : fail(
+            `output '${requirement.name}' does not take its value from ${missing
+              .map((m) => (m.endsWith('.') ? `a ${m.slice(0, -1)} reference` : m))
+              .join(' or ')} — a value typed out is not a reference`,
+          );
+    });
+  },
+};
+
 export const terraformResourceReferences: SandboxVerifierHandler<'terraform_resource_references'> = {
   type: 'terraform_resource_references',
   label: (r) => `${r.resource_type}.${r.name} refers to ${r.references}`,
@@ -156,19 +183,35 @@ export const terraformResourceLiteralAbsent: SandboxVerifierHandler<'terraform_r
        * message names the argument and leaves the text out: the student can
        * see their own file, and the list is the lab's to state.
        */
-      const forbidden = requirement.literals.map((literal) => literal.toLowerCase());
-      const offending = block.arguments
-        .filter((argument) =>
-          argument.literals.some((literal) => {
-            const text = literal.toLowerCase();
-            return forbidden.some((needle) => text.includes(needle));
-          }),
-        )
-        .map((argument) => argument.name);
+      const fold = (text: string) => (requirement.case_sensitive ? text : text.toLowerCase());
+      const forbidden = requirement.literals.map(fold);
+      const hardCodes = (literals: readonly string[]) =>
+        literals.some((literal) => forbidden.some((needle) => fold(literal).includes(needle)));
+
+      const offending = block.arguments.filter((argument) => hardCodes(argument.literals)).map((argument) => argument.name);
       if (offending.length > 0) {
         return fail(
           `${requirement.resource_type}.${requirement.name} still hard-codes a value this lab asks it to take from input, in: ${offending.join(', ')}`,
         );
+      }
+
+      if (requirement.through_locals) {
+        const localArguments = new Map(
+          blocksOfType(config, 'locals').flatMap((locals) => locals.arguments.map((a) => [a.name, a] as const)),
+        );
+        const reached = new Set(
+          block.arguments.flatMap((argument) =>
+            reachableReferences(config, argument.value)
+              .filter((reference) => reference.kind === 'local')
+              .map((reference) => reference.target.slice('local.'.length)),
+          ),
+        );
+        const parked = [...reached].filter((name) => hardCodes(localArguments.get(name)?.literals ?? [])).sort();
+        if (parked.length > 0) {
+          return fail(
+            `${requirement.resource_type}.${requirement.name} reads a value this lab asks it to take from input out of a local that types it in: ${parked.map((n) => `local.${n}`).join(', ')}`,
+          );
+        }
       }
       return pass();
     });

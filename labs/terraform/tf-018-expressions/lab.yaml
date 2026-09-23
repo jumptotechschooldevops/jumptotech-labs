@@ -158,6 +158,14 @@ requirements:
       - gold_services
       - replica_factor
       - scaled_replicas
+    # Each value computed rather than typed in. The task prints the answer
+    # (`gold: auth, ledger`, `replicas: 12`), so without these a student stuck
+    # on `sum()` could write `scaled_replicas = 12` and every check passed.
+    references:
+      service_summary: [var.services]
+      gold_services: [var.services]
+      replica_factor: [var.environment]
+      scaled_replicas: [var.services, local.replica_factor]
     label: The four derived values are named local values
 
   # A hand-typed manifest refers to nothing. These two are what make retyping
@@ -214,6 +222,17 @@ requirements:
     name: release_manifest
     literals: [production]
     label: The environment line is not typed into the resource
+  # Nor into a local the resource reads (`env_line = "PRODUCTION"`). Case
+  # matters here: the solution's replica factor compares against the
+  # lower-case "production", which is input, not output.
+  - type: terraform_resource_literal_absent
+    dir: terraform
+    resource_type: local_file
+    name: release_manifest
+    literals: [PRODUCTION]
+    through_locals: true
+    case_sensitive: true
+    label: The environment line is not typed into a local either
 
   - type: terraform_resource_exists
     dir: terraform

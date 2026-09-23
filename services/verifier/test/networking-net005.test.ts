@@ -328,9 +328,10 @@ describe('one student cannot satisfy another', () => {
     const sandbox = solved();
     await verify(sandbox);
 
-    // Exactly two inspections, both with argv the verifier owns: the neighbour
-    // table and the listening-socket table. No lab operand reaches either.
-    expect([...sandbox.inspections].sort()).toEqual([NEIGH, 'ss -H -lntu'].sort());
+    // Exactly three inspections: the neighbour table and the listening-socket
+    // table, with argv the verifier owns, and the poller's latest log line,
+    // with argv the lab fixes. No student-supplied operand reaches any.
+    expect([...sandbox.inspections].sort()).toEqual([NEIGH, 'ss -H -lntu', `tail -n 1 ${LOG}`].sort());
     const allowed = new Set([
       '/home/student/routing',
       '/home/student/routing/brief.txt',

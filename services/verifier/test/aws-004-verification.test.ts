@@ -317,3 +317,24 @@ describe('AWS-004 — the trust statement allows AssumeRole, not everything unde
     }
   });
 });
+
+describe('AWS-004 — the permissions policy is left as review accepted it (certification pass)', () => {
+  it('fails one that lost ListBucket and gained a pasted trust statement', async () => {
+    // Before: passed, because only object-level questions were asked of it.
+    const edited = JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        { Effect: 'Allow', Action: 's3:GetObject', Resource: `${BUCKET}/*` },
+        { Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' },
+      ],
+    });
+    expect(failed((await run(TRUST_SOLVED, edited)).checks)).toEqual([
+      'The permissions policy is still a valid document',
+      'The role can still list the reconciliation bucket',
+    ]);
+  });
+
+  it('passes the seeded permissions policy beside the fixed trust policy', async () => {
+    expect(failed((await run(TRUST_SOLVED)).checks)).toEqual([]);
+  });
+});

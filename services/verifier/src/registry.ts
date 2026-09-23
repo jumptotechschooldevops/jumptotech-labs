@@ -129,6 +129,7 @@ import {
   deploymentReplicas,
   deploymentResources,
   deploymentRolloutComplete,
+  deploymentRevisionHistory,
   deploymentSelector,
   deploymentStrategy,
   deploymentUsesConfigMap,
@@ -255,6 +256,7 @@ import {
   terraformResourceDependsOn,
   terraformResourceLiteralAbsent,
   terraformResourceReferences,
+  terraformOutputReferences,
   terraformVariableDeclared,
   terraformVariableValidation,
 } from './handlers/terraform-config.js';
@@ -333,6 +335,7 @@ const KUBERNETES_HANDLERS: { [K in KubernetesRequirementType]: VerifierHandler<K
   deployment_replicas: deploymentReplicas,
   deployment_available: deploymentAvailable,
   deployment_rollout_complete: deploymentRolloutComplete,
+  deployment_revision_history: deploymentRevisionHistory,
   deployment_selector: deploymentSelector,
   deployment_strategy: deploymentStrategy,
   deployment_resources: deploymentResources,
@@ -452,6 +455,7 @@ const SANDBOX_HANDLERS: { [K in SandboxRequirementType]: SandboxVerifierHandler<
   terraform_state_absent: terraformStateAbsent,
 
   terraform_resource_references: terraformResourceReferences,
+  terraform_output_references: terraformOutputReferences,
   terraform_resource_literal_absent: terraformResourceLiteralAbsent,
   terraform_variable_declared: terraformVariableDeclared,
   terraform_locals_declared: terraformLocalsDeclared,

@@ -246,7 +246,7 @@ suite('DOCKER-010 against a real docker:27-dind sandbox', () => {
     const before = await verify();
     expect(before.passed).toBe(false);
     expect(before.summary).toBe('LAB NOT COMPLETE');
-    expect(before.checks).toHaveLength(9);
+    expect(before.checks).toHaveLength(11);
 
     /*
      * Exactly which six fail is worth pinning, because three checks legitimately
@@ -267,7 +267,9 @@ suite('DOCKER-010 against a real docker:27-dind sandbox', () => {
       'Container ledger-web runs the nginx:1.27-alpine image',
       'Container ledger-worker is running',
       'ledger-api publishes container port 80 on host port 8080',
+      'ledger-api runs the nginx server',
       'ledger-web publishes container port 80 on host port 8081',
+      'ledger-web runs the nginx server',
       'ledger-worker runs with LEDGER_MODE set to live',
     ].sort());
   }, 300_000);
@@ -334,7 +336,24 @@ suite('DOCKER-010 against a real docker:27-dind sandbox', () => {
 
     const result = await verify();
     expect(result.passed).toBe(false);
-    expect(failing(result)).toEqual(['Container ledger-web runs the nginx:1.27-alpine image']);
+    expect(failing(result)).toEqual([
+      'Container ledger-web runs the nginx:1.27-alpine image',
+      'ledger-web runs the nginx server',
+    ]);
+  }, 300_000);
+
+  it('the right image and port, kept alive by sleep, fails', async () => {
+    // Recreated "with those settings plus the correction": the seeded
+    // `sleep 3600` survives onto the nginx image, which never starts nginx.
+    await rmInSandbox('ledger-web');
+    expect(
+      (await inSandbox('docker', 'run', '-d', '--name', 'ledger-web', '-p', '8081:80',
+        'nginx:1.27-alpine', 'sleep', '3600')).code,
+    ).toBe(0);
+
+    const result = await verify();
+    expect(result.passed).toBe(false);
+    expect(failing(result)).toEqual(['ledger-web runs the nginx server']);
   }, 300_000);
 
   it('a decoy container with the right settings cannot stand in for the target', async () => {

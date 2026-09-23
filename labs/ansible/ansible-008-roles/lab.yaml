@@ -78,6 +78,14 @@ requirements:
     requires: [tasks, handlers, templates, defaults]
     used_by: site.yml
     label: A 'web' role exists with the standard layout and site.yml applies it
+  # The template itself, in the role: an empty roles/web/templates/ satisfied
+  # the layout check, and Ansible's search path then fell back to the
+  # playbook's own templates/app.conf.j2, so the role rendered a file it did
+  # not contain and every check passed.
+  - type: ansible_template_exists
+    path: roles/web/templates/app.conf.j2
+    references: [app_name, app_port, app_release]
+    label: The configuration template lives in the role
   - type: yaml_valid
     path: roles/web/defaults/main.yml
     label: The role declares its own defaults

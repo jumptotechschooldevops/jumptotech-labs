@@ -52,6 +52,7 @@ export {
   KubernetesClient,
   toPodSnapshot,
   toDeploymentSnapshot,
+  toReplicaSetSnapshot,
   toServiceSnapshot,
   toPersistentVolumeClaimSnapshot,
 } from './k8s/client.js';

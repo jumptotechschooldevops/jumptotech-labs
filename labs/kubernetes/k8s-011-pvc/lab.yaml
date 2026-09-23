@@ -73,6 +73,13 @@ requirements:
     name: ledger
     min_available: 1
     label: ledger is running after the change
+  # Availability alone is satisfied by the previous ReplicaSet's Pod: when the
+  # edited template's Pods never become ready, the controller keeps the old
+  # one serving, so a change that broke the app would still pass. The rollout
+  # must have finished on the new template.
+  - type: deployment_rollout_complete
+    name: ledger
+    label: The changed Deployment has rolled out
 
 hints:
   - level: 1

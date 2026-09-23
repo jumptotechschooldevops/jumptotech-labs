@@ -113,6 +113,7 @@ export const iamPolicyStatement: SandboxVerifierHandler<'iam_policy_statement'> 
       ...(requirement.principals !== undefined ? { principals: requirement.principals } : {}),
       ...(requirement.exact_principals ? { exactPrincipals: true } : {}),
       ...(requirement.exact_actions ? { exactActions: true } : {}),
+      ...(requirement.unconditional ? { unconditional: true } : {}),
       ...(requirement.not_principals !== undefined
         ? { notPrincipals: requirement.not_principals }
         : {}),
@@ -129,6 +130,16 @@ export const iamPolicyStatement: SandboxVerifierHandler<'iam_policy_statement'> 
       return fail(
         `no statement in '${requirement.path}' has Effect ${requirement.effect}; ${summarise(policy)}`,
       );
+    }
+    if (requirement.unconditional) {
+      const conditional = findStatements(policy, { ...selector, unconditional: false });
+      if (conditional.length > 0) {
+        // Not which condition, and not how to remove it: only that the
+        // statement found applies some of the time rather than always.
+        return fail(
+          `a matching statement exists in '${requirement.path}', but it carries a Condition, so it applies only some of the time`,
+        );
+      }
     }
     if (requirement.actions !== undefined && requirement.exact_actions) {
       const loosely = findStatements(policy, { ...selector, exactActions: false });

@@ -177,7 +177,13 @@ while true; do
   status_ledger=$(ask "$CTL" status ledger-api)
   restart_ledger=$(ask "$CTL" restart ledger-api)
   other_command=$(outside_remit)
+  # Two questions, because sudoers `*` matches spaces too: a rule written
+  # `… * ledger-api` refuses `restart payments-api` but permits
+  # `restart payments-api ledger-api`, and the tool acts on its first service.
   restart_other=$(ask "$CTL" restart payments-api)
+  if [ "$restart_other" != permitted ]; then
+    restart_other=$(ask "$CTL" restart payments-api ledger-api)
+  fi
 
   [ "$status_ledger" = permitted ]  && p_status=ok      || p_status=denied
   [ "$restart_ledger" = permitted ] && p_restart=ok     || p_restart=denied

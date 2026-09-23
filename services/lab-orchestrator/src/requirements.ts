@@ -664,6 +664,30 @@ const kubernetesRequirementSchemas = {
     .object({ type: z.literal('deployment_rollout_complete'), name: resourceName, ...common })
     .strict(),
 
+  /**
+   * The Deployment's own rollout history, read from the ReplicaSets it owns.
+   *
+   * `rolled_out_image`: some template the Deployment rolled out ran this
+   * image — the bad release really went out (its ReplicaSet survives, scaled
+   * to zero, as history). `current_is_rollback`: the live template is an
+   * earlier one re-used — the controller records the revisions a re-used
+   * ReplicaSet held in `deployment.kubernetes.io/revision-history`, which
+   * `rollout undo` and an edit back to an identical template both produce,
+   * and `rollout restart` (a new template every time) never does.
+   */
+  deployment_revision_history: z
+    .object({
+      type: z.literal('deployment_revision_history'),
+      name: resourceName,
+      rolled_out_image: imageReference.optional(),
+      current_is_rollback: z.boolean().optional(),
+      ...common,
+    })
+    .strict()
+    .refine((v) => v.rolled_out_image !== undefined || v.current_is_rollback === true, {
+      message: 'must assert a rolled-out image, a rollback, or both',
+    }),
+
   deployment_selector: z
     .object({
       type: z.literal('deployment_selector'),
@@ -1432,7 +1456,12 @@ const kubernetesRequirementSchemas = {
   workload_volume_mount: z
     .object({
       type: z.literal('workload_volume_mount'),
-      kind: z.enum(['pod', 'deployment']),
+      /**
+       * `statefulset` checks the Pod template's containers. Its volumes come
+       * from `volumeClaimTemplates` rather than `spec.volumes`, so `source`
+       * cannot be asserted for it — a claim template is always a claim.
+       */
+      kind: z.enum(['pod', 'deployment', 'statefulset']),
       name: resourceName,
       container: resourceName,
       collection: z.enum(['containers', 'initContainers']).default('containers'),
@@ -1794,6 +1823,15 @@ const sandboxRequirementSchemas = {
         )
         .min(1)
         .max(10),
+      /**
+       * Also read the string literals of every local value the resource's
+       * arguments reach. Moving `region = "eu-west-1"` one hop into a local
+       * is still typing it in. Opt-in, because many correct solutions keep a
+       * constant in a local on purpose.
+       */
+      through_locals: z.boolean().optional(),
+      /** Compare case-sensitively (the default ignores case). */
+      case_sensitive: z.boolean().optional(),
       ...common,
     })
     .strict(),
@@ -1813,6 +1851,32 @@ const sandboxRequirementSchemas = {
       references: terraformReferenceTarget,
       /** Require the reference to reach a particular attribute of that object. */
       referenced_attribute: terraformAttributePath.optional(),
+      ...common,
+    })
+    .strict(),
+
+  /**
+   * An `output` block's `value` reaches these objects — directly or through
+   * locals. An entry ending in `.` is a prefix: `local.` is "some local
+   * value", `local_file.` "some local_file resource", for a lab that lets the
+   * student rename them; anything else is an exact target (`var.channel`).
+   * A value typed out as a literal reaches nothing.
+   */
+  terraform_output_references: z
+    .object({
+      type: z.literal('terraform_output_references'),
+      dir: sandboxPath,
+      name: terraformLabel,
+      reaches: z
+        .array(
+          z
+            .string()
+            .min(2)
+            .max(160)
+            .regex(/^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*\.?$/, 'must be a reference target or a prefix ending in .'),
+        )
+        .min(1)
+        .max(8),
       ...common,
     })
     .strict(),
@@ -2046,6 +2110,13 @@ const sandboxRequirementSchemas = {
       exact_principals: z.boolean().optional(),
       /** Every principal listed must appear in the statement's `NotPrincipal`. */
       not_principals: z.array(iamPrincipalSelector).min(1).max(20).optional(),
+      /**
+       * The statement carries no `Condition` at all. A Deny that applies only
+       * when some condition holds (`aws:SecureTransport` false, a principal
+       * tag nobody has) is not a protection that a later broad Allow cannot
+       * get past; asking one request with a context cannot prove "always".
+       */
+      unconditional: z.boolean().optional(),
       ...common,
     })
     .strict(),
@@ -2418,6 +2489,13 @@ const sandboxRequirementSchemas = {
       path: sandboxPath,
       contains: literalText,
       ignore_case: z.boolean().default(false),
+      /**
+       * Skip whole-line `#` comments. For a configuration file whose reader
+       * ignores them, `# bind_address = 127.0.0.1` kept above the new line is
+       * a valid way to retire a value, not a value still in use. A comment
+       * after a value on the same line still counts: the reader sees it too.
+       */
+      ignore_comment_lines: z.boolean().optional(),
       ...common,
     })
     .strict(),
@@ -3717,6 +3795,12 @@ const cicdRequirementSchemas = {
       uses: z.string().min(1).max(160).optional(),
       run_contains: z.array(z.string().min(1).max(120)).max(6).optional(),
       /**
+       * `run_contains` fragments must each *start* a command — not appear in
+       * `echo node build.mjs`. For fragments that are commands; an argument
+       * such as a file path keeps the plain substring match.
+       */
+      as_command: z.boolean().optional(),
+      /**
        * Require the step's `run:` to expand each of these variables — `$NAME`,
        * `${NAME}`, `${{ env.NAME }}` — rather than merely spell the name. A
        * bare `IMAGE_NAME` is literal text to the shell.
@@ -3787,6 +3871,8 @@ const cicdRequirementSchemas = {
       stage: z.string().min(1).max(64),
       /** Require the stage's `steps` block to mention all of these substrings. */
       steps_contain: z.array(z.string().min(1).max(120)).max(6).optional(),
+      /** `steps_contain` fragments must each start a command (see `as_command`). */
+      steps_as_command: z.boolean().optional(),
       /**
        * Require the stage's steps to expand each of these variables — `$NAME`,
        * `${NAME}`, `env.NAME` — rather than merely spell the name.
@@ -3805,6 +3891,9 @@ const cicdRequirementSchemas = {
    * `via` pins the mechanism where the lab teaches one specific pattern:
    *
    *   `workflow_env`        `env:` in a GitHub Actions workflow
+   *   `workflow_env_global` the workflow's top-level `env:` only — a value
+   *                         every job reads, where a job's own `env` is
+   *                         invisible to the others
    *   `workflow_secret`     `${{ secrets.NAME }}`
    *   `jenkins_environment` an `environment { }` entry in a Jenkinsfile
    *   `jenkins_credentials` `credentials('id')` in a Jenkinsfile
@@ -3816,7 +3905,7 @@ const cicdRequirementSchemas = {
       /** The variable name, e.g. `REGISTRY_URL` or `DEPLOY_TOKEN`. */
       name: envVarName,
       via: z
-        .enum(['workflow_env', 'workflow_secret', 'jenkins_environment', 'jenkins_credentials'])
+        .enum(['workflow_env', 'workflow_env_global', 'workflow_secret', 'jenkins_environment', 'jenkins_credentials'])
         .optional(),
       /**
        * Require the declaration's value to contain this text, e.g.
@@ -4040,6 +4129,7 @@ export const REQUIREMENT_FAMILIES = {
   deployment_replicas: 'kubernetes',
   deployment_available: 'kubernetes',
   deployment_rollout_complete: 'kubernetes',
+  deployment_revision_history: 'kubernetes',
   deployment_selector: 'kubernetes',
   deployment_resources: 'kubernetes',
   deployment_probe: 'kubernetes',
@@ -4147,6 +4237,7 @@ export const REQUIREMENT_FAMILIES = {
   terraform_output_equals: 'terraform',
   terraform_state_absent: 'terraform',
   terraform_resource_references: 'terraform',
+  terraform_output_references: 'terraform',
   terraform_resource_literal_absent: 'terraform',
   terraform_variable_declared: 'terraform',
   terraform_locals_declared: 'terraform',

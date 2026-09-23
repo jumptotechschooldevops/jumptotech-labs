@@ -84,7 +84,8 @@ task:
     assumption. Then correct
     `/etc/ledger/settlement.conf` so the poller points somewhere this host can
     actually reach, and leave it running. The poller re-reads its configuration
-    each cycle, so no restart is required.
+    each cycle, so no restart is required. The file is owned by root, so edit
+    it with `sudoedit` or `sudo nano`.
 
     You cannot change this machine's routing table: the sandbox does not grant
     the privilege, and that is the point. Routing is what you are diagnosing.
@@ -120,6 +121,9 @@ requirements:
   - type: file_content_absent
     path: /etc/ledger/settlement.conf
     contains: "10.80.4.10"
+    # The service reads only `key = value` lines, so the old value kept as a
+    # comment above the new line is retired, not in use.
+    ignore_comment_lines: true
     label: The unreachable destination is no longer configured
 
   # --- the poller reached something, and had to resolve it to do so --------
@@ -129,8 +133,12 @@ requirements:
   # this host's own address, because traffic to yourself is delivered locally
   # and resolves nothing. Both together are only true of a correct answer, and
   # the line is written by the poller reading the student's own configuration.
-  - type: file_content
-    path: /var/log/jumptotech/settlement.log
+  #
+  # The latest cycle, not any cycle: the log is append-only, so one good line
+  # from an endpoint the student later moved away from kept this passing.
+  - type: command_output
+    command: tail
+    args: ["-n", "1", "/var/log/jumptotech/settlement.log"]
     contains: "status=routable neighbour=resolved"
     label: The poller reached a destination that required resolving a neighbour
 

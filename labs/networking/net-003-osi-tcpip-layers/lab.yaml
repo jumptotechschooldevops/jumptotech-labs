@@ -234,7 +234,7 @@ hints:
   - level: 3
     text: >
       `nc -w2 -v 127.0.0.1 9110` and `nc -w2 -v 10.99.99.99 80` produce the
-      first two errors; `ping -c1 ledger.bank.invalid` produces the third.
+      first two errors; `nc -w2 -v ledger.bank.invalid 80` produces the third.
       Redirect each into its file with `>` and note that these tools write
       errors to standard error, so `2>&1` matters. For the ledger API, pipe a
       request into it — `printf 'GET /health HTTP/1.1\r\nHost: ledger\r\n

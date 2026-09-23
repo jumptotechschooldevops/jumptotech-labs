@@ -64,6 +64,41 @@ const commandCheck = (entrypoint?: string[], command?: string[], name = 'batch')
     ...(command ? { command } : {}),
   }) as Requirement;
 
+// ------------------------------------------ a relative program, from WORKDIR
+
+describe('docker_container_command — a relative program is the file WORKDIR resolves it to', () => {
+  function inWorkdir(entrypoint: string[], workingDir: string) {
+    const docker = new FakeDockerDaemon();
+    docker.addContainer(
+      containerSpec({ name: 'batch', image: 'jumptotech/batch:1.0', entrypoint, command: ['--dry-run'], workingDir }),
+      'exited',
+      0,
+    );
+    return docker;
+  }
+
+  it('accepts ENTRYPOINT ["./batch.sh"] under WORKDIR /app, which starts /app/batch.sh', async () => {
+    // Before: rejected, although the kernel runs exactly /app/batch.sh.
+    const docker = inWorkdir(['./batch.sh'], '/app');
+    expect(passed(await check(docker, commandCheck(EXEC_ENTRYPOINT, ['--dry-run'])))).toBe(true);
+  });
+
+  it('refuses the same relative path under another WORKDIR', async () => {
+    const docker = inWorkdir(['./batch.sh'], '/srv');
+    expect(passed(await check(docker, commandCheck(EXEC_ENTRYPOINT, ['--dry-run'])))).toBe(false);
+  });
+
+  it('refuses a bare name, which exec form looks up on PATH rather than in WORKDIR', async () => {
+    const docker = inWorkdir(['batch.sh'], '/app');
+    expect(passed(await check(docker, commandCheck(EXEC_ENTRYPOINT, ['--dry-run'])))).toBe(false);
+  });
+
+  it('still refuses the script run through sh, which is a different program', async () => {
+    const docker = inWorkdir(['/bin/sh', '/app/batch.sh'], '/app');
+    expect(passed(await check(docker, commandCheck(EXEC_ENTRYPOINT, ['--dry-run'])))).toBe(false);
+  });
+});
+
 // --------------------------------------------------- exec form vs shell form
 
 describe('docker_container_command — exec form and shell form are different things', () => {
