@@ -267,7 +267,9 @@ suite('DOCKER-010 against a real docker:27-dind sandbox', () => {
       'Container ledger-web runs the nginx:1.27-alpine image',
       'Container ledger-worker is running',
       'ledger-api publishes container port 80 on host port 8080',
+      'ledger-api runs the nginx server',
       'ledger-web publishes container port 80 on host port 8081',
+      'ledger-web runs the nginx server',
       'ledger-worker runs with LEDGER_MODE set to live',
     ].sort());
   }, 300_000);
