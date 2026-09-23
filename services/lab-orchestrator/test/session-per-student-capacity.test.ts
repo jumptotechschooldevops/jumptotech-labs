@@ -323,7 +323,7 @@ export function perStudentCapacity(
 
     // ------------------------------- recovery and lifecycle (BETA-P0-007)
 
-    it('End during provisioning frees the slot, and the lost start cannot push the student past it', async () => {
+    it('End during provisioning holds the slot until the build is discarded, so a lost start cannot push the student past it', async () => {
       const w = await world({ maxActiveSessions: 5, maxActiveSessionsPerStudent: 1 });
 
       const building = w.provider.holdNextCreate();
@@ -336,10 +336,13 @@ export function perStudentCapacity(
       // A reservation still being provisioned holds the slot.
       await expect(w.b.start(LAB, ALICE)).rejects.toMatchObject({ code: 'STUDENT_SESSION_LIMIT_REACHED' });
 
-      // End claims it mid-provisioning and records ENDED: the slot is free.
-      expect((await w.b.end(row!.sessionId)).session.status).toBe('ENDED');
-      const replacement = await w.b.start(LAB, ALICE);
-      expect(replacement.session.status).toBe('ACTIVE');
+      // End claims it mid-provisioning, but its sandbox is still being built:
+      // the session stays ENDING, and keeps the slot, until the build is over.
+      // Recording ENDED here let a Start / End loop build any number at once.
+      const ending = await w.b.end(row!.sessionId);
+      expect(ending.session.status).toBe('ENDING');
+      expect(ending.destroy.namespaceGone).toBe(false);
+      await expect(w.b.start(LAB, ALICE)).rejects.toMatchObject({ code: 'STUDENT_SESSION_LIMIT_REACHED' });
 
       // The original provisioning now finishes. It must not become a second
       // ACTIVE session for Alice, and what it built must not survive.
@@ -347,10 +350,34 @@ export function perStudentCapacity(
       await expect(lost).rejects.toMatchObject({ code: 'SESSION_NOT_ACTIVE' });
       expect((await w.read(row!.sessionId)).status).toBe('ENDED');
       expect(w.runtime.containers.has(row!.sandboxRef)).toBe(false);
+      expect(await w.heldBy(ALICE)).toBe(0);
+
+      const replacement = await w.b.start(LAB, ALICE);
+      expect(replacement.session.status).toBe('ACTIVE');
       expect(w.runtime.containers.has(replacement.session.sandboxRef)).toBe(true);
       expect(await w.heldBy(ALICE)).toBe(1);
       expect(await w.a.activeCount()).toBe(1);
-      expect(w.refusals).toEqual({ capacity: 0, student: 1 });
+      expect(w.refusals).toEqual({ capacity: 0, student: 2 });
+    });
+
+    it('End during provisioning does not hand its slot to another student while the build goes on', async () => {
+      const w = await world({ maxActiveSessions: 1, maxActiveSessionsPerStudent: 1 });
+
+      const building = w.provider.holdNextCreate();
+      const lost = w.a.start(LAB, ALICE);
+      lost.catch(() => undefined);
+      await building.entered;
+      const [row] = (await w.store.list()).filter((s) => s.ownerUserId === ALICE);
+      await w.b.end(row!.sessionId);
+
+      // Alice's sandbox is still being built: the platform's one slot is taken.
+      await expect(w.b.start(LAB, BOB)).rejects.toMatchObject({ code: 'LAB_CAPACITY_REACHED' });
+
+      building.release();
+      await expect(lost).rejects.toMatchObject({ code: 'SESSION_NOT_ACTIVE' });
+      expect(w.runtime.containers.has(row!.sandboxRef)).toBe(false);
+      expect((await w.b.start(LAB, BOB)).session.status).toBe('ACTIVE');
+      expect([...w.runtime.containers.keys()]).toHaveLength(1);
     });
 
     it('a provisioning failure after End claimed the session releases the slot exactly once', async () => {

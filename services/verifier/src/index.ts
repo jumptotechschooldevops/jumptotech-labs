@@ -18,6 +18,8 @@
  * by the caller from the session record — never by the browser.
  */
 import {
+  AnsibleSandboxUnreachableError,
+  ContainerRuntimeError,
   DockerUnreachableError,
   KubernetesUnreachableError,
   WorkspaceUnavailableError,
@@ -37,7 +39,7 @@ import {
   type AnyVerifyReader,
   type VerificationReaders,
 } from './registry.js';
-import { SandboxReader, type SandboxPort } from './sandbox-reader.js';
+import { SandboxReader, SandboxUnreachableError, type SandboxPort } from './sandbox-reader.js';
 import type { AnsibleSandboxPort } from '@jumptotech/lab-orchestrator';
 import { AnsibleVerifyReader } from './ansible-reader.js';
 import { CicdVerifyReader } from './cicd-reader.js';
@@ -213,12 +215,20 @@ export async function verifyLab(options: VerifyOptions): Promise<VerificationRes
     const unreachable =
       error instanceof KubernetesUnreachableError ||
       error instanceof DockerUnreachableError ||
-      error instanceof WorkspaceUnavailableError;
+      error instanceof WorkspaceUnavailableError ||
+      error instanceof SandboxUnreachableError ||
+      error instanceof AnsibleSandboxUnreachableError ||
+      // The runtime broker or the daemon refusing an exec outright.
+      error instanceof ContainerRuntimeError;
     if (unreachable) {
       const substrate =
         error instanceof WorkspaceUnavailableError
           ? 'lab workspace'
-          : lab.environment.provider === 'docker'
+          : error instanceof SandboxUnreachableError ||
+              error instanceof AnsibleSandboxUnreachableError ||
+              error instanceof ContainerRuntimeError
+            ? 'lab environment'
+            : lab.environment.provider === 'docker'
             ? 'Docker'
             : 'cluster';
       return {

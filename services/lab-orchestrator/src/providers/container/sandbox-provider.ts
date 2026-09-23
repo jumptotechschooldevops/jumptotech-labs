@@ -54,6 +54,7 @@ import {
   type LabProvider,
   type LabProviderId,
   type LabSessionContext,
+  type SessionTeardownContext,
   type ManagedSandbox,
   type ProvisionStep,
   type ResetResult,
@@ -73,6 +74,7 @@ import { loadSetupFiles, type LoadedSetupFile } from '../../session/setup-files.
 import { loadSeedScripts, type LoadedSeedScript } from '../../session/seed-scripts.js';
 import { AVAILABLE, unavailable, type ProviderAvailability } from '../catalog.js';
 import {
+  execDidNotRun,
   CONTAINER_EXPIRES_LABEL,
   CONTAINER_LAB_LABEL,
   CONTAINER_PROVIDER_LABEL,
@@ -80,6 +82,7 @@ import {
   MANAGED_CONTAINER_LABEL,
   MANAGED_CONTAINER_SELECTOR,
   MAX_SANDBOX_READ_BYTES,
+  ContainerRuntimeError,
   type ContainerExecRequest,
   type ContainerExecResult,
   type ContainerInfo,
@@ -643,7 +646,7 @@ export class ContainerLabProvider implements LabProvider {
 
   // --------------------------------------------------------------- destroy
 
-  async destroy(context: LabSessionContext): Promise<DestroyResult> {
+  async destroy(context: SessionTeardownContext): Promise<DestroyResult> {
     return this.destroySandbox(this.#ref(context), context.sessionId);
   }
 
@@ -699,7 +702,8 @@ export class ContainerLabProvider implements LabProvider {
       return { ok: false, namespaceGone: false, steps, error: this.#toLabError(error, 'DESTROY_FAILED') };
     }
 
-    const gone = (await this.#runtime.inspect(sandboxRef).catch(() => null)) === null;
+    // Unconfirmed is not gone: the next pass verifies again.
+    const gone = (await this.#runtime.inspect(sandboxRef).catch(() => undefined)) === null;
     steps.push({
       id: 'delete-sandbox',
       label: 'Sandbox deleted',
@@ -1255,7 +1259,10 @@ export class ContainerLabProvider implements LabProvider {
       workdir: this.#home,
       timeoutMs: 15_000,
     });
-    if (result.exitCode !== 0) return [];
+    if (result.exitCode !== 0) {
+      if (execDidNotRun(result)) throw unreadable(ref, result);
+      return [];
+    }
 
     const prefix = `${absolute}/`;
     const seen = new Set<string>();
@@ -1286,7 +1293,10 @@ export class ContainerLabProvider implements LabProvider {
       workdir: this.#home,
       timeoutMs: 10_000,
     });
-    if (stat.exitCode !== 0) return null;
+    if (stat.exitCode !== 0) {
+      if (execDidNotRun(stat)) throw unreadable(ref, stat);
+      return null;
+    }
 
     const [rawType, mode, owner, group, size] = stat.stdout.trim().split('|');
     const type = normalisePathType(rawType);
@@ -1315,7 +1325,10 @@ export class ContainerLabProvider implements LabProvider {
      * `cat` looked like any failed one, and a large file came back with no
      * content at all: a 70 KiB `terraform.tfstate` read as "no state".
      */
-    if (cat.exitCode !== 0 && !cat.outputTruncated) return read;
+    if (cat.exitCode !== 0 && !cat.outputTruncated) {
+      if (execDidNotRun(cat)) throw unreadable(ref, cat);
+      return read;
+    }
 
     read.content = cat.stdout.slice(0, maxBytes);
     if (cat.outputTruncated || cat.stdout.length > maxBytes) read.truncated = true;
@@ -1324,7 +1337,7 @@ export class ContainerLabProvider implements LabProvider {
 
   // --------------------------------------------------------------- helpers
 
-  #ref(context: LabSessionContext): string {
+  #ref(context: Pick<LabSessionContext, 'sandboxRef' | 'namespace'>): string {
     return assertValidContainerSandboxRef(sandboxRefOf(context));
   }
 
@@ -1823,6 +1836,15 @@ function versionFlagFor(binary: string): string {
 
 function firstLine(text: string): string {
   return text.split('\n')[0]?.trim() ?? '';
+}
+
+/** A sandbox read that Docker, not the file, answered. */
+function unreadable(ref: string, result: { stderr: string; timedOut: boolean }): ContainerRuntimeError {
+  return new ContainerRuntimeError(
+    result.timedOut
+      ? `sandbox ${ref} did not answer in time`
+      : `sandbox ${ref} could not be read: ${result.stderr.trim()}`,
+  );
 }
 
 function describe(error: unknown): string {

@@ -18,6 +18,7 @@
  * that. See `session/sandbox-paths.ts`.
  */
 import {
+  ContainerRuntimeError,
   scanHclFiles,
   type HclDocument,
   type SandboxInspectResult,
@@ -112,6 +113,25 @@ export class SandboxUnreachableError extends Error {
   }
 }
 
+/** A configuration file too large to be read whole, so it cannot be judged. */
+export class ConfigTooLargeError extends Error {
+  constructor(readonly path: string) {
+    super(`'${path}' is too large for the checker to read in full`);
+    this.name = 'ConfigTooLargeError';
+  }
+}
+
+/**
+ * A read the runtime could not answer — a stopped or removed sandbox, a daemon
+ * that is down, a broker that timed out — is an unreadable environment, not a
+ * missing file: no check happened. Anything else (a path the lab may not name)
+ * is rethrown as it is.
+ */
+function unreachableIfRuntime(error: unknown): never {
+  if (error instanceof ContainerRuntimeError) throw new SandboxUnreachableError(error.message);
+  throw error;
+}
+
 /**
  * The slice of Terraform state the checks care about.
  *
@@ -169,7 +189,7 @@ export class SandboxReader {
     const key = `${relativePath}#${options?.maxBytes ?? 'default'}`;
     const existing = this.#cache.get(key);
     if (existing) return existing;
-    const promise = this.port.read(relativePath, options);
+    const promise = this.port.read(relativePath, options).catch(unreachableIfRuntime);
     this.#cache.set(key, promise);
     return promise;
   }
@@ -369,7 +389,9 @@ export class SandboxReader {
    */
   async terraformConfigPaths(dir: string): Promise<string[]> {
     if (!this.port.list) throw new SandboxCapabilityMissingError('read Terraform configuration files');
-    return this.port.list(dir, { suffix: '.tf', maxDepth: 1, maxEntries: MAX_CONFIG_FILES });
+    return this.port
+      .list(dir, { suffix: '.tf', maxDepth: 1, maxEntries: MAX_CONFIG_FILES })
+      .catch(unreachableIfRuntime);
   }
 
   async #scanConfig(dir: string): Promise<HclDocument> {
@@ -378,6 +400,10 @@ export class SandboxReader {
     for (const name of names) {
       const read = await this.path(this.join(dir, name), { maxBytes: MAX_CONFIG_BYTES });
       if (!read || read.type !== 'file' || read.content === undefined) continue;
+      // Only the start of this file was read. Scanned as if it were all of
+      // it, a block padded past the cap was never seen: a "must not contain"
+      // check passed on a configuration that did contain it.
+      if (read.truncated) throw new ConfigTooLargeError(this.join(dir, name));
       files.push({ path: name, text: read.content });
     }
     return scanHclFiles(files);

@@ -12,6 +12,7 @@ import {
   type DestroyResult,
   type LabSession,
   type LabSessionContext,
+  type SessionTeardownContext,
   type ResetResult,
   type SessionStatus,
   type SessionStore,
@@ -191,7 +192,7 @@ export class GatedLinuxProvider extends LinuxLabProvider {
     return super.reset(context);
   }
 
-  override async destroy(context: LabSessionContext): Promise<DestroyResult> {
+  override async destroy(context: SessionTeardownContext): Promise<DestroyResult> {
     this.destroys.record();
     const next = this.#nextDestroy;
     this.#nextDestroy = undefined;

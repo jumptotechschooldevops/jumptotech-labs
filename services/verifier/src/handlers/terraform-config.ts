@@ -40,7 +40,7 @@ import {
   type TerraformReference,
 } from '@jumptotech/lab-orchestrator';
 import { fail, pass, skip, type HandlerOutcome, type SandboxVerifierHandler } from '../contract.js';
-import { SandboxCapabilityMissingError, type SandboxReader } from '../sandbox-reader.js';
+import { ConfigTooLargeError, SandboxCapabilityMissingError, type SandboxReader } from '../sandbox-reader.js';
 
 /**
  * Load the scanned configuration, or skip when the sandbox cannot list files.
@@ -57,6 +57,10 @@ async function withConfig(
     return await use(await reader.terraformConfig(dir));
   } catch (error) {
     if (error instanceof SandboxCapabilityMissingError) return skip(error.message);
+    // Fails closed: judging the part that was read is how a padded file passed.
+    if (error instanceof ConfigTooLargeError) {
+      return fail(`${error.message} — keep .tf files under 64 KiB so they can be verified`);
+    }
     throw error;
   }
 }

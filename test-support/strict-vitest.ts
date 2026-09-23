@@ -13,7 +13,8 @@
  *
  * Arguments are passed to `vitest run` unchanged. vitest's own exit status wins
  * when it is non-zero; on success the JSON report is read back and the run
- * fails if no test ran or any test was skipped or left as todo, naming each one.
+ * fails if no test ran, a test file it names did not run, or any test was
+ * skipped or left as todo, naming each one.
  * Unit runs (`npm test`) are deliberately not strict: several suites skip on
  * purpose there (test-support/README.md → INTEGRATION).
  */
@@ -54,6 +55,39 @@ export function strictRunProblems(report: VitestJsonReport, cwd = process.cwd())
   return problems;
 }
 
+/** vitest options that take the next argument as their value. */
+const OPTIONS_WITH_VALUE = new Set(['--root', '-r', '--dir', '--config', '-c', '-t', '--testNamePattern', '--project']);
+
+/**
+ * Test files this step named that are not in what ran.
+ *
+ * vitest reads file arguments as filters, and one that matches nothing among
+ * several others is dropped without a word: `vitest run a.test.ts
+ * missing.test.ts` exits 0 having run `a` alone (measured, vitest 3.2.7). So a
+ * step naming five suites stayed green with one of them renamed away.
+ */
+export function namedFilesNotRun(args: readonly string[], report: VitestJsonReport, cwd = process.cwd()): string[] {
+  let root = cwd;
+  const named: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === '--root' || arg === '-r') {
+      root = path.resolve(cwd, args[index + 1] ?? '.');
+      index += 1;
+    } else if (arg.startsWith('--root=')) {
+      root = path.resolve(cwd, arg.slice('--root='.length));
+    } else if (OPTIONS_WITH_VALUE.has(arg)) {
+      index += 1;
+    } else if (!arg.startsWith('-') && /\.(test|spec)\.[cm]?[jt]sx?$/.test(arg)) {
+      named.push(arg);
+    }
+  }
+  const ran = new Set(report.testResults.map((file) => path.resolve(file.name)));
+  return named
+    .filter((arg) => !ran.has(path.resolve(root, arg)))
+    .map((arg) => `${arg}: named by this step, but no such test file ran`);
+}
+
 function main(args: string[]): number {
   const dir = mkdtempSync(path.join(tmpdir(), 'strict-vitest-'));
   const reportFile = path.join(dir, 'report.json');
@@ -76,7 +110,7 @@ function main(args: string[]): number {
       console.error(`strict-vitest: vitest exited 0 but wrote no readable report (${(error as Error).message})`);
       return 1;
     }
-    const problems = strictRunProblems(report);
+    const problems = [...namedFilesNotRun(args, report), ...strictRunProblems(report)];
     if (problems.length === 0) return 0;
     console.error('\nstrict-vitest: this step must run every test it names, and did not:');
     // `::error::` is a GitHub Actions annotation; elsewhere it is a readable prefix.

@@ -35,6 +35,13 @@ import WebSocket from 'ws';
 export interface ShellExit {
   exitCode: number;
   signal?: number;
+  /**
+   * Set when the shell was not seen to exit: the runtime broker closed it for
+   * the stated reason (its own idle or time limit), or the connection to the
+   * broker was lost (`BROKER_LOST`: restarted, crashed, killed for memory).
+   * Absent for a real exit, which the broker reports as one.
+   */
+  endedBy?: string;
 }
 
 export interface Shell {
@@ -136,6 +143,12 @@ export interface BrokerAttachment {
   workdir: string;
 }
 
+/** How long a killed broker shell waits for the broker to acknowledge the close. */
+const BROKER_CLOSE_TIMEOUT_MS = 2_000;
+
+/** `closeTimeout` is a client option of ws 8.21, not yet in `@types/ws`. */
+type BrokerClientOptions = WebSocket.ClientOptions & { closeTimeout: number };
+
 /**
  * A PTY inside `sandboxd`, bridged over an authenticated WebSocket.
  *
@@ -156,17 +169,25 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
     let onData: (data: string) => void = () => undefined;
     let onExit: (event: ShellExit) => void = () => undefined;
 
-    const ws = new WebSocket(url, {
+    const clientOptions: BrokerClientOptions = {
       // Over wss, certificate and hostname verification are always on, whatever
       // NODE_TLS_REJECT_UNAUTHORIZED says; the CA, when given, is this socket's only.
       ...(url.startsWith('wss:') ? brokerTlsOptions(options.ca ? { ca: options.ca } : {}) : {}),
+      /*
+       * `kill` closes this socket, and ws then waits this long for the broker's
+       * reply before destroying it (30 s by default). A broker that has paused
+       * this socket for input pressure never reads the close, so for all that
+       * time it kept the PTY; destroyed, its peer probe notices within seconds.
+       */
+      closeTimeout: BROKER_CLOSE_TIMEOUT_MS,
       headers: {
         'x-internal-secret': options.secret,
         // Correlation only. The broker's attach authorization is the `attach`
         // scope secret above and the ownership gates behind it.
         ...(currentRequestId() ? { [REQUEST_ID_HEADER]: currentRequestId()! } : {}),
       },
-    });
+    };
+    const ws = new WebSocket(url, clientOptions);
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -175,11 +196,15 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
       reject(new ShellStartError('BROKER_UNREACHABLE', 'The runtime broker did not respond.'));
     }, options.connectTimeoutMs ?? 15_000);
 
+    /** Whether the broker reported the shell's exit; anything else ending it is not one. */
+    let exited = false;
     const fail = (code: string, message: string): void => {
       if (settled) {
-        // Already attached: a later failure is the shell dying, not a start
-        // failure, so it travels the exit path the browser is listening on.
-        onExit({ exitCode: 1 });
+        // Already attached: a later failure ends the shell rather than failing
+        // a start, so it travels the exit path the browser is listening on —
+        // saying why, so it is not told the shell exited.
+        if (!exited) onExit({ exitCode: 1, endedBy: code });
+        exited = true;
         return;
       }
       settled = true;
@@ -248,6 +273,8 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
           if (typeof message.data === 'string') onData(message.data);
           return;
         case 'exit':
+          if (exited) return;
+          exited = true;
           onExit({
             exitCode: typeof message.exitCode === 'number' ? message.exitCode : 0,
             ...(typeof message.signal === 'number' ? { signal: message.signal } : {}),
@@ -267,7 +294,7 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
     });
 
     ws.on('error', (error: Error) => {
-      fail('BROKER_UNREACHABLE', `Could not reach the runtime broker: ${error.message}`);
+      fail(settled ? 'BROKER_LOST' : 'BROKER_UNREACHABLE', `Could not reach the runtime broker: ${error.message}`);
     });
 
     ws.on('close', () => {
@@ -275,7 +302,8 @@ export function brokerShell(options: BrokerShellOptions): Promise<BrokerAttachme
         fail('BROKER_CLOSED', 'The runtime broker closed the connection before attaching.');
         return;
       }
-      onExit({ exitCode: 0 });
+      // A close with no `exit` before it is the broker going away, not the shell.
+      fail('BROKER_LOST', 'The connection to the runtime broker was lost.');
     });
   });
 }

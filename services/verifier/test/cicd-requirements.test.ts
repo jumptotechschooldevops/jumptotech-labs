@@ -147,6 +147,25 @@ describe('github_workflow_exists', () => {
     const result = await check({ type: 'github_workflow_exists', path: WORKFLOW }, sandbox);
     expect(result.status).toBe('fail');
   });
+
+  /*
+   * 444 bytes that expand to 10^9 nodes. The parser refuses to build it
+   * ("Excessive alias count"), but that refusal came from `toJS()`, outside
+   * the try: it escaped the check, then verifyLab, and every Check of the lab
+   * answered HTTP 500 for as long as the file stayed. It is a file that does
+   * not parse, and fails like one.
+   */
+  it('fails, rather than throwing, on YAML whose aliases expand without bound', async () => {
+    let laughs = 'a: &a ["x","x","x","x","x","x","x","x","x","x"]\n';
+    const names = 'abcdefghi';
+    for (let i = 1; i < names.length; i += 1) {
+      laughs += `${names[i]}: &${names[i]} [${Array(10).fill(`*${names[i - 1]}`).join(',')}]\n`;
+    }
+    const sandbox = new FakeCicdSandbox().put(WORKFLOW, `${GOOD_WORKFLOW}${laughs}`);
+    const result = await check({ type: 'github_workflow_exists', path: WORKFLOW }, sandbox);
+    expect(result.status).toBe('fail');
+    expect(result.detail).toMatch(/alias/i);
+  });
 });
 
 describe('github_workflow_trigger', () => {

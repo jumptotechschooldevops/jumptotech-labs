@@ -46,7 +46,11 @@ import {
   writeSessionDockerCerts,
   writeSessionKubeconfig,
 } from './credentials.js';
-import { createOutputFlow, type OutputFlow } from '@jumptotech/lab-orchestrator/output-flow';
+import {
+  createOutputFlow,
+  pausableSocket,
+  type OutputFlow,
+} from '@jumptotech/lab-orchestrator/output-flow';
 import { reportSessionActivity } from './activity.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
 import { InputBudget } from './input-budget.js';
@@ -668,7 +672,8 @@ export function createTerminalServer(
       ws,
       createOutputFlow(
         { get bufferedAmount() { return term.pendingInputBytes(); } },
-        { pause: () => ws.pause(), resume: () => ws.resume() },
+        // Probes the browser while paused: a paused socket never reads the close.
+        pausableSocket(ws),
         () => {
           securityMetrics?.securityEvents.inc({ service: 'terminal', event: 'input_backlog' });
           obs.warn('security.event', {
@@ -687,7 +692,29 @@ export function createTerminalServer(
       send(ws, { type: 'output', data });
       flow.afterSend();
     });
-    term.onExit(({ exitCode, signal }) => {
+    term.onExit(({ exitCode, signal, endedBy }) => {
+      // The broker's own timers mean what this service's do.
+      if (endedBy === 'IDLE_TIMEOUT') return closeFor(ws, endedBy, 'Terminal closed after inactivity.');
+      if (endedBy === 'SESSION_EXPIRED') {
+        return closeFor(ws, endedBy, 'Terminal session reached its maximum duration.');
+      }
+      /*
+       * Anything else that ended a broker shell without an exit — sandboxd
+       * restarted, crashed or was killed for memory — is not the student's
+       * doing and is worth retrying. Reported as an exit, it read "The shell
+       * exited (code 0)" and the workspace, rightly, did not reconnect.
+       */
+      if (endedBy !== undefined) {
+        log(`session ${sessions.get(ws)?.claims.sid ?? '?'}: shell lost — ${endedBy}`);
+        send(ws, {
+          type: 'error',
+          code: 'SANDBOX_UNAVAILABLE',
+          message: 'The connection to the lab environment was lost.',
+        });
+        endSession(ws);
+        if (ws.readyState === ws.OPEN) ws.close(1011, 'shell lost');
+        return;
+      }
       send(ws, { type: 'exit', exitCode, ...(signal !== undefined ? { signal } : {}) });
       endSession(ws);
       if (ws.readyState === ws.OPEN) ws.close(1000, 'shell exited');
@@ -815,7 +842,30 @@ export function createTerminalServer(
         clearTimeout(authTimer);
         const cols = message.cols ?? 80;
         const rows = message.rows ?? 24;
-        void attachInTurn(claims.sid, () => startSession(ws, claims, cols, rows))
+        /*
+         * Behind the attach running now, only the newest one waits. Every
+         * attach replaces the one before it, so one still waiting when a newer
+         * socket arrives would run a whole attach — a credential mint, a PTY —
+         * only to be replaced in turn; and the line had no length and no timer.
+         */
+        waitingAttaches.get(claims.sid)?.();
+        let replaced = false;
+        const replace = (): void => {
+          replaced = true;
+          if (ws.readyState !== ws.OPEN) return;
+          terminalMetrics?.connections.inc({ outcome: 'superseded' });
+          send(ws, {
+            type: 'error',
+            code: 'SESSION_ENDED',
+            message: 'This lab session has ended. The environment has been released.',
+          });
+          ws.close(4410, 'session ended');
+        };
+        waitingAttaches.set(claims.sid, replace);
+        void attachInTurn(claims.sid, () => {
+          if (waitingAttaches.get(claims.sid) === replace) waitingAttaches.delete(claims.sid);
+          return replaced ? Promise.resolve(false) : startSession(ws, claims, cols, rows);
+        })
           .then((started) => {
             if (!started) return;
             authenticated = true;
@@ -897,6 +947,8 @@ export function createTerminalServer(
    * flight. Different sessions never wait on each other.
    */
   const attachQueues = new Map<string, Promise<unknown>>();
+  /** sessionId → how to replace the browser attach waiting in that queue, if one is. */
+  const waitingAttaches = new Map<string, () => void>();
 
   function attachInTurn(sessionId: string, attach: () => Promise<boolean>): Promise<boolean> {
     const previous = attachQueues.get(sessionId) ?? Promise.resolve();

@@ -151,6 +151,20 @@ export interface ContainerExecResult {
   outputTruncated?: boolean;
 }
 
+/**
+ * True when a `docker exec` failed in Docker rather than in the command it ran.
+ *
+ * Both exit 1 (Docker 28.4.0, measured): `stat` of a missing file, and an exec
+ * into a stopped container, a removed one, or with the daemon down. Only the
+ * words tell them apart — the CLI prints the daemon's refusal as its whole
+ * stderr — plus an exec that ran out of time. A read that reports "not there"
+ * for either of the second kind lets a "must not exist" check pass against an
+ * environment nobody could read.
+ */
+export function execDidNotRun(result: Pick<ContainerExecResult, 'stderr' | 'timedOut'>): boolean {
+  return result.timedOut || /^\s*(Error response from daemon:|Cannot connect to the Docker daemon)/.test(result.stderr);
+}
+
 export class ContainerRuntimeError extends Error {
   readonly code = 'CONTAINER_RUNTIME_ERROR';
   constructor(message: string) {
@@ -365,7 +379,18 @@ export class DockerCliRuntime implements ContainerRuntimePort {
       '{{.Id}}\t{{.State.Status}}\t{{.Config.Image}}\t{{json .Config.Labels}}',
       name,
     ]);
-    if (result.exitCode !== 0) return null;
+    /*
+     * Absent only when Docker says so. A daemon that is down, or an inspect
+     * that timed out, also exits non-zero; read as "no such sandbox" it let End
+     * record a container still running as already gone.
+     */
+    if (result.timedOut) throw new ContainerRuntimeError(`docker inspect of ${name} did not answer in time`);
+    if (result.exitCode !== 0) {
+      if (/no such (container|object)/i.test(result.stderr)) return null;
+      throw new ContainerRuntimeError(
+        result.stderr.trim() || `docker inspect exited with code ${result.exitCode}`,
+      );
+    }
 
     const [id, state, image, labelsJson] = result.stdout.trim().split('\t');
     if (!id) return null;

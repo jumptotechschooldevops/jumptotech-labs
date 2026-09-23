@@ -145,3 +145,37 @@ describe('execFileOutcome — how a runner reads a finished child process', () =
     expect(execFileOutcome(overflow, { killed: true })).toEqual({ exitCode: 1, timedOut: false });
   });
 });
+
+/*
+ * `inspect` answers "is this sandbox there", and End, Reset and the attach
+ * gates act on the answer. It returned null — "absent" — for any failure, so a
+ * daemon that was down, or an inspect that timed out, read as a sandbox already
+ * gone: End recorded ENDED and released the slot with the container, its peer
+ * and its network still running. Both cases below exit 1 on Docker 28.4.0;
+ * only the words differ (captured from the real CLI).
+ */
+describe('container runtime inspect — absent is not unreachable', () => {
+  function answering(result: { exitCode: number; stderr: string; timedOut?: boolean }) {
+    return new DockerCliRuntime({
+      run: async () => ({ stdout: '', timedOut: false, ...result }),
+    });
+  }
+
+  it('reads "No such container" as absent', async () => {
+    const cli = answering({ exitCode: 1, stderr: `Error response from daemon: No such container: ${NAME}\n` });
+    await expect(cli.inspect(NAME)).resolves.toBeNull();
+  });
+
+  it('reads an unreachable daemon as an error', async () => {
+    const cli = answering({
+      exitCode: 1,
+      stderr: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n',
+    });
+    await expect(cli.inspect(NAME)).rejects.toBeInstanceOf(ContainerRuntimeError);
+  });
+
+  it('reads an inspect that timed out as an error', async () => {
+    const cli = answering({ exitCode: 124, stderr: '', timedOut: true });
+    await expect(cli.inspect(NAME)).rejects.toBeInstanceOf(ContainerRuntimeError);
+  });
+});

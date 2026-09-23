@@ -188,8 +188,18 @@ export interface LabSessionContext {
   policy: SessionPolicy;
 }
 
+/**
+ * What tearing a sandbox down is given: the session's context without its lab.
+ *
+ * Deliberately narrower. A session outlives the catalog entry it was started
+ * from — a deploy can remove a lab, rename it, or ship it invalid — and its
+ * sandbox must still be destroyable from what the row itself records. So no
+ * provider's `destroy` can depend on the lab definition.
+ */
+export type SessionTeardownContext = Omit<LabSessionContext, 'lab'>;
+
 /** The sandbox handle for a context, whichever field carries it. */
-export function sandboxRefOf(context: LabSessionContext): string {
+export function sandboxRefOf(context: Pick<LabSessionContext, 'sandboxRef' | 'namespace'>): string {
   return context.sandboxRef ?? context.namespace;
 }
 
@@ -389,7 +399,7 @@ export interface LabProvider {
   reset(context: LabSessionContext): Promise<ResetResult>;
 
   /** Tear the sandbox down entirely, and confirm the namespace is gone. */
-  destroy(context: LabSessionContext): Promise<DestroyResult>;
+  destroy(context: SessionTeardownContext): Promise<DestroyResult>;
 
   /**
    * Run a single non-interactive command in the sandbox context.

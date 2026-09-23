@@ -402,9 +402,12 @@ describe('a socket table the sandbox cannot produce never becomes a pass', () =>
       commands: { 'ss -H -lntu': { exitCode: 1, stderr: 'ss: command failed' } },
     });
 
-    await expect(
-      verifyLab({ lab: labWith(LOOPBACK), sandbox, namespace: 'jtt-lab-000000000001' }),
-    ).rejects.toThrow(/command failed/i);
+    // Reported as the verification error it is — it used to escape verifyLab
+    // and reach the student as HTTP 500.
+    const result = await verifyLab({ lab: labWith(LOOPBACK), sandbox, namespace: 'jtt-lab-000000000001' });
+    expect(result.passed).toBe(false);
+    expect(result.error).toMatchObject({ code: 'ENVIRONMENT_UNREACHABLE', message: expect.stringMatching(/command failed/i) });
+    expect(result.checks.every((check) => check.status === 'skipped')).toBe(true);
   });
 
   it('does not pass when the sandbox cannot be inspected at all', async () => {

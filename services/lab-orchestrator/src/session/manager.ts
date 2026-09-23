@@ -28,6 +28,7 @@ import type {
   DestroyResult,
   EnvironmentInfo,
   LabSessionContext,
+  SessionTeardownContext,
   LabProvider,
   ProvisionStep,
   ResetResult,
@@ -591,6 +592,7 @@ export class SessionManager {
     });
     if (!active) {
       await this.#discardLostWork(session, context, 'start');
+      await this.#finishTeardownOfLostStart(session.sessionId);
       throw await this.#closedDuringStart(session.sessionId);
     }
     this.#emit((m) => m.onTransition?.('CREATING', 'ACTIVE'));
@@ -774,6 +776,7 @@ export class SessionManager {
       this.#log(
         `session ${session.sessionId}: provisioning failed after a teardown claimed it; left ${current?.status ?? 'removed'} — ${reason}`,
       );
+      await this.#finishTeardownOfLostStart(session.sessionId);
       return;
     }
     this.#emit((m) => m.onTransition?.(session.status, 'FAILED'));
@@ -868,6 +871,16 @@ export class SessionManager {
    * is what makes "possessing a namespace name grants nothing" true.
    */
   #contextFor(lab: LoadedLabDefinition, session: LabSession): LabSessionContext {
+    return { ...this.#teardownContextFor(session), lab };
+  }
+
+  /**
+   * The context a teardown is given: everything but the lab, all of it from the
+   * stored row. A session whose lab has since left the catalog must still be
+   * destroyable — `contextFor` would throw LabNotFoundError and leave the row
+   * ENDING / EXPIRING, holding its slot and its sandbox, for good.
+   */
+  #teardownContextFor(session: LabSession): SessionTeardownContext {
     return {
       sessionId: session.sessionId,
       labId: session.labId,
@@ -875,7 +888,6 @@ export class SessionManager {
       sandboxRef: session.sandboxRef ?? session.namespace,
       namespace: session.namespace,
       serviceAccountName: session.serviceAccountName,
-      lab,
       expiresAtMs: Date.parse(session.expiresAt),
       policy: this.#policy,
     };
@@ -1230,12 +1242,37 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Finish the teardown that claimed a session while its start was building.
+   *
+   * That teardown only marked the row (see `#teardown`), so it still holds its
+   * slot; the start, which alone knew when the build was over, ends it now as
+   * what it was — an End as ENDED, an expiry as EXPIRED — with the teardown's
+   * own reason. Racing another resumption of the same teardown is safe:
+   * destroy is idempotent and only one of them records the ending. A failure
+   * is logged; the reaper resumes an unfinished teardown.
+   */
+  async #finishTeardownOfLostStart(sessionId: string): Promise<void> {
+    try {
+      const current = await this.#store.get(sessionId);
+      if (current?.status === 'ENDING') {
+        await this.resumeAbandonedEnd(sessionId);
+      } else if (current?.status === 'EXPIRING') {
+        await this.#teardown(current, ['EXPIRING'], 'EXPIRING', 'EXPIRED', current.statusReason ?? 'expired');
+      }
+    } catch (error) {
+      this.#log(`session ${sessionId}: could not finish the teardown of a lost start — ${describeError(error)}`);
+    }
+  }
+
   // ------------------------------------------------------- end / expire
 
   /** Student pressed End Lab. */
   async end(sessionId: string): Promise<TeardownResult> {
     const session = await this.require(sessionId);
-    return this.#teardown(session, [...LIVE_STATUSES, 'ENDING'], 'ENDING', 'ENDED', 'ended by student');
+    return this.#teardown(session, [...LIVE_STATUSES, 'ENDING'], 'ENDING', 'ENDED', 'ended by student', undefined, {
+      deferToStart: true,
+    });
   }
 
   /**
@@ -1279,7 +1316,9 @@ export class SessionManager {
         session.statusReason ?? OPERATOR_END_REASON,
       );
     }
-    return this.#teardown(session, LIVE_STATUSES, 'EXPIRING', 'EXPIRED', OPERATOR_END_REASON);
+    return this.#teardown(session, LIVE_STATUSES, 'EXPIRING', 'EXPIRED', OPERATOR_END_REASON, undefined, {
+      deferToStart: true,
+    });
   }
 
   /**
@@ -1335,7 +1374,7 @@ export class SessionManager {
       };
     }
     try {
-      return await this.#providerFor(session).destroy(this.contextFor(session));
+      return await this.#providerFor(session).destroy(this.#teardownContextFor(session));
     } catch (error) {
       return {
         ok: false,
@@ -1360,12 +1399,43 @@ export class SessionManager {
     done: Extract<SessionStatus, 'ENDED' | 'EXPIRED'>,
     reason: string,
     claimGuard?: TransitionGuard,
+    options: { deferToStart?: boolean } = {},
   ): Promise<TeardownResult> {
     if (isTerminalStatus(session.status)) {
       return {
         session,
         destroy: { ok: true, namespaceGone: true, steps: [] },
       };
+    }
+
+    /*
+     * A CREATING session has a start building its sandbox right now — in this
+     * instance or another — and a destroy now finds nothing yet to remove.
+     * Recording ENDED on that released the slot while the build went on, and
+     * the start discarded what it built only when it finished: one student
+     * pressing Start and End in a loop had a dozen sandboxes building at once
+     * against a limit of one, and the global ceiling was passed the same way.
+     *
+     * So End only marks such a session, and the row keeps occupying its slot.
+     * The start that owns the build discards it and finishes this teardown
+     * (`#finishTeardownOfLostStart`); a start whose process died is finished
+     * by the reaper, as any unfinished End is. The reaper's own expiry of a
+     * CREATING row does not defer: it acts only once that start is presumed
+     * dead.
+     */
+    if (options.deferToStart && session.status === 'CREATING') {
+      const claimed = await this.#transition(
+        session.sessionId,
+        ['CREATING'],
+        inProgress,
+        { statusReason: reason },
+        claimGuard,
+      );
+      if (claimed) {
+        this.#log(`session ${session.sessionId} ${inProgress} (${reason}): its start will discard what it builds`);
+        return { session: claimed, destroy: { ok: true, namespaceGone: false, steps: [] } };
+      }
+      // It moved on meanwhile — ACTIVE, FAILED, … — so it is torn down as what it is now.
     }
 
     /*
@@ -1421,7 +1491,7 @@ export class SessionManager {
 
     let destroy: DestroyResult;
     try {
-      destroy = await this.#providerFor(marked).destroy(this.contextFor(marked));
+      destroy = await this.#providerFor(marked).destroy(this.#teardownContextFor(marked));
     } catch (error) {
       // A throw is a failed delete like any other: the teardown stays in flight
       // for the reaper to resume, rather than escaping as a 500 mid-teardown.

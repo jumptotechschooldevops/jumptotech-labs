@@ -21,7 +21,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import WebSocket from 'ws';
 import {
   CONTAINER_SANDBOX_PREFIX,
@@ -69,8 +69,10 @@ function fakePty(): BrokerPty & {
   resizes: [number, number][];
   killed: boolean;
   emit(d: string): void;
+  exit(exitCode: number): void;
 } {
   let onData: (d: string) => void = () => undefined;
+  let onExit: (e: { exitCode: number }) => void = () => undefined;
   return {
     written: [],
     resizes: [],
@@ -87,9 +89,14 @@ function fakePty(): BrokerPty & {
     onData(listener) {
       onData = listener;
     },
-    onExit() {},
+    onExit(listener) {
+      onExit = listener;
+    },
     emit(data) {
       onData(data);
+    },
+    exit(exitCode) {
+      onExit({ exitCode });
     },
   };
 }
@@ -159,6 +166,10 @@ interface Stack {
   argvs: string[][];
   /** Who the stub API says owns each session. */
   owners: Map<string, string>;
+  /** Every TCP connection the broker holds, so a test can drop them as a crash would. */
+  brokerConnections: Set<Socket>;
+  /** Credential exchanges the stub API has been asked for. */
+  credentialCalls(): number;
 }
 
 /**
@@ -178,6 +189,7 @@ async function bringUpStack(
     [SESSION_B, OWNER_B],
   ]);
 
+  let credentialCalls = 0;
   const api = createServer((req, res) => {
     const match = /^\/internal\/sessions\/(sess-[0-9a-f]+)\/credentials$/.exec(req.url ?? '');
     if (!match || req.method !== 'POST') {
@@ -189,6 +201,7 @@ async function bringUpStack(
       return;
     }
     const sessionId = match[1]!;
+    credentialCalls += 1;
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', async () => {
@@ -253,6 +266,11 @@ async function bringUpStack(
     },
     log: () => undefined,
   });
+  const brokerConnections = new Set<Socket>();
+  broker.on('connection', (socket: Socket) => {
+    brokerConnections.add(socket);
+    socket.on('close', () => brokerConnections.delete(socket));
+  });
   const brokerPort = await listen(broker);
 
   const terminalConfig = loadTerminalConfig({
@@ -276,6 +294,8 @@ async function bringUpStack(
     ptys,
     argvs,
     owners,
+    brokerConnections,
+    credentialCalls: () => credentialCalls,
   };
 }
 
@@ -418,6 +438,50 @@ describe('a container-backed lab gets a shell without this process holding a run
     const { first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
     expect(first).toMatchObject({ type: 'error' });
     expect(stack.ptys).toHaveLength(0);
+  });
+});
+
+/** Every frame and the close code a browser socket receives, from now on. */
+function record(ws: WebSocket): { frames: Record<string, unknown>[]; closed: Promise<number> } {
+  const frames: Record<string, unknown>[] = [];
+  ws.on('message', (raw) => frames.push(JSON.parse(String(raw)) as Record<string, unknown>));
+  return { frames, closed: new Promise((resolve) => ws.on('close', (code) => resolve(code))) };
+}
+
+/*
+ * A broker shell ends one of two ways, and a student has to be told which.
+ * The shell exiting — `exit`, a program that ended it — is final, and the
+ * browser does not reconnect. Losing the broker — sandboxd restarted, crashed
+ * or was killed for memory — is not the student's doing, and it is exactly what
+ * the workspace's automatic reconnect exists to ride out. Both used to reach
+ * the browser as an `exit` frame and close 1000: "The shell exited (code 0)",
+ * and no reconnect.
+ */
+describe('a broker shell that ends', () => {
+  it('reports the shell exiting as an exit', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) });
+    const { ws, first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
+    expect(first.type).toBe('ready');
+    const seen = record(ws);
+
+    stack.ptys[0]!.exit(3);
+
+    expect(await seen.closed).toBe(1000);
+    expect(seen.frames).toContainEqual({ type: 'exit', exitCode: 3 });
+    expect(seen.frames.some((f) => f.type === 'error')).toBe(false);
+  });
+
+  it('reports losing the broker as a transient failure, not as the shell exiting', async () => {
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) });
+    const { ws, first } = await authenticate(stack.terminalUrl, tokenFor(SESSION_A, OWNER_A));
+    expect(first.type).toBe('ready');
+    const seen = record(ws);
+
+    for (const socket of stack.brokerConnections) socket.destroy();
+
+    expect(await seen.closed).toBe(1011);
+    expect(seen.frames.some((f) => f.type === 'exit')).toBe(false);
+    expect(seen.frames).toContainEqual(expect.objectContaining({ type: 'error', code: 'SANDBOX_UNAVAILABLE' }));
   });
 });
 
@@ -632,6 +696,44 @@ describe('one shell per session, even while attaches are still in flight', () =>
     // And that one shell is the session's, so ending the session reaches it.
     expect(await terminate(stack, SESSION_A)).toEqual({ terminated: true });
     await eventually(() => stack.ptys.every((p) => p.killed), 'the shell to be closed');
+  });
+
+  /*
+   * Serializing a session's attaches bounded it to one in flight, but not the
+   * line behind it: every socket that authenticated with the session's token
+   * waited its turn with no timer — the auth grace is cleared once a token
+   * verifies — and then ran a whole attach, a credential mint and a PTY, only
+   * to be replaced by the next. Sixty sockets from one student were sixty
+   * mints and sixty spawns one after another, and a Reset's reattach queued
+   * behind them outlived the API's 20 s wait. The newest attach always wins,
+   * so one waiting behind the running one is all a session ever needs.
+   */
+  it('keeps only the newest attach waiting, and closes the ones it replaces at once', async () => {
+    const apiGate = gate();
+    const stack = await bringUpStack({ [refFor(SESSION_A)]: snapshot(SESSION_A) }, { apiGate });
+
+    const running = await authOnly(stack);
+    const runningClosed = closeCode(running);
+    await apiGate.reached(1);
+
+    // Each is replaced by the next one's auth, so its close is listened for
+    // before that auth is sent.
+    const replacedClosed: Promise<number>[] = [];
+    for (let i = 0; i < 20; i += 1) replacedClosed.push(closeCode(await authOnly(stack)));
+    const newest = await authOnly(stack);
+    const newestReady = frame(newest, ['ready', 'error']);
+
+    // Closed while still waiting — before the attach ahead of them has moved.
+    expect(new Set(await Promise.all(replacedClosed))).toEqual(new Set([4410]));
+    expect(stack.credentialCalls()).toBe(1);
+
+    apiGate.release();
+    expect(await newestReady).toMatchObject({ type: 'ready', sandboxRef: refFor(SESSION_A) });
+    expect(await runningClosed).toBe(4410);
+    // The attach that was already running, and the newest: nothing in between
+    // reached the API or the broker.
+    expect(stack.credentialCalls()).toBe(2);
+    expect(stack.ptys).toHaveLength(2);
   });
 
   it('a second socket arriving during the first one’s broker attach replaces it', async () => {
