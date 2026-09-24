@@ -12,6 +12,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { AuthError, type IdentityResolver } from '../src/auth/identity.js';
 import { authenticate, authzDecisionLabels, type AuthAuditEvent } from '../src/auth/middleware.js';
+import { createRateLimiter } from '../src/rate-limit.js';
 
 const refusing: IdentityResolver = {
   mode: 'oidc',
