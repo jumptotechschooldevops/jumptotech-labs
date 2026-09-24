@@ -1804,7 +1804,9 @@ function refuse(steps: ProvisionStep[], reason: string): DestroyResult {
 /** stat's own report that the path, or a component of it, does not exist. */
 function statReportedAbsent(result: ContainerExecResult): boolean {
   if (result.timedOut || result.exitCode !== 1) return false;
-  return /^stat: .*: (No such file or directory|Not a directory)\s*$/m.test(result.stderr);
+  return /^(?:\/bin\/)?stat: .*: (No such file or directory|Not a directory)\s*$/m.test(
+    result.stderr,
+  );
 }
 
 /** A `find` that exited 1 with nothing on stderr but its own diagnostics. */

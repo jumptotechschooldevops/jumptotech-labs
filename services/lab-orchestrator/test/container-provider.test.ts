@@ -452,6 +452,13 @@ describe('sandbox reads for the verifier', () => {
     const find = (result: ContainerExecResult) => (argv: readonly string[]) =>
       argv[0] === '/usr/bin/find' ? result : undefined;
 
+    it('reads GNU stat executable-path missing-file output as absent', async () => {
+      const { provider, context } = await world(
+        stat(failed(`/bin/stat: cannot statx '${HOME}/deploy/missing.txt': No such file or directory`)),
+      );
+      expect(await provider.readSandboxPath(context, 'deploy/missing.txt')).toBeNull();
+    });
+
     it('does not read an unsearchable path as absent', async () => {
       const { provider, context } = await world(
         stat(failed(`stat: cannot statx '${HOME}/deploy/app.log': Permission denied`)),
