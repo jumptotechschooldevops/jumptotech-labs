@@ -25,6 +25,8 @@ describe('authz decision metric labels', () => {
   it('count every anonymous request under one action, whatever its path', async () => {
     const events: AuthAuditEvent[] = [];
     const app = express();
+    const limiter = createRateLimiter({ limit: 100, windowMs: 60_000 });
+    app.use('/api/sessions', limiter);
     app.use('/api/sessions', authenticate(refusing, (event) => events.push(event)));
 
     for (let i = 0; i < 25; i += 1) {
