@@ -351,7 +351,15 @@ export class FakeContainerRuntime implements ContainerRuntimePort {
         if (!entry) {
           return fail(`stat: cannot statx '${target}': No such file or directory`);
         }
-        const kind = entry.type === 'directory' ? 'directory' : 'regular file';
+        // GNU stat's `%F` names an empty regular file differently, and empty
+        // files are common in lab solutions: modelled so the provider's
+        // mapping of that spelling is exercised rather than assumed.
+        const kind =
+          entry.type === 'directory'
+            ? 'directory'
+            : entry.content.length === 0
+              ? 'regular empty file'
+              : 'regular file';
         return ok(
           `${kind}|${entry.mode}|${entry.owner}|${entry.group}|${entry.content.length}\n`,
         );

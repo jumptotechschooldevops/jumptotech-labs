@@ -472,6 +472,30 @@ describe('operator socket — the socket itself', () => {
     expect(lines.some((line) => line.includes('"event":"ops.operator_socket.failed"'))).toBe(true);
   });
 
+  it('never throws into the api when the running socket reports errors', async () => {
+    // A listening server can still emit 'error' (an accept failing with
+    // EMFILE when the process runs out of descriptors). Only a one-shot
+    // listener was installed for the listen itself, so the first such error
+    // used it up and the second was an unhandled 'error' that ended the api.
+    const dir = path.join(privateDir(), 'running');
+    mkdirSync(dir, { mode: 0o700 });
+    const lines: string[] = [];
+    const server = await startOperatorSocket({
+      socketPath: path.join(dir, 'api.sock'),
+      logger: createLogger({ service: 'api', sink: (line) => lines.push(line) }),
+      handler: (_req, res) => res.end(),
+    });
+    expect(server).not.toBeNull();
+    servers.push(server!);
+
+    const accept = Object.assign(new Error('accept EMFILE'), { code: 'EMFILE' });
+    expect(() => {
+      server!.emit('error', accept);
+      server!.emit('error', accept);
+    }).not.toThrow();
+    expect(lines.filter((line) => line.includes('EMFILE')).length).toBeGreaterThanOrEqual(2);
+  });
+
   it('is off unless OPERATOR_SOCKET_PATH is set, and refuses a relative one', () => {
     const base = { TERMINAL_SESSION_SECRET: 'operator-socket-test-secret-value', ALLOWED_ORIGINS: 'http://localhost:3000' };
     expect(loadConfig(base as NodeJS.ProcessEnv).operations.operatorSocketPath).toBeUndefined();

@@ -35,8 +35,9 @@ export interface LoadObservabilityOptions {
 function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
   const raw = env[name];
   if (!raw || raw.trim() === '') return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  // Digits only: `parseInt` alone read `2h` as 2 and `1e3` as 1.
+  const parsed = /^\s*[0-9]+\s*$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`Environment variable ${name} must be a positive integer, got '${raw}'`);
   }
   return parsed;
@@ -53,10 +54,26 @@ function rateFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): nu
   return parsed;
 }
 
-function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
+const TRUE_WORDS = ['1', 'true', 'yes', 'on'];
+const FALSE_WORDS = ['0', 'false', 'no', 'off'];
+
+/**
+ * A switch the operator sets in .env — the one parser every service uses.
+ *
+ * Anything that is not a recognisable yes or no is refused at startup rather
+ * than read as `false`. That reading made `LAB_LAUNCHES_PAUSED=ture` — the
+ * runbook's stop-launches switch, typed during an incident — leave Start Lab
+ * open, and, while the terminal and sandboxd kept their own lenient copies,
+ * `TERMINAL_SANDBOX_BROKER_ENABLED=ture` silently run `docker exec` in the
+ * terminal process instead of through the broker.
+ */
+export function boolFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
   const raw = env[name];
   if (raw === undefined || raw.trim() === '') return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+  const word = raw.trim().toLowerCase();
+  if (TRUE_WORDS.includes(word)) return true;
+  if (FALSE_WORDS.includes(word)) return false;
+  throw new Error(`${name} must be true or false (also accepted: ${[...TRUE_WORDS, ...FALSE_WORDS].join(', ')}); it is set to something else.`);
 }
 
 export function loadObservabilityConfig(options: LoadObservabilityOptions): ObservabilityConfig {

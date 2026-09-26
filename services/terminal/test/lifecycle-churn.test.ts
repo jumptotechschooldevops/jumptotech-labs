@@ -174,6 +174,9 @@ async function bringUpStack() {
             pty.input += data;
           },
           resize() {},
+          pause() {},
+          resume() {},
+          pendingInputBytes: () => 0,
           kill() {
             if (pty.killed) return;
             pty.killed = true;

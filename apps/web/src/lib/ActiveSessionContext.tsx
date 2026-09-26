@@ -119,12 +119,22 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
   const inFlightLaunch = useRef<Promise<StartLabResponse | null> | null>(null);
   const inFlightGrant = useRef(new Map<string, Promise<TerminalGrant>>());
   const generation = useRef(0);
+  /*
+   * Bumped by every change this page makes to the list itself — a launch, an
+   * adopted copy (End, a poll). A read in flight across one was answered from
+   * before it, and applying it would undo it: a lab that just launched
+   * vanished with its terminal grant, an ended one came back as running. Such
+   * a read is not applied; it is read again.
+   */
+  const changes = useRef(0);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<void> => {
     const mine = ++generation.current;
+    const seen = changes.current;
     try {
       const result = await Promise.resolve().then(() => api.listMySessions());
       if (generation.current !== mine) return;
+      if (changes.current !== seen) return refresh();
       setEntries(result.sessions);
       setLimit(result.limits?.maxActiveSessionsPerStudent ?? null);
       setError(null);
@@ -151,6 +161,7 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const adoptSession = useCallback((session: SessionInfo, attempt?: AttemptSummary | null) => {
+    changes.current += 1;
     setEntries((current) => {
       const index = current.findIndex((entry) => entry.session.sessionId === session.sessionId);
       if (!isLiveStatus(session.status)) {
@@ -179,6 +190,7 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
       const promise = Promise.resolve()
         .then(() => api.startLab(labId))
         .then((response) => {
+          changes.current += 1;
           grants.current.set(response.session.sessionId, browserGrant(response.terminal));
           setGrantVersion((v) => v + 1);
           setEntries((current) => [
