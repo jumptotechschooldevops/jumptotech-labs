@@ -46,9 +46,13 @@ install -d -o student -g student -m 0755 /home/student/ops
 # permission fault layered on top of that is noise, not difficulty.
 install -o student -g student -m 0644 /dev/null /var/log/jumptotech/ledger-sync.log
 
-# Start the runaway and detach it from this seed session.
-setsid nohup /usr/local/bin/stale-batch-job >/dev/null 2>&1 &
-disown || true
+# Start the runaway as `student`, detached from this seed session. Seed
+# scripts run as root, and a root-owned job is not "an ordinary background
+# process" to the student: a plain `kill <pid>` from their uid-1001 shell gets
+# "Operation not permitted", which the task never prepares them for. Its log
+# belongs to the same account, as ledger-sync's does.
+install -o student -g student -m 0644 /dev/null /var/log/jumptotech/stale-batch-job.log
+su student -s /bin/bash -c 'setsid nohup /usr/local/bin/stale-batch-job >/dev/null 2>&1 &'
 
 # Give it a moment to appear in the process table before setup verification
 # looks for it.

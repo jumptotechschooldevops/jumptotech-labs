@@ -359,6 +359,9 @@ or attestation reason; `private-beta-operations.test.ts` and
 
 ### 9.3 Alert thresholds
 
+The indicators these thresholds protect, the objective each one stands for, and
+the operator question each answers are in [beta-slo-indicators.md](beta-slo-indicators.md).
+
 | Alert | Severity | Threshold | Why this number |
 |---|---|---|---|
 | `TlsCertificateRenewalDue` | warning | < 21 days, 1 h | P0-017 `DEFAULT_EXPIRY_THRESHOLDS.warnDays` (test-pinned) |

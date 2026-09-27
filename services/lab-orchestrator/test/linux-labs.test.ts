@@ -442,3 +442,20 @@ describe('LINUX-015 — the probe asks about another service however it is spell
     expect(seed!.content).toContain('ask "$CTL" restart payments-api ledger-api');
   });
 });
+
+// ------------------------------------------- LINUX-004's leftover job
+
+describe('LINUX-004 — the leftover job belongs to the student who must stop it', () => {
+  // Seed scripts run as root. The task calls stale-batch-job "an ordinary
+  // background process" and never mentions sudo, so a root-owned job met a
+  // beginner's `kill <pid>` with "Operation not permitted". The seed starts it
+  // as `student`.
+  it('starts stale-batch-job as student, never as root', async () => {
+    const lab = (await realRegistry()).get('LINUX-004');
+    const [seed] = await loadSeedScripts(lab);
+    const text = seed!.content;
+    const starts = text.split('\n').filter((line) => /setsid nohup \/usr\/local\/bin\/stale-batch-job/.test(line));
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatch(/^su student -s \/bin\/bash -c '/);
+  });
+});

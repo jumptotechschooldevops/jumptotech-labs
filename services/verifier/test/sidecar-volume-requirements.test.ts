@@ -300,7 +300,7 @@ describe('K8S-017 — the shipped lab', () => {
     // Availability passes: the point is that a healthy workload can still be
     // wrong, which is what this lab teaches.
     expect(await failed(seeded())).toEqual([
-      'The original Deployment was extended, not replaced',
+      'The Deployment was extended in place, as a new revision',
       'log-shipper runs for the whole life of the Pod, as a sidecar',
       'The application writes into a shared volume',
       'log-shipper reads the same shared volume',
@@ -375,13 +375,13 @@ describe('K8S-017 — the shipped lab', () => {
     });
     expect(await failed(recreated)).toEqual([
       'The Deployment still selects the audit-api Pods',
-      'The original Deployment was extended, not replaced',
+      'The Deployment was extended in place, as a new revision',
     ]);
   });
 
   it('refuses the fixture deleted and re-applied with the sidecar added', async () => {
     const reapplied = solved({ annotations: { 'deployment.kubernetes.io/revision': '1' } });
-    expect(await failed(reapplied)).toEqual(['The original Deployment was extended, not replaced']);
+    expect(await failed(reapplied)).toEqual(['The Deployment was extended in place, as a new revision']);
   });
 
   it('does not pass on another session"s solved namespace', async () => {

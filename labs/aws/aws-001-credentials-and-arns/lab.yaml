@@ -175,9 +175,13 @@ requirements:
     label: Every finding has been filled in
 
   # --- Part 3: the repair ---------------------------------------------------
+  # The header and the key it governs, together: "[reconciliation]" on its
+  # own was satisfied by a comment, or with the two profiles' keys swapped.
+  # The repair renames only the header line, so the key line below it is the
+  # seeded one, byte for byte.
   - type: file_content
     path: /home/student/aws-incident/deploy/credentials
-    contains: "[reconciliation]"
+    contains: "[reconciliation]\naws_access_key_id = AKIAI88QH8DHFEXAMPLE"
     label: The reconciliation profile uses a credentials-file section header
 
   - type: file_content_absent

@@ -93,7 +93,9 @@ export const workloadMountsPvc: VerifierHandler<'workload_mounts_pvc'> = {
     const mounts = await volumeMountsFor(reader, r.kind, r.name);
     if (!mounts) return missing(titleCase(r.kind), r.name, reader.namespace);
 
-    const match = mounts.filter((m) => m.claimName === r.claim && m.mountPath === r.mountPath);
+    // `/data/` and `/data` are the same mount point.
+    const trim = (p: string) => p.replace(/\/+$/, '') || '/';
+    const match = mounts.filter((m) => m.claimName === r.claim && trim(m.mountPath) === trim(r.mountPath));
     if (match.length === 0) {
       const observed = mounts
         .filter((m) => m.claimName)

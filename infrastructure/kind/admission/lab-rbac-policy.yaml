@@ -138,3 +138,45 @@ metadata:
 spec:
   policyName: jumptotech-require-pod-security
   validationActions: [Deny]
+---
+# A Service's `spec.externalIPs` makes kube-proxy on every node capture traffic
+# to that IP:port — any IP, not one the cluster owns (CVE-2020-8554). A student
+# may write Services, so without this a student Service with
+# `externalIPs: [<control-plane node IP>]` and port 6443 captured every
+# connection to the API server: the api's orchestrator, other students'
+# kubectl, and the kubelet's own liveness probe, which then restarted the
+# apiserver in a loop. Proved on kind v1.34; only a shell on the node could
+# delete the Service again. No lab uses externalIPs.
+#
+# Applies to every caller in a managed namespace, as nothing the platform
+# creates there needs the field either.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: jumptotech-deny-service-external-ips
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["services"]
+  matchConditions:
+    - name: sets-external-ips
+      expression: "has(object.spec.externalIPs)"
+  validations:
+    - expression: "size(object.spec.externalIPs) == 0"
+      message: "Services in lab namespaces may not set spec.externalIPs"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: jumptotech-deny-service-external-ips
+spec:
+  policyName: jumptotech-deny-service-external-ips
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        jumptotech.io/managed: "true"

@@ -76,7 +76,9 @@ task:
 
     Work until the workspace holds a project that genuinely builds, genuinely
     tests, and genuinely produces its artifacts, with both pipeline definitions
-    matching the shape recorded in the incident. Press Check Solution as often
+    matching the shape recorded in the incident. Keep each file's own name
+    (`ci.yml`, `Jenkinsfile`) wherever it has to end up: the checks look for
+    those names. Press Check Solution as often
     as you like; the failures are the diagnostic tool.
 
 setup:
@@ -171,6 +173,9 @@ requirements:
     steps_as_command: true
     after:
       - Build
+    # Runs on every build: a Test stage behind `when { expression { return
+    # false } }` is declared and never runs.
+    unconditional: true
     label: The Jenkins pipeline tests after it builds
   - type: jenkins_stage_exists
     path: Jenkinsfile

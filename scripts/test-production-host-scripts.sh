@@ -108,7 +108,7 @@ case $args in
   'get nodes --no-headers') [ -z "${FAKE_KUBE_DOWN-}" ] || exit 1; echo "jumptotech-labs-control-plane ${FAKE_NODE_STATE:-Ready} control-plane 1d v1.34.0" ;;
   get\ --raw\ *configz) echo "{\"kubeletconfig\":{\"seccompDefault\":${FAKE_SECCOMP:-true}}}" ;;
   'get validatingadmissionpolicies -o name')
-    for p in jumptotech-deny-clusterrole-bindings jumptotech-protect-managed-resources jumptotech-require-pod-security; do
+    for p in jumptotech-deny-clusterrole-bindings jumptotech-protect-managed-resources jumptotech-require-pod-security jumptotech-deny-service-external-ips; do
       [ "$p" = "${FAKE_MISSING_POLICY-}" ] || echo "validatingadmissionpolicy.admissionregistration.k8s.io/$p"
     done
     ;;

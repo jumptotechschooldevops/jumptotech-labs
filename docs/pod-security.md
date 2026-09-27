@@ -122,6 +122,7 @@ malformed, or if the version is `latest` under `NODE_ENV=production`.
 | VAP `jumptotech-require-pod-security` | Namespace CREATE/UPDATE where the new *or old* object is `jumptotech.io/managed=true`; every caller | a managed namespace whose `enforce` label is missing or not `baseline`/`restricted`; removing `managed` from a managed namespace |
 | VAP `jumptotech-protect-managed-resources` (existing) | lab ServiceAccounts, managed namespaces | UPDATE/DELETE of any object labelled managed — now including the `default` ServiceAccount |
 | VAP `jumptotech-deny-clusterrole-bindings` (existing) | lab ServiceAccounts, managed namespaces | a RoleBinding to a ClusterRole |
+| VAP `jumptotech-deny-service-external-ips` | Service CREATE/UPDATE in managed namespaces; every caller | a non-empty `spec.externalIPs` (CVE-2020-8554: kube-proxy on every node captures traffic to that IP:port, including the API server's) |
 | Student RBAC (existing) | the student token | any write to `namespaces`; `pods/ephemeralcontainers` |
 | Setup-manifest guard | lab YAML at load | workloads with host access or privilege (§7) |
 

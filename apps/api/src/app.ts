@@ -51,6 +51,7 @@ import { createInternalRoutes } from './routes/internal.js';
 import { createTrackRoutes } from './routes/tracks.js';
 import { createLearningPathRoutes } from './routes/learning-paths.js';
 import {
+  CHECK_RATE_LIMIT,
   LEARNING_PATH_RATE_LIMIT,
   SANDBOX_WRITE_RATE_LIMIT,
   byAuthenticatedUser,
@@ -99,6 +100,8 @@ export interface CreateAppDeps {
   learningPathRateLimit?: RateLimitPolicy;
   /** Per-student budget for Start and Reset, the routes that create a sandbox. Defaults to `SANDBOX_WRITE_RATE_LIMIT`. */
   sandboxWriteRateLimit?: RateLimitPolicy;
+  /** Per-student budget for Check. Defaults to `CHECK_RATE_LIMIT`. */
+  checkRateLimit?: RateLimitPolicy;
   /**
    * How a request's caller is identified (PLATFORM-009).
    *
@@ -310,6 +313,14 @@ export function createApp(deps: CreateAppDeps): Express {
     },
     byAuthenticatedUser,
   );
+  const checkLimiter = createRateLimiter(
+    deps.checkRateLimit ?? CHECK_RATE_LIMIT,
+    () => {
+      observability.metrics.common.securityEvents.inc({ service: 'api', event: 'rate_limited' });
+      observability.logger.warn('security.event', { securityEvent: 'rate_limited', reason: 'checks' });
+    },
+    byAuthenticatedUser,
+  );
 
   app.get('/health', asyncRoute(async (_req, res) => {
     /*
@@ -472,6 +483,7 @@ export function createApp(deps: CreateAppDeps): Express {
     obs: observability.logger,
     metrics: observability.metrics,
     sandboxWriteLimiter,
+    checkLimiter,
   };
   app.use('/api/labs', browserCors, originGuard, authenticated, createLabRoutes(routes));
   app.use('/api/tracks', browserCors, originGuard, authenticated, createTrackRoutes(routes));

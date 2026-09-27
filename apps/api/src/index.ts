@@ -334,6 +334,7 @@ async function main(): Promise<void> {
     intervalMs: config.reaperIntervalSeconds * 1000,
     retentionMs: config.sessionRetentionMinutes * 60_000,
     log: logger.legacy('reaper.sweep.completed'),
+    logProblem: logger.legacy('reaper.sweep.failed', 'warn'),
     metrics: {
       onSweep: (event) => {
         /*

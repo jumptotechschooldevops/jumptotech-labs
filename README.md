@@ -3623,8 +3623,11 @@ TEST_DATABASE_URL=postgresql://user:password@localhost:5432/jumptotech_labs_test
   npm run test:db
 ```
 
-Without `RUN_DB_TESTS=1` they skip themselves with a message, exactly like the
-cluster and sandbox suites.
+Without `RUN_DB_TESTS=1` they skip themselves with a message under `npm test`,
+exactly like the cluster and sandbox suites. `npm run test:db` runs them through
+`test-support/strict-vitest.ts`, so there a skip fails the run instead of
+passing it: that script exists to test against a database, and a run in which
+every suite skipped itself proved nothing.
 
 ### Running the catalog tests only
 
@@ -3651,7 +3654,7 @@ npx vitest run test/docker-requirements.test.ts --root services/verifier
 npx vitest run test/docker-credentials.test.ts test/workspace.test.ts \
   --root services/terminal
 npx vitest run test/docker-api.test.ts --root apps/api
-npx vitest run test/multi-track-catalog.test.ts --root apps/web
+npx vitest run test/catalog.test.tsx --root apps/web
 ```
 
 ### PLATFORM-001 coverage
@@ -3829,7 +3832,7 @@ check that no command-execution endpoint exists.
 | Workspace path safety, per-session directories, size cap | `terminal/test/workspace.test.ts` |
 | Docker credential parsing, file modes, per-session material | `terminal/test/docker-credentials.test.ts` |
 | Start / check / reset / end a Docker lab over HTTP; cross-session checks | `apps/api/test/docker-api.test.ts` |
-| Multi-track catalog, track order and taglines, substrate wording | `apps/web/test/multi-track-catalog.test.tsx` |
+| Multi-track catalog: labs grouped under their track, in the API's track order | `apps/web/test/catalog.test.tsx` |
 | **Separate daemons, mutual-TLS rejection, real limits, real teardown** | `lab-orchestrator/test/docker-integration.test.ts` (real Docker) |
 
 The same rule as the Kubernetes track applies to what a fake may be used for.
