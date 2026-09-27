@@ -58,6 +58,9 @@ export {
 export const MANAGED_CONTAINER_SELECTOR = `${MANAGED_LABEL}=true`;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Containers per `docker inspect` in `list`: bounds one argv, and one answer to wait for. */
+const INSPECT_BATCH = 100;
 /** Cap on anything read out of a sandbox, so a huge file cannot exhaust the API. */
 export const MAX_SANDBOX_READ_BYTES = 64 * 1024;
 
@@ -423,19 +426,78 @@ export class DockerCliRuntime implements ContainerRuntimePort {
       .map((line) => line.trim())
       .filter(Boolean);
 
-    const found: ContainerInfo[] = [];
-    for (const name of names) {
-      // Name-shape gate first: a container someone else labelled by hand never
-      // enters the cleanup work list.
+    // Name-shape gate first: a container someone else labelled by hand never
+    // enters the cleanup work list, and never reaches an argv.
+    const managed = names.filter((name) => {
       try {
         assertValidManagedContainerRef(name);
+        return true;
       } catch {
-        continue;
+        return false;
       }
-      const info = await this.inspect(name);
-      if (info) found.push(info);
+    });
+
+    /*
+     * One `docker inspect` per batch, not one per container.
+     *
+     * This runs for every container provider on every reaper sweep and on every
+     * sandboxd metrics scrape, over every managed container on the daemon. One
+     * process per container made that a sequential fan-out growing with each
+     * student (a five-student run measured 9.2 s per list on a loaded host).
+     * The batch answers with the same fields, in argument order.
+     */
+    const found: ContainerInfo[] = [];
+    for (let i = 0; i < managed.length; i += INSPECT_BATCH) {
+      found.push(...(await this.#inspectMany(managed.slice(i, i + INSPECT_BATCH))));
     }
     return found;
+  }
+
+  /**
+   * `inspect` for several containers in one process, with its rules intact: a
+   * name the daemon reports as missing (removed since it was listed) is absent;
+   * a timeout, or any failure other than absence, throws.
+   */
+  async #inspectMany(names: readonly string[]): Promise<ContainerInfo[]> {
+    if (names.length === 0) return [];
+    const result = await this.#docker([
+      'inspect',
+      '--type',
+      'container',
+      '--format',
+      '{{.Name}}\t{{.Id}}\t{{.State.Status}}\t{{.Config.Image}}\t{{json .Config.Labels}}',
+      ...names,
+    ]);
+    if (result.timedOut) {
+      throw new ContainerRuntimeError(`docker inspect of ${names.length} containers did not answer in time`);
+    }
+    if (result.exitCode !== 0) {
+      const failures = result.stderr
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((line) => !/no such (container|object)/i.test(line));
+      if (failures.length > 0 || result.stderr.trim() === '') {
+        throw new ContainerRuntimeError(
+          failures.join('; ') || `docker inspect exited with code ${result.exitCode}`,
+        );
+      }
+    }
+
+    const byName = new Map<string, ContainerInfo>();
+    for (const line of result.stdout.split('\n')) {
+      const [rawName, id, state, image, labelsJson] = line.split('\t');
+      const name = rawName?.replace(/^\//, '');
+      if (!name || !id) continue;
+      byName.set(name, {
+        name,
+        id,
+        state: state ?? 'unknown',
+        image: image ?? '',
+        labels: parseLabelsJson(labelsJson),
+      });
+    }
+    return names.flatMap((name) => byName.get(name) ?? []);
   }
 
   async remove(name: string): Promise<void> {
