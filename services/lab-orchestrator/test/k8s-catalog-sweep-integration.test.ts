@@ -14,8 +14,8 @@
  *
  * A Check reads live objects, and a lab's setup verification may accept a
  * fixture before its rollout is finished (K8S-015 waits for three of
- * checkout-api's four replicas), so both Checks are read once the grades stop
- * changing rather than once.
+ * checkout-api's four replicas; K8S-019 for a Deployment that exists), so both
+ * Checks are read once the grades have held for 30 seconds rather than once.
  *
  * Tier: E2E. Gated on RUN_INTEGRATION_TESTS=1 and a kind kubeconfig, like the
  * rest of the kind job.
@@ -105,16 +105,25 @@ describe.runIf(ENABLED)('every Kubernetes lab on real kind', () => {
     };
   }
 
-  /** Grades once two reads five seconds apart agree, or after two minutes. */
+  /**
+   * Grades once they have held for 30 seconds, or after three minutes.
+   *
+   * Two agreeing reads were not enough: K8S-019's setup accepts its Deployment
+   * before the Pods are Ready, and two reads during the image pull agreed on a
+   * state that was about to change. A lab that starts deliberately broken stays
+   * the same, so it settles in 30 seconds too.
+   */
   async function settledGrades(labId: string, namespace: string) {
-    const deadline = Date.now() + 120_000;
-    let previous = await grades(labId, namespace);
-    for (;;) {
+    const deadline = Date.now() + 180_000;
+    let current = await grades(labId, namespace);
+    let stableSince = Date.now();
+    while (Date.now() - stableSince < 30_000 && Date.now() < deadline) {
       await sleep(5_000);
-      const current = await grades(labId, namespace);
-      if (JSON.stringify(current) === JSON.stringify(previous) || Date.now() > deadline) return current;
-      previous = current;
+      const next = await grades(labId, namespace);
+      if (JSON.stringify(next) !== JSON.stringify(current)) stableSince = Date.now();
+      current = next;
     }
+    return current;
   }
 
   it.each(LAB_IDS)(
