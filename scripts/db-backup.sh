@@ -37,6 +37,12 @@
 #                              (its first migration's applied_at) begins after
 #                              the newest archive here: one re-created after that
 #                              archive. Refused otherwise; see RB-02 §4d.
+#   BACKUP_RECREATED_TOLERANCE_SECONDS
+#                              How much later than the newest archive's name
+#                              that history may begin and still count as the
+#                              archived database (default 60): the name is
+#                              stamped before the dump's snapshot. The restore
+#                              drill lowers it to test the refusal quickly.
 #   JTT_DB_CONTAINER           The PostgreSQL container. Default: the running
 #                              `postgres` service of COMPOSE_PROJECT_NAME
 #                              (default jumptotech-labs).
@@ -85,6 +91,7 @@ retention_days=${BACKUP_RETENTION_DAYS:-14}
 min_keep=${BACKUP_RETENTION_MIN_KEEP:-7}
 copy_hook=${BACKUP_COPY_HOOK-}
 accept_new_database=${BACKUP_ACCEPT_NEW_DATABASE:-false}
+recreated_tolerance=${BACKUP_RECREATED_TOLERANCE_SECONDS:-60}
 
 case $backup_dir in
   /*) ;;
@@ -111,6 +118,7 @@ case $accept_new_database in
   true | false) ;;
   *) jtt_die "BACKUP_ACCEPT_NEW_DATABASE must be true or false" ;;
 esac
+[[ $recreated_tolerance =~ ^[0-9]{1,5}$ ]] || jtt_die "BACKUP_RECREATED_TOLERANCE_SECONDS must be a whole number of seconds"
 if [ -n "$label" ] && [[ ! $label =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
   jtt_die "the label may contain only a-z, 0-9 and -, at most 32 characters"
 fi
@@ -218,13 +226,18 @@ archive_names() {
 # retention would count it toward the minimum kept while the archives that hold
 # the students' history age out. So stop here — loudly, as a failed backup —
 # until an operator restores (RB-02 §4d) or accepts it. Compared by the archive
-# name's UTC timestamp, which is when that dump started.
+# name's UTC timestamp, taken just before that dump: the name is stamped to the
+# second, before the staging `docker exec` and pg_dump's snapshot, so a database
+# migrated in those moments is inside the archive and still records a later
+# applied_at. A tolerance (default sixty seconds) covers that gap: CI migrated
+# and dumped within one second and was refused. A volume lost and re-created
+# within that tolerance of a backup is left to DatabaseRecreated (D3).
 newest=$(archive_names | head -1)
 if [ -n "$newest" ]; then
   newest_stamp=${newest#"jtt-pg-$database-"}
   newest_stamp=${newest_stamp:0:16}
   [[ $newest_stamp =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || jtt_die "unexpected archive name $newest"
-  recreated=$(jtt_psql "$database" -c "SELECT COALESCE(min(applied_at) > (to_timestamp('$newest_stamp', 'YYYYMMDD\"T\"HH24MISS\"Z\"')::timestamp AT TIME ZONE 'UTC'), false) FROM schema_migrations") \
+  recreated=$(jtt_psql "$database" -c "SELECT COALESCE(min(applied_at) > (to_timestamp('$newest_stamp', 'YYYYMMDD\"T\"HH24MISS\"Z\"')::timestamp AT TIME ZONE 'UTC') + make_interval(secs => $recreated_tolerance), false) FROM schema_migrations") \
     || jtt_die "cannot read the migration ledger of $database; is it the application database?"
   if [ "$recreated" = t ]; then
     if [ "$accept_new_database" = true ]; then

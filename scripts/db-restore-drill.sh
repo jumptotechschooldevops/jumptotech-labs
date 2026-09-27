@@ -288,11 +288,19 @@ with_database "$target_url" "$repo/node_modules/.bin/tsx" services/progress/bin/
 # --- 12 ---------------------------------------------------------------------------------
 
 say "12. backing up the restored database, then a re-created one"
-restored_backup() { JTT_DB_CONTAINER="$prefix-target" BACKUP_DIR="$work/backups" "$repo/scripts/db-backup.sh" "$@"; }
+# A two-second tolerance instead of the default minute (db-backup.sh): the source
+# was migrated before its archive was stamped, and the re-creation below waits
+# past it, so both halves are decided by the ledger rather than by timing.
+restored_backup() {
+  JTT_DB_CONTAINER="$prefix-target" BACKUP_DIR="$work/backups" BACKUP_RECREATED_TOLERANCE_SECONDS=2 \
+    "$repo/scripts/db-backup.sh" "$@"
+}
 restored_backup --label after-restore >/dev/null 2>"$work/backup-restored.log" \
   || { indent "$work/backup-restored.log"; fail "db-backup.sh refused the restored database, whose ledger is the original"; }
 echo "    the restored database is backed up: its history begins before every archive"
 # The volume-loss shape: the same name, an empty database, migrated at startup.
+# Later than the tolerance after that archive's stamp, as a real loss would be.
+sleep 3
 psql_in target postgres -c "ALTER DATABASE $database RENAME TO ${database}_drill_lost" >/dev/null
 psql_in target postgres -c "CREATE DATABASE $database" >/dev/null
 with_database "$target_url" npm run --silent db:migrate >"$work/migrate-recreated.log" 2>&1 \

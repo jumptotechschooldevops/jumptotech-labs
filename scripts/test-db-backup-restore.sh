@@ -446,6 +446,7 @@ export FAKE_LEDGER_NEWER=1
 backup
 expect 'history newer than the newest archive: refused' says 'it was re-created after that archive'
 expect 'history newer than the newest archive: compared with the newest archive by name' logged "to_timestamp('20260102T031700Z'"
+expect 'history newer than the newest archive: allows the stamp-to-snapshot gap' logged '+ make_interval(secs => 60)'
 expect 'history newer than the newest archive: nothing dumped' bash -c "! grep -q '^pg_dump' '$FAKE_LOG'"
 expect 'history newer than the newest archive: the archives are all kept' test "$(ls "$BACKUP_DIR" | grep -c '\.dump$')" -eq 2
 expect 'history newer than the newest archive: recorded as a failed backup' recent_timestamp_of db-backup.last-failure
