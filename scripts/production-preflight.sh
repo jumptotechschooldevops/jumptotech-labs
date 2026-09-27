@@ -468,11 +468,11 @@ if [ $cluster_ok -eq 1 ] && [ -s "$host_kubeconfig" ] && have kubectl; then
   fi
   policies=$(kube get validatingadmissionpolicies -o name 2>/dev/null || true)
   missing_policies=()
-  for policy in jumptotech-deny-clusterrole-bindings jumptotech-protect-managed-resources jumptotech-require-pod-security; do
+  for policy in jumptotech-deny-clusterrole-bindings jumptotech-protect-managed-resources jumptotech-require-pod-security jumptotech-deny-service-external-ips; do
     jtt_contains "$policies" "/$policy\$" || missing_policies+=("$policy")
   done
   if [ ${#missing_policies[@]} -eq 0 ]; then
-    pass kind.admission-policies 'all three lab admission policies are installed'
+    pass kind.admission-policies 'all four lab admission policies are installed'
   else
     fail kind.admission-policies "missing: ${missing_policies[*]} (kubectl apply -f infrastructure/kind/admission/lab-rbac-policy.yaml)"
   fi

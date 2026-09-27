@@ -54,10 +54,12 @@ const bindings = () => documents().filter((d) => d.kind === 'ValidatingAdmission
 const STUDENT_SCOPED = ['jumptotech-deny-clusterrole-bindings', 'jumptotech-protect-managed-resources'];
 /** BETA-P0-016: applies to every caller, so the platform cannot unfence a namespace either. */
 const REQUIRE_POD_SECURITY = 'jumptotech-require-pod-security';
+/** CVE-2020-8554: a Service's externalIPs capture traffic to any IP on every node. */
+const DENY_EXTERNAL_IPS = 'jumptotech-deny-service-external-ips';
 
 describe('lab admission policies — the manifest is structurally valid', () => {
-  it('ships all three policies and their bindings', () => {
-    const expected = [...STUDENT_SCOPED, REQUIRE_POD_SECURITY].sort();
+  it('ships all four policies and their bindings', () => {
+    const expected = [...STUDENT_SCOPED, REQUIRE_POD_SECURITY, DENY_EXTERNAL_IPS].sort();
     expect(policies().map((p) => p.metadata?.name).sort()).toEqual(expected);
     expect(bindings().map((b) => b.metadata?.name).sort()).toEqual(expected);
   });
@@ -221,5 +223,32 @@ describe('lab admission policies — cluster-up applies them', () => {
     expect(applyIndex, 'cluster-up.sh must apply the admission manifest').toBeGreaterThan(-1);
     expect(storageIndex).toBeGreaterThan(-1);
     expect(applyIndex).toBeLessThan(storageIndex);
+  });
+});
+
+describe('lab admission policies — no Service may set externalIPs', () => {
+  const policy = () => policies().find((p) => p.metadata?.name === DENY_EXTERNAL_IPS)!;
+  const expressions = (field: 'matchConditions' | 'validations') =>
+    ((policy().spec?.[field] ?? []) as Array<{ expression?: string }>).map((e) => e.expression ?? '');
+
+  it('checks Service creates and updates', () => {
+    const rules = (policy().spec?.matchConstraints as { resourceRules: Array<Record<string, string[]>> }).resourceRules;
+    expect(rules).toEqual([
+      { apiGroups: [''], apiVersions: ['v1'], operations: ['CREATE', 'UPDATE'], resources: ['services'] },
+    ]);
+  });
+
+  it('refuses a non-empty externalIPs for every caller, not only students', () => {
+    // A student ServiceAccount is the attacker, but a Pod the student starts
+    // under another ServiceAccount must not get around it either.
+    expect(expressions('matchConditions')).toEqual(['has(object.spec.externalIPs)']);
+    expect(expressions('validations')).toEqual(['size(object.spec.externalIPs) == 0']);
+  });
+
+  it('is bound in managed namespaces', () => {
+    const binding = bindings().find((b) => b.metadata?.name === DENY_EXTERNAL_IPS);
+    expect(binding?.spec?.matchResources).toEqual({
+      namespaceSelector: { matchLabels: { 'jumptotech.io/managed': 'true' } },
+    });
   });
 });
