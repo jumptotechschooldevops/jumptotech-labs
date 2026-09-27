@@ -867,7 +867,9 @@ export function createTerminalServer(
         waitingAttaches.set(claims.sid, replace);
         void attachInTurn(claims.sid, () => {
           if (waitingAttaches.get(claims.sid) === replace) waitingAttaches.delete(claims.sid);
-          return replaced ? Promise.resolve(false) : startSession(ws, claims, cols, rows);
+          return replaced
+            ? Promise.resolve(false)
+            : withSessionSlot(ws, claims.sid, () => startSession(ws, claims, cols, rows));
         })
           .then((started) => {
             if (!started) return;
@@ -952,6 +954,53 @@ export function createTerminalServer(
   const attachQueues = new Map<string, Promise<unknown>>();
   /** sessionId → how to replace the browser attach waiting in that queue, if one is. */
   const waitingAttaches = new Map<string, () => void>();
+
+  /**
+   * Shells that are being started right now.
+   *
+   * The ceiling has to count them. `sessions.size` is the shells that already
+   * exist, and an attach is not instant — the credentials exchange is an HTTP
+   * call to the API and a container attach is a WebSocket to the broker — so
+   * sockets arriving together all measured the count before any of them had
+   * registered anything. Twenty students starting a class at once each passed
+   * a check that said the terminal was empty.
+   */
+  let startingShells = 0;
+
+  /**
+   * Admit one attach against `maxSessions`, counting the attaches in flight.
+   *
+   * Deliberately here rather than on `connection`: a socket that has not
+   * presented a token holds no shell, and counting one would let anyone fill
+   * the ceiling by opening connections and never speaking. A session that
+   * already has a shell is *replacing* it — `startSession` closes the old one
+   * — so it is not asking for a second slot, and a student reconnecting to a
+   * full terminal is still served.
+   */
+  async function withSessionSlot(
+    ws: WebSocket,
+    sessionId: string,
+    start: () => Promise<boolean>,
+  ): Promise<boolean> {
+    const replacing = bySessionId.has(sessionId);
+    if (!replacing && sessions.size + startingShells >= config.maxSessions) {
+      terminalMetrics?.connections.inc({ outcome: 'capacity' });
+      obs.warn('terminal.connection.rejected', {
+        sessionId,
+        outcome: 'capacity',
+        count: sessions.size + startingShells,
+      });
+      send(ws, { type: 'error', code: 'CAPACITY', message: 'Too many active terminal sessions.' });
+      if (ws.readyState === ws.OPEN) ws.close(1013, 'capacity');
+      return false;
+    }
+    startingShells += 1;
+    try {
+      return await start();
+    } finally {
+      startingShells -= 1;
+    }
+  }
 
   function attachInTurn(sessionId: string, attach: () => Promise<boolean>): Promise<boolean> {
     const previous = attachQueues.get(sessionId) ?? Promise.resolve();
