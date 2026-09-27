@@ -25,4 +25,16 @@ describe('api integer settings', () => {
   it('keeps the default when unset or empty', () => {
     expect(loadConfig({ ...DEVELOPMENT, MAX_SESSION_MINUTES: '' }).lifetimes.maxSessionSeconds).toBe(3600);
   });
+
+  // Past 2^31 - 1 ms `setInterval` runs every 1 ms: a cleanup interval meant as
+  // "rarely" would sweep in a tight loop.
+  it.each(['CLEANUP_INTERVAL_SECONDS', 'EDGE_PROBE_INTERVAL_SECONDS'])(
+    'refuses a %s a timer cannot wait for',
+    (name) => {
+      expect(() => loadConfig({ ...DEVELOPMENT, [name]: '2147484' })).toThrow(
+        new RegExp(`${name} must be at most 2147483`),
+      );
+      expect(loadConfig({ ...DEVELOPMENT, [name]: '2147483' })).toBeTruthy();
+    },
+  );
 });
