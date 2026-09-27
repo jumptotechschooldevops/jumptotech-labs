@@ -261,7 +261,7 @@ suite('DOCKER-012 against a real docker:27-dind sandbox', () => {
   it('the unsolved lab fails exactly the two checks it should', async () => {
     const before = await verify();
     expect(before.passed).toBe(false);
-    expect(before.checks).toHaveLength(6);
+    expect(before.checks).toHaveLength(7);
     // ledger-web is correct already; only the second service is outstanding.
     expect(failing(before).sort()).toEqual([
       'Container statements-web is running',
@@ -303,6 +303,19 @@ suite('DOCKER-012 against a real docker:27-dind sandbox', () => {
     const portCheck = result.checks.find((c) => c.label.includes('8081'));
     expect(portCheck?.status).toBe('fail');
     expect(portCheck?.detail).toContain('does not publish it to a host port');
+  }, 300_000);
+
+  it('a recreated statements-web running `sleep` holds the binding and still fails', async () => {
+    // The binding alone was the grade: nothing listens behind it here.
+    await inSandbox('docker', 'rm', '--force', 'statements-web');
+    expect(
+      (await inSandbox('docker', 'run', '-d', '--name', 'statements-web', '-p', '8081:80',
+        'nginx:1.27-alpine', 'sleep', '3600')).code,
+    ).toBe(0);
+
+    const result = await verify();
+    expect(result.passed).toBe(false);
+    expect(failing(result)).toEqual(['statements-web runs nginx, the image\'s own command']);
   }, 300_000);
 
   it('stopping production to free 8080 does not pass', async () => {
