@@ -115,8 +115,8 @@ RUN_DOCKER_INTEGRATION_TESTS=1 npm run test:integration:docker
 RUN_DB_TESTS=1 TEST_DATABASE_URL=... npm run test:db
 ```
 
-Those npm scripts run a plain `vitest run`, which exits 0 when every test
-skipped — and an integration suite skips itself whenever its infrastructure is
+Those npm scripts, except `test:db` (strict since the CI/CD audit), run a
+plain `vitest run`, which exits 0 when every test skipped — and an integration suite skips itself whenever its infrastructure is
 missing (no kubeconfig, daemon, image, PTY or database). **A green run is only
 evidence if the `Tests` line shows nothing skipped.** To make a skip a failure,
 run the same files through [`strict-vitest.ts`](./strict-vitest.ts), as every

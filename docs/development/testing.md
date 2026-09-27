@@ -26,13 +26,14 @@ Read this before reporting any result.
   `[<suite>] skipped — <reason>` once and every test reports **skipped**.
 - **A plain `vitest run` exits 0 when everything skipped.** So does every
   `npm run test:integration*` script and `make test-integration`,
-  `make test-sandbox`, `make test-tls-edge` and `make test-db`, which are plain
-  `vitest run` underneath. Their exit code is not evidence. Their
+  `make test-sandbox` and `make test-tls-edge`, which are plain `vitest run`
+  underneath. Their exit code is not evidence. Their
   `Tests  N passed | M skipped` line is.
 - **`npx tsx test-support/strict-vitest.ts <vitest args>` is the strict form.**
   It fails when any test did not pass (skipped, todo) and when no test ran at
-  all. Every runtime CI job except `postgres-integration` uses it; so do
-  `make test-terminal-container` and `make test-sandboxd-container`.
+  all. Every runtime CI job uses it, `postgres-integration` through
+  `npm run test:db`; so do `make test-terminal-container` and
+  `make test-sandboxd-container`.
 - **A suite that cannot run must report skipped, not passed.** vitest counts a
   test that `return`s early as passed, which no runner can detect; use
   `context.skip(reason)`. `services/observability/test/suite-skip-semantics.test.ts`
@@ -83,7 +84,7 @@ One workspace: `npx vitest run --root services/verifier` (or one file:
 
 | Command | Needs | Docker | PostgreSQL | kind | Ports on the host | Strict? | CI job |
 |---|---|---|---|---|---|---|---|
-| `make test-db` | Docker | yes (`postgres:16-alpine`) | throwaway | no | `127.0.0.1:${TEST_DB_PORT:-55432}` | **no** — read the `skipped` counts | `postgres-integration` |
+| `make test-db` | Docker | yes (`postgres:16-alpine`) | throwaway | no | `127.0.0.1:${TEST_DB_PORT:-55432}` | yes (`npm run test:db` is strict) | `postgres-integration` |
 | `make db-restore-drill` | Docker | yes | disposable servers | no | ephemeral loopback | script, exits non-zero on failure | `postgres-integration` |
 | `RUN_INTEGRATION_TESTS=1 KUBECONFIG=infrastructure/kind/generated/kubeconfig-host.yaml npx tsx test-support/strict-vitest.ts test/integration.test.ts --root services/lab-orchestrator` | `npm run cluster:up` | yes | no | **yes** | kind API `127.0.0.1:16443` | yes | `kind-integration` |
 | same, `test/pod-security-integration.test.ts`, `test/labs-integration.test.ts`, `test/network-policy-enforcement-integration.test.ts` | kind | yes | no | yes | — | yes | `kind-integration` |

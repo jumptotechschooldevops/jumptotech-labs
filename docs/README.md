@@ -52,6 +52,7 @@ fails the build for one that does not:
 | sign-in, identity, the production auth gates | [authentication.md](authentication.md) |
 | which service may hold which secret | [secret-boundaries.md](secret-boundaries.md) |
 | logs, metrics, health, alert design | [observability.md](observability.md) |
+| what the beta is measured by: indicators, objectives, operator questions | [beta-slo-indicators.md](beta-slo-indicators.md) |
 | Kubernetes NetworkPolicy and its enforcement proof | [kubernetes-network-security.md](kubernetes-network-security.md) |
 | PodSecurity admission and the namespace policy | [pod-security.md](pod-security.md) |
 
@@ -133,6 +134,7 @@ Dated; not maintained after their pass. Newest first within each group.
 
 | Record | Date |
 |---|---|
+| [releases/overnight-cicd-supply-chain-report.md](releases/overnight-cicd-supply-chain-report.md) | 2026-09-21 |
 | [releases/overnight-code-health-audit.md](releases/overnight-code-health-audit.md) | 2026-09-26 |
 | [releases/overnight-private-beta-certification.md](releases/overnight-private-beta-certification.md) | 2026-09-22 |
 | [releases/overnight-commercial-readiness.md](releases/overnight-commercial-readiness.md) | 2026-09-21/22 |

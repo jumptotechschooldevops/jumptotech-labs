@@ -210,7 +210,7 @@ provider, backups or capacity.
 | Which commit is deployed? | the host's checkout: `git rev-parse HEAD`. The services report `JTT_COMMIT` from `.env` in their start-up log line and the `jtt_build_info{commit=…}` metric; `make production-preflight` warns when it differs from HEAD. |
 | Which image corresponds to it? | images are built on the host from that checkout (`prod up --build`); there is no registry. `docker image inspect <image> --format '{{.Created}}'` against the checkout time. Images carry no revision label (follow-up below). |
 | Which CI run validated it? | `gh run list --commit <sha> --workflow "Quality gates"`. Every push to `main` now has a complete run. |
-| Which tests passed? | that run's job logs; each strict step fails if anything skipped, so a green step means every named test ran and passed. `postgres-integration`'s `make test-db` step is not strict (§1): read its `skipped` counts. |
+| Which tests passed? | that run's job logs; each strict step fails if anything skipped, so a green step means every named test ran and passed, including `postgres-integration`'s `make test-db` (§1). |
 | Which configuration was expected? | `make production-config-check` (the real loaders against the resolved compose files) and the evidence file from §5. |
 
 **Follow-ups, not done here:** build the images with `JTT_COMMIT` as a build
