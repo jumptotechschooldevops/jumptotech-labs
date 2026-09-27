@@ -310,13 +310,23 @@ async function sample(label: string) {
   return { label, host, rows };
 }
 
-/** Open descriptors and threads of PID 1 in a platform container (Linux procfs). */
+/**
+ * Open descriptors and threads of the service's Node process (Linux procfs).
+ *
+ * Not PID 1: the platform containers run with `init: true`, so PID 1 is the
+ * init shim, which always shows 3 descriptors and 1 thread. The lowest-PID
+ * process named `node` is the service itself.
+ */
+const NODE_FDS =
+  'for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = node ] && { echo "$(ls $p/fd | wc -l) $(ls $p/task | wc -l)"; break; }; done';
+
 async function fds(service: string): Promise<{ fds: number; threads: number } | undefined> {
   if (!args.project) return undefined;
   try {
-    const out = await docker('exec', `${args.project}-${service}-1`, 'sh', '-c', 'ls /proc/1/fd | wc -l; ls /proc/1/task | wc -l');
-    const [f, t] = out.split('\n').map(Number);
-    return { fds: f ?? NaN, threads: t ?? NaN };
+    const out = await docker('exec', `${args.project}-${service}-1`, 'sh', '-c', NODE_FDS);
+    const [f, t] = out.trim().split(/\s+/).map(Number);
+    if (!f) return undefined;
+    return { fds: f, threads: t ?? NaN };
   } catch {
     return undefined;
   }
