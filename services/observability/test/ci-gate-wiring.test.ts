@@ -85,9 +85,9 @@ function makeRecipe(target: string): string {
  * expanded (recursively), and the terminal test image's default command for
  * the targets that run that image without naming a suite.
  */
-function expandedWorkflow(): string {
+function expandedWorkflow(source = workflow, { imageCommands = true } = {}): string {
   const seen = new Set<string>();
-  let text = workflow;
+  let text = source;
   for (let pass = 0; pass < 5; pass += 1) {
     let added = '';
     for (const [, target] of text.matchAll(/\bmake ([a-z][a-z0-9-]*)/g)) {
@@ -100,7 +100,7 @@ function expandedWorkflow(): string {
       seen.add(`npm:${script}`);
       added += `\n${rootScripts[script!]}`;
     }
-    if (text.includes('terminal-test.Dockerfile') && !seen.has('image:terminal-test')) {
+    if (imageCommands && text.includes('terminal-test.Dockerfile') && !seen.has('image:terminal-test')) {
       seen.add('image:terminal-test');
       const cmd = /^CMD \[(.+)\]$/m.exec(read('infrastructure/docker/terminal-test.Dockerfile'));
       added += `\n${(cmd?.[1] ?? '').replace(/[",]/g, ' ')}`;
@@ -200,7 +200,9 @@ describe('every integration suite', () => {
   it('is run by some CI job', () => {
     const text = expandedWorkflow();
     // `vitest run --root <ws>` with no file filter runs the whole workspace.
-    const wholeWorkspaces = [...text.matchAll(/vitest run --root (\S+?)(?=\s*(?:&&|$|\n))/gm)].map(([, ws]) => ws);
+    const wholeWorkspaces = [
+      ...text.matchAll(/(?:vitest run|strict-vitest\.ts) --root (\S+?)(?=\s*(?:&&|$|\n))/gm),
+    ].map(([, ws]) => ws);
     const unwired = integrationSuites().filter((suite) => {
       const file = path.basename(suite);
       const stem = file.replace(/-integration\.test\.tsx?$/, '');
@@ -221,6 +223,30 @@ describe('every integration suite', () => {
     for (const target of ['test-terminal-container', 'test-sandboxd-container']) {
       expect(makeRecipe(target), target).toContain('npx tsx test-support/strict-vitest.ts');
     }
+  });
+
+  it('runs strictly behind every Make target and npm script a runtime job calls, too', () => {
+    // The check above reads the workflow's own lines. `postgres-integration`
+    // runs `make test-db` → `npm run test:db`, which was bare `vitest run`: all
+    // four persistence suites `describe.skip` themselves without RUN_DB_TESTS
+    // and TEST_DATABASE_URL, and vitest exits 0 on an all-skipped run, so a
+    // drifted variable name would have left that job green having tested
+    // nothing. Every job but the hermetic `gates` one exists to provide the
+    // infrastructure its suites would otherwise skip without.
+    //
+    // The terminal test image's own CMD is left out: both Make targets that run
+    // the image replace it with a strict command (asserted above).
+    const jobs = workflow.slice(workflow.indexOf('\njobs:\n')).split(/\n(?=  [a-z][a-z0-9-]*:\n)/).slice(1);
+    const runtimeJobs = jobs.filter((job) => !job.startsWith('  gates:'));
+    expect(runtimeJobs.length).toBeGreaterThanOrEqual(9);
+    const bare = runtimeJobs.flatMap((job) => {
+      const name = job.slice(2, job.indexOf(':'));
+      return expandedWorkflow(job, { imageCommands: false })
+        .split('\n')
+        .filter((line) => /\bvitest run\b/.test(line) && !/^\s*#/.test(line))
+        .map((line) => `${name}: ${line.trim()}`);
+    });
+    expect(bare, 'a runtime job reaches a bare `vitest run`; use npx tsx test-support/strict-vitest.ts').toEqual([]);
   });
 
   it('includes the sandbox-image binaries suite, in the job that builds those images', () => {
@@ -276,6 +302,14 @@ describe('the workflows', () => {
     }
   });
 
+  it('run every quality-gate step with pipefail', () => {
+    // GitHub's default `run:` shell is `bash -e {0}`: `a | b` succeeds when
+    // `a` fails. `shell: bash` is `bash --noprofile --norc -eo pipefail {0}`.
+    expect(workflow).toMatch(/^defaults:\n {2}run:\n {4}shell: bash\n/m);
+    // A step may not opt back out to a pipefail-less shell.
+    expect(workflow).not.toMatch(/^\s+shell: (sh|bash -e \{0\})\s*$/m);
+  });
+
   it('verify every binary they download before installing it', () => {
     for (const [file, text] of files) {
       for (const [, target] of text.matchAll(/curl -fsSLo (\S+)/g)) {
@@ -312,5 +346,77 @@ describe('one Node version', () => {
       expect(setups.length).toBeGreaterThan(0);
       for (const setup of setups) expect(setup.split(/\n\s*- /)[0]).toMatch(/node-version-file: \.nvmrc/);
     }
+  });
+});
+
+describe('values the workflow repeats from elsewhere', () => {
+  // Each of these is written twice. Nothing broke when one copy moved and the
+  // other did not until a runner failed for a reason no diff showed.
+  const envValues = (name: string): string[] =>
+    [...workflow.matchAll(new RegExp(`^ {6}${name}: (\\S+)$`, 'gm'))].map(([, value]) => value!);
+
+  it('install one kind and one kubectl, the same in every job that installs them', () => {
+    for (const name of ['KIND_VERSION', 'KIND_SHA256', 'KUBECTL_VERSION', 'KUBECTL_SHA256']) {
+      const values = envValues(name);
+      expect(values.length, name).toBeGreaterThanOrEqual(2);
+      expect(new Set(values).size, `${name} differs between jobs: ${values.join(', ')}`).toBe(1);
+    }
+  });
+
+  it('install the kubectl the images carry, checked against the same amd64 checksum', () => {
+    const dockerDir = path.join(REPO_ROOT, 'infrastructure/docker');
+    const images = readdirSync(dockerDir)
+      .filter((file) => file.endsWith('.Dockerfile'))
+      .map((file) => readFileSync(path.join(dockerDir, file), 'utf8'))
+      .filter((text) => /^ARG KUBECTL_VERSION=/m.test(text));
+    expect(images.length).toBeGreaterThan(0);
+    for (const text of images) {
+      expect(/^ARG KUBECTL_VERSION=(\S+)$/m.exec(text)![1]).toBe(envValues('KUBECTL_VERSION')[0]);
+      expect(/^ARG KUBECTL_SHA256_AMD64=(\S+)$/m.exec(text)![1]).toBe(envValues('KUBECTL_SHA256')[0]);
+    }
+  });
+
+  it('point the browser suite at the ports e2e/stack.sh starts the stack on', () => {
+    // The job runs `stack.sh up` with no port overrides, then hands Playwright
+    // literal URLs: they must be stack.sh's defaults.
+    const stack = read('e2e/stack.sh');
+    const job = workflow.slice(workflow.indexOf('\n  browser-e2e:'));
+    expect(job).not.toMatch(/E2E_(WEB|API)_PORT/);
+    for (const [variable, port] of [
+      ['E2E_BASE_URL', /^WEB_PORT="\$\{E2E_WEB_PORT:-(\d+)\}"$/m.exec(stack)?.[1]],
+      ['E2E_API_URL', /^API_PORT="\$\{E2E_API_PORT:-(\d+)\}"$/m.exec(stack)?.[1]],
+    ] as const) {
+      expect(port, `stack.sh default behind ${variable}`).toBeDefined();
+      expect(job).toContain(`${variable}=http://127.0.0.1:${port} `);
+    }
+  });
+});
+
+describe('the lockfile', () => {
+  // `npm ci` installs exactly what this file names, so it is the supply chain.
+  // Every package comes from the public registry with an integrity hash: a git
+  // URL, a tarball URL or a second registry would install code npm cannot
+  // verify against the hash it recorded, and would arrive in a lockfile diff
+  // few reviewers read line by line.
+  const lock = JSON.parse(read('package-lock.json')) as {
+    lockfileVersion: number;
+    packages: Record<string, { resolved?: string; integrity?: string; link?: boolean }>;
+  };
+  const installed = Object.entries(lock.packages).filter(([key]) => key.includes('node_modules/'));
+
+  it('installs every package from the npm registry, pinned by integrity', () => {
+    expect(lock.lockfileVersion).toBe(3);
+    expect(installed.length).toBeGreaterThan(100);
+    const unverified = installed
+      .filter(([, entry]) => !entry.link)
+      .filter(([, entry]) => !entry.resolved?.startsWith('https://registry.npmjs.org/') || !/^sha512-/.test(entry.integrity ?? ''))
+      .map(([key, entry]) => `${key}: ${entry.resolved ?? 'no resolved URL'}`);
+    expect(unverified).toEqual([]);
+  });
+
+  it('links only to the repository\'s own workspaces', () => {
+    const links = installed.filter(([, entry]) => entry.link);
+    expect(links.length).toBe(workspaces().length);
+    expect(links.filter(([, entry]) => !workspaces().includes(entry.resolved ?? '')).map(([key]) => key)).toEqual([]);
   });
 });
