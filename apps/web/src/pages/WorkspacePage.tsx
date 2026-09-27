@@ -28,7 +28,15 @@
  * reattaches to the lab that is really running, and mints a fresh terminal
  * token through the owner-guarded endpoint — it never needs one from storage.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react';
 import { useActiveSession } from '../lib/ActiveSessionContext';
 import { useCatalog } from '../lib/CatalogContext';
 import { ApiRequestError, api } from '../lib/api';
@@ -185,6 +193,32 @@ function Elapsed({ since }: { since: number }) {
   }, []);
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
   return <span className="overlay__elapsed">{seconds}s</span>;
+}
+
+/**
+ * Whether this tab is the one the student is looking at.
+ *
+ * A poll of a session is not a cheap row read: the handler asks the provider
+ * for live environment status — a `docker inspect` through the runtime broker,
+ * or four Kubernetes API calls. The rate belongs to each open tab, so a
+ * workspace left in a background tab, or a second tab on the same lab, pays it
+ * again for a screen nobody is watching. Polling never counted as activity, so
+ * pausing it cannot change how long a lab lives.
+ */
+function usePageVisible(): { visible: boolean; wasHidden: MutableRefObject<boolean> } {
+  const hidden = typeof document !== 'undefined' && document.hidden;
+  const [visible, setVisible] = useState(!hidden);
+  /** Set while the tab is away, so the poll that follows happens immediately. */
+  const wasHidden = useRef(hidden);
+  useEffect(() => {
+    const onChange = () => {
+      if (document.hidden) wasHidden.current = true;
+      setVisible(!document.hidden);
+    };
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, []);
+  return { visible, wasHidden };
 }
 
 export function WorkspacePage({ labId }: { labId: string }) {
@@ -399,9 +433,18 @@ export function WorkspacePage({ labId }: { labId: string }) {
 
   // --- polling -------------------------------------------------------------
   const [pollNonce, setPollNonce] = useState(0);
+  const { visible, wasHidden } = usePageVisible();
   useEffect(() => {
     if (!sessionId || !status || !isLiveStatus(status) || gone) return;
-    const delay = isTransitionalStatus(status) || resetting || ending ? TRANSITION_POLL_MS : STEADY_POLL_MS;
+    // A hidden tab polls nothing at all; it reads once when it comes back.
+    if (!visible) return;
+    const resumed = wasHidden.current;
+    wasHidden.current = false;
+    const delay = resumed
+      ? 0
+      : isTransitionalStatus(status) || resetting || ending
+        ? TRANSITION_POLL_MS
+        : STEADY_POLL_MS;
     let cancelled = false;
     const timeout = setTimeout(() => {
       Promise.resolve()
@@ -429,7 +472,7 @@ export function WorkspacePage({ labId }: { labId: string }) {
       cancelled = true;
       clearTimeout(timeout);
     };
-  }, [sessionId, status, session, gone, resetting, ending, pollNonce, updateSession, refreshSessionList]);
+  }, [sessionId, status, session, gone, resetting, ending, visible, pollNonce, updateSession, refreshSessionList]);
 
   // --- terminal grant --------------------------------------------------------
   const grant = sessionId ? grantFor(sessionId) : null;
