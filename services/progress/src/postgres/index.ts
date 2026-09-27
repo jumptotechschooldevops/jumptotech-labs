@@ -21,4 +21,5 @@ export {
   MIGRATIONS_DIR,
   type Migration,
   type MigrationReport,
+  type MigrateOptions,
 } from './migrator.js';

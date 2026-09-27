@@ -265,7 +265,7 @@ export function loadOperationsConfig(env: NodeJS.ProcessEnv, publicOrigin: strin
       connectHost: strFromEnv(env, 'EDGE_PROBE_CONNECT_HOST', 'web'),
       httpsPort: intFromEnv(env, 'EDGE_PROBE_HTTPS_PORT', 8443),
       httpPort: intFromEnv(env, 'EDGE_PROBE_HTTP_PORT', 8080),
-      intervalSeconds: intFromEnv(env, 'EDGE_PROBE_INTERVAL_SECONDS', 300),
+      intervalSeconds: intFromEnv(env, 'EDGE_PROBE_INTERVAL_SECONDS', 300, MAX_TIMER_SECONDS),
     },
     backupStatusDir,
     hostMetrics: boolFromEnv(env, 'HOST_METRICS_ENABLED', true),
@@ -292,6 +292,14 @@ export interface ProgressConfig {
    * Deployments that migrate from a pipeline instead can switch it off.
    */
   autoMigrate: boolean;
+  /**
+   * Start against a database migrated by a newer release (a code rollback after
+   * a migration). Off in production unless DATABASE_ALLOW_NEWER_SCHEMA=true: the
+   * rollback boundary is a decision, docs/development/production-host-readiness.md
+   * §21.2. On elsewhere, so switching branches on a laptop keeps working; the
+   * migrator still logs every version it does not know. Absent means on.
+   */
+  allowNewerSchema?: boolean;
   /** The development identity every request is attributed to. NOT a login. */
   devStudentId: string;
   /**
@@ -423,7 +431,7 @@ export function databasePasswordOf(database: DatabaseConfig | null): {
   return { source: 'POSTGRES_PASSWORD', value: database.password };
 }
 
-function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number, max?: number): number {
   const raw = env[name];
   if (!raw || raw.trim() === '') return fallback;
   // Digits only: `parseInt` alone read `2h` as 2 and `1e3` as 1.
@@ -431,8 +439,20 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`Environment variable ${name} must be a positive integer, got '${raw}'`);
   }
+  if (max !== undefined && parsed > max) {
+    throw new Error(`Environment variable ${name} must be at most ${max}, got '${raw}'`);
+  }
   return parsed;
 }
+
+/**
+ * The largest number of seconds a Node timer can wait. `setTimeout` and
+ * `setInterval` take a signed 32-bit millisecond delay; anything larger is
+ * replaced by 1 ms with only a warning, so a value meant as "effectively never"
+ * would fire at once — every terminal closed on connect, or a cleanup interval
+ * that spins.
+ */
+const MAX_TIMER_SECONDS = Math.floor(2_147_483_647 / 1000);
 
 
 /**
@@ -723,6 +743,7 @@ export function loadProgressConfig(env: NodeJS.ProcessEnv = process.env): Progre
   return {
     database: loadDatabaseConfig(env),
     autoMigrate: boolFromEnv(env, 'DATABASE_AUTO_MIGRATE', true),
+    allowNewerSchema: boolFromEnv(env, 'DATABASE_ALLOW_NEWER_SCHEMA', !isProductionEnv(env)),
     devStudentId: strFromEnv(env, 'DEV_STUDENT_ID', DEFAULT_DEV_STUDENT_ID),
     // Opt-in, and never on by default in production even if someone forgets.
     allowStudentHeader:
@@ -1042,7 +1063,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       dockerImage: strFromEnv(env, 'DOCKER_SANDBOX_IMAGE', DEFAULT_DOCKER_SANDBOX_IMAGE),
     },
     progress: { ...progress, databaseTransport },
-    reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
+    reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60, MAX_TIMER_SECONDS),
     launchesPaused: boolFromEnv(env, 'LAB_LAUNCHES_PAUSED', false),
     accessPolicy: accessPolicyFromEnv(env),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),

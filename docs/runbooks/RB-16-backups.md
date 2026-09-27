@@ -51,6 +51,12 @@ It prints the archive path on success and records `db-backup.last-success`.
 
 ## 4. Diagnose
 
+- **The log says "history begins after the newest archive".** Not a backup
+  fault: the live database was re-created after the newest archive, and the
+  script refuses to back it up so retention cannot age the good archives out.
+  `DatabaseRecreatedSinceLastBackup` fires too — follow
+  [RB-02 §4d](RB-02-database.md), not this runbook.
+
 - **4a A failing run.** The log's last `ERROR:` line names the step: the
   container not running or ambiguous, `pg_dump` failing, the read-back or
   checksum failing, `BACKUP_COPY_HOOK` failing, a lock held by another run. A

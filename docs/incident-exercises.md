@@ -113,7 +113,12 @@ docker start jumptotech-labs-postgres-1
 The schema check is not ceremony: a database that returns on an **empty volume**
 is healthy by every other measure — it accepts connections, the pool is fine,
 `jtt_db_up` is 1 — and a cohort's history is gone. `jtt_migration_version_info`
-was declared but never populated until this exercise asked for it.
+was declared but never populated until this exercise asked for it. It is not
+enough on its own either (disaster-recovery audit): the api auto-migrates an
+empty volume at startup, which then reports the same version. The distinguishing
+signal is `jtt_database_ledger_started_timestamp_seconds` — when the database's
+history begins — and `DatabaseRecreatedSinceLastBackup` fires when that is after
+the last successful backup.
 
 ---
 

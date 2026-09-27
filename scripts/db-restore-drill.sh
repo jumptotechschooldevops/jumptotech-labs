@@ -26,6 +26,9 @@
 #   10. compare fingerprints; confirm the previous database was kept, not dropped
 #   11. the real migrator finds nothing to apply; the repository the api uses
 #       reads the restored history and writes a new attempt
+#   12. db-backup.sh backs the restored database up (its ledger is the
+#       original); a database re-created under the same name after that is
+#       refused, and accepted only with BACKUP_ACCEPT_NEW_DATABASE=true
 #
 # Environment: JTT_TEST_RUN_ID (run-scoped names), DRILL_POSTGRES_IMAGE
 # (default postgres:16-alpine, the image docker-compose.yml runs).
@@ -281,6 +284,39 @@ indent "$work/status-target.log"
 if grep -q PENDING "$work/status-target.log"; then fail "db:status reports a pending migration"; fi
 with_database "$target_url" "$repo/node_modules/.bin/tsx" services/progress/bin/restore-drill-check.ts \
   || fail "the application check failed against the restored database"
+
+# --- 12 ---------------------------------------------------------------------------------
+
+say "12. backing up the restored database, then a re-created one"
+# A two-second tolerance instead of the default minute (db-backup.sh): the source
+# was migrated before its archive was stamped, and the re-creation below waits
+# past it, so both halves are decided by the ledger rather than by timing.
+restored_backup() {
+  JTT_DB_CONTAINER="$prefix-target" BACKUP_DIR="$work/backups" BACKUP_RECREATED_TOLERANCE_SECONDS=2 \
+    "$repo/scripts/db-backup.sh" "$@"
+}
+restored_backup --label after-restore >/dev/null 2>"$work/backup-restored.log" \
+  || { indent "$work/backup-restored.log"; fail "db-backup.sh refused the restored database, whose ledger is the original"; }
+echo "    the restored database is backed up: its history begins before every archive"
+# The volume-loss shape: the same name, an empty database, migrated at startup.
+# Later than the tolerance after that archive's stamp, as a real loss would be.
+sleep 3
+psql_in target postgres -c "ALTER DATABASE $database RENAME TO ${database}_drill_lost" >/dev/null
+psql_in target postgres -c "CREATE DATABASE $database" >/dev/null
+with_database "$target_url" npm run --silent db:migrate >"$work/migrate-recreated.log" 2>&1 \
+  || { indent "$work/migrate-recreated.log"; fail "the migrations did not apply to the re-created database"; }
+before=$(find "$work/backups" -name '*.dump' | wc -l | tr -d ' ')
+if restored_backup >/dev/null 2>"$work/backup-recreated.log"; then
+  indent "$work/backup-recreated.log"
+  fail "db-backup.sh backed up a database re-created after the newest archive"
+fi
+grep -q 'history begins after the newest archive' "$work/backup-recreated.log" \
+  || { indent "$work/backup-recreated.log"; fail "db-backup.sh did not name the re-created database"; }
+[ "$(find "$work/backups" -name '*.dump' | wc -l | tr -d ' ')" = "$before" ] || fail "a refused backup changed the archives"
+echo "    refused: a database re-created after the newest archive; every archive kept"
+BACKUP_ACCEPT_NEW_DATABASE=true restored_backup --label accepted >/dev/null 2>"$work/backup-accepted.log" \
+  || { indent "$work/backup-accepted.log"; fail "BACKUP_ACCEPT_NEW_DATABASE=true did not accept the new database"; }
+echo "    accepted with BACKUP_ACCEPT_NEW_DATABASE=true"
 
 printf '\nRESTORE DRILL PASSED in %ss (the --replace restore itself took %ss): backup, source destroyed, fresh server, restore, identical fingerprint, migrations current, application read and write.\n' \
   "$(($(date +%s) - started_at))" "$restore_seconds"

@@ -39,7 +39,7 @@
  * it.
  */
 import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
-import { brokerFetch } from '../broker-transport.js';
+import { brokerFetch, describeTransportFailure } from '../broker-transport.js';
 import {
   DockerUnreachableError,
   type CreateNetworkSpec,
@@ -149,7 +149,7 @@ class BrokerCall {
        */
       clearTimeout(timer);
       if (controller.signal.aborted) throw this.#late(op);
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeTransportFailure(error);
       throw new DockerUnreachableError(`the runtime broker is unreachable: ${message}`);
     }
 
