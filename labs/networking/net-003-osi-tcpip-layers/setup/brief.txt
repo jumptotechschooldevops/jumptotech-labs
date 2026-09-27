@@ -54,7 +54,7 @@ ANSWER FORMAT — this matters
 Every answer line in the templates ends with "= ". Type your value immediately
 after the space and change nothing else. A completed line looks exactly like:
 
-    refused_layer = L2
+    example_layer = L7
 
 Answer each line once. A line that lists several values is wrong even if the
 right one is among them — the point of the drill is to commit to a diagnosis.
