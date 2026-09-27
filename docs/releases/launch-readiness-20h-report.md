@@ -30,7 +30,7 @@ was run on one.**
 | #87 | merged `2bd5d66` | A web test raced the terminal mount and failed #80's CI. Test-only | CI health |
 | #88 | merged `849da5f` | `docs/beta-slo-indicators.md`: ten indicators, each with query, objective, alert and runbook, plus the operator questions answered with real queries and commands | WS5/6/28 |
 | #90 | merged `9047583` | A timer setting above 2,147,483 s made Node fire it after 1 ms (every shell closed on connect, or the reaper spinning). It is now refused at startup | P2 config |
-| #92 | open, then merged | Port of the unmerged docs audit: one authoritative docs map enforced by a contract test, `operator-guide.md`, `testing.md`, `getting-started.md`, executable runbook commands, `make down` refused on production, and suites with no runtime reporting *skipped* rather than passed. Reconciled with today's main (strict `test:db`, the DR documents, one `pre-migration` backup label) | WS25/29 |
+| #92 | this PR (carries this report) | Port of the unmerged docs audit: one authoritative docs map enforced by a contract test, `operator-guide.md`, `testing.md`, `getting-started.md`, executable runbook commands, `make down` refused on production, and suites with no runtime reporting *skipped* rather than passed. Reconciled with today's main (strict `test:db`, the DR documents, one `pre-migration` backup label) | WS25/29 |
 
 Three finished audits had never been opened as PRs: disaster recovery, CI/CD
 supply chain, and docs. They were found by grepping main for each fix's content;
