@@ -169,9 +169,12 @@ requirements:
     equals: invalid
     label: ARN 5 is judged correctly
 
+  # Comment lines are skipped: the seeded header says "Replace every FILL_ME
+  # below", and a student who fills in every value has no reason to edit it.
   - type: file_content_absent
     path: /home/student/aws-incident/findings.env
     contains: "FILL_ME"
+    ignore_comment_lines: true
     label: Every finding has been filled in
 
   # --- Part 3: the repair ---------------------------------------------------

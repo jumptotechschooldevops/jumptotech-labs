@@ -162,6 +162,32 @@ describe('AWS-001 — the correct solution passes', () => {
     expect(result.summary).toBe('LAB PASSED');
   });
 
+  it('passes the seeded sheet with every value replaced and its header comment left alone', async () => {
+    // What a student does: replace each FILL_ME value and nothing else. The
+    // header still says "Replace every FILL_ME below". Before: that comment
+    // failed "Every finding has been filled in" on a complete sheet — found by
+    // solving the lab on the real image; SOLVED_FINDINGS had dropped the header.
+    const answers: Record<string, string> = {
+      CAPTURE_1_SOURCE: 'environment_variables',
+      CAPTURE_2_SOURCE: 'credentials_file',
+      CAPTURE_3_SOURCE: 'custom_process',
+      ARN_1: 'valid',
+      ARN_2: 'invalid',
+      ARN_3: 'valid',
+      ARN_4: 'invalid',
+      ARN_5: 'invalid',
+    };
+    let filled = SEEDED_FINDINGS;
+    for (const [key, value] of Object.entries(answers)) {
+      filled = filled.replace(`${key}=FILL_ME`, `${key}=${value}`);
+    }
+    expect(filled).toContain('# Replace every FILL_ME below.');
+
+    const { result } = await run(filled, SOLVED_DEPLOY);
+    expect(failedLabels(result.checks)).toEqual([]);
+    expect(result.passed).toBe(true);
+  });
+
   it('accepts a differently formatted sheet that still states the same answers', async () => {
     // Same conclusions, different comments, different blank lines, different
     // key order — two correct solutions must both pass.
