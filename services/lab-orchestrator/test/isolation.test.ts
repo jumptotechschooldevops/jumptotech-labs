@@ -49,6 +49,35 @@ describe('ResourceQuota (story test 11)', () => {
     expect(hard['services.nodeports']).toBe('0');
   });
 
+  it('caps the count of every kind the student Role may create', () => {
+    // Without a count, `kubectl create configmap --from-file=<1 MiB>` in a
+    // loop fills etcd for the whole cluster. Every resource the Role grants a
+    // write verb on must carry a ceiling here or in the story-test caps above.
+    const hard = (resourceQuotaManifest(POLICY).spec as { hard: Record<string, string> }).hard;
+    const role = studentRbacManifests(POLICY).find((m) => m.kind === 'Role') as unknown as {
+      rules: { apiGroups: string[]; resources: string[]; verbs: string[] }[];
+    };
+    const uncapped: string[] = [];
+    for (const rule of role.rules) {
+      if (!rule.verbs.includes('create')) continue;
+      for (const group of rule.apiGroups) {
+        for (const resource of rule.resources) {
+          if (resource.includes('/')) continue; // subresources are not objects
+          const key = group === '' ? `count/${resource}` : `count/${resource}.${group}`;
+          if (hard[key] === undefined && hard[resource] === undefined) uncapped.push(key);
+        }
+      }
+    }
+
+    expect(uncapped).toEqual([]);
+    // The quota controller ignores events, so a count there would be inert.
+    expect(hard['count/events']).toBeUndefined();
+    const eventRules = role.rules.filter((r) => r.resources.includes('events'));
+    expect(eventRules.flatMap((r) => r.verbs)).not.toContain('create');
+    expect(hard['count/configmaps']).toBe('50');
+    expect(hard['count/secrets']).toBe('50');
+  });
+
   it('is configurable rather than hardcoded', () => {
     const tuned = resourceQuotaManifest({ ...POLICY, quota: { ...POLICY.quota, pods: '3' } });
 
