@@ -276,6 +276,24 @@ describe('script checks grade behaviour, not source', () => {
     expect(notExecutable.status).toBe('fail');
     expect(notExecutable.detail).toMatch(/not executable/);
   });
+
+  it('never runs a symlink at the script path, even one stat reports as 777', async () => {
+    // Grading feedback, not a security gate: the run is the student's own code
+    // as the student in their own container, so a symlink swapped in after
+    // this read reaches nothing a regular script could not. What it pins is
+    // that the verifier does not grade a link as though it were the script.
+    const sandbox = new FakeSandbox({
+      files: { '/home/student/report.sh': { type: 'symlink', mode: '777', owner: 'student' } },
+      scripts: { '/home/student/report.sh': { exitCode: 0, stdout: 'total=3\n' } },
+    });
+    const result = await verifyRequirement(
+      { type: 'script_runs', path: '/home/student/report.sh', args: [], expected_exit_code: 0, output_contains: [], timeout_seconds: 15 },
+      { sandbox: new SandboxReader(sandbox) },
+    );
+    expect(result.status).toBe('fail');
+    expect(result.detail).toMatch(/not a regular file/);
+    expect(sandbox.scriptRuns).toEqual([]);
+  });
 });
 
 // ------------------------------------------- allow-listed inspection commands
