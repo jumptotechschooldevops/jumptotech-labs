@@ -287,7 +287,7 @@ describe('GET /api/labs/:id — the student-safe definition (test requirement 31
       'Service selects the accounts Pods',
       'Service accepts port 80 and forwards to container port 80',
       'Both accounts Pods are registered as ready endpoints',
-      'The Service answers requests on its stable cluster address',
+      'The Service has a stable cluster address of its own',
     ]);
     // Never the requirement objects themselves.
     for (const requirement of res.body.data.requirements) {
