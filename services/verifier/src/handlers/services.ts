@@ -156,10 +156,23 @@ export const serviceEndpoints: VerifierHandler<'service_endpoints'> = {
  */
 export const serviceHeadless: VerifierHandler<'service_headless'> = {
   type: 'service_headless',
-  label: (r) => `Service ${r.name} is headless`,
+  label: (r) =>
+    r.expected === false
+      ? `Service ${r.name} has a stable cluster IP of its own`
+      : `Service ${r.name} is headless`,
   async run(r, reader) {
     const service = await reader.service(r.name);
     if (!service) return missing('Service', r.name, reader.namespace);
+
+    if (r.expected === false) {
+      // A virtual IP, allocated: not headless, and not an ExternalName alias.
+      if (service.clusterIP !== undefined && service.clusterIP !== 'None') return pass();
+      return fail(
+        service.clusterIP === 'None'
+          ? `Service '${r.name}' is headless (clusterIP 'None'), so it has no stable address of its own — clients would get the Pod addresses directly`
+          : `Service '${r.name}' has no cluster IP at all (type '${service.type}')`,
+      );
+    }
 
     if (service.clusterIP === 'None') return pass();
     if (service.clusterIP === undefined) {

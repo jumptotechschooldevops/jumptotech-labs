@@ -15,8 +15,9 @@
  *   - Everything the *runtime* decides is assumed to have gone as well as it
  *     possibly could: every Deployment is fully rolled out and available, each
  *     of its replicas is a Running, ready Pod carrying the template's labels,
- *     every claim is Bound, and an in-cluster request to a Service with a
- *     ready backend succeeds.
+ *     every claim is Bound, every Service the API server would give a
+ *     cluster IP has one, and an in-cluster request to a Service with a ready
+ *     backend succeeds.
  *
  *   Checks only pass more often as the world gets healthier (with the one
  *   exception of absence checks, which the model does not affect), so a lab
@@ -133,6 +134,16 @@ function podsOf(manifest: Manifest): PodSnapshot[] {
 }
 
 /**
+ * The cluster IP the API server allocates on create: every Service gets one
+ * unless it is headless (`clusterIP: None`) or an ExternalName alias.
+ */
+function allocated(manifest: Manifest, index: number): Manifest {
+  const spec = (manifest.spec ?? {}) as Record<string, unknown>;
+  if (spec.clusterIP !== undefined || spec.type === 'ExternalName') return manifest;
+  return { ...manifest, spec: { ...spec, clusterIP: `10.96.0.${10 + index}` } };
+}
+
+/**
  * A namespace holding exactly a lab's setup objects, with a runtime that never
  * lets anything down.
  */
@@ -147,7 +158,7 @@ class StarterNamespace extends FakeKubernetes {
       },
       pods: { [NS]: deployments.flatMap(podsOf) },
       services: {
-        [NS]: byKind('Service').map((m) => toServiceSnapshot(m as any, NS, m.metadata.name)),
+        [NS]: byKind('Service').map((m, i) => toServiceSnapshot(allocated(m, i) as any, NS, m.metadata.name)),
       },
       configMaps: {
         [NS]: byKind('ConfigMap').map((m) => ({

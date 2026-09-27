@@ -138,6 +138,30 @@ describe('service_headless — reads spec.clusterIP, nothing else', () => {
     expect(result.detail).toContain('no clusterIP field');
   });
 
+  describe('expected: false — the Service has a stable cluster IP of its own', () => {
+    const stable = (svc: Partial<ServiceSnapshot>) =>
+      verifyRequirement(
+        { type: 'service_headless', name: 'ledger-db', expected: false },
+        new VerifyReader(new FakeKubernetes({ services: { [NS]: [service(svc)] } }), NS),
+      );
+
+    it('passes a load-balanced Service with a virtual IP', async () => {
+      expect((await stable({ clusterIP: '10.96.14.3' })).status).toBe('pass');
+    });
+
+    it('fails a headless Service, and says it has no stable address', async () => {
+      const result = await stable({ clusterIP: 'None' });
+      expect(result.status).toBe('fail');
+      expect(result.detail).toContain('no stable address');
+    });
+
+    it('fails a Service with no cluster IP at all, such as ExternalName', async () => {
+      const result = await stable({ type: 'ExternalName', clusterIP: undefined });
+      expect(result.status).toBe('fail');
+      expect(result.detail).toContain('no cluster IP at all');
+    });
+  });
+
   it('is not the same question as service_type — a headless Service is still ClusterIP', async () => {
     /*
      * The reason this primitive had to exist. Both Services below report type

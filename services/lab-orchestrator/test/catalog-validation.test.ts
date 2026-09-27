@@ -248,6 +248,29 @@ describe('lab identity and prerequisites', () => {
     ]);
   });
 
+  it('fails on a requirement that dials a ClusterIP from the api', async () => {
+    // K8S-003, NET-024 and NET-025 shipped this way. The api has no route to
+    // the cluster's Service CIDR, so their service_http checks could never pass
+    // on the platform — found by solving the labs on real kind.
+    const kubernetesLab = (probe: Record<string, unknown>) => ({
+      ...BASE_EXTRA,
+      environment: { provider: 'kubernetes', isolation: 'namespace' },
+      requirements: [probe],
+    });
+    const report = await validateFixture({
+      labs: [
+        { id: 'LINUX-901', extra: kubernetesLab({ type: 'service_http', service: 'web', port: 80, label: 'Web answers' }) },
+        { id: 'LINUX-902', extra: kubernetesLab({ type: 'service_tcp', service: 'db', port: 5432, label: 'DB accepts' }) },
+        { id: 'LINUX-903', extra: kubernetesLab({ type: 'service_headless', name: 'web', expected: false, label: 'Web has an address' }) },
+      ],
+    });
+
+    expect(withCode(report, 'UNROUTABLE_SERVICE_PROBE')).toEqual([
+      expect.objectContaining({ severity: 'error', subject: 'LINUX-901', message: expect.stringMatching(/service_http/) }),
+      expect.objectContaining({ severity: 'error', subject: 'LINUX-902', message: expect.stringMatching(/service_tcp/) }),
+    ]);
+  });
+
   it('accepts a shared order, where the tie sorts on id (LINUX-011 and LINUX-014 share one)', async () => {
     const report = await validateFixture({
       labs: [

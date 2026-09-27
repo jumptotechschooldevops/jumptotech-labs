@@ -90,12 +90,15 @@ requirements:
     min_ready: 1
     label: The first Service has ready backend endpoints
 
-  - type: service_http
-    service: ledger-selector-broken
+  # A request through each Service's ClusterIP was the check here, but the api
+  # has no route to the cluster's Service CIDR, so it could never pass on the
+  # platform. What makes the request work is graded instead: the selector, the
+  # ready endpoints, and the port each Service forwards to.
+  - type: service_port
+    name: ledger-selector-broken
     port: 80
-    path: /
-    expected_status: 200
-    label: The first Service successfully reaches its application
+    target_port: 3000
+    label: The first Service forwards to the port the application listens on
 
   - type: service_selector
     name: ledger-port-broken
@@ -109,19 +112,13 @@ requirements:
     label: The second Service has ready backend endpoints
 
   # Without this, moving the application to the broken Service's targetPort
-  # also satisfies the HTTP check — and teaches the opposite of the lesson.
+  # would also make requests work — and teach the opposite of the lesson.
   - type: service_port
     name: ledger-port-broken
     port: 80
     target_port: 3000
     label: The second Service forwards to the port the application listens on
 
-  - type: service_http
-    service: ledger-port-broken
-    port: 80
-    path: /
-    expected_status: 200
-    label: The second Service successfully reaches its application
 
   - type: configmap_key
     name: diagnosis

@@ -88,13 +88,13 @@ requirements:
   # A headless Service (`clusterIP: None`, the second example in
   # `kubectl create service clusterip --help`) still reports type ClusterIP and
   # still gets endpoints, but it has no stable address — the point of the lab.
-  # Only a request through the Service's own cluster IP tells the two apart.
-  - type: service_http
-    service: accounts
-    port: 80
-    path: /
-    expected_status: 200
-    label: The Service answers requests on its stable cluster address
+  # Its own clusterIP tells the two apart. (A request to that address was the
+  # check here, but the api has no route to the cluster's Service CIDR, so it
+  # could never pass on the platform: found by solving the lab on real kind.)
+  - type: service_headless
+    name: accounts
+    expected: false
+    label: The Service has a stable cluster address of its own
 
 hints:
   - level: 1

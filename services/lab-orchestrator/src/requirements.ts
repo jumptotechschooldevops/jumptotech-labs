@@ -837,7 +837,19 @@ const kubernetesRequirementSchemas = {
    * type `ClusterIP`, so the two checks answer different questions.
    */
   service_headless: z
-    .object({ type: z.literal('service_headless'), name: resourceName, ...common })
+    .object({
+      type: z.literal('service_headless'),
+      name: resourceName,
+      /**
+       * `false` asks the opposite question: the Service has a cluster IP of
+       * its own — a stable virtual address — and is not headless. That is what
+       * a lab about "a stable address for a set of Pods" grades, and unlike
+       * sending a request to the address it can be answered from the api,
+       * which has no route to the cluster's Service CIDR.
+       */
+      expected: z.boolean().optional(),
+      ...common,
+    })
     .strict(),
   service_selector: z
     .object({ type: z.literal('service_selector'), name: resourceName, selector: labelMap, ...common })

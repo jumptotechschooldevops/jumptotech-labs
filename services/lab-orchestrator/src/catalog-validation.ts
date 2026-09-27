@@ -31,6 +31,11 @@
  *     same track. The track page sorts by `order` then id, so an `order` that
  *     disagrees with the prerequisites shows a student a lab before the one it
  *     builds on;
+ *   - **unroutable probes**: a `service_http` or `service_tcp` requirement. Both
+ *     dial a Service's ClusterIP from the api process, which has no route to
+ *     the cluster's Service CIDR where the platform is deployed, so the check
+ *     can never pass for a student (and dialing student-chosen endpoints from
+ *     inside the cluster would be SSRF-shaped, SEC-RT-7);
  *   - **learning paths**: every path error, the flagship path placing every lab,
  *     and skills defined in `skills.yaml` that no stage declares.
  *
@@ -87,6 +92,8 @@ export const CATALOG_FINDING_CODES = [
   'LAB_METADATA_INCOMPLETE',
   /** A track lists a lab before one of its same-track prerequisites. */
   'LAB_TRACK_ORDER',
+  /** A lab grades by dialing a ClusterIP from the api, which cannot reach one. */
+  'UNROUTABLE_SERVICE_PROBE',
   /** A learning path, or the skill catalog, was refused. */
   'LEARNING_PATH',
   /** The flagship path is missing, or does not place a registered lab. */
@@ -152,6 +159,7 @@ export async function validateCatalog(options: CatalogValidationOptions): Promis
 
   checkLayout(labs, labsDir, tree, add);
   checkTrackOrder(registry, add);
+  checkServiceProbes(labs, add);
   for (const lab of labs) {
     await checkSetupAssets(lab, add);
     checkLabFiles(lab, labsDir, tree, add);
@@ -316,6 +324,24 @@ function checkTrackOrder(registry: LabRegistry, add: Add): void {
           `is listed in track '${track}' before its prerequisite ${prerequisite}; give ${prerequisite} a lower \`order\``,
         );
       }
+    }
+  }
+}
+
+// --- probes the api cannot make ---------------------------------------------------
+
+const UNROUTABLE_PROBES = new Set(['service_http', 'service_tcp']);
+
+function checkServiceProbes(labs: readonly LoadedLabDefinition[], add: Add): void {
+  for (const lab of labs) {
+    for (const requirement of [...lab.requirements, ...lab.setup.verify]) {
+      if (!UNROUTABLE_PROBES.has(requirement.type)) continue;
+      add(
+        'error',
+        'UNROUTABLE_SERVICE_PROBE',
+        lab.id,
+        `uses ${requirement.type}, which dials the Service's ClusterIP from the api — the api has no route to the Service CIDR, so it can never pass; grade the selector, service_port target_port, service_endpoints or service_headless (expected: false) instead`,
+      );
     }
   }
 }
