@@ -184,7 +184,6 @@ export function studentRbacManifests(policy: SessionPolicy): KubernetesManifestO
             'configmaps',
             'secrets',
             'serviceaccounts',
-            'events',
             'endpoints',
             'persistentvolumeclaims',
             'replicationcontrollers',
@@ -192,6 +191,10 @@ export function studentRbacManifests(policy: SessionPolicy): KubernetesManifestO
           verbs: write,
         },
         { apiGroups: [''], resources: ['resourcequotas', 'limitranges'], verbs: read },
+        // Read-only: ResourceQuota cannot count events, so a writable events
+        // resource would be the one uncapped way to fill etcd. Kubelet and the
+        // controllers record events under their own identities.
+        { apiGroups: [''], resources: ['events'], verbs: read },
         {
           apiGroups: ['apps'],
           resources: [

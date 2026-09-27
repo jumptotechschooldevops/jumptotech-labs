@@ -368,6 +368,37 @@ export interface SessionPolicy {
 }
 
 /**
+ * Object-count ceilings for every kind the student Role may create.
+ *
+ * `DEFAULT_SESSION_POLICY` caps pods, services and PVCs, but nothing else: a
+ * student could loop `kubectl create configmap --from-file=<1 MiB>` until etcd
+ * hit its backend quota, which stops writes for every namespace on the cluster
+ * and every lab Start. Reset's purge also lists these kinds unpaginated, so an
+ * unbounded count was an unbounded API allocation too. The ceilings are far
+ * above what any lab creates; they exist to make the total finite. Not
+ * environment-tunable, like the cost-safety zeros. Events have no entry: the
+ * quota controller ignores them, so the student Role only reads them instead.
+ */
+export const SESSION_OBJECT_COUNT_QUOTA: Readonly<Record<string, string>> = {
+  'count/configmaps': '50',
+  'count/secrets': '50',
+  'count/serviceaccounts': '20',
+  'count/endpoints': '30',
+  'count/replicationcontrollers': '20',
+  'count/deployments.apps': '20',
+  'count/replicasets.apps': '100',
+  'count/statefulsets.apps': '10',
+  'count/daemonsets.apps': '10',
+  'count/controllerrevisions.apps': '100',
+  'count/jobs.batch': '50',
+  'count/cronjobs.batch': '10',
+  'count/horizontalpodautoscalers.autoscaling': '10',
+  'count/ingresses.networking.k8s.io': '10',
+  'count/roles.rbac.authorization.k8s.io': '20',
+  'count/rolebindings.rbac.authorization.k8s.io': '20',
+};
+
+/**
  * Development defaults, straight from the PLATFORM-002 story.
  *
  * These are *defaults*, not constants: every value is overridable from the
@@ -387,6 +418,7 @@ export const DEFAULT_SESSION_POLICY: SessionPolicy = {
     // Cost safety: a lab may never ask the cloud for an address.
     'services.loadbalancers': '0',
     'services.nodeports': '0',
+    ...SESSION_OBJECT_COUNT_QUOTA,
   },
   limitRange: {
     name: 'jumptotech-session-limits',

@@ -12,6 +12,7 @@ import {
   DEFAULT_LINUX_SANDBOX_IMAGE,
   DEFAULT_DOCKER_SANDBOX_IMAGE,
   DEFAULT_SESSION_POLICY,
+  SESSION_OBJECT_COUNT_QUOTA,
   DEFAULT_POD_SECURITY,
   assertPodSecurityConfig,
   type PodSecurityConfig,
@@ -632,6 +633,7 @@ export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): Session
       // load balancer or a node port.
       'services.loadbalancers': '0',
       'services.nodeports': '0',
+      ...SESSION_OBJECT_COUNT_QUOTA,
     },
     limitRange: {
       name: strFromEnv(env, 'SESSION_LIMITRANGE_NAME', base.limitRange.name),
