@@ -93,7 +93,12 @@ case $sql in
   *'CREATE DATABASE'*) [ -z "${FAKE_CREATE_FAIL-}" ] || exit 3 ;;
   *'ALTER DATABASE'*) [ -z "${FAKE_SWAP_FAIL-}" ] || { echo 'ERROR: database is being accessed by other users' >&2; exit 3; } ;;
   *'count(*) FROM schema_migrations'*) echo 5 ;;
+  *'min(applied_at) >'*)
+    printf '%s\n' "$sql" >>"$FAKE_LOG"
+    if [ -n "${FAKE_LEDGER_NEWER-}" ]; then echo t; else echo f; fi
+    ;;
   *'SELECT version, checksum FROM schema_migrations'*)
+    [ -z "${FAKE_LEDGER_READ_FAIL-}" ] || { echo 'psql: error: server closed the connection unexpectedly' >&2; exit 2; }
     for file in "$FAKE_REPO"/services/progress/migrations/*.sql; do
       sum=$(sha256sum "$file")
       printf '%s %s\n' "$(basename "$file" .sql)" "${sum%% *}"
@@ -211,7 +216,8 @@ new_case() {
   export JTT_DB_CONTAINER=fake-postgres FAKE_DATABASES="postgres jumptotech_labs"
   unset FAKE_PS_IDS FAKE_RUNNING FAKE_MOUNT_SOURCE FAKE_SERVER_DOWN FAKE_SESSIONS \
     FAKE_CREATE_FAIL FAKE_SWAP_FAIL FAKE_PG_DUMP_FAIL FAKE_PG_DUMP_GARBAGE \
-    FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG FAKE_ARCHIVE_TRUNCATED \
+    FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG FAKE_ARCHIVE_TRUNCATED FAKE_LEDGER_READ_FAIL FAKE_LEDGER_NEWER \
+    BACKUP_ACCEPT_NEW_DATABASE \
     BACKUP_LABEL BACKUP_RETENTION_DAYS BACKUP_RETENTION_MIN_KEEP BACKUP_COPY_HOOK
 }
 
@@ -248,6 +254,11 @@ server_untouched() { [ ! -s "$FAKE_LOG" ]; }
 no_change() { ! grep -E -q 'CREATE DATABASE|ALTER DATABASE|DROP|^pg_restore .* -d ' "$FAKE_LOG"; }
 mode_of() { ls -ld "$1" | cut -c1-10; }
 
+recent_timestamp_of() {
+  local stamp
+  stamp=$(sed -n 's/^timestamp_seconds=//p' "$BACKUP_STATUS_DIR/$1" 2>/dev/null)
+  [ -n "$stamp" ] && [ $(($(date -u +%s) - stamp)) -lt 120 ]
+}
 stamp_days_ago() {
   local epoch=$(($(date -u +%s) - $1 * 86400))
   date -u -d "@$epoch" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -r "$epoch" +%Y%m%dT%H%M%SZ
@@ -334,6 +345,48 @@ new_case
 BACKUP_DIR=/var/lib/postgresql/data/backups backup
 expect 'BACKUP_DIR under /var/lib/postgresql: refused before anything is created' says "PostgreSQL's own storage"
 
+# Inside the checkout, only backups/ is excluded from every Docker build
+# context and from every service mount. Anywhere else there an archive can be
+# baked into an image (the Dockerfiles copy whole workspace directories), be
+# read by the api (labs/ is mounted into it), or be served on port 80
+# (infrastructure/docker/nginx/acme-webroot/). Proven against a copy of the
+# scripts, so JTT_REPO_ROOT is a temporary checkout and nothing is written into
+# this one.
+checkout="$work/checkout"
+if [ ! -d "$checkout" ]; then
+  mkdir -p "$checkout/scripts" "$checkout/services/progress" "$checkout/labs"
+  cp "$repo/scripts/db-backup.sh" "$repo/scripts/db-lib.sh" "$checkout/scripts/"
+  cp -R "$repo/services/progress/migrations" "$checkout/services/progress/"
+  checkout=$(cd "$checkout" && pwd -P)
+fi
+backup_from_checkout() { run "$checkout/scripts/db-backup.sh" "$@"; }
+for inside in infrastructure/docker/nginx/acme-webroot/.well-known labs/linux/backups apps/api/backups services/progress backups-old; do
+  new_case
+  BACKUP_DIR="$checkout/$inside" backup_from_checkout
+  expect "BACKUP_DIR at <checkout>/$inside: refused" says 'inside the repository checkout'
+  expect "BACKUP_DIR at <checkout>/$inside: no archive written" test -z "$(find "$checkout" -name '*.dump*' | head -1)"
+  expect "BACKUP_DIR at <checkout>/$inside: refused before the server is touched" server_untouched
+done
+new_case
+BACKUP_DIR="$checkout/services/../labs/x" backup_from_checkout
+expect 'BACKUP_DIR spelled with .. into the checkout: refused' says 'inside the repository checkout'
+new_case
+mkdir -p "$case_dir/elsewhere"
+ln -s "$checkout/labs" "$case_dir/elsewhere/link"
+BACKUP_DIR="$case_dir/elsewhere/link/backups" backup_from_checkout
+expect 'BACKUP_DIR reaching into the checkout through a symlink: refused' says 'inside the repository checkout'
+expect 'BACKUP_DIR reaching into the checkout through a symlink: no archive written' test -z "$(find "$checkout" -name '*.dump*' | head -1)"
+new_case
+BACKUP_DIR="$checkout/backups/postgres" backup_from_checkout
+expect 'BACKUP_DIR at <checkout>/backups/postgres (the default): accepted' succeeded
+# Two archives in one second would share a name, which the script refuses.
+find "$checkout/backups" -mindepth 1 -delete
+new_case
+unset BACKUP_DIR
+backup_from_checkout
+expect 'no BACKUP_DIR: the default <checkout>/backups/postgres is accepted' succeeded
+find "$checkout/backups" -mindepth 1 -delete
+
 new_case
 BACKUP_DIR=relative/backups backup
 expect 'relative BACKUP_DIR: refused before the server is touched' failed
@@ -381,6 +434,40 @@ new_case
 export FAKE_RUNNING=false
 backup
 expect 'a stopped container: refused' says 'is not running'
+
+# A database whose history begins after the newest archive was re-created
+# after it (a lost volume, auto-migrated at startup). Backing it up would add a
+# backup of the empty database, retention would count it toward MIN_KEEP, and
+# the good archives would age out. Refused until an operator decides.
+new_case
+fake_archive jtt-pg-jumptotech_labs-20260101T031700Z.dump
+fake_archive jtt-pg-jumptotech_labs-20260102T031700Z-pre-upgrade.dump
+export FAKE_LEDGER_NEWER=1
+backup
+expect 'history newer than the newest archive: refused' says 'it was re-created after that archive'
+expect 'history newer than the newest archive: compared with the newest archive by name' logged "to_timestamp('20260102T031700Z'"
+expect 'history newer than the newest archive: allows the stamp-to-snapshot gap' logged '+ make_interval(secs => 60)'
+expect 'history newer than the newest archive: nothing dumped' bash -c "! grep -q '^pg_dump' '$FAKE_LOG'"
+expect 'history newer than the newest archive: the archives are all kept' test "$(ls "$BACKUP_DIR" | grep -c '\.dump$')" -eq 2
+expect 'history newer than the newest archive: recorded as a failed backup' recent_timestamp_of db-backup.last-failure
+new_case
+fake_archive jtt-pg-jumptotech_labs-20260101T031700Z.dump
+export FAKE_LEDGER_NEWER=1 BACKUP_ACCEPT_NEW_DATABASE=true
+backup
+expect 'history newer than the newest archive, BACKUP_ACCEPT_NEW_DATABASE=true: backed up' succeeded
+expect 'BACKUP_ACCEPT_NEW_DATABASE=true: says what it accepted' says 'BACKUP_ACCEPT_NEW_DATABASE'
+new_case
+fake_archive jtt-pg-jumptotech_labs-20260101T031700Z.dump
+export BACKUP_ACCEPT_NEW_DATABASE=yes
+backup
+expect 'BACKUP_ACCEPT_NEW_DATABASE other than true/false: refused before the server is touched' server_untouched
+new_case
+backup
+expect 'no earlier archive (a first backup): the history is not compared' bash -c "! grep -q 'min(applied_at)' '$FAKE_LOG'"
+new_case
+fake_archive jtt-pg-jumptotech_labs-20260101T031700Z.dump
+backup
+expect 'history older than the newest archive (a healthy or restored database): backed up' succeeded
 
 # Retention: this database's archives only, regular files only, the newest
 # BACKUP_RETENTION_MIN_KEEP always kept.
@@ -606,6 +693,20 @@ export FAKE_PG_RESTORE_FAIL=1
 restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
 expect '--replace when pg_restore fails: exits non-zero, target untouched' says 'jumptotech_labs is untouched'
 expect '--replace when pg_restore fails: no rename is attempted' bash -c "! grep -q 'ALTER DATABASE' '$FAKE_LOG'"
+
+# The swap is the point of no return. A step after it that fails — here the
+# migration report, on a connection that drops — must not print "restore
+# FAILED" and exit non-zero: the operator would believe the target untouched
+# and start the api, or run --replace again, over a database that was replaced.
+new_case
+given_archive
+export FAKE_LEDGER_READ_FAIL=1
+restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
+expect '--replace whose post-swap report fails: exits 0, because the swap happened' succeeded
+expect '--replace whose post-swap report fails: never says the restore failed' bash -c "! grep -q 'restore FAILED' '$case_dir/err'"
+expect '--replace whose post-swap report fails: says the database was replaced' says 'replaced jumptotech_labs with the archive'
+expect '--replace whose post-swap report fails: says the report is missing and how to get it' says 'migration report could not be read'
+expect '--replace whose post-swap report fails: still prints how to undo the swap' says 'To undo the swap'
 
 new_case
 given_archive

@@ -35,7 +35,7 @@ diagnosis, and the alerts that look alike are known in advance.
 | Runbook | Alerts |
 |---|---|
 | [RB-01 Service down](RB-01-service-down.md) | `ServiceDown`, `ServiceNotReady`, `ServiceRestartLoop` |
-| [RB-02 Database](RB-02-database.md) | `DatabaseDown`, `DatabasePoolSaturated`, `ProgressStoreIsMemory` |
+| [RB-02 Database](RB-02-database.md) | `DatabaseDown`, `DatabasePoolSaturated`, `ProgressStoreIsMemory`, `DatabaseRecreatedSinceLastBackup` |
 | [RB-03 Lab start failures](RB-03-lab-start-failures.md) | `LabStartsFailingHard`, `LabStartFailureRateElevated` |
 | [RB-04 Capacity](RB-04-capacity.md) | `CapacityExhausted`, `CapacityNearExhausted` |
 | [RB-05 Cleanup and leaks](RB-05-cleanup-and-leaks.md) | `ReaperStalled`, `SandboxLeakSuspected`, `OrphansPersisting`, `ReaperDeleteFailures` |
@@ -106,6 +106,11 @@ shape above:
   — BETA-P0-013: manual and scheduled backups, retention, verification, restore
   into a disposable database, production replacement and rollback, and recovery
   from volume loss, host loss, corruption, a bad migration or an operator mistake.
+- [Disaster recovery](disaster-recovery.md) — the whole-host path: what must
+  survive and what may disappear, the secret recovery model, host reboot, bad
+  release, database loss, runtime loss and host loss, one numbered recovery
+  procedure, RPO/RTO factors, and the real-host drill plan. Evidence:
+  [disaster-recovery-drill-evidence-template.md](../releases/disaster-recovery-drill-evidence-template.md).
 - [Production TLS: domain, certificates, renewal](production-tls.md)
   — BETA-P0-017: DNS, initial provisioning, renewal and hot reload, expiry
   monitoring, staging validation, renewal failure, an expired certificate, key

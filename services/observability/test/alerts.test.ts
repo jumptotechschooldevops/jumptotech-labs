@@ -195,6 +195,8 @@ describe('the alert set', () => {
       'AuthFailureSpike',
       'ScopeDenialDetected',
       'ProgressStoreIsMemory',
+      // Disaster-recovery audit: an empty volume auto-migrated after a backup.
+      'DatabaseRecreatedSinceLastBackup',
       // BETA-P0-018 — the private-beta operational contract.
       'TlsCertificateRenewalDue',
       'TlsCertificateExpiresWithin7Days',

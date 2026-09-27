@@ -20,8 +20,9 @@
 #
 #   BACKUP_DIR                 Where archives go. Default <repo>/backups/postgres
 #                              (git-ignored). Refused if it is inside any mount
-#                              of the database container. On a real host this
-#                              directory must be copied OFF the host.
+#                              of the database container, or inside this
+#                              checkout anywhere but backups/. On a real host
+#                              this directory must be copied OFF the host.
 #   BACKUP_RETENTION_DAYS      Delete this database's archives older than this.
 #                              0 keeps everything. Default 14.
 #   BACKUP_RETENTION_MIN_KEEP  Never delete below this many newest archives,
@@ -32,6 +33,16 @@
 #                              the archive and its sidecar as arguments, to copy
 #                              them off-host. Its failure fails the run. Where it
 #                              copies to is a DECISION REQUIRED item.
+#   BACKUP_ACCEPT_NEW_DATABASE true once, to back up a database whose history
+#                              (its first migration's applied_at) begins after
+#                              the newest archive here: one re-created after that
+#                              archive. Refused otherwise; see RB-02 §4d.
+#   BACKUP_RECREATED_TOLERANCE_SECONDS
+#                              How much later than the newest archive's name
+#                              that history may begin and still count as the
+#                              archived database (default 60): the name is
+#                              stamped before the dump's snapshot. The restore
+#                              drill lowers it to test the refusal quickly.
 #   JTT_DB_CONTAINER           The PostgreSQL container. Default: the running
 #                              `postgres` service of COMPOSE_PROJECT_NAME
 #                              (default jumptotech-labs).
@@ -79,13 +90,35 @@ backup_dir=${BACKUP_DIR:-$JTT_REPO_ROOT/backups/postgres}
 retention_days=${BACKUP_RETENTION_DAYS:-14}
 min_keep=${BACKUP_RETENTION_MIN_KEEP:-7}
 copy_hook=${BACKUP_COPY_HOOK-}
+accept_new_database=${BACKUP_ACCEPT_NEW_DATABASE:-false}
+recreated_tolerance=${BACKUP_RECREATED_TOLERANCE_SECONDS:-60}
 
 case $backup_dir in
   /*) ;;
   *) jtt_die "BACKUP_DIR must be an absolute path" ;;
 esac
+# Inside the checkout, only backups/ is kept out of every Docker build context
+# (.dockerignore) and out of every service mount. Anywhere else there, an
+# archive can be baked into an image (the Dockerfiles copy whole workspace
+# directories), read by the api (labs/ is mounted into it), or served on port
+# 80 (infrastructure/docker/nginx/acme-webroot/). Checked on the path as given,
+# before anything is created, and again once it is resolved (a symlink or ..).
+refuse_checkout_path() {
+  case "${1%/}/" in
+    "$JTT_REPO_ROOT"/backups/*) ;;
+    "$JTT_REPO_ROOT"/*)
+      jtt_die "BACKUP_DIR is inside the repository checkout but not under its backups/ directory; an archive there can reach a Docker image, a service mount or the public web root. Use $JTT_REPO_ROOT/backups/<name> or a directory outside the checkout"
+      ;;
+  esac
+}
+refuse_checkout_path "$backup_dir"
 [[ $retention_days =~ ^[0-9]+$ ]] || jtt_die "BACKUP_RETENTION_DAYS must be a whole number of days (0 disables retention)"
 [[ $min_keep =~ ^[1-9][0-9]*$ ]] || jtt_die "BACKUP_RETENTION_MIN_KEEP must be a positive whole number"
+case $accept_new_database in
+  true | false) ;;
+  *) jtt_die "BACKUP_ACCEPT_NEW_DATABASE must be true or false" ;;
+esac
+[[ $recreated_tolerance =~ ^[0-9]{1,5}$ ]] || jtt_die "BACKUP_RECREATED_TOLERANCE_SECONDS must be a whole number of seconds"
 if [ -n "$label" ] && [[ ! $label =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
   jtt_die "the label may contain only a-z, 0-9 and -, at most 32 characters"
 fi
@@ -146,6 +179,7 @@ mkdir -p "$backup_dir"
 chmod 700 "$backup_dir"
 backup_dir=$(cd "$backup_dir" && pwd -P)
 refuse_database_storage "$backup_dir"
+refuse_checkout_path "$backup_dir"
 
 mounts=$(docker inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' "$JTT_CONTAINER") \
   || jtt_die "cannot inspect the mounts of $JTT_CONTAINER"
@@ -176,6 +210,43 @@ take_lock() {
   printf '%s\n' "$$" >"$dir/pid"
 }
 take_lock
+
+# This database's archives, named exactly as this script names them, regular
+# files only (never a symlink or anything else in there), newest first.
+archive_names() {
+  local entry
+  for entry in "$backup_dir"/jtt-pg-"$database"-*.dump; do
+    if [ -f "$entry" ] && [ ! -L "$entry" ]; then basename "$entry"; fi
+  done | grep -E "^jtt-pg-$database-[0-9]{8}T[0-9]{6}Z(-[a-z0-9][a-z0-9-]*)?\.dump$" | sort -r || true
+}
+
+# A database whose history begins after the newest archive was re-created
+# after it: a lost or replaced volume, auto-migrated by the api at startup.
+# Backing it up would put an archive of the empty database first in line, and
+# retention would count it toward the minimum kept while the archives that hold
+# the students' history age out. So stop here — loudly, as a failed backup —
+# until an operator restores (RB-02 §4d) or accepts it. Compared by the archive
+# name's UTC timestamp, taken just before that dump: the name is stamped to the
+# second, before the staging `docker exec` and pg_dump's snapshot, so a database
+# migrated in those moments is inside the archive and still records a later
+# applied_at. A tolerance (default sixty seconds) covers that gap: CI migrated
+# and dumped within one second and was refused. A volume lost and re-created
+# within that tolerance of a backup is left to DatabaseRecreated (D3).
+newest=$(archive_names | head -1)
+if [ -n "$newest" ]; then
+  newest_stamp=${newest#"jtt-pg-$database-"}
+  newest_stamp=${newest_stamp:0:16}
+  [[ $newest_stamp =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || jtt_die "unexpected archive name $newest"
+  recreated=$(jtt_psql "$database" -c "SELECT COALESCE(min(applied_at) > (to_timestamp('$newest_stamp', 'YYYYMMDD\"T\"HH24MISS\"Z\"')::timestamp AT TIME ZONE 'UTC') + make_interval(secs => $recreated_tolerance), false) FROM schema_migrations") \
+    || jtt_die "cannot read the migration ledger of $database; is it the application database?"
+  if [ "$recreated" = t ]; then
+    if [ "$accept_new_database" = true ]; then
+      jtt_log "WARNING: $database's history begins after the newest archive ($newest); backing it up anyway because BACKUP_ACCEPT_NEW_DATABASE=true. Unset it after this run."
+    else
+      jtt_die "$database's history begins after the newest archive ($newest): it was re-created after that archive, and its students' history is in the archives, not in the database. Not backing it up, so retention cannot age those archives out. Restore it (docs/runbooks/RB-02-database.md §4d), or, if a new database is intended, run once with BACKUP_ACCEPT_NEW_DATABASE=true"
+    fi
+  fi
+fi
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 name="jtt-pg-$database-$timestamp${label:+-$label}.dump"
@@ -238,13 +309,7 @@ apply_retention() {
   cutoff_epoch=$(($(date -u +%s) - retention_days * 86400))
   cutoff=$(date -u -d "@$cutoff_epoch" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -r "$cutoff_epoch" +%Y%m%dT%H%M%SZ)
 
-  # Only this database's archives, named exactly as this script names them, and
-  # only regular files: never a symlink, a directory or anything else in there.
-  names=$(
-    for entry in "$backup_dir"/jtt-pg-"$database"-*.dump; do
-      if [ -f "$entry" ] && [ ! -L "$entry" ]; then basename "$entry"; fi
-    done | grep -E "^jtt-pg-$database-[0-9]{8}T[0-9]{6}Z(-[a-z0-9][a-z0-9-]*)?\.dump$" | sort -r || true
-  )
+  names=$(archive_names)
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     rank=$((rank + 1))

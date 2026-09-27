@@ -307,6 +307,10 @@ services:
       # the migration files this database has not seen and nothing else. Set to
       # false if you would rather run `npm run db:migrate` from a pipeline.
       DATABASE_AUTO_MIGRATE: ${DATABASE_AUTO_MIGRATE:-true}
+      # A code rollback after a migration: under NODE_ENV=production the api
+      # refuses a database a newer release migrated unless this is true. Empty
+      # means the api's own default (refuse in production, allow elsewhere).
+      DATABASE_ALLOW_NEWER_SCHEMA: ${DATABASE_ALLOW_NEWER_SCHEMA:-}
       # The development identity every request is attributed to. NOT a login.
       DEV_STUDENT_ID: ${DEV_STUDENT_ID:-dev-student-001}
       # Off by design. Switching it on lets any caller name any student with a
