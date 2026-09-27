@@ -86,6 +86,9 @@ export const jenkinsStageExists: CicdVerifierHandler<'jenkins_stage_exists'> = {
     if (stage.stepsBody.trim().length === 0) {
       return fail(`stage '${stage.name}' has an empty 'steps' block`);
     }
+    if (requirement.unconditional && stage.hasWhen) {
+      return fail(`stage '${stage.name}' has a 'when' block, so it does not run on every build`);
+    }
 
     if (requirement.steps_contain) {
       const missing = stepsMissing(stage, requirement.steps_contain, requirement.steps_as_command);

@@ -119,6 +119,13 @@ requirements:
   - type: secret_not_hardcoded
     path: Jenkinsfile
     label: No credential is written in plain text
+  # secret_not_hardcoded judges environment {} assignments. The seeded
+  # password moved into an `sh "docker login -p ..."` step, a `def` above the
+  # pipeline, or a withEnv([...]) passed it; the literal itself must go.
+  - type: file_contains
+    path: Jenkinsfile
+    absent: [placeholder-do-not-ship-this]
+    label: The seeded password is gone from the whole file
   - type: jenkins_stage_exists
     path: Jenkinsfile
     stage: Publish

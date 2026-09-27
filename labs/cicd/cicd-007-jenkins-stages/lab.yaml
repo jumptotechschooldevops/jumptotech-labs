@@ -112,6 +112,9 @@ requirements:
     steps_as_command: true
     after:
       - Build
+    # Runs on every build: a Test stage behind `when { expression { return
+    # false } }` is declared and never runs.
+    unconditional: true
     label: Test runs the test suite, after Build
   - type: jenkins_stage_exists
     path: Jenkinsfile
