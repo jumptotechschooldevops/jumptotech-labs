@@ -334,6 +334,38 @@ export function describeProgressRepository(
       ).toBe(0);
     });
 
+    it('never closes an old attempt whose session still holds a sandbox', async () => {
+      // Both are older than the cutoff. One session is gone; the other is still
+      // running — created under a longer lifetime, or waiting on a busy reaper
+      // — and its own teardown must be the thing that closes its attempt.
+      const gone = await startAttempt({ at: T(0), sessionId: 'sess-gone00000000' });
+      const live = await startAttempt({ at: T(1), labId: 'K8S-002', sessionId: 'sess-live00000000' });
+      const unbound = await startAttempt({ at: T(2), labId: 'K8S-003', sessionId: null });
+
+      const closed = await repository.expireStaleAttempts({
+        startedBefore: T(30),
+        reason: 'the lab environment is no longer running',
+        at: T(60),
+        liveSessionIds: ['sess-live00000000', 'sess-unrelated000'],
+      });
+
+      expect(closed).toBe(2);
+      expect((await repository.findAttempt(gone.attemptId))?.status).toBe('EXPIRED');
+      expect((await repository.findAttempt(unbound.attemptId))?.status).toBe('EXPIRED');
+      expect((await repository.findAttempt(live.attemptId))?.status).toBe('IN_PROGRESS');
+
+      // Once that session is gone too, the next sweep closes it.
+      expect(
+        await repository.expireStaleAttempts({
+          startedBefore: T(30),
+          reason: 'the lab environment is no longer running',
+          at: T(61),
+          liveSessionIds: [],
+        }),
+      ).toBe(1);
+      expect((await repository.findAttempt(live.attemptId))?.status).toBe('EXPIRED');
+    });
+
     it('records a FAILED attempt when the sandbox never came up', async () => {
       const attempt = await startAttempt({ sessionId: null });
       const failed = await repository.finishAttempt({
