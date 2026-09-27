@@ -40,6 +40,9 @@ task:
 
         Git → CI → Build → Test → Docker image → deployment manifest update
 
+    The workflow is `.github/workflows/ci.yml`; build on it rather than
+    starting a second file.
+
     **Trigger.** Continuous integration runs on every push, but delivery must
     not. Restrict this workflow's `push` trigger to the `main` branch with a
     `branches:` filter, so pushing work in progress to a feature branch does
@@ -104,6 +107,8 @@ requirements:
     trigger: push
     branches:
       - main
+    # "Only": `branches: [main, '**']` includes main and every other branch.
+    only_branches: true
     label: Delivery runs only on pushes to main
   - type: github_workflow_job_exists
     path: .github/workflows/ci.yml

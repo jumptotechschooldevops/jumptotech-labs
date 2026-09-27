@@ -76,6 +76,14 @@ concurrency:
 permissions:
   contents: read
 
+# Without this, a `run:` block is `bash -e {0}`: no pipefail, so the status of
+# `a | b` is b's alone and a failing `a` passes. Naming the shell makes it
+# `bash --noprofile --norc -eo pipefail {0}` for every step. Diagnostics and
+# cleanup steps that must not fail already end their pipelines in `|| true`.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   gates:
     runs-on: ubuntu-latest
@@ -152,21 +160,42 @@ jobs:
       # from a compose file rather than a property of running code. Mounting the
       # Docker socket into a monitoring container would reintroduce the exact
       # root-equivalent capability the runtime broker exists to remove.
+      #
+      # Both halves passed vacuously until the CI/CD supply-chain audit: `grep -q`
+      # on a missing file exits 2, which `if` reads as "no match"; and the awk
+      # range `/^  prometheus:/,/^  [a-z]/` ends on the line that starts it, so
+      # it only ever read the three `  name:` lines (a Prometheus joined to both
+      # networks passed). The same rule is held hermetically, on every
+      # `npm test`, by services/observability/test/observability-isolation.test.ts.
       - name: Observability containers hold no container runtime
         run: |
+          set -euo pipefail
+          files=(docker-compose.yml docker-compose.runtime.yml docker-compose.observability.yml
+                 docker-compose.production.yml docker-compose.production-observability.yml)
+          for file in "${files[@]}"; do
+            test -f "$file" || { echo "$file is missing: nothing was checked" >&2; exit 1; }
+          done
           for file in docker-compose.observability.yml docker-compose.production-observability.yml; do
             if grep -q 'docker.sock' "$file"; then
               echo "$file mounts a Docker socket" >&2
               exit 1
             fi
           done
-          for net in sandboxes kind; do
-            if awk '/^  (prometheus|grafana|alertmanager):/,/^  [a-z]/' \
-                 docker-compose.observability.yml | grep -q "$net"; then
-              echo "an observability container joins the $net network" >&2
-              exit 1
-            fi
-          done
+          # Each observability service's own lines, comments skipped, in every
+          # file that can extend it.
+          joined=$(awk '
+            /^[[:space:]]*#/ { next }
+            /^[^[:space:]]/ { service = ""; next }
+            /^  [a-z][a-z0-9_-]*:/ { service = $1; sub(/:$/, "", service); next }
+            service ~ /^(prometheus|grafana|alertmanager)$/ &&
+              /(^|[^a-z0-9_-])(kind|sandboxes)([^a-z0-9_-]|$)/ { print FILENAME ": " service ": " $0 }
+          ' "${files[@]}")
+          if [ -n "$joined" ]; then
+            printf '%s\n' "$joined" >&2
+            echo "an observability container joins the kind or sandboxes network" >&2
+            exit 1
+          fi
+          echo "no observability container mounts a Docker socket or joins kind/sandboxes"
 
       # `docker-compose.runtime.yml` says of its one socket mount: "this is the
       # only mount of it in the whole stack, and this is the only service that

@@ -53,6 +53,7 @@ import {
 } from '@jumptotech/lab-orchestrator/output-flow';
 import { reportSessionActivity } from './activity.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
+import { AttachBudget } from './attach-budget.js';
 import { InputBudget } from './input-budget.js';
 import { brokerShell, localShell, ShellStartError, type Shell } from './shell.js';
 import {
@@ -201,6 +202,8 @@ export function createTerminalServer(
    * the first". Holds one entry per session with a live or attaching shell.
    */
   const attachClaims = new Map<string, symbol>();
+  /** How often each student may open a terminal; see `attach-budget.ts`. */
+  const attachBudget = new AttachBudget(config.attachBudget);
   const workspaces = new SessionWorkspaces({
     root: config.workspaceRoot,
     secret: config.sessionSecret,
@@ -832,6 +835,26 @@ export function createTerminalServer(
           );
           send(ws, { type: 'error', code: 'UNAUTHORIZED', message: msg });
           ws.close(4401, 'unauthorized');
+          return;
+        }
+
+        // Before anything that costs: the credentials exchange, the shell, and
+        // replacing the attach that is waiting for this session.
+        if (!attachBudget.spend(claims.uid)) {
+          clearTimeout(authTimer);
+          terminalMetrics?.connections.inc({ outcome: 'rate_limited' });
+          securityMetrics?.securityEvents.inc({ service: 'terminal', event: 'rate_limited' });
+          obs.warn('terminal.connection.rejected', {
+            outcome: 'rate_limited',
+            securityEvent: 'rate_limited',
+            sessionId: claims.sid,
+          });
+          send(ws, {
+            type: 'error',
+            code: 'ATTACH_RATE_LIMITED',
+            message: 'The terminal was opened too many times in a short while. Wait a moment, then reconnect.',
+          });
+          ws.close(4429, 'attach rate limited');
           return;
         }
 

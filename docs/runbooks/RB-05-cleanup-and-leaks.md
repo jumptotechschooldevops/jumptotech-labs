@@ -67,8 +67,11 @@ docker ps -a --filter label=jumptotech.io/managed=true \
 
 ## 4a. Diagnose — the sweep is not completing
 
-1. `prod logs api | grep '"event":"reaper'` — a sweep that throws
-   logs `reaper.sweep.failed`.
+1. `prod logs api | grep '"event":"reaper.sweep.failed"'` — at `warn`, one
+   line per sweep that threw (`sweep failed: …`) or that could not finish a
+   teardown or read a provider (`sweep could not finish N item(s): <sandbox>:
+   <reason>; …`, the first five). `jtt_reaper_teardown_incomplete_total` and
+   the sweep's error count say *how many*; this line says *which and why*.
 2. A sweep that hangs on one unreachable provider blocks the pass. Check
    `jtt_provider_available` and `jtt_sandboxd_runtime_up`.
 3. Confirm the API is up at all — a stalled reaper with a down API is RB-01.

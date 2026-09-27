@@ -204,6 +204,16 @@ function wantedAddresses(address: string | string[] | undefined): string[] {
   return (Array.isArray(address) ? address : [address]).map(normaliseBindAddress);
 }
 
+/**
+ * `127.0.0.0/8`, `::1`, and IPv4 loopback written as an IPv4-mapped IPv6
+ * address. Takes a normalised address. A wildcard is not loopback.
+ */
+function isLoopbackAddress(address: string): boolean {
+  const v4 = address.startsWith('::ffff:') ? address.slice('::ffff:'.length) : address;
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4)) return true;
+  return address === '::1' || address === '0:0:0:0:0:0:0:1';
+}
+
 /** `tcp/8080 on 127.0.0.1` / `tcp/8080`, for messages. */
 function describeSocket(
   protocol: string,
@@ -217,7 +227,9 @@ function describeSocket(
 export const portListening: SandboxVerifierHandler<'port_listening'> = {
   type: 'port_listening',
   label: (r) =>
-    `Something is listening on ${describeSocket(r.protocol, r.port, wantedAddresses(r.address))}`,
+    r.beyond_loopback
+      ? `Something is listening on ${r.protocol}/${r.port} beyond loopback`
+      : `Something is listening on ${describeSocket(r.protocol, r.port, wantedAddresses(r.address))}`,
   async run(requirement, reader) {
     const sockets = await reader.sockets();
     const wanted = wantedAddresses(requirement.address);
@@ -227,6 +239,12 @@ export const portListening: SandboxVerifierHandler<'port_listening'> = {
 
     if (onPort.length === 0) {
       return fail(`Nothing is listening on ${requirement.protocol} port ${requirement.port}`);
+    }
+    if (requirement.beyond_loopback) {
+      if (onPort.some((s) => !isLoopbackAddress(normaliseBindAddress(s.address)))) return pass();
+      return fail(
+        `${requirement.protocol.toUpperCase()} port ${requirement.port} is listening on loopback only, so nothing off this host can reach it`,
+      );
     }
     if (wanted.length === 0) return pass();
 
@@ -514,11 +532,16 @@ export const systemdUnitDirective: SandboxVerifierHandler<'systemd_unit_directiv
       // systemd's leading `-` (optional file: `EnvironmentFile=-/etc/…`) and
       // `@`/`+`/`!` prefixes qualify a path; they do not change which path.
       // A scalar directive's words are also split on punctuation, so
-      // `Description=… (ledger-api)` names ledger-api.
+      // `Description=… (ledger-api)`, `ledger-api: …`, `… ledger-api.` and
+      // `… (ledger-api.service)` all name ledger-api. The word as written is
+      // kept too, so a check for `ledger-api.service` itself still matches.
       const members = (
         LIST_DIRECTIVES.has(directive)
           ? unit.value.tokens(section, directive)
-          : unit.value.tokens(section, directive).flatMap((token) => token.split(/[(),;"']+/))
+          : unit.value
+              .tokens(section, directive)
+              .flatMap((token) => token.split(/[(),;:"']+/))
+              .flatMap((token) => [token, token.replace(/\.$/, '').replace(/\.service$/, '')])
       )
         .map((token) => token.replace(/^[-@+!:]+/, ''))
         .filter((token) => token.length > 0);

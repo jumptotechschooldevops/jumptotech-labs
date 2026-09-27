@@ -118,8 +118,9 @@ What the service needs, agreed with operations and unchanged by the move:
 
 Reviewer's note from the last migration: the unit file itself is configuration
 and belongs to root, world-readable — 0644. Two people have now shipped units
-nobody but root could read, and the fleet's service manager silently ignored
-them.
+nobody but root could read; systemd itself runs as root and read them fine,
+but the reviewers and the audit tooling, which run as other accounts, could
+not.
 MD
 chmod 0644 /srv/jumptotech/runbooks/ledger-api-migration.md
 

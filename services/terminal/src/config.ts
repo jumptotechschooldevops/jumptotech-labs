@@ -1,4 +1,5 @@
 import type { OutputFlowOptions } from '@jumptotech/lab-orchestrator/output-flow';
+import { DEFAULT_ATTACH_BUDGET } from './attach-budget.js';
 import {
   assertTlsVerificationEnabled,
   resolveBrokerClientTransport,
@@ -112,6 +113,12 @@ export interface TerminalConfig {
   workspaceRoot: string;
   /** Hard cap on concurrent PTYs, so a stuck browser cannot exhaust the host. */
   maxSessions: number;
+  /**
+   * How often one student may open a terminal: a burst, then a rate per
+   * minute. Each attach costs a credentials exchange and a shell; see
+   * `attach-budget.ts`.
+   */
+  attachBudget: { burst: number; perMinute: number };
   /** Kill an idle PTY after this long with no client traffic. */
   idleTimeoutMs: number;
   /** Kill any PTY after this long, regardless of activity. */
@@ -279,6 +286,10 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     workDir: env.TERMINAL_WORKDIR ?? '/home/student',
     workspaceRoot: env.TERMINAL_WORKSPACE_ROOT ?? '/home/student/workspaces',
     maxSessions: intFromEnv(env, 'TERMINAL_MAX_SESSIONS', 16),
+    attachBudget: {
+      burst: intFromEnv(env, 'TERMINAL_ATTACH_BURST', DEFAULT_ATTACH_BUDGET.burst),
+      perMinute: intFromEnv(env, 'TERMINAL_ATTACHES_PER_MINUTE', DEFAULT_ATTACH_BUDGET.perMinute),
+    },
     idleTimeoutMs: intFromEnv(env, 'TERMINAL_IDLE_TIMEOUT_SECONDS', 1800) * 1000,
     maxSessionMs: intFromEnv(env, 'TERMINAL_MAX_SESSION_SECONDS', 7200) * 1000,
     activityReportIntervalMs: 30_000,

@@ -49,10 +49,10 @@ environment:
   provider: terraform
   isolation: container
 
-# The approved curriculum lists TF-002 here. TF-002 is not on this branch yet;
-# TF-001 is the honest prerequisite today. Revisit when TF-002 lands.
+# The approved curriculum lists TF-002 here, and the learning path already
+# places TF-002 first: a student declares variables before exposing values.
 prerequisites:
-  - TF-001
+  - TF-002
 
 story: >
   The release pipeline needs four facts out of this configuration every time it
@@ -117,7 +117,7 @@ task:
     A note on the token: it is a deliberately fake placeholder. Marking an
     output sensitive keeps it out of console output; it does **not** encrypt it,
     and it is still stored in plain text in `terraform.tfstate`. That gap is
-    worth seeing now — it is the subject of a later lab.
+    worth seeing now: anyone who can read the state can read the token.
 
 setup:
   files:
@@ -216,9 +216,13 @@ requirements:
   # `terraform output` prints `<sensitive>` in place of an output marked
   # sensitive. Its presence is the proof the student marked one, and its
   # absence is what a forgotten `sensitive = true` looks like.
-  - type: file_content
+  #
+  # file_contains, not file_content: a failed file_content quotes the file's
+  # first line, and `terraform output` sorts by name, so with the flag
+  # forgotten that line is `deploy_token = "<the token>"`.
+  - type: file_contains
     path: terraform/outputs.txt
-    contains: <sensitive>
+    contains: [<sensitive>]
     label: An output is marked sensitive, so the listing redacts it
 
   # outputs.txt is the student's own file, so `<sensitive>` could be typed into

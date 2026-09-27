@@ -456,6 +456,13 @@ export const terraformCheckDeclared: SandboxVerifierHandler<'terraform_check_dec
           `check '${requirement.name}' declares ${assertions.length} assert block${assertions.length === 1 ? '' : 's'}, and this lab asks for at least ${requirement.min_assertions}`,
         );
       }
+      if (requirement.condition_mentions !== undefined) {
+        const text = assertions.map((a) => argumentValue(a, 'condition') ?? '').join(' ');
+        const missing = requirement.condition_mentions.filter((wanted) => !mentions(text, wanted));
+        if (missing.length > 0) {
+          return fail(`check '${requirement.name}' asserts nothing about ${missing.join(', ')}`);
+        }
+      }
       return pass();
     });
   },

@@ -997,6 +997,9 @@ describe('the terminal connection', () => {
     terminal.autoConnect = false;
     renderWithProviders(<WorkspacePage labId="LINUX-001" />);
     await screen.findByText('Connecting to your terminal…');
+    // That overlay is up before the terminal mounts; the event below needs the
+    // terminal that holds the issued grant, or a slow runner reads null here.
+    await waitFor(() => expect(terminal.last?.grant).toBeTruthy());
 
     act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'CAPACITY' }));
     expect(screen.getByText('The terminal could not connect')).toBeTruthy();

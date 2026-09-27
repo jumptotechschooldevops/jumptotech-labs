@@ -377,6 +377,7 @@ export const deploymentUsesConfigMap: VerifierHandler<'deployment_uses_configmap
       ...(r.key !== undefined ? { key: r.key } : {}),
       ...(r.via !== undefined ? { via: r.via } : {}),
       ...(r.env !== undefined ? { env: r.env } : {}),
+      ...(r.container !== undefined ? { container: r.container } : {}),
     });
   },
 };
@@ -414,6 +415,7 @@ export const deploymentUsesSecret: VerifierHandler<'deployment_uses_secret'> = {
       ...(r.key !== undefined ? { key: r.key } : {}),
       ...(r.via !== undefined ? { via: r.via } : {}),
       ...(r.env !== undefined ? { env: r.env } : {}),
+      ...(r.container !== undefined ? { container: r.container } : {}),
     });
   },
 };
@@ -438,6 +440,7 @@ function checkConfigReference(
     key?: string;
     via?: ConfigReference['via'];
     env?: string;
+    container?: string;
   },
 ): HandlerOutcome {
   const refs = workload.configRefs ?? [];
@@ -457,6 +460,23 @@ function checkConfigReference(
     const used = [...new Set(matching.map((ref) => ref.via))].join(', ');
     return fail(`${want.kind} '${want.name}' is referenced via ${used}, expected ${want.via}`);
   }
+
+  if (want.container !== undefined) {
+    // A reference in a sidecar reaches the sidecar, not the application. A
+    // volume-level reference names no container, so it cannot satisfy this.
+    const carried = byMechanism.filter((ref) => ref.container === want.container);
+    if (carried.length === 0) {
+      return fail(`${want.kind} '${want.name}' is referenced, but not by container '${want.container}'`);
+    }
+    return checkKeyAndEnv(carried, want);
+  }
+  return checkKeyAndEnv(byMechanism, want);
+}
+
+function checkKeyAndEnv(
+  byMechanism: readonly ConfigReference[],
+  want: { kind: string; name: string; key?: string; env?: string },
+): HandlerOutcome {
 
   if (want.key !== undefined) {
     // `key: undefined` on a reference means "the whole object", which includes

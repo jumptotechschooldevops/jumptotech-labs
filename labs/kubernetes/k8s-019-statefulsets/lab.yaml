@@ -85,7 +85,10 @@ environment:
   provider: kubernetes
   isolation: namespace
 
+# K8S-003 as well: the governing Service is a headless Service, and neither
+# K8S-011 nor K8S-018 reaches K8S-003 (Services) through its own chain.
 prerequisites:
+  - K8S-003
   - K8S-011
   - K8S-018
 

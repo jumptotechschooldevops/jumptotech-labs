@@ -16,7 +16,11 @@
  * is tested in `services/verifier/test/cs-001-verification.test.ts`.
  */
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
+  DEFAULT_SESSION_POLICY,
   MAX_SEED_SCRIPT_BYTES,
   OFFICIAL_DOC_HOSTS,
   PROVIDER_REQUIREMENT_FAMILIES,
@@ -390,5 +394,25 @@ describe('CS-004 seeded leaking process', () => {
     // source cannot answer "which kind dominates".
     expect(content).toMatch(/create_connection/);
     expect(content).toMatch(/\.spool/);
+  });
+});
+
+describe('CS-013 grades the platform CPU quota as a literal', () => {
+  // CS-013 requires its program to print `CPU_QUOTA=0.5`, read from the
+  // container's cgroup. That number is the session policy's `--cpus`, which
+  // an operator can override (SANDBOX_CPUS). Changing the default without
+  // changing the lab would make CS-013 impossible for every student.
+  it('the literal the lab asks for is the sandbox CPU default everywhere it is set', async () => {
+    const lab = (await realRegistry()).get('CS-013');
+    const expected = lab.requirements
+      .flatMap((r) => ('output_contains' in r ? (r.output_contains as string[]) : []))
+      .find((line) => line.startsWith('CPU_QUOTA='));
+    expect(expected).toBe(`CPU_QUOTA=${DEFAULT_SESSION_POLICY.sandbox.cpus}`);
+
+    const compose = readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../docker-compose.yml'),
+      'utf8',
+    );
+    expect(compose).toContain(`SANDBOX_CPUS: \${SANDBOX_CPUS:-${DEFAULT_SESSION_POLICY.sandbox.cpus}}`);
   });
 });

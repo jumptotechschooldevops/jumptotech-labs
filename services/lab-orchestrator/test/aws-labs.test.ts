@@ -35,7 +35,7 @@ describe('AWS lab definitions load', () => {
     const registry = await realRegistry();
 
     expect(registry.loadErrors).toEqual([]);
-    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006', 'AWS-007', 'AWS-008', 'AWS-009', 'AWS-012', 'AWS-018']);
+    expect(registry.labsForTrack('aws').map((l) => l.id)).toEqual(['AWS-001', 'AWS-002', 'AWS-003', 'AWS-004', 'AWS-005', 'AWS-006', 'AWS-018', 'AWS-007', 'AWS-008', 'AWS-009', 'AWS-012']);
   });
 
   it('declares the Linux sandbox, and gets container isolation for free', async () => {

@@ -306,7 +306,7 @@ describe('verifier — Secret checks (test requirement 20)', () => {
             name: 'payments',
             desiredReplicas: 1,
             selector: { app: 'payments' },
-            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN' }],
+            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN', container: 'payments' }],
           }),
         ],
       },
@@ -345,7 +345,7 @@ describe('verifier — Secret checks (test requirement 20)', () => {
             name: 'payments',
             desiredReplicas: 1,
             selector: { app: 'payments' },
-            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN' }],
+            configRefs: [{ source: 'secret', name: 'payments-api', key: 'api-token', via: 'env', env: 'PAYMENTS_API_TOKEN', container: 'payments' }],
             containers: [
               { name: 'api', image: 'nginx:stable', ready: true, restartCount: 0, state: 'running', literalEnvNames: ['PAYMENTS_API_TOKEN'] },
             ],

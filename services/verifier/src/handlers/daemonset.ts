@@ -59,6 +59,12 @@ export const daemonSetReady: VerifierHandler<'daemonset_ready'> = {
   async run(r, reader) {
     const ds = await reader.daemonSet(r.name);
     if (!ds) return missing('DaemonSet', r.name, reader.namespace);
+    if (r.every_scheduled) {
+      if (ds.desiredScheduled === 0) return fail('The controller has not scheduled any Pod yet');
+      return ds.numberReady >= ds.desiredScheduled
+        ? pass()
+        : fail(`${ds.numberReady} of ${ds.desiredScheduled} scheduled Pod(s) ready`);
+    }
     const required = r.min_ready ?? 1;
     return ds.numberReady >= required
       ? pass()

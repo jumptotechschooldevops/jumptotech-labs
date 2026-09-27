@@ -98,8 +98,10 @@ task:
     **Part 2 — the two unit systems.** A kilobyte is 1000 bytes; a kibibyte is
     1024. That one difference is why the same memory has two sizes, and it
     compounds: by the mebibyte the gap is about 5%, by the gibibyte about 7%.
-    Express the limit you converted in Part 1 in both systems using `numfmt`,
-    and record each exactly as `numfmt` prints it.
+    Express the limit you converted in Part 1 in both systems using `numfmt`
+    (`--to=si` and `--to=iec`), and record each exactly as `numfmt` prints it.
+    `--to=iec-i` is IEC too, but spells the suffix differently; record the
+    `--to=iec` form.
 
 
     **Part 3 — the converter.** Write `/home/student/py/units.py`: a program

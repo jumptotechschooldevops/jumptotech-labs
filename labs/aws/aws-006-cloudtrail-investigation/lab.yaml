@@ -61,7 +61,7 @@ task:
   description: >
     This lab environment is a Linux sandbox, not an AWS account. Nothing here
     reaches AWS. The files under `~/incident-9214/cloudtrail` are an export of
-    management events, copied off so they can be read offline.
+    CloudTrail events, copied off so they can be read offline.
 
     Start with `README.md`, then `incident-9214.txt` for the timeline and
     `infrastructure.txt` for what the account actually contains — you will need

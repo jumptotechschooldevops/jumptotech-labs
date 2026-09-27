@@ -8,7 +8,7 @@
  * cannot accidentally concatenate one in.
  */
 import pg from 'pg';
-import { describeDatabase, type DatabaseConfig } from './config.js';
+import { defaultQueryTimeoutMs, describeDatabase, type DatabaseConfig } from './config.js';
 import { assertNoConnectionStringTls, databaseTlsOptions } from './tls.js';
 
 /**
@@ -90,6 +90,12 @@ export class PostgresDatabase implements SqlExecutor {
       connectionTimeoutMillis: config.connectionTimeoutMs,
       idleTimeoutMillis: config.idleTimeoutMs,
       statement_timeout: config.statementTimeoutMs,
+      // The server cannot enforce its timeout from the far side of a dead
+      // socket. This bound, and keepalive for idle connections, are what free
+      // a pool slot when the database goes silent instead of refusing.
+      query_timeout: config.queryTimeoutMs ?? defaultQueryTimeoutMs(config.statementTimeoutMs),
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
       application_name: config.applicationName,
     });
     return new PostgresDatabase(pool, describeDatabase(config));
@@ -113,16 +119,24 @@ export class PostgresDatabase implements SqlExecutor {
    */
   async transaction<T>(work: (tx: SqlExecutor) => Promise<T>): Promise<T> {
     const client = await this.#pool.connect();
+    // Set when the connection can no longer be trusted: a ROLLBACK that fails
+    // means the reply to an earlier statement never came (a client-side query
+    // timeout) or the socket is gone. Released normally, that connection would
+    // be handed, still wedged, to the next caller; released with an error, the
+    // pool destroys it.
+    let broken: Error | undefined;
     try {
       await client.query('BEGIN');
       const result = await work(executorFor(client));
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK').catch(() => undefined);
+      await client.query('ROLLBACK').catch((rollbackError: unknown) => {
+        broken = rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError));
+      });
       throw error;
     } finally {
-      client.release();
+      client.release(broken);
     }
   }
 
@@ -135,10 +149,16 @@ export class PostgresDatabase implements SqlExecutor {
    */
   async session<T>(work: (client: SqlExecutor) => Promise<T>): Promise<T> {
     const client = await this.#pool.connect();
+    let failed: Error | undefined;
     try {
       return await work(executorFor(client));
+    } catch (error) {
+      // Session state (an advisory lock) or a timed-out statement may still be
+      // on this connection; destroy it rather than hand it to another caller.
+      failed = error instanceof Error ? error : new Error(String(error));
+      throw error;
     } finally {
-      client.release();
+      client.release(failed);
     }
   }
 

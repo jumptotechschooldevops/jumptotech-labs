@@ -189,19 +189,22 @@ export class ProgressService {
   /**
    * Close attempts whose sandbox cannot possibly exist any more.
    *
-   * The sandbox layer keeps its sessions in memory, so restarting the API
-   * forgets them — and with them, the event that would have closed the attempts
-   * they hosted. This sweep is the backstop: past the absolute session lifetime
-   * no sandbox can still be alive, so anything still IN_PROGRESS by then was
-   * abandoned rather than being worked on.
+   * An attempt is closed by its session's teardown. When that event is lost
+   * (a restart of an in-memory session store, a failed progress write), this
+   * sweep is the backstop for attempts older than the absolute session
+   * lifetime. Age alone does not prove a sandbox is gone, so the caller also
+   * names the sessions that still hold one, and their attempts are kept.
    *
    * `maxSessionSeconds` must be the platform's absolute deadline; the grace
    * period on top of it is what keeps this from racing a teardown in flight.
+   * `liveSessionIds` are sessions that still hold a sandbox: their attempts are
+   * left for their own teardown to close, whatever their age.
    */
   async expireAbandonedAttempts(input: {
     maxSessionSeconds: number;
     graceSeconds?: number;
     reason?: string;
+    liveSessionIds?: readonly string[];
   }): Promise<number> {
     const graceSeconds = input.graceSeconds ?? 300;
     const now = this.#now();
@@ -209,6 +212,7 @@ export class ProgressService {
       startedBefore: new Date(now - (input.maxSessionSeconds + graceSeconds) * 1000).toISOString(),
       reason: input.reason ?? 'the lab environment is no longer running',
       at: new Date(now).toISOString(),
+      ...(input.liveSessionIds ? { liveSessionIds: input.liveSessionIds } : {}),
     });
     if (closed > 0) this.#log(`closed ${closed} abandoned attempt(s)`);
     return closed;

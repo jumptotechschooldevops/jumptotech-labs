@@ -80,7 +80,7 @@ requirements:
   - type: file_contains
     path: site.yml
     contains: [node_role]
-    absent: ['== "node1"', "== 'node1'", "inventory_hostname =="]
+    absent: ['== "node1"', "== 'node1'", "'node1' ==", '"node1" ==', "inventory_hostname ==", "inventory_hostname in", "match('node1')"]
     label: The condition reads the node's role rather than naming a node
   # First, from cleared paths: the state below is what the playbook made.
   # Directories and files made by hand passed every check while this lab had
