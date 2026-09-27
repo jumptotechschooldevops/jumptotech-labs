@@ -77,6 +77,17 @@ cannot scale horizontally as built: terminal and sandboxd (live shells in
 process memory), and the api's in-process limiters and single-flight gates
 (two api instances would each enforce their own budgets).
 
+**Can an operator see capacity? Yes, with one gap.** Exported today:
+`jtt_sessions_active` against `jtt_sessions_capacity_limit`,
+`jtt_lab_start_outcome_total` (including `capacity_reached`),
+`jtt_lab_provision_duration_seconds` and per-step durations,
+`jtt_verification_duration_seconds` and errors, `jtt_terminal_connections_open`,
+`jtt_sandboxd_shells_open`, `jtt_sandboxd_runtime_op_duration_seconds`,
+`jtt_reaper_orphans_found` and `jtt_reaper_delete_failures_total`, and host load
+and memory (the operations sampler adds PSI and OOM kills). The gap is sandboxd's
+PID headroom against its `pids_limit`, which is the ceiling §29 predicts for 25
+students (P2).
+
 ## 5. One-student baseline — PASS (latencies INCONCLUSIVE)
 
 LINUX-001 through the edge, warm images: Start 11.1 s, terminal ready 7.5 s
@@ -372,6 +383,7 @@ None found in platform code. The one P0 **requirement** is §34 item 1.
 - The progress runtime's log lines (attempt started, attempts closed) carry
   `event: migration.applied`, which misleads an operator searching logs.
 - `SANDBOX_TMPFS_SIZE` is still loaded and unused; sandbox disk is unbounded.
+- sandboxd PID usage against `pids_limit` is not exported.
 - api, postgres and web have no `mem_limit`.
 
 ## 34. Capacity requirements before private beta
