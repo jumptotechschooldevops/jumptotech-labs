@@ -239,7 +239,7 @@ reclaimed by the reaper as an orphan ~2 minutes later (§19).
 |---|---|
 | NET-007 peer + network outliving End under load | bounded: reaper reclaims within one sweep (~2 min observed). P2, documented |
 | The capacity harness left 4 sandboxes + 2 networks when it died on a fatal error | fixed in #98: the fatal path Ends every session each student holds, including a Start whose answer never arrived |
-| Memory growth | none observed (api RSS flat 5→50 students; no multi-hour churn run, see §26) |
+| Memory growth | none in the api. Control-plane churn, 1 500 sessions (10 students × 150 cycles), every response 200: heap +0.3–1.25 KB per session, RSS flat 141–147 MiB, no timer or socket left. A heap-snapshot diff attributes the remainder to the progress attempt record (PostgreSQL in production). MEASURED, PASS |
 
 ## 20. Concurrency bugs found
 
@@ -303,7 +303,7 @@ terminal-integration and tls-edge-integration. All passed before merge.
 |---|---|
 | Kubernetes sessions, Docker-track (dind), Terraform/Ansible/CI-CD labs | NOT RUN: the E2E stack disables them, and adding a kind cluster or privileged dind sandboxes to a VM at load ~200 would have harmed other sessions |
 | 10 / 25 live students | NOT RUN: five already failed Starts on this host for host reasons, so larger bursts would have measured the host |
-| Multi-hour churn / memory-leak soak | NOT RUN on the live stack (host). The control plane showed flat RSS across 5→50 |
+| Live-stack churn / multi-hour soak | NOT RUN (host). Control-plane churn ran and passed (§19) |
 | File-descriptor tracking over churn | NOT RUN (live stack down); the harness records api/terminal FDs per phase for the beta host |
 | PostgreSQL pool saturation | NOT RUN; see §11 |
 | Live rerun on current main with #91's cause logging | NOT RUN: rebuild failed on an npm registry network error and the VM stayed saturated |
