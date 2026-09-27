@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **STARTING COMMIT** | `24e09f132d522b8de713e696bd0a682f3be74d93` (origin/main, merge of PR #54) |
-| **BRANCH** | `feat/overnight-disaster-recovery` (local only: not pushed, no PR) |
+| **BRANCH** | `feat/overnight-disaster-recovery` (350c9bd), never pushed; its eight commits were re-applied unchanged onto main 92c0aaf on 2026-09-27 as `fix/disaster-recovery-guards`. Findings below are as of 24e09f1; migration `006_access_entitlements` landed after the audit and is added to §5. |
 | **AUDIT DATE** | 2026-09-21 / 22 (UTC) |
 | **Question** | If JumpToTech Labs fails, can an operator recover it safely? |
 | **Method** | Static reading of every backup, restore, migration, release, rollback and operations script and runbook; deterministic tests with fake `docker`/`psql`/`pg_dump`/`pg_restore`; unit tests with a scripted SQL session; `promtool test rules`; the migrator and one new SQL expression run against PostgreSQL 17 compiled to WASM (PGlite, in-process, scratch directory only). **No Docker container, kind cluster, compose stack, image, volume or shared port was started, changed or removed.** |
@@ -154,6 +154,7 @@ served on port 80, and `labs/`, mounted into the api. Fixed in the script and in
 | 003_users_and_ownership | creates `users`, `user_roles` (seeded), adds nullable `lab_sessions.owner_user_id` | no | yes | additive |
 | 004_auth_sessions | creates `auth_sessions` | no | yes | additive |
 | 005_session_recovery | adds `status_changed_at` (backfilled, NOT NULL with default), widens the status `CHECK` to include `DEGRADED` | no data removed; the CHECK is dropped and re-added in the same transaction | yes | pre-005 code inserts work (default); it may meet `DEGRADED` rows it does not know |
+| 006_access_entitlements (after this audit) | creates `access_entitlements`, `access_events`, index `users_by_lower_email` | no | yes | additive; pre-006 code ignores the tables, and with D2 the production api refuses to start on it unless `DATABASE_ALLOW_NEWER_SCHEMA=true` |
 
 Ordering by numeric prefix; names validated; immutability enforced by checksum;
 concurrent starts serialised by an advisory lock; repeat execution is a no-op; a
