@@ -83,6 +83,9 @@ const TRANSIENT_TERMINAL_CODES = new Set([
   'CREDENTIALS_UNAVAILABLE',
   'SANDBOX_UNAVAILABLE',
   'AUTH_TIMEOUT',
+  // The terminal's per-student attach budget refills within seconds, and the
+  // backoff below is slower than that.
+  'ATTACH_RATE_LIMITED',
 ]);
 
 /**

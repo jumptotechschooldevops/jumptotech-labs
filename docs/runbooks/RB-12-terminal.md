@@ -23,6 +23,7 @@ sum by (outcome) (rate(jtt_terminal_connections_total[10m]))
 | `unauthorized` | The session token was rejected | Secret mismatch or clock skew |
 | `unauthenticated` | First frame was not `auth` | A client bug |
 | `capacity` | `TERMINAL_MAX_SESSIONS` reached | Capacity |
+| `rate_limited` | One student opened the terminal more often than `TERMINAL_ATTACH_BURST`, then `TERMINAL_ATTACHES_PER_MINUTE`, allow (30 and 30 by default; the browser's own retries are six a minute). The log line names the session. Counted as a failure: a loop against the credentials exchange is worth seeing | `ops sessions` for that session's student; a script, or a client stuck reconnecting |
 | `no_credentials` | The API would not release session credentials | API / ownership |
 | `shell_start_failed` | The PTY would not start | `sandboxd` — RB-06 |
 | `superseded` | The attach was cancelled: its session ended, or was opened in another tab, while it waited. Not a failure, and not counted as one by `TerminalConnectionFailures` | Nothing, unless it is most of the traffic |
