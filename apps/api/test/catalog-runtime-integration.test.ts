@@ -14,7 +14,8 @@
  *   2. **Check** before any work does not pass: the lab does not begin solved.
  *   3. **Reset** succeeds, and the Check that follows grades exactly as the
  *      first one did: Reset returns the lab to where Start left it.
- *   4. **End Lab** removes the sandbox.
+ *   4. **End Lab** removes the sandbox, and every peer, managed node and
+ *      network that carried the session's label.
  *
  * Five labs run at once, each as its own student, under the private beta's
  * capacity policy (five live sessions, one per student) — Vitest's default
@@ -48,6 +49,7 @@ import request from 'supertest';
 import type { Express } from 'express';
 import {
   ANSIBLE_WORKSPACE_DIR,
+  CONTAINER_SESSION_LABEL,
   DEFAULT_ANSIBLE_SANDBOX_IMAGE,
   DEFAULT_CICD_SANDBOX_IMAGE,
   DEFAULT_LINUX_SANDBOX_IMAGE,
@@ -178,13 +180,18 @@ function grades(result: CheckResult): Record<string, string> {
   return Object.fromEntries(result.checks.map((c) => [c.label, c.status]));
 }
 
-async function sandboxExists(ref: string): Promise<boolean> {
-  try {
-    await exec('docker', ['inspect', '--type', 'container', ref]);
-    return true;
-  } catch {
-    return false;
-  }
+/**
+ * Every container and network still carrying a session's label.
+ *
+ * The session's main container is not the whole of it: a `network: link` lab
+ * has a peer container and a private network, and an Ansible lab has two
+ * managed nodes. End Lab has not ended a session while any of them remain.
+ */
+async function leftovers(sessionId: string): Promise<string[]> {
+  const filter = `label=${CONTAINER_SESSION_LABEL}=${sessionId}`;
+  const containers = await exec('docker', ['ps', '-a', '--filter', filter, '--format', 'container {{.Names}}']);
+  const networks = await exec('docker', ['network', 'ls', '--filter', filter, '--format', 'network {{.Name}}']);
+  return `${containers.stdout}${networks.stdout}`.split('\n').filter(Boolean);
 }
 
 beforeAll(async () => {
@@ -280,7 +287,7 @@ describe.runIf(ENABLED)('every container-backed lab on a real runtime', () => {
             mark('end');
             console.log(`[catalog-runtime] ${labId} ${JSON.stringify(took)} (seconds since Start was clicked)`);
           }
-          expect(await sandboxExists(session.sandboxRef), `${labId} sandbox left behind`).toBe(false);
+          expect(await leftovers(session.sessionId), `${labId} left behind after End Lab`).toEqual([]);
           created.delete(session.sandboxRef);
         },
         600_000,
