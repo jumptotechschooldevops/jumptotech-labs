@@ -463,9 +463,9 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       return;
     }
 
-    const mine = (await sessions.listOccupying())
-      .filter((session) => session.ownerUserId !== undefined && session.ownerUserId === user.userId)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    // The caller's own, asked for as such: the store answers from the owner
+    // index rather than handing back every student's live session to filter.
+    const mine = await sessions.listOccupyingForOwner(user.userId);
 
     const entries = await Promise.all(
       mine.map(async (session) => {
