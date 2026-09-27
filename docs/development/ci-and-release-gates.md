@@ -105,6 +105,7 @@ Enforcement above), not something the workflow decides.
 | `test:security` | a curated subset of the unit suites `npm test` already runs in `gates`; the wiring test proves every file it names exists and is a unit suite | `npm run test:security` |
 | Five-student beta gate | needs the running stack, kind and the observability profile for ~30 min | `make beta-validate` |
 | Production preflight, config check, smoke, TLS check | about a real host; see §5 | `make production-preflight` etc. |
+| Capacity probes | a capacity number is only true on the host that measured it; see [capacity-probes.md](capacity-probes.md) | `npm run capacity:control-plane`, `npm run capacity:classroom -- …` |
 
 ---
 
