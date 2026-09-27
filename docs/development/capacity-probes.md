@@ -50,6 +50,28 @@ Every response in every phase was 200. At the browser's real cadence (one
 status poll per student every 15 s) fifty students need about 1.5 ms of api CPU
 a second. The api is not what limits a class. The sandbox runtime is.
 
+### Churn: does the api keep anything per session?
+
+```bash
+npm run capacity:control-plane -- --students 10 --churn 150 --checks-per-cycle 1
+```
+
+Ten students start, poll, open a terminal grant, Check and End, 150 times over,
+against one api process. Every 25 cycles the child forgets finished sessions
+(what the reaper's retention sweep does), empties the fake runtime's own call
+log, forces GC, and reports heap, RSS and its active handles and timers.
+`CAPACITY_SNAPSHOT_DIR=<dir>` also writes a heap snapshot at the first and last
+sample, for diffing.
+
+Result on 2026-09-27 (1 500 sessions, every response 200): heap growth
+0.3–1.25 KB per session and noisy, RSS flat at 141–147 MiB, no timer and no
+socket left behind. A snapshot diff attributes what remains to one record per
+session carrying the session id and two timestamps. That is the progress
+attempt, kept in memory by this probe and in PostgreSQL in production. **No
+per-session leak in the api.** Before the fake's call log was emptied the same
+run showed ~4 KB per session, all of it the fake remembering every seed script
+it was handed. That is why the probe empties it.
+
 ## 2. A real class: `scripts/capacity/classroom.ts`
 
 ```bash

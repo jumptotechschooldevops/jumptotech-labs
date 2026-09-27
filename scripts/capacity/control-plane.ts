@@ -54,10 +54,11 @@ async function serve(maxSessions: number): Promise<void> {
   const providers = new ProviderRegistry();
   providers.register({ provider: new LinuxLabProvider({ runtime }) });
   const progress = new ProgressService({ repository: new InMemoryProgressRepository() });
+  const store = new InMemorySessionStore();
   const sessions = new SessionManager({
     registry: labs,
     providers,
-    store: new InMemorySessionStore(),
+    store,
     policy: config.policy,
     lifetimes: config.lifetimes,
     namespaceSecret: config.namespaceSecret,
@@ -87,8 +88,37 @@ async function serve(maxSessions: number): Promise<void> {
     const address = server.address();
     process.send!({ type: 'listening', port: typeof address === 'object' && address ? address.port : 0 });
   });
-  process.on('message', (m: { type: string }) => {
-    if (m.type === 'mark') {
+  process.on('message', async (m: { type: string }) => {
+    if (m.type === 'settle') {
+      // What the reaper's retention sweep does in production: finished
+      // sessions are forgotten, so what remains after GC is what leaked.
+      for (const s of await store.list()) {
+        if (['ENDED', 'EXPIRED', 'FAILED'].includes(s.status)) await store.delete(s.sessionId);
+      }
+      // The fake runtime keeps a log of every call for test assertions (every
+      // exec request, the seed script included). That is the harness
+      // remembering, not the api, so it is emptied before measuring.
+      for (const log of [runtime.created, runtime.removed, runtime.execs, runtime.seedScriptsRun, runtime.networksCreated, runtime.networksRemoved]) {
+        log.length = 0;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+      (globalThis as { gc?: () => void }).gc?.();
+      const kinds: Record<string, number> = {};
+      for (const k of process.getActiveResourcesInfo()) kinds[k] = (kinds[k] ?? 0) + 1;
+      process.send!({
+        type: 'settled',
+        heapKiB: Math.round(process.memoryUsage().heapUsed / 1024),
+        rssMiB: Math.round(process.memoryUsage().rss / 1048576),
+        sessionsHeld: (await store.list()).length,
+        activeResources: kinds,
+      });
+    } else if (m.type === 'snapshot' && process.env.CAPACITY_SNAPSHOT_DIR) {
+      // Diagnostics only: a heap snapshot for diffing what a churn retained.
+      const { writeHeapSnapshot } = await import('node:v8');
+      (globalThis as { gc?: () => void }).gc?.();
+      const file = writeHeapSnapshot(path.join(process.env.CAPACITY_SNAPSHOT_DIR, `churn-${Date.now()}.heapsnapshot`));
+      process.send!({ type: 'snapshotted', file });
+    } else if (m.type === 'mark') {
       elu = performance.eventLoopUtilization();
       cpu = process.cpuUsage();
       delay.reset();
@@ -143,7 +173,7 @@ function pct(xs: number[]) {
 
 async function probe(students: number) {
   const child = fork(SELF, ['--serve', String(students)], {
-    execArgv: ['--import', 'tsx'],
+    execArgv: ['--import', 'tsx', '--expose-gc'],
     stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
   });
   const { port } = await ask<{ port: number }>(child, 'noop', 'listening');
@@ -218,8 +248,78 @@ async function probe(students: number) {
   return { students, admitted: ids.size, phases };
 }
 
+/**
+ * Repeated classes against one api process: every student starts, polls,
+ * checks and ends, `cycles` times. After each block of cycles the child forgets
+ * finished sessions (the reaper's retention sweep), forces GC and reports heap,
+ * RSS and its active handles and timers. A leak shows as heap growing block
+ * after block, or as handles that do not return to their baseline. Progress
+ * attempts are kept in memory by design here (PostgreSQL in production), so a
+ * small steady heap growth per Start is expected and is reported per session.
+ */
+async function churn(students: number, cycles: number, every: number, checksPerCycle: number) {
+  const child = fork(SELF, ['--serve', String(students)], {
+    execArgv: ['--import', 'tsx', '--expose-gc'],
+    stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+  const { port } = await ask<{ port: number }>(child, 'noop', 'listening');
+  const base = `http://127.0.0.1:${port}`;
+  const names = Array.from({ length: students }, (_, i) => `churn-${i + 1}`);
+  const req = async (who: string, method: string, url: string) => {
+    const r = await fetch(base + url, {
+      method,
+      headers: { authorization: `Developer ${who}`, origin: 'http://localhost:3000', 'content-type': 'application/json' },
+      body: method === 'POST' ? '{}' : undefined,
+    });
+    return { status: r.status, body: (await r.json().catch(() => ({}))) as any };
+  };
+  const labs = ['LINUX-001', 'LINUX-002', 'LINUX-003', 'LINUX-004', 'LINUX-005'];
+  const samples = [{ cycle: 0, ...(await ask<Record<string, unknown>>(child, 'settle', 'settled')) }];
+  const statuses: Record<string, number> = {};
+  for (let c = 1; c <= cycles; c += 1) {
+    await Promise.all(
+      names.map(async (n, i) => {
+        const started = await req(n, 'POST', `/api/labs/${labs[(i + c) % labs.length]}/start`);
+        const id = started.body?.data?.session?.sessionId;
+        const seen = [started.status];
+        if (id) {
+          seen.push((await req(n, 'GET', `/api/sessions/${id}`)).status);
+          seen.push((await req(n, 'POST', `/api/sessions/${id}/terminal`)).status);
+          for (let k = 0; k < checksPerCycle; k += 1) seen.push((await req(n, 'POST', `/api/sessions/${id}/check`)).status);
+          seen.push((await req(n, 'DELETE', `/api/sessions/${id}`)).status);
+        }
+        for (const s of seen) statuses[s] = (statuses[s] ?? 0) + 1;
+      }),
+    );
+    if (c % every === 0) {
+      samples.push({ cycle: c, ...(await ask<Record<string, unknown>>(child, 'settle', 'settled')) });
+      if (process.env.CAPACITY_SNAPSHOT_DIR && (c === every || c === cycles)) {
+        samples.push({ cycle: c, ...(await ask<Record<string, unknown>>(child, 'snapshot', 'snapshotted')) });
+      }
+    }
+  }
+  child.kill();
+  const first = samples[1] as unknown as { heapKiB: number };
+  const last = samples[samples.length - 1] as unknown as { heapKiB: number; cycle: number };
+  const sessions = (last.cycle - every) * students;
+  return {
+    students,
+    cycles,
+    checksPerCycle,
+    statuses,
+    samples,
+    heapGrowthBytesPerSessionAfterWarmup: sessions > 0 ? Math.round(((last.heapKiB - first.heapKiB) * 1024) / sessions) : null,
+  };
+}
+
 const { values } = parseArgs({
-  options: { serve: { type: 'string' }, students: { type: 'string', default: '5,10,25,50' } },
+  options: {
+    serve: { type: 'string' },
+    students: { type: 'string', default: '5,10,25,50' },
+    churn: { type: 'string' },
+    'sample-every': { type: 'string', default: '25' },
+    'checks-per-cycle': { type: 'string', default: '1' },
+  },
   allowPositionals: true,
 });
 
@@ -229,7 +329,15 @@ if (process.argv.includes('--serve')) {
 } else {
   const counts = values.students!.split(',').map(Number);
   if (counts.some((c) => !Number.isInteger(c) || c < 1 || c > 50)) throw new Error('--students takes 1..50');
-  const out = [];
-  for (const c of counts) out.push(await probe(c));
-  console.log(JSON.stringify(out, null, 2));
+  if (values.churn) {
+    const cycles = Number(values.churn);
+    if (!Number.isInteger(cycles) || cycles < 1 || cycles > 2000) throw new Error('--churn takes 1..2000 cycles');
+    const checks = Number(values['checks-per-cycle']);
+    if (!Number.isInteger(checks) || checks < 0 || checks > 5) throw new Error('--checks-per-cycle takes 0..5');
+    console.log(JSON.stringify(await churn(counts[0]!, cycles, Number(values['sample-every']), checks), null, 2));
+  } else {
+    const out = [];
+    for (const c of counts) out.push(await probe(c));
+    console.log(JSON.stringify(out, null, 2));
+  }
 }
