@@ -13,8 +13,11 @@ tested.
   104 ms of api time, and memory stayed flat.
 - The limit is the sandbox runtime and the host under it. On the only host
   available (a shared development Mac whose Docker VM ran at load 160–640, CPU
-  pressure ≈ 90 %), real five-student classroom runs failed 1–2 of 5 Starts and
-  produced latencies that say more about the host than the platform.
+  pressure ≈ 90 %), the first five-student runs failed 1–2 of 5 Starts. Once
+  the VM recovered, four runs on current main started 19 of 20 labs, and
+  every terminal, Check, Reset and End succeeded (§6a). The one failure was a
+  transport `ECONNRESET` between api and sandboxd, now logged by #91.
+  Latencies from this host say more about the host than the platform.
 - **Five-student status: CONDITIONAL.** No platform defect was found that
   blocks five students, and cleanup and accounting were correct in every run.
   Runtime capacity is not certified until `npm run capacity:classroom` passes
@@ -28,8 +31,8 @@ tested.
 
 ## 2. Final main commit
 
-`f7c1054` at the time of writing, plus #97 and #98 and this report when they
-merge; the PR record is in §23–24.
+`e534b7b` when this report merged (#100); the current-main runs in §6a were
+made on `8d90c22`, which includes #91 and #97.
 
 ## 3. Environment tested
 
@@ -125,6 +128,44 @@ A third run on current main could not start: the rebuild's `npm ci` failed
 with a registry network error, the old containers went unhealthy on the
 starved VM, and one Start exceeded the harness's 300 s deadline. That is where
 the harness's leak on a fatal error was found and fixed (§19).
+
+### 6a. Current main, after the VM recovered — 2 of 4 runs PASS, 19 of 20 Starts
+
+Later the same day the VM idled at CPU PSI 35–95 % (it still rose to 74–94 %
+during every burst). Four more five-student runs on `8d90c22`, which carries
+#91 and #97:
+
+| | 5d | rep1 | rep2 | rep3 | Total |
+|---|---|---|---|---|---|
+| Verdict | PASS | FAIL | FAIL | PASS | 2 / 4 |
+| Starts usable | 5 / 5 (10–44 s) | 5 / 5 (26–78 s) | 4 / 5 (47–104 s) | 5 / 5 (19–72 s) | 19 / 20 |
+| Sixth student | 503 `LAB_CAPACITY_REACHED` | 503 | admitted, a slot was free | 503 | correct 4 / 4 |
+| Terminals, first try | 5 / 5 (10–21 s) | 5 / 5 (5–7 s) | 4 / 4 (1–2 s) | 5 / 5 (2–3 s) | 19 / 19 |
+| Checks HTTP 200 | 5 / 5 | 5 / 5 | 4 / 4 | 5 / 5 | 19 / 19 |
+| Resets ACTIVE | 5 / 5 | 5 / 5 | 4 / 4 | 5 / 5 | 19 / 19 |
+| Reconnect after Reset, max | 2.2 s | 5.5 s | 1.8 s | 7.6 s | |
+| End HTTP 200 | 5 / 5 | 5 / 5 | 5 / 5 | 5 / 5 | 20 / 20 |
+| Sandboxes gone after End | 23 s | 29 s | 8 s | 30 s | |
+| Left after End | — | 1 network (NET-006) | — | — | reaped ~3 min later |
+| Noisy neighbour, others' p95 | 398 ms | 644 ms | 383 ms | 912 ms | |
+| api FDs, idle → after class | — | 32 → 32 | 38 → 33 | 34 → 30 | no growth |
+
+The one failed Start now says why:
+`the runtime broker is unreachable: fetch failed (ECONNRESET)`. The api→sandboxd
+connection was reset, and once more sandboxd recorded no failed or refused
+operation, did not restart and was not OOM-killed. Two candidate mechanisms
+were tested:
+
+- **A server-side timeout killing a slow request: ruled out.** A 70 s response
+  on Node 22's default server timeouts (headers 60 s, request 300 s,
+  keep-alive 5 s) completes on both a fresh and a reused connection.
+- **A keep-alive reuse race: plausible, not proven.** The client reuses a
+  pooled socket the server has just closed at its 5 s idle timeout. undici only
+  reuses a socket idle less than 3 s, so the race needs the api's event loop to
+  lag more than 2 s at that instant, which it did on this host (`/health` took
+  up to 23 s). It did not reproduce in 61 attempts off the loaded host,
+  including a server that drops idle sockets inside undici's reuse window.
+  Without a reproduction no fix was made (§32).
 
 ## 7. Classroom start burst — see §6
 
@@ -317,14 +358,17 @@ terminal-integration and tls-edge-integration. All passed before merge.
 | Live-stack churn / multi-hour soak | NOT RUN (host). Control-plane churn ran and passed (§19) |
 | File-descriptor tracking over churn | NOT RUN (live stack down); the harness records api/terminal FDs per phase for the beta host |
 | PostgreSQL pool saturation | NOT RUN; see §11 |
-| Live rerun on current main with #91's cause logging | NOT RUN: rebuild failed on an npm registry network error and the VM stayed saturated |
+| Live rerun on current main with #91's cause logging | RUN later the same day: §6a |
 
 ## 27. Five-student beta capacity status — CONDITIONAL
 
 - **Control plane:** PASS with a wide margin (MEASURED to 50).
 - **Accounting, refusal, cleanup, bounded output:** PASS.
-- **Runtime:** INCONCLUSIVE. On this host 1–2 of 5 Starts failed with a
-  transport error whose cause is now logged.
+- **Runtime:** on current main, 19 of 20 Starts and every terminal, Check,
+  Reset and End succeeded across four classes, with the host at CPU PSI
+  74–94 % during every burst (§6a). The one failure was a transport reset
+  (`ECONNRESET`) that a student would see as a Start to press again. Two of the
+  four runs passed with no defect at all.
 - Beta may proceed only after `npm run capacity:classroom -- --students 5`
   passes on the beta host (§34).
 
@@ -364,15 +408,19 @@ None found in platform code. The one P0 **requirement** is §34 item 1.
 
 ## 32. Remaining P1
 
-1. The cause of the `broker unreachable: fetch failed` Start failures is
-   UNKNOWN. Reproduce on the beta host with #91 in the build and read the
-   logged cause code.
+1. Starts can fail as `broker unreachable: fetch failed (ECONNRESET)` when
+   the host is saturated (1 in 20 at CPU PSI ~90 %; 3 in 15 earlier at PSI
+   ~94 % and load up to 640). The reset is transport-level, a server timeout is
+   ruled out, and a keep-alive reuse race is the plausible cause (§6a). If it
+   appears on the beta host at normal load, the next steps are to retry
+   idempotent broker operations once on a connection reset, or to have
+   sandboxd answer `Connection: close`.
 2. Twenty-five-student ceilings: `TERMINAL_MAX_SESSIONS`, the sandboxd PID
    budget, and one host (§29), before any cohort above ~15.
 
 ## 33. Remaining P2
 
-- End releases capacity before the NET-007 peer and network are gone;
+- End releases capacity before the peer container and the lab network are gone (seen for NET-007 and, in §6a, for NET-006);
   `#removePeer` swallows inspect errors (§18).
 - The reaper tears down expired sessions serially (§21.7).
 - A Start chain can outlive nginx's 330 s `/api/` timeout on a starved host:
