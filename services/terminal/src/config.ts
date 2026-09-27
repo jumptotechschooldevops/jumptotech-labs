@@ -181,7 +181,7 @@ export interface TerminalConfig {
   sandboxBrokerEnabled: boolean;
 }
 
-function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number, max?: number): number {
   const raw = env[name];
   if (!raw || raw.trim() === '') return fallback;
   // Digits only: `parseInt` alone read `2h` as 2 and `1e3` as 1.
@@ -189,8 +189,20 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`Environment variable ${name} must be a positive integer, got '${raw}'`);
   }
+  if (max !== undefined && parsed > max) {
+    throw new Error(`Environment variable ${name} must be at most ${max}, got '${raw}'`);
+  }
   return parsed;
 }
+
+/**
+ * The largest number of seconds a Node timer can wait. `setTimeout` and
+ * `setInterval` take a signed 32-bit millisecond delay; anything larger is
+ * replaced by 1 ms with only a warning, so a value meant as "effectively never"
+ * would fire at once — every terminal closed on connect, or a cleanup interval
+ * that spins.
+ */
+const MAX_TIMER_SECONDS = Math.floor(2_147_483_647 / 1000);
 
 function optionalIdFromEnv(env: NodeJS.ProcessEnv, name: string): number | undefined {
   const raw = env[name]?.trim();
@@ -290,8 +302,8 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
       burst: intFromEnv(env, 'TERMINAL_ATTACH_BURST', DEFAULT_ATTACH_BUDGET.burst),
       perMinute: intFromEnv(env, 'TERMINAL_ATTACHES_PER_MINUTE', DEFAULT_ATTACH_BUDGET.perMinute),
     },
-    idleTimeoutMs: intFromEnv(env, 'TERMINAL_IDLE_TIMEOUT_SECONDS', 1800) * 1000,
-    maxSessionMs: intFromEnv(env, 'TERMINAL_MAX_SESSION_SECONDS', 7200) * 1000,
+    idleTimeoutMs: intFromEnv(env, 'TERMINAL_IDLE_TIMEOUT_SECONDS', 1800, MAX_TIMER_SECONDS) * 1000,
+    maxSessionMs: intFromEnv(env, 'TERMINAL_MAX_SESSION_SECONDS', 7200, MAX_TIMER_SECONDS) * 1000,
     activityReportIntervalMs: 30_000,
     shell: env.TERMINAL_SHELL ?? '/bin/bash',
     promptUser: env.TERMINAL_PROMPT_USER ?? 'student',
