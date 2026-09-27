@@ -80,6 +80,12 @@ requirements:
     name: ledger-api
     network: ledger-net
     label: Container ledger-api is attached to ledger-net
+  # The images the task names: two `alpine sleep` containers on the network
+  # passed before, and the wget proof needs nginx answering.
+  - type: docker_container_image
+    name: ledger-api
+    image: nginx:1.27-alpine
+    label: ledger-api runs the nginx:1.27-alpine image
   - type: docker_container_running
     name: ledger-worker
     label: Container ledger-worker is running
@@ -87,6 +93,10 @@ requirements:
     name: ledger-worker
     network: ledger-net
     label: Container ledger-worker is attached to ledger-net
+  - type: docker_container_image
+    name: ledger-worker
+    image: alpine:3.20
+    label: ledger-worker runs the alpine:3.20 image
 
 reset:
   docker:

@@ -114,7 +114,8 @@ setup:
           #
           # 2. Which boolean field of `docker inspect memory-probe` shows that
           #    this was a memory kill rather than an ordinary application exit
-          #    with the same code? Give the field name exactly as it appears.
+          #    with the same code? Give only the field's own name (the last
+          #    part of its path), exactly as it appears.
           inspect_field: ____
   verify:
     - type: docker_image_exists

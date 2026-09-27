@@ -177,6 +177,12 @@ export const dockerImageLayers: DockerVerifierHandler<'docker_image_layers'> = {
     const shared = sharedPrefixLength(before.layers, after.layers);
     const changed = after.layers.length - shared;
 
+    if (r.same_depth && after.layers.length !== before.layers.length) {
+      return fail(
+        `'${r.image}' has ${after.layers.length} layers and '${r.shares_prefix_with}' has ${before.layers.length} — rebuilding the same Dockerfile replaces its last layer rather than stacking a new one on top of the old image`,
+      );
+    }
+
     // A new image ID is not a changed build: `docker build --label x=2` or an
     // edited CMD gives a new ID over identical layers. "Changed" means a layer
     // was rebuilt.

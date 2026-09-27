@@ -176,6 +176,10 @@ requirements:
     maximum_changed_suffix: 1
     minimum_shared_prefix: 3
     must_differ: true
+    # A real rebuild replaces the source layer. `FROM jumptotech/greeter:1.0`
+    # plus one more COPY, or `docker commit`, stacks a layer on 1.0 and
+    # otherwise passes with the cache-hostile Dockerfile left unfixed.
+    same_depth: true
     label: The source-only rebuild reused the dependency layers
 
   # And it still has to work.
