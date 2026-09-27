@@ -41,6 +41,15 @@ export interface DatabaseConfig {
   idleTimeoutMs: number;
   /** Server-side cap on any single query, so a bad plan cannot pin a worker. */
   statementTimeoutMs: number;
+  /**
+   * Client-side cap on waiting for a reply. `statement_timeout` cannot help when
+   * the server itself went silent (frozen host, partition, failover without a
+   * RST): the query would wait on the socket until the kernel gives up, holding
+   * its pool slot. Longer than `statementTimeoutMs`, so a merely slow query is
+   * still cancelled by the server, which keeps the connection usable.
+   * Absent ⇒ `statementTimeoutMs` + 5 s.
+   */
+  queryTimeoutMs?: number;
   applicationName: string;
 }
 
@@ -53,6 +62,11 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
     throw new Error(`Environment variable ${name} must be a positive integer, got '${raw}'`);
   }
   return parsed;
+}
+
+/** How long past the server's statement timeout the client waits for a reply. */
+export function defaultQueryTimeoutMs(statementTimeoutMs: number): number {
+  return statementTimeoutMs + 5_000;
 }
 
 /**
@@ -83,13 +97,28 @@ export function loadDatabaseConfig(env: NodeJS.ProcessEnv = process.env): Databa
     );
   }
 
+  const statementTimeoutMs = intFromEnv(env, 'DATABASE_STATEMENT_TIMEOUT_MS', 10_000);
+  const queryTimeoutMs = intFromEnv(
+    env,
+    'DATABASE_QUERY_TIMEOUT_MS',
+    defaultQueryTimeoutMs(statementTimeoutMs),
+  );
+  if (queryTimeoutMs <= statementTimeoutMs) {
+    throw new Error(
+      `DATABASE_QUERY_TIMEOUT_MS (${queryTimeoutMs}) must be greater than DATABASE_STATEMENT_TIMEOUT_MS ` +
+        `(${statementTimeoutMs}): the server's own cancel has to come first, or every slow query costs a ` +
+        'connection.',
+    );
+  }
+
   const shared = {
     ssl,
     ...(caFile ? { sslCa: readDatabaseCaBundle(caFile) } : {}),
     maxConnections: intFromEnv(env, 'DATABASE_POOL_MAX', 10),
     connectionTimeoutMs: intFromEnv(env, 'DATABASE_CONNECT_TIMEOUT_MS', 5_000),
     idleTimeoutMs: intFromEnv(env, 'DATABASE_IDLE_TIMEOUT_MS', 30_000),
-    statementTimeoutMs: intFromEnv(env, 'DATABASE_STATEMENT_TIMEOUT_MS', 10_000),
+    statementTimeoutMs,
+    queryTimeoutMs,
     applicationName: env.DATABASE_APPLICATION_NAME?.trim() || 'jumptotech-labs-api',
   };
 
