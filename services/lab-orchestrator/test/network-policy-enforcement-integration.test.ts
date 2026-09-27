@@ -98,6 +98,26 @@ async function startInfraTarget(): Promise<{ name: string; target: ProbeTarget }
 const blockedAssertions = (report: NetworkProbeReport) =>
   report.checks.filter((c) => c.phase === 'with-policy' && c.role === 'assertion' && c.expected === 'blocked');
 
+describe('NetworkPolicy enforcement probe validation', () => {
+  it.each([0, -1, 65536])('rejects invalid probe target port %s before touching the cluster', async (port) => {
+    let kubectlCalled = false;
+
+    await expect(
+      runNetworkEnforcementProbe({
+        kubectl: async () => {
+          kubectlCalled = true;
+          return { code: 0, stdout: '', stderr: '' };
+        },
+        policy: DEFAULT_SESSION_POLICY,
+        runId: 'badport',
+        publicTarget: { host: '1.1.1.1', port },
+      }),
+    ).rejects.toThrow(/not a valid host and port/);
+
+    expect(kubectlCalled).toBe(false);
+  });
+});
+
 suite('NetworkPolicy enforcement on a real cluster (BETA-P0-015)', () => {
   let infra: { name: string; target: ProbeTarget };
 

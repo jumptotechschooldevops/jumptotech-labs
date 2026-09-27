@@ -247,8 +247,14 @@ export async function runNetworkEnforcementProbe(options: NetworkProbeOptions): 
     throw new Error('NETWORK_POLICY_ENABLED=false: there are no session policies to measure');
   }
   for (const target of [publicTarget, privateTarget]) {
-    if (target && (!SAFE_HOST.test(target.host) || !Number.isInteger(target.port))) {
-      throw new Error(`probe target '${target.host}:${target.port}' is not a host and port`);
+    if (
+      target &&
+      (!SAFE_HOST.test(target.host) ||
+        !Number.isInteger(target.port) ||
+        target.port < 1 ||
+        target.port > 65535)
+    ) {
+      throw new Error(`probe target '${target.host}:${target.port}' is not a valid host and port`);
     }
   }
 
