@@ -2816,6 +2816,50 @@ ansible-playbook --syntax-check site.yml
 ansible-playbook site.yml
 ansible-playbook site.yml
 `,
+  // The same moves sandbox-integration makes, graded here with Reset after.
+  'LINUX-001': `
+set -e
+mkdir -p project/archive
+touch project/app.log project/config.txt
+mv project/app.log project/archive/app.log
+`,
+  // Exact modes on the two files the audit flagged, and a private token.
+  'LINUX-002': `
+set -e
+chmod 640 /srv/jumptotech/reports/daily-balance.csv
+chmod 750 /srv/jumptotech/reports/collect-balances.sh
+mkdir -p /home/student/secure
+printf 'token-chosen-by-the-student\\n' > /home/student/secure/api-token.txt
+chmod 600 /home/student/secure/api-token.txt
+`,
+  // Account management through sudo, which the lab grants.
+  'LINUX-003': `
+set -e
+sudo groupadd deployers
+sudo useradd --create-home ci-runner
+sudo usermod -aG deployers ci-runner
+sudo usermod -aG deployers student
+sudo install -d -g deployers -m 0770 /srv/jumptotech/deploy
+id student | grep -q deployers
+`,
+  // The configuration and workflow sandbox-integration uses for TF-001.
+  'TF-001': `
+set -e
+cd terraform
+cat > main.tf <<'HCL'
+resource "local_file" "manifest" {
+  filename = "build/manifest.txt"
+  content  = "service=ledger-api\\nenvironment=lab\\n"
+}
+
+output "manifest_path" {
+  value = "build/manifest.txt"
+}
+HCL
+terraform init -no-color -input=false
+terraform plan -no-color -input=false
+terraform apply -auto-approve -no-color -input=false
+`,
 };
 
 interface CheckResult {
