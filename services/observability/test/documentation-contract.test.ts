@@ -78,9 +78,13 @@ function anchorsOf(file: string): Set<string> {
     for (const match of text.matchAll(/<a\s+(?:name|id)="([^"]+)"/g)) anchors.add(match[1]!);
     const heading = /^#{1,6}\s+(.*?)\s*#*\s*$/.exec(text);
     if (!heading) continue;
-    const slug = heading[1]!
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/<[^>]+>/g, '')
+    // Tags are stripped until none is left: one pass over `<<b>b>` leaves `<b>`.
+    let title = heading[1]!.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+    for (let previous = ''; previous !== title; ) {
+      previous = title;
+      title = title.replace(/<[^>]*>/g, '');
+    }
+    const slug = title
       .toLowerCase()
       .replace(/[^\p{L}\p{N}\s_-]/gu, '')
       .replace(/\s/g, '-');
