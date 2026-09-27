@@ -53,6 +53,7 @@ import { createLearningPathRoutes } from './routes/learning-paths.js';
 import {
   LEARNING_PATH_RATE_LIMIT,
   SANDBOX_WRITE_RATE_LIMIT,
+  SIGN_IN_RATE_LIMIT,
   byAuthenticatedUser,
   createRateLimiter,
   type RateLimitPolicy,
@@ -99,6 +100,8 @@ export interface CreateAppDeps {
   learningPathRateLimit?: RateLimitPolicy;
   /** Per-student budget for Start and Reset, the routes that create a sandbox. Defaults to `SANDBOX_WRITE_RATE_LIMIT`. */
   sandboxWriteRateLimit?: RateLimitPolicy;
+  /** Per-client budget for `/auth/login` and `/auth/callback`. Defaults to `SIGN_IN_RATE_LIMIT`. */
+  signInRateLimit?: RateLimitPolicy;
   /**
    * How a request's caller is identified (PLATFORM-009).
    *
@@ -310,6 +313,10 @@ export function createApp(deps: CreateAppDeps): Express {
     },
     byAuthenticatedUser,
   );
+  const signInLimiter = createRateLimiter(deps.signInRateLimit ?? SIGN_IN_RATE_LIMIT, () => {
+    observability.metrics.common.securityEvents.inc({ service: 'api', event: 'rate_limited' });
+    observability.logger.warn('security.event', { securityEvent: 'rate_limited', reason: 'sign_in' });
+  });
 
   app.get('/health', asyncRoute(async (_req, res) => {
     /*
@@ -426,6 +433,8 @@ export function createApp(deps: CreateAppDeps): Express {
    * authenticated, and `/auth/session` must be able to answer "nobody" without
    * that being a 401 the frontend has to special-case.
    */
+  // Before the router, so a refused callback never reaches the provider.
+  app.use(['/auth/login', '/auth/callback'], signInLimiter);
   app.use(
     '/auth',
     browserCors,

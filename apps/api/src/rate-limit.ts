@@ -43,6 +43,22 @@ export const LEARNING_PATH_RATE_LIMIT: RateLimitPolicy = { limit: 600, windowMs:
  */
 export const SANDBOX_WRITE_RATE_LIMIT: RateLimitPolicy = { limit: 20, windowMs: 60_000 };
 
+/**
+ * Starting a sign-in and finishing one: `/auth/login` and `/auth/callback`.
+ *
+ * Both are open to anyone, by design, and the second is expensive somewhere
+ * else. `/auth/login` hands any caller a signed transaction cookie, and that
+ * cookie can be presented to `/auth/callback` with its state and any code, as
+ * often as the caller likes — each time the api posts to the identity
+ * provider's token endpoint under this deployment's own client credentials. A
+ * provider that throttles or blocks the client for that locks every student
+ * out of sign-in. Per client address, because nobody is signed in yet; 120 a
+ * minute is a class of thirty behind one NAT signing in at the same moment,
+ * four times over. `/auth/session`, which the page asks on every load and
+ * focus, is not counted.
+ */
+export const SIGN_IN_RATE_LIMIT: RateLimitPolicy = { limit: 120, windowMs: 60_000 };
+
 /** Budget key: the client address. IPv6 is grouped by /56, so one host cannot mint fresh budgets. */
 export const byClientAddress = (req: Request): string => ipKeyGenerator(req.ip ?? '');
 
