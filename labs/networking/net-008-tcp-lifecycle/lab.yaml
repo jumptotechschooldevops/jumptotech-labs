@@ -87,7 +87,7 @@ task:
     it as `states.txt`. A connection does not disappear the moment it ends.
 
     Leave all three services as they are. This lab observes; nothing here needs
-    repairing, and the answer sheet is about what you saw.
+    repairing, and the answer sheet, `answers.txt`, is about what you saw.
 
 setup:
   files:

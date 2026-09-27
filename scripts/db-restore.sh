@@ -146,10 +146,16 @@ esac
 
 jtt_require_command docker
 
+swapped=
 cleanup() {
   local status=$?
   jtt_container_unstage
-  if [ "$status" -ne 0 ]; then jtt_log "restore FAILED (exit $status)"; fi
+  if [ "$status" -ne 0 ] && [ -n "$swapped" ]; then
+    # Past the point of no return: never report this as a failed restore.
+    jtt_log "WARNING: a step after the swap failed (exit $status), but the swap itself COMMITTED: $swapped"
+  elif [ "$status" -ne 0 ]; then
+    jtt_log "restore FAILED (exit $status)"
+  fi
   if [ "$status" -ne 0 ] && [ "$mode" = verify ]; then jtt_record_status verify failure; fi
   exit "$status"
 }
@@ -297,8 +303,13 @@ if ! jtt_psql postgres \
   jtt_die "the swap failed and was rolled back. $target is unchanged; the restored copy is in $staging."
 fi
 
+swapped="$target is now the restored archive; the previous database is kept as $retained. Do not run --replace again; to undo, rename them back (the runbook, §6.6)."
 jtt_log "replaced $target with the archive; the previous database is kept as $retained"
-jtt_report_migrations "$target"
+# The swap has committed, so nothing after it may turn this into a reported
+# failure: an operator told "restore FAILED" would believe $target untouched.
+if ! (jtt_report_migrations "$target"); then
+  jtt_log "WARNING: the migration report could not be read; $target was replaced all the same. Run npm run db:status (or start the api and read its migration log line) before letting students in."
+fi
 cat >&2 <<EOF
 
 Next:

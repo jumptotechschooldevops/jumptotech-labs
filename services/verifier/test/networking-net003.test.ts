@@ -316,7 +316,7 @@ describe('NET-003 cannot be passed without doing it', () => {
   it('rejects copying the brief into the answer files', async () => {
     const lab = await loadLabDefinition(NET_003);
     const brief =
-      'refused  unreachable  resolution  app_503\nrefused_layer = L2\nledger.bank.invalid\n';
+      'refused  unreachable  resolution  app_503\nexample_layer = L7\nledger.bank.invalid\n';
 
     const sandbox = solved();
     for (const name of ['triage.txt', 'model.txt', 'refused.txt', 'app.txt']) {

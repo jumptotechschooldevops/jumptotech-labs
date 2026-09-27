@@ -1,0 +1,110 @@
+# ---------------------------------------------------------------------------
+# Recovered, or re-created? — disaster-recovery audit.
+#
+# A database that returns on an empty volume is auto-migrated by the api at
+# startup and then reports the same jtt_migration_version_info as a restored
+# one. What differs is when its history begins
+# (jtt_database_ledger_started_timestamp_seconds): a restore carries the
+# original ledger, a re-creation the moment it happened. History that begins
+# after the last successful backup means students' data exists in a backup and
+# not in the live database.
+#
+#   1. re-created after a backup: fires, critical;
+#   2. a first deployment (ledger older than every backup): quiet;
+#   3. a restore (the ledger's original start, older than the backup): quiet;
+#   4. no backup recorded at all (a laptop, or a new host before its first
+#      backup): quiet — BackupNeverSucceeded covers that.
+#
+# promtool's clock starts at Unix time 0.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../alerts/database.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a database whose history begins after the last backup was re-created
+    input_series:
+      # The last backup succeeded at t=3600; the database's ledger began at t=7200.
+      - series: 'jtt_backup_last_success_timestamp_seconds{instance="api:9400",operation="backup"}'
+        values: '3600+0x60'
+      - series: 'jtt_database_ledger_started_timestamp_seconds{instance="api:9400"}'
+        values: '7200+0x60'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DatabaseRecreatedSinceLastBackup
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DatabaseRecreatedSinceLastBackup
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: api:9400
+            exp_annotations:
+              summary: 'the database history begins after the last successful backup: it was re-created, not recovered'
+              description: >-
+                An empty database was initialised after the last good backup
+                (a lost or replaced volume, or DATABASE_URL pointing at a new
+                database). Students' history is in the backup, not here, and
+                anything they do now diverges from it. Stop the api and
+                restore (postgres-backup-restore.md §7.1) before anyone signs
+                in. db-backup.sh refuses to back this database up (so
+                retention cannot age the good archives out), and this stays
+                firing, until it is restored or BACKUP_ACCEPT_NEW_DATABASE=true
+                accepts it.
+              runbook_url: docs/runbooks/RB-02-database.md
+
+  - interval: 15s
+    name: a first deployment, backed up afterwards, stays quiet
+    input_series:
+      - series: 'jtt_database_ledger_started_timestamp_seconds{instance="api:9400"}'
+        values: '600+0x60'
+      - series: 'jtt_backup_last_success_timestamp_seconds{instance="api:9400",operation="backup"}'
+        values: '3600+0x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DatabaseRecreatedSinceLastBackup
+        exp_alerts: []
+
+  - interval: 15s
+    name: a restored database keeps its original history and stays quiet
+    input_series:
+      # Restored from a backup taken at t=86400 of a database begun at t=100.
+      - series: 'jtt_database_ledger_started_timestamp_seconds{instance="api:9400"}'
+        values: '100+0x60'
+      - series: 'jtt_backup_last_success_timestamp_seconds{instance="api:9400",operation="backup"}'
+        values: '86400+0x60'
+      # A verification newer than the ledger is not a backup.
+      - series: 'jtt_backup_last_success_timestamp_seconds{instance="api:9400",operation="verify"}'
+        values: '90000+0x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DatabaseRecreatedSinceLastBackup
+        exp_alerts: []
+
+  - interval: 15s
+    name: with no backup recorded there is nothing to compare, and it stays quiet
+    input_series:
+      - series: 'jtt_database_ledger_started_timestamp_seconds{instance="api:9400"}'
+        values: '7200+0x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DatabaseRecreatedSinceLastBackup
+        exp_alerts: []
+
+  - interval: 15s
+    name: only a newer backup than the verification decides it
+    input_series:
+      # The ledger began after a verification but before the last backup.
+      - series: 'jtt_database_ledger_started_timestamp_seconds{instance="api:9400"}'
+        values: '5000+0x60'
+      - series: 'jtt_backup_last_success_timestamp_seconds{instance="api:9400",operation="verify"}'
+        values: '4000+0x60'
+      - series: 'jtt_backup_last_success_timestamp_seconds{instance="api:9400",operation="backup"}'
+        values: '6000+0x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DatabaseRecreatedSinceLastBackup
+        exp_alerts: []

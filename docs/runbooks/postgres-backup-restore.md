@@ -8,7 +8,9 @@ here from its "Fix" section.
 | **Proven** | `make db-restore-drill` passes against real PostgreSQL 16 servers. It backs up a seeded server, destroys it, restores into a fresh server, and checks the result: identical rows, schema, sequences and migration ledger. The real migrator and the api's repository then read and write the restored database. |
 | **Not proven** | A restore on a production host, at production data size, from an off-host copy, on a schedule. No production host exists yet. The CI job that runs the drill has not yet run on a GitHub runner. |
 
-Read §4 (targets) and §10 (open decisions) before relying on any of this.
+Read §4 (targets) and §10 (open decisions) before relying on any of this. For
+the whole-host path (configuration, secrets, runtime, validation), start from
+[disaster-recovery.md](disaster-recovery.md).
 
 ---
 
@@ -258,6 +260,17 @@ database** that are older than `BACKUP_RETENTION_DAYS`. It deletes an archive's
 sidecar with it. It always keeps the newest `BACKUP_RETENTION_MIN_KEEP`. Age comes
 from the UTC timestamp in the name, not from the file's mtime.
 
+Before dumping, the script refuses a database whose history — its first
+migration's `applied_at` — begins after the newest archive of it in
+`BACKUP_DIR`. That database was re-created after the archive (a lost volume the
+api auto-migrated at startup), and backing it up would put an archive of the
+empty database first in line while the ones holding students' history aged out.
+The run fails, so `BackupLastRunFailed` fires beside
+`DatabaseRecreatedSinceLastBackup` ([RB-02 §4d](RB-02-database.md)). A restored
+database keeps its original ledger and is backed up normally; a first backup has
+nothing to compare with. `BACKUP_ACCEPT_NEW_DATABASE=true`, for one run, accepts a
+new database on purpose.
+
 Retention never touches:
 
 - the archive just written;
@@ -273,8 +286,14 @@ host. Retention in the off-host copy is the off-host destination's job (§10).
 - The default is `backups/postgres` in the checkout. It is ignored by git, as are
   `*.dump`, `*.dump.sha256` and `*.dump.partial` everywhere, and CI fails if an
   archive is ever committed. The directory is `0700` and the files are `0600`.
-- On a host, use a dedicated directory. Ideally put it on a different filesystem
-  from Docker's data root.
+- On a host, use a dedicated directory outside the checkout. Ideally put it on a
+  different filesystem from Docker's data root.
+- `db-backup.sh` refuses a `BACKUP_DIR` inside the checkout anywhere but under
+  `backups/`: elsewhere an archive can be copied into a Docker image (the
+  Dockerfiles copy whole workspace directories), read by the api (`labs/` is
+  mounted into it), or served on port 80 (`infrastructure/docker/nginx/acme-webroot/`).
+  `.dockerignore` also excludes `*.dump`, `*.dump.sha256` and `*.dump.partial`
+  everywhere, as `.gitignore` does.
 - **A copy on the database host is not a disaster-recovery backup.** It survives a
   dropped table or a bad migration. It does not survive losing the host or its
   disk.
@@ -422,9 +441,11 @@ for a command named after the whole string:
    printed which ones are pending.
    - **CHECKSUM DIFFERS** or **unknown** in that report means the code and the
      data disagree. Deploy the release that matches the archive; do not edit
-     migrations. The api refuses to start on CHECKSUM DIFFERS, but **not** on
-     unknown: it starts against a schema newer than its code, so do not start
-     it until the release matches.
+     migrations. The api refuses to start on CHECKSUM DIFFERS. Under
+     `NODE_ENV=production` it also refuses on **unknown** (a schema newer than
+     its code) unless `DATABASE_ALLOW_NEWER_SCHEMA=true` — set that only as an
+     explicit decision to run older code on the newer schema, and remove it once
+     the release matches. Outside production it starts with a warning.
 7. **Validate** (§6.5).
 
 ### 6.5 Validate
@@ -578,17 +599,21 @@ everything written since the archive. So prefer this:
 | `scripts/db-restore-drill.sh` (`make db-restore-drill`, CI `postgres-integration`) | two real `postgres:16-alpine` servers it creates and removes, labelled with the run id | See the list below this table. |
 | CI `gates` → "No database archive is committed" | `git ls-files` | no `.dump` / `.backup` / `.bak` file is tracked |
 
-**The stub suite** proves, for 88 cases:
+**The stub suite** proves, for 157 cases:
 - A failed dump, an unreadable archive, a non-application archive, a corrupted
   copy, an unreachable server, or a destination inside the database's storage
   each leaves nothing that looks like a backup.
+- A `BACKUP_DIR` inside the checkout but outside `backups/` — directly, through
+  `..` or through a symlink — is refused, and no archive is written there.
 - Retention deletes only this database's regular files, and keeps the minimum.
 - The lock and the copy hook behave.
 - A restore refuses each of these *before any database change*: no mode, a bad
   or missing checksum, an unreadable or altered archive, an existing or system
   target, missing or wrong confirmation, a connected session.
 - `--replace` stages, restores, then swaps inside one `BEGIN`/`COMMIT` and drops
-  nothing.
+  nothing. Once the swap has committed, a later step that fails (the migration
+  report on a dropped connection) exits 0 with a warning and the undo command,
+  never "restore FAILED".
 - A password sentinel never appears in output, arguments or files.
 
 **The static test** proves:
@@ -613,7 +638,11 @@ everything written since the archive. So prefer this:
 - `db:migrate` and `db:status` report the database current;
 - the api's repository reads the restored history and writes a new attempt
   through the restored sequence;
-- the password is absent from the archive's name, the backup log and the SQL.
+- the password is absent from the archive's name, the backup log and the SQL;
+- `db-backup.sh` backs up the restored database (its ledger is the original),
+  refuses the same name re-created and migrated after that archive, and accepts
+  it only with `BACKUP_ACCEPT_NEW_DATABASE=true` (step 12; added by the
+  disaster-recovery audit and not yet run — it needs Docker).
 
 **Not proven by any of it:**
 - a restore on the production host, at production size, or from an off-host copy;

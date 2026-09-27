@@ -43,6 +43,35 @@ export const LEARNING_PATH_RATE_LIMIT: RateLimitPolicy = { limit: 600, windowMs:
  */
 export const SANDBOX_WRITE_RATE_LIMIT: RateLimitPolicy = { limit: 20, windowMs: 60_000 };
 
+/**
+ * Starting a sign-in and finishing one: `/auth/login` and `/auth/callback`.
+ *
+ * Both are open to anyone, by design, and the second is expensive somewhere
+ * else. `/auth/login` hands any caller a signed transaction cookie, and that
+ * cookie can be presented to `/auth/callback` with its state and any code, as
+ * often as the caller likes — each time the api posts to the identity
+ * provider's token endpoint under this deployment's own client credentials. A
+ * provider that throttles or blocks the client for that locks every student
+ * out of sign-in. Per client address, because nobody is signed in yet; 120 a
+ * minute is a class of thirty behind one NAT signing in at the same moment,
+ * four times over. `/auth/session`, which the page asks on every load and
+ * focus, is not counted.
+ */
+export const SIGN_IN_RATE_LIMIT: RateLimitPolicy = { limit: 120, windowMs: 60_000 };
+
+/**
+ * Check — verifying a lab.
+ *
+ * A check is dozens of reads against the sandbox, run in this process, and a
+ * write to the attempt. One at a time per session was already enforced; how
+ * many in a row was not, and a loop re-asking as each answer arrived ran about
+ * a hundred a second against a fake runtime — against a real one, a student's
+ * sandbox read without pause for as long as the script ran. The browser
+ * disables Verify while a check runs, and the release gate's own polling asks
+ * every three seconds, so 40 a minute is invisible to both. Per student.
+ */
+export const CHECK_RATE_LIMIT: RateLimitPolicy = { limit: 40, windowMs: 60_000 };
+
 /** Budget key: the client address. IPv6 is grouped by /56, so one host cannot mint fresh budgets. */
 export const byClientAddress = (req: Request): string => ipKeyGenerator(req.ip ?? '');
 

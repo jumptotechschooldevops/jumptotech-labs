@@ -74,7 +74,9 @@ fails the build for one that does not:
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
 | the alert runbooks RB-01…RB-21 and their index | [runbooks/README.md](runbooks/README.md) |
-| backup, restore, disaster recovery | [runbooks/postgres-backup-restore.md](runbooks/postgres-backup-restore.md) |
+| backup and restore of PostgreSQL | [runbooks/postgres-backup-restore.md](runbooks/postgres-backup-restore.md) |
+| disaster recovery: host loss, reboot, database or runtime loss, a replacement host | [runbooks/disaster-recovery.md](runbooks/disaster-recovery.md) |
+| what a recovery drill must record | [releases/disaster-recovery-drill-evidence-template.md](releases/disaster-recovery-drill-evidence-template.md) |
 | certificates and the TLS edge | [runbooks/production-tls.md](runbooks/production-tls.md) |
 | the five-student release gate | [runbooks/five-student-beta-validation.md](runbooks/five-student-beta-validation.md) |
 | diagnostics underneath the runbooks: request tracing, health endpoints | [incident-troubleshooting.md](incident-troubleshooting.md) |
@@ -134,6 +136,7 @@ Dated; not maintained after their pass. Newest first within each group.
 
 | Record | Date |
 |---|---|
+| [releases/overnight-disaster-recovery-audit.md](releases/overnight-disaster-recovery-audit.md) | 2026-09-21/22 |
 | [releases/overnight-cicd-supply-chain-report.md](releases/overnight-cicd-supply-chain-report.md) | 2026-09-21 |
 | [releases/overnight-code-health-audit.md](releases/overnight-code-health-audit.md) | 2026-09-26 |
 | [releases/overnight-private-beta-certification.md](releases/overnight-private-beta-certification.md) | 2026-09-22 |

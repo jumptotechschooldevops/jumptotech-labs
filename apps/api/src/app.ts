@@ -51,8 +51,10 @@ import { createInternalRoutes } from './routes/internal.js';
 import { createTrackRoutes } from './routes/tracks.js';
 import { createLearningPathRoutes } from './routes/learning-paths.js';
 import {
+  CHECK_RATE_LIMIT,
   LEARNING_PATH_RATE_LIMIT,
   SANDBOX_WRITE_RATE_LIMIT,
+  SIGN_IN_RATE_LIMIT,
   byAuthenticatedUser,
   createRateLimiter,
   type RateLimitPolicy,
@@ -99,6 +101,10 @@ export interface CreateAppDeps {
   learningPathRateLimit?: RateLimitPolicy;
   /** Per-student budget for Start and Reset, the routes that create a sandbox. Defaults to `SANDBOX_WRITE_RATE_LIMIT`. */
   sandboxWriteRateLimit?: RateLimitPolicy;
+  /** Per-client budget for `/auth/login` and `/auth/callback`. Defaults to `SIGN_IN_RATE_LIMIT`. */
+  signInRateLimit?: RateLimitPolicy;
+  /** Per-student budget for Check. Defaults to `CHECK_RATE_LIMIT`. */
+  checkRateLimit?: RateLimitPolicy;
   /**
    * How a request's caller is identified (PLATFORM-009).
    *
@@ -310,6 +316,18 @@ export function createApp(deps: CreateAppDeps): Express {
     },
     byAuthenticatedUser,
   );
+  const signInLimiter = createRateLimiter(deps.signInRateLimit ?? SIGN_IN_RATE_LIMIT, () => {
+    observability.metrics.common.securityEvents.inc({ service: 'api', event: 'rate_limited' });
+    observability.logger.warn('security.event', { securityEvent: 'rate_limited', reason: 'sign_in' });
+  });
+  const checkLimiter = createRateLimiter(
+    deps.checkRateLimit ?? CHECK_RATE_LIMIT,
+    () => {
+      observability.metrics.common.securityEvents.inc({ service: 'api', event: 'rate_limited' });
+      observability.logger.warn('security.event', { securityEvent: 'rate_limited', reason: 'checks' });
+    },
+    byAuthenticatedUser,
+  );
 
   app.get('/health', asyncRoute(async (_req, res) => {
     /*
@@ -426,6 +444,8 @@ export function createApp(deps: CreateAppDeps): Express {
    * authenticated, and `/auth/session` must be able to answer "nobody" without
    * that being a 401 the frontend has to special-case.
    */
+  // Before the router, so a refused callback never reaches the provider.
+  app.use(['/auth/login', '/auth/callback'], signInLimiter);
   app.use(
     '/auth',
     browserCors,
@@ -472,6 +492,7 @@ export function createApp(deps: CreateAppDeps): Express {
     obs: observability.logger,
     metrics: observability.metrics,
     sandboxWriteLimiter,
+    checkLimiter,
   };
   app.use('/api/labs', browserCors, originGuard, authenticated, createLabRoutes(routes));
   app.use('/api/tracks', browserCors, originGuard, authenticated, createTrackRoutes(routes));

@@ -23,7 +23,8 @@ backups/
 # A database archive holds every student's data, and BACKUP_DIR can point
 # anywhere: .gitignore already keeps these names out of git wherever they are
 # written. The Dockerfiles copy whole service directories, so the same names
-# stay out of every build context too (CI/CD supply-chain audit).
+# stay out of every build context too (CI/CD supply-chain audit). db-backup.sh also
+# refuses to write one inside the checkout outside backups/ (DR audit D1).
 **/*.dump
 **/*.dump.sha256
 **/*.dump.partial
