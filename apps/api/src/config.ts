@@ -12,6 +12,7 @@ import {
   DEFAULT_LINUX_SANDBOX_IMAGE,
   DEFAULT_DOCKER_SANDBOX_IMAGE,
   DEFAULT_SESSION_POLICY,
+  SESSION_OBJECT_COUNT_QUOTA,
   DEFAULT_POD_SECURITY,
   assertPodSecurityConfig,
   type PodSecurityConfig,
@@ -264,7 +265,7 @@ export function loadOperationsConfig(env: NodeJS.ProcessEnv, publicOrigin: strin
       connectHost: strFromEnv(env, 'EDGE_PROBE_CONNECT_HOST', 'web'),
       httpsPort: intFromEnv(env, 'EDGE_PROBE_HTTPS_PORT', 8443),
       httpPort: intFromEnv(env, 'EDGE_PROBE_HTTP_PORT', 8080),
-      intervalSeconds: intFromEnv(env, 'EDGE_PROBE_INTERVAL_SECONDS', 300),
+      intervalSeconds: intFromEnv(env, 'EDGE_PROBE_INTERVAL_SECONDS', 300, MAX_TIMER_SECONDS),
     },
     backupStatusDir,
     hostMetrics: boolFromEnv(env, 'HOST_METRICS_ENABLED', true),
@@ -422,7 +423,7 @@ export function databasePasswordOf(database: DatabaseConfig | null): {
   return { source: 'POSTGRES_PASSWORD', value: database.password };
 }
 
-function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number, max?: number): number {
   const raw = env[name];
   if (!raw || raw.trim() === '') return fallback;
   // Digits only: `parseInt` alone read `2h` as 2 and `1e3` as 1.
@@ -430,8 +431,20 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`Environment variable ${name} must be a positive integer, got '${raw}'`);
   }
+  if (max !== undefined && parsed > max) {
+    throw new Error(`Environment variable ${name} must be at most ${max}, got '${raw}'`);
+  }
   return parsed;
 }
+
+/**
+ * The largest number of seconds a Node timer can wait. `setTimeout` and
+ * `setInterval` take a signed 32-bit millisecond delay; anything larger is
+ * replaced by 1 ms with only a warning, so a value meant as "effectively never"
+ * would fire at once — every terminal closed on connect, or a cleanup interval
+ * that spins.
+ */
+const MAX_TIMER_SECONDS = Math.floor(2_147_483_647 / 1000);
 
 
 /**
@@ -632,6 +645,7 @@ export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): Session
       // load balancer or a node port.
       'services.loadbalancers': '0',
       'services.nodeports': '0',
+      ...SESSION_OBJECT_COUNT_QUOTA,
     },
     limitRange: {
       name: strFromEnv(env, 'SESSION_LIMITRANGE_NAME', base.limitRange.name),
@@ -1040,7 +1054,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
       dockerImage: strFromEnv(env, 'DOCKER_SANDBOX_IMAGE', DEFAULT_DOCKER_SANDBOX_IMAGE),
     },
     progress: { ...progress, databaseTransport },
-    reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60),
+    reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60, MAX_TIMER_SECONDS),
     launchesPaused: boolFromEnv(env, 'LAB_LAUNCHES_PAUSED', false),
     accessPolicy: accessPolicyFromEnv(env),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),

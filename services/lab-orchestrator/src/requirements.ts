@@ -2937,7 +2937,24 @@ const dockerRequirementSchemas = {
     .strict(),
 
   docker_container_running: z
-    .object({ type: z.literal('docker_container_running'), name: dockerObjectName, ...common })
+    .object({
+      type: z.literal('docker_container_running'),
+      name: dockerObjectName,
+      /**
+       * The container was created by Docker Compose for this service key:
+       * Compose labels every container it makes with
+       * `com.docker.compose.service`. A Compose lab needs it, or containers
+       * started by hand with `docker run` beside a file that merely mentions
+       * the service pass.
+       */
+      compose_service: z
+        .string()
+        .min(1)
+        .max(64)
+        .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/, 'must be a Compose service name')
+        .optional(),
+      ...common,
+    })
     .strict(),
 
   /**
@@ -3253,6 +3270,13 @@ const dockerRequirementSchemas = {
       maximum_changed_suffix: z.number().int().min(0).max(200).optional(),
       /** The two images must not be the same image. */
       must_differ: z.boolean().default(true),
+      /**
+       * Both images have the same number of layers. Rebuilding one Dockerfile
+       * after a source edit *replaces* its last layers; a build `FROM` the
+       * first image (or a `docker commit` of it) *adds* one on top, which
+       * otherwise satisfies every prefix and suffix bound.
+       */
+      same_depth: z.literal(true).optional(),
       ...common,
     })
     .strict()

@@ -662,10 +662,21 @@ export class DockerLabProvider implements LabProvider {
       // turn a two-second reset into a two-minute one.
       const keep = new Set(requiredImages(plan));
       for (const image of await session.listImages()) {
-        if (image.tags.some((tag) => keep.has(tag))) continue;
-        const reference = image.tags[0] ?? image.id;
-        await session.removeImage(reference, true);
-        removed.push(`image/${reference}`);
+        const studentTags = image.tags.filter((tag) => !keep.has(tag));
+        if (studentTags.length < image.tags.length) {
+          // One of the lab's images: keep it, but take off any name the
+          // student gave it (`docker tag busybox:1.36 toolbox:1.0`).
+          for (const tag of studentTags) {
+            await session.removeImage(tag, false);
+            removed.push(`image/${tag}`);
+          }
+          continue;
+        }
+        // By id, forced: removing an image by one of several tags only
+        // untags it, so a second name the student gave it would survive the
+        // reset and leave DOCKER-003 half solved.
+        await session.removeImage(image.id, true);
+        removed.push(`image/${image.tags[0] ?? image.id}`);
       }
     }
 

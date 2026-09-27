@@ -24,4 +24,16 @@ describe('sandboxd integer settings', () => {
   it('accepts a plain integer', () => {
     expect(loadSandboxdConfig({ ...BASE, SANDBOXD_MAX_SESSIONS: '8' }).maxSessions).toBe(8);
   });
+
+  // Past 2^31 - 1 ms a Node timer fires after 1 ms: a limit meant as "never"
+  // would close every broker shell as it opened.
+  it.each(['SANDBOXD_MAX_SESSION_SECONDS', 'SANDBOXD_IDLE_TIMEOUT_SECONDS'])(
+    'refuses a %s a timer cannot wait for',
+    (name) => {
+      expect(() => loadSandboxdConfig({ ...BASE, [name]: '2592000' })).toThrow(
+        new RegExp(`${name} must be at most 2147483`),
+      );
+      expect(loadSandboxdConfig({ ...BASE, [name]: '2147483' })).toBeTruthy();
+    },
+  );
 });

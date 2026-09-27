@@ -21,4 +21,16 @@ describe('terminal integer settings', () => {
   it('accepts a plain integer', () => {
     expect(loadTerminalConfig({ ...DEVELOPMENT, TERMINAL_MAX_SESSIONS: '20' }).maxSessions).toBe(20);
   });
+
+  // Past 2^31 - 1 ms a Node timer fires after 1 ms: a limit meant as "never"
+  // would close every terminal on connect.
+  it.each(['TERMINAL_MAX_SESSION_SECONDS', 'TERMINAL_IDLE_TIMEOUT_SECONDS'])(
+    'refuses a %s a timer cannot wait for',
+    (name) => {
+      expect(() => loadTerminalConfig({ ...DEVELOPMENT, [name]: '2147484' })).toThrow(
+        new RegExp(`${name} must be at most 2147483`),
+      );
+      expect(loadTerminalConfig({ ...DEVELOPMENT, [name]: '2147483' })).toBeTruthy();
+    },
+  );
 });
