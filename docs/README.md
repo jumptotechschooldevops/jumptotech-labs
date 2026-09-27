@@ -79,6 +79,7 @@ fails the build for one that does not:
 | what a recovery drill must record | [releases/disaster-recovery-drill-evidence-template.md](releases/disaster-recovery-drill-evidence-template.md) |
 | certificates and the TLS edge | [runbooks/production-tls.md](runbooks/production-tls.md) |
 | the five-student release gate | [runbooks/five-student-beta-validation.md](runbooks/five-student-beta-validation.md) |
+| capacity probes: measuring what the host holds | [development/capacity-probes.md](development/capacity-probes.md) |
 | diagnostics underneath the runbooks: request tracing, health endpoints | [incident-troubleshooting.md](incident-troubleshooting.md) |
 | rehearsed failures | [incident-exercises.md](incident-exercises.md) |
 | the private-beta release decision and its conditions | [releases/private-beta-release-gate.md](releases/private-beta-release-gate.md) |
@@ -136,6 +137,7 @@ Dated; not maintained after their pass. Newest first within each group.
 
 | Record | Date |
 |---|---|
+| [releases/performance-capacity-certification-2026-09-27.md](releases/performance-capacity-certification-2026-09-27.md) | 2026-09-27 |
 | [releases/launch-readiness-20h-report.md](releases/launch-readiness-20h-report.md) | 2026-09-27 |
 | [releases/app-security-multi-tenant-audit.md](releases/app-security-multi-tenant-audit.md) | 2026-09-27 |
 | [releases/overnight-disaster-recovery-audit.md](releases/overnight-disaster-recovery-audit.md) | 2026-09-21/22 |
