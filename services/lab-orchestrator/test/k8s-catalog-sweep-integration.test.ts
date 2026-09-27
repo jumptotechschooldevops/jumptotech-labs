@@ -12,9 +12,10 @@
  *      first one did: Reset returns the lab to where Start left it.
  *   4. **End Lab** removes the namespace.
  *
- * A Check reads live objects, and a fixture's rollout can still be settling in
- * the seconds after Start or Reset returns, so the post-Reset grades are polled
- * until they match rather than compared once.
+ * A Check reads live objects, and a lab's setup verification may accept a
+ * fixture before its rollout is finished (K8S-015 waits for three of
+ * checkout-api's four replicas), so both Checks are read once the grades stop
+ * changing rather than once.
  *
  * Tier: E2E. Gated on RUN_INTEGRATION_TESTS=1 and a kind kubeconfig, like the
  * rest of the kind job.
@@ -104,6 +105,18 @@ describe.runIf(ENABLED)('every Kubernetes lab on real kind', () => {
     };
   }
 
+  /** Grades once two reads five seconds apart agree, or after two minutes. */
+  async function settledGrades(labId: string, namespace: string) {
+    const deadline = Date.now() + 120_000;
+    let previous = await grades(labId, namespace);
+    for (;;) {
+      await sleep(5_000);
+      const current = await grades(labId, namespace);
+      if (JSON.stringify(current) === JSON.stringify(previous) || Date.now() > deadline) return current;
+      previous = current;
+    }
+  }
+
   it.each(LAB_IDS)(
     '%s starts, does not begin solved, resets to its start, and ends',
     async (labId) => {
@@ -113,19 +126,14 @@ describe.runIf(ENABLED)('every Kubernetes lab on real kind', () => {
 
       try {
         // 2. Check before any work.
-        const initial = await grades(labId, session.namespace);
+        const initial = await settledGrades(labId, session.namespace);
         expect(Object.keys(initial.byLabel).length).toBeGreaterThan(0);
         expect(initial.passed, `${labId} passes its Check before any work`).toBe(false);
 
-        // 3. Reset, then — once any rollout settles — the same grades as at Start.
+        // 3. Reset, then the same grades as at Start.
         const { result: reset } = await manager.reset(session.sessionId);
         expect(reset.ok, JSON.stringify(reset.steps)).toBe(true);
-        const deadline = Date.now() + 90_000;
-        let after = await grades(labId, session.namespace);
-        while (JSON.stringify(after.byLabel) !== JSON.stringify(initial.byLabel) && Date.now() < deadline) {
-          await sleep(3_000);
-          after = await grades(labId, session.namespace);
-        }
+        const after = await settledGrades(labId, session.namespace);
         expect(after.byLabel).toEqual(initial.byLabel);
       } finally {
         // 4. End Lab.
