@@ -187,6 +187,9 @@ requirements:
     dir: terraform
     name: manifest_is_populated
     min_assertions: 1
+    # The assertion must read the manifest's content — through the resource or
+    # a data source scoped to the check. `condition = true` passed before.
+    condition_mentions: [content]
     label: A check block reports on the manifest without blocking the apply
 
   - type: terraform_data_source_declared

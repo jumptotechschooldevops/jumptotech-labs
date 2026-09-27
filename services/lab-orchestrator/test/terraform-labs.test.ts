@@ -449,7 +449,10 @@ describe('TF-003 — Outputs and Exposed Values', () => {
     const listing = requirements.filter((r) => 'path' in r && r.path === 'terraform/outputs.txt');
     // `terraform output` redacts a sensitive value; both halves are asserted.
     expect(
-      listing.some((r) => r.type === 'file_content' && 'contains' in r && r.contains === '<sensitive>'),
+      // file_contains: its failure reports counts, never the listing's text.
+      listing.some(
+        (r) => r.type === 'file_contains' && 'contains' in r && (r.contains as string[]).includes('<sensitive>'),
+      ),
     ).toBe(true);
     expect(
       listing.some(
@@ -1076,8 +1079,9 @@ describe('TF-025 — Custom Conditions', () => {
     );
     // `self` is how a postcondition names what was read — an identifier the
     // task itself gives, not a function — and `region` is what the task says
-    // it must assert was read.
-    expect(mentioned.sort()).toEqual(['environment', 'production', 'region', 'replicas', 'self', 'staging']);
+    // it must assert was read. `content` is the attribute the check block's
+    // assertion must read, whichever object it reads it from.
+    expect(mentioned.sort()).toEqual(['content', 'environment', 'production', 'region', 'replicas', 'self', 'staging']);
     for (const fn of ['contains', 'regex', 'startswith', 'can', 'length']) {
       expect(mentioned).not.toContain(fn);
     }

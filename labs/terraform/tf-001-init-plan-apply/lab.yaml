@@ -58,6 +58,10 @@ task:
     contents include the service name `ledger-api`.
 
     Declare an output named `manifest_path` whose value is `build/manifest.txt`.
+    Write the resource's `filename` exactly as `build/manifest.txt`: the
+    provider documentation's `${path.module}/` prefix writes the same file but
+    reports its path as `./build/manifest.txt`, and the output is compared as
+    written.
 
     Then run the workflow: initialise the directory, review the plan, and apply
     it. When you are done, `terraform output` should print your output and the

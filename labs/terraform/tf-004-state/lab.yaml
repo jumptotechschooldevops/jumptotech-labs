@@ -35,9 +35,11 @@
 #     → plan reports it as a create
 #   · deleting a managed file by hand → plan reports it as a create
 #
-# One saved plan therefore proves the whole refactor was done the way the
-# documentation describes, and nothing about it can be produced by copying a
-# string or writing a note.
+# The plan cannot see history, though. A student who renames without
+# `state mv`, applies the destroy-and-recreate, and only then saves the plan
+# gets a clean plan too: the end state is identical. What the plan does prove
+# is that configuration and state agree at the end, and nothing about it can
+# be produced by copying a string or writing a note.
 #
 # Content is written from the official HashiCorp Terraform documentation.
 # Verified: 2026-08-25
@@ -56,9 +58,9 @@ environment:
   provider: terraform
   isolation: container
 
-# The approved curriculum lists TF-003 here. TF-003 is not on this branch yet,
-# and this lab's final step needs the saved-plan workflow, so TF-011 is the
-# honest prerequisite today. Revisit when TF-002/TF-003 land.
+# The approved curriculum lists TF-003 here. This lab's final step needs the
+# saved-plan workflow, which TF-011 teaches, so TF-011 is its prerequisite;
+# the learning path places TF-003 before it as well.
 prerequisites:
   - TF-011
 
@@ -222,7 +224,7 @@ requirements:
   - type: file_content_absent
     path: terraform/plan.json
     contains: '"delete"'
-    label: The final plan destroys nothing — the rename moved the object rather than replacing it
+    label: The final plan destroys nothing — configuration and state agree after the rename
 
 hints:
   - level: 1
