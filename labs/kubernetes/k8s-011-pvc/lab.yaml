@@ -31,7 +31,7 @@ task:
   description: >
     Create a PersistentVolumeClaim named `ledger-data` with access mode
     `ReadWriteOnce` and storage request `1Gi`. Use the cluster's default
-    StorageClass unless your environment requires `local-path`.
+    StorageClass: leave `storageClassName` unset and the cluster provisions it.
 
     Update Deployment `ledger` so its container mounts `ledger-data` at `/data`.
     Wait until the Pod is running and the PVC is Bound.

@@ -155,7 +155,7 @@ requirements:
     name: ledger-writer
     key: deployment.kubernetes.io/revision
     min_int: 2
-    label: ledger-writer was reconfigured, not replaced
+    label: ledger-writer was changed in place, as a new revision
   - type: deployment_strategy
     name: ledger-writer
     strategy: Recreate
@@ -184,7 +184,7 @@ requirements:
     name: checkout-api
     key: deployment.kubernetes.io/revision
     min_int: 2
-    label: checkout-api was reconfigured, not replaced
+    label: checkout-api was changed in place, as a new revision
   - type: deployment_strategy
     name: checkout-api
     strategy: RollingUpdate
