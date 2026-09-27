@@ -11,6 +11,7 @@
  *   4403  CREDENTIALS_UNAVAILABLE
  *   4408  IDLE_TIMEOUT / SESSION_EXPIRED   the terminal's own timers (named in the frame)
  *   1013  CAPACITY          the terminal service is full
+ *   4429  ATTACH_RATE_LIMITED   opened too often in a short while — retry later
  *   1000  SHELL_EXITED      the student typed `exit`
  *   else  CONNECTION_LOST   anything abnormal (1006 …)
  * ```
@@ -29,6 +30,8 @@ export function codeForClose(closeCode: number, serverCode: string | undefined):
       return 'CREDENTIALS_UNAVAILABLE';
     case 1013:
       return 'CAPACITY';
+    case 4429:
+      return 'ATTACH_RATE_LIMITED';
     case 1000:
       return 'SHELL_EXITED';
     default:
@@ -53,6 +56,7 @@ const TERMINAL_NOTICE: Record<string, string> = {
   IDLE_TIMEOUT: 'The terminal closed after a period of inactivity.',
   SESSION_EXPIRED: 'The terminal reached its time limit.',
   CAPACITY: 'The terminal service is busy right now.',
+  ATTACH_RATE_LIMITED: 'The terminal was reconnected too many times in a short while.',
   UNAUTHORIZED: 'The terminal’s access expired.',
   UNAUTHENTICATED: 'The terminal connection was refused.',
   AUTH_TIMEOUT: 'The terminal took too long to connect.',

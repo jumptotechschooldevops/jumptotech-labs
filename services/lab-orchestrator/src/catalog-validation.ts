@@ -27,6 +27,10 @@
  *     files whose names say they are a solution;
  *   - **metadata**: a lab with no story, no objectives or no hints, which the
  *     schema allows but every shipped lab has;
+ *   - **track order**: a lab listed in its track before a prerequisite from the
+ *     same track. The track page sorts by `order` then id, so an `order` that
+ *     disagrees with the prerequisites shows a student a lab before the one it
+ *     builds on;
  *   - **learning paths**: every path error, the flagship path placing every lab,
  *     and skills defined in `skills.yaml` that no stage declares.
  *
@@ -81,6 +85,8 @@ export const CATALOG_FINDING_CODES = [
   'SETUP_SOLUTION_NAME',
   /** A lab has no story, objectives or hints — optional in the schema, expected of every lab. */
   'LAB_METADATA_INCOMPLETE',
+  /** A track lists a lab before one of its same-track prerequisites. */
+  'LAB_TRACK_ORDER',
   /** A learning path, or the skill catalog, was refused. */
   'LEARNING_PATH',
   /** The flagship path is missing, or does not place a registered lab. */
@@ -145,6 +151,7 @@ export async function validateCatalog(options: CatalogValidationOptions): Promis
   const labs = registry.all();
 
   checkLayout(labs, labsDir, tree, add);
+  checkTrackOrder(registry, add);
   for (const lab of labs) {
     await checkSetupAssets(lab, add);
     checkLabFiles(lab, labsDir, tree, add);
@@ -289,6 +296,26 @@ function checkLayout(labs: readonly LoadedLabDefinition[], labsDir: string, tree
   for (const file of tree.files) {
     if (/^lab\.ya?ml$/i.test(path.posix.basename(file.relative)) && path.posix.basename(file.relative) !== 'lab.yaml') {
       add('error', 'LAB_LAYOUT', `labs/${file.relative}`, 'a lab definition must be named exactly lab.yaml');
+    }
+  }
+}
+
+// --- track order --------------------------------------------------------------
+
+function checkTrackOrder(registry: LabRegistry, add: Add): void {
+  for (const { track } of registry.tracks()) {
+    const position = new Map(registry.labsForTrack(track).map((lab, index) => [lab.id, index]));
+    for (const [labId, index] of position) {
+      for (const prerequisite of registry.get(labId).prerequisites) {
+        const before = position.get(prerequisite);
+        if (before === undefined || before < index) continue;
+        add(
+          'error',
+          'LAB_TRACK_ORDER',
+          labId,
+          `is listed in track '${track}' before its prerequisite ${prerequisite}; give ${prerequisite} a lower \`order\``,
+        );
+      }
     }
   }
 }

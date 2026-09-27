@@ -127,10 +127,9 @@ export interface ProgressRepository {
    * Without this sweep a student's dashboard would show a lab stuck "in
    * progress" forever.
    *
-   * `startedBefore` must be older than the absolute session lifetime, which is
-   * what makes this safe: past that deadline no sandbox can still exist, so the
-   * sweep cannot close an attempt somebody is still working on — not even one
-   * belonging to another API instance.
+   * `startedBefore` must be older than the absolute session lifetime, and
+   * `liveSessionIds` names the sessions that still hold a sandbox; together
+   * they keep the sweep off attempts somebody is still working on.
    *
    * Returns how many attempts were closed.
    */
@@ -138,6 +137,13 @@ export interface ProgressRepository {
     startedBefore: string;
     reason: string;
     at: string;
+    /**
+     * Sessions that still hold a sandbox. Their attempts are never closed here,
+     * however old: a session can outlive the current lifetime (it was created
+     * under a longer `MAX_SESSION_MINUTES`, or the reaper is behind), and it is
+     * its own teardown that must close its attempt.
+     */
+    liveSessionIds?: readonly string[];
   }): Promise<number>;
 
   /** Most recent attempts first. */

@@ -398,7 +398,7 @@ describe('K8S-016 — the shipped lab', () => {
      * passes, because the fixture's application is not the broken part.
      */
     expect(await failed(seeded())).toEqual([
-      'The original Deployment was fixed, not replaced',
+      'The Deployment was fixed in place, as a new revision',
       'An init container prepare-content runs before the application',
       'The rollout finished',
       'Both replicas are available and serving',
@@ -450,7 +450,7 @@ describe('K8S-016 — the shipped lab', () => {
     });
     expect(await failed(recreated)).toEqual([
       'The Deployment still selects the reporting-api Pods',
-      'The original Deployment was fixed, not replaced',
+      'The Deployment was fixed in place, as a new revision',
     ]);
   });
 

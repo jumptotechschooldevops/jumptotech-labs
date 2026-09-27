@@ -283,6 +283,24 @@ export class PostgresSessionStore implements SessionStore {
   }
 
   /**
+   * One student's own live sessions, newest first.
+   *
+   * Served by `lab_sessions_by_owner`, and the owner is a bound parameter, so
+   * a row with no owner — a session from before authentication — matches
+   * nothing and is unreachable here, exactly as the authorization layer treats
+   * it.
+   */
+  async listOccupyingForOwner(ownerUserId: string): Promise<LabSession[]> {
+    const { rows } = await this.db.query<SessionRow>(
+      `SELECT ${COLUMNS} FROM lab_sessions
+        WHERE status = ANY($1) AND owner_user_id = $2
+        ORDER BY created_at DESC`,
+      [[...OCCUPYING_STATUSES], ownerUserId],
+    );
+    return rows.map(toSession);
+  }
+
+  /**
    * Expiry candidates: past the absolute deadline, or idle too long.
    *
    * Computed in the database so a fresh instance finds sessions no process

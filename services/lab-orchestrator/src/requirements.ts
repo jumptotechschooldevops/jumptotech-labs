@@ -750,6 +750,8 @@ const kubernetesRequirementSchemas = {
       via: z.enum(['env', 'envFrom', 'volume']).optional(),
       /** As on deployment_uses_secret: the variable the value must arrive in. */
       env: z.string().min(1).max(253).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name').optional(),
+      /** As on deployment_uses_secret: the container that must carry the reference. */
+      container: z.string().min(1).max(63).optional(),
       ...common,
     })
     .strict(),
@@ -787,6 +789,13 @@ const kubernetesRequirementSchemas = {
        * satisfies this only when the key *is* that name.
        */
       env: z.string().min(1).max(253).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be an environment variable name').optional(),
+      /**
+       * The container the reference must be carried by. Omitted, any
+       * container counts — including a sidecar the application never reads.
+       * Set, a volume-level reference does not count (which container mounts
+       * it is not recorded), so pair it with `env` or `via: env|envFrom`.
+       */
+      container: z.string().min(1).max(63).optional(),
       ...common,
     })
     .strict(),
@@ -1239,9 +1248,18 @@ const kubernetesRequirementSchemas = {
       type: z.literal('daemonset_ready'),
       name: resourceName,
       min_ready: z.number().int().min(1).max(50).optional(),
+      /**
+       * Every Pod the controller wants (`desiredNumberScheduled`) is Ready,
+       * and there is at least one. "Ready on every node" rather than "on
+       * some": a fixed `min_ready` passes 1 of 3.
+       */
+      every_scheduled: z.literal(true).optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((r) => !(r.every_scheduled && r.min_ready !== undefined), {
+      message: 'daemonset_ready takes min_ready or every_scheduled, not both',
+    }),
 
   // --- Scheduling --------------------------------------------------------
   pod_node_selector: z
@@ -2575,9 +2593,23 @@ const sandboxRequirementSchemas = {
        * that sentence.
        */
       address: z.union([bindAddress, z.array(bindAddress).min(1).max(6)]).optional(),
+      /**
+       * Pass when any socket on the port is bound somewhere other than
+       * loopback (`127.0.0.0/8`, `::1`) — a wildcard *or* one of the host's
+       * own addresses.
+       *
+       * This is what "reachable from the segment" means when the lab cannot
+       * name the host's address, because it is allocated per session. A wildcard
+       * list in `address` would refuse a student who binds the segment address
+       * itself: the tighter exposure, and the one the peer can reach.
+       */
+      beyond_loopback: z.literal(true).optional(),
       ...common,
     })
-    .strict(),
+    .strict()
+    .refine((r) => !(r.beyond_loopback && r.address !== undefined), {
+      message: 'port_listening takes address or beyond_loopback, not both',
+    }),
 
   port_not_listening: z
     .object({

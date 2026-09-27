@@ -40,7 +40,7 @@ task:
     The `statements` Deployment is already running in your namespace with its
     settings hardcoded in the Pod template.
 
-    Create a ConfigMap named `statements-config` containing exactly these two
+    Create a ConfigMap named `statements-config` containing these two
     entries, then change the Deployment so it takes its configuration from that
     ConfigMap instead of from literal values:
 

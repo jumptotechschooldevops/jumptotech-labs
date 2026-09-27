@@ -137,14 +137,18 @@ export class AttemptClosingListener implements SessionLifecycleListener {
 /**
  * Periodically close attempts no sandbox can still back.
  *
- * The sandbox layer keeps sessions in memory, so an API restart forgets them —
- * and with them the `onSessionClosed` event that would have closed the attempts
- * they hosted. Without this, a student who was mid-lab when the platform
- * restarted would see that lab "in progress" on their dashboard forever.
+ * An attempt is closed by its session's `onSessionClosed` event. When that
+ * event is lost — the in-memory session store forgot the session on restart,
+ * the progress write failed, the session record was lost with its database —
+ * a student would see that lab "in progress" on their dashboard forever.
  *
- * The cutoff is the absolute session lifetime plus a grace period, which is
- * what makes it safe: past that deadline no sandbox can still be alive, so this
- * cannot close an attempt somebody is still working on.
+ * The cutoff is the absolute session lifetime plus a grace period, and on top
+ * of it every session that still occupies a slot is excluded by id. Age alone
+ * is not proof: sessions persist across restarts with the deadline they were
+ * created with, so after `MAX_SESSION_MINUTES` is lowered, or while the reaper
+ * is behind, a live lab can be older than the cutoff. Closing its attempt then
+ * would show the student EXPIRED mid-lab and make their End unrecordable.
+ * If the live sessions cannot be read, the sweep is skipped, not run blind.
  */
 export class AbandonedAttemptSweeper {
   #timer: NodeJS.Timeout | undefined;
@@ -153,6 +157,8 @@ export class AbandonedAttemptSweeper {
     private readonly options: {
       progress: ProgressService;
       maxSessionSeconds: number;
+      /** Ids of the sessions that occupy a slot right now. */
+      liveSessionIds: () => Promise<readonly string[]>;
       intervalMs: number;
       graceSeconds?: number;
       log?: (message: string) => void;
@@ -176,12 +182,14 @@ export class AbandonedAttemptSweeper {
   async sweep(): Promise<number> {
     const log = this.options.log ?? (() => undefined);
     return (
-      (await record(log, 'close abandoned attempts', () =>
-        this.options.progress.expireAbandonedAttempts({
+      (await record(log, 'close abandoned attempts', async () => {
+        const liveSessionIds = await this.options.liveSessionIds();
+        return this.options.progress.expireAbandonedAttempts({
           maxSessionSeconds: this.options.maxSessionSeconds,
+          liveSessionIds,
           ...(this.options.graceSeconds ? { graceSeconds: this.options.graceSeconds } : {}),
-        }),
-      )) ?? 0
+        });
+      })) ?? 0
     );
   }
 }

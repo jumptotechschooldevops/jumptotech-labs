@@ -157,7 +157,7 @@ requirements:
     name: audit-api
     key: deployment.kubernetes.io/revision
     min_int: 2
-    label: The original Deployment was extended, not replaced
+    label: The Deployment was extended in place, as a new revision
   - type: workload_container
     kind: deployment
     name: audit-api

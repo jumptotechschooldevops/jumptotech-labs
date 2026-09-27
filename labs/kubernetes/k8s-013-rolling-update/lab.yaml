@@ -7,9 +7,12 @@
 #
 # The check that carries the lesson is `deployment_selector`. A Deployment's
 # selector is immutable in apps/v1, and this one has two labels, so a student
-# who deletes the Deployment and recreates it with `kubectl create deployment`
-# cannot reproduce it. Updating in place is therefore not merely the taught
-# route — it is the only route that passes.
+# who recreates it with `kubectl create deployment` cannot reproduce it. It
+# does not prove object identity: deleting the Deployment and re-applying a
+# copy of the seed with the new image, then changing its template once more,
+# still passes, because the revision annotation counts template changes since
+# the object was created, not since the lab began. Proving identity would need
+# the seeded object's uid recorded at setup.
 #
 # As everywhere else in this track there is no `namespace:` field: the session
 # owns its namespace, and both the terminal and the verifier are scoped to it.
@@ -141,7 +144,7 @@ requirements:
     name: payments-api
     key: deployment.kubernetes.io/revision
     min_int: 2
-    label: The original Deployment was updated, not replaced
+    label: The Deployment was changed in place, as a new revision
   - type: deployment_replicas
     name: payments-api
     replicas: 3

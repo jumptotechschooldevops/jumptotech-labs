@@ -335,10 +335,10 @@ describe('K8S-015 — the shipped lab', () => {
 
   it('fails on the untouched fixture, on strategy and image for both services', async () => {
     expect(await failed(seeded())).toEqual([
-      'ledger-writer was reconfigured, not replaced',
+      'ledger-writer was changed in place, as a new revision',
       'ledger-writer never runs two versions at once',
       'ledger-writer was released to nginx:1.28-alpine',
-      'checkout-api was reconfigured, not replaced',
+      'checkout-api was changed in place, as a new revision',
       'checkout-api keeps every replica serving and adds at most one',
       'checkout-api was released to nginx:1.28-alpine',
     ]);
@@ -406,9 +406,9 @@ describe('K8S-015 — the shipped lab', () => {
     // The strategy is not part of the Pod template, so changing it alone rolls
     // out no new revision: nothing has been released yet.
     expect(await failed(configuredOnly)).toEqual([
-      'ledger-writer was reconfigured, not replaced',
+      'ledger-writer was changed in place, as a new revision',
       'ledger-writer was released to nginx:1.28-alpine',
-      'checkout-api was reconfigured, not replaced',
+      'checkout-api was changed in place, as a new revision',
       'checkout-api was released to nginx:1.28-alpine',
     ]);
   });
@@ -419,14 +419,14 @@ describe('K8S-015 — the shipped lab', () => {
     });
     expect(await failed(recreated)).toEqual([
       'checkout-api still selects its own Pods',
-      'checkout-api was reconfigured, not replaced',
+      'checkout-api was changed in place, as a new revision',
     ]);
   });
 
   it('refuses a Deployment re-created from the fixture with the right settings', async () => {
     // Same labels, same strategy, same image — and back at revision 1.
     const reapplied = solved({ ledger: { annotations: REVISION_1 } });
-    expect(await failed(reapplied)).toEqual(['ledger-writer was reconfigured, not replaced']);
+    expect(await failed(reapplied)).toEqual(['ledger-writer was changed in place, as a new revision']);
   });
 
   it('fails mid-rollout rather than on configuration alone', async () => {
