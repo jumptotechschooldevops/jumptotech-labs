@@ -77,6 +77,9 @@ function fakePty(): BrokerPty & { killed: boolean } {
     killed: false,
     write: () => undefined,
     resize: () => undefined,
+    pause: () => undefined,
+    resume: () => undefined,
+    pendingInputBytes: () => 0,
     kill() {
       this.killed = true;
     },
