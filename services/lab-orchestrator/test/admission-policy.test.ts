@@ -56,10 +56,12 @@ const STUDENT_SCOPED = ['jumptotech-deny-clusterrole-bindings', 'jumptotech-prot
 const REQUIRE_POD_SECURITY = 'jumptotech-require-pod-security';
 /** CVE-2020-8554: a Service's externalIPs capture traffic to any IP on every node. */
 const DENY_EXTERNAL_IPS = 'jumptotech-deny-service-external-ips';
+/** Capacity: a namespace that never finishes deleting holds its session's slot. */
+const BOUND_TEARDOWN = 'jumptotech-bound-namespace-teardown';
 
 describe('lab admission policies — the manifest is structurally valid', () => {
-  it('ships all four policies and their bindings', () => {
-    const expected = [...STUDENT_SCOPED, REQUIRE_POD_SECURITY, DENY_EXTERNAL_IPS].sort();
+  it('ships every policy and its binding', () => {
+    const expected = [...STUDENT_SCOPED, REQUIRE_POD_SECURITY, DENY_EXTERNAL_IPS, BOUND_TEARDOWN].sort();
     expect(policies().map((p) => p.metadata?.name).sort()).toEqual(expected);
     expect(bindings().map((b) => b.metadata?.name).sort()).toEqual(expected);
   });
@@ -247,6 +249,40 @@ describe('lab admission policies — no Service may set externalIPs', () => {
 
   it('is bound in managed namespaces', () => {
     const binding = bindings().find((b) => b.metadata?.name === DENY_EXTERNAL_IPS);
+    expect(binding?.spec?.matchResources).toEqual({
+      namespaceSelector: { matchLabels: { 'jumptotech.io/managed': 'true' } },
+    });
+  });
+});
+
+describe('lab admission policies — namespace teardown always finishes', () => {
+  const policy = () => policies().find((p) => p.metadata?.name === BOUND_TEARDOWN)!;
+  const validations = () =>
+    ((policy().spec?.validations ?? []) as Array<{ expression?: string }>).map((v) => v.expression ?? '');
+
+  it('checks creates and updates of every resource', () => {
+    const rules = (policy().spec?.matchConstraints as { resourceRules: Array<Record<string, string[]>> }).resourceRules;
+    expect(rules).toEqual([
+      { apiGroups: ['*'], apiVersions: ['*'], operations: ['CREATE', 'UPDATE'], resources: ['*'] },
+    ]);
+  });
+
+  it('lets a student keep existing finalizers but add none of their own', () => {
+    const finalizers = validations().find((e) => e.includes('finalizers'))!;
+    expect(finalizers).toContain("system:serviceaccount:lab-");
+    expect(finalizers).toContain('f in oldObject.metadata.finalizers');
+    // The one Kubernetes itself adds to a student's new PVC.
+    expect(finalizers).toContain("f == 'kubernetes.io/pvc-protection'");
+  });
+
+  it('caps a Pod grace period inside the Reset drain and End windows, for every caller', () => {
+    const grace = validations().find((e) => e.includes('terminationGracePeriodSeconds'))!;
+    expect(grace).toMatch(/terminationGracePeriodSeconds <= 60\b/);
+    expect(grace).not.toContain('system:serviceaccount');
+  });
+
+  it('is bound in managed namespaces', () => {
+    const binding = bindings().find((b) => b.metadata?.name === BOUND_TEARDOWN);
     expect(binding?.spec?.matchResources).toEqual({
       namespaceSelector: { matchLabels: { 'jumptotech.io/managed': 'true' } },
     });

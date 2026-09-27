@@ -180,3 +180,61 @@ spec:
     namespaceSelector:
       matchLabels:
         jumptotech.io/managed: "true"
+---
+# Teardown must finish. The orchestrator frees a session's capacity slot only
+# once its namespace is verifiably gone, and a namespace is not gone while any
+# object in it still carries a finalizer or any Pod is still inside its grace
+# period. A student could hold a slot for as long as they liked with either:
+#
+#   - a finalizer nobody will ever remove (`metadata.finalizers: [x.io/pin]`);
+#   - a Pod that ignores SIGTERM with `terminationGracePeriodSeconds: 1e8`
+#     (measured on kind v1.34: deletion deadline three years out).
+#
+# Students may keep finalizers an object already has, and the one Kubernetes
+# adds to a new PVC for them; they may add no other. The grace-period ceiling
+# applies to every caller, since controllers create Pods from the student's
+# templates, and sits inside the provider's Reset drain and End windows.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: jumptotech-bound-namespace-teardown
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["*"]
+  matchConditions:
+    - name: sets-finalizers-or-grace
+      expression: >-
+        has(object.metadata.finalizers) ||
+        (request.resource.group == '' && request.resource.resource == 'pods' &&
+          has(object.spec.terminationGracePeriodSeconds))
+  validations:
+    - expression: >-
+        !request.userInfo.username.startsWith('system:serviceaccount:lab-') ||
+        !has(object.metadata.finalizers) ||
+        object.metadata.finalizers.all(f,
+          (oldObject != null && has(oldObject.metadata.finalizers) && f in oldObject.metadata.finalizers) ||
+          (request.resource.group == '' && request.resource.resource == 'persistentvolumeclaims' &&
+            f == 'kubernetes.io/pvc-protection'))
+      message: "Students may not add finalizers in lab namespaces"
+    - expression: >-
+        !(request.resource.group == '' && request.resource.resource == 'pods') ||
+        !has(object.spec.terminationGracePeriodSeconds) ||
+        object.spec.terminationGracePeriodSeconds <= 60
+      message: "Pods in lab namespaces may not set terminationGracePeriodSeconds above 60"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: jumptotech-bound-namespace-teardown
+spec:
+  policyName: jumptotech-bound-namespace-teardown
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        jumptotech.io/managed: "true"

@@ -123,6 +123,7 @@ malformed, or if the version is `latest` under `NODE_ENV=production`.
 | VAP `jumptotech-protect-managed-resources` (existing) | lab ServiceAccounts, managed namespaces | UPDATE/DELETE of any object labelled managed — now including the `default` ServiceAccount |
 | VAP `jumptotech-deny-clusterrole-bindings` (existing) | lab ServiceAccounts, managed namespaces | a RoleBinding to a ClusterRole |
 | VAP `jumptotech-deny-service-external-ips` | Service CREATE/UPDATE in managed namespaces; every caller | a non-empty `spec.externalIPs` (CVE-2020-8554: kube-proxy on every node captures traffic to that IP:port, including the API server's) |
+| VAP `jumptotech-bound-namespace-teardown` | every CREATE/UPDATE in managed namespaces | a lab ServiceAccount adding a finalizer (other than `kubernetes.io/pvc-protection` on a new PVC); any Pod with `terminationGracePeriodSeconds` above 60. Either kept a namespace Terminating, and so its session holding a capacity slot, indefinitely |
 | Student RBAC (existing) | the student token | any write to `namespaces`; `pods/ephemeralcontainers` |
 | Setup-manifest guard | lab YAML at load | workloads with host access or privilege (§7) |
 
