@@ -1,6 +1,6 @@
 # Computer Science Fundamentals — curriculum plan
 
-**Track id:** `cs` · **Status:** design only — no labs implemented, nothing committed
+**Track id:** `cs` · **Status:** implemented — CS-001..CS-013 ship; this is the plan they were built from
 **Branch:** `claude/cs-fundamentals` · **Scope:** `labs/cs/**` only
 **Classification:** **FOUNDATIONAL SKILL** — not a certification track (see
 [Official-source policy](#12-official-source-policy-compliance) and `SOURCES.md`)

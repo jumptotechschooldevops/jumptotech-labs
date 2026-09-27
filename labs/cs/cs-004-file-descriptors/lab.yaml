@@ -98,8 +98,9 @@ task:
     process holds is a numbered descriptor, and the kernel exposes them per
     process under `/proc`. Find the collector's entries and look at what each
     number points at — the entries are symbolic links, so a tool that follows a
-    link tells you the target. Three of them will be familiar from CS-001's
-    process contract. The rest are the problem.
+    link tells you the target. Three of them are the standard streams every
+    process starts with — 0, 1 and 2 (stdin, stdout and stderr). The rest are
+    the problem.
 
 
     Work out which *kind* of thing dominates the table. Counting is the only
