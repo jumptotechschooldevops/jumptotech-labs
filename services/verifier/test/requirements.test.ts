@@ -143,6 +143,7 @@ describe('verifier — Service checks (test requirement 18)', () => {
     name: 'accounts',
     namespace: NS,
     type: 'ClusterIP',
+    clusterIP: '10.96.0.10',
     selector: { app: 'accounts' },
     ports: [{ port: 80, targetPort: 80, protocol: 'TCP' }],
   };

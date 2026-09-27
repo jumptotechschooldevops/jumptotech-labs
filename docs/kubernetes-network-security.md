@@ -308,11 +308,14 @@ What production infrastructure must prove, beyond the probe:
   A credential lacking any of these fails closed: the track reports
   unavailable, or provisioning fails. The api's production credential is itself
   undecided (§11, D5).
-- **The verifier still reaches what it must.** Today no shipped lab uses
-  `service_http`/`service_tcp`, which dial a ClusterIP from the api process.
+- **The verifier still reaches what it must.** No shipped lab uses
+  `service_http`/`service_tcp`, which dial a ClusterIP from the api process:
+  the api has no route to the Service CIDR, so those checks could never pass
+  (K8S-003, NET-024 and NET-025 used them until 2026-09-27), and
+  `npm run validate:labs` now refuses them (`UNROUTABLE_SERVICE_PROBE`).
   Traffic from outside the pod network into a session is denied by
-  default-deny, so any future lab that needs it needs an explicit, reviewed
-  ingress allowance.
+  default-deny, so any future lab that needs a real request needs an explicit,
+  reviewed design — an in-namespace probe, not a route from the api.
 
 ---
 

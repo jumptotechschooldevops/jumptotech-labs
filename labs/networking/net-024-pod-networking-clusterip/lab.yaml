@@ -129,12 +129,14 @@ requirements:
     min_ready: 2
     label: Service has two ready backends
 
-  - type: service_http
-    service: ledger-api
-    port: 80
-    path: /
-    expected_status: 200
-    label: Application responds through the Service
+  # Selector, port mapping and two ready backends above are what make a
+  # request through the Service work; this adds that it has an address of its
+  # own. A request to the ClusterIP cannot be the check: the api has no route
+  # to the cluster's Service CIDR, so it could never pass on the platform.
+  - type: service_headless
+    name: ledger-api
+    expected: false
+    label: The Service has a stable cluster address of its own
 
 hints:
   - level: 1
