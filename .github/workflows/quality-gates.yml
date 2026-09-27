@@ -556,6 +556,63 @@ jobs:
           docker ps -aq --filter label=jumptotech.io/managed=true | xargs -r docker rm -f || true
           docker network ls -q --filter name=jtt-net- | xargs -r docker network rm || true
 
+  # --- Every container-backed lab, as a student starts it ------------------
+  #
+  # The per-lab suites walk a handful of labs end to end; this walks all of the
+  # Linux, Terraform, Ansible and CI/CD labs through Start → Check → Reset →
+  # Check → End Lab on a real daemon, and solves the ones it has a solution for.
+  # It catches what no fake can: a seed that fails on the image it really runs
+  # on, setup verification that never holds, a lab that begins solved, a Reset
+  # that does not restore the start, and an End Lab that leaves a container.
+  # Its own runner, because it runs five sessions at once.
+  catalog-runtime:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      RUNTIME_OWNER_ID: ci-${{ github.run_id }}-catalog
+      JTT_TEST_RUN_ID: cicat${{ github.run_id }}
+      RUN_INTEGRATION_TESTS: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build the sandbox images
+        run: npm run sandbox:build
+
+      - name: Every container-backed lab
+        run: |
+          npx tsx test-support/strict-vitest.ts test/catalog-runtime-integration.test.ts \
+            --root apps/api
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker ps -a
+          docker network ls
+
+      - name: Leaked sandboxes
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/managed=true \
+            | xargs -r docker inspect -f '{{.Name}} {{.Config.Image}}' || true
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker ps -aq --filter label=jumptotech.io/managed=true | xargs -r docker rm -f || true
+          docker network ls -q --filter name=jtt-net- | xargs -r docker network rm || true
+
   # --- Networking (NET-004 … NET-008 and the NET_RAW boundary) --------------
   #
   # Its own job rather than a step in `sandbox-integration`, because the thing
