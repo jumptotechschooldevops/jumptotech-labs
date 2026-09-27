@@ -683,6 +683,15 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Every Docker-track lab, not only 009 … 014: it starts, does not begin
+      # solved, resets to exactly its starting grades, and End Lab removes the
+      # sandbox and its data volume. Sequential inside, like the loop above.
+      - name: Every Docker-track lab starts, begins unsolved, resets and ends
+        run: |
+          npx tsx test-support/strict-vitest.ts test/docker-catalog-sweep-integration.test.ts \
+            --root services/lab-orchestrator \
+            --testTimeout=1200000 --hookTimeout=900000
+
       - name: Diagnostics
         if: failure()
         run: |
