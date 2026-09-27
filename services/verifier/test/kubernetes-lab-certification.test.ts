@@ -147,7 +147,7 @@ describe('K8S-003 — a Service with a stable cluster address', () => {
   it('fails a headless Service, which reports type ClusterIP but has no address of its own', async () => {
     // Before: `kubectl create service clusterip accounts --clusterip="None" --tcp=80:80`
     // — the second example in `--help` — passed every check.
-    expect(await graded('None')).toEqual(['The Service answers requests on its stable cluster address']);
+    expect(await graded('None')).toEqual(['The Service has a stable cluster address of its own']);
   });
 });
 
