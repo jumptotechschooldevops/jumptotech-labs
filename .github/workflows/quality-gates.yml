@@ -426,6 +426,17 @@ jobs:
           npx tsx test-support/strict-vitest.ts test/labs-integration.test.ts \
             --root services/lab-orchestrator
 
+      # Every Kubernetes lab, not only the ones walked to a PASS above: it
+      # starts, does not begin solved, resets to exactly its starting grades,
+      # and End Lab removes its namespace.
+      - name: Every Kubernetes lab starts, begins unsolved, resets and ends
+        env:
+          RUN_INTEGRATION_TESTS: '1'
+          KUBECONFIG: infrastructure/kind/generated/kubeconfig-host.yaml
+        run: |
+          npx tsx test-support/strict-vitest.ts test/k8s-catalog-sweep-integration.test.ts \
+            --root services/lab-orchestrator
+
       # BETA-P0-015. The steps above prove the NetworkPolicy objects exist; a
       # cluster accepts those whether or not anything enforces them. This proves
       # enforcement by connection attempts, each denial paired with a negative
