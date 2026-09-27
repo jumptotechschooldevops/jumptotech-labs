@@ -104,6 +104,20 @@ set -e
 printf '[web]\nnode1\nnode2\n' > inventory.ini
 ansible web -m ping
 `,
+  // Each answer replaced in place, the seeded header comment left as it is.
+  'AWS-001': `
+set -e
+cd /home/student/aws-incident
+sed -i \\
+  -e 's/^CAPTURE_1_SOURCE=.*/CAPTURE_1_SOURCE=environment_variables/' \\
+  -e 's/^CAPTURE_2_SOURCE=.*/CAPTURE_2_SOURCE=credentials_file/' \\
+  -e 's/^CAPTURE_3_SOURCE=.*/CAPTURE_3_SOURCE=custom_process/' \\
+  -e 's/^ARN_1=.*/ARN_1=valid/' -e 's/^ARN_2=.*/ARN_2=invalid/' -e 's/^ARN_3=.*/ARN_3=valid/' \\
+  -e 's/^ARN_4=.*/ARN_4=invalid/' -e 's/^ARN_5=.*/ARN_5=invalid/' \\
+  findings.env
+grep -q '^# Replace every FILL_ME' findings.env
+sed -i 's/^\\[profile reconciliation\\]$/[reconciliation]/' deploy/credentials
+`,
   'CICD-001': `
 set -e
 mkdir -p ci
