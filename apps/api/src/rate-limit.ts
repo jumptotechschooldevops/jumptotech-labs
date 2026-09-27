@@ -43,6 +43,19 @@ export const LEARNING_PATH_RATE_LIMIT: RateLimitPolicy = { limit: 600, windowMs:
  */
 export const SANDBOX_WRITE_RATE_LIMIT: RateLimitPolicy = { limit: 20, windowMs: 60_000 };
 
+/**
+ * Check — verifying a lab.
+ *
+ * A check is dozens of reads against the sandbox, run in this process, and a
+ * write to the attempt. One at a time per session was already enforced; how
+ * many in a row was not, and a loop re-asking as each answer arrived ran about
+ * a hundred a second against a fake runtime — against a real one, a student's
+ * sandbox read without pause for as long as the script ran. The browser
+ * disables Verify while a check runs, and the release gate's own polling asks
+ * every three seconds, so 40 a minute is invisible to both. Per student.
+ */
+export const CHECK_RATE_LIMIT: RateLimitPolicy = { limit: 40, windowMs: 60_000 };
+
 /** Budget key: the client address. IPv6 is grouped by /56, so one host cannot mint fresh budgets. */
 export const byClientAddress = (req: Request): string => ipKeyGenerator(req.ip ?? '');
 

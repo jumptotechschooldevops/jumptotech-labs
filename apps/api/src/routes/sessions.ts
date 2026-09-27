@@ -124,6 +124,8 @@ export interface SessionRoutesDeps {
    * Optional so routers composed directly in tests need none.
    */
   sandboxWriteLimiter?: RequestHandler;
+  /** The per-student budget for Check. Optional, like the one above. */
+  checkLimiter?: RequestHandler;
 }
 
 /** Stand-in when no limiter is composed. */
@@ -571,7 +573,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   const checksInFlight = new Set<string>();
 
   // POST /api/sessions/:sessionId/check ------------------------------------
-  router.post('/:sessionId/check', asyncRoute(async (req, res) => {
+  router.post('/:sessionId/check', deps.checkLimiter ?? noLimit, asyncRoute(async (req, res) => {
     const allowed = await guard(req, res, 'session:check');
     if (!allowed) return;
     let session: LabSession;
