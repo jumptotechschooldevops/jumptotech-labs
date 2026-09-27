@@ -323,6 +323,29 @@ export function brokerTlsOptions(target: { ca?: string }): BrokerClientTlsOption
 }
 
 /**
+ * Why a broker request never got an answer, in words safe for any log.
+ *
+ * The global `fetch` reports every connection-level failure (refused, reset,
+ * a keep-alive socket closed under the request) as the same
+ * `TypeError: fetch failed` and puts the reason on `error.cause`. That message
+ * alone cannot tell a broker that is down from a connection reset on a loaded
+ * host. The innermost cause's `code` is appended, and only when it is a plain
+ * token such as `ECONNRESET` or `UND_ERR_SOCKET`: the cause's own message
+ * names the broker's address, which does not belong in a session's reason.
+ */
+export function describeTransportFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  let code: string | undefined;
+  let cause: unknown = error instanceof Error ? error.cause : undefined;
+  for (let depth = 0; cause && depth < 4; depth += 1) {
+    const candidate = (cause as { code?: unknown }).code;
+    if (typeof candidate === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(candidate)) code = candidate;
+    cause = cause instanceof Error ? cause.cause : undefined;
+  }
+  return code ? `${message} (${code})` : message;
+}
+
+/**
  * A `fetch` for one broker.
  *
  * Plain `http://` uses the global `fetch`. `https://` goes through
