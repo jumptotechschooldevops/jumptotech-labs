@@ -23,7 +23,7 @@ Companion documents: [incident troubleshooting](incident-troubleshooting.md),
 ║  /metrics (Bearer)   /livez (open)   /readyz (open)                 ║
 ╚═══════╪═════════════════════╪══════════════════════╪═══════════════╝
         └─────────────────────┴──────────────────────┘
-                              │ scrape 15s, loopback only
+                              │ scrape 15s, compose network only
                    ┌──────────▼──────────┐
                    │ Prometheus  :9090   │──► Alertmanager :9093
                    └──────────┬──────────┘
@@ -52,17 +52,26 @@ surface entirely, so there is no preflight and no origin list to get wrong.
 
 ## 2. Exposure model
 
-| Surface | Bind | Auth | Reachable from a browser? |
+| Surface | Host publication | Auth | Reachable from a browser? |
 |---|---|---|---|
-| `/metrics` | 127.0.0.1 | `Authorization: Bearer`, constant-time | **No** |
-| `/livez`, `/readyz` | 127.0.0.1 | none | No |
-| Prometheus :9090 | 127.0.0.1 | none | No |
-| Alertmanager :9093 | 127.0.0.1 | none | No |
+| `/metrics` | 127.0.0.1 (development overlay); none in production | `Authorization: Bearer`, constant-time | **No** |
+| `/livez`, `/readyz` | 127.0.0.1 (development overlay); none in production | none | No |
+| Prometheus :9090 | 127.0.0.1 (development); none in production | none | No |
+| Alertmanager :9093 | 127.0.0.1 (development); none in production | none | No |
 | Grafana :3001 | 127.0.0.1 | admin password; anonymous **off** | No |
 
-Three independent gates on `/metrics`: a port nginx cannot route to, a loopback
-bind, and a constant-time bearer check. Any one would do; all three is this
-repository's established idiom.
+"Host publication" is the `ports:` entry, which is what a browser or another
+machine could reach. Inside its container the second listener binds
+`OBSERVABILITY_HOST`, default `0.0.0.0` (`services/observability/src/config.ts`),
+because Prometheus scrapes `api:9400`, `terminal:9401` and `sandboxd:9402` over
+the compose network; it is not a loopback bind. In production
+(`docker-compose.production.yml`, `ports: !reset []`) none of the three ports is
+published at all, and Prometheus and Alertmanager listen on 127.0.0.1 inside
+their own network namespace (§9.1).
+
+Three independent gates on `/metrics`: a port nginx cannot route to, a port the
+host publishes on loopback at most, and a constant-time bearer check. Any one
+would do; all three is this repository's established idiom.
 
 `Bearer` rather than the `x-internal-secret` used elsewhere, because Prometheus
 can supply it from `authorization.credentials_file` and cannot supply an

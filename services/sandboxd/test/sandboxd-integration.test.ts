@@ -83,6 +83,9 @@ async function capable(): Promise<string | null> {
   return null;
 }
 
+// Each test calls `context.skip` when the probe failed, never `return`: vitest counts a
+// returned test as passed, so a host with no PTY (macOS) reported 7 passes having
+// run nothing, and strict-vitest could not tell.
 let skipReason: string | null = 'not probed';
 let server: Server | undefined;
 let brokerUrl = '';
@@ -250,8 +253,8 @@ async function attach(sessionId: string): Promise<{
 }
 
 describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('sandboxd against a real runtime', () => {
-  it('creates a sandbox through the broker and stamps its own ownership', async () => {
-    if (skipReason) return;
+  it('creates a sandbox through the broker and stamps its own ownership', async (context) => {
+    if (skipReason) context.skip(skipReason);
 
     const created = await client.create(specFor(SESSION_A));
     expect(created.name).toBe(refFor(SESSION_A));
@@ -264,8 +267,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('sandboxd against a re
     expect(onDaemon?.state).toBe('running');
   }, 180_000);
 
-  it('opens a real shell in it, and the shell is the sandbox user', async () => {
-    if (skipReason) return;
+  it('opens a real shell in it, and the shell is the sandbox user', async (context) => {
+    if (skipReason) context.skip(skipReason);
 
     const shell = await attach(SESSION_A);
     expect(shell.first).toMatchObject({ type: 'attached', sandboxRef: refFor(SESSION_A) });
@@ -292,8 +295,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('sandboxd against a re
     shell.close();
   }, 180_000);
 
-  it('writes a file the verifier path can read back through the same runtime', async () => {
-    if (skipReason) return;
+  it('writes a file the verifier path can read back through the same runtime', async (context) => {
+    if (skipReason) context.skip(skipReason);
 
     const shell = await attach(SESSION_A);
     await shell.run("printf 'graded\\n' > /home/student/answer.txt");
@@ -309,8 +312,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('sandboxd against a re
     expect(read.stdout).toContain('graded');
   }, 180_000);
 
-  it("will not attach one session to another session's sandbox", async () => {
-    if (skipReason) return;
+  it("will not attach one session to another session's sandbox", async (context) => {
+    if (skipReason) context.skip(skipReason);
 
     await client.create(specFor(SESSION_B));
 
@@ -329,15 +332,15 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('sandboxd against a re
     b.close();
   }, 240_000);
 
-  it('refuses a session id whose sandbox is not on this runtime', async () => {
-    if (skipReason) return;
+  it('refuses a session id whose sandbox is not on this runtime', async (context) => {
+    if (skipReason) context.skip(skipReason);
     const orphan = await attach('sess-9999999999999999');
     expect(orphan.first).toMatchObject({ type: 'error', code: 'SANDBOX_NOT_FOUND' });
     orphan.close();
   }, 60_000);
 
-  it('refuses to remove a container it does not own, and leaves it running', async () => {
-    if (skipReason) return;
+  it('refuses to remove a container it does not own, and leaves it running', async (context) => {
+    if (skipReason) context.skip(skipReason);
 
     /*
      * A validly *named* sandbox created outside this broker's ownership — the
@@ -371,8 +374,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('sandboxd against a re
     }
   }, 180_000);
 
-  it('destroys a sandbox on request, and destroying it twice is success', async () => {
-    if (skipReason) return;
+  it('destroys a sandbox on request, and destroying it twice is success', async (context) => {
+    if (skipReason) context.skip(skipReason);
 
     await client.remove(refFor(SESSION_B));
     expect(await realRuntime.inspect(refFor(SESSION_B))).toBeNull();

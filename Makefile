@@ -7,7 +7,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 #
 # The base file is the Kubernetes track and no container runtime anywhere. The
 # runtime overlay adds `sandboxd` — the only process given a Docker socket — and
-# with it every remaining track — all 114 labs. That is the default because a
+# with it every remaining track — the whole catalogue. That is the default because a
 # stack that can only run a sixth of the catalogue is not the one anybody wants.
 #
 # The Docker track is in that overlay too: `sandboxd` brokers its
@@ -21,7 +21,7 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-setup: ## First-time setup: .env + kind cluster
+setup: ## First-time setup: .env secrets + RUNTIME_OWNER_ID, scrape token, kind cluster, sandbox images (:latest)
 	@$(MAKE) secrets
 	@# One runtime owner for the whole stack: the api and sandboxd read this same
 	@# value, and compose refuses to start without it. Not a secret. An existing
@@ -127,7 +127,12 @@ rebuild: ## Rebuild and restart the development stack after source changes (refu
 verify-api-image: ## Confirm the running API container has current composition wiring
 	@bash scripts/verify-api-image-composition.sh
 
-down: ## Stop the application
+# On a production checkout this would remove every platform container from the
+# development file list: the site goes offline and the monitoring containers are
+# left running, orphaned. The production host stops with `prod` (§1 of
+# docs/runbooks/private-beta-operations.md), so this refuses there.
+down: ## Stop the development stack, keeping student progress (refused on a production checkout; use `prod`)
+	@bash scripts/refuse-on-production.sh down "every platform container of the running site (it goes offline; monitoring is left orphaned)"
 	@$(COMPOSE) down
 
 logs: ## Tail service logs

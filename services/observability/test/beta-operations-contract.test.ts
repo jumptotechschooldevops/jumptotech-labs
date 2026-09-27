@@ -160,6 +160,9 @@ describe('runbook commands run against the production stack', () => {
     'docs/development/production-host-readiness.md',
     'docs/releases/private-beta-release-gate.md',
     'docs/releases/production-host-evidence-template.md',
+    // Linked from runbooks/README.md as the diagnostic layer; its log filters
+    // were bare `docker compose` and so could never show sandboxd.
+    'docs/incident-troubleshooting.md',
   ];
 
   /** Every line an operator might paste: fenced code, and inline `code` spans. */

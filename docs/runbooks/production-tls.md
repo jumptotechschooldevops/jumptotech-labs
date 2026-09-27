@@ -167,10 +167,13 @@ Two places to run it, ideally both:
 For example, a cron entry. The alert command is **DECISION REQUIRED**:
 
 ```cron
-17 */6 * * * cd /srv/jumptotech-labs && npm run --silent tls:check -- --origin https://<host> --cert-dir infrastructure/docker/nginx/tls >/var/log/jtt-tls-check.log 2>&1 || <alert command>
+17 */6 * * * cd /srv/jumptotech-labs && npm run --silent tls:check -- --origin https://<host> --cert-dir infrastructure/docker/nginx/tls >>/var/log/jumptotech/tls-check.log 2>&1 || <alert command>
 ```
 
-It needs Node 20+ and `npm ci` in that checkout. `--json` gives
+It needs Node 22 (`.nvmrc`; `package.json` requires `>=22`) and `npm ci` in
+that checkout. `/var/log/jumptotech` is the cron log directory the host procedure
+creates, owned by the operator account
+([production-host-readiness.md §5.4](../development/production-host-readiness.md#54-filesystem-layout)). `--json` gives
 machine-readable output. `--warn-days` and `--critical-days` change the windows.
 It never prints key material.
 

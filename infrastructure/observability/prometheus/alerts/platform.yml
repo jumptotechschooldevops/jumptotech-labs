@@ -5,7 +5,7 @@
 #             Pages. Must have a runbook whose step 3 restores service.
 #   warning   degraded, or heading somewhere bad. Ticket, not a page.
 #
-# Every rule carries `runbook_url`. `alerts-have-runbooks.test.ts` fails the
+# Every rule carries `runbook_url`. `alerts.test.ts` (services/observability) fails the
 # build if one points at a file that does not exist — an alert whose runbook is
 # a dead link is worse than no runbook, because it costs an operator the two
 # minutes they spend looking for it.

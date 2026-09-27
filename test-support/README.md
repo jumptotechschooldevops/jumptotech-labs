@@ -115,6 +115,25 @@ RUN_DOCKER_INTEGRATION_TESTS=1 npm run test:integration:docker
 RUN_DB_TESTS=1 TEST_DATABASE_URL=... npm run test:db
 ```
 
+Those npm scripts, except `test:db` (strict since the CI/CD audit), run a
+plain `vitest run`, which exits 0 when every test skipped — and an integration suite skips itself whenever its infrastructure is
+missing (no kubeconfig, daemon, image, PTY or database). **A green run is only
+evidence if the `Tests` line shows nothing skipped.** To make a skip a failure,
+run the same files through [`strict-vitest.ts`](./strict-vitest.ts), as every
+runtime CI job does:
+
+```bash
+RUN_INTEGRATION_TESTS=1 KUBECONFIG=infrastructure/kind/generated/kubeconfig-host.yaml \
+  npx tsx test-support/strict-vitest.ts test/integration.test.ts --root services/lab-orchestrator
+```
+
+It fails on any test that did not pass (skipped, todo) and on a run in which no
+test ran. A suite that cannot run must therefore call `context.skip(reason)`,
+never `return` — vitest counts a returned test as passed, and
+`services/observability/test/suite-skip-semantics.test.ts` fails the
+build for it. The full matrix is
+[docs/development/testing.md](../docs/development/testing.md).
+
 Two worktrees running integration at once is safe **provided** each pins its
 own id and its own images:
 
@@ -122,12 +141,15 @@ own id and its own images:
 JTT_TEST_RUN_ID=cs001 \
 LINUX_SANDBOX_IMAGE=jumptotech/lab-linux:cs001-e2e \
 TERRAFORM_SANDBOX_IMAGE=jumptotech/lab-terraform:cs001-e2e \
+ANSIBLE_SANDBOX_IMAGE=jumptotech/lab-ansible:cs001-e2e \
+CICD_SANDBOX_IMAGE=jumptotech/lab-cicd:cs001-e2e \
 RUN_INTEGRATION_TESTS=1 npm run test:integration
 ```
 
-Both image variables are required together: `scripts/sandbox-build.sh` always
-builds both, so setting only the Linux one overwrites the shared
-`jumptotech/lab-terraform:latest`.
+All four image variables are required together — `LINUX_`, `TERRAFORM_`,
+`ANSIBLE_` and `CICD_SANDBOX_IMAGE`: `scripts/sandbox-build.sh` always builds all
+four, and refuses to start when only some are set, because an unset one would be
+written to its shared `:latest` tag.
 
 ## Known limitation
 

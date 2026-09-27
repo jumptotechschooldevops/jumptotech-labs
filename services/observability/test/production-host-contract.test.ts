@@ -493,6 +493,9 @@ describe('the gates that prove this contract actually run', () => {
     for (const [target, destructive] of [
       ['clean', 'docker compose down -v'],
       ['sandbox-clean', 'scripts/sandbox-clean.sh'],
+      // Not destructive of data, but it takes the production site offline from
+      // the development file list and leaves monitoring orphaned.
+      ['down', '$(COMPOSE) down'],
     ] as const) {
       const start = makefile.indexOf(`\n${target}: ## `);
       expect(start, target).toBeGreaterThan(-1);

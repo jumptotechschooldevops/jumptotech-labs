@@ -74,14 +74,22 @@ The thing PLATFORM-003 changed most about debugging. Before it, "the API logged
 an error" and "sandboxd logged an error" were two observations; now they are one
 story.
 
+These commands use `prod`, the production compose command defined in
+[runbooks/private-beta-operations.md §1](runbooks/private-beta-operations.md#1-the-production-command).
+A bare `docker compose` reads only `docker-compose.yml`, which has no
+`sandboxd`, so its logs could never show the `[sandboxd]` lines below. On a
+development stack started with `make up`, use `make logs`, or put
+`docker compose -f docker-compose.yml -f docker-compose.runtime.yml` where these
+say `prod`.
+
 ```bash
 # From a student's report — the id is returned in the x-request-id response header
-docker compose logs --no-log-prefix | grep '"requestId":"<id>"' | jq -s 'sort_by(.ts)'
+prod logs --no-log-prefix | grep '"requestId":"<id>"' | jq -s 'sort_by(.ts)'
 
 # From a symptom: find a recent failure, then follow its id
-RID=$(docker compose logs --no-log-prefix \
+RID=$(prod logs --no-log-prefix \
       | grep '"event":"lab.start.failed"' | tail -1 | jq -r .requestId)
-docker compose logs --no-log-prefix | grep "\"requestId\":\"$RID\"" | jq -s 'sort_by(.ts)'
+prod logs --no-log-prefix | grep "\"requestId\":\"$RID\"" | jq -s 'sort_by(.ts)'
 ```
 
 A real trace looks like this:
@@ -102,14 +110,14 @@ supplying its own can pollute its own correlation and nothing else.
 
 ```bash
 # Everything security-relevant
-docker compose logs --no-log-prefix | grep '"event":"security.event"' | jq .
+prod logs --no-log-prefix | grep '"event":"security.event"' | jq .
 
 # Authorization denials, grouped by user
-docker compose logs --no-log-prefix | grep '"authorizationResult":"denied-not-owner"' \
+prod logs --no-log-prefix | grep '"authorizationResult":"denied-not-owner"' \
   | jq -r '[.userId, .action] | @tsv' | sort | uniq -c | sort -rn
 
 # Every error, any service
-docker compose logs --no-log-prefix | jq -c 'select(.level=="error")'
+prod logs --no-log-prefix | jq -c 'select(.level=="error")'
 ```
 
 ---

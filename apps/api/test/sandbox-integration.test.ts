@@ -99,6 +99,9 @@ terraform plan -no-color -input=false
 terraform apply -auto-approve -no-color -input=false
 `;
 
+// A test that finds no runtime calls `context.skip`, never `return`: vitest counts a
+// returned test as passed, so a runner with no Docker or no image reported 13
+// passes having checked nothing, and strict-vitest could not tell.
 let enabled = false;
 let skipReason = '';
 const runtime = new DockerCliRuntime();
@@ -220,8 +223,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
    * trade-off is pinned honestly — everything relaxed is named, and everything
    * still standing is asserted against Docker rather than against a fake.
    */
-  it('creates a container with no network, no host mounts and bounded resources', async () => {
-    if (!enabled) return;
+  it('creates a container with no network, no host mounts and bounded resources', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app, sessions } = await harness();
     const session = await startLab(app, 'LINUX-001');
 
@@ -262,8 +265,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     await endLab(app, session.sessionId);
   }, 180_000);
 
-  it('runs real Linux commands as an unprivileged user with no daemon access', async () => {
-    if (!enabled) return;
+  it('runs real Linux commands as an unprivileged user with no daemon access', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app } = await harness();
     const session = await startLab(app, 'LINUX-001');
 
@@ -321,8 +324,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     await endLab(app, session.sessionId);
   }, 180_000);
 
-  it('fails LINUX-001 before the work and passes it after, on real state', async () => {
-    if (!enabled) return;
+  it('fails LINUX-001 before the work and passes it after, on real state', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app } = await harness();
     const session = await startLab(app, 'LINUX-001');
 
@@ -345,8 +348,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     await endLab(app, session.sessionId);
   }, 180_000);
 
-  it('restores the baseline on Reset and destroys the sandbox on End', async () => {
-    if (!enabled) return;
+  it('restores the baseline on Reset and destroys the sandbox on End', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app } = await harness();
     const session = await startLab(app, 'LINUX-001');
 
@@ -378,8 +381,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     expect(await runtime.inspect(session.sandboxRef)).toBeNull();
   }, 240_000);
 
-  it('keeps two students in two sandboxes', async () => {
-    if (!enabled) return;
+  it('keeps two students in two sandboxes', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app } = await harness();
     const a = await startLab(app, 'LINUX-001', 'student-a');
     const b = await startLab(app, 'LINUX-001', 'student-b');
@@ -411,8 +414,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     await endLab(app, b.sessionId, 'student-b');
   }, 240_000);
 
-  it('reclaims an expired sandbox without anyone asking', async () => {
-    if (!enabled) return;
+  it('reclaims an expired sandbox without anyone asking', async (context) => {
+    if (!enabled) context.skip(skipReason);
     let now = Date.now();
     const { app, sessions, providers } = await harness({ now: () => now });
     const session = await startLab(app, 'LINUX-001');
@@ -437,8 +440,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
     expect((await sessions.get(session.sessionId))?.status).toBe('EXPIRED');
   }, 240_000);
 
-  it('refuses to delete a container it does not own', async () => {
-    if (!enabled) return;
+  it('refuses to delete a container it does not own', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { providers } = await harness();
     const linux = providers.peek('linux')!;
     /*
@@ -482,8 +485,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Linux sandbox', 
 });
 
 describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbox', () => {
-  it('ships a working terraform CLI and the lab starter files', async () => {
-    if (!enabled) return;
+  it('ships a working terraform CLI and the lab starter files', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app } = await harness();
     const session = await startLab(app, 'TF-001');
 
@@ -497,8 +500,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
     await endLab(app, session.sessionId);
   }, 240_000);
 
-  it('runs init, plan and apply offline, and passes TF-001 on real state', async () => {
-    if (!enabled) return;
+  it('runs init, plan and apply offline, and passes TF-001 on real state', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app } = await harness();
     const session = await startLab(app, 'TF-001');
 
@@ -522,8 +525,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
     await endLab(app, session.sessionId);
   }, 300_000);
 
-  it('restores the starter configuration on Reset and removes the sandbox on End', async () => {
-    if (!enabled) return;
+  it('restores the starter configuration on Reset and removes the sandbox on End', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app } = await harness();
     const session = await startLab(app, 'TF-001');
 
@@ -543,8 +546,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
     expect(await runtime.inspect(session.sandboxRef)).toBeNull();
   }, 300_000);
 
-  it('runs a Linux and a Terraform sandbox side by side, isolated', async () => {
-    if (!enabled) return;
+  it('runs a Linux and a Terraform sandbox side by side, isolated', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app } = await harness();
     // Two students: one student may hold only one live lab (see the capacity
     // suite below), so side by side means side by side for different people.
@@ -576,8 +579,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('real Terraform sandbo
  * and that the containers counted are the containers running.
  */
 describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('beta session capacity on real sandboxes', () => {
-  it('refuses the same student a second live lab with 429, and lets them start again after End', async () => {
-    if (!enabled) return;
+  it('refuses the same student a second live lab with 429, and lets them start again after End', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app, sessions } = await harness();
     expect(sessions.lifetimes).toMatchObject({ maxActiveSessions: 5, maxActiveSessionsPerStudent: 1 });
 
@@ -599,8 +602,8 @@ describe.runIf(process.env.RUN_INTEGRATION_TESTS === '1')('beta session capacity
     await endLab(app, next.sessionId, 'alice');
   }, 300_000);
 
-  it('runs five students at MAX_ACTIVE_SESSIONS=5 and refuses a sixth with 503', async () => {
-    if (!enabled) return;
+  it('runs five students at MAX_ACTIVE_SESSIONS=5 and refuses a sixth with 503', async (context) => {
+    if (!enabled) context.skip(skipReason);
     const { app, sessions } = await harness();
     const students = ['student-1', 'student-2', 'student-3', 'student-4', 'student-5'];
 

@@ -98,7 +98,7 @@ Follow production-host-readiness.md §21. What decides the route back:
   restore `.env.previous`, `prod up -d --build --wait --wait-timeout 900`).
 - **B applied a migration:** A now **refuses to start** on that database
   (`The database records migration(s) this release does not ship: …`; added by
-  this audit). That refusal is the rollback boundary: restore the `pre-upgrade`
+  this audit). That refusal is the rollback boundary: restore the `pre-migration`
   archive, or run A on the newer schema as an explicit decision with
   `DATABASE_ALLOW_NEWER_SCHEMA=true` (§21.2).
 - `prod up --wait` exiting non-zero **is** the health failure. The smoke's
@@ -232,7 +232,7 @@ The **targets** are an **OPERATOR DECISION REQUIRED**. postgres-backup-restore.m
 | backup frequency (one cron line a day today) | whether a replacement host exists or must be provisioned (D2) |
 | whether the newest archive left the host before it was lost (D7) | fetching the archive from off-host storage (D7) |
 | whether backup failures reach a person (D6) — a silently failing job turns a 24 h RPO into weeks | image builds (`prod up --build`), `cluster:up`, sandbox images |
-| a `pre-upgrade` / `pre-restore` archive before planned changes | restore time: 2 s for 27 KB in the drill; production size unmeasured |
+| a `pre-migration` / `pre-restore` archive before planned changes | restore time: 2 s for 27 KB in the drill; production size unmeasured |
 | no WAL archiving or point-in-time recovery (not built) | the validation steps (§5 13–18) and a person available with Docker access and the secrets |
 
 ## 7. Recovery evidence

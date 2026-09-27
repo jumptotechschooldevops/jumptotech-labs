@@ -27,7 +27,7 @@ Two workflows run on every pull request (any target branch for Quality gates,
   cluster and image store, torn down afterwards. Every object they create is
   named after a run-scoped `RUNTIME_OWNER_ID` / `JTT_TEST_RUN_ID`, and every
   cleanup filters on it.
-- **Runtime suites run strictly.** They go through
+- **Runtime suites run strictly — all but one.** They go through
   [`test-support/strict-vitest.ts`](../../test-support/strict-vitest.ts), not
   bare `vitest run`: an integration suite skips itself when its infrastructure is
   missing, and in the job that exists to provide that infrastructure a skip
@@ -35,7 +35,10 @@ Two workflows run on every pull request (any target branch for Quality gates,
   reached through a Make target or npm script (`make test-db` →
   `npm run test:db`); the wiring test expands them and refuses a bare
   `vitest run` in any runtime job. Unit runs (`npm test`) are not strict,
-  because several suites skip there on purpose.
+  because several suites skip there on purpose. A suite that cannot run must
+  call `context.skip(reason)`, not `return`: vitest counts a returned test as
+  passed, which no runner can see; `suite-skip-semantics.test.ts`
+  enforces it. Local commands and what each one needs: [testing.md](testing.md).
 - **Every step runs with `pipefail`.** `defaults.run.shell: bash` makes each
   `run:` block `bash -eo pipefail`; GitHub's default (`bash -e`) reports only
   the last command of a pipeline.
@@ -85,7 +88,7 @@ with `npm ci` on the Node version in `.nvmrc`.
 | `sandbox-integration` | Linux, Terraform, Ansible and CI/CD sandboxes against real images; every binary the providers exec exists in every image | `npm run sandbox:build` (use private tags — `README → Local development requirements`), then the job's lines | Docker | an image change; a provider exec path |
 | `catalog-runtime` | Every Linux, Terraform, Ansible and CI/CD lab starts on its real image, does not begin solved, resets to exactly its starting grades and leaves nothing behind on End Lab; labs with a known solution are solved to a PASS. Five sessions at once, one per student | `npm run sandbox:build` (private tags), then `RUN_INTEGRATION_TESTS=1 npx vitest run test/catalog-runtime-integration.test.ts --root apps/api` (add `-t LINUX-004` for one lab) | Docker | a seed or setup check that fails on the real image; a lab that begins solved; Reset or End Lab regressions |
 | `networking-integration` | NET-004…008 end to end; the NET_RAW capability is a closed set | the job's lines | Docker | network namespace timing, capability grant |
-| `docker-integration` | per-session Docker-in-Docker, mTLS isolation, DOCKER-009…014 | `npm run test:integration:docker` (+ the per-lab suites) | Docker that allows privileged containers; pulls `docker:27-dind` | dind start-up time; a lab verifier |
+| `docker-integration` | per-session Docker-in-Docker, mTLS isolation, DOCKER-009…014 | the job's strict lines (`npm run test:integration:docker` is the same core file, non-strict) | Docker that allows privileged containers; pulls `docker:27-dind` | dind start-up time; a lab verifier |
 | `terminal-integration` | the whole shell chain with a real PTY, in a container | `npm run cluster:up && make test-terminal-container` | Docker, kind | kubeconfig/cluster wiring |
 | `sandboxd-integration` | the broker's refusals against a real daemon and real PTYs | `make test-sandboxd-container` | Docker (the only job that mounts the socket) | broker scope refusal |
 | `tls-edge-integration` | the production TLS edge in the real web image: certificate gate, protocols, redirect, WebSocket, renewal | `make test-tls-edge` | Docker | nginx/openssl behaviour; test-only certificates |
@@ -209,7 +212,7 @@ provider, backups or capacity.
 | Which commit is deployed? | the host's checkout: `git rev-parse HEAD`. The services report `JTT_COMMIT` from `.env` in their start-up log line and the `jtt_build_info{commit=…}` metric; `make production-preflight` warns when it differs from HEAD. |
 | Which image corresponds to it? | images are built on the host from that checkout (`prod up --build`); there is no registry. `docker image inspect <image> --format '{{.Created}}'` against the checkout time. Images carry no revision label (follow-up below). |
 | Which CI run validated it? | `gh run list --commit <sha> --workflow "Quality gates"`. Every push to `main` now has a complete run. |
-| Which tests passed? | that run's job logs; each strict step fails if anything skipped, so a green step means every named test ran and passed. |
+| Which tests passed? | that run's job logs; each strict step fails if anything skipped, so a green step means every named test ran and passed, including `postgres-integration`'s `make test-db` (§1). |
 | Which configuration was expected? | `make production-config-check` (the real loaders against the resolved compose files) and the evidence file from §5. |
 
 **Follow-ups, not done here:** build the images with `JTT_COMMIT` as a build
