@@ -92,6 +92,8 @@ export interface ProviderMetricsHooks {
 export class ProviderRegistry {
   readonly #providers = new Map<LabProviderId, ProviderRegistration>();
   readonly #cache = new Map<LabProviderId, { at: number; status: ProviderStatus }>();
+  /** The probe currently running for each provider, which concurrent callers share. */
+  readonly #inFlight = new Map<LabProviderId, Promise<ProviderStatus>>();
   readonly #ttlMs: number;
   readonly #now: () => number;
   #metrics: ProviderMetricsHooks = {};
@@ -131,6 +133,7 @@ export class ProviderRegistry {
     }
     this.#providers.set(id, registration);
     this.#cache.delete(id);
+    this.#inFlight.delete(id);
     return this;
   }
 
@@ -229,6 +232,32 @@ export class ProviderRegistry {
     const cached = this.#cache.get(providerId);
     if (cached && this.#now() - cached.at < this.#ttlMs) return cached.status;
 
+    /*
+     * One probe per provider at a time.
+     *
+     * Every caller that finds the memo stale used to run its own probe, so a
+     * class opening the catalog together — each `GET /api/labs` asks every
+     * provider — paid for one full set of probes per request: two `docker`
+     * processes per container provider, an API round trip and the attestation
+     * read for Kubernetes. Callers arriving while a probe is in flight now
+     * join it. The answer is exactly as fresh as the one the first caller
+     * gets; nothing is served from before the probe began.
+     */
+    const pending = this.#inFlight.get(providerId);
+    if (pending) return pending;
+    const probe = this.#probe(providerId, registration, cached).finally(() => {
+      // Only this probe's own entry: `invalidate()` may have replaced it.
+      if (this.#inFlight.get(providerId) === probe) this.#inFlight.delete(providerId);
+    });
+    this.#inFlight.set(providerId, probe);
+    return probe;
+  }
+
+  async #probe(
+    providerId: LabProviderId,
+    registration: ProviderRegistration,
+    cached: { at: number; status: ProviderStatus } | undefined,
+  ): Promise<ProviderStatus> {
     const base = {
       providerId,
       implementation: registration.provider.name,
@@ -302,8 +331,15 @@ export class ProviderRegistry {
 
   /** Drop memoised availability, e.g. after an operator starts Docker. */
   invalidate(providerId?: string): void {
-    if (providerId && isLabProviderId(providerId)) this.#cache.delete(providerId);
-    else this.#cache.clear();
+    // A probe already running started before the invalidation, so the next
+    // caller must not join it: "ask again now" means a probe that starts now.
+    if (providerId && isLabProviderId(providerId)) {
+      this.#cache.delete(providerId);
+      this.#inFlight.delete(providerId);
+    } else {
+      this.#cache.clear();
+      this.#inFlight.clear();
+    }
   }
 }
 
