@@ -127,6 +127,26 @@ const LAB_IDS = CATALOG.all()
   .map((lab) => lab.id)
   .sort();
 
+const DOCKER_008_COMPOSE = `services:
+  api:
+    image: nginx:1.27-alpine
+    container_name: ledger-api
+    networks:
+      - ledger-net
+  worker:
+    image: alpine:3.20
+    container_name: ledger-worker
+    command: ["sleep", "infinity"]
+    environment:
+      LEDGER_API_URL: http://ledger-api
+    networks:
+      - ledger-net
+networks:
+  ledger-net:
+    name: ledger-net
+    driver: bridge
+`;
+
 /**
  * What a student does to solve a lab, for the labs this sweep walks to a PASS
  * (DOCKER-009 … 014 are solved in their own suites).
@@ -168,6 +188,54 @@ set -e
 printf 'LEDGER_BATCH_SIZE=500\n' > /tmp/statements.env
 docker run -d --name statements -e LEDGER_REGION=eu-west-1 -e LEDGER_MODE=batch --env-file /tmp/statements.env alpine:3.20 sleep 3600
 `,
+  },
+  // The Dockerfile is the student's workspace file and the build context the
+  // CLI sends; here the context is written inside the sandbox as well.
+  'DOCKER-004': {
+    daemon: `
+set -e
+mkdir -p /tmp/greeter
+cat > /tmp/greeter/message.txt <<'TXT'
+JumpToTech Bank — internal platform services
+Environment: lab
+Support: platform-team@jumptotech.invalid
+TXT
+cat > /tmp/greeter/Dockerfile <<'DOCKERFILE'
+FROM alpine:3.20
+WORKDIR /app
+COPY message.txt .
+RUN cp message.txt banner.txt
+CMD ["cat", "/app/banner.txt"]
+DOCKERFILE
+docker build -t jumptotech/greeter:1.0 /tmp/greeter
+docker run --name greeter jumptotech/greeter:1.0
+`,
+    workspace: {
+      Dockerfile:
+        'FROM alpine:3.20\nWORKDIR /app\nCOPY message.txt .\nRUN cp message.txt banner.txt\nCMD ["cat", "/app/banner.txt"]\n',
+    },
+  },
+  'DOCKER-006': {
+    daemon: `
+set -e
+docker network create --driver bridge ledger-net
+docker run -d --name ledger-api --network ledger-net nginx:1.27-alpine
+docker run -d --name ledger-worker --network ledger-net alpine:3.20 sleep 3600
+for i in 1 2 3 4 5 6 7 8 9 10; do docker exec ledger-worker wget -qO- http://ledger-api >/dev/null && break; sleep 1; done
+`,
+  },
+  // The worker added to the student's compose.yaml, and the stack brought up
+  // by Compose — the check reads Compose's own service labels.
+  'DOCKER-008': {
+    daemon: `
+set -e
+mkdir -p /tmp/stack
+cat > /tmp/stack/compose.yaml <<'YAML'
+${DOCKER_008_COMPOSE}YAML
+docker compose -f /tmp/stack/compose.yaml up -d
+docker compose -f /tmp/stack/compose.yaml ps
+`,
+    workspace: { 'compose.yaml': DOCKER_008_COMPOSE },
   },
   // Same name, image and command; only the container side of 3000 changes.
   'NET-022': {
