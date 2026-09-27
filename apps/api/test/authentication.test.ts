@@ -85,11 +85,7 @@ describe('the Authorization header', () => {
   it('says "authentication required" for a missing header, not "invalid"', () => {
     // A client with no credential needs to know to sign in; one with a bad
     // credential must not learn anything about why it failed.
-    try {
-      bearerToken(undefined);
-    } catch (error) {
-      expect((error as AuthError).code).toBe('AUTH_REQUIRED');
-    }
+    expect(() => bearerToken(undefined)).toThrow(expect.objectContaining({ code: 'AUTH_REQUIRED' }));
   });
 });
 

@@ -86,7 +86,7 @@ export interface AuthRuntimeConfig {
  * `AUTH_MODE=development` refuses to start rather than starting insecurely.
  */
 export function assertAuthModeAllowed(config: AuthRuntimeConfig): void {
-  if (config.mode === 'development' && config.nodeEnv === 'production') {
+  if (config.mode === 'development' && config.nodeEnv?.trim() === 'production') {
     throw new AuthError(
       'AUTH_MISCONFIGURED',
       'AUTH_MODE=development cannot be used when NODE_ENV=production: ' +

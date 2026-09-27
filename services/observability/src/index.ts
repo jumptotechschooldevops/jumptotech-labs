@@ -136,6 +136,7 @@ export {
 export {
   loadObservabilityConfig,
   assertScrapeTokenIsDistinct,
+  boolFromEnv,
   type ObservabilityConfig,
 } from './config.js';
 

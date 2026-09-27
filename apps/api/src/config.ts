@@ -424,9 +424,10 @@ export function databasePasswordOf(database: DatabaseConfig | null): {
 
 function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
   const raw = env[name];
-  if (!raw) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!raw || raw.trim() === '') return fallback;
+  // Digits only: `parseInt` alone read `2h` as 2 and `1e3` as 1.
+  const parsed = /^\s*[0-9]+\s*$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`Environment variable ${name} must be a positive integer, got '${raw}'`);
   }
   return parsed;
@@ -458,7 +459,7 @@ export function assertPublicOriginConfigured(options: {
   appUrl: string;
   looksLocal: boolean;
 }): void {
-  if (options.nodeEnv !== 'production' || !options.looksLocal) return;
+  if (options.nodeEnv.trim() !== 'production' || !options.looksLocal) return;
   throw new Error(
     `NODE_ENV=production but the public origin resolved to '${options.appUrl}'. ` +
       'A production deployment cannot serve OIDC callbacks, logout redirects or ' +
@@ -717,14 +718,13 @@ export function loadDockerSandboxPolicy(
 
 /** Persistence + development identity settings. */
 export function loadProgressConfig(env: NodeJS.ProcessEnv = process.env): ProgressConfig {
-  const nodeEnv = env.NODE_ENV ?? 'development';
   return {
     database: loadDatabaseConfig(env),
     autoMigrate: boolFromEnv(env, 'DATABASE_AUTO_MIGRATE', true),
     devStudentId: strFromEnv(env, 'DEV_STUDENT_ID', DEFAULT_DEV_STUDENT_ID),
     // Opt-in, and never on by default in production even if someone forgets.
     allowStudentHeader:
-      nodeEnv === 'production'
+      isProductionEnv(env)
         ? boolFromEnv(env, 'DEV_STUDENT_HEADER_ENABLED', false)
         : boolFromEnv(env, 'DEV_STUDENT_HEADER_ENABLED', true),
   };

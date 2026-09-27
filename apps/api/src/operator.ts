@@ -527,11 +527,22 @@ export function startOperatorSocket(options: {
   }
   return new Promise((resolve) => {
     const server = createServer(options.handler);
-    server.once('error', (error) => {
+    const failedToStart = (error: Error) => {
       logger.error('ops.operator_socket.failed', { err: error }, 'the operator socket is not available');
       resolve(null);
-    });
+    };
+    server.once('error', failedToStart);
     server.listen(socketPath, () => {
+      /*
+       * A listening server can still emit 'error' — an accept failing with
+       * EMFILE when the process is out of descriptors. The one-shot listener
+       * above would take the first and leave the next unhandled, which ends
+       * the api; from here on every one is logged instead.
+       */
+      server.off('error', failedToStart);
+      server.on('error', (error) => {
+        logger.error('ops.operator_socket.failed', { err: error }, 'the operator socket reported an error');
+      });
       try {
         chmodSync(socketPath, 0o600);
       } catch {

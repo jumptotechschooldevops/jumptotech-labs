@@ -16,6 +16,7 @@ import {
   SessionReaper,
 } from '@jumptotech/lab-orchestrator';
 import { buildIdentityResolver } from './auth/resolvers.js';
+import { authzDecisionLabels } from './auth/middleware.js';
 import { buildSandboxComposition } from './composition.js';
 import { OidcTokenVerifier } from './auth/oidc.js';
 import { InMemoryUserRepository, PostgresUserRepository } from './auth/users.js';
@@ -421,10 +422,7 @@ async function main(): Promise<void> {
      * somebody probing session ids from an ordinary bug.
      */
     authAudit: (event) => {
-      metrics.auth.authzDecisions.inc({
-        action: event.action,
-        result: event.authorizationResult,
-      });
+      metrics.auth.authzDecisions.inc(authzDecisionLabels(event));
       logger.info('authz.decision', {
         requestId: event.requestId,
         ...(event.authenticatedUserId ? { userId: event.authenticatedUserId } : {}),

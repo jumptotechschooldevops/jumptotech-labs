@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import {
+  ContainerRuntimeError,
   DEFAULT_SESSION_POLICY,
   GRANTABLE_CAPABILITIES,
   LINUX_SANDBOX_CAPABILITIES,
@@ -19,6 +20,7 @@ import {
   MAX_SANDBOX_READ_BYTES,
   TerraformLabProvider,
   loadLabDefinition,
+  type ContainerExecResult,
   type LabSessionContext,
   type LoadedLabDefinition,
 } from '../src/index.js';
@@ -397,6 +399,19 @@ describe('sandbox reads for the verifier', () => {
     expect(read?.content).toBe(big.slice(0, MAX_SANDBOX_READ_BYTES));
   });
 
+  it("reads an empty regular file as a file, as GNU stat's 'regular empty file' spells it", async () => {
+    const lab = await loadLabDefinition(LINUX_001);
+    const runtime = new FakeContainerRuntime();
+    const provider = new LinuxLabProvider({ runtime });
+    const context = contextFor(lab);
+    await provider.create(context);
+    runtime.put(SANDBOX_A, `${HOME}/deploy/config.txt`, { content: '', mode: '644', owner: 'student', group: 'student' });
+
+    const read = await provider.readSandboxPath(context, 'deploy/config.txt');
+
+    expect(read).toMatchObject({ type: 'file', sizeBytes: 0 });
+  });
+
   it('returns null for a path that does not exist', async () => {
     const lab = await loadLabDefinition(LINUX_001);
     const runtime = new FakeContainerRuntime();
@@ -405,6 +420,105 @@ describe('sandbox reads for the verifier', () => {
     await provider.create(context);
 
     expect(await provider.readSandboxPath(context, 'deploy/missing.txt')).toBeNull();
+  });
+
+  /*
+   * `null` is "this path does not exist", and `path_absent` passes on it. Any
+   * failed `stat` used to be that null — so a student who made a parent
+   * directory unsearchable, a stopped container, or a stat that ran out of
+   * time under load all passed `path_absent` without anything being deleted.
+   * Only stat's own "No such file or directory" / "Not a directory" is absence.
+   */
+  describe('a stat or find that could not answer', () => {
+    async function world(answer: (argv: readonly string[]) => ContainerExecResult | undefined) {
+      const lab = await loadLabDefinition(LINUX_001);
+      const runtime = new FakeContainerRuntime();
+      const provider = new LinuxLabProvider({ runtime });
+      const context = contextFor(lab);
+      await provider.create(context);
+      const real = runtime.exec.bind(runtime);
+      runtime.exec = async (name, request) => answer(request.argv) ?? real(name, request);
+      return { provider, context, runtime };
+    }
+    const failed = (stderr: string, extra: Partial<ContainerExecResult> = {}): ContainerExecResult => ({
+      exitCode: 1,
+      stdout: '',
+      stderr,
+      timedOut: false,
+      ...extra,
+    });
+    const stat = (result: ContainerExecResult) => (argv: readonly string[]) =>
+      argv[0] === '/bin/stat' ? result : undefined;
+    const find = (result: ContainerExecResult) => (argv: readonly string[]) =>
+      argv[0] === '/usr/bin/find' ? result : undefined;
+
+    it('reads GNU stat executable-path missing-file output as absent', async () => {
+      const { provider, context } = await world(
+        stat(failed(`/bin/stat: cannot statx '${HOME}/deploy/missing.txt': No such file or directory`)),
+      );
+      expect(await provider.readSandboxPath(context, 'deploy/missing.txt')).toBeNull();
+    });
+
+    it('does not read an unsearchable path as absent', async () => {
+      const { provider, context } = await world(
+        stat(failed(`stat: cannot statx '${HOME}/deploy/app.log': Permission denied`)),
+      );
+      await expect(provider.readSandboxPath(context, 'deploy/app.log')).rejects.toThrow(
+        ContainerRuntimeError,
+      );
+    });
+
+    it('does not read a stat that ran out of time as absent', async () => {
+      const { provider, context } = await world(stat(failed('', { exitCode: 124, timedOut: true })));
+      await expect(provider.readSandboxPath(context, 'deploy/app.log')).rejects.toThrow(
+        ContainerRuntimeError,
+      );
+    });
+
+    it('does not read a container that is not running as absent', async () => {
+      const { provider, context } = await world(
+        stat(failed(`Error response from daemon: container ${SANDBOX_A} is not running`)),
+      );
+      await expect(provider.readSandboxPath(context, 'deploy/app.log')).rejects.toThrow(/not running/);
+    });
+
+    it('still reads a path under a regular file as absent', async () => {
+      const { provider, context } = await world(
+        stat(failed(`stat: cannot statx '${HOME}/deploy/app.log/x': Not a directory`)),
+      );
+      expect(await provider.readSandboxPath(context, 'deploy/app.log/x')).toBeNull();
+    });
+
+    it('lists what find found even when one subdirectory was unreadable', async () => {
+      const { provider, context } = await world(
+        find(
+          failed(`find: '${HOME}/terraform/locked': Permission denied\n`, {
+            stdout: `${HOME}/terraform/main.tf\n`,
+          }),
+        ),
+      );
+      expect(await provider.listSandboxFiles(context, 'terraform')).toEqual(['main.tf']);
+    });
+
+    it('lists nothing for a directory that does not exist', async () => {
+      const { provider, context } = await world(
+        find(failed(`find: '${HOME}/terraform': No such file or directory\n`)),
+      );
+      expect(await provider.listSandboxFiles(context, 'terraform')).toEqual([]);
+    });
+
+    it('does not list a find that could not run as an empty directory', async () => {
+      const timedOut = await world(find(failed('', { exitCode: 124, timedOut: true })));
+      await expect(timedOut.provider.listSandboxFiles(timedOut.context, 'terraform')).rejects.toThrow(
+        ContainerRuntimeError,
+      );
+      const stopped = await world(
+        find(failed(`Error response from daemon: container ${SANDBOX_A} is not running`)),
+      );
+      await expect(stopped.provider.listSandboxFiles(stopped.context, 'terraform')).rejects.toThrow(
+        /not running/,
+      );
+    });
   });
 
   it('refuses a path that would escape the sandbox home', async () => {

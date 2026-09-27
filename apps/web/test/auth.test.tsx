@@ -259,6 +259,32 @@ describe('signing in and out', () => {
     expect(screen.queryByText('the catalog')).toBeNull();
   });
 
+  it('is not undone by a session check that was answered before it', async () => {
+    // The tab regained focus just before the click: that re-check was answered
+    // while still signed in, and landing after sign-out it put the app back.
+    let answerStale: (session: AuthSession) => void = () => undefined;
+    const loadSession = vi
+      .fn<() => Promise<AuthSession>>()
+      .mockResolvedValueOnce(SIGNED_IN)
+      .mockImplementationOnce(() => new Promise<AuthSession>((resolve) => (answerStale = resolve)));
+    renderGate({ loadSession, signOutImpl: () => Promise.resolve({ signedOut: true }) });
+    const signOutButton = await screen.findByRole('button', { name: 'Sign out' });
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(loadSession).toHaveBeenCalledTimes(2));
+    fireEvent.click(signOutButton);
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy();
+
+    await act(async () => {
+      answerStale(SIGNED_IN);
+    });
+
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+  });
+
   it('re-enables the button when sign-out fails, so it can be retried', async () => {
     const signOutImpl = vi.fn().mockRejectedValue(new Error('network'));
     renderGate({ loadSession: () => Promise.resolve(SIGNED_IN), signOutImpl });

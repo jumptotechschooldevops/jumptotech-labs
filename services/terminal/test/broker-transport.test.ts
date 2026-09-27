@@ -189,7 +189,16 @@ describe('brokerShell over wss', () => {
       },
       spawn: (): BrokerPty => {
         spawned += 1;
-        return { write() {}, resize() {}, kill() {}, onData() {}, onExit() {} };
+        return {
+          write() {},
+          resize() {},
+          kill() {},
+          pause() {},
+          resume() {},
+          pendingInputBytes: () => 0,
+          onData() {},
+          onExit() {},
+        };
       },
       log: () => undefined,
     });

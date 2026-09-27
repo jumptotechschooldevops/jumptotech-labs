@@ -86,6 +86,12 @@ function fakePty(): BrokerPty & {
     kill() {
       this.killed = true;
     },
+    // No backlog to model: never paused, never behind on input.
+    pause() {},
+    resume() {},
+    pendingInputBytes() {
+      return 0;
+    },
     onData(listener) {
       onData = listener;
     },

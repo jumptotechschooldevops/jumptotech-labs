@@ -492,7 +492,26 @@ export class DockerCliRuntime implements ContainerRuntimePort {
       '{{.Id}}\t{{json .Labels}}',
       name,
     ]);
-    if (result.exitCode !== 0) return null;
+
+    if (result.timedOut) {
+      throw new ContainerRuntimeError(
+        `docker network inspect of ${name} did not answer in time`,
+      );
+    }
+
+    if (result.exitCode !== 0) {
+      if (
+        /no such network/i.test(result.stderr) ||
+        /network .* not found/i.test(result.stderr)
+      ) {
+        return null;
+      }
+
+      throw new ContainerRuntimeError(
+        result.stderr.trim() ||
+          `docker network inspect exited with code ${result.exitCode}`,
+      );
+    }
 
     const [id, labelsJson] = result.stdout.trim().split('\t');
     if (!id) return null;

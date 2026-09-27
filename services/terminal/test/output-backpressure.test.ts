@@ -89,6 +89,18 @@ function floodPty(options: { pausable: boolean }): FloodPty {
     emitted: 0,
     write() {},
     resize() {},
+    // A source that cannot be slowed is asked to pause like any other and
+    // simply does not: the relay must then fall back to its hard limit.
+    pause() {
+      pty.pauses += 1;
+      if (options.pausable) paused = true;
+    },
+    resume() {
+      pty.resumes += 1;
+      paused = false;
+      wake?.();
+    },
+    pendingInputBytes: () => 0,
     kill() {
       killed = true;
       pty.killed = true;
@@ -113,17 +125,6 @@ function floodPty(options: { pausable: boolean }): FloodPty {
       }
     },
   };
-  if (options.pausable) {
-    pty.pause = () => {
-      pty.pauses += 1;
-      paused = true;
-    };
-    pty.resume = () => {
-      pty.resumes += 1;
-      paused = false;
-      wake?.();
-    };
-  }
   return pty;
 }
 

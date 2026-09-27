@@ -307,9 +307,16 @@ export async function writeSessionDockerCerts(
 
   const certDir = path.join(dir, `${safe}-${attachNonce()}.docker`);
   await mkdir(certDir, { recursive: true, mode: 0o700 });
-  await writeFile(path.join(certDir, 'ca.pem'), credentials.ca, { mode: 0o600 });
-  await writeFile(path.join(certDir, 'cert.pem'), credentials.clientCert, { mode: 0o600 });
-  await writeFile(path.join(certDir, 'key.pem'), credentials.clientKey, { mode: 0o600 });
+  try {
+    await writeFile(path.join(certDir, 'ca.pem'), credentials.ca, { mode: 0o600 });
+    await writeFile(path.join(certDir, 'cert.pem'), credentials.clientCert, { mode: 0o600 });
+    await writeFile(path.join(certDir, 'key.pem'), credentials.clientKey, { mode: 0o600 });
+  } catch (error) {
+    // The caller learns the directory only from a successful return, so its
+    // cleanup cannot remove a half-written one: this is the only owner.
+    await removeSessionDockerCerts(certDir);
+    throw error;
+  }
   return certDir;
 }
 

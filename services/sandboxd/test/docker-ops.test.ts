@@ -199,6 +199,34 @@ describe('the operation list is closed', () => {
   });
 });
 
+describe('a create whose daemon container cannot be started', () => {
+  /*
+   * The data volume is created first, so it can be mounted. When the run then
+   * fails, nothing else can ever remove it: the failed start's destroy finds no
+   * container, and `removeSandbox` returns before the volume step whenever the
+   * container is absent. Each leaked volume holds a whole inner daemon's image
+   * store, so the create must remove the volume it made.
+   */
+  it('removes the data volume it created, and still reports the failure', async () => {
+    const fake = fakeEngines();
+    (fake.engines.host as { runContainer: unknown }).runContainer = async () => {
+      throw new Error('docker: Error response from daemon: no space left on device');
+    };
+
+    await expect(
+      opsOver(fake).run('createSandbox', {
+        sessionId: SESSION_A,
+        labId: 'DOCKER-001',
+        expiresAtMs: Date.now() + 60_000,
+      }),
+    ).rejects.toThrow(/no space left on device/);
+
+    const volume = `${refFor(SESSION_A)}-data`;
+    expect(fake.hostCalls).toContainEqual({ op: 'createVolume', arg: volume });
+    expect(fake.hostCalls).toContainEqual({ op: 'removeVolume', arg: volume });
+  });
+});
+
 describe('the caller cannot choose what runs', () => {
   it('builds the whole run spec from configuration, ignoring anything sent', async () => {
     const fake = fakeEngines();

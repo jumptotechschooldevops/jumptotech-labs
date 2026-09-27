@@ -20,7 +20,9 @@ import {
   PROVIDER_ISOLATION,
   PROVIDER_REQUIREMENT_FAMILIES,
   PROVIDER_SANDBOX_KIND,
+  TASK_BINARY_ALLOWLIST,
   WORKSPACE_TASKS,
+  assertTaskBinariesAllowed,
   assertCapabilityName,
   parseLabDefinition,
   type LoadedLabDefinition,
@@ -157,6 +159,19 @@ describe('what the verifier may run inside a CI/CD sandbox', () => {
   it('names no shell, so nothing in a project can become syntax', () => {
     for (const shell of ['sh', 'bash', 'zsh', 'env']) {
       expect(CICD_INSPECTION_COMMANDS.includes(shell), shell).toBe(false);
+    }
+  });
+
+  it('refuses a task table that names a binary outside TASK_BINARY_ALLOWLIST', () => {
+    // The independent second gate. The inspection allow-list above is derived
+    // from the table, so it cannot catch a careless edit; this must.
+    expect(() =>
+      assertTaskBinariesAllowed({ app_build: { argv: ['sh', '-c', 'npm run build'] } }),
+    ).toThrow(/'sh', which is not in TASK_BINARY_ALLOWLIST/);
+    expect(() => assertTaskBinariesAllowed({ app_build: { argv: [] } })).toThrow(/TASK_BINARY_ALLOWLIST/);
+    expect(() => assertTaskBinariesAllowed(WORKSPACE_TASKS)).not.toThrow();
+    for (const task of Object.values(WORKSPACE_TASKS)) {
+      expect(TASK_BINARY_ALLOWLIST.has(task.argv[0]!)).toBe(true);
     }
   });
 

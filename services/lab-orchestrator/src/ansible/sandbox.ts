@@ -28,7 +28,6 @@ import type {
 import { AnsibleSandboxUnreachableError, ForbiddenSandboxPathError, MAX_READ_BYTES } from './port.js';
 import { resolveManagedPath, resolveWorkspacePath } from './paths.js';
 import type { AnsibleExecPort, AnsibleExecResult } from './exec-port.js';
-import { execDidNotRun } from '../providers/container/runtime.js';
 import {
   ANSIBLE_CALLBACK_DIR,
   ANSIBLE_CALLBACK_NAME,
@@ -109,10 +108,7 @@ export class DockerAnsibleSandbox implements AnsibleSandboxPort {
       argv: ['ls', '-1A', absolute],
       user: ANSIBLE_SHELL_USER,
     });
-    if (result.exitCode !== 0) {
-      unlessItRan(result);
-      return null;
-    }
+    if (result.exitCode !== 0) return null;
     return result.stdout
       .split('\n')
       .map((line) => line.trim())
@@ -171,7 +167,6 @@ export class DockerAnsibleSandbox implements AnsibleSandboxPort {
       argv: ['pgrep', '-x', processName],
       user: 'root',
     });
-    if (result.exitCode !== 0) unlessItRan(result);
     return result.exitCode === 0 && result.stdout.trim().length > 0;
   }
 
@@ -255,10 +250,7 @@ export class DockerAnsibleSandbox implements AnsibleSandboxPort {
       argv: ['head', '-c', String(MAX_READ_BYTES), absolute],
       user,
     });
-    if (result.exitCode !== 0) {
-      unlessItRan(result);
-      return null;
-    }
+    if (result.exitCode !== 0) return null;
     return result.stdout;
   }
 
@@ -268,8 +260,24 @@ export class DockerAnsibleSandbox implements AnsibleSandboxPort {
       user,
     });
     if (result.exitCode !== 0) {
-      unlessItRan(result);
-      return { path: absolute, exists: false, kind: 'other' };
+      /*
+       * `exists: false` is what `managed_file_exists state: absent` passes on,
+       * so only stat's own "No such file or directory" / "Not a directory" is
+       * absence. A stopped node, an unsearchable parent or a stat stopped at
+       * its deadline is not an answer about the path.
+       */
+      if (
+        !result.timedOut &&
+        result.exitCode === 1 &&
+        /^stat: .*: (No such file or directory|Not a directory)\s*$/m.test(result.stderr)
+      ) {
+        return { path: absolute, exists: false, kind: 'other' };
+      }
+      throw new AnsibleSandboxUnreachableError(
+        result.timedOut
+          ? `stat of ${absolute} did not finish in time`
+          : result.stderr.trim() || `stat of ${absolute} exited with code ${result.exitCode}`,
+      );
     }
 
     const [description = '', mode = '', owner = '', group = '', size = ''] = result.stdout
@@ -307,20 +315,6 @@ export class DockerAnsibleSandbox implements AnsibleSandboxPort {
       timeoutMs: spec.timeoutMs ?? this.#commandTimeoutMs,
     });
   }
-}
-
-/**
- * A read whose `docker exec` never ran — the node stopped or removed, the
- * daemon down, the exec out of time — cannot say a file is absent or a
- * service stopped: `state: absent` and `expected: stopped` passed against
- * managed nodes that no longer existed. Only for the platform's own reads; a
- * student's playbook that runs out of time is the student's result.
- */
-function unlessItRan(result: AnsibleExecResult): void {
-  if (!execDidNotRun(result)) return;
-  throw new AnsibleSandboxUnreachableError(
-    result.timedOut ? 'a lab node did not answer in time' : `a lab node could not be read: ${result.stderr.trim()}`,
-  );
 }
 
 function describeKind(description: string): AnsiblePathInfo['kind'] {
