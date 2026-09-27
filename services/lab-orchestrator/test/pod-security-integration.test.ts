@@ -183,7 +183,7 @@ suite('pod security: real kind cluster (BETA-P0-016)', () => {
       expect(namespace?.labels).toMatchObject(podSecurityLabels(DEFAULT_POD_SECURITY));
     }, 60_000);
 
-    it('is backed by all three admission policies on this cluster', async () => {
+    it('is backed by every lab admission policy on this cluster', async () => {
       for (const kind of ['validatingadmissionpolicies', 'validatingadmissionpolicybindings']) {
         const listed = await admin('get', kind, '-o', 'name');
         expect(listed.code).toBe(0);
@@ -191,6 +191,8 @@ suite('pod security: real kind cluster (BETA-P0-016)', () => {
           'jumptotech-deny-clusterrole-bindings',
           'jumptotech-protect-managed-resources',
           'jumptotech-require-pod-security',
+          'jumptotech-deny-service-external-ips',
+          'jumptotech-bound-namespace-teardown',
         ]) {
           expect(listed.stdout, `${kind}/${name} — apply infrastructure/kind/admission/lab-rbac-policy.yaml`).toContain(`/${name}`);
         }
@@ -293,6 +295,74 @@ suite('pod security: real kind cluster (BETA-P0-016)', () => {
 
       expect(result.code).not.toBe(0);
       expect(result.stderr).toMatch(BASELINE_REFUSAL);
+    }, 60_000);
+  });
+
+  describe('the student cannot stop their namespace being torn down', () => {
+    // A namespace that never finishes deleting keeps its session holding a
+    // capacity slot (jumptotech-bound-namespace-teardown).
+    const TEARDOWN_REFUSAL = /jumptotech-bound-namespace-teardown/;
+
+    it('refuses a finalizer on a new object, and one patched onto an existing object', async () => {
+      const created = await studentApply('pin-finalizer', {
+        apiVersion: 'v1',
+        kind: 'ConfigMap',
+        metadata: { name: 'pin-finalizer', finalizers: ['example.com/pin'] },
+      });
+      expect(created.code, 'a student finalizer was admitted').not.toBe(0);
+      expect(created.stderr).toMatch(TEARDOWN_REFUSAL);
+
+      expect((await student('create', 'configmap', 'pin-later', '--from-literal=a=b')).code).toBe(0);
+      const patched = await student(
+        'patch', 'configmap', 'pin-later', '--type=merge',
+        '-p', JSON.stringify({ metadata: { finalizers: ['example.com/pin'] } }),
+      );
+      await student('delete', 'configmap', 'pin-later', '--wait=false');
+      expect(patched.code, 'a patched-on finalizer was admitted').not.toBe(0);
+      expect(patched.stderr).toMatch(TEARDOWN_REFUSAL);
+    }, 60_000);
+
+    it('still admits a PVC, which Kubernetes gives its own finalizer, and edits to it', async () => {
+      const created = await studentApply('teardown-pvc', {
+        apiVersion: 'v1',
+        kind: 'PersistentVolumeClaim',
+        metadata: { name: 'teardown-pvc' },
+        spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Mi' } } },
+      });
+      expect(created.code, created.stderr).toBe(0);
+      const labelled = await student('label', 'pvc', 'teardown-pvc', 'jtt-test=kept');
+      await student('delete', 'pvc', 'teardown-pvc', '--wait=false');
+      expect(labelled.code, labelled.stderr).toBe(0);
+    }, 60_000);
+
+    it('refuses a Pod grace period that outlasts teardown, from the student and from cluster-admin', async () => {
+      const pod = (name: string) => ({
+        apiVersion: 'v1',
+        kind: 'Pod',
+        metadata: { name },
+        spec: { terminationGracePeriodSeconds: 100_000_000, containers: [box()] },
+      });
+      const fromStudent = await studentApply('grace-student', pod('grace-student'));
+      if (fromStudent.code === 0) await admin('delete', 'pod', 'grace-student', '-n', session.namespace, '--force', '--grace-period=0');
+      expect(fromStudent.code, 'a 1e8 s grace period was admitted').not.toBe(0);
+      expect(fromStudent.stderr).toMatch(TEARDOWN_REFUSAL);
+
+      const fromAdmin = await admin('apply', '-n', session.namespace, '-f', await manifestFile('grace-admin', pod('grace-admin')));
+      if (fromAdmin.code === 0) await admin('delete', 'pod', 'grace-admin', '-n', session.namespace, '--force', '--grace-period=0');
+      expect(fromAdmin.code).not.toBe(0);
+      expect(fromAdmin.stderr).toMatch(TEARDOWN_REFUSAL);
+    }, 60_000);
+
+    it('refuses a Service with externalIPs (CVE-2020-8554)', async () => {
+      const result = await studentApply('external-ip', {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: 'external-ip' },
+        spec: { externalIPs: ['192.0.2.10'], ports: [{ port: 6443 }] },
+      });
+      if (result.code === 0) await student('delete', 'service', 'external-ip', '--wait=false');
+      expect(result.code, 'a Service with externalIPs was admitted').not.toBe(0);
+      expect(result.stderr).toMatch(/jumptotech-deny-service-external-ips/);
     }, 60_000);
   });
 
