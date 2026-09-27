@@ -13,6 +13,8 @@
  *      first one did.
  *   4. **End Lab** removes the sandbox and its data volume.
  *
+ * Labs in `SOLUTIONS` are also solved between 2 and 3, to every check green.
+ *
  * Both Checks are read once the grades stop changing — a seeded container can
  * still be starting when setup verification accepts it.
  *
@@ -125,6 +127,67 @@ const LAB_IDS = CATALOG.all()
   .map((lab) => lab.id)
   .sort();
 
+/**
+ * What a student does to solve a lab, for the labs this sweep walks to a PASS
+ * (DOCKER-009 … 014 are solved in their own suites).
+ *
+ * `daemon` runs inside the session's sandbox with its own Docker CLI — the
+ * same daemon the student's terminal drives over mTLS. `workspace` is what the
+ * student writes into their workspace files. Test code only.
+ */
+const SOLUTIONS: Record<string, { daemon?: string; workspace?: Record<string, string> }> = {
+  'DOCKER-002': {
+    daemon: `
+set -e
+docker start ledger-api
+docker rm -f stale-worker
+docker run --name audit-log alpine:3.20 echo audit complete
+`,
+  },
+  // Two names for one image. Reset must then remove both, or the retry
+  // starts half solved (#73).
+  'DOCKER-003': {
+    daemon: `
+set -e
+docker pull busybox:1.36
+docker tag busybox:1.36 jumptotech/toolbox:1.0
+docker image inspect busybox:1.36 >/dev/null
+`,
+  },
+  'DOCKER-005': {
+    daemon: `
+set -e
+docker volume create ledger-data
+docker run -d --name ledger-db -v ledger-data:/var/lib/ledger alpine:3.20 sleep 3600
+`,
+  },
+  // The env file lives with the student's CLI; here that is the sandbox.
+  'DOCKER-007': {
+    daemon: `
+set -e
+printf 'LEDGER_BATCH_SIZE=500\n' > /tmp/statements.env
+docker run -d --name statements -e LEDGER_REGION=eu-west-1 -e LEDGER_MODE=batch --env-file /tmp/statements.env alpine:3.20 sleep 3600
+`,
+  },
+  // Same name, image and command; only the container side of 3000 changes.
+  'NET-022': {
+    daemon: `
+set -e
+docker rm -f payments-status
+docker run -d --name payments-status -p 3000:8080 nginx:1.27-alpine sh -c "sed -i 's/listen       80;/listen       8080;/' /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"
+`,
+    workspace: {
+      'diagnosis.txt':
+        'mapping_sends_traffic_to_container_port: 80\n' +
+        'application_is_listening_on_port: 8080\n' +
+        'why_the_request_fails: host port 3000 is published to container port 80, where nothing listens\n',
+      'model.txt':
+        'The daemon installs a DNAT rule on the Docker host: a packet to host port 3000 is rewritten to the ' +
+        "container's address and port 8080, the port nginx listens on after the repair.\n",
+    },
+  },
+};
+
 describe.runIf(ENABLED)('every Docker-track lab on a real dind sandbox', () => {
   const engines = new DockerCliFactory({});
   const sandboxes: string[] = [];
@@ -218,13 +281,30 @@ describe.runIf(ENABLED)('every Docker-track lab on a real dind sandbox', () => {
         expect(Object.keys(initial.byLabel).length).toBeGreaterThan(0);
         expect(initial.passed, `${labId} passes its Check before any work`).toBe(false);
 
-        // 3. Reset, then the same grades as at Start.
+        // 3. Where the sweep knows a solution: solve it, and every check passes.
+        const solution = SOLUTIONS[labId];
+        if (solution) {
+          if (solution.daemon) {
+            const solved = await docker('exec', sandbox, 'sh', '-c', solution.daemon);
+            expect(solved.code, `${labId} solution: ${solved.stdout}\n${solved.stderr}`).toBe(0);
+          }
+          for (const [file, content] of Object.entries(solution.workspace ?? {})) {
+            await writeFile(path.join(workspaceRoot, sessionId.replace(/[^a-zA-Z0-9_-]/g, ''), file), content);
+          }
+          const solvedGrades = await settled();
+          expect(
+            Object.entries(solvedGrades.byLabel).filter(([, status]) => status !== 'pass'),
+            `${labId} solved`,
+          ).toEqual([]);
+        }
+
+        // 4. Reset, then the same grades as at Start — solved or not.
         const reset = await provider.reset(context);
         expect(reset.ok, JSON.stringify(reset.steps)).toBe(true);
         const after = await settled();
         expect(after.byLabel).toEqual(initial.byLabel);
       } finally {
-        // 4. End Lab.
+        // 5. End Lab.
         await provider.destroy(context);
       }
       const left = await docker('ps', '-a', '--filter', `name=^${sandbox}$`, '--format', '{{.Names}}');
