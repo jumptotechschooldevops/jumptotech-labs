@@ -383,10 +383,11 @@ async function main(): Promise<void> {
   // The reaper's counterpart on the persistent side: it closes attempts whose
   // sandbox is gone in a way nothing could report — an API restart, most of
   // all. It only ever touches attempts older than the absolute session
-  // lifetime, so it cannot close one a student is still working on.
+  // lifetime whose session no longer occupies a slot.
   const attemptSweeper = new AbandonedAttemptSweeper({
     progress: learning.progress,
     maxSessionSeconds: config.lifetimes.maxSessionSeconds,
+    liveSessionIds: async () => (await sessions.listOccupying()).map((session) => session.sessionId),
     intervalMs: config.reaperIntervalSeconds * 1000,
     log: logger.legacy('progress.write_failed', 'warn'),
   });
