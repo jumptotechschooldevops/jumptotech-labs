@@ -80,6 +80,7 @@ fails the build for one that does not:
 | rehearsed failures | [incident-exercises.md](incident-exercises.md) |
 | the private-beta release decision and its conditions | [releases/private-beta-release-gate.md](releases/private-beta-release-gate.md) |
 | what a deployment must record | [releases/production-host-evidence-template.md](releases/production-host-evidence-template.md) |
+| who may use labs: entitlements, the `ops access` commands, the payment boundary | [commercial-access.md](commercial-access.md) |
 
 The alert runbooks, one per alert family:
 [RB-01](runbooks/RB-01-service-down.md) ·
@@ -132,6 +133,10 @@ Dated; not maintained after their pass. Newest first within each group.
 
 | Record | Date |
 |---|---|
+| [releases/overnight-code-health-audit.md](releases/overnight-code-health-audit.md) | 2026-09-26 |
+| [releases/overnight-private-beta-certification.md](releases/overnight-private-beta-certification.md) | 2026-09-22 |
+| [releases/overnight-commercial-readiness.md](releases/overnight-commercial-readiness.md) | 2026-09-21/22 |
+| [releases/overnight-lab-certification-report.md](releases/overnight-lab-certification-report.md) | 2026-09-21 |
 | [releases/overnight-devex-documentation-audit.md](releases/overnight-devex-documentation-audit.md) | 2026-09-21 |
 | [releases/overnight-scale-resilience-report.md](releases/overnight-scale-resilience-report.md) | 2026-09-21 |
 | [releases/overnight-final-hardening-report.md](releases/overnight-final-hardening-report.md) | 2026-09-20/21 |
