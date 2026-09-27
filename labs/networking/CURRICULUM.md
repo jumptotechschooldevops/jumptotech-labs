@@ -1,6 +1,8 @@
 # JumpToTech Labs — Networking Track
 
-**Status: design proposal. Nothing in this document is implemented.**
+**Status: partly implemented.** Ten of the planned labs ship (NET-002..008,
+NET-022, NET-024, NET-025 — see the per-lab "Implemented" notes below); the
+rest of this document is still a design proposal.
 
 Scope: a 33-lab track taking a student from "what is a network" to diagnosing a
 production 502 at 3am, across Linux, Docker, Kubernetes and AWS.
