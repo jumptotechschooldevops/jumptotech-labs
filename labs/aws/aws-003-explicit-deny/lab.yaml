@@ -111,22 +111,32 @@ requirements:
     label: The policy is a valid document declaring the 2012-10-17 version
 
   # --- what the incident requires to work ---------------------------------
+  #
+  # Asked of an ordinary request over TLS, like the checks below: with no
+  # context every Condition is ignored, and a Deny for plain-HTTP requests
+  # read as denying everything it covers.
   - type: iam_policy_allows
     path: /home/student/access-review/policy.json
     action: s3:ListBucket
     resource: arn:aws:s3:::jumptotech-build-artifacts
+    context:
+      aws:SecureTransport: "true"
     label: The developer role may list the bucket
 
   - type: iam_policy_allows
     path: /home/student/access-review/policy.json
     action: s3:GetObject
     resource: arn:aws:s3:::jumptotech-build-artifacts/builds/ledger-api-4.2.1.tar.gz
+    context:
+      aws:SecureTransport: "true"
     label: The developer role may read a build artifact
 
   - type: iam_policy_allows
     path: /home/student/access-review/policy.json
     action: s3:PutObject
     resource: arn:aws:s3:::jumptotech-build-artifacts/builds/ledger-api-4.2.2.tar.gz
+    context:
+      aws:SecureTransport: "true"
     label: The developer role may upload a build artifact
 
   # --- what must remain impossible ----------------------------------------
@@ -171,6 +181,9 @@ requirements:
     path: /home/student/access-review/policy.json
     action: s3:DeleteObject
     resource: arn:aws:s3:::jumptotech-build-artifacts/builds/ledger-api-4.2.1.tar.gz
+    # Never, for any request: a Deny that fires only on plain HTTP must not
+    # make an Allow of DeleteObject look refused.
+    any_context: true
     label: Build artifacts cannot be deleted either
 
   # --- and how the protection must be expressed ----------------------------
