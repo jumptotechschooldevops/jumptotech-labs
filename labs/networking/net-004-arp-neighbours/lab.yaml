@@ -60,8 +60,10 @@ task:
     explains the three outcomes and, importantly, which tools work here.
 
     Nothing tells you your addressing: this session's segment is allocated when
-    the lab starts, so you have to read your interface, your prefix and your
-    gateway off the machine with `ip addr` and `ip route`.
+    the lab starts, so you have to read your interface and your prefix off the
+    machine with `ip addr`. The gateway is not listed anywhere — `brief.txt`
+    explains how to work out where it should be, and the first outcome below
+    is how you prove it.
 
     Then produce three outcomes. Reach for the gateway, which is on your
     segment and answers. Reach for another address inside your own prefix that

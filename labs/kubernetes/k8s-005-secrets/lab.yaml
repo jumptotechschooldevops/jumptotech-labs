@@ -86,6 +86,9 @@ requirements:
     secret: payments-api
     key: api-token
     env: PAYMENTS_API_TOKEN
+    # The application's own container: a sidecar carrying the reference while
+    # the payments container reads nothing passed before.
+    container: payments
     label: Deployment payments reads the credential from the Secret
   - type: deployment_available
     name: payments

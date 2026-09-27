@@ -76,11 +76,20 @@ requirements:
     label: The group variables file is valid YAML
   # The values live in the variables files and the playbook refers to them.
   # Empty vars files beside a playbook that still spells out the values, or
-  # nodes edited by hand, used to pass.
-  - type: file_contains
+  # nodes edited by hand, used to pass. Each value is read as a key, once: a
+  # substring check passed `# was: app_port 8080, app_release 2.4.1`.
+  - type: file_key_value
     path: group_vars/web.yml
-    contains: [app_port, "8080", app_release, "2.4.1"]
-    label: The web group's variables hold the port and the release
+    separator: ':'
+    key: app_port
+    equals: "8080"
+    label: The web group's variables set the application port
+  - type: file_key_value
+    path: group_vars/web.yml
+    separator: ':'
+    key: app_release
+    equals: "2.4.1"
+    label: The web group's variables set the release
   - type: file_contains
     path: site.yml
     contains: [app_port, app_release, node_role, "register:", stdout]
@@ -105,6 +114,20 @@ requirements:
   - type: file_exists
     path: host_vars/node2.yml
     label: Host variables exist for node2
+  # The role comes from host_vars. Empty host_vars files beside a site.yml
+  # computing the role from inventory_hostname passed before.
+  - type: file_key_value
+    path: host_vars/node1.yml
+    separator: ':'
+    key: node_role
+    equals: primary
+    label: node1's host variables give it its role
+  - type: file_key_value
+    path: host_vars/node2.yml
+    separator: ':'
+    key: node_role
+    equals: replica
+    label: node2's host variables give it its role
   - type: managed_file_content
     path: /etc/jumptotech/app.conf
     hosts: [node1]
@@ -159,10 +182,10 @@ hints:
       one of its fields.
   - level: 3
     text: >
-      A registered command result carries its output on `.stdout`. Remember
-      that a command's output usually ends with a newline, so if the check
-      complains about the content of `node.facts`, look at how the value was
-      written into the file rather than at the variable itself. Run
+      A registered command result is an object, and its output is one field
+      of it, `.stdout`. If `node.facts` contains a whole dictionary — braces,
+      `rc`, `stderr` and all — the template wrote the registered object rather
+      than that field. Run
       `ansible-playbook site.yml` after each edit and inspect a node with
       `ansible node2 -m command -a "cat /etc/jumptotech/app.conf"`.
 

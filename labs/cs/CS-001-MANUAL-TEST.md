@@ -274,10 +274,11 @@ browser terminal and clicking **Check** after each.
 | O4 | solve, then `sed -i 's/SCAN01_LOAD_PER_CPU=3/SCAN01_LOAD_PER_CPU=24.00/' ~/ops/machine.txt` | FAIL 10/11 |
 | O5 | solve, then `sed -i 's/MEMINFO_SCOPE=host/MEMINFO_SCOPE=container/' ~/ops/machine.txt` | FAIL 10/11 |
 | O6 | solve, then `rm -rf ~/ops/live` | FAIL 9/11 |
-| O7 | `sudo sed -i 's/16266528/4194304/' /srv/kestrel/scan-01/proc-meminfo.txt`, then answer from the forged capture | FAIL — the expected values live in `lab.yaml`, outside the sandbox, so forging the evidence only destroys the student's own source of truth |
+| O7 | `sudo sed -i 's/16266528/4194304/' /srv/kestrel/scan-01/proc-meminfo.txt` | refused — CS-001 declares `unprivileged_shell`, so there is no `sudo`; and the expected values live in `lab.yaml`, outside the sandbox, so forging the evidence could only destroy the student's own source of truth |
 
 O7 is the one that matters most: it proves the answer key is not reachable from
-inside the container even with `sudo`.
+inside the container, and that the student cannot become root to rewrite the
+tools the verifier runs.
 
 ---
 
@@ -286,8 +287,8 @@ inside the container even with `sudo`.
 1. Solve the lab and click **Check** so it passes.
 2. `GET /api/progress` (or the UI's progress panel) must record **CS-001** as
    completed, and the CS track as **1/1**.
-3. Confirm no other track's counts moved: Kubernetes stays `0/12`, Docker `0/10`,
-   Linux `0/10`, Terraform `0/1`.
+3. Confirm no other track's counts moved: every other track stays at `0/<its
+   lab count>`.
 4. Click **Reset**, then **Check** (which now fails). Confirm the *recorded
    completion* is not corrupted or silently revoked by a reset — reset restores
    the sandbox, not the learning history.
@@ -338,7 +339,7 @@ never print a value.**
 | Other sessions | `ls /srv /home` | only this session's own content; no other student's files |
 | Environment | `env \| cut -d= -f1 \| sort` | **names only.** No `INTERNAL_SERVICE_SECRET`, `DATABASE_URL`, `NAMESPACE_DERIVATION_SECRET` or kubeconfig path should appear |
 | Kubeconfig | `ls ~/.kube 2>&1; test -f /etc/jumptotech/kubeconfig.yaml && echo PRESENT \|\| echo ABSENT` | ABSENT |
-| Capabilities | `capsh --print 2>/dev/null \| head -2 \|\| grep CapEff /proc/self/status` | only the nine granted caps; no `SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE` |
+| Capabilities | `capsh --print 2>/dev/null \| head -2 \|\| grep CapEff /proc/self/status` | no effective capabilities (`unprivileged_shell`); no `SYS_ADMIN`, `NET_ADMIN`, `SYS_PTRACE` |
 
 Also inspect from outside the sandbox:
 
@@ -357,7 +358,7 @@ Also inspect from outside the sandbox:
 ```bash
 ping -c1 1.1.1.1        # expect: network unreachable (--network none)
 ls /var/run/docker.sock # expect: no such file
-sudo id                 # expect: uid=0 — root inside this container only
+sudo id                 # expect: refused — CS-001 declares unprivileged_shell
 mount | grep -c ' / '   # the overlay root; no host bind mounts exist
 ```
 

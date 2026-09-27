@@ -31,8 +31,14 @@ Two workflows run on every pull request (any target branch for Quality gates,
   [`test-support/strict-vitest.ts`](../../test-support/strict-vitest.ts), not
   bare `vitest run`: an integration suite skips itself when its infrastructure is
   missing, and in the job that exists to provide that infrastructure a skip
-  fails the step, as does a run in which no test ran. Unit runs (`npm test`) are
-  not strict, because several suites skip there on purpose.
+  fails the step, as does a run in which no test ran. That includes suites
+  reached through a Make target or npm script (`make test-db` →
+  `npm run test:db`); the wiring test expands them and refuses a bare
+  `vitest run` in any runtime job. Unit runs (`npm test`) are not strict,
+  because several suites skip there on purpose.
+- **Every step runs with `pipefail`.** `defaults.run.shell: bash` makes each
+  `run:` block `bash -eo pipefail`; GitHub's default (`bash -e`) reports only
+  the last command of a pipeline.
 - **Concurrency.** A newer push to a pull request cancels the run in flight. A
   push to `main` never cancels anything: runs are grouped by commit SHA, so every
   commit on `main` has a complete run.
@@ -62,7 +68,7 @@ with `npm ci` on the Node version in `.nvmrc`.
 | Test | every workspace's unit suites, including the security and CI-wiring suites | `npm test` (one workspace: `npx vitest run --root <ws>`) | none — the host-execution guard fails any suite that reaches for a process, daemon or network | assertion; `HOST_EXECUTION_DENIED`; a 5 s timeout on a saturated laptop (re-run that file alone before blaming the change) |
 | Production composition wiring | the api's production composition root is the one tested | `npm run test:composition` | none | composition refactor that dropped a wire |
 | Observability configuration | Prometheus rules, Alertmanager config and dashboards are valid to promtool/amtool | `make observability-check` | Docker (runs promtool/amtool images) or the tools on PATH | rule syntax, a dashboard query naming a metric that does not exist |
-| Observability containers hold no container runtime · sandboxd is the only service holding a Docker socket | the absence of a mount, read from the compose files | the `run:` block in the workflow | none | a new socket mount |
+| Observability containers hold no container runtime · sandboxd is the only service holding a Docker socket | no socket mount outside sandboxd, and no monitoring container on the `kind` or `sandboxes` network, read from all five compose files (the hermetic twin is `observability-isolation.test.ts` in `npm test`) | the `run:` block in the workflow | none | a new socket mount or network |
 | Each service receives exactly its allowed secrets, mounts, ports and networks | `docker compose config` of every stack against `infrastructure/secret-distribution.json` | `make secrets-check` | Docker Compose v2 | a new env var or port not declared in the distribution file |
 | Backup and restore scripts refuse unsafe states | the backup/restore scripts' refusals, against a fake daemon | `make test-db-backup` | none | a refusal path that no longer refuses |
 | Production configuration gates fail closed · production-host scripts … | the production config loaders and host scripts refuse every unsafe variation; only read-only verbs | `make test-production-host` | none | a new unsafe default |
@@ -126,10 +132,16 @@ image updates monthly.
 
 **npm.** `package-lock.json` is authoritative; CI and every image install with
 `npm ci`. Lifecycle scripts run in CI and in the images that compile `node-pty`;
-the api and web images install with `--ignore-scripts`.
+the api and web images install with `--ignore-scripts`. The only dependencies
+with install scripts are `node-pty` (native build), `esbuild` (checks its
+platform binary) and `fsevents` (macOS, optional); no workspace has a lifecycle
+script and there is no `.npmrc`. Every locked package resolves from
+`registry.npmjs.org` with a sha512 integrity, and the only links are the
+workspaces (`ci-gate-wiring.test.ts` → the lockfile).
 
 **Build contexts.** `.dockerignore` keeps secrets, host state and host build
-output out of every context (`build-context-secrets.test.ts`).
+output out of every context (`build-context-secrets.test.ts`), including
+database archives (`*.dump*`) wherever they are written.
 
 ### Dependencies
 

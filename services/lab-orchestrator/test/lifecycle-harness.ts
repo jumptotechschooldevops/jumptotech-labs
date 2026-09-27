@@ -107,6 +107,7 @@ export class PausableStore implements SessionStore {
   delete(sessionId: string) { return this.inner.delete(sessionId); }
   list() { return this.inner.list(); }
   listOccupying() { return this.inner.listOccupying(); }
+  listOccupyingForOwner(ownerUserId: string) { return this.inner.listOccupyingForOwner(ownerUserId); }
   findBySandboxRef(ref: string) { return this.inner.findBySandboxRef(ref); }
   findByNamespace(ns: string) { return this.inner.findByNamespace(ns); }
   transition(

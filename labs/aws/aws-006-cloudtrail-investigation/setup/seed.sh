@@ -27,7 +27,7 @@ cat > "$DIR/README.md" <<'DOC'
 
 SIMULATED ENVIRONMENT. This sandbox is a Linux container, not an AWS account.
 Nothing here is connected to AWS. The files under `cloudtrail/` are an export
-of management events, copied here so they can be read offline.
+of CloudTrail events, copied here so they can be read offline.
 
     incident-9214.txt   the page-out and what operations know so far
     infrastructure.txt  what the account's security groups and instances are

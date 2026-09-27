@@ -652,7 +652,7 @@ function worldSatisfying(requirements: readonly Requirement[]): FakeWorld {
         const unit = unitFor(requirement.path);
         unit.sections.add(requirement.section);
         if (requirement.absent === true) break;
-        const value = requirement.equals ?? requirement.contains ?? '';
+        const value = requirement.equals ?? requirement.one_of?.[0] ?? requirement.contains ?? '';
         unit.directives.push({
           section: requirement.section,
           directive: requirement.directive,

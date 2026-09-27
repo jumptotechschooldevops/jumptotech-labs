@@ -240,6 +240,7 @@ describe('how a closed terminal socket is classified', () => {
     expect(codeForClose(4410, undefined)).toBe('SESSION_ENDED');
     expect(codeForClose(4401, undefined)).toBe('UNAUTHORIZED');
     expect(codeForClose(1013, undefined)).toBe('CAPACITY');
+    expect(codeForClose(4429, undefined)).toBe('ATTACH_RATE_LIMITED');
     expect(codeForClose(1000, undefined)).toBe('SHELL_EXITED');
     expect(codeForClose(1006, undefined)).toBe('CONNECTION_LOST');
   });

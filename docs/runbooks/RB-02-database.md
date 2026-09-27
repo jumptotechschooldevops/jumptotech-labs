@@ -55,8 +55,13 @@ prod restart api      # only after `prod ps postgres` shows healthy
 ```
 
 The API does **not** need a restart for the database to come back — the pool
-reconnects and `jtt_db_up` returns to 1 on its own. Restart it only if the pool
-is stuck.
+reconnects and `jtt_db_up` returns to 1 on its own. That includes a database
+that went silent rather than refusing (host frozen, network partition): every
+query in flight gives its connection up after `DATABASE_QUERY_TIMEOUT_MS`
+(default 15 s) and idle connections are probed by TCP keepalive, so the pool
+does not stay full of dead sockets. Restart the api only if
+`jtt_db_pool_connections{state="waiting"}` stays above 0 for more than a minute
+after `jtt_db_up` is back to 1.
 
 ## 4a. Diagnose — unreachable
 

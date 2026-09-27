@@ -288,6 +288,7 @@ export class PostgresProgressRepository implements ProgressRepository {
     startedBefore: string;
     reason: string;
     at: string;
+    liveSessionIds?: readonly string[];
   }): Promise<number> {
     const { rows } = await this.db.query<{ attempt_id: string }>(
       `UPDATE lab_attempts SET
@@ -296,8 +297,9 @@ export class PostgresProgressRepository implements ProgressRepository {
          ended_at      = COALESCE(ended_at, $3::timestamptz),
          updated_at    = $3
        WHERE status = 'IN_PROGRESS' AND started_at < $1::timestamptz
+         AND (session_id IS NULL OR NOT (session_id = ANY($4::text[])))
        RETURNING attempt_id`,
-      [input.startedBefore, input.reason, input.at],
+      [input.startedBefore, input.reason, input.at, [...(input.liveSessionIds ?? [])]],
     );
     return rows.length;
   }

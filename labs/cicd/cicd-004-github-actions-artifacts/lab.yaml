@@ -65,7 +65,8 @@ task:
     artifact rather than fail, so the run stays green and the artifact is
     useless.
 
-    Add an upload step to the `build` job, after the build has run. Then run
+    Add an upload step to the `build` job in `.github/workflows/ci.yml`, after
+    the build has run. Then run
     the build in your terminal so a real artifact exists in your workspace to
     check.
 

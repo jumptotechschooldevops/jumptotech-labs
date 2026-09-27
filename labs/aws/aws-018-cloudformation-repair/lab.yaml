@@ -26,7 +26,7 @@ topic: aws-automation
 difficulty: intermediate
 level: practice
 duration_minutes: 45
-order: 18
+order: 7
 
 environment:
   provider: linux

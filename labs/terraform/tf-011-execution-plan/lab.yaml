@@ -89,7 +89,9 @@ task:
     second time.
 
     Also declare an output named `rollback_path` whose value is
-    `build/rollback-plan.txt`.
+    `build/rollback-plan.txt`. As in TF-001, write the `filename` without a
+    `${path.module}/` prefix: the prefix reports the path as
+    `./build/rollback-plan.txt`, and the output is compared as written.
 
     Now plan again, saving to `tfplan2` and exporting it to `plan2.json`, then
     apply that saved plan. Before you apply, read `plan2.json`. One of the two

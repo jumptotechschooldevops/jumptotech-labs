@@ -105,6 +105,15 @@ export const githubWorkflowTrigger: CicdVerifierHandler<'github_workflow_trigger
             : `the ${requirement.trigger} trigger has no branches filter, so it runs on every branch`,
         );
       }
+      if (requirement.only_branches) {
+        const wanted = new Set(requirement.branches);
+        const extra = trigger.branches.filter((branch) => !wanted.has(branch) && !branch.startsWith('!'));
+        if (extra.length > 0) {
+          return fail(
+            `the ${requirement.trigger} trigger also runs on ${extra.map((b) => `'${b}'`).join(', ')}, not only on ${requirement.branches.join(', ')}`,
+          );
+        }
+      }
     }
 
     return pass(

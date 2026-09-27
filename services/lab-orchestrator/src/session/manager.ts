@@ -1656,6 +1656,11 @@ export class SessionManager {
     return this.#store.listOccupying();
   }
 
+  /** One student's own live sessions, newest first. Never anyone else's. */
+  async listOccupyingForOwner(ownerUserId: string): Promise<LabSession[]> {
+    return this.#store.listOccupyingForOwner(ownerUserId);
+  }
+
   /** Statuses that count towards `MAX_ACTIVE_SESSIONS`. */
   static readonly OCCUPYING_STATUSES = OCCUPYING_STATUSES;
 }

@@ -134,10 +134,13 @@ hints:
   - level: 2
     text: >
       Not every fault produces an error. A play whose `hosts:` pattern matches
-      nothing reports zero hosts and exits successfully; a `notify:` naming a
-      handler that does not exist notifies nothing. Compare what the inventory
-      says the group is called with what the playbook asks for, and compare the
-      handler's name with the string that notifies it — character for character.
+      nothing reports zero hosts and exits successfully, so every fault behind
+      it stays hidden until that one is fixed. A `notify:` naming a handler that
+      does not exist does fail — "The requested handler ... was not found" —
+      but only once the notifying task reports a change. Compare what the
+      inventory says the group is called with what the playbook asks for, and
+      compare the handler's name with the string that notifies it — character
+      for character.
   - level: 3
     text: >
       Also check the two places a value can silently be the wrong one: the name

@@ -388,6 +388,34 @@ export function sessionStoreContract(
 
     const [ALICE, BOB, CAROL, DAVE] = CONTRACT_OWNERS as [string, string, string, string];
 
+    // ------------------------------------------------- one student's own live sessions
+
+    it('returns only the asking student\'s live sessions, newest first', async () => {
+      const store = await makeStore();
+      const older = seat('0a0a0a0a', 0, { ownerUserId: ALICE, status: 'ACTIVE', createdAt: '2026-09-21T09:00:00.000Z' });
+      const newer = seat('0a0a0a0a', 1, { ownerUserId: ALICE, status: 'CREATING', createdAt: '2026-09-21T10:00:00.000Z' });
+      await store.create(older);
+      await store.create(newer);
+      await store.create(seat('0a0a0a0a', 2, { ownerUserId: BOB, status: 'ACTIVE' }));
+
+      const mine = await store.listOccupyingForOwner(ALICE);
+      expect(mine.map((s) => s.sessionId)).toEqual([newer.sessionId, older.sessionId]);
+    });
+
+    it('leaves out finished sessions and sessions nobody owns', async () => {
+      const store = await makeStore();
+      await store.create(seat('0b0b0b0b', 0, { ownerUserId: ALICE, status: 'ACTIVE' }));
+      await store.create(seat('0b0b0b0b', 1, { ownerUserId: ALICE, status: 'ENDED', endedAt: NOW }));
+      // A session from before authentication belongs to nobody and is
+      // reachable by no student.
+      await store.create(seat('0b0b0b0b', 2, { status: 'ACTIVE' }));
+
+      const mine = await store.listOccupyingForOwner(ALICE);
+      expect(mine).toHaveLength(1);
+      expect(mine[0]?.status).toBe('ACTIVE');
+      expect(await store.listOccupyingForOwner(CAROL)).toEqual([]);
+    });
+
     it('refuses a student at their own limit, says which limit refused, and inserts nothing', async () => {
       const store = await makeStore();
       await store.create(seat('a1a1a1a1', 0, { ownerUserId: ALICE, status: 'ACTIVE' }));

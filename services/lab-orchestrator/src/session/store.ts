@@ -82,6 +82,19 @@ export interface SessionStore {
   list(): Promise<LabSession[]>;
   /** Sessions holding a live sandbox — the ones that count towards capacity. */
   listOccupying(): Promise<LabSession[]>;
+  /**
+   * One student's own live sessions, newest first.
+   *
+   * Separate from `listOccupying` because "mine" is a different question from
+   * "the platform's occupancy", and asking the broad one to answer the narrow
+   * one costs every reader every other student's rows: the Continue-lab read
+   * and the learning path's next-lab rule both run on ordinary page loads, so
+   * at a hundred students each of them materialised a hundred sessions to
+   * report at most one. The durable store answers it from
+   * `lab_sessions_by_owner`. A session with no owner belongs to nobody and is
+   * never returned.
+   */
+  listOccupyingForOwner(ownerUserId: string): Promise<LabSession[]>;
   /** Guards against ever handing two sessions the same sandbox. */
   findBySandboxRef(sandboxRef: string): Promise<LabSession | null>;
   /** Kubernetes-specific alias of `findBySandboxRef`. */
@@ -241,6 +254,23 @@ export class InMemorySessionStore implements SessionStore {
 
   async listOccupying(): Promise<LabSession[]> {
     return (await this.list()).filter((s) => occupiesCapacity(s.status));
+  }
+
+  /**
+   * Answered from this store's own map rather than by filtering
+   * `listOccupying`, so the double has the same *shape* as the durable store's
+   * owner-scoped query and not only the same answer. A test that counts what
+   * was read would otherwise see the whole platform being scanned here and be
+   * unable to tell the two apart.
+   */
+  async listOccupyingForOwner(ownerUserId: string): Promise<LabSession[]> {
+    const mine: LabSession[] = [];
+    for (const session of this.#bySessionId.values()) {
+      if (!occupiesCapacity(session.status)) continue;
+      if (session.ownerUserId === undefined || session.ownerUserId !== ownerUserId) continue;
+      mine.push({ ...session });
+    }
+    return mine.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   async findBySandboxRef(sandboxRef: string): Promise<LabSession | null> {
