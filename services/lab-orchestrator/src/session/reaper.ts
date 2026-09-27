@@ -120,6 +120,13 @@ export interface ReaperOptions {
   now?: () => number;
   log?: (message: string) => void;
   /**
+   * Where a sweep that threw, or one that could not finish a teardown or read
+   * a provider, says why. Separate from `log` so operators can find cleanup
+   * trouble by event and level (RB-05) instead of it being an info line among
+   * routine removals. Absent ⇒ `log`.
+   */
+  logProblem?: (message: string) => void;
+  /**
    * Observability hooks — PLATFORM-003. Plain callbacks; see
    * `SessionManagerOptions.metrics` for why this package takes no metric type.
    */
@@ -187,6 +194,7 @@ export class SessionReaper {
   #sweeping = false;
   readonly #now: () => number;
   readonly #log: (message: string) => void;
+  readonly #logProblem: (message: string) => void;
   readonly #orphanGraceMs: number;
   readonly #resetRecoveryGraceMs: number;
   readonly #abandonedEndGraceMs: number;
@@ -204,6 +212,7 @@ export class SessionReaper {
      * structured logging; the composition root always injects one.
      */
     this.#log = options.log ?? (() => undefined);
+    this.#logProblem = options.logProblem ?? this.#log;
     this.#orphanGraceMs = options.orphanGraceMs ?? 60_000;
     // Never zero: a reset's claim is fenced on its status timestamp, and a grace
     // period is what guarantees a later claim of the same session carries a
@@ -249,7 +258,7 @@ export class SessionReaper {
     );
     this.#timer = setInterval(() => {
       void this.sweep().catch((error: unknown) => {
-        this.#log(`sweep failed: ${describe(error)}`);
+        this.#logProblem(`sweep failed: ${describe(error)}`);
       });
     }, this.options.intervalMs);
     this.#timer.unref?.();
@@ -293,6 +302,8 @@ export class SessionReaper {
       throw error;
     } finally {
       this.#sweeping = false;
+      // The metrics count these; only the log can say which sandbox and why.
+      if (result.errors.length > 0) this.#logProblem(summarizeProblems(result.errors));
       /*
        * `errors` non-empty still counts as a completed sweep.
        *
@@ -619,4 +630,17 @@ export class SessionReaper {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** How many sweep problems one log line names, and how much of each. */
+const PROBLEMS_LOGGED = 5;
+const PROBLEM_CHARS = 300;
+
+/** One bounded line: a stuck provider can fail every sandbox on every sweep. */
+function summarizeProblems(errors: readonly string[]): string {
+  const named = errors
+    .slice(0, PROBLEMS_LOGGED)
+    .map((error) => (error.length > PROBLEM_CHARS ? `${error.slice(0, PROBLEM_CHARS)}…` : error));
+  const more = errors.length > PROBLEMS_LOGGED ? ` (+${errors.length - PROBLEMS_LOGGED} more)` : '';
+  return `sweep could not finish ${errors.length} item(s): ${named.join('; ')}${more}`;
 }

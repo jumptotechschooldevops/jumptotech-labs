@@ -399,3 +399,72 @@ describe('a teardown whose owner died', () => {
     expect(result.session.status).toBe('EXPIRING');
   });
 });
+
+describe('cleanup trouble is logged with its reasons', () => {
+  it('names what a sweep could not finish on the problem log, not the routine one', async () => {
+    const { manager, provider, clock } = await harness({ maxSessionSeconds: 600 });
+    const { session } = await manager.start('K8S-001');
+    clock.now += 11 * MINUTE;
+    const routine: string[] = [];
+    const problems: string[] = [];
+    const reaper = new SessionReaper({
+      sessions: manager,
+      provider,
+      intervalMs: 60_000,
+      now: () => clock.now,
+      log: (message) => routine.push(message),
+      logProblem: (message) => problems.push(message),
+    });
+    vi.spyOn(manager, 'expire').mockRejectedValue(new Error('namespace delete timed out'));
+
+    const result = await reaper.sweep();
+
+    // The metrics only ever saw a count; the reason has to reach a log line an
+    // operator can search for (RB-05: `reaper.sweep.failed`).
+    expect(result.errors).toEqual([`${session.namespace}: namespace delete timed out`]);
+    expect(problems).toEqual([
+      `sweep could not finish 1 item(s): ${session.namespace}: namespace delete timed out`,
+    ]);
+    expect(routine.some((line) => line.includes('namespace delete timed out'))).toBe(false);
+  });
+
+  it('bounds the line however many sandboxes fail, and however long the reason', async () => {
+    const { manager, provider, clock } = await harness({ maxSessionSeconds: 600 });
+    for (let i = 0; i < 7; i += 1) await manager.start('K8S-001');
+    clock.now += 11 * MINUTE;
+    const problems: string[] = [];
+    const reaper = new SessionReaper({
+      sessions: manager,
+      provider,
+      intervalMs: 60_000,
+      now: () => clock.now,
+      logProblem: (message) => problems.push(message),
+    });
+    vi.spyOn(manager, 'expire').mockRejectedValue(new Error('x'.repeat(10_000)));
+
+    const result = await reaper.sweep();
+
+    expect(result.errors).toHaveLength(7);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/^sweep could not finish 7 item\(s\): /);
+    expect(problems[0]).toMatch(/ \(\+2 more\)$/);
+    expect(problems[0]!.length).toBeLessThan(5 * 310 + 100);
+  });
+
+  it('says nothing on the problem log when a sweep has nothing wrong', async () => {
+    const { manager, provider, clock } = await harness({ maxSessionSeconds: 600 });
+    await manager.start('K8S-001');
+    clock.now += 11 * MINUTE;
+    const problems: string[] = [];
+    const reaper = new SessionReaper({
+      sessions: manager,
+      provider,
+      intervalMs: 60_000,
+      now: () => clock.now,
+      logProblem: (message) => problems.push(message),
+    });
+    const result = await reaper.sweep();
+    expect(result.removed).toHaveLength(1);
+    expect(problems).toEqual([]);
+  });
+});
