@@ -306,7 +306,7 @@ export async function runNetworkEnforcementProbe(options: NetworkProbeOptions): 
   };
   const tcp = async (from: string, target: ProbeTarget) => {
     if (!SAFE_HOST.test(target.host)) return false;
-    return (await exec(from, ['sh', '-c', `echo | nc -w 3 ${target.host} ${target.port}`])).code === 0;
+    return (await exec(from, ['nc', '-z', '-w', '3', target.host, String(target.port)])).code === 0;
   };
   const dns = async (from: string, name: string) => (await exec(from, ['nslookup', name])).code === 0;
 
