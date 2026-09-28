@@ -94,8 +94,7 @@ test('a reload keeps a running lab: same session, terminal back, revealed hints 
   await expect.poll(() => platform.openSockets.size).toBe(1);
 });
 
-// Known defect on main, fixed in its own PR: a completed lab reached after its summary is gone says only 'not running'.
-test.fixme('a reload after a pass keeps the lab completed; a reload after End does not bring the lab back', async ({ page, platform }) => {
+test('a reload after a pass keeps the lab completed; a reload after End does not bring the lab back', async ({ page, platform }) => {
   await openSignedIn(page, platform);
   await launch(page);
   platform.solved.add(platform.current().session.sessionId);
