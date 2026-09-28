@@ -8,6 +8,7 @@
  *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts session <session-id>
  *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts end <session-id> --yes
  *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts access <verb> …
+ *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts role <verb> …
  *
  * `access` manages lab access (docs/commercial-access.md): list, find, show,
  * grant, suspend, restore, revoke. Every change needs `--by` and `--reason`,
@@ -49,6 +50,13 @@ export const USAGE = `usage: operator-cli <command> [--json]
   access restore <user-id> --by <operator> --reason <text>
   access revoke  <user-id> --by <operator> --reason <text> [--end-sessions --yes]
 
+  Roles. STUDENT (the default for every sign-in), INSTRUCTOR (reads the
+  classroom view at #/classroom) or ADMIN (also ends a student's lab from it).
+  A sign-in never changes a role; only this does. <user-id> from access find.
+
+  role show <user-id>
+  role set  <user-id> STUDENT|INSTRUCTOR|ADMIN --by <operator> --reason <text>
+
 The socket path is OPERATOR_SOCKET_PATH, set in the api container by the compose files.`;
 
 export type AccessVerb = 'grant' | 'trial' | 'suspend' | 'restore' | 'revoke';
@@ -62,7 +70,9 @@ export type Command =
   | { kind: 'access-find'; email: string }
   | { kind: 'access-show'; userId: string }
   | { kind: 'access-plans' }
-  | { kind: 'access-change'; verb: AccessVerb; userId: string; body: Record<string, unknown> };
+  | { kind: 'access-change'; verb: AccessVerb; userId: string; body: Record<string, unknown> }
+  | { kind: 'role-show'; userId: string }
+  | { kind: 'role-set'; userId: string; body: { role: string; by: string; reason: string } };
 
 /** Options that take a value, per access verb. */
 const ACCESS_VALUE_OPTIONS: Record<string, readonly string[]> = {
@@ -159,8 +169,43 @@ export function parseAccessArgs(argv: readonly string[]): { command: Command; js
   return { command: { kind: 'access-change', verb: verb as AccessVerb, userId, body }, json };
 }
 
+export function parseRoleArgs(argv: readonly string[]): { command: Command; json: boolean } | { error: string } {
+  const [verb, ...rest] = argv;
+  const values: Record<string, string> = {};
+  const words: string[] = [];
+  let json = false;
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--by' || arg === '--reason') {
+      const value = rest[i + 1];
+      if (verb !== 'set') return { error: `${arg} is for role set` };
+      if (value === undefined || value.startsWith('--')) return { error: `${arg} needs a value` };
+      if (arg in values) return { error: `${arg} given twice` };
+      values[arg] = value;
+      i += 1;
+    } else if (arg.startsWith('--')) return { error: `unknown option ${arg} for role ${verb ?? ''}`.trim() };
+    else words.push(arg);
+  }
+  if (verb === 'show') {
+    if (words.length !== 1) return { error: 'role show needs exactly one <user-id>' };
+    return { command: { kind: 'role-show', userId: words[0]! }, json };
+  }
+  if (verb === 'set') {
+    if (words.length !== 2) return { error: 'role set needs <user-id> and a role: STUDENT, INSTRUCTOR or ADMIN' };
+    if (!values['--by']) return { error: 'role set needs --by <operator>: every change records who made it' };
+    if (!values['--reason']) return { error: 'role set needs --reason <text>: every change records why' };
+    return {
+      command: { kind: 'role-set', userId: words[0]!, body: { role: words[1]!.toUpperCase(), by: values['--by'], reason: values['--reason'] } },
+      json,
+    };
+  }
+  return { error: verb ? `unknown role command ${verb}` : 'role needs a command: show, set' };
+}
+
 export function parseArgs(argv: readonly string[]): { command: Command; json: boolean } | { error: string } {
   if (argv[0] === 'access') return parseAccessArgs(argv.slice(1));
+  if (argv[0] === 'role') return parseRoleArgs(argv.slice(1));
   const json = argv.includes('--json');
   const recent = argv.includes('--recent');
   const yes = argv.includes('--yes');
@@ -234,6 +279,10 @@ function pathFor(command: Command): { method: 'GET' | 'POST'; path: string; body
         path: `/v1/access/${encodeURIComponent(command.userId)}/${command.verb}`,
         body: command.body,
       };
+    case 'role-show':
+      return { method: 'GET', path: `/v1/users/${encodeURIComponent(command.userId)}/role` };
+    case 'role-set':
+      return { method: 'POST', path: `/v1/users/${encodeURIComponent(command.userId)}/role`, body: command.body };
     case 'status':
       return { method: 'GET', path: '/v1/status' };
     case 'sessions':
@@ -477,6 +526,16 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     case 'access-change':
       process.stdout.write(
         `${formatAccessChange(parsed.command.verb, data as unknown as Parameters<typeof formatAccessChange>[1])}\n`,
+      );
+      break;
+    case 'role-show':
+      process.stdout.write(`${String(data.userId)}  ${String(data.role)}  ${String(data.email ?? data.displayName ?? '')}\n`);
+      break;
+    case 'role-set':
+      process.stdout.write(
+        data.changed
+          ? `changed: ${parsed.command.userId} is now ${String(data.after)} (was ${String(data.before)}). The api applies it to their next request; the Classroom link appears when they reload the page.\n`
+          : `unchanged: ${parsed.command.userId} is already ${String(data.after)}.\n`,
       );
       break;
     case 'status':

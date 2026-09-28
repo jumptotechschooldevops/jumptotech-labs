@@ -41,6 +41,10 @@
  *                                   suspend, restore, revoke — see
  *                                   `access/operator-access.ts` and
  *                                   docs/commercial-access.md
+ *   GET  /v1/users/<id>/role        an account's role
+ *   POST /v1/users/<id>/role        set it: {role, by, reason}. The only
+ *                                   way an account becomes INSTRUCTOR or
+ *                                   ADMIN — a sign-in never can (users.ts)
  *
  * Nothing else: no raw SQL, no status edits, no terminal, no workspace, no
  * credentials. A session is reported by its identifiers, lab, status and
@@ -68,11 +72,22 @@ import {
   accessActionFor,
   accessRefusal,
   handleAccessRequest,
+  readJsonBody,
   type AccessRouteResult,
   type OperatorAccessDeps,
 } from './access/operator-access.js';
+import { assertActor, assertReason, assertUserId } from './access/entitlements.js';
+import { isRole, ROLES } from './auth/identity.js';
+import type { UserRepository } from './auth/users.js';
 
-type OperatorAction = 'status' | 'sessions' | 'session' | 'end_session' | AccessRouteResult['action'];
+type OperatorAction =
+  | 'status'
+  | 'sessions'
+  | 'session'
+  | 'end_session'
+  | 'role_show'
+  | 'role_set'
+  | AccessRouteResult['action'];
 type OperatorOutcome = 'ok' | 'rejected' | 'failed';
 
 export interface OperatorDeps {
@@ -92,6 +107,8 @@ export interface OperatorDeps {
    * grant, suspend, restore, revoke. Absent: those endpoints answer 404.
    */
   access?: OperatorAccessDeps;
+  /** Role management. Absent: `/v1/users/…` answers 404. */
+  users?: Pick<UserRepository, 'findById' | 'setRole'>;
   now?: () => number;
 }
 
@@ -347,6 +364,76 @@ export function createOperatorHandler(deps: OperatorDeps): (req: IncomingMessage
           send(res, served.status, { ok: true, data: served.payload });
           count(action, 'ok');
           deps.logger.info('ops.operator.request', { action, outcome: 'ok', ...(served.logFields ?? {}) });
+          return;
+        } else if (parts[0] === 'v1' && parts[1] === 'users' && parts.length === 4 && parts[3] === 'role' && deps.users) {
+          /*
+           * Roles. The account is named by its internal id (from `access find`),
+           * never by email, for the reason `access` gives: an address is
+           * descriptive and can be shared, and a role granted to the wrong
+           * account is an administrator nobody meant to create.
+           */
+          const isSet = method === 'POST';
+          if (!isSet && method !== 'GET') {
+            send(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'no such operator endpoint' } });
+            return;
+          }
+          action = isSet ? 'role_set' : 'role_show';
+          let candidate = '';
+          try {
+            candidate = decodeURIComponent(parts[2] ?? '');
+          } catch {
+            // A malformed escape is a bad id.
+          }
+          const userId = assertUserId(candidate);
+          const user = await deps.users.findById(userId);
+          if (!user) {
+            count(action, 'rejected');
+            send(res, 404, { ok: false, error: { code: 'USER_NOT_FOUND', message: `no account ${userId}; find it with \`access find --email\`` } });
+            return;
+          }
+          const view = (u: { userId: string; email?: string; displayName?: string; role: string }) => ({
+            userId: u.userId,
+            email: u.email ?? null,
+            displayName: u.displayName ?? null,
+            role: u.role,
+          });
+          if (!isSet) {
+            send(res, 200, { ok: true, data: view(user) });
+          } else {
+            const body = await readJsonBody(req);
+            const role = typeof body.role === 'string' ? body.role.toUpperCase() : body.role;
+            if (!isRole(role)) {
+              count(action, 'rejected');
+              send(res, 400, { ok: false, error: { code: 'INVALID_ROLE', message: `role is one of ${ROLES.join(', ')}` } });
+              return;
+            }
+            const actor = assertActor(body.by);
+            const reason = assertReason(body.reason);
+            if (user.role === role) {
+              send(res, 200, { ok: true, data: { changed: false, before: user.role, after: role, account: view(user) } });
+            } else {
+              const updated = await deps.users.setRole(userId, role);
+              if (!updated) {
+                count(action, 'rejected');
+                send(res, 404, { ok: false, error: { code: 'USER_NOT_FOUND', message: `no account ${userId}` } });
+                return;
+              }
+              /*
+               * The record of who changed whose role and why. The operator's
+               * name and reason are in the message, as `ops end` records its
+               * operator; the fields stay ids and states so a dashboard can count
+               * them without collecting prose.
+               */
+              deps.logger.warn(
+                'ops.operator.role_changed',
+                { userId, action: 'role_set', result: `${user.role}->${role}` },
+                `role of ${userId} changed from ${user.role} to ${role} by ${actor}: ${reason}`,
+              );
+              send(res, 200, { ok: true, data: { changed: true, before: user.role, after: role, account: view(updated) } });
+            }
+          }
+          count(action, 'ok');
+          deps.logger.info('ops.operator.request', { action, outcome: 'ok', userId });
           return;
         } else if (parts.length >= 3 && parts[0] === 'v1' && parts[1] === 'sessions') {
           const isEnd = parts.length === 4 && parts[3] === 'end' && method === 'POST';
