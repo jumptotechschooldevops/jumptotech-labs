@@ -686,6 +686,26 @@ export const AUTH_CALLBACK_OUTCOMES = [
   'state_mismatch',
   'no_code',
   'verification_failed',
+  // The token endpoint did not answer, or answered 5xx: the provider's outage,
+  // not a forged or broken token (IdentityProviderUnreachable, RB-14).
+  'provider_unavailable',
+] as const;
+
+/**
+ * Every outcome of `GET /auth/login`.
+ *
+ *   redirected            the browser was sent to the identity provider;
+ *   provider_unavailable  discovery did not answer, timed out or answered 5xx;
+ *   misconfigured         the provider answered with something unusable;
+ *   not_configured        this deployment has no browser sign-in;
+ *   failed                anything else.
+ */
+export const AUTH_LOGIN_OUTCOMES = [
+  'redirected',
+  'provider_unavailable',
+  'misconfigured',
+  'not_configured',
+  'failed',
 ] as const;
 
 export interface AuthMetrics {
@@ -708,12 +728,15 @@ export function createAuthMetrics(registry: Registry): AuthMetrics {
       ...common,
     }),
 
-    logins: new client.Counter({
-      name: 'jtt_auth_login_total',
-      help: 'Sign-in flows started, by outcome.',
-      labelNames: ['outcome'],
-      ...common,
-    }),
+    // Zero-initialised for the same reason as the callbacks below: the
+    // provider-outage alert reads `increase` on a handful of sign-ins a day.
+    logins: zeroInitialisedCounter(
+      registry,
+      'jtt_auth_login_total',
+      'Sign-in flows started (GET /auth/login), by outcome.',
+      'outcome',
+      AUTH_LOGIN_OUTCOMES,
+    ),
 
     // Zero-initialised: the sign-in failure alert reads it on a platform where a
     // handful of students sign in a day.

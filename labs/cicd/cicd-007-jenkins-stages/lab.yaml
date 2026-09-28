@@ -56,13 +56,13 @@ task:
 
     Restructure the `Jenkinsfile` into four stages, in this order:
 
-    * **Checkout** — get the source. On a real controller this is `checkout scm`,
-      which pulls the commit that triggered the run.
-    * **Build** — run the project's build command.
-    * **Test** — run the project's test command.
-    * **Package** — report on the artifact the build produced. Listing what is
-      in the output directory is enough; the point is that packaging is a
-      distinct phase that only runs once the tests have passed.
+      * **Checkout** — get the source. On a real controller this is `checkout scm`,
+        which pulls the commit that triggered the run.
+      * **Build** — run the project's build command.
+      * **Test** — run the project's test command.
+      * **Package** — report on the artifact the build produced. Listing what is
+        in the output directory is enough; the point is that packaging is a
+        distinct phase that only runs once the tests have passed.
 
     Then run the build and the tests yourself in the terminal, so the pipeline
     you have written describes commands you have actually seen succeed.

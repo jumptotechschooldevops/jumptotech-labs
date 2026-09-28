@@ -82,6 +82,19 @@ describe('ConfirmDialog', () => {
     expect((screen.getByRole('button', { name: 'Confirm end…' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('survives a double click on the button that opened it: the second press is not a click outside', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'End lab' }), { detail: 1 });
+    const backdrop = screen.getByRole('alertdialog').parentElement!;
+    // The second press of a double click lands where the button was: on the backdrop.
+    fireEvent.mouseDown(backdrop, { detail: 2 });
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+
+    // A deliberate click outside still cancels.
+    fireEvent.mouseDown(backdrop, { detail: 1 });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
   it('confirms only when asked', () => {
     const onConfirm = vi.fn();
     render(<Harness onConfirm={onConfirm} />);

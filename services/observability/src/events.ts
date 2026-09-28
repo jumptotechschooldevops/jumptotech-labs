@@ -141,6 +141,8 @@ export const LOG_EVENTS = [
   // describes went ahead regardless.
   'session_event.write_failed',
   'session_events.purged',
+  // A staff member ended a student's lab from the classroom view.
+  'classroom.session_ended',
 ] as const;
 
 export type LogEvent = (typeof LOG_EVENTS)[number];

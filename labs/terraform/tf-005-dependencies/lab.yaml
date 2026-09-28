@@ -97,22 +97,22 @@ task:
     Add two resources. Their names are the contract, because the deploy tooling
     looks for them:
 
-    - `local_file.integrity_record` — writes `build/integrity.txt`. Its
-      content must carry the service configuration's SHA-256 checksum. Write
-      its `filename` exactly as `build/integrity.txt`, the way the existing
-      configuration resource writes its own: a `${path.module}/` prefix
-      writes the same file but reports its path as `./build/integrity.txt`,
-      and the paths in the `deployment` output are compared as written.
-    - `local_file.deploy_manifest` — writes `build/deploy-manifest.txt`.
-      Its content must carry that same checksum **and** the path of the
-      integrity record, taken from that resource rather than typed out.
+      - `local_file.integrity_record` — writes `build/integrity.txt`. Its
+        content must carry the service configuration's SHA-256 checksum. Write
+        its `filename` exactly as `build/integrity.txt`, the way the existing
+        configuration resource writes its own: a `${path.module}/` prefix
+        writes the same file but reports its path as `./build/integrity.txt`,
+        and the paths in the `deployment` output are compared as written.
+      - `local_file.deploy_manifest` — writes `build/deploy-manifest.txt`.
+        Its content must carry that same checksum **and** the path of the
+        integrity record, taken from that resource rather than typed out.
 
     Then publish two outputs:
 
-    - `config_fingerprint` — the configuration's SHA-256 checksum.
-    - `deployment` — one object with the keys `config`, `integrity` and
-      `fingerprint`: the configuration's path, the integrity record's path,
-      and the checksum.
+      - `config_fingerprint` — the configuration's SHA-256 checksum.
+      - `deployment` — one object with the keys `config`, `integrity` and
+        `fingerprint`: the configuration's path, the integrity record's path,
+        and the checksum.
 
     How you lay any of this out is yours. Wrap the checksum in prose, use a
     heredoc, build the manifest with a template — anything that puts the right

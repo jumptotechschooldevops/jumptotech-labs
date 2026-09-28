@@ -70,7 +70,7 @@ Every production command below is the command that host is meant to run.
 | Take the site down | `prod stop web` (stays stopped across reboots) | ops §3, §6.1 |
 | Stop the stack | `prod down` — keeps the database; back up first | ops §6 |
 | End one student's lab | `ops end <id> --yes` | ops §7.1 |
-| Evidence after an incident | `make private-beta-diagnostics` (sanitized bundle) | ops §7.2; incident response §4 |
+| Evidence after an incident | `make private-beta-diagnostics` (sanitized bundle) | ops §7.3; incident response §4 |
 | Upgrade | readiness §21.1, eight steps | readiness §21.1 |
 | Roll back | readiness §21.2 | readiness §21.2 |
 
@@ -103,9 +103,13 @@ Every step is manual; nothing deploys on merge.
 **Rollback** ([readiness §21.2](../development/production-host-readiness.md#212-rollback)):
 
 - *Rolled back:* the code (`git checkout $(cat previous-commit)`, `npm ci`), the
-  configuration (`.env.previous`), and — by rebuilding — the images.
-- *Not rolled back by that:* the database. Migrations are forward-only and the
-  previous api starts on a newer schema without complaint. If the release
+  configuration (`.env.previous`), and — by rebuilding — the api, terminal,
+  sandboxd and web images. The sandbox images only if `make sandbox-build` is
+  run again, or each release has its own tags
+  ([private-beta-deployment.md §7.1](private-beta-deployment.md)).
+- *Not rolled back by that:* the database. Migrations are forward-only, and in
+  production the previous api **refuses to start** on a schema a newer release
+  migrated, naming the versions it does not ship. If the release
   applied a migration, restore the `pre-migration` archive taken in §21.1 step 3
   ([postgres-backup-restore.md §6.4](postgres-backup-restore.md#64-production-recovery-procedure));
   anything students wrote after it is lost. Running sandboxes are not restored

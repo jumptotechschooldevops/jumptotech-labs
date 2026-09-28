@@ -170,7 +170,7 @@ For example, a cron entry. The alert command is **DECISION REQUIRED**:
 17 */6 * * * cd /srv/jumptotech-labs && npm run --silent tls:check -- --origin https://<host> --cert-dir infrastructure/docker/nginx/tls >>/var/log/jumptotech/tls-check.log 2>&1 || <alert command>
 ```
 
-It needs Node 22 (`.nvmrc`; `package.json` requires `>=22`) and `npm ci` in
+It needs Node 22 (`.nvmrc`; `package.json` requires `>=22 <25`) and `npm ci` in
 that checkout. `/var/log/jumptotech` is the cron log directory the host procedure
 creates, owned by the operator account
 ([production-host-readiness.md §5.4](../development/production-host-readiness.md#54-filesystem-layout)). `--json` gives
@@ -262,11 +262,11 @@ Browsers refuse the site now. Do **not** try to bypass the gate: production pins
    `tls-install.sh` refuses to install from the live directory, into a private
    directory rather than the shared `/tmp`:
    ```bash
-   install -d -m 0700 ~/tls-restore
-   cp infrastructure/docker/nginx/tls/fullchain.pem.previous ~/tls-restore/fullchain.pem
-   (umask 077 && cp infrastructure/docker/nginx/tls/privkey.pem.previous ~/tls-restore/privkey.pem)
-   make tls-install CERT=~/tls-restore/fullchain.pem KEY=~/tls-restore/privkey.pem
-   rm -r ~/tls-restore
+   install -d -m 0700 "$HOME/tls-restore"
+   cp infrastructure/docker/nginx/tls/fullchain.pem.previous "$HOME/tls-restore/fullchain.pem"
+   (umask 077 && cp infrastructure/docker/nginx/tls/privkey.pem.previous "$HOME/tls-restore/privkey.pem")
+   make tls-install CERT="$HOME/tls-restore/fullchain.pem" KEY="$HOME/tls-restore/privkey.pem"
+   rm -r "$HOME/tls-restore"
    ```
 
 ### 7.4 Verify recovery

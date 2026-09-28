@@ -355,6 +355,11 @@ export class DockerOps {
           privileged: this.#policy.privileged,
           restartPolicy: `on-failure:${this.#policy.restartAttempts}`,
           memory: this.#policy.memory,
+          // No swap beyond it. Docker's default is twice `memory` on a host with
+          // swap, which let each Docker-track student hold DOCKER_SANDBOX_MEMORY
+          // in RAM and as much again in swap — the container tracks already pin
+          // this (providers/container/runtime.ts).
+          memorySwap: this.#policy.memory,
           cpus: this.#policy.cpus,
           pidsLimit: this.#policy.pidsLimit,
           env: { DOCKER_TLS_CERTDIR: CERT_DIR },

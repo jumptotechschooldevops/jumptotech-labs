@@ -88,10 +88,10 @@ task:
 
     **Name the slug once.** Add a `locals` block defining three values:
 
-    - `service_prefix` — the string `jumptotech`;
-    - `environment` — the string `prod`;
-    - `service_slug` — the two above with `ledger` between them, joined by
-      hyphens, composed as an expression rather than written out.
+      - `service_prefix` — the string `jumptotech`;
+      - `environment` — the string `prod`;
+      - `service_slug` — the two above with `ledger` between them, joined by
+        hyphens, composed as an expression rather than written out.
 
     **Then use them.** The manifest's filename becomes
     `build/<service_slug>.json`, and its content keeps the same three keys —

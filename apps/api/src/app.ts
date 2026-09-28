@@ -1,11 +1,12 @@
 import {
   authenticate,
   createSessionGuard,
+  requireAction,
   type AuthAuditLogger,
 } from './auth/middleware.js';
 import type { IdentityResolver } from './auth/identity.js';
 import { DevelopmentIdentityResolver } from './auth/resolvers.js';
-import { InMemoryUserRepository, type UserRepository } from './auth/users.js';
+import { InMemoryUserRepository, isUserDirectory, type UserDirectory, type UserRepository } from './auth/users.js';
 import { BrowserSessionAuthenticator } from './auth/browser-authenticator.js';
 import { InMemoryAuthSessionStore, type AuthSessionStore } from './auth/browser-session.js';
 import { deriveTransactionKey } from './auth/cookies.js';
@@ -60,6 +61,7 @@ import {
   type RateLimitPolicy,
 } from './rate-limit.js';
 import { createMeRoutes } from './routes/me.js';
+import { createAdminRoutes } from './routes/admin.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { AccessControl, InMemoryAccessStore } from './access/entitlements.js';
 import { InMemorySessionEventStore, type SessionEventStore } from './classroom/session-events.js';
@@ -132,6 +134,8 @@ export interface CreateAppDeps {
    * memory when absent, like the other stores a suite does not supply.
    */
   sessionEvents?: SessionEventStore;
+  /** When the reaper last finished a sweep, for the classroom view. Absent: unknown. */
+  reaperLastSuccessMs?: () => number | undefined;
   /**
    * Structured logging and metrics — PLATFORM-003.
    *
@@ -443,6 +447,11 @@ export function createApp(deps: CreateAppDeps): Express {
     );
   const sessionGuard = createSessionGuard(deps.sessions, audit, access);
   const sessionEvents = deps.sessionEvents ?? new InMemorySessionEventStore();
+  // Both user stores are directories; a suite's own double may not be, and then
+  // the classroom view names students by id rather than failing.
+  const directory: UserDirectory = isUserDirectory(users)
+    ? users
+    : { findByIds: async () => [], search: async () => [] };
 
   /*
    * `/auth` is outside `authenticate` on purpose.
@@ -475,6 +484,10 @@ export function createApp(deps: CreateAppDeps): Express {
       ),
       mode: deps.config.auth.mode,
       onCallback: (outcome) => observability.metrics.auth.callbacks.inc({ outcome }),
+      onLogin: (outcome) => observability.metrics.auth.logins.inc({ outcome }),
+      // Unwired until the reliability audit: every line this router writes —
+      // the provider unreachable, the session store not answering — was dropped.
+      logger: observability.logger.legacy('auth.login.unavailable', 'warn'),
     }),
   );
 
@@ -520,6 +533,33 @@ export function createApp(deps: CreateAppDeps): Express {
    */
   app.use('/api/me/learning-paths', browserCors, learningPathLimiter);
   app.use('/api/me', browserCors, originGuard, authenticated, createMeRoutes(routes));
+  /*
+   * The classroom view (docs/runbooks/instructor-guide.md). INSTRUCTOR and
+   * ADMIN only, decided server-side from the stored role by `policy.ts`; the
+   * role check runs before any handler, so a STUDENT is refused 403 on every
+   * path under it, including ones that do not exist.
+   */
+  app.use(
+    '/api/admin',
+    browserCors,
+    originGuard,
+    authenticated,
+    requireAction('classroom:read', audit),
+    createAdminRoutes({
+      registry: deps.registry,
+      sessions: deps.sessions,
+      progress: learning.progress,
+      sessionEvents,
+      users: directory,
+      launchesPaused: deps.config.launchesPaused === true,
+      retentionSeconds: deps.config.sessionRetentionMinutes * 60,
+      reaperLastSuccessMs: deps.reaperLastSuccessMs ?? (() => undefined),
+      reaperIntervalSeconds: deps.config.reaperIntervalSeconds,
+      authAudit: audit,
+      obs: observability.logger,
+      sandboxWriteLimiter,
+    }),
+  );
   app.use('/internal', createInternalRoutes({ ...deps, access }));
 
   app.use((_req, res) => {
