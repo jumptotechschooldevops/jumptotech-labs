@@ -484,6 +484,10 @@ export function createApp(deps: CreateAppDeps): Express {
       ),
       mode: deps.config.auth.mode,
       onCallback: (outcome) => observability.metrics.auth.callbacks.inc({ outcome }),
+      onLogin: (outcome) => observability.metrics.auth.logins.inc({ outcome }),
+      // Unwired until the reliability audit: every line this router writes —
+      // the provider unreachable, the session store not answering — was dropped.
+      logger: observability.logger.legacy('auth.login.unavailable', 'warn'),
     }),
   );
 

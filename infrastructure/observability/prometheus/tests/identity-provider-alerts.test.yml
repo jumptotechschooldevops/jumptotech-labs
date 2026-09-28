@@ -1,0 +1,93 @@
+# ---------------------------------------------------------------------------
+# The identity provider is down — reliability audit 2026-09-28.
+#
+# Measured on a compose stack with the test identity provider stopped: every
+# new sign-in failed, reported as AUTH_MISCONFIGURED and counted nowhere, so no
+# alert could fire. Now /auth/login and the callback count provider outages as
+# `provider_unavailable`.
+#
+#   1. provider down, students trying to sign in: fires two minutes after the
+#      second failure;
+#   2. one dropped request: quiet;
+#   3. an outage seen at the callback (token endpoint) fires too;
+#   4. those callbacks are not also counted as OidcSignInFailures, whose
+#      question is a forged or broken token, not a provider outage.
+#
+# promtool's clock starts at Unix time 0; the counters are zero-initialised.
+# ---------------------------------------------------------------------------
+
+rule_files:
+  - ../alerts/security.yml
+  - ../rules/recording.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 1m
+    name: sign-ins that cannot reach the provider fire
+    input_series:
+      - series: 'jtt_auth_login_total{instance="api:9400",outcome="provider_unavailable"}'
+        values: '0 0 1 1 2 3 3 3'
+      - series: 'jtt_auth_callback_total{instance="api:9400",outcome="provider_unavailable"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: IdentityProviderUnreachable
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: IdentityProviderUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'New sign-ins are failing: the identity provider is not responding'
+              description: >-
+                3 sign-in attempts in 10 minutes could not reach the identity
+                provider (discovery or token endpoint unreachable, timed out, or
+                HTTP 5xx). Students already signed in are not affected. Check the
+                provider's status page first; this deployment's configuration is
+                not the cause unless it changed.
+              runbook_url: docs/runbooks/RB-14-auth.md
+
+  - interval: 1m
+    name: one dropped request is not an outage
+    input_series:
+      - series: 'jtt_auth_login_total{instance="api:9400",outcome="provider_unavailable"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'jtt_auth_callback_total{instance="api:9400",outcome="provider_unavailable"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: IdentityProviderUnreachable
+        exp_alerts: []
+
+  - interval: 1m
+    name: an outage at the token endpoint fires, and is not a token-verification alert
+    input_series:
+      - series: 'jtt_auth_login_total{instance="api:9400",outcome="provider_unavailable"}'
+        values: '0x20'
+      - series: 'jtt_auth_callback_total{instance="api:9400",outcome="provider_unavailable"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20'
+      - series: 'jtt_auth_callback_total{instance="api:9400",outcome="verification_failed"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: IdentityProviderUnreachable
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: IdentityProviderUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'New sign-ins are failing: the identity provider is not responding'
+              description: >-
+                4 sign-in attempts in 10 minutes could not reach the identity
+                provider (discovery or token endpoint unreachable, timed out, or
+                HTTP 5xx). Students already signed in are not affected. Check the
+                provider's status page first; this deployment's configuration is
+                not the cause unless it changed.
+              runbook_url: docs/runbooks/RB-14-auth.md
+      - eval_time: 15m
+        alertname: OidcSignInFailures
+        exp_alerts: []

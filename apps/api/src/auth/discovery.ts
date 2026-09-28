@@ -81,11 +81,15 @@ export async function fetchDiscoveryDocument(
     });
   } catch {
     clearTimeout(timer);
-    throw new AuthError('AUTH_MISCONFIGURED', 'Could not reach the identity provider for discovery.');
+    throw new AuthError('AUTH_PROVIDER_UNAVAILABLE', 'Could not reach the identity provider for discovery.');
   }
   if (!response.ok) {
     clearTimeout(timer);
-    throw new AuthError('AUTH_MISCONFIGURED', 'The identity provider refused the discovery request.');
+    // 5xx is the provider having an outage; 4xx (a wrong issuer path, most of
+    // all) is this deployment's configuration.
+    throw response.status >= 500
+      ? new AuthError('AUTH_PROVIDER_UNAVAILABLE', `The identity provider answered discovery with HTTP ${response.status}.`)
+      : new AuthError('AUTH_MISCONFIGURED', 'The identity provider refused the discovery request.');
   }
 
   // Still under the deadline: `fetch` resolves at the headers, and a document
@@ -94,12 +98,9 @@ export async function fetchDiscoveryDocument(
   try {
     document = (await response.json()) as Record<string, unknown>;
   } catch {
-    throw new AuthError(
-      'AUTH_MISCONFIGURED',
-      controller.signal.aborted
-        ? 'The identity provider did not finish sending its discovery document in time.'
-        : "The identity provider's discovery document was not JSON.",
-    );
+    throw controller.signal.aborted
+      ? new AuthError('AUTH_PROVIDER_UNAVAILABLE', 'The identity provider did not finish sending its discovery document in time.')
+      : new AuthError('AUTH_MISCONFIGURED', "The identity provider's discovery document was not JSON.");
   } finally {
     clearTimeout(timer);
   }
