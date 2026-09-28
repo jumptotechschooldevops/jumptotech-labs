@@ -309,6 +309,19 @@ suite('SEC-ARCH-2 — a Unix identity per session, on a real kernel', () => {
     }
   });
 
+  it('leaves the tools a Kubernetes or Docker lab uses working as the session’s own uid', async () => {
+    // kubectl reads the session's kubeconfig and writes its cache under a home
+    // that is the session's own.
+    expect(await a.run('kubectl config view -o jsonpath={.kind}')).toBe('Config');
+    expect(await a.run('kubectl version --client -o json >/dev/null && echo client-ok')).toBe('client-ok');
+    expect(await a.run('mkdir -p ~/.kube/cache && touch ~/.kube/cache/x && echo cache-ok')).toBe('cache-ok');
+    // Files a student makes are readable by what they build: `COPY` into an
+    // image keeps the mode, and a 0600 file is unreadable to a non-root app.
+    expect(await a.run('umask')).toBe('0022');
+    expect(await a.run('echo hi > ~/app.py && stat -c %a ~/app.py')).toBe('644');
+    expect(await a.run('docker --version >/dev/null && echo docker-cli-ok')).toBe('docker-cli-ok');
+  });
+
   it('gives a shell no way back up: no uid 0, no other session’s uid', async () => {
     expect(await a.run('setpriv --reuid=0 true')).toMatch(/Operation not permitted/);
     expect(await a.run(`setpriv --reuid=${B.shellUid} true`)).toMatch(/Operation not permitted/);
