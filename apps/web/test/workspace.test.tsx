@@ -376,7 +376,7 @@ describe('Reset', () => {
     act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'SHELL_EXITED' }));
 
     expect(await screen.findByText('Terminal: Resetting your environment…')).toBeTruthy();
-    expect(screen.queryByText('Terminal: The shell exited.')).toBeNull();
+    expect(screen.queryByText(/Terminal: The shell exited/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
 
     await act(async () => {
@@ -830,7 +830,9 @@ describe('the terminal connection', () => {
     apiMock.issueTerminal.mockResolvedValue({ session: sessionInfo(), terminal: { url: 'ws://terminal', token: 'second-token' } });
 
     act(() => terminal.last!.onEvent({ status: 'disconnected', code: 'SHELL_EXITED' }));
-    expect(screen.getByText('Terminal: The shell exited.')).toBeTruthy();
+    expect(
+      screen.getByText('Terminal: The shell exited — your lab and files are still there. Press Reconnect for a new shell.'),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
     await waitFor(() => expect(screen.getByTestId('terminal').getAttribute('data-token')).toBe('second-token'));

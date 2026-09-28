@@ -698,11 +698,32 @@ async function main(): Promise<void> {
       clearInterval(sessionEventSweeper);
       observabilityServer.close();
       operatorSocket?.close();
+      /*
+       * Starts and resets still running are cut off below. Hand them to the
+       * reaper first (SessionManager.interruptInFlight), while the pool is
+       * open: otherwise each holds its student's slot behind "Preparing…" for
+       * the ten-minute abandoned-operation grace. Bounded, so a database that
+       * does not answer cannot eat the shutdown budget.
+       */
+      const handOver = Promise.race([
+        sessions.interruptInFlight().then(({ starts, resets }) => {
+          if (starts + resets > 0) {
+            logger.warn(
+              'process.stopping',
+              { reason: 'operations_interrupted', count: starts + resets },
+              `handed ${starts} start(s) and ${resets} reset(s) still running to the reaper`,
+            );
+          }
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, 3_000).unref()),
+      ]);
       server.close(() => {
         // Release the connection pool so a restart does not leave connections
-        // hanging on the database side.
-        const closed = learning.database?.close() ?? Promise.resolve();
-        void closed.catch(() => undefined).finally(() => process.exit(0));
+        // hanging on the database side — after the hand-over has used it.
+        void handOver.finally(() => {
+          const closed = learning.database?.close() ?? Promise.resolve();
+          void closed.catch(() => undefined).finally(() => process.exit(0));
+        });
       });
       // `close` waits for in-flight requests, and Start Lab holds its request
       // for the whole provisioning (up to the 180 s ready timeout). Docker's

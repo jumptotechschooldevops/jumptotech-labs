@@ -31,7 +31,16 @@ import { Badge, DifficultyBadge, LoadingState, PageHeader, ProgressBadge } from 
 /** How often a lab page re-reads the session list while the student's previous lab shuts down. */
 const SHUTDOWN_RECHECK_MS = 3_000;
 
-function LaunchPanel({ lab }: { lab: LabDetail }) {
+function LaunchPanel({
+  lab,
+  onRecheck,
+  rechecking,
+}: {
+  lab: LabDetail;
+  /** Read the lab again: its availability is the provider probe's answer at the time the page loaded. */
+  onRecheck: () => void;
+  rechecking: boolean;
+}) {
   const sessions = useActiveSession();
   const { sessionForLab, entries, launching, launchError, limit, launch } = sessions;
 
@@ -135,6 +144,13 @@ function LaunchPanel({ lab }: { lab: LabDetail }) {
         <p className="notice__guidance">
           Labs in other tracks may still work. If this lasts, let your instructor know.
         </p>
+        {/* The answer is from when the page loaded; a platform that was only
+            busy for a moment is often ready again seconds later. */}
+        <div className="notice__actions">
+          <button type="button" className="btn btn--secondary" onClick={onRecheck} disabled={rechecking}>
+            {rechecking ? 'Checking…' : 'Check again'}
+          </button>
+        </div>
       </div>
     );
   } else {
@@ -184,6 +200,18 @@ export function LabDetailPage({ labId }: { labId: string }) {
   const [lab, setLab] = useState<LabDetail | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [nonce, setNonce] = useState(0);
+  const [rechecking, setRechecking] = useState(false);
+
+  /** Read the lab again in place — no loading screen — to see whether it can be started now. */
+  const recheck = () => {
+    if (rechecking) return;
+    setRechecking(true);
+    Promise.resolve()
+      .then(() => api.getLab(labId))
+      .then((detail) => setLab(detail))
+      .catch(() => undefined)
+      .finally(() => setRechecking(false));
+  };
 
   usePageTitle(lab ? `${lab.id} ${lab.title}` : labId);
 
@@ -265,7 +293,7 @@ export function LabDetailPage({ labId }: { labId: string }) {
         </div>
 
         <aside className="detail-layout__side" aria-label="Launch and environment">
-          <LaunchPanel lab={lab} />
+          <LaunchPanel lab={lab} onRecheck={recheck} rechecking={rechecking} />
 
           <section className="panel" aria-labelledby="environment-heading">
             <h2 id="environment-heading" className="panel__title">
