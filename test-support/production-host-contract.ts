@@ -254,12 +254,15 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
   for (const [name, service] of Object.entries(services)) {
     if (service.privileged === true) privilegeProblems.push(`${name} is privileged`);
     const added = (service.cap_add ?? []).map((cap) => cap.toUpperCase().replace(/^CAP_/, '')).sort();
-    const allowedAdds = name === 'terminal' ? ['SETGID', 'SETUID'] : [];
+    // The terminal launches its service with exactly these as ambient
+    // capabilities, to run each session's shell as its own uid and hand it its
+    // files (SEC-ARCH-2); it refuses to start holding any other.
+    const allowedAdds = name === 'terminal' ? ['CHOWN', 'SETGID', 'SETUID'] : [];
     const extra = added.filter((cap) => !allowedAdds.includes(cap));
     if (extra.length) privilegeProblems.push(`${name} adds ${extra.join(', ')}`);
     if (service.network_mode === 'host') privilegeProblems.push(`${name} uses the host network`);
   }
-  results.push(one('privilege.containers', privilegeProblems, 'no compose service is privileged, on the host network, or given a capability beyond the terminal SETUID/SETGID drop'));
+  results.push(one('privilege.containers', privilegeProblems, 'no compose service is privileged, on the host network, or given a capability beyond the terminal SETUID/SETGID/CHOWN'));
 
   if (options.hostDockerSocketGid !== undefined && services.sandboxd) {
     const groups = (services.sandboxd.group_add ?? []).map(String);
