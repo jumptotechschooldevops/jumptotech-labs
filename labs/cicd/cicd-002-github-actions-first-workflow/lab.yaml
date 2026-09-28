@@ -59,11 +59,11 @@ task:
 
     Create `.github/workflows/ci.yml` in your workspace so that it:
 
-    * has a `name`
-    * runs `on` a `push`
-    * defines a job whose id is `build`
-    * runs that job on `ubuntu-latest`
-    * has at least one step
+      * has a `name`
+      * runs `on` a `push`
+      * defines a job whose id is `build`
+      * runs that job on `ubuntu-latest`
+      * has at least one step
 
     The step can be anything at all for now — printing a line is fine. What is
     being checked here is workflow *structure*, not what the job does.

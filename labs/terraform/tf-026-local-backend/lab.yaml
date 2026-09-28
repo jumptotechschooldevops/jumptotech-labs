@@ -318,7 +318,7 @@ hints:
       Nothing else goes in that file — the line is checked as a whole, so an
       extra heading or a second line will fail it.
 
-      and `terraform apply`. It should report one resource to add and nothing
+      Then run `terraform apply`. It should report one resource to add and nothing
       to change.
 
 references:

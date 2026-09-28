@@ -93,6 +93,8 @@ describe('the sign-in gate', () => {
     // Crucially not a sign-in button: the problem is not that nobody signed in.
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    // And what a student can do about it: check their side, then wait and retry.
+    expect(screen.getByText(/Check your internet connection, then press Try again/)).toBeTruthy();
   });
 
   it('gives up on an API that accepts the session query and never answers', async () => {
@@ -285,6 +287,24 @@ describe('signing in and out', () => {
     expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
   });
 
+  /*
+   * A shared computer: the next student signs in from the page the last one
+   * left. Sign-in returns to the current address, so without this the next
+   * student landed on the previous one's lab workspace or learning stage.
+   */
+  it('forgets where the student was, so the next sign-in on this browser starts at the dashboard', async () => {
+    window.history.replaceState(null, '', '/#/labs/LINUX-002/workspace');
+    const signInImpl = vi.fn();
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_IN), signInImpl });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    await screen.findByRole('button', { name: 'Sign in' });
+
+    expect(window.location.hash).toBe('');
+    // A deliberate sign-out is not reported as an expiry.
+    expect(screen.queryByText(/sign-in has expired/i)).toBeNull();
+  });
+
   it('re-enables the button when sign-out fails, so it can be retried', async () => {
     const signOutImpl = vi.fn().mockRejectedValue(new Error('network'));
     renderGate({ loadSession: () => Promise.resolve(SIGNED_IN), signOutImpl });
@@ -315,6 +335,29 @@ describe('an expired session', () => {
 
     expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy();
     expect(loadSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('tells a student whose sign-in expired what happened, and keeps their place for when they sign back in', async () => {
+    window.history.replaceState(null, '', '/#/labs/LINUX-001/workspace');
+    let signedIn = true;
+    renderGate({ loadSession: () => Promise.resolve(signedIn ? SIGNED_IN : SIGNED_OUT) });
+    expect(await screen.findByText('the catalog')).toBeTruthy();
+
+    signedIn = false;
+    announceAuthExpired();
+
+    const notice = await screen.findByRole('alert');
+    expect(notice.textContent).toMatch(/Your sign-in has expired/);
+    expect(notice.textContent).toMatch(/saved progress is not affected/);
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    // Sign-in returns here: same student, same place.
+    expect(window.location.hash).toBe('#/labs/LINUX-001/workspace');
+  });
+
+  it('does not call a first visit an expired sign-in', async () => {
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_OUT) });
+    await screen.findByRole('button', { name: 'Sign in' });
+    expect(screen.queryByText(/sign-in has expired/i)).toBeNull();
   });
 
   it('dispatches exactly one event per announcement', () => {

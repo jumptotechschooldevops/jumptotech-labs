@@ -199,8 +199,7 @@ test.describe('Verify', () => {
 });
 
 test.describe('Reset and End', () => {
-  // Known defect on main, fixed in its own PR: a double click on End lab or Reset opens and instantly closes its dialog.
-  test.fixme('a double click on End lab or Reset opens its confirmation and leaves it open to read', async ({ page, platform }) => {
+  test('a double click on End lab or Reset opens its confirmation and leaves it open to read', async ({ page, platform }) => {
     await openSignedIn(page, platform);
     await launch(page);
     for (const [button, title] of [['End lab', 'End this lab?'], ['Reset', 'Reset this lab?']] as const) {

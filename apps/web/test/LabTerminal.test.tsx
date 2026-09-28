@@ -24,6 +24,7 @@ const xterm = vi.hoisted(() => ({
     setSize(cols: number, rows: number): void;
     type(data: string): void;
     written: string[];
+    focusCount: number;
   }[],
   /** The size the next `fit()` settles on. */
   fitTo: { cols: 80, rows: 24 },
@@ -66,7 +67,10 @@ vi.mock('@xterm/xterm', () => {
     writeln(text: string) {
       this.written.push(text);
     }
-    focus() {}
+    focusCount = 0;
+    focus() {
+      this.focusCount += 1;
+    }
     clear() {}
     dispose() {}
   }
@@ -352,5 +356,50 @@ describe('LabTerminal input typed while connecting', () => {
       expect(lone.test(frame.data as string)).toBe(false);
     }
     expect(paste.startsWith(inputs(socket))).toBe(true);
+  });
+});
+
+describe('LabTerminal focus on connect', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('takes the keyboard focus when the shell is ready and nothing else holds it', () => {
+    const { socket, term } = mount();
+    act(() => socket.serverOpens());
+    act(() => socket.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+    expect(term.focusCount).toBe(1);
+  });
+
+  it('does not pull focus out of an open confirmation dialog when a reconnect completes', () => {
+    const { socket, term } = mount();
+    // The student opened "End this lab?" while the terminal was still connecting.
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'alertdialog');
+    dialog.setAttribute('aria-modal', 'true');
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Cancel';
+    dialog.append(cancel);
+    document.body.append(dialog);
+    cancel.focus();
+
+    act(() => socket.serverOpens());
+    act(() => socket.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+
+    expect(term.focusCount).toBe(0);
+    expect(document.activeElement).toBe(cancel);
+  });
+
+  it('does not take focus from a field the student is typing in', () => {
+    const { socket, term } = mount();
+    const field = document.createElement('input');
+    document.body.append(field);
+    field.focus();
+
+    act(() => socket.serverOpens());
+    act(() => socket.serverSends({ type: 'ready', sessionId: 'sess-a' }));
+
+    expect(term.focusCount).toBe(0);
+    expect(document.activeElement).toBe(field);
   });
 });

@@ -83,11 +83,11 @@ task:
 
     Declare three input variables, and give each one a type:
 
-    - `environment` — a string, with **no default**. There is no sensible
-      default for which environment you are deploying; leaving it out is how
-      you make Terraform insist on being told.
-    - `replicas` — a number, defaulting to `2`.
-    - `debug` — a boolean, defaulting to `true`.
+      - `environment` — a string, with **no default**. There is no sensible
+        default for which environment you are deploying; leaving it out is how
+        you make Terraform insist on being told.
+      - `replicas` — a number, defaulting to `2`.
+      - `debug` — a boolean, defaulting to `true`.
 
     Then rewrite the resource so it uses them. The filename becomes
     `build/<environment>.json`, and the JSON keeps exactly the shape it has now

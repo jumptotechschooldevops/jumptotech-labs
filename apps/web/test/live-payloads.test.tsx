@@ -227,24 +227,30 @@ describe('lab page UI against the real API payload (test requirement 35)', () =>
     expect(screen.getByText(/nothing stops you starting this lab now/i)).toBeTruthy();
   });
 
+  /** Whether a hint is on screen. Hints render their `code` spans as elements, so compare the visible text. */
+  const hintShown = (text: string): boolean => {
+    const visible = (value: string) => value.replace(/`|\*\*/g, '').replace(/\s+/g, ' ').trim();
+    return [...document.querySelectorAll('.hints__item')].some((item) => visible(item.textContent ?? '').endsWith(visible(text)));
+  };
+
   it('unlocks the real hint ladder one step at a time (test requirement 36)', () => {
     render(<LabBrief lab={TROUBLESHOOTING} />);
     // YAML folded scalars keep a trailing newline that the DOM renders trimmed.
     const [first, second, third] = TROUBLESHOOTING.hints.map((hint) => hint.text.trim());
 
     expect(screen.getByText('0 of 3')).toBeTruthy();
-    expect(screen.queryByText(first!)).toBeNull();
+    expect(hintShown(first!)).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: /show a hint/i }));
-    expect(screen.getByText(first!)).toBeTruthy();
-    expect(screen.queryByText(second!)).toBeNull();
+    expect(hintShown(first!)).toBe(true);
+    expect(hintShown(second!)).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: /show hint 2/i }));
-    expect(screen.getByText(second!)).toBeTruthy();
-    expect(screen.queryByText(third!)).toBeNull();
+    expect(hintShown(second!)).toBe(true);
+    expect(hintShown(third!)).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: /show hint 3/i }));
-    expect(screen.getByText(third!)).toBeTruthy();
+    expect(hintShown(third!)).toBe(true);
     expect(screen.queryByRole('button', { name: /show/i })).toBeNull();
   });
 
@@ -285,7 +291,7 @@ describe('lab page UI against the real API payload (test requirement 35)', () =>
     expect(screen.getByText('LINUX-010')).toBeTruthy();
     for (const hint of LINUX_TROUBLESHOOTING.hints) {
       fireEvent.click(screen.getByRole('button', { name: /show/i }));
-      expect(screen.getByText(hint.text.trim())).toBeTruthy();
+      expect(hintShown(hint.text)).toBe(true);
     }
     // Even fully hinted, the brief never states the seeded fault or its fix.
     expect(container.textContent).not.toContain('seed.sh');

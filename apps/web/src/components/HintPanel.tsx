@@ -25,8 +25,9 @@
  * without being reported again, so a reload no longer hides the hints a
  * student has already read. It only ever opens hints — never closes one.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LabHint } from '../lib/types';
+import { RichText } from './RichText';
 
 export interface HintPanelProps {
   hints: LabHint[];
@@ -43,9 +44,23 @@ export function HintPanel({ hints, onReveal, alreadyRevealed = 0 }: HintPanelPro
     setRevealed((current) => Math.max(current, Math.min(alreadyRevealed, hints.length)));
   }, [alreadyRevealed, hints.length]);
 
-  const revealNext = useCallback(() => {
+  /*
+   * Revealing the last hint removes the button that was pressed, and focus
+   * with it — to <body>, the top of the page. When the button had focus, hand
+   * it to the hint just opened instead.
+   */
+  const lastHint = useRef<HTMLLIElement | null>(null);
+  const focusLastHint = useRef(false);
+  useEffect(() => {
+    if (!focusLastHint.current) return;
+    focusLastHint.current = false;
+    lastHint.current?.focus();
+  }, [revealed]);
+
+  const revealNext = useCallback((event?: { currentTarget: EventTarget }) => {
     if (revealed >= hints.length) return;
     const hint = hints[revealed];
+    focusLastHint.current = revealed + 1 === hints.length && event?.currentTarget === document.activeElement;
     setRevealed(revealed + 1);
     // Reported outside the state updater: React may invoke an updater more than
     // once, and a reveal that is *reported* twice would be a lie about what the
@@ -74,10 +89,16 @@ export function HintPanel({ hints, onReveal, alreadyRevealed = 0 }: HintPanelPro
       )}
 
       <ol className="hints__list">
-        {hints.slice(0, revealed).map((hint) => (
-          <li key={hint.level} className="hints__item">
+        {hints.slice(0, revealed).map((hint, index) => (
+          <li
+            key={hint.level}
+            className="hints__item"
+            {...(index === hints.length - 1 ? { ref: lastHint, tabIndex: -1 } : {})}
+          >
             <span className="hints__level">Hint {hint.level}</span>
-            <p className="hints__text">{hint.text}</p>
+            <div className="hints__body">
+              <RichText text={hint.text} className="hints__text" />
+            </div>
           </li>
         ))}
       </ol>

@@ -214,6 +214,11 @@ requirements:
     label: The second address in classify.txt is classified correctly
   - type: file_key_value
     path: /home/student/subnets/classify.txt
+    key: "192.168.100.79"
+    equals: private
+    label: The third address in classify.txt is classified correctly
+  - type: file_key_value
+    path: /home/student/subnets/classify.txt
     key: "127.0.0.1"
     equals: loopback
     label: The fourth address in classify.txt is classified correctly
@@ -222,11 +227,6 @@ requirements:
     key: "169.254.10.5"
     equals: link-local
     label: The fifth address in classify.txt is classified correctly
-  - type: file_key_value
-    path: /home/student/subnets/classify.txt
-    key: "192.168.100.79"
-    equals: private
-    label: The third address in classify.txt is classified correctly
   - type: file_key_value
     path: /home/student/subnets/classify.txt
     key: "8.8.8.8"
