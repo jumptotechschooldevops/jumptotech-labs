@@ -83,6 +83,9 @@ import { assertActor, assertReason, assertUserId } from './access/entitlements.j
 import { isRole, ROLES } from './auth/identity.js';
 import type { UserRepository } from './auth/users.js';
 import type { AuthSessionStore } from './auth/browser-session.js';
+import { billingActionFor, handleBillingRequest, type BillingRouteResult } from './billing/operator-billing.js';
+import type { BillingService } from './billing/service.js';
+import { BillingError } from './billing/types.js';
 
 type OperatorAction =
   | 'status'
@@ -92,7 +95,8 @@ type OperatorAction =
   | 'role_show'
   | 'role_set'
   | 'sign_out'
-  | AccessRouteResult['action'];
+  | AccessRouteResult['action']
+  | BillingRouteResult['action'];
 type OperatorOutcome = 'ok' | 'rejected' | 'failed';
 
 export interface OperatorDeps {
@@ -119,6 +123,8 @@ export interface OperatorDeps {
    * answers 404 — the store is the only place a sign-in can be ended.
    */
   authSessions?: Pick<AuthSessionStore, 'destroyAllForUser'>;
+  /** Billing (docs/billing.md): list, show, reconcile. Absent (billing off): 404. */
+  billing?: BillingService;
   now?: () => number;
 }
 
@@ -314,6 +320,9 @@ function send(res: ServerResponse, status: number, payload: unknown): void {
 function refusal(error: unknown): { status: number; code: string; message: string } | null {
   const access = accessRefusal(error);
   if (access) return access;
+  if (error instanceof BillingError) {
+    return { status: error.code === 'PROVIDER_UNAVAILABLE' ? 503 : 409, code: error.code, message: error.message };
+  }
   if (!(error instanceof SessionError)) return null;
   const status = error.code === 'SESSION_NOT_FOUND' ? 404 : error.code === 'INVALID_SESSION_ID' ? 400 : 409;
   return { status, code: error.code, message: error.message };
@@ -501,6 +510,22 @@ export function createOperatorHandler(deps: OperatorDeps): (req: IncomingMessage
           }
           count(action, 'ok');
           deps.logger.info('ops.operator.request', { action, outcome: 'ok', userId });
+          return;
+        } else if (parts[0] === 'v1' && parts[1] === 'billing') {
+          action = billingActionFor(method, parts) ?? undefined;
+          if (!deps.billing) {
+            send(res, 404, { ok: false, error: { code: 'BILLING_DISABLED', message: 'billing is not enabled on this api' } });
+            return;
+          }
+          const served = await handleBillingRequest({ service: deps.billing, logger: deps.logger }, req, url);
+          if (!served) {
+            send(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'no such operator endpoint' } });
+            return;
+          }
+          action = served.action;
+          send(res, served.status, { ok: true, data: served.payload });
+          count(action, 'ok');
+          deps.logger.info('ops.operator.request', { action, outcome: 'ok', ...(served.logFields ?? {}) });
           return;
         } else if (parts.length >= 3 && parts[0] === 'v1' && parts[1] === 'sessions') {
           const isEnd = parts.length === 4 && parts[3] === 'end' && method === 'POST';

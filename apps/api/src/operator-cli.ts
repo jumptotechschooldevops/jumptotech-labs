@@ -47,6 +47,14 @@ export const USAGE = `usage: operator-cli <command> [--json]
   access trial <user-id> --by <operator> --reason <text>
                          start a trial of TRIAL_DURATION_DAYS, once per account
   access plans           the configured plans (ACCESS_PLANS_FILE) and trial terms
+
+  Billing (docs/billing.md) — only when BILLING_PROVIDER is set.
+
+  billing list           every subscription, newest first, in product terms
+  billing show <user-id> one account: customer, subscriptions, billing's row, events
+  billing reconcile [--apply --by <operator> --reason <text>]
+                         compare stored state with the provider; --apply
+                         re-processes what drifted through the webhook path
   access suspend <user-id> --by <operator> --reason <text> [--end-sessions --yes]
   access restore <user-id> --by <operator> --reason <text>
   access revoke  <user-id> --by <operator> --reason <text> [--end-sessions --yes]
@@ -80,7 +88,10 @@ export type Command =
   | { kind: 'access-change'; verb: AccessVerb; userId: string; body: Record<string, unknown> }
   | { kind: 'role-show'; userId: string }
   | { kind: 'role-set'; userId: string; body: { role: string; by: string; reason: string } }
-  | { kind: 'sign-out'; userId: string; body: { by: string; reason: string } };
+  | { kind: 'sign-out'; userId: string; body: { by: string; reason: string } }
+  | { kind: 'billing-list' }
+  | { kind: 'billing-show'; userId: string }
+  | { kind: 'billing-reconcile'; body: Record<string, unknown> };
 
 /** Options that take a value, per access verb. */
 const ACCESS_VALUE_OPTIONS: Record<string, readonly string[]> = {
@@ -233,10 +244,58 @@ export function parseSignOutArgs(argv: readonly string[]): { command: Command; j
   return { command: { kind: 'sign-out', userId: words[0]!, body: { by: values['--by'], reason: values['--reason'] } }, json };
 }
 
+export function parseBillingArgs(argv: readonly string[]): { command: Command; json: boolean } | { error: string } {
+  const [verb, ...rest] = argv;
+  const json = rest.includes('--json');
+  const words: string[] = [];
+  const values: Record<string, string> = {};
+  let apply = false;
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i]!;
+    if (arg === '--json') continue;
+    if (arg === '--apply' && verb === 'reconcile') {
+      apply = true;
+    } else if ((arg === '--by' || arg === '--reason') && verb === 'reconcile') {
+      const value = rest[i + 1];
+      if (value === undefined || value.startsWith('--')) return { error: `${arg} needs a value` };
+      values[arg] = value;
+      i += 1;
+    } else if (arg.startsWith('--')) {
+      return { error: `unknown option ${arg} for billing ${verb ?? ''}`.trim() };
+    } else {
+      words.push(arg);
+    }
+  }
+  switch (verb) {
+    case 'list':
+      return words.length === 0 ? { command: { kind: 'billing-list' }, json } : { error: 'billing list takes no argument' };
+    case 'show':
+      return words.length === 1 ? { command: { kind: 'billing-show', userId: words[0]! }, json } : { error: 'billing show needs exactly one <user-id>' };
+    case 'reconcile': {
+      if (words.length > 0) return { error: 'billing reconcile takes no argument' };
+      if (!apply && (values['--by'] || values['--reason'])) return { error: '--by and --reason go with --apply' };
+      if (apply && (!values['--by'] || !values['--reason'])) {
+        return { error: 'billing reconcile --apply needs --by <operator> and --reason <text>: it changes access' };
+      }
+      return {
+        command: {
+          kind: 'billing-reconcile',
+          body: apply ? { apply: true, by: values['--by'], reason: values['--reason'] } : {},
+        },
+        json,
+      };
+    }
+    default:
+      return { error: verb ? `unknown billing command ${verb}` : 'billing needs a command: list, show, reconcile' };
+  }
+
+}
+
 export function parseArgs(argv: readonly string[]): { command: Command; json: boolean } | { error: string } {
   if (argv[0] === 'access') return parseAccessArgs(argv.slice(1));
   if (argv[0] === 'role') return parseRoleArgs(argv.slice(1));
   if (argv[0] === 'sign-out') return parseSignOutArgs(argv.slice(1));
+  if (argv[0] === 'billing') return parseBillingArgs(argv.slice(1));
   const json = argv.includes('--json');
   const recent = argv.includes('--recent');
   const yes = argv.includes('--yes');
@@ -304,6 +363,12 @@ function pathFor(command: Command): { method: 'GET' | 'POST'; path: string; body
       return { method: 'GET', path: `/v1/access/${encodeURIComponent(command.userId)}` };
     case 'access-plans':
       return { method: 'GET', path: '/v1/access/plans' };
+    case 'billing-list':
+      return { method: 'GET', path: '/v1/billing' };
+    case 'billing-show':
+      return { method: 'GET', path: `/v1/billing/${encodeURIComponent(command.userId)}` };
+    case 'billing-reconcile':
+      return { method: 'POST', path: '/v1/billing/reconcile', body: command.body };
     case 'access-change':
       return {
         method: 'POST',
@@ -511,6 +576,63 @@ export function formatAccountDetail(data: {
   ].join('\n');
 }
 
+export function formatBillingList(data: {
+  provider: string;
+  mode: string;
+  subscriptions: Array<{ subscriptionRef: string; userId: string; productStatus: string; planId: string | null; currentPeriodEnd: string }>;
+}): string {
+  const header = `billing: provider ${data.provider}, ${data.mode.toUpperCase()} mode`;
+  if (data.subscriptions.length === 0) return `${header}\nno subscriptions`;
+  const rows = [['SUBSCRIPTION', 'USER ID', 'STATUS', 'PLAN', 'PERIOD END']];
+  for (const s of data.subscriptions) rows.push([s.subscriptionRef, s.userId, s.productStatus, s.planId ?? '-', s.currentPeriodEnd]);
+  return `${header}\n${table(rows)}`;
+}
+
+export function formatBillingShow(data: {
+  provider: string;
+  mode: string;
+  userId: string;
+  customerRef: string | null;
+  account: { subscription: { status: string; accessUntil: string | null } | null; canSubscribe: boolean };
+  billingEntitlement: { status: string; kind: string; planId: string | null; expiresAt: string | null } | null;
+  subscriptions: Array<{ subscriptionRef: string; productStatus: string; status: string; currentPeriodEnd: string; cancelAtPeriodEnd: boolean; providerStateAt: string }>;
+  recentEvents: Array<{ processedAt: string; eventType: string; eventId: string; outcome: string }>;
+}): string {
+  const e = data.billingEntitlement;
+  return [
+    `user:            ${data.userId}`,
+    `provider:        ${data.provider} (${data.mode.toUpperCase()} mode)`,
+    `customer:        ${data.customerRef ?? 'none — never completed a checkout'}`,
+    `student sees:    ${data.account.subscription ? `${data.account.subscription.status}${data.account.subscription.accessUntil ? ` until ${data.account.subscription.accessUntil}` : ''}` : 'no subscription'}`,
+    `billing row:     ${e ? `${e.status} ${e.kind}/${e.planId ?? '-'} until ${e.expiresAt ?? 'no end'}` : 'none'}`,
+    `subscriptions:   ${data.subscriptions.length === 0 ? 'none' : ''}`,
+    ...data.subscriptions.map(
+      (s) =>
+        `  ${s.subscriptionRef}  ${s.productStatus} (provider: ${s.status})  period end ${s.currentPeriodEnd}` +
+        `${s.cancelAtPeriodEnd ? '  cancels at period end' : ''}  state as of ${s.providerStateAt}`,
+    ),
+    `recent events:   ${data.recentEvents.length === 0 ? 'none' : '(newest first)'}`,
+    ...data.recentEvents.map((ev) => `  ${ev.processedAt}  ${ev.eventType.padEnd(22)} ${ev.outcome.padEnd(8)} ${ev.eventId}`),
+  ].join('\n');
+}
+
+export function formatReconcile(data: {
+  checked: number;
+  drift: Array<{ subscriptionRef: string; userId: string; field: string; stored: string; provider: string }>;
+  applied: Array<{ subscriptionRef: string; outcome: string }>;
+  manual: Array<{ subscriptionRef: string; userId: string }>;
+}): string {
+  return [
+    `checked ${data.checked} subscription(s); ${data.drift.length} disagreement(s)`,
+    ...data.drift.map((d) => `  ${d.subscriptionRef}  ${d.userId}  ${d.field}: stored ${d.stored} | provider ${d.provider}`),
+    ...(data.applied.length > 0 ? ['re-processed from the provider:', ...data.applied.map((a) => `  ${a.subscriptionRef}: ${a.outcome}`)] : []),
+    ...(data.manual.length > 0
+      ? ['needs a person (the provider does not know it):', ...data.manual.map((m) => `  ${m.subscriptionRef}  ${m.userId}`)]
+      : []),
+    ...(data.drift.length > 0 && data.applied.length === 0 ? ['report only — nothing changed. Add --apply --by <you> --reason <why> to fix.'] : []),
+  ].join('\n');
+}
+
 export function formatAccessChange(verb: string, data: {
   changed: boolean;
   account: AccountAccessView | null;
@@ -566,6 +688,15 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       break;
     case 'access-plans':
       process.stdout.write(`${formatPlans(data as unknown as Parameters<typeof formatPlans>[0])}\n`);
+      break;
+    case 'billing-list':
+      process.stdout.write(`${formatBillingList(data as unknown as Parameters<typeof formatBillingList>[0])}\n`);
+      break;
+    case 'billing-show':
+      process.stdout.write(`${formatBillingShow(data as unknown as Parameters<typeof formatBillingShow>[0])}\n`);
+      break;
+    case 'billing-reconcile':
+      process.stdout.write(`${formatReconcile(data as unknown as Parameters<typeof formatReconcile>[0])}\n`);
       break;
     case 'access-change':
       process.stdout.write(

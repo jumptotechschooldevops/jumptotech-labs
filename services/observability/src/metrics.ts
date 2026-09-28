@@ -1143,6 +1143,10 @@ export const OPERATOR_ACTIONS = [
   'role_set',
   // Ending an account's browser sign-ins (docs/runbooks/identity-and-access.md).
   'sign_out',
+  // Billing (docs/billing.md).
+  'billing_list',
+  'billing_show',
+  'billing_reconcile',
 ] as const;
 /** How an operator request ended: served, refused (bad input, unknown session), or failed. */
 export const OPERATOR_OUTCOMES = ['ok', 'rejected', 'failed'] as const;

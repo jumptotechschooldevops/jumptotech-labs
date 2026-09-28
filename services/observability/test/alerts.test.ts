@@ -23,6 +23,7 @@ import {
   createCommonMetrics,
   createDatabaseMetrics,
   createOperationsMetrics,
+  createBillingMetrics,
   createProviderMetrics,
   createReaperMetrics,
   createRegistry,
@@ -119,6 +120,7 @@ function knownSeries(): Set<string> {
   createTerminalMetrics(registry);
   createSandboxdMetrics(registry);
   createOperationsMetrics(registry);
+  createBillingMetrics(registry, 'test');
 
   // Series the platform does not register: Prometheus's own `up`, and what
   // Alertmanager exports about delivery (prometheus.yml job `alertmanager`;

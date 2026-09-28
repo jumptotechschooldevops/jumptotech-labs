@@ -79,7 +79,7 @@ fails the build for one that does not:
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
 | what fails, what students see, what recovers by itself: failure domains, journeys, failure matrix, measured RPO/RTO, restart order, retention | [reliability-failure-model.md](reliability-failure-model.md) |
 | running an incident: severity, roles, status and class messages, the postmortem template | [runbooks/incident-management.md](runbooks/incident-management.md) |
-| the alert runbooks RB-01…RB-21 and their index | [runbooks/README.md](runbooks/README.md) |
+| the alert runbooks RB-01…RB-22 and their index | [runbooks/README.md](runbooks/README.md) |
 | backup and restore of PostgreSQL | [runbooks/postgres-backup-restore.md](runbooks/postgres-backup-restore.md) |
 | disaster recovery: host loss, reboot, database or runtime loss, a replacement host | [runbooks/disaster-recovery.md](runbooks/disaster-recovery.md) |
 | what a recovery drill must record | [releases/disaster-recovery-drill-evidence-template.md](releases/disaster-recovery-drill-evidence-template.md) |
@@ -115,7 +115,8 @@ The alert runbooks, one per alert family:
 [RB-18](runbooks/RB-18-network-isolation.md) ·
 [RB-19](runbooks/RB-19-host-pressure.md) ·
 [RB-20](runbooks/RB-20-watchdog.md) ·
-[RB-21](runbooks/RB-21-launches-paused.md).
+[RB-21](runbooks/RB-21-launches-paused.md) ·
+[RB-22](runbooks/RB-22-billing.md).
 
 ---
 

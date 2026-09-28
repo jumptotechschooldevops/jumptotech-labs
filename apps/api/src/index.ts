@@ -649,6 +649,7 @@ async function main(): Promise<void> {
           },
           users,
           authSessions,
+          ...(billing ? { billing: billing.service } : {}),
         }),
       })
     : null;

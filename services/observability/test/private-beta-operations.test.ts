@@ -244,8 +244,9 @@ describe('the private-beta alert set', () => {
     // reliability audit's IdentityProviderUnreachable (security.yml), without
     // which nothing fired while nobody could sign in; 65 with the
     // observability audit's ProcessFileDescriptorsHigh (api.yml), the one
-    // saturation signal with no alert. Adding alerts is fine; do it on purpose.
-    expect(ALERTS.length).toBeLessThanOrEqual(65);
+    // saturation signal with no alert; billing.yml adds the billing alerts.
+    // Adding alerts is fine; do it on purpose.
+    expect(ALERTS.length).toBeLessThanOrEqual(69);
   });
 });
 

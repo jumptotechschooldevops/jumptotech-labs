@@ -22,6 +22,7 @@ the api refuses `BILLING_PROVIDER=test` under `NODE_ENV=production`. Billing is
 - [8. Data held](#8-data-held)
 - [9. Integrating a real provider](#9-integrating-a-real-provider)
 - [10. Observability](#10-observability)
+- [11. Operating it: support and reconciliation](#11-operating-it-support-and-reconciliation)
 - [Tests](#tests)
 
 ## 1. What exists
@@ -262,6 +263,56 @@ Not done, and not to be done without the decisions in §7. What it takes:
 | `jtt_billing_provider_requests_total{provider,op,outcome}` | checkout, portal and subscription calls to the provider |
 | `billing.webhook_processed` / `_rejected` / `_failed` | one line per delivery: event id and type, outcome, account id — never the body, an email or the secret |
 | `billing.ownership_conflict`, `billing.checkout_unknown` | a webhook that tried to bind something to the wrong account |
+| `jtt_billing_reconcile_drift`, `jtt_billing_reconcile_last_run_timestamp_seconds` | what the last reconciliation left, and when it ran |
+
+Alerts (`infrastructure/observability/prometheus/alerts/billing.yml`, runbook
+[RB-22](runbooks/RB-22-billing.md)), none of which can fire with billing off:
+`BillingWebhooksFailing` (failed or unmapped deliveries),
+`BillingWebhookSignaturesRejected` (a secret mismatch, or probing),
+`BillingProviderFailing` (checkout, portal or reconciliation calls failing),
+`BillingStateDrift` (reconciliation left disagreements).
+
+## 11. Operating it: support and reconciliation
+
+Through the operator socket, like `ops access`
+([commercial-access.md §6](commercial-access.md#6-operator-runbook)):
+
+```bash
+ops billing list                     # every subscription, newest first, in product terms
+ops billing show <user-id>           # customer, subscriptions, billing's row, the events processed for them
+ops billing reconcile                # compare with the provider — report only, changes nothing
+ops billing reconcile --apply --by aisalkyn --reason "webhooks lost during outage"
+```
+
+**Reconciliation** answers "does what we stored still match the provider, and
+does each account's billing row match its subscriptions?" For every stored
+subscription (at most 1000 a run) it fetches the provider's current state and
+compares status, period, cancel flag, end, price and the plan the price maps to;
+then it compares each billing row with what the subscriptions imply under the
+current configuration (a changed offer→plan mapping, leeway or grace shows up
+here).
+
+- **Report only** by default. The metric records what it found.
+- `--apply` (needs `--by` and `--reason`, logged) re-processes each drifted
+  subscription **from the provider's current state, through the webhook
+  processor** — same ownership rules, ordering, transaction and audit record as
+  a delivery. Nothing is written by hand.
+- A subscription the provider does not know is listed under "needs a person"
+  and never changed: deleted at the provider, refunded, or another account's —
+  a decision, not a fix.
+
+Run it after any billing incident, and on a schedule once billing is live
+(a decision about frequency and who reviews its report; nothing schedules it
+today).
+
+Support questions, from the account's side:
+
+| The student says | Look at | It means |
+|---|---|---|
+| "I paid but I still have no access" | `ops billing show <id>` | No customer: the checkout never completed at the provider. A subscription but `billing.webhook_failed` in the log: RB-22. A subscription on another account: `ops access find --email` |
+| "It says payment problem" | `ops billing show <id>` | A renewal payment failed; access follows `BILLING_PAST_DUE_GRACE_HOURS`. The student updates their card in *Manage billing* |
+| "I cancelled but still have access" | `ops billing show <id>` | Cancel at period end: access runs to the period's end, as documented |
+| "I cannot subscribe" | `ops access show <id>` | Suspended (`ACCOUNT_SUSPENDED`), already subscribed, or the provider is failing (RB-22) |
 
 ## Tests
 
@@ -270,5 +321,7 @@ Not done, and not to be done without the decisions in §7. What it takes:
 | `apps/api/test/billing-webhooks.test.ts` | the whole flow over HTTP; a success URL grants nothing; bad, missing, forged and replayed signatures; oversized and malformed bodies; duplicates (sequential and concurrent); out-of-order delivery; failure then retry; unknown accounts and prices retried; renewal, leeway, failed payment with and without grace, cancel at period end and at once, reactivation, provider trials; manual grants and suspension alongside billing; ownership; no card data stored or logged |
 | `apps/api/test/billing-account.test.ts` | the student routes: billing off; a checkout grants nothing until the webhook; smuggled customer/plan/price/user fields refused; one account never reaches another's checkout, portal or subscription; already subscribed, suspended, rate bound, provider down, foreign origin; the lifecycle in product words; legal links |
 | `apps/web/test/account-page.test.tsx` | the page: access in product words and never blamed on payment; offers and checkout; a non-http(s) provider link is not followed; "being confirmed", never "subscribed", on return; legal links; the test-mode pages |
+| `apps/api/test/billing-operations.test.ts` | `ops billing list/show/reconcile` over the real socket and CLI: a lost cancellation found and fixed through the processor; drift after a configuration change; a subscription the provider does not know left for a person; --apply attributed |
+| `infrastructure/observability/prometheus/tests/billing-alerts.test.yml` | the four alerts fire and clear on the real rules (promtool) |
 | `apps/api/test/billing-config.test.ts` | off by default; test provider refused in production; required decisions with no default; offers without amounts; every provider status mapped to a product status |
 | `apps/api/test/billing-persistence-integration.test.ts` | migration 010 on PostgreSQL; one transaction per webhook; concurrent duplicates across two connections; rollback then retry; ordering in SQL; the schema's own refusals; no payment-detail column (`make test-db`) |
