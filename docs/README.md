@@ -74,6 +74,7 @@ fails the build for one that does not:
 | the private beta on one host, in order: sizing, external setup, secrets, commands, validation, go-live checklist, stop conditions | [runbooks/private-beta-deployment.md](runbooks/private-beta-deployment.md) |
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
+| running an incident: severity, roles, status and class messages, the postmortem template | [runbooks/incident-management.md](runbooks/incident-management.md) |
 | the alert runbooks RB-01…RB-21 and their index | [runbooks/README.md](runbooks/README.md) |
 | backup and restore of PostgreSQL | [runbooks/postgres-backup-restore.md](runbooks/postgres-backup-restore.md) |
 | disaster recovery: host loss, reboot, database or runtime loss, a replacement host | [runbooks/disaster-recovery.md](runbooks/disaster-recovery.md) |
