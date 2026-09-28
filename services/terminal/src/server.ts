@@ -138,6 +138,10 @@ const PLATFORM_WORDED_CODES = new Set([
   // The owner's lab access is not ACTIVE (docs/commercial-access.md): the
   // API's own sentence, which names the state and nothing an operator wrote.
   'ACCESS_NOT_ACTIVE',
+  // Access is active but its plan does not cover this lab, or the plan is no
+  // longer configured (docs/commercial-access.md §10): the API's own sentence.
+  'LAB_NOT_IN_PLAN',
+  'ACCESS_PLAN_UNAVAILABLE',
   // This service.
   'CONTAINER_EXEC_DISABLED',
   'INVALID_WORKSPACE_PATH',

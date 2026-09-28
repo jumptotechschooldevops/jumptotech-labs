@@ -444,8 +444,15 @@ yet"). Then, per student ([commercial-access.md §6](../commercial-access.md)):
 
 ```bash
 ops access find --email <student-email>
-ops access grant <user-id> --until <ISO-8601 with offset, e.g. 2026-12-31T23:59:59Z> --by <operator> --reason "private beta cohort 1"
-ops access show <user-id>          # ACTIVE
+ops access grant <user-id> --until <ISO-8601 with offset, e.g. 2026-12-31T23:59:59Z> --kind beta --by <operator> --reason "private beta cohort 1"
+ops access show <user-id>          # ACTIVE, kind BETA
+ops access list --state ACTIVE     # the five, each BETA
+```
+
+`--kind beta` labels them as beta participants in `ops access list` and in the
+history; it changes nothing they may do. Nothing about who is in the beta lives
+in source code or configuration: the grants are the list, and `ops access
+revoke` removes one.
 ```
 
 ### 5.9 One real flow per track

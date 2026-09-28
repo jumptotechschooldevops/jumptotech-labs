@@ -24,6 +24,7 @@ import { createLogger, createOperationsMetrics, createRegistry } from '@jumptote
 
 import { loadConfig } from '../src/config.js';
 import { createOperatorHandler, startOperatorSocket } from '../src/operator.js';
+import { parsePlans, type PlanCatalog, type TrialConfig } from '../src/access/plans.js';
 import { main as cli, parseArgs } from '../src/operator-cli.js';
 import { InMemoryUserRepository } from '../src/auth/users.js';
 import { InMemoryAccessStore, type AccessPolicy } from '../src/access/entitlements.js';
@@ -42,7 +43,10 @@ afterEach(() => {
 
 const NOW = Date.parse('2026-10-01T12:00:00.000Z');
 
-async function compose(policy: AccessPolicy = 'entitlement') {
+async function compose(
+  policy: AccessPolicy = 'entitlement',
+  terms: { plans?: PlanCatalog; trial?: TrialConfig } = {},
+) {
   const config = loadConfig({
     TERMINAL_SESSION_SECRET: 'operator-access-test-secret-value',
     ALLOWED_ORIGINS: 'http://localhost:3000',
@@ -92,7 +96,7 @@ async function compose(policy: AccessPolicy = 'entitlement') {
       retentionSeconds: 15 * 60,
       reaperLastSuccessMs: () => clock.now,
       reaperIntervalSeconds: 60,
-      access: { store, policy },
+      access: { store, policy, ...terms },
       now: () => clock.now,
     }),
   });
@@ -319,6 +323,104 @@ describe('operator access — what is logged', () => {
       expect(reply.status).toBe(200);
       expect(reply.raw).not.toMatch(/token|secret|password|cookie|kubeconfig|subject/i);
     }
+  });
+});
+
+describe('operator access — kinds, plans and trials', () => {
+  const plans = parsePlans({
+    plans: [
+      { id: 'fixture-linux', name: 'Linux only', tracks: ['linux'], maxConcurrentSessions: 1 },
+      { id: 'fixture-all', name: 'Everything', tracks: 'all' },
+    ],
+  });
+
+  it('grants a beta student on a plan, and shows the kind and plan everywhere', async () => {
+    const { alice, run, call } = await compose('entitlement', { plans });
+    const granted = await run(
+      'access', 'grant', alice.userId, '--until', '2026-12-31T23:59:59Z', '--kind', 'beta', '--plan', 'fixture-linux',
+      '--by', 'aisalkyn', '--reason', 'private beta cohort 1',
+    );
+    expect(granted.code, granted.err + granted.out).toBe(0);
+
+    const list = await run('access', 'list');
+    expect(list.out).toMatch(/KIND\/PLAN/);
+    expect(list.out).toContain('BETA/fixture-linux');
+    const shown = await run('access', 'show', alice.userId);
+    expect(shown.out).toMatch(/kind \/ plan:\s+BETA \/ fixture-linux/);
+    expect(shown.out).toMatch(/GRANT\s+by aisalkyn: NONE → ACTIVE BETA\/fixture-linux/);
+    const json = await call('GET', `/v1/access/${alice.userId}`);
+    expect(json.body.data.account.entitlement).toMatchObject({ kind: 'BETA', planId: 'fixture-linux' });
+    expect(json.body.data.history[0].after).toMatchObject({ kind: 'BETA', planId: 'fixture-linux' });
+
+    // Extending keeps the kind and plan; --no-plan removes the plan explicitly.
+    await run('access', 'grant', alice.userId, '--until', '2027-01-31T23:59:59Z', '--by', 'aisalkyn', '--reason', 'extended');
+    expect((await call('GET', `/v1/access/${alice.userId}`)).body.data.account.entitlement).toMatchObject({
+      kind: 'BETA',
+      planId: 'fixture-linux',
+    });
+    await run('access', 'grant', alice.userId, '--until', '2027-01-31T23:59:59Z', '--no-plan', '--by', 'aisalkyn', '--reason', 'all tracks');
+    expect((await call('GET', `/v1/access/${alice.userId}`)).body.data.account.entitlement.planId).toBeNull();
+  });
+
+  it('refuses a plan that is not configured, and a kind that does not exist', async () => {
+    const { alice, run, call } = await compose('entitlement', { plans });
+    const unknown = await run(
+      'access', 'grant', alice.userId, '--no-expiry', '--plan', 'gold', '--by', 'ops', '--reason', 'x',
+    );
+    expect(unknown.code).toBe(1);
+    expect(unknown.out).toContain('INVALID_PLAN');
+    expect(unknown.out).toContain('fixture-linux, fixture-all');
+    const noPlans = await compose('entitlement');
+    const none = await noPlans.run('access', 'grant', noPlans.alice.userId, '--no-expiry', '--plan', 'fixture-linux', '--by', 'ops', '--reason', 'x');
+    expect(none.out).toContain('No plans are configured');
+
+    const kind = await call('POST', `/v1/access/${alice.userId}/grant`, { by: 'ops', reason: 'x', noExpiry: true, kind: 'VIP' });
+    expect(kind.status).toBe(400);
+    expect(kind.body.error.code).toBe('INVALID_KIND');
+    const both = await call('POST', `/v1/access/${alice.userId}/grant`, {
+      by: 'ops', reason: 'x', noExpiry: true, plan: 'fixture-all', noPlan: true,
+    });
+    expect(both.body.error.code).toBe('INVALID_PLAN');
+    expect(parseArgs(['access', 'grant', alice.userId, '--no-expiry', '--plan', 'a', '--no-plan', '--by', 'o', '--reason', 'r'])).toHaveProperty('error');
+  });
+
+  it('starts a trial of the configured length once, and refuses when trials are off', async () => {
+    const off = await compose('entitlement', { plans });
+    const refused = await off.run('access', 'trial', off.alice.userId, '--by', 'ops', '--reason', 'asked for a trial');
+    expect(refused.code).toBe(1);
+    expect(refused.out).toContain('TRIALS_DISABLED');
+
+    const { alice, run, call } = await compose('entitlement', { plans, trial: { durationDays: 14, planId: 'fixture-linux' } });
+    const started = await run('access', 'trial', alice.userId, '--by', 'ops', '--reason', 'webinar attendee');
+    expect(started.code, started.err + started.out).toBe(0);
+    const shown = await call('GET', `/v1/access/${alice.userId}`);
+    expect(shown.body.data.account).toMatchObject({
+      state: 'ACTIVE',
+      entitlement: { kind: 'TRIAL', planId: 'fixture-linux', startsAt: '2026-10-01T12:00:00.000Z', expiresAt: '2026-10-15T12:00:00.000Z' },
+    });
+    const again = await call('POST', `/v1/access/${alice.userId}/trial`, { by: 'ops', reason: 'again' });
+    expect(again.status).toBe(409);
+    expect(again.body.error.code).toBe('TRIAL_ALREADY_USED');
+    // A trial takes no window from the operator: the configured length is the only one.
+    const smuggled = await call('POST', `/v1/access/${alice.userId}/trial`, { by: 'ops', reason: 'x', until: '2030-01-01T00:00:00Z' });
+    expect(smuggled.status).toBe(400);
+  });
+
+  it('lists the configured plans and trial terms', async () => {
+    const { run, call, metric } = await compose('entitlement', { plans, trial: { durationDays: 7, planId: null } });
+    const printed = await run('access', 'plans');
+    expect(printed.code).toBe(0);
+    expect(printed.out).toContain('fixture-linux');
+    expect(printed.out).toContain('≤ 1 (and the deployment limit)');
+    expect(printed.out).toContain('trials: 7 days, no plan, once per account');
+    const json = await call('GET', '/v1/access/plans');
+    expect(json.body.data.trial).toEqual({ enabled: true, durationDays: 7, planId: null });
+    expect(await metric('jtt_operator_actions_total', { action: 'access_plans', outcome: 'ok' })).toBe(2);
+
+    const none = await compose('entitlement');
+    const empty = await none.run('access', 'plans');
+    expect(empty.out).toContain('plans: none configured');
+    expect(empty.out).toContain('trials: off');
   });
 });
 

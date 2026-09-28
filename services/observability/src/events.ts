@@ -133,6 +133,12 @@ export const LOG_EVENTS = [
   'ops.operator.session_ended',
   // A grant, suspend, restore or revoke of a student's lab access (docs/commercial-access.md).
   'ops.operator.access_changed',
+
+  // --- commercial access (docs/commercial-access.md §10) ----------------------
+  // The plans and trial terms this process loaded, at startup.
+  'config.access_plans',
+  // An entitlement names a plan the configuration no longer defines; lab use is refused.
+  'access.plan_unknown',
 ] as const;
 
 export type LogEvent = (typeof LOG_EVENTS)[number];

@@ -202,6 +202,9 @@ describe('ACCESS_POLICY=entitlement: a signed-in account is not an entitled one'
       active: false,
       startsAt: null,
       expiresAt: null,
+      kind: null,
+      plan: null,
+      maxConcurrentSessions: null,
     });
   });
 

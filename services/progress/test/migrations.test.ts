@@ -17,7 +17,8 @@ describe('migration files', () => {
 
     // PLATFORM-008 added 002; PLATFORM-009 added 003; PLATFORM-010 added 004;
     // BETA-P0-007 added 005; commercial access (docs/commercial-access.md) added 006;
-    // SEC-ARCH-2 (a shell uid per session) added 007.
+    // SEC-ARCH-2 (a shell uid per session) added 007; access kinds and plans
+    // (docs/commercial-access.md §10) added 009 — the number does not assume 008.
     // The list is asserted so a migration cannot be added without someone
     // noticing here, but the *safety* checks below apply to every file rather
     // than to a numbered one — that is the invariant.
@@ -29,6 +30,7 @@ describe('migration files', () => {
       '005_session_recovery',
       '006_access_entitlements',
       '007_session_shell_uid',
+      '009_access_plans_and_kinds',
     ]);
     for (const migration of migrations) {
       expect(migration.checksum, migration.version).toMatch(/^[0-9a-f]{64}$/);
@@ -117,6 +119,23 @@ describe('migration files', () => {
     expect(accessStatements).not.toMatch(/\bDELETE\b|\bUPDATE\b/i);
     for (const forbidden of ['token', 'password', 'secret', 'cookie']) {
       expect(accessStatements.toLowerCase(), forbidden).not.toContain(forbidden);
+    }
+
+    /*
+     * 009 only adds: two columns with a default that means exactly what an
+     * existing row meant (STANDARD, no plan), their history twins, and an
+     * index. Nothing is dropped, rewritten or cascaded.
+     */
+    const plans = migrations.find((m) => m.version === '009_access_plans_and_kinds')!.sql;
+    const planStatements = plans
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('--'))
+      .join('\n');
+    expect(planStatements).toContain("ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'STANDARD'");
+    expect(planStatements).toContain('ADD COLUMN IF NOT EXISTS plan_id TEXT');
+    expect(planStatements).not.toMatch(/\bDROP\b|\bUPDATE\b|\bDELETE\b|ON\s+DELETE|RENAME/i);
+    for (const forbidden of ['token', 'password', 'secret', 'cookie', 'card', 'price']) {
+      expect(planStatements.toLowerCase(), forbidden).not.toContain(forbidden);
     }
 
     // Forward-only, and never destructive on startup — for every migration.

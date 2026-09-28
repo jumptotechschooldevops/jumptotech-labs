@@ -1110,6 +1110,8 @@ export const OPERATOR_ACTIONS = [
   'access_find',
   'access_show',
   'access_grant',
+  'access_trial',
+  'access_plans',
   'access_suspend',
   'access_restore',
   'access_revoke',

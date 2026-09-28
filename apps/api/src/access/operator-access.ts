@@ -10,7 +10,9 @@
  *   GET  /v1/access[?state=<STATE>]          every account and its access
  *   GET  /v1/access/find?email=<address>     accounts with that email
  *   GET  /v1/access/<user-id>                one account: access, why, history, live labs
- *   POST /v1/access/<user-id>/grant          {by, reason, until | noExpiry, from?}
+ *   GET  /v1/access/plans                    the configured plans and trial terms
+ *   POST /v1/access/<user-id>/grant          {by, reason, until | noExpiry, from?, kind?, plan? | noPlan?}
+ *   POST /v1/access/<user-id>/trial          {by, reason} — the configured length, once per account
  *   POST /v1/access/<user-id>/suspend        {by, reason, endSessions?}
  *   POST /v1/access/<user-id>/restore        {by, reason}
  *   POST /v1/access/<user-id>/revoke         {by, reason, endSessions?}
@@ -29,6 +31,7 @@ import {
   ACCESS_STATES,
   AccessError,
   assertActor,
+  assertKind,
   assertReason,
   assertUserId,
   evaluateAccess,
@@ -41,10 +44,15 @@ import {
   type AccountAccess,
   type GrantRequest,
 } from './entitlements.js';
+import { PLAN_ID_SHAPE, PlanCatalog, type TrialConfig } from './plans.js';
 
 export interface OperatorAccessDeps {
   store: AccessStore;
   policy: AccessPolicy;
+  /** Plans a grant may name. Absent: none. */
+  plans?: PlanCatalog;
+  /** Trial terms. Absent or `durationDays: null`: trials are off. */
+  trial?: TrialConfig;
 }
 
 /** One account as the operator CLI prints it. */
@@ -63,6 +71,8 @@ export interface AccountAccessView {
     startsAt: string;
     expiresAt: string | null;
     grantedVia: string;
+    kind: string;
+    planId: string | null;
     updatedAt: string;
   } | null;
 }
@@ -84,6 +94,8 @@ export function toAccountView(account: AccountAccess, policy: AccessPolicy, nowM
           startsAt: account.entitlement.startsAt,
           expiresAt: account.entitlement.expiresAt,
           grantedVia: account.entitlement.grantedVia,
+          kind: account.entitlement.kind,
+          planId: account.entitlement.planId,
           updatedAt: account.entitlement.updatedAt,
         }
       : null,
@@ -119,6 +131,7 @@ export function diagnose(view: AccountAccessView, policy: AccessPolicy, nowIso: 
     case 'ACTIVE':
       return [
         e!.expiresAt ? `Active until ${e!.expiresAt}.` : 'Active, with no end date.',
+        `Kind ${e!.kind}; ${e!.planId ? `plan ${e!.planId} — a lab outside its tracks is refused LAB_NOT_IN_PLAN` : 'no plan — every track'}.`,
         'Access is not the problem: if this student cannot start a lab, run `ops status`, and `ops sessions` for a lab they already hold.',
       ];
   }
@@ -130,6 +143,8 @@ export type AccessRouteResult = {
     | 'access_find'
     | 'access_show'
     | 'access_grant'
+    | 'access_trial'
+    | 'access_plans'
     | 'access_suspend'
     | 'access_restore'
     | 'access_revoke';
@@ -142,10 +157,14 @@ export type AccessRouteResult = {
 /** Which action a `/v1/access…` path names, for the counter — before anything is parsed or read. */
 export function accessActionFor(method: string, parts: readonly string[]): AccessRouteResult['action'] | null {
   if (parts.length === 2 && method === 'GET') return 'access_list';
-  if (parts.length === 3 && method === 'GET') return parts[2] === 'find' ? 'access_find' : 'access_show';
+  if (parts.length === 3 && method === 'GET') {
+    return parts[2] === 'find' ? 'access_find' : parts[2] === 'plans' ? 'access_plans' : 'access_show';
+  }
   if (parts.length === 4 && method === 'POST') {
     const verb = parts[3];
-    if (verb === 'grant' || verb === 'suspend' || verb === 'restore' || verb === 'revoke') return `access_${verb}`;
+    if (verb === 'grant' || verb === 'trial' || verb === 'suspend' || verb === 'restore' || verb === 'revoke') {
+      return `access_${verb}`;
+    }
   }
   return null;
 }
@@ -183,7 +202,7 @@ function assertOnlyFields(body: Record<string, unknown>, allowed: readonly strin
   }
 }
 
-function grantFrom(body: Record<string, unknown>): GrantRequest {
+function grantFrom(body: Record<string, unknown>, plans: PlanCatalog): GrantRequest {
   const noExpiry = body.noExpiry === true;
   const hasUntil = body.until !== undefined && body.until !== null;
   if (noExpiry === hasUntil) {
@@ -192,9 +211,47 @@ function grantFrom(body: Record<string, unknown>): GrantRequest {
       'A grant needs exactly one of --until <instant> or --no-expiry: unlimited access is never a default.',
     );
   }
+  if (body.plan !== undefined && body.noPlan === true) {
+    throw new AccessError('INVALID_PLAN', 'Give --plan <id> or --no-plan, not both.');
+  }
+  let planId: string | null | undefined;
+  if (body.noPlan === true) {
+    planId = null;
+  } else if (body.plan !== undefined) {
+    const raw = typeof body.plan === 'string' ? body.plan.trim() : '';
+    // Refused unless it is configured now: a grant on a plan nobody defined
+    // would be refused at every lab use, which is a support ticket, not access.
+    if (!PLAN_ID_SHAPE.test(raw) || !plans.get(raw)) {
+      const known = plans.list().map((plan) => plan.id);
+      throw new AccessError(
+        'INVALID_PLAN',
+        known.length > 0
+          ? `--plan must be one of: ${known.join(', ')} (ACCESS_PLANS_FILE).`
+          : 'No plans are configured (ACCESS_PLANS_FILE is unset); grant without --plan.',
+      );
+    }
+    planId = raw;
+  }
   return {
     ...(body.from !== undefined ? { startsAt: parseInstant(body.from, '--from') } : {}),
     expiresAt: noExpiry ? null : parseInstant(body.until, '--until'),
+    ...(body.kind !== undefined ? { kind: assertKind(body.kind) } : {}),
+    ...(planId !== undefined ? { planId } : {}),
+  };
+}
+
+/** What `access plans` prints: the plans an operator may name, and whether trials are on. */
+function plansPayload(plans: PlanCatalog, trial: TrialConfig | undefined) {
+  return {
+    plans: plans.list().map((plan) => ({
+      id: plan.id,
+      name: plan.name,
+      tracks: plan.tracks === 'all' ? 'all' : [...plan.tracks],
+      maxConcurrentSessions: plan.maxConcurrentSessions,
+    })),
+    trial: trial?.durationDays
+      ? { enabled: true, durationDays: trial.durationDays, planId: trial.planId }
+      : { enabled: false, note: 'TRIAL_DURATION_DAYS is not set; the trial length is a business decision.' },
   };
 }
 
@@ -248,6 +305,10 @@ export async function handleAccessRequest(
     return { action: 'access_find', status: 200, payload: { policy: deps.policy, count: accounts.length, accounts } };
   }
 
+  if (parts.length === 3 && parts[2] === 'plans' && method === 'GET') {
+    return { action: 'access_plans', status: 200, payload: plansPayload(deps.plans ?? new PlanCatalog(), deps.trial) };
+  }
+
   if (parts.length === 3 && method === 'GET') {
     const userId = assertUserId(decodeSegment(parts[2]));
     const [account] = await deps.store.findAccounts({ userId });
@@ -275,22 +336,42 @@ export async function handleAccessRequest(
     const userId = assertUserId(decodeSegment(parts[2]));
     const verb = parts[3];
     const action: AccessAction | null =
-      verb === 'grant' ? 'GRANT' : verb === 'suspend' ? 'SUSPEND' : verb === 'restore' ? 'RESTORE' : verb === 'revoke' ? 'REVOKE' : null;
+      verb === 'grant'
+        ? 'GRANT'
+        : verb === 'trial'
+          ? 'TRIAL'
+          : verb === 'suspend'
+            ? 'SUSPEND'
+            : verb === 'restore'
+              ? 'RESTORE'
+              : verb === 'revoke'
+                ? 'REVOKE'
+                : null;
     if (!action) return null;
     const body = await readJsonBody(req);
     const endable = action === 'SUSPEND' || action === 'REVOKE';
     assertOnlyFields(body, [
       'by',
       'reason',
-      ...(action === 'GRANT' ? ['until', 'noExpiry', 'from'] : []),
+      ...(action === 'GRANT' ? ['until', 'noExpiry', 'from', 'kind', 'plan', 'noPlan'] : []),
       ...(endable ? ['endSessions'] : []),
     ]);
     const actor = assertActor(body.by);
     const reason = assertReason(body.reason);
-    const grant = action === 'GRANT' ? grantFrom(body) : undefined;
+    const grant = action === 'GRANT' ? grantFrom(body, deps.plans ?? new PlanCatalog()) : undefined;
+    let trial: { durationDays: number; planId: string | null } | undefined;
+    if (action === 'TRIAL') {
+      if (!deps.trial?.durationDays) {
+        throw new AccessError(
+          'TRIALS_DISABLED',
+          'Trials are off: TRIAL_DURATION_DAYS is not set. How long a trial lasts is a business decision.',
+        );
+      }
+      trial = { durationDays: deps.trial.durationDays, planId: deps.trial.planId };
+    }
 
     const result = await deps.store.mutate(
-      { userId, action, actor, reason, ...(grant ? { grant } : {}) },
+      { userId, action, actor, reason, ...(grant ? { grant } : {}), ...(trial ? { trial } : {}) },
       () => new Date(deps.now()),
     );
     const state = evaluateAccess(result.after, deps.now()).state;
@@ -337,7 +418,7 @@ export async function handleAccessRequest(
         ...(result.event ? { event: eventView(result.event) } : {}),
         ended,
         stillRunning,
-        ...(stillRunning.length > 0 && action !== 'GRANT' && action !== 'RESTORE'
+        ...(stillRunning.length > 0 && action !== 'GRANT' && action !== 'TRIAL' && action !== 'RESTORE'
           ? {
               note:
                 'Running labs are refused from now on (terminal, Check, Reset, hints) but keep their slot until ' +
@@ -366,7 +447,11 @@ export function accessRefusal(error: unknown): { status: number; code: string; m
   const status =
     error.code === 'USER_NOT_FOUND' || error.code === 'NO_ENTITLEMENT'
       ? 404
-      : error.code === 'ENTITLEMENT_SUSPENDED' || error.code === 'ENTITLEMENT_REVOKED'
+      : error.code === 'ENTITLEMENT_SUSPENDED' ||
+          error.code === 'ENTITLEMENT_REVOKED' ||
+          error.code === 'TRIAL_ALREADY_USED' ||
+          error.code === 'ALREADY_ACTIVE' ||
+          error.code === 'TRIALS_DISABLED'
         ? 409
         : 400;
   return { status, code: error.code, message: error.message };
