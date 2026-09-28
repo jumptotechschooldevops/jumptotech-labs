@@ -62,6 +62,14 @@ export const PRODUCTION_PUBLICATIONS = Object.freeze([
  * `unless-stopped`, never `always`: `prod stop web` is the runbook's only way to
  * take the site down, and `always` would undo it at the next daemon restart.
  */
+/** The container-track images the api reads; each must reach it from .env. */
+export const SANDBOX_IMAGE_VARIABLES = Object.freeze([
+  'LINUX_SANDBOX_IMAGE',
+  'TERRAFORM_SANDBOX_IMAGE',
+  'ANSIBLE_SANDBOX_IMAGE',
+  'CICD_SANDBOX_IMAGE',
+] as const);
+
 export const PRODUCTION_RESTART_POLICY = 'unless-stopped';
 
 /**
@@ -463,6 +471,19 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
           'ACCESS_POLICY=open: every account the identity provider signs in may use every lab; entitlements are recorded but not enforced',
         )
       : pass('access.policy', 'lab access requires an ACTIVE entitlement (ACCESS_POLICY=entitlement)'),
+  );
+
+  // --- sandbox images ------------------------------------------------------------
+  // The api picks each container track's image from its own environment and
+  // falls back to a built-in `:latest`. A name .env sets but compose does not
+  // pass is one the preflight and `make sandbox-build` honour and the api never sees.
+  const unpassedImages = SANDBOX_IMAGE_VARIABLES.filter((name) => !env(services.api, name));
+  results.push(
+    one(
+      'images.sandbox',
+      unpassedImages.map((name) => `${name} does not reach the api: it would start its built-in default whatever .env says`),
+      SANDBOX_IMAGE_VARIABLES.map((name) => `${name}=${env(services.api, name)}`).join(', '),
+    ),
   );
 
   // --- durability ----------------------------------------------------------------
