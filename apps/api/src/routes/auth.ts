@@ -46,7 +46,7 @@ import {
   type AuthTransaction,
   type CookieAttributes,
 } from '../auth/cookies.js';
-import type { AUTH_CALLBACK_OUTCOMES } from '@jumptotech/observability';
+import type { AUTH_CALLBACK_OUTCOMES, AUTH_LOGIN_OUTCOMES } from '@jumptotech/observability';
 import type { AuthCookieConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 
@@ -81,6 +81,12 @@ export interface AuthRoutesDeps {
    * `AUTH_CALLBACK_OUTCOMES`, never the provider's error text.
    */
   onCallback?: (outcome: (typeof AUTH_CALLBACK_OUTCOMES)[number]) => void;
+  /**
+   * Every `/auth/login` by outcome, from `AUTH_LOGIN_OUTCOMES`. Without it an
+   * identity provider that is down was invisible: sign-in failed before any
+   * callback existed to count.
+   */
+  onLogin?: (outcome: (typeof AUTH_LOGIN_OUTCOMES)[number]) => void;
 }
 
 function cookieAttributes(cookie: AuthCookieConfig, maxAgeSeconds?: number): CookieAttributes {
@@ -219,7 +225,16 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
 
   // GET /auth/login --------------------------------------------------------
   router.get('/login', asyncRoute(async (req, res) => {
+    const outcome = (value: (typeof AUTH_LOGIN_OUTCOMES)[number]): void => {
+      try {
+        deps.onLogin?.(value);
+      } catch {
+        /* counting a sign-in must never break one */
+      }
+    };
+
     if (!deps.client) {
+      outcome('not_configured');
       sendError(res, 503, {
         code: 'AUTH_NOT_CONFIGURED',
         message: 'This deployment has no identity provider configured.',
@@ -232,6 +247,10 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     try {
       request = await deps.client.authorizationRequest();
     } catch (error) {
+      const code = error instanceof AuthError ? error.code : 'unknown';
+      outcome(code === 'AUTH_PROVIDER_UNAVAILABLE' ? 'provider_unavailable' : code === 'AUTH_MISCONFIGURED' ? 'misconfigured' : 'failed');
+      // The code and our own message only: provider text never reaches a log.
+      log(`sign-in could not start: ${code}${error instanceof AuthError ? ` — ${error.message}` : ''}`);
       authErrorResponse(res, error, 'start sign-in');
       return;
     }
@@ -255,6 +274,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     // 302 rather than a JSON body with a URL: the browser must *navigate*, and
     // a fetch that returned the URL would need the page to redirect itself,
     // which is a second place to get the destination wrong.
+    outcome('redirected');
     res.redirect(302, request.url);
   }));
 
@@ -343,7 +363,9 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
       // and only as a user row.
       user = await deps.users.upsert(claims);
     } catch (error) {
-      outcome('verification_failed');
+      const unavailable = error instanceof AuthError && error.code === 'AUTH_PROVIDER_UNAVAILABLE';
+      outcome(unavailable ? 'provider_unavailable' : 'verification_failed');
+      if (unavailable) log(`sign-in could not complete: AUTH_PROVIDER_UNAVAILABLE — ${error.message}`);
       res.setHeader('set-cookie', clearTx);
       authErrorResponse(res, error, 'complete sign-in');
       return;
@@ -429,11 +451,17 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
  */
 function authErrorResponse(res: Response, error: unknown, what: string): void {
   if (error instanceof AuthError) {
-    const status = error.code === 'AUTH_MISCONFIGURED' ? 503 : 401;
+    const unavailable = error.code === 'AUTH_PROVIDER_UNAVAILABLE';
+    const status = error.code === 'AUTH_MISCONFIGURED' || unavailable ? 503 : 401;
+    if (unavailable) res.setHeader('retry-after', '60');
     sendError(res, status, {
       code: error.code,
       message: error.message,
-      ...(error.remediation ? { remediation: error.remediation } : {}),
+      ...(error.remediation
+        ? { remediation: error.remediation }
+        : unavailable
+          ? { remediation: 'The sign-in service is not responding. Try again in a few minutes; if you are already signed in, you are not affected.' }
+          : {}),
     });
     return;
   }
