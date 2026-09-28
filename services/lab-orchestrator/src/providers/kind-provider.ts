@@ -135,6 +135,11 @@ export interface KindProviderOptions {
   clusterName: string;
   /** Kubeconfig handed to allow-listed CLI health checks. */
   kubeconfigPath?: string;
+  /**
+   * The context those checks use (`kubectl --context`), so they reach the same
+   * cluster as the API client rather than the kubeconfig's current-context.
+   */
+  kubeContext?: string;
   /** Max time to wait for student pods to finish terminating during reset. */
   resetDrainTimeoutMs?: number;
   /** Max time `destroy()` waits for the namespace to actually disappear. */
@@ -180,6 +185,7 @@ export class KindLabProvider implements LabProvider {
   readonly #k8s: KubernetesPort;
   readonly #clusterName: string;
   readonly #kubeconfigPath: string | undefined;
+  readonly #kubeContext: string | undefined;
   readonly #resetDrainTimeoutMs: number;
   readonly #destroyTimeoutMs: number;
   readonly #wait: RequirementWaiter | undefined;
@@ -197,6 +203,7 @@ export class KindLabProvider implements LabProvider {
     this.#k8s = options.k8s;
     this.#clusterName = options.clusterName;
     this.#kubeconfigPath = options.kubeconfigPath;
+    this.#kubeContext = options.kubeContext;
     this.#resetDrainTimeoutMs = options.resetDrainTimeoutMs ?? 60_000;
     this.#destroyTimeoutMs = options.destroyTimeoutMs ?? 90_000;
     this.#wait = options.waitForRequirements;
@@ -840,7 +847,12 @@ export class KindLabProvider implements LabProvider {
     // fake — is never given the chance to choose which namespace it acts on.
     return this.#exec(
       request.command,
-      [...request.args, '--namespace', context.namespace],
+      [
+        ...request.args,
+        ...(this.#kubeContext ? ['--context', this.#kubeContext] : []),
+        '--namespace',
+        context.namespace,
+      ],
       { timeoutMs, env },
     );
   }

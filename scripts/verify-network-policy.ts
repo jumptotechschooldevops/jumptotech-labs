@@ -5,7 +5,9 @@
  *       [--public-target 1.1.1.1:443] [--private-target 172.19.0.3:4000]
  *       [--image busybox:1.36] [--run-id abc123] [--keep-namespaces] [--json report.json]
  *
- * Runs `runNetworkEnforcementProbe` against the cluster in KUBECONFIG. It needs
+ * Runs `runNetworkEnforcementProbe` against the cluster in KUBECONFIG, through
+ * the context the API uses (`LAB_KUBE_CONTEXT`, else `kind-<LAB_CLUSTER_NAME>`),
+ * never the kubeconfig's current-context: kubectl fails if it is absent. It needs
  * rights to create and delete namespaces, Pods and NetworkPolicies, to exec into
  * Pods, and — with --write-attestation — to write a ConfigMap in kube-system.
  *
@@ -34,7 +36,7 @@ import {
   spawnKubectl,
   type ProbeTarget,
 } from '@jumptotech/lab-orchestrator';
-import { loadNetworkPolicyConfig } from '../apps/api/src/config.js';
+import { loadNetworkPolicyConfig, resolveKubeContext } from '../apps/api/src/config.js';
 
 function target(flag: string, value: string | undefined): ProbeTarget | undefined {
   if (value === undefined) return undefined;
@@ -57,12 +59,14 @@ async function main(): Promise<number> {
   });
 
   const network = loadNetworkPolicyConfig(process.env);
-  const kubectl = spawnKubectl();
+  const context = resolveKubeContext(process.env);
+  const kubectl = spawnKubectl({ context });
   const runId = values['run-id'] ?? randomBytes(4).toString('hex');
   const publicTarget = target('public-target', values['public-target']);
   const privateTarget = target('private-target', values['private-target']);
 
   console.log(`NetworkPolicy enforcement probe ${runId}`);
+  console.log(`  kube context      ${context}`);
   console.log(`  contract digest   ${networkPolicyContractDigest(network)}`);
   console.log(`  external egress   ${network.allowExternalEgress ? 'permitted (public IPv4 only)' : 'not permitted'}`);
 

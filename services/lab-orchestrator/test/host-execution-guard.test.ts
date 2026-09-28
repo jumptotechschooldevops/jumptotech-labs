@@ -185,6 +185,24 @@ describe('KindLabProvider never reaches the host on its own', () => {
     expect(call?.args.at(-1)).toMatch(/^lab-[0-9a-f]{12}$/);
   });
 
+  it('names the configured context, so kubectl never uses the current one', async () => {
+    const exec = fakeExec();
+    const provider = new KindLabProvider({
+      k8s: new FakeKubernetes(),
+      clusterName: 'jumptotech-labs',
+      kubeContext: 'kind-jumptotech-labs',
+      exec,
+      sleep: async () => undefined,
+    });
+    const lab = await loadK8s001();
+    await provider.create(sessionContext(lab));
+    const call = exec.calls.find((c) => c.command === 'kubectl');
+
+    const at = call?.args.indexOf('--context') ?? -1;
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(call?.args[at + 1]).toBe('kind-jumptotech-labs');
+  });
+
   it('still refuses a binary that is not allow-listed, before any runner runs', async () => {
     const exec = fakeExec();
     const provider = new KindLabProvider({
