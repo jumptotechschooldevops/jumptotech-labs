@@ -21,6 +21,7 @@
  * teardown each check that their own claim still stands before they report
  * success, and discard what they built when a teardown took the session.
  */
+import { isValidShellUid } from './shell-identity.js';
 import type { LabRegistry } from '../lab-registry.js';
 import type { LoadedLabDefinition } from '../lab-definition.js';
 import type {
@@ -1641,14 +1642,31 @@ export class SessionManager {
    */
   async getTerminalContext(sessionId: string): Promise<TerminalContext> {
     const { session, lab } = await this.requireActive(sessionId);
+    let context: TerminalContext;
     try {
-      return await this.#providerFor(session).getTerminalContext(this.#contextFor(lab, session));
+      context = await this.#providerFor(session).getTerminalContext(this.#contextFor(lab, session));
     } catch (error) {
       throw new SessionError(
         'CREDENTIALS_UNAVAILABLE',
         error instanceof Error ? error.message : String(error),
       );
     }
+    /*
+     * A shell that runs in the terminal service's own container runs as this
+     * session's own uid — SEC-ARCH-2. The uid is the stored row's, whatever the
+     * provider returned, and a session without a valid one gets no shell rather
+     * than a shared one: the terminal refuses a local shell with no uid.
+     */
+    if (context.kind === 'kubernetes' || context.kind === 'docker-daemon') {
+      if (!isValidShellUid(session.shellUid)) {
+        throw new SessionError(
+          'CREDENTIALS_UNAVAILABLE',
+          `session ${session.sessionId} has no valid shell uid; refusing to open a shell it would share`,
+        );
+      }
+      return { ...context, shellUid: session.shellUid };
+    }
+    return context;
   }
 
   /** Sessions that hold a namespace right now. */

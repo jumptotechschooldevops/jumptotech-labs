@@ -158,6 +158,16 @@ export interface LabSession {
    * which is reachable by no student.
    */
   ownerUserId?: string;
+  /**
+   * The Unix uid this session's shell runs as, when the shell runs in the
+   * terminal service's container (Kubernetes and Docker tracks) — SEC-ARCH-2.
+   *
+   * Assigned by the session store when the row is created, never by the
+   * caller: both stores overwrite whatever a caller put here, and no patch can
+   * change it. See `shell-identity.ts`. Optional only in the type, because a
+   * session object is built before the store has assigned one.
+   */
+  shellUid?: number;
   /** Idle window in seconds, copied from config at creation time. */
   idleTimeoutSeconds: number;
   /** How long before idle expiry the UI should warn, in seconds. */

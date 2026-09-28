@@ -96,12 +96,21 @@ interface SessionRow {
   idle_timeout_seconds: number;
   idle_warning_seconds: number;
   revision: string | number;
+  /** BIGINT, so the driver hands it back as a string. */
+  shell_uid?: string | number | null;
 }
 
 const COLUMNS = `session_id, lab_id, provider, sandbox_kind, sandbox_ref, namespace,
   service_account_name, status, environment_id, owner_user_id, created_at, last_activity_at,
   expires_at, ended_at, status_reason, idle_timeout_seconds, idle_warning_seconds, revision,
   status_changed_at`;
+
+/*
+ * What a read returns: every inserted column, and the shell uid the row's
+ * sequence default assigned (migration 007). Never part of an INSERT, so the
+ * database always chooses it — see `shell-identity.ts`.
+ */
+const READ_COLUMNS = `${COLUMNS}, shell_uid`;
 
 /** Timestamps come back as `Date`; the model is ISO-8601 strings throughout. */
 function iso(value: Date | string): string {
@@ -120,6 +129,7 @@ function toSession(row: SessionRow): LabSession {
     status: row.status as SessionStatus,
     environmentId: row.environment_id,
     ...(row.owner_user_id ? { ownerUserId: row.owner_user_id } : {}),
+    ...(row.shell_uid !== null && row.shell_uid !== undefined ? { shellUid: Number(row.shell_uid) } : {}),
     createdAt: iso(row.created_at),
     lastActivityAt: iso(row.last_activity_at),
     statusChangedAt: iso(row.status_changed_at),
@@ -179,7 +189,7 @@ export class PostgresSessionStore implements SessionStore {
 
   async get(sessionId: string): Promise<LabSession | null> {
     const { rows } = await this.db.query<SessionRow>(
-      `SELECT ${COLUMNS} FROM lab_sessions WHERE session_id = $1`,
+      `SELECT ${READ_COLUMNS} FROM lab_sessions WHERE session_id = $1`,
       [sessionId],
     );
     return rows[0] ? toSession(rows[0]) : null;
@@ -194,7 +204,7 @@ export class PostgresSessionStore implements SessionStore {
     const { rows } = await this.db.query<SessionRow>(
       `UPDATE lab_sessions SET ${sets.join(', ')}, revision = revision + 1
        WHERE session_id = $${params.length}
-       RETURNING ${COLUMNS}`,
+       RETURNING ${READ_COLUMNS}`,
       params,
     );
     return rows[0] ? toSession(rows[0]) : null;
@@ -239,7 +249,7 @@ export class PostgresSessionStore implements SessionStore {
     const { rows } = await this.db.query<SessionRow>(
       `UPDATE lab_sessions SET ${sets.join(', ')}, revision = revision + 1
        WHERE ${where}
-       RETURNING ${COLUMNS}`,
+       RETURNING ${READ_COLUMNS}`,
       params,
     );
     return rows[0] ? toSession(rows[0]) : null;
@@ -257,7 +267,7 @@ export class PostgresSessionStore implements SessionStore {
       `UPDATE lab_sessions
           SET last_activity_at = $1, revision = revision + 1
         WHERE session_id = $2 AND status = ANY($3)
-        RETURNING ${COLUMNS}`,
+        RETURNING ${READ_COLUMNS}`,
       [at, sessionId, [...ACTIVITY_STATUSES]],
     );
     return rows[0] ? toSession(rows[0]) : null;
@@ -269,14 +279,14 @@ export class PostgresSessionStore implements SessionStore {
 
   async list(): Promise<LabSession[]> {
     const { rows } = await this.db.query<SessionRow>(
-      `SELECT ${COLUMNS} FROM lab_sessions ORDER BY created_at`,
+      `SELECT ${READ_COLUMNS} FROM lab_sessions ORDER BY created_at`,
     );
     return rows.map(toSession);
   }
 
   async listOccupying(): Promise<LabSession[]> {
     const { rows } = await this.db.query<SessionRow>(
-      `SELECT ${COLUMNS} FROM lab_sessions WHERE status = ANY($1) ORDER BY created_at`,
+      `SELECT ${READ_COLUMNS} FROM lab_sessions WHERE status = ANY($1) ORDER BY created_at`,
       [[...OCCUPYING_STATUSES]],
     );
     return rows.map(toSession);
@@ -292,7 +302,7 @@ export class PostgresSessionStore implements SessionStore {
    */
   async listOccupyingForOwner(ownerUserId: string): Promise<LabSession[]> {
     const { rows } = await this.db.query<SessionRow>(
-      `SELECT ${COLUMNS} FROM lab_sessions
+      `SELECT ${READ_COLUMNS} FROM lab_sessions
         WHERE status = ANY($1) AND owner_user_id = $2
         ORDER BY created_at DESC`,
       [[...OCCUPYING_STATUSES], ownerUserId],
@@ -308,7 +318,7 @@ export class PostgresSessionStore implements SessionStore {
    */
   async listExpirable(nowIso: string): Promise<LabSession[]> {
     const { rows } = await this.db.query<SessionRow>(
-      `SELECT ${COLUMNS} FROM lab_sessions
+      `SELECT ${READ_COLUMNS} FROM lab_sessions
         WHERE status = ANY($1)
           AND (expires_at <= $2::timestamptz
                OR last_activity_at + (idle_timeout_seconds * INTERVAL '1 second') <= $2::timestamptz)
@@ -324,7 +334,7 @@ export class PostgresSessionStore implements SessionStore {
 
   async findBySandboxRef(sandboxRef: string): Promise<LabSession | null> {
     const { rows } = await this.db.query<SessionRow>(
-      `SELECT ${COLUMNS} FROM lab_sessions WHERE sandbox_ref = $1`,
+      `SELECT ${READ_COLUMNS} FROM lab_sessions WHERE sandbox_ref = $1`,
       [sandboxRef],
     );
     return rows[0] ? toSession(rows[0]) : null;

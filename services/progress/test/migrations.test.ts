@@ -16,7 +16,8 @@ describe('migration files', () => {
     const migrations = await loadMigrations(MIGRATIONS_DIR);
 
     // PLATFORM-008 added 002; PLATFORM-009 added 003; PLATFORM-010 added 004;
-    // BETA-P0-007 added 005; commercial access (docs/commercial-access.md) added 006.
+    // BETA-P0-007 added 005; commercial access (docs/commercial-access.md) added 006;
+    // SEC-ARCH-2 (a shell uid per session) added 007.
     // The list is asserted so a migration cannot be added without someone
     // noticing here, but the *safety* checks below apply to every file rather
     // than to a numbered one — that is the invariant.
@@ -27,6 +28,7 @@ describe('migration files', () => {
       '004_auth_sessions',
       '005_session_recovery',
       '006_access_entitlements',
+      '007_session_shell_uid',
     ]);
     for (const migration of migrations) {
       expect(migration.checksum, migration.version).toMatch(/^[0-9a-f]{64}$/);
