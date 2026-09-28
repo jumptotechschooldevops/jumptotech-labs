@@ -73,6 +73,7 @@ fails the build for one that does not:
 | a new host: prerequisites, preflight, deployment, smoke, upgrade, rollback | [development/production-host-readiness.md](development/production-host-readiness.md) |
 | the private beta on one host, in order: sizing, external setup, secrets, commands, validation, go-live checklist, stop conditions | [runbooks/private-beta-deployment.md](runbooks/private-beta-deployment.md) |
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
+| teaching a class: the classroom view, what to check when a student is stuck, P0–P3, when to escalate | [runbooks/instructor-guide.md](runbooks/instructor-guide.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
 | running an incident: severity, roles, status and class messages, the postmortem template | [runbooks/incident-management.md](runbooks/incident-management.md) |
 | the alert runbooks RB-01…RB-21 and their index | [runbooks/README.md](runbooks/README.md) |

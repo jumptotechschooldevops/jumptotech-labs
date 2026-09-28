@@ -38,6 +38,20 @@ import { TracksPage } from './pages/TracksPage';
  */
 const WorkspacePage = lazy(() => import('./pages/WorkspacePage').then((module) => ({ default: module.WorkspacePage })));
 
+/*
+ * The classroom view is for instructors and administrators; students never
+ * download it. Hiding it is not what protects it — every `/api/admin` request
+ * is authorized server-side from the account's stored role.
+ */
+const ClassroomPage = lazy(() => import('./pages/ClassroomPage').then((module) => ({ default: module.ClassroomPage })));
+const ClassroomSessionPage = lazy(() =>
+  import('./pages/ClassroomSessionPage').then((module) => ({ default: module.ClassroomSessionPage })),
+);
+const ClassroomStudentPage = lazy(() =>
+  import('./pages/ClassroomStudentPage').then((module) => ({ default: module.ClassroomStudentPage })),
+);
+const ClassroomLabsPage = lazy(() => import('./pages/ClassroomLabsPage').then((module) => ({ default: module.ClassroomLabsPage })));
+
 function NotFoundPage() {
   usePageTitle('Page not found');
   return (
@@ -88,6 +102,30 @@ function Page({ route, navigation }: { route: Route; navigation: number }) {
       return <ProgressPage />;
     case 'help':
       return <HelpPage />;
+    case 'classroom':
+      return (
+        <Suspense fallback={<LoadingState label="Loading the classroom…" />}>
+          <ClassroomPage />
+        </Suspense>
+      );
+    case 'classroomLabs':
+      return (
+        <Suspense fallback={<LoadingState label="Loading…" />}>
+          <ClassroomLabsPage />
+        </Suspense>
+      );
+    case 'classroomSession':
+      return (
+        <Suspense fallback={<LoadingState label="Loading…" />}>
+          <ClassroomSessionPage key={route.sessionId} sessionId={route.sessionId} />
+        </Suspense>
+      );
+    case 'classroomStudent':
+      return (
+        <Suspense fallback={<LoadingState label="Loading…" />}>
+          <ClassroomStudentPage key={route.userId} userId={route.userId} />
+        </Suspense>
+      );
     case 'notFound':
       return <NotFoundPage />;
   }

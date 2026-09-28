@@ -38,7 +38,7 @@ import { OidcTokenVerifier } from '../src/auth/oidc.js';
 import { OidcBrowserClient } from '../src/auth/oidc-client.js';
 import { InMemoryUserRepository } from '../src/auth/users.js';
 import { InMemoryAuthSessionStore, mintAuthSessionId } from '../src/auth/browser-session.js';
-import { safeReturnTo } from '../src/routes/auth.js';
+import { safeReturnTo, signInFailureLocation } from '../src/routes/auth.js';
 import { startFakeIdentityProvider, foreignToken, type FakeIdentityProvider } from './oidc-identity.js';
 import { realCatalog } from '@jumptotech/lab-orchestrator/testing/real-catalog';
 
@@ -501,6 +501,71 @@ describe('the sign-in flow itself', () => {
     expect(second.status).toBe(401);
     // The only thing that really matters: no second session was minted.
     expect(cookieValue(second.headers['set-cookie'] as unknown as string[], 'jtt_session')).toBeUndefined();
+  });
+
+  describe('a browser whose sign-in fails is taken back into the app, not shown JSON', () => {
+    // What a browser sends on a top-level navigation. API clients (no Accept, or JSON) keep the JSON errors above.
+    const NAVIGATION = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+
+    it('Cancel at the provider comes back as ?signin=cancelled, to the page sign-in started from', async () => {
+      const { app } = harness;
+      const login = await request(app).get('/auth/login').query({ returnTo: '/#/labs/LINUX-001' });
+      const tx = (login.headers['set-cookie'] as unknown as string[]).map((c) => c.split(';')[0]).join('; ');
+      const state = new URL(login.headers.location as string).searchParams.get('state')!;
+
+      const res = await request(app)
+        .get('/auth/callback')
+        .query({ error: 'access_denied', error_description: '<script>provider text</script>', state })
+        .set('Cookie', tx)
+        .set('Accept', NAVIGATION);
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe(`${APP_URL}/?signin=cancelled#/labs/LINUX-001`);
+      const cookies = (res.headers['set-cookie'] as unknown as string[]) ?? [];
+      expect(cookieValue(cookies, 'jtt_session')).toBeUndefined();
+      // The provider's own words never travel back to the page.
+      expect(res.headers.location).not.toContain('script');
+    });
+
+    it('a spent or foreign sign-in page (Back, a second tab) comes back as ?signin=expired', async () => {
+      const { app } = harness;
+      const login = await request(app).get('/auth/login');
+      const authorize = await fetch(login.headers.location as string, { redirect: 'manual' });
+      const back = new URL(authorize.headers.get('location')!);
+
+      const res = await request(app)
+        .get('/auth/callback')
+        .query({ code: back.searchParams.get('code')!, state: back.searchParams.get('state')! })
+        .set('Accept', NAVIGATION);
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe(`${APP_URL}/?signin=expired`);
+    });
+
+    it('a code the provider refuses comes back as ?signin=failed, and mints no session', async () => {
+      const { app } = harness;
+      idp.signInAs({ subject: 'auth0|refused-browser' });
+      const login = await request(app).get('/auth/login');
+      const tx = (login.headers['set-cookie'] as unknown as string[]).map((c) => c.split(';')[0]).join('; ');
+      const authorize = await fetch(login.headers.location as string, { redirect: 'manual' });
+      const back = new URL(authorize.headers.get('location')!);
+      const query = { code: back.searchParams.get('code')!, state: back.searchParams.get('state')! };
+      expect((await request(app).get('/auth/callback').query(query).set('Cookie', tx)).status).toBe(302);
+
+      const replay = await request(app).get('/auth/callback').query(query).set('Cookie', tx).set('Accept', NAVIGATION);
+
+      expect(replay.status).toBe(302);
+      expect(replay.headers.location).toBe(`${APP_URL}/?signin=failed`);
+      expect(cookieValue(replay.headers['set-cookie'] as unknown as string[], 'jtt_session')).toBeUndefined();
+    });
+
+    it('the return address is re-sanitised: an off-site returnTo still lands on the app', () => {
+      expect(signInFailureLocation(APP_URL, '//evil.example/x', 'failed')).toBe(`${APP_URL}/?signin=failed`);
+      expect(signInFailureLocation(APP_URL, 'https://evil.example/', 'expired')).toBe(`${APP_URL}/?signin=expired`);
+      expect(signInFailureLocation(APP_URL, '/?signin=cancelled#/help', 'unavailable')).toBe(
+        `${APP_URL}/?signin=unavailable#/help`,
+      );
+    });
   });
 
   it('sets a session cookie that script cannot read', async () => {

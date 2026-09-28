@@ -48,7 +48,7 @@ import {
 } from '../auth/cookies.js';
 import type { AUTH_CALLBACK_OUTCOMES, AUTH_LOGIN_OUTCOMES } from '@jumptotech/observability';
 import type { AuthCookieConfig } from '../config.js';
-import { asyncRoute, sendError, sendOk } from '../http.js';
+import { asyncRoute, sendError, sendOk, type ApiErrorBody } from '../http.js';
 
 /** How long a half-finished sign-in may sit before it must be restarted. */
 const TRANSACTION_TTL_SECONDS = 10 * 60;
@@ -148,10 +148,58 @@ export function safeReturnTo(value: unknown): string {
   return value;
 }
 
+
+/**
+ * Why a browser's sign-in did not complete, in words the app can explain.
+ *
+ * A closed vocabulary the app maps to its own text — never the provider's
+ * `error_description`, never which check failed (see `authErrorResponse`).
+ */
+export type SignInFailure = 'cancelled' | 'expired' | 'unavailable' | 'failed';
+
+/**
+ * Where a browser whose sign-in failed is sent: back into the app, at the page
+ * it started from, with `?signin=<reason>` for the app to explain and strip.
+ *
+ * `/auth/login` and `/auth/callback` are top-level navigations. Answering them
+ * with the API's JSON error left a student who pressed Cancel at the provider
+ * — or whose sign-in page sat open too long, or who signed in from two tabs —
+ * on a page of raw JSON with no way back but the address bar.
+ */
+export function signInFailureLocation(appUrl: string, returnTo: unknown, reason: SignInFailure): string {
+  const target = new URL(safeReturnTo(returnTo), 'http://app.invalid');
+  target.searchParams.set('signin', reason);
+  return `${appUrl}${target.pathname}${target.search}${target.hash}`;
+}
+
+/** A browser navigation (`Accept: text/html…`) rather than an API client asking for JSON. */
+function isBrowserNavigation(req: Request): boolean {
+  return req.accepts(['json', 'html']) === 'html';
+}
+
 export function createAuthRoutes(deps: AuthRoutesDeps): Router {
   const router = Router();
   const log = deps.logger ?? (() => undefined);
   const txCookieName = `${deps.cookie.name}${TRANSACTION_COOKIE_SUFFIX}`;
+
+  /**
+   * Refuse a sign-in step. A browser is taken back to the app with a reason it
+   * can explain; any other caller gets the JSON error, as before.
+   */
+  const refuseSignIn = (
+    req: Request,
+    res: Response,
+    reason: SignInFailure,
+    returnTo: unknown,
+    status: number,
+    body: ApiErrorBody,
+  ): void => {
+    if (isBrowserNavigation(req)) {
+      res.redirect(302, signInFailureLocation(deps.appUrl, returnTo, reason));
+      return;
+    }
+    sendError(res, status, body);
+  };
 
   /*
    * Nothing under /auth may be cached (BETA-P0-014).
@@ -251,7 +299,10 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
       outcome(code === 'AUTH_PROVIDER_UNAVAILABLE' ? 'provider_unavailable' : code === 'AUTH_MISCONFIGURED' ? 'misconfigured' : 'failed');
       // The code and our own message only: provider text never reaches a log.
       log(`sign-in could not start: ${code}${error instanceof AuthError ? ` — ${error.message}` : ''}`);
-      authErrorResponse(res, error, 'start sign-in');
+      // The provider's discovery or keys could not be read: nothing the student can fix by retrying at once.
+      const { status, body, retryAfter } = authErrorResponse(error, 'start sign-in');
+      if (retryAfter) res.setHeader('retry-after', retryAfter);
+      refuseSignIn(req, res, 'unavailable', req.query.returnTo, status, body);
       return;
     }
 
@@ -310,7 +361,9 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
       log(`sign-in refused by the identity provider: ${String(req.query.error).slice(0, 200)}`);
       outcome('provider_refused');
       res.setHeader('set-cookie', clearTx);
-      sendError(res, 401, {
+      // `access_denied` is what a provider sends when the user presses Cancel.
+      const pending = openTransaction(parseCookies(req.get('cookie'))[txCookieName], deps.transactionSecret);
+      refuseSignIn(req, res, req.query.error === 'access_denied' ? 'cancelled' : 'failed', pending?.returnTo, 401, {
         code: 'AUTH_REFUSED',
         message: 'The identity provider did not complete sign-in.',
         remediation: 'Try signing in again.',
@@ -322,7 +375,8 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     if (!transaction) {
       outcome('no_transaction');
       res.setHeader('set-cookie', clearTx);
-      sendError(res, 400, {
+      // Started more than ten minutes ago, replayed with Back, or finished in another tab.
+      refuseSignIn(req, res, 'expired', undefined, 400, {
         code: 'AUTH_NO_TRANSACTION',
         message: 'This sign-in could not be matched to a request from this browser.',
         remediation: 'Start sign-in again from the application.',
@@ -334,7 +388,8 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     if (!safeEquals(req.query.state, transaction.state)) {
       outcome('state_mismatch');
       res.setHeader('set-cookie', clearTx);
-      sendError(res, 400, {
+      // Two sign-ins at once (two tabs): this browser's newer one replaced this one's transaction.
+      refuseSignIn(req, res, 'expired', undefined, 400, {
         code: 'AUTH_STATE_MISMATCH',
         message: 'This sign-in could not be matched to a request from this browser.',
         remediation: 'Start sign-in again from the application.',
@@ -346,7 +401,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     if (typeof code !== 'string' || code.length === 0 || code.length > 4096) {
       outcome('no_code');
       res.setHeader('set-cookie', clearTx);
-      sendError(res, 400, {
+      refuseSignIn(req, res, 'failed', transaction.returnTo, 400, {
         code: 'AUTH_NO_CODE',
         message: 'The identity provider returned no authorization code.',
       });
@@ -367,7 +422,12 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
       outcome(unavailable ? 'provider_unavailable' : 'verification_failed');
       if (unavailable) log(`sign-in could not complete: AUTH_PROVIDER_UNAVAILABLE — ${error.message}`);
       res.setHeader('set-cookie', clearTx);
-      authErrorResponse(res, error, 'complete sign-in');
+      const { status, body, retryAfter } = authErrorResponse(error, 'complete sign-in');
+      if (retryAfter) res.setHeader('retry-after', retryAfter);
+      // The provider or the user store could not be reached: the platform's fault, worth a retry later.
+      const unreachable =
+        !(error instanceof AuthError) || error.code === 'AUTH_MISCONFIGURED' || error.code === 'AUTH_PROVIDER_UNAVAILABLE';
+      refuseSignIn(req, res, unreachable ? 'unavailable' : 'failed', transaction.returnTo, status, body);
       return;
     }
 
@@ -449,25 +509,32 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
  * Coarse on purpose, exactly as `oidc.ts` is: an unauthenticated caller learning
  * *which* step failed learns something about the configuration.
  */
-function authErrorResponse(res: Response, error: unknown, what: string): void {
+function authErrorResponse(
+  error: unknown,
+  what: string,
+): { status: number; body: ApiErrorBody; retryAfter?: string } {
   if (error instanceof AuthError) {
     const unavailable = error.code === 'AUTH_PROVIDER_UNAVAILABLE';
-    const status = error.code === 'AUTH_MISCONFIGURED' || unavailable ? 503 : 401;
-    if (unavailable) res.setHeader('retry-after', '60');
-    sendError(res, status, {
-      code: error.code,
-      message: error.message,
-      ...(error.remediation
-        ? { remediation: error.remediation }
-        : unavailable
-          ? { remediation: 'The sign-in service is not responding. Try again in a few minutes; if you are already signed in, you are not affected.' }
-          : {}),
-    });
-    return;
+    return {
+      status: error.code === 'AUTH_MISCONFIGURED' || unavailable ? 503 : 401,
+      body: {
+        code: error.code,
+        message: error.message,
+        ...(error.remediation
+          ? { remediation: error.remediation }
+          : unavailable
+            ? { remediation: 'The sign-in service is not responding. Try again in a few minutes; if you are already signed in, you are not affected.' }
+            : {}),
+      },
+      ...(unavailable ? { retryAfter: '60' } : {}),
+    };
   }
-  sendError(res, 401, {
-    code: 'AUTH_INVALID_TOKEN',
-    message: `Could not ${what}.`,
-    remediation: 'Try signing in again.',
-  });
+  return {
+    status: 401,
+    body: {
+      code: 'AUTH_INVALID_TOKEN',
+      message: `Could not ${what}.`,
+      remediation: 'Try signing in again.',
+    },
+  };
 }

@@ -123,8 +123,33 @@ jtt_resolve_role() {
   jtt_check_identifier "database role" "$JTT_ROLE"
 }
 
+# The server must be the real one, not the image's first-start initialiser.
+#
+# On a new volume the official image runs a temporary server to initialise it,
+# stops it, then starts the real one. The temporary server answers on the Unix
+# socket only (listen_addresses=''), so a socket check — including the compose
+# healthcheck this used to share — says "ready" while initialisation is still
+# running. Measured (reliability audit 2026-09-28): socket ready at +58.5 s,
+# gone again at +61.5 s, TCP ready at +64.7 s; the disaster-recovery restore
+# (runbook §7.1: new volume, then --replace) ran in that gap and failed with
+# "the database system is shutting down". TCP inside the container is served
+# only by the real server, so wait for that, bounded.
+jtt_wait_ready() {
+  local timeout=${JTT_DB_READY_TIMEOUT_SECONDS:-120} waited=0
+  case $timeout in '' | *[!0-9]*) jtt_die "JTT_DB_READY_TIMEOUT_SECONDS must be a whole number of seconds" ;; esac
+  until docker exec "$JTT_CONTAINER" pg_isready -q -h 127.0.0.1 -p 5432 >/dev/null 2>&1; do
+    if [ "$waited" -ge "$timeout" ]; then
+      jtt_die "PostgreSQL in $JTT_CONTAINER is not accepting TCP connections after ${timeout}s. On the first start of a new volume the image initialises it with a temporary server first; wait until the container is healthy and run this again. Nothing was changed."
+    fi
+    [ "$waited" -eq 0 ] && jtt_log "waiting for PostgreSQL in $JTT_CONTAINER to finish starting (at most ${timeout}s)"
+    sleep 2
+    waited=$((waited + 2))
+  done
+}
+
 jtt_check_server() {
   local answer
+  jtt_wait_ready
   answer=$(jtt_psql postgres -c 'SELECT 1') || true
   if [ "$answer" != 1 ]; then
     jtt_die "cannot run a query in $JTT_CONTAINER as role $JTT_ROLE over the local socket; is PostgreSQL up and initialised?"
