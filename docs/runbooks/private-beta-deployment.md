@@ -54,6 +54,11 @@ The deployment tooling's own self-tests pass at `ac1b775`:
 | Egress | Docker Hub, `registry.npmjs.org`, `download.docker.com`, `dl.k8s.io`; the identity provider; the ACME CA; the backup and alert destinations | §7.1 |
 | Accounts | a dedicated operator account `jtt-ops` in the `docker` group (root-equivalent); no other local accounts | §5.2, §15 step 1 |
 
+Everything measured on Docker Desktop must be re-measured on the host before
+students. The checklist (L1–L12: cgroups, storage, firewall, sandbox-to-host,
+NetworkPolicy, kind, reboot, capacity) is
+[production-host-readiness §5.5](../development/production-host-readiness.md).
+
 ### 1.2 Recommended sizing: an ESTIMATE, gated by measurement
 
 The repository has **no** measured server sizing (production-host-readiness §5.3:
