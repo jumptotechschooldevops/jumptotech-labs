@@ -57,18 +57,6 @@ export interface TerminalConfig {
    */
   developmentSecretFallbacks?: readonly string[];
   /**
-   * The unprivileged account this process drops to at startup — BETA-P0-010.
-   *
-   * Student shells run as this same account, so the drop has to happen *inside*
-   * this process: the kernel marks a process that changed its uid non-dumpable,
-   * and a non-dumpable process' `/proc/<pid>/environ` and memory are closed to
-   * other processes of that uid. Started directly as the account instead, every
-   * student could read this service's secrets. See `process-identity.ts`.
-   */
-  dropToUid?: number;
-  /** Group for `dropToUid`. Defaults to the same number. */
-  dropToGid?: number;
-  /**
    * Base URL of the sandbox broker, used for Linux sessions.
    *
    * This service still holds no container-runtime access: it opens a WebSocket
@@ -119,6 +107,12 @@ export interface TerminalConfig {
    * `attach-budget.ts`.
    */
   attachBudget: { burst: number; perMinute: number };
+  /**
+   * RLIMIT_NPROC for each session's shell uid — SEC-ARCH-2. With a uid per
+   * session it bounds one student's processes (a fork bomb) without touching
+   * anyone else's; the container's own pid limit is shared by everyone.
+   */
+  shellMaxProcesses: number;
   /** Kill an idle PTY after this long with no client traffic. */
   idleTimeoutMs: number;
   /** Kill any PTY after this long, regardless of activity. */
@@ -204,15 +198,6 @@ function intFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: number, max?
  */
 const MAX_TIMER_SECONDS = Math.floor(2_147_483_647 / 1000);
 
-function optionalIdFromEnv(env: NodeJS.ProcessEnv, name: string): number | undefined {
-  const raw = env[name]?.trim();
-  if (!raw) return undefined;
-  if (!/^[0-9]+$/.test(raw) || Number.parseInt(raw, 10) <= 0) {
-    throw new Error(`Environment variable ${name} must name an unprivileged numeric id, got '${raw}'`);
-  }
-  return Number.parseInt(raw, 10);
-}
-
 export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): TerminalConfig {
   const sessionSecret = env.TERMINAL_SESSION_SECRET ?? '';
   if (sessionSecret.length < 8) {
@@ -274,8 +259,6 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     ? resolveBrokerClientTransport(env, { service: 'terminal', url: sandboxBrokerUrl })
     : null;
 
-  const dropToUid = optionalIdFromEnv(env, 'TERMINAL_DROP_TO_UID');
-  const dropToGid = optionalIdFromEnv(env, 'TERMINAL_DROP_TO_GID');
 
   return {
     port: intFromEnv(env, 'TERMINAL_PORT', 4001),
@@ -289,8 +272,6 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
     // The fallback is development-only: production refused above.
     internalServiceSecret: explicitInternalSecret || sessionSecret,
     developmentSecretFallbacks: explicitInternalSecret ? [] : ['INTERNAL_SERVICE_SECRET'],
-    ...(dropToUid !== undefined ? { dropToUid } : {}),
-    ...(dropToGid !== undefined ? { dropToGid } : {}),
     sandboxBrokerUrl,
     sandboxBrokerCredential,
     sandboxBrokerTransport,
@@ -302,6 +283,7 @@ export function loadTerminalConfig(env: NodeJS.ProcessEnv = process.env): Termin
       burst: intFromEnv(env, 'TERMINAL_ATTACH_BURST', DEFAULT_ATTACH_BUDGET.burst),
       perMinute: intFromEnv(env, 'TERMINAL_ATTACHES_PER_MINUTE', DEFAULT_ATTACH_BUDGET.perMinute),
     },
+    shellMaxProcesses: intFromEnv(env, 'TERMINAL_SHELL_MAX_PROCESSES', 128),
     idleTimeoutMs: intFromEnv(env, 'TERMINAL_IDLE_TIMEOUT_SECONDS', 1800, MAX_TIMER_SECONDS) * 1000,
     maxSessionMs: intFromEnv(env, 'TERMINAL_MAX_SESSION_SECONDS', 7200, MAX_TIMER_SECONDS) * 1000,
     activityReportIntervalMs: 30_000,

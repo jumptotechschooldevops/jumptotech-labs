@@ -47,7 +47,6 @@ const PRODUCTION = {
   SANDBOXD_ATTACH_SECRET: hex('attach').slice(0, 48),
   TERMINAL_SANDBOX_BROKER_ENABLED: 'true',
   OBSERVABILITY_SCRAPE_TOKEN: hex('scrape'),
-  TERMINAL_DROP_TO_UID: '1001',
 } as NodeJS.ProcessEnv;
 
 function refusal(env: NodeJS.ProcessEnv): string {

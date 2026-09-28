@@ -834,6 +834,14 @@ jobs:
       - name: Terminal suite, in a container, against a real PTY
         run: make test-terminal-container
 
+      # SEC-ARCH-2. The terminal code, launched as the image launches the
+      # service (non-root, ambient SETUID/SETGID/CHOWN, no-new-privileges,
+      # service-owned 0711 tmpfs), driving real shells: one session's shell
+      # cannot read, write, list or signal another's, and End leaves nothing
+      # of it running. Refuses to run unless production's identity checks pass.
+      - name: Per-session shell identities, on a real kernel
+        run: make test-terminal-isolation
+
       - name: Diagnostics
         if: failure()
         env:

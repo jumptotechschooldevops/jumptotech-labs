@@ -41,6 +41,7 @@
 import { createHmac } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { lstat, mkdir, open, realpath, rm } from 'node:fs/promises';
+import { handTree, reclaimTree, removeTree, type SessionOwner } from './shell-identity.js';
 import path from 'node:path';
 
 /** Refuse to read anything larger; a Dockerfile is a few hundred bytes. */
@@ -142,13 +143,90 @@ export interface WorkspaceOptions {
   root: string;
   /** Keys the session-id → directory-name derivation. */
   secret: string;
+  /**
+   * This service's own identity, when each session's shell has a uid of its
+   * own (SEC-ARCH-2). Absent in development, where shells share this service's.
+   */
+  service?: SessionOwner;
 }
 
 export class SessionWorkspaces {
+  /** One operation per workspace at a time: see `#asService`. */
+  readonly #turns = new Map<string, Promise<unknown>>();
+
   constructor(private readonly options: WorkspaceOptions) {}
 
   dirFor(sessionId: string): string {
     return workspaceDirFor(this.options.root, sessionId, this.options.secret);
+  }
+
+  /**
+   * Make a session's workspace — or its home, for a Kubernetes shell — and
+   * give it to the session's uid. Called on every attach, before the shell.
+   *
+   * A workspace this service created (the lab's baseline, seeded at Start
+   * before anyone attached) is handed over; one the session already owns is
+   * left as it is. One owned by anybody else is refused: a session's
+   * directory name comes from its id, and its owner from its id's uid, so a
+   * mismatch is a fault, never something to reconcile by chowning.
+   */
+  async claimFor(sessionId: string, owner: SessionOwner | null): Promise<string> {
+    const dir = this.dirFor(sessionId);
+    return this.#inTurn(dir, async () => {
+      await mkdir(this.options.root, { recursive: true, mode: 0o711 });
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const service = this.options.service;
+      if (!service || !owner) return dir;
+      const current = await lstat(dir);
+      if (!current.isDirectory()) throw new WorkspacePathError('is not a directory');
+      if (current.uid === owner.uid) return dir;
+      if (current.uid !== service.uid) {
+        throw new WorkspacePathError('belongs to another session identity');
+      }
+      await handTree(dir, owner);
+      return dir;
+    });
+  }
+
+  /**
+   * Run `work` on a session's workspace with this service owning all of it.
+   *
+   * A workspace the session owns is `0700` to its uid, which this service is
+   * not; so it is taken back first and handed back after, whatever `work` did.
+   * While it is the service's, nothing the student runs can change it: every
+   * path check below holds for as long as `work` takes, where before a student
+   * process could swap a directory for a link between a check and a use.
+   */
+  async #asService<T>(dir: string, work: () => Promise<T>): Promise<T> {
+    return this.#inTurn(dir, async () => {
+      const service = this.options.service;
+      if (!service) return work();
+      let owner: SessionOwner | null = null;
+      try {
+        const current = await lstat(dir);
+        if (current.uid !== service.uid) owner = { uid: current.uid, gid: current.gid };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      if (!owner) return work();
+      await reclaimTree(dir, service);
+      try {
+        return await work();
+      } finally {
+        await handTree(dir, owner);
+      }
+    });
+  }
+
+  #inTurn<T>(dir: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.#turns.get(dir) ?? Promise.resolve();
+    const turn = previous.then(work, work);
+    const tail = turn.catch(() => undefined);
+    this.#turns.set(dir, tail);
+    void tail.then(() => {
+      if (this.#turns.get(dir) === tail) this.#turns.delete(dir);
+    });
+    return turn;
   }
 
   /**
@@ -176,18 +254,19 @@ export class SessionWorkspaces {
     // 0711 on the root: a shell can enter its own workspace by name but cannot
     // list the root to discover anyone else's.
     await mkdir(this.options.root, { recursive: true, mode: 0o711 });
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-
-    for (const file of files) {
-      const target = resolveWorkspaceFile(dir, file.path);
-      if (mode === 'fill') {
-        await fillBaselineFile(dir, target, file.content);
-        continue;
+    return this.#asService(dir, async () => {
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      for (const file of files) {
+        const target = resolveWorkspaceFile(dir, file.path);
+        if (mode === 'fill') {
+          await fillBaselineFile(dir, target, file.content);
+          continue;
+        }
+        await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+        await writeBaselineFile(dir, target, file.content);
       }
-      await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-      await writeBaselineFile(dir, target, file.content);
-    }
-    return dir;
+      return dir;
+    });
   }
 
   /**
@@ -198,7 +277,12 @@ export class SessionWorkspaces {
    * only this service can open.
    */
   async read(sessionId: string, relative: string): Promise<string | null> {
-    const target = await realWorkspacePath(this.dirFor(sessionId), relative);
+    const dir = this.dirFor(sessionId);
+    return this.#asService(dir, () => this.#read(dir, relative));
+  }
+
+  async #read(dir: string, relative: string): Promise<string | null> {
+    const target = await realWorkspacePath(dir, relative);
     if (target === null) return null;
 
     /*
@@ -242,10 +326,15 @@ export class SessionWorkspaces {
     }
   }
 
-  /** Remove a session's workspace. Safe to call twice. */
+  /**
+   * Remove a session's workspace. Safe to call twice.
+   *
+   * Taken back first when the session owns it: the student may have left
+   * directories in it `000`, which its owner — not this service — could open.
+   */
   async destroy(sessionId: string): Promise<void> {
     const dir = this.dirFor(sessionId);
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    await this.#inTurn(dir, () => removeTree(dir, this.options.service ?? null)).catch(() => undefined);
   }
 }
 
