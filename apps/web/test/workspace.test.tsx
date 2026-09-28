@@ -25,6 +25,7 @@ import {
   attemptSummary,
   labDetail,
   learningPathProgress,
+  progressSnapshot,
   resetApiMock,
   sessionInfo,
   sessionsResponse,
@@ -150,6 +151,22 @@ describe('finding the running lab', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Go to the lab page' }).getAttribute('href')).toBe('#/labs/LINUX-001');
     expect(screen.queryByTestId('terminal')).toBeNull();
+  });
+
+  it('says a lab that is not running was completed, when it was — after a reload of the ended summary, say', async () => {
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    apiMock.getProgress.mockResolvedValue(progressSnapshot({ 'LINUX-001': 'COMPLETED' }));
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' })).toBeTruthy();
+    expect(await screen.findByText(/You have completed this lab/)).toBeTruthy();
+  });
+
+  it('does not claim a completion it has not read', async () => {
+    apiMock.listMySessions.mockResolvedValue(sessionsResponse([]));
+    renderWithProviders(<WorkspacePage labId="LINUX-001" />);
+    await screen.findByRole('heading', { level: 1, name: 'LINUX-001 is not running' });
+    expect(screen.queryByText(/You have completed this lab/)).toBeNull();
   });
 
   it('does not allow Verify, or ask for a terminal, before the environment is ready — and polls until it is', async () => {
@@ -422,6 +439,20 @@ describe('End lab', () => {
     expect(screen.getByRole('link', { name: 'Back to labs' })).toBeTruthy();
   });
 
+  it('puts keyboard focus on the outcome, since the dialog and the End button that had it are gone', async () => {
+    apiMock.endLab.mockResolvedValue({ message: 'ok', session: sessionInfo({ status: 'ENDED' }), steps: [] });
+    await renderConnected();
+    const end = button('End lab');
+    end.focus();
+    fireEvent.click(end);
+    const confirm = within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' });
+    confirm.focus();
+    fireEvent.click(confirm);
+
+    const heading = await screen.findByRole('heading', { name: 'Lab ended' });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+  });
+
   it('shows an End that is still cleaning up as shutting down, not as failed, and offers no second End', async () => {
     apiMock.endLab.mockRejectedValue(
       new ApiRequestError(503, {
@@ -454,6 +485,15 @@ describe('after the lab has ended', () => {
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
     await screen.findByRole('heading', { name: 'Lab ended' });
   }
+
+  it('keeps the ticking elapsed time out of the preparing card\'s announcements', async () => {
+    await endLab();
+    apiMock.startLab.mockReturnValue(new Promise(() => undefined));
+    fireEvent.click(screen.getByRole('button', { name: 'Launch a fresh environment' }));
+    const card = (await screen.findByText('Preparing your lab environment…')).closest('[role="status"]')!;
+    const elapsed = card.querySelector('.overlay__elapsed')!;
+    expect(elapsed.getAttribute('aria-live')).toBe('off');
+  });
 
   it('shows the new environment preparing when the student launches again — not the old summary', async () => {
     await endLab();

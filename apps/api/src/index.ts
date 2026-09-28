@@ -511,6 +511,7 @@ async function main(): Promise<void> {
     access,
     sessionEvents,
     ...(billing ? { billing } : {}),
+    reaperLastSuccessMs: () => reaperLastSuccessMs,
     observability: {
       logger,
       metrics: {

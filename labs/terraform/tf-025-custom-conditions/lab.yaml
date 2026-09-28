@@ -95,8 +95,9 @@ task:
     carry a `lifecycle` block too, and inside a postcondition you refer to what
     was read as `self`.
 
-    **A check block** named `manifest_is_populated`, with an assertion that the
-    manifest ended up with content in it. A `check` block sits at the top level
+    **A check block** named `manifest_is_populated`, with an assertion whose
+    condition reads the manifest's `content` and fails if it is empty. A
+    `check` block sits at the top level
     rather than inside a resource, and it is the one of the four that
     *reports* rather than blocks — an assertion that fails is a warning, not an
     error, which is what makes it right for something you want to know about

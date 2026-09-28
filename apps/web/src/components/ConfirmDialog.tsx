@@ -11,6 +11,7 @@
  *   - Tab and Shift+Tab stay inside it;
  *   - Escape cancels — unless the action is already running, when cancelling
  *     would only hide something that is still happening;
+ *   - a press outside cancels too, but not the second press of a double click;
  *   - focus returns to whatever opened it.
  */
 import { useEffect, useId, useRef, type ReactNode } from 'react';
@@ -81,8 +82,20 @@ export function ConfirmDialog({
     }
   };
 
+  /*
+   * A press on the backdrop is a click outside — unless it is the second press
+   * of a double click. Students double-click buttons; the dialog opens on the
+   * first click, the second lands where End lab or Reset was, on the backdrop,
+   * and used to cancel the dialog before it could be read, so the button
+   * seemed to do nothing.
+   */
+  const onBackdropPress = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (busy || event.detail > 1) return;
+    onCancel();
+  };
+
   return (
-    <div className="modal__backdrop" onMouseDown={busy ? undefined : onCancel}>
+    <div className="modal__backdrop" onMouseDown={onBackdropPress}>
       <div
         ref={dialogRef}
         className="modal"

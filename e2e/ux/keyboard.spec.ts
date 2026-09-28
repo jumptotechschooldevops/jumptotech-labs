@@ -97,8 +97,7 @@ test('the End dialog opens on Cancel, keeps Tab inside, closes on Escape, and gi
   expect(platform.count(/^DELETE /)).toBe(0);
 });
 
-// Known defect on main, fixed in its own PR: after End, focus falls to the top of the page.
-test.fixme('ending a lab with the keyboard leaves focus on the outcome, not at the top of the page', async ({ page, platform }) => {
+test('ending a lab with the keyboard leaves focus on the outcome, not at the top of the page', async ({ page, platform }) => {
   await openSignedIn(page, platform);
   await launch(page);
   await actionButton(page, 'End lab').focus();
@@ -114,8 +113,7 @@ test.fixme('ending a lab with the keyboard leaves focus on the outcome, not at t
   expect(await focused(page)).toMatch(/^(a|button):/);
 });
 
-// Known defect on main, fixed in its own PR: a reconnecting terminal takes focus out of an open dialog.
-test.fixme('a terminal that reconnects by itself does not take focus out of an open dialog', async ({ page, platform }) => {
+test('a terminal that reconnects by itself does not take focus out of an open dialog', async ({ page, platform }) => {
   await openSignedIn(page, platform);
   await launch(page);
 
@@ -162,8 +160,7 @@ test('Reset confirmed from the keyboard puts the student back in the fresh shell
   await expect.poll(() => focused(page)).toBe('terminal');
 });
 
-// Known defect on main, fixed in its own PR: revealing the last hint drops focus.
-test.fixme('hints open one at a time from the keyboard, and each is announced where focus is', async ({ page, platform }) => {
+test('hints open one at a time from the keyboard, and each is announced where focus is', async ({ page, platform }) => {
   await openSignedIn(page, platform);
   await launch(page);
   const show = page.getByRole('button', { name: /Show a hint/ });

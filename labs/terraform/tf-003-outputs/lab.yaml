@@ -86,15 +86,15 @@ task:
     outputs. The pipeline reads them by name, so these five names are the
     contract:
 
-    - `service_name` — the service that was built. Take it from the local value,
-      not by retyping the string.
-    - `release_channel` — the channel, from the input variable.
-    - `manifest_path` — where the manifest was written. Take it from the
-      resource's own attribute, so it stays correct if the filename changes.
-    - `release_summary` — a single object gathering the three above, under the
-      keys `service`, `channel` and `manifest`. One value the pipeline can read
-      in one go.
-    - `deploy_token` — the token, from its variable, and marked **sensitive**.
+      - `service_name` — the service that was built. Take it from the local value,
+        not by retyping the string.
+      - `release_channel` — the channel, from the input variable.
+      - `manifest_path` — where the manifest was written. Take it from the
+        resource's own attribute, so it stays correct if the filename changes.
+      - `release_summary` — a single object gathering the three above, under the
+        keys `service`, `channel` and `manifest`. One value the pipeline can read
+        in one go.
+      - `deploy_token` — the token, from its variable, and marked **sensitive**.
 
     Everything else is yours. Rename the resource, restructure the locals,
     compose the summary however you prefer — what is checked is the output
