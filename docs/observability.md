@@ -328,9 +328,11 @@ Alertmanager and Grafana share Prometheus's network namespace, so Prometheus
 reaches Alertmanager, and Grafana reaches Prometheus, on localhost. In
 production both listen on loopback **inside** that namespace, which is what
 keeps them away from every other container on the default network — in
-particular the terminal, where Kubernetes-track students have a shell. Before
-this, on the dev profile, a shell there could reach Prometheus's lifecycle API
-and create Alertmanager silences without a credential.
+particular the terminal, where Kubernetes-track students have a shell. On the
+dev profile they still listen on every interface, so a shell there can read
+Prometheus's query API and create Alertmanager silences without a credential;
+the lifecycle API (`/-/quit`, `/-/reload`) is off in both profiles. Reload rules
+with `kill -s HUP`.
 
 | Surface | Production |
 |---|---|
