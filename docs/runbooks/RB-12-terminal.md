@@ -38,6 +38,11 @@ else needs step 4 first.
 
 1. `prod logs terminal | grep '"event":"terminal.connection.rejected"'`
    — one line per refusal with its outcome.
+   Everything else that went wrong is a `warn` line with its own event:
+   `prod logs terminal | grep '"level":"warn"'` — `terminal.connection.rejected`
+   (a shell that could not start), `terminal.reattach.failed`,
+   `terminal.connection.closed` ("shell lost"), `terminal.terminate.requested`
+   (a control action from the api failed), `terminal.activity.report_failed`.
 2. **`unauthorized`:** `TERMINAL_SESSION_SECRET` must match between `api` and
    `terminal` exactly. Tokens are time-bounded, so host clock skew presents the
    same way.
