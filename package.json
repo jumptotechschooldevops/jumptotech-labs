@@ -37,7 +37,7 @@
     "test:integration:docker": "RUN_DOCKER_INTEGRATION_TESTS=1 vitest run test/docker-integration.test.ts --root services/lab-orchestrator --testTimeout=900000 --hookTimeout=900000",
     "db:migrate": "npm run migrate --workspace @jumptotech/progress",
     "db:status": "npm run migrate --workspace @jumptotech/progress -- --status",
-    "test:db": "tsx test-support/strict-vitest.ts test/postgres-repository-integration.test.ts test/session-shell-uid-migration-integration.test.ts --root services/progress && tsx test-support/strict-vitest.ts test/session-store-integration.test.ts --root services/lab-orchestrator && tsx test-support/strict-vitest.ts --no-file-parallelism test/progress-persistence-integration.test.ts test/auth-persistence-integration.test.ts test/access-persistence-integration.test.ts --root apps/api",
+    "test:db": "tsx test-support/strict-vitest.ts test/postgres-repository-integration.test.ts test/session-shell-uid-migration-integration.test.ts --root services/progress && tsx test-support/strict-vitest.ts test/session-store-integration.test.ts --root services/lab-orchestrator && tsx test-support/strict-vitest.ts --no-file-parallelism test/progress-persistence-integration.test.ts test/auth-persistence-integration.test.ts test/access-persistence-integration.test.ts test/session-events-persistence-integration.test.ts --root apps/api",
     "dev:api": "npm run dev --workspace @jumptotech/api",
     "dev:terminal": "npm run dev --workspace @jumptotech/terminal",
     "dev:sandboxd": "npm run dev --workspace @jumptotech/sandboxd",
@@ -51,7 +51,8 @@
     "e2e:up": "bash e2e/stack.sh up",
     "e2e:down": "bash e2e/stack.sh down",
     "test:e2e": "bash e2e/stack.sh run",
-    "test:e2e:running": "playwright test --config e2e/playwright.config.ts"
+    "test:e2e:running": "playwright test --config e2e/playwright.config.ts",
+    "test:e2e:ux": "npm run build --workspace @jumptotech/web && playwright test --config e2e/playwright.ux.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

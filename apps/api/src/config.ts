@@ -673,6 +673,17 @@ export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): Session
       ),
       'limits.cpu': strFromEnv(env, 'QUOTA_LIMITS_CPU', base.quota['limits.cpu'] ?? '4'),
       'limits.memory': strFromEnv(env, 'QUOTA_LIMITS_MEMORY', base.quota['limits.memory'] ?? '4Gi'),
+      // Node disk (red-team O4); see DEFAULT_SESSION_POLICY.
+      'requests.ephemeral-storage': strFromEnv(
+        env,
+        'QUOTA_REQUESTS_EPHEMERAL_STORAGE',
+        base.quota['requests.ephemeral-storage'] ?? '2Gi',
+      ),
+      'limits.ephemeral-storage': strFromEnv(
+        env,
+        'QUOTA_LIMITS_EPHEMERAL_STORAGE',
+        base.quota['limits.ephemeral-storage'] ?? '4Gi',
+      ),
       // Cost safety: not configurable up. A lab may never ask for a cloud
       // load balancer or a node port.
       'services.loadbalancers': '0',
@@ -688,14 +699,29 @@ export function loadSessionPolicy(env: NodeJS.ProcessEnv = process.env): Session
           'LIMITS_DEFAULT_REQUEST_MEMORY',
           base.limitRange.defaultRequest.memory,
         ),
+        'ephemeral-storage': strFromEnv(
+          env,
+          'LIMITS_DEFAULT_REQUEST_EPHEMERAL_STORAGE',
+          base.limitRange.defaultRequest['ephemeral-storage'] ?? '64Mi',
+        ),
       },
       default: {
         cpu: strFromEnv(env, 'LIMITS_DEFAULT_CPU', base.limitRange.default.cpu),
         memory: strFromEnv(env, 'LIMITS_DEFAULT_MEMORY', base.limitRange.default.memory),
+        'ephemeral-storage': strFromEnv(
+          env,
+          'LIMITS_DEFAULT_EPHEMERAL_STORAGE',
+          base.limitRange.default['ephemeral-storage'] ?? '256Mi',
+        ),
       },
       max: {
         cpu: strFromEnv(env, 'LIMITS_MAX_CPU', base.limitRange.max?.cpu ?? '1'),
         memory: strFromEnv(env, 'LIMITS_MAX_MEMORY', base.limitRange.max?.memory ?? '1Gi'),
+        'ephemeral-storage': strFromEnv(
+          env,
+          'LIMITS_MAX_EPHEMERAL_STORAGE',
+          base.limitRange.max?.['ephemeral-storage'] ?? '1Gi',
+        ),
       },
     },
     network: loadNetworkPolicyConfig(env),

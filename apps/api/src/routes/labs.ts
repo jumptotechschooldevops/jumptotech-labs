@@ -32,6 +32,7 @@ import { record } from '../progress.js';
 import { toAttemptPayload } from './me.js';
 import { accessRefusalBody, refusalState } from '../access/entitlements.js';
 import { requestId } from '../auth/middleware.js';
+import { recordSafely, type SessionEventInput } from '../classroom/session-events.js';
 import {
   issueTerminalGrant,
   noLimit,
@@ -231,6 +232,19 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
   const obs = deps.obs ?? silentLogger();
   const router = Router();
 
+  /** One Start, for the classroom view. Never throws. */
+  const startEvent = (
+    labId: string,
+    ownerUserId: string | undefined,
+    fields: Pick<SessionEventInput, 'outcome' | 'code' | 'durationMs' | 'sessionId'>,
+  ) =>
+    recordSafely(deps.sessionEvents, obs, {
+      labId,
+      ...(ownerUserId ? { ownerUserId, actorUserId: ownerUserId } : {}),
+      operation: 'start',
+      ...fields,
+    });
+
   /** One Start Lab outcome, counted and logged the same way every time. */
   function recordStart(
     lab: { id: string; track: string; environment: { provider: string } },
@@ -306,6 +320,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
      */
     if (deps.config.launchesPaused) {
       deps.obs?.info('lab.start.paused', { labId: def.id, code: 'LAB_LAUNCHES_PAUSED' });
+      await startEvent(def.id, req.user?.userId, { outcome: 'refused', code: 'LAB_LAUNCHES_PAUSED' });
       sendError(res, 503, {
         code: 'LAB_LAUNCHES_PAUSED',
         message: 'Starting new labs is paused for maintenance.',
@@ -354,6 +369,7 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
       if (!entitled.allowed) {
         const body = accessRefusalBody(entitled);
         recordStart(def, 'access_denied', { code: body.code });
+        await startEvent(def.id, owner.userId, { outcome: 'refused', code: body.code });
         deps.authAudit?.({
           requestId: requestId(req),
           authenticatedUserId: owner.userId,
@@ -394,7 +410,11 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
      * starts — the student loses the record, not the lesson.
      */
     let attempt: LabAttempt | undefined;
+    // Known once the session is admitted, so a start that fails after that
+    // point is recorded against the session the instructor can look up.
+    let admittedSessionId: string | undefined;
     const openAttempt = async (session: { sessionId: string }): Promise<void> => {
+      admittedSessionId = session.sessionId;
       const opened = await record(log, 'open attempt', () =>
         progress.startAttempt({
           studentId: identityUsed.studentId,
@@ -445,6 +465,16 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
               ? 'provider_unavailable'
               : 'provision_failed';
       recordStart(def, outcome, { durationMs: Date.now() - startedAt, code });
+      await startEvent(def.id, owner.userId, {
+        // A refusal took no slot and built nothing; a failure was admitted and broke.
+        outcome:
+          outcome === 'capacity_reached' || outcome === 'student_limit_reached' || outcome === 'provider_unavailable'
+            ? 'refused'
+            : 'failed',
+        code: error instanceof SessionError ? code : 'PLATFORM_ERROR',
+        durationMs: Date.now() - startedAt,
+        ...(admittedSessionId ? { sessionId: admittedSessionId } : {}),
+      });
       // The sandbox never came up. Close the attempt honestly rather than
       // leaving a row that says the student is still working on it.
       const opened = attempt;
@@ -476,6 +506,11 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
     recordStart(def, 'success', {
       durationMs: Date.now() - startedAt,
       sessionId: started.session.sessionId,
+    });
+    await startEvent(def.id, owner.userId, {
+      outcome: 'ok',
+      sessionId: started.session.sessionId,
+      durationMs: Date.now() - startedAt,
     });
 
     sendOk(res, {

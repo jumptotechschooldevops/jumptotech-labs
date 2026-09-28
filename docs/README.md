@@ -107,8 +107,8 @@ The alert runbooks, one per alert family:
 [RB-17](runbooks/RB-17-session-lifecycle.md) ·
 [RB-18](runbooks/RB-18-network-isolation.md) ·
 [RB-19](runbooks/RB-19-host-pressure.md) ·
-[RB-21](runbooks/RB-21-launches-paused.md)
-(there is no RB-20).
+[RB-20](runbooks/RB-20-watchdog.md) ·
+[RB-21](runbooks/RB-21-launches-paused.md).
 
 ---
 

@@ -154,7 +154,11 @@ Renewal must run on a schedule with `scripts/tls-install.sh` as the deploy hook
 ### 2.5 Alerts (D6)
 
 A webhook destination for Alertmanager and a named person who receives it:
-`infrastructure/observability/alertmanager/secrets/README.md`.
+`infrastructure/observability/alertmanager/secrets/README.md`. And an external
+check-in (heartbeat) service for the always-firing `Watchdog`: its URL goes in
+`alertmanager/secrets/heartbeat-url`, and it must tell that person when the
+check-ins stop, because a dead host, Docker daemon, Prometheus or Alertmanager
+sends no alert of its own ([RB-20](RB-20-watchdog.md)).
 
 ### 2.6 Off-host encrypted backup (D7)
 
@@ -186,6 +190,7 @@ storage-side encryption with managed keys).
 | `OIDC_CLIENT_SECRET` | **EXTERNAL**: the identity provider (§2.3) | api |
 | TLS private key | **EXTERNAL**: generated on the host (§2.4); `infrastructure/docker/nginx/tls/privkey.pem`, `0600` | web |
 | Alert webhook URL | **EXTERNAL** (D6); `infrastructure/observability/alertmanager/secrets/webhook-url` | alertmanager |
+| Heartbeat check-in URL | **EXTERNAL** (D6); `infrastructure/observability/alertmanager/secrets/heartbeat-url` | alertmanager |
 | Backup hook credentials, encryption key | **EXTERNAL** (D7); never beside the archives or on the hook's command line | the backup job only |
 
 Which service receives which secret is fixed by `infrastructure/secret-distribution.json`

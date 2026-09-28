@@ -36,3 +36,5 @@ npm-debug.log*
 /e2e/.stack/
 /e2e/test-results/
 /e2e/playwright-report/
+/e2e/test-results-ux/
+/e2e/playwright-report-ux/

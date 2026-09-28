@@ -7,5 +7,5 @@
     "declarationMap": false,
     "types": ["node"]
   },
-  "include": ["playwright.config.ts", "global-setup.ts", "tests/**/*.ts"]
+  "include": ["playwright.config.ts", "playwright.ux.config.ts", "global-setup.ts", "tests/**/*.ts", "ux/**/*.ts"]
 }

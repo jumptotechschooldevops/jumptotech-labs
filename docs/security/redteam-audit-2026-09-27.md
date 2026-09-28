@@ -27,17 +27,87 @@ Live proofs used a dedicated throwaway kind v1.34 cluster
 | # | Severity | Finding | Why not fixed here |
 |---|---|---|---|
 | O1 | MEDIUM (HIGH for an untrusted cohort) | Docker- and Kubernetes-track shells are local PTYs in the shared terminal container as uid 1001; End signals only bash's pid, so a `setsid`/`nohup` process outlives the session and keeps SEC-ARCH-2's cross-session credential read, and can signal the terminal service | Needs the planned per-session uid, or a cgroup per shell. Killing every uid-1001 process on End would kill other students' shells |
-| O2 | MEDIUM | Container sandboxes (linux/terraform/ansible/cicd) have no disk limit (`--storage-opt size=` absent); one student can fill the Docker data root | `--storage-opt` needs overlay2 on xfs+pquota; the host storage layout is an ops decision |
-| O3 | HIGH (accepted as S12 / SEC-ARCH-1) | Docker-track DinD is `--privileged`; a student with the inner daemon's cert can `docker run --privileged -v /dev:/dev` and reach host root without any escape | Documented and accepted for a trusted beta only. `docs/pod-security.md` §10 understates it as requiring an escape; it does not |
-| O4 | LOW | Kubernetes pods have no ephemeral-storage limits, and local-path PVCs do not enforce size, so a student can fill the kind node disk | Ephemeral limits via LimitRange are possible; PVC size is not enforceable on local-path |
+| O2 | MEDIUM — **partly fixed** (see I2, I3) | Container sandboxes: unbounded container log **fixed** (PR #119, merged); writable layer and the DinD image volume still unbounded. `--storage-opt size=` is accepted but **not enforced** by Docker Desktop's containerd snapshotter (measured), so it was not added | Production host must run overlay2 on XFS with `pquota` (or equivalent) before a per-sandbox disk quota is real; until then, host-disk alerts and session lifetime are the control |
+| O3 | HIGH (accepted for the private beta only) | Docker-track DinD is `--privileged`; the student holds the inner daemon's client certificate, so reaching host-level privilege needs no escape | `docs/pod-security.md` §10 corrected in this pass. PRIVATE BETA ACCEPTABLE RISK; PUBLIC MULTI-TENANT BLOCKER (Docker track off, or a VM/sandboxed runtime per sandbox). Not probed live |
+| O4 | MEDIUM — **fixed except PVCs** (see I4, I5) | Kubernetes pods had no ephemeral-storage bound; local-path PVCs do not enforce size | ephemeral-storage LimitRange + quota (PR #122, on top of merged #121). PVC capacity needs a provisioner that enforces it: infrastructure action |
 | O5 | LOW | Logout does not end an issued terminal grant (≤ 1 h TTL); `destroyAllForUser` has no caller, so revoking access leaves browser sessions alive (entitlement is still checked per action) | Behavioural change to the session model |
 | O6 | LOW | Revoking access does not close an already-attached shell until idle expiry | Documented in operator-access; fix is to close on `ACCESS_NOT_ACTIVE` activity reports |
 | O7 | LOW | No rate limit on `/auth/*`, `POST /check`, terminal-token mint; nginx has no `limit_req`/`limit_conn`; unauthenticated terminal sockets are not counted against the cap | Check is serialized per session and one session per student; bounded |
 | O8 | LOW | `/api/labs` returns every hint to any signed-in account regardless of entitlement; hint reveals are self-reported | Product decision: catalogue may be public by design |
 | O9 | LOW | Bearer path accepts ID tokens when `OIDC_AUDIENCE == OIDC_CLIENT_ID`; no `azp`/`typ` binding | Same subject only; no impersonation |
-| O10 | LOW (dev only) | Orchestrator falls back to the default kubeconfig context; with an EKS current-context `dev:api` would create lab namespaces on a real cluster | Dev-host hazard; the kind kubeconfig is mounted in compose |
-| O11 | LOW (dev overlay only) | `docker-compose.observability.yml` Prometheus on `0.0.0.0:9090` with `--web.enable-lifecycle`, reachable from local-PTY shells | Production overlay binds 127.0.0.1 without lifecycle |
+| O10 | HIGH on a developer machine — **fixed** (PR #115, merged) | Orchestrator fell back to the kubeconfig's current-context | See I1 |
+| O11 | LOW (dev overlay only) — **fixed** (PR #116, merged) | Dev Prometheus lifecycle API reachable from peer containers | See I6. Dev read API and Alertmanager silences remain reachable from peers in development only |
 | O12 | LOW | Local-PTY shells reach `api:4000` directly and control `X-Forwarded-For` (`trust proxy 1`); only the per-IP learning-path read limit keys on `req.ip` | Limited impact |
+
+## Docker/Kubernetes isolation pass (wave 3, 2026-09-27)
+
+Baseline `ac1b775`. Every Kubernetes probe used a session started through
+`KindLabProvider` on the shared `jumptotech-labs` kind cluster and the
+student's **own** ServiceAccount kubeconfig, with owner label
+`runtime-owner=redteam-o4`; all such namespaces were ended through the provider
+and verified gone. Docker probes used disposable containers and networks
+labelled `jtt.redteam.probe`, removed after each run. No external cluster was
+contacted. Live privileged-DinD escape probing was not performed (O3 is
+recorded from the design).
+
+| # | Severity | Finding | Threat model / boundary | Reproduction and evidence | Fix and tests | Remaining risk | Beta / public impact |
+|---|---|---|---|---|---|---|---|
+| I1 (O10) | HIGH on a developer machine | `KubernetesClient` used `loadFromDefault()` and the kubeconfig's current-context; nothing compared it with `LAB_CLUSTER_NAME` | developer runs `npm run dev:api` with a real cluster current → lab namespaces, Roles and a student token created there, handed to a student shell | fake kubeconfig with current-context `prod` plus a kind context: the composed client's endpoint (the one student kubeconfigs are built from) was the prod server. The machine this ran on has 9 EKS contexts | PR #115 (merged): one context everywhere (`LAB_KUBE_CONTEXT`, else `kind-<LAB_CLUSTER_NAME>`); a missing context refuses every request before any network; `kubectl` calls pass `--context`. Tests fail on the old composition and client | none known | beta: fixed. public: fixed |
+| I2 (O2) | MEDIUM (host availability) | Container sandboxes used the daemon's `json-file` log with no `max-size`; PID 1's stdout is writable by the student and nothing reads that log | student → host Docker data root, shared by every session and the platform | `> /proc/1/fd/1` wrote 4,997,120 bytes into the host log from one command | PR #119 (merged): `--log-driver json-file --log-opt max-size=1m --log-opt max-file=1`; re-measured: 20 MB written, log holds 999,424 bytes; boundary test fails on the old runtime | writable layer (I3) | beta: fixed. public: fixed |
+| I3 (O2) | MEDIUM | Writable layer and the DinD `/var/lib/docker` volume are unbounded | as I2 | 50 MB `/tmp` + 2,000 files freely; a container created with `--storage-opt size=64m` took **100 MB** (accepted, stored, not enforced by the containerd snapshotter) | not fixed: a cosmetic quota was deliberately not added | one student can fill the Docker disk within a session | beta: accepted with disk alerts, one session per student and End removing the layer. public: **blocker** until the host enforces per-container quotas |
+| I4 (O4) | MEDIUM (host availability) | Kubernetes sessions had no ephemeral-storage requests, limits or quota | student → kind node disk = the same host disk | as the student: 200 MB each into the writable layer, a disk-backed emptyDir and a `10Mi` PVC all succeeded. Kubelet enforcement proven first: 64Mi limit and emptyDir `sizeLimit` both Evicted | PR #122: LimitRange 64Mi/256Mi/1Gi and quota 2Gi/4Gi, env-overridable; re-measured: unqualified 400 MB writer and an emptyDir without sizeLimit Evicted at 256Mi, `50Gi` refused by `max`, student cannot patch the LimitRange, 6 replicas still fit | PVCs (I5) | beta: fixed. public: fixed |
+| I5 (O4) | MEDIUM | local-path stores a PVC as a plain node directory and ignores its size | as I4 | `/var/local-path-provisioner/pvc-…_tiny` held **201M** for a `10Mi` claim | not fixed: two certified labs need PVCs; a `requests.storage` quota would bound only the requested number | up to 5 PVCs per session, unbounded in size | beta: accepted (5 known students, disk alerts). public: **blocker**: a provisioner that enforces capacity (XFS project quotas, TopoLVM, cloud block CSI) |
+| I6 (O11) | LOW (dev only) | Dev Prometheus ran `--web.enable-lifecycle` on `0.0.0.0` in a namespace reachable from the compose default network (the terminal container) | peer container → monitoring | disposable network, dev flags: peer `POST /-/quit` → 200 and Prometheus exited 0; `/api/v1/status/flags` readable | PR #116 (merged): lifecycle off in dev; contract test fails on the old compose file | dev read API, Alertmanager silences | beta: none (production overlay already safe) |
+| I7 (new) | MEDIUM (defence in depth) | Session guardrails were **stored wrong**: `@kubernetes/client-node` models rename `NetworkPolicyIngressRule.from` → `_from` and `LimitRangeItem.default` → `_default`; plain manifests lost both fields. Every session's `allow-same-namespace` policy was stored as `ingress: [{}]` (allow from everywhere), and the LimitRange default collapsed to its max | any cluster workload without an egress policy → every student pod. Student A → student B stayed blocked by A's own default-deny egress | live `ingress: [{}]`; from a pod in a separate namespace, `wget` to an old-session pod **REACHED**, to a fixed-session pod **blocked**. The enforcement attestation did not see it: the probe applies its own policies with `kubectl` | PR #121 (merged): manifests go through the public `loadYaml` (wire → model) before create/replace. Stand-in API test and a live `labs-integration` case read back with the student kubeconfig; both fail on the old client. Kubelet HTTP probes still pass | none known | beta: fixed. public: fixed |
+| I8 (new; fixed by PR #123, per-session uid owner) | MEDIUM | Kubernetes-track shells share `HOME=/home/student` (one tmpfs in the terminal container) across sessions; bash writes `~/.bash_history` there on exit and files persist after End | student A (ended) → the next Kubernetes-track student | terminal image, the terminal's exact flags: A's typed `export SECRET_MARKER_A=…` and `notes-from-A.txt` readable from the next shell | PR #123 (per-session uid, stacked on merged #117): each Kubernetes shell gets its own 0700 home, where bash's default HISTFILE lands, and End kills the session uid's processes and removes it | until #123 merges, as O1 | beta: fixed once #123 is on main. public: same |
+| I9 (confirmed from a peer report) | LOW–MEDIUM (production Linux) | `--internal` sandbox networks can reach the host's own stack at the bridge gateway | container sandbox → host services bound to `0.0.0.0` | disposable internal network: every gateway port answered with refused (the host stack responds; nothing listens in the Docker Desktop VM). Loopback-only binding is not a boundary for `NET_RAW` labs on Docker Desktop (peer report) | not fixed: host firewall | a Linux host's `0.0.0.0` services (sshd) are reachable from sandboxes | beta: **infrastructure action**: INPUT drop from `jtt-net-*`/sandbox bridges to the host. public: blocker until measured on the production kernel |
+
+### Cross-student isolation (proved, not inferred)
+
+- **Kubernetes, with real student credentials (A against B):** namespaces,
+  pods (list, logs, exec, attach, port-forward), services, the service proxy,
+  secrets, configmaps, PVCs, creating pods in B, a token for B's or A's own
+  ServiceAccount, nodes, the node proxy, PVs, clusterroles, RoleBinding
+  creation (including binding `cluster-admin`), impersonation and
+  `kube-system` secrets were all **Forbidden**. Pod network A → B timed out
+  (A's default-deny egress). From a student pod only the API service
+  (anonymous 403) and cluster DNS answer. Other kind-network hosts, the Docker
+  gateway, the internet and `169.254.169.254` are filtered. A selector-less
+  Service with hand-written Endpoints (CVE-2021-25740 class) pointing at
+  another student's pod, or at a filtered kind-network host, was **blocked**
+  both by ClusterIP and by name: egress policy sees the post-DNAT
+  destination. On the node:
+  kubelet 401, etcd requires a client certificate, apiserver 403, kube-proxy
+  healthz on 10256 is the only readable endpoint (non-sensitive).
+- **Docker, proved in CI on every PR:** `docker-integration.test.ts`
+  (separate container lists and image stores, another session's client
+  certificate rejected, reset and teardown isolation, nothing left on the host),
+  `sandboxd-integration.test.ts` (no attach to another session's sandbox),
+  `sandbox-integration.test.ts` (Linux and Terraform side by side).
+  **Bounded by O1**: every Docker-track student shell is uid 1001 in the one
+  terminal container, so student A can read student B's TLS client key and
+  drive B's daemon; the mutual-TLS boundary holds only once per-session uids
+  land. B's published inner ports are also reachable over the shared
+  `sandboxes` bridge (lab services only; weaker than O1).
+
+### Cleanup and residue
+
+Kubernetes End (provider teardown), measured: namespace gone in 53 s, the PV
+deleted, the local-path directory with 201 MB removed, no containers left; an
+empty 8 KiB `/var/log/pods` directory was collected by the kubelet within 60 s.
+Students cannot reach node paths (PSA baseline forbids `hostPath`). Docker
+teardown is asserted in CI (`leaves nothing of a destroyed session behind on
+the host`). The residue found is I8 (terminal HOME).
+
+### Beta and public-launch position after this pass
+
+- **Private 5-student beta blockers:** none new from this pass, provided #122 is on main (#115, #116, #119 and #121 are) and the host firewall action (I9) is applied.
+- **Public multi-tenant blockers:** O1 and I8 until #117/#123 are proven in production; O3 (Docker track off or a VM
+  per sandbox); I3 and I5 (enforced per-container and per-PVC disk quotas on
+  the host); I9 measured and firewalled on the production kernel.
+- **Infrastructure actions:** XFS `pquota` (or equivalent) for the Docker data
+  root; a capacity-enforcing storage provisioner for the cluster; host INPUT
+  drop from sandbox bridges; keep `HostDiskSpace*` alerts wired.
 
 ## Areas audited and found safe
 

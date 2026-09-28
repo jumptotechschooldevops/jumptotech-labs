@@ -62,6 +62,7 @@ import {
 import { createMeRoutes } from './routes/me.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { AccessControl, InMemoryAccessStore } from './access/entitlements.js';
+import { InMemorySessionEventStore, type SessionEventStore } from './classroom/session-events.js';
 
 /**
  * The learning-history half of the graph.
@@ -126,6 +127,11 @@ export interface CreateAppDeps {
    * always passes the PostgreSQL-backed one when a database is configured.
    */
   access?: AccessControl;
+  /**
+   * What happened to each lab, for the classroom view (migration 008). In
+   * memory when absent, like the other stores a suite does not supply.
+   */
+  sessionEvents?: SessionEventStore;
   /**
    * Structured logging and metrics — PLATFORM-003.
    *
@@ -444,6 +450,7 @@ export function createApp(deps: CreateAppDeps): Express {
       },
     );
   const sessionGuard = createSessionGuard(deps.sessions, audit, access);
+  const sessionEvents = deps.sessionEvents ?? new InMemorySessionEventStore();
 
   /*
    * `/auth` is outside `authenticate` on purpose.
@@ -501,6 +508,7 @@ export function createApp(deps: CreateAppDeps): Express {
     metrics: observability.metrics,
     sandboxWriteLimiter,
     checkLimiter,
+    sessionEvents,
   };
   app.use('/api/labs', browserCors, originGuard, authenticated, createLabRoutes(routes));
   app.use('/api/tracks', browserCors, originGuard, authenticated, createTrackRoutes(routes));

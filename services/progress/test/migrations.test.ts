@@ -17,8 +17,9 @@ describe('migration files', () => {
 
     // PLATFORM-008 added 002; PLATFORM-009 added 003; PLATFORM-010 added 004;
     // BETA-P0-007 added 005; commercial access (docs/commercial-access.md) added 006;
-    // SEC-ARCH-2 (a shell uid per session) added 007; access kinds and plans
-    // (docs/commercial-access.md §10) added 009 — the number does not assume 008.
+    // SEC-ARCH-2 (a shell uid per session) added 007; the classroom view's
+    // session events (docs/runbooks/instructor-guide.md) added 008; access kinds
+    // and plans (docs/commercial-access.md §10) added 009.
     // The list is asserted so a migration cannot be added without someone
     // noticing here, but the *safety* checks below apply to every file rather
     // than to a numbered one — that is the invariant.
@@ -30,6 +31,7 @@ describe('migration files', () => {
       '005_session_recovery',
       '006_access_entitlements',
       '007_session_shell_uid',
+      '008_session_events',
       '009_access_plans_and_kinds',
     ]);
     for (const migration of migrations) {
@@ -119,6 +121,24 @@ describe('migration files', () => {
     expect(accessStatements).not.toMatch(/\bDELETE\b|\bUPDATE\b/i);
     for (const forbidden of ['token', 'password', 'secret', 'cookie']) {
       expect(accessStatements.toLowerCase(), forbidden).not.toContain(forbidden);
+    }
+
+    /*
+     * Session events (the classroom view). Additive only, and a row can hold
+     * codes and identifiers but no prose: `code` is constrained to an
+     * identifier shape, and there is no message, output or credential column.
+     */
+    const events = migrations.find((m) => m.version === '008_session_events')!.sql;
+    const eventStatements = events
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('--'))
+      .join('\n');
+    expect(eventStatements).toContain('CREATE TABLE IF NOT EXISTS session_events');
+    expect(eventStatements).toMatch(/code ~ '\^\[A-Za-z0-9_\.-\]\{1,64\}\$'/);
+    expect(eventStatements).not.toMatch(/\bALTER\s+TABLE\b/i);
+    expect(eventStatements).not.toMatch(/\bREFERENCES\b/i);
+    for (const forbidden of ['token', 'password', 'secret', 'cookie', 'message', 'output', 'command', 'email']) {
+      expect(eventStatements.toLowerCase(), forbidden).not.toContain(forbidden);
     }
 
     /*

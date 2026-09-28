@@ -53,6 +53,7 @@ diagnosis, and the alerts that look alike are known in advance.
 | [RB-17 Session lifecycle](RB-17-session-lifecycle.md) | `LabResetsFailing`, `SessionStuckProvisioning`, `SessionResetStuck`, `SessionTeardownStuck`, `SessionDegradedNotReclaimed` |
 | [RB-18 Network isolation](RB-18-network-isolation.md) | `NetworkIsolationNotAttested`, `NetworkIsolationAttestationAging` |
 | [RB-19 Host pressure](RB-19-host-pressure.md) | `HostMemoryPressure`, `HostMemoryCritical`, `HostDiskSpaceLow`, `HostDiskSpaceCritical`, `HostCpuSaturated` |
+| [RB-20 Watchdog](RB-20-watchdog.md) | `Watchdog` — always firing; act when the external heartbeat service reports it **stopped** |
 | [RB-21 Launches paused](RB-21-launches-paused.md) | `LabLaunchesPaused` |
 | [Private beta operations §8](private-beta-operations.md) | `AlertNotificationsFailing`, `AlertmanagerUnreachable` |
 
