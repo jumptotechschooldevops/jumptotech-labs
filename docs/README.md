@@ -74,7 +74,7 @@ fails the build for one that does not:
 | the private beta on one host, in order: sizing, external setup, secrets, commands, validation, go-live checklist, stop conditions | [runbooks/private-beta-deployment.md](runbooks/private-beta-deployment.md) |
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
-| the alert runbooks RB-01…RB-21 and their index | [runbooks/README.md](runbooks/README.md) |
+| the alert runbooks RB-01…RB-22 and their index | [runbooks/README.md](runbooks/README.md) |
 | backup and restore of PostgreSQL | [runbooks/postgres-backup-restore.md](runbooks/postgres-backup-restore.md) |
 | disaster recovery: host loss, reboot, database or runtime loss, a replacement host | [runbooks/disaster-recovery.md](runbooks/disaster-recovery.md) |
 | what a recovery drill must record | [releases/disaster-recovery-drill-evidence-template.md](releases/disaster-recovery-drill-evidence-template.md) |
@@ -109,7 +109,8 @@ The alert runbooks, one per alert family:
 [RB-18](runbooks/RB-18-network-isolation.md) ·
 [RB-19](runbooks/RB-19-host-pressure.md) ·
 [RB-20](runbooks/RB-20-watchdog.md) ·
-[RB-21](runbooks/RB-21-launches-paused.md).
+[RB-21](runbooks/RB-21-launches-paused.md) ·
+[RB-22](runbooks/RB-22-billing.md).
 
 ---
 

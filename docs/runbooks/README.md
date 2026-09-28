@@ -55,6 +55,7 @@ diagnosis, and the alerts that look alike are known in advance.
 | [RB-19 Host pressure](RB-19-host-pressure.md) | `HostMemoryPressure`, `HostMemoryCritical`, `HostDiskSpaceLow`, `HostDiskSpaceCritical`, `HostCpuSaturated` |
 | [RB-20 Watchdog](RB-20-watchdog.md) | `Watchdog` — always firing; act when the external heartbeat service reports it **stopped** |
 | [RB-21 Launches paused](RB-21-launches-paused.md) | `LabLaunchesPaused` |
+| [RB-22 Billing](RB-22-billing.md) | `BillingWebhooksFailing`, `BillingWebhookSignaturesRejected`, `BillingProviderFailing`, `BillingStateDrift` |
 | [Private beta operations §8](private-beta-operations.md) | `AlertNotificationsFailing`, `AlertmanagerUnreachable` |
 
 `ReaperSweepErrorsPersisting` is in RB-05.

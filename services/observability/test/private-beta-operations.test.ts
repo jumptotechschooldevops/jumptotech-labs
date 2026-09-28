@@ -240,9 +240,11 @@ describe('the private-beta alert set', () => {
   it('stays at a size an operator reads, rather than growing without review', () => {
     // 57 after BETA-P0-018; 60 on main at 001bcf1; 62 with the two
     // alert-delivery alerts (platform.yml); 63 with the disaster-recovery
-    // audit's DatabaseRecreatedSinceLastBackup (database.yml). Adding alerts
-    // is fine; do it on purpose.
-    expect(ALERTS.length).toBeLessThanOrEqual(63);
+    // audit's DatabaseRecreatedSinceLastBackup (database.yml) and the Watchdog; 67 with the
+    // four billing alerts (billing.yml, RB-22) — which cannot fire while
+    // billing is off, as it is for the private beta. Adding alerts is fine;
+    // do it on purpose.
+    expect(ALERTS.length).toBeLessThanOrEqual(67);
   });
 });
 
