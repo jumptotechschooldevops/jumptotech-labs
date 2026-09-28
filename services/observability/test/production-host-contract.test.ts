@@ -59,6 +59,10 @@ function shipped(): ResolvedCompose {
         MAX_ACTIVE_SESSIONS_PER_STUDENT: '1',
         NETWORK_POLICY_ENABLED: 'true',
         NETWORK_POLICY_ATTESTATION_REQUIRED: '',
+        LINUX_SANDBOX_IMAGE: 'jumptotech/lab-linux:latest',
+        TERRAFORM_SANDBOX_IMAGE: 'jumptotech/lab-terraform:latest',
+        ANSIBLE_SANDBOX_IMAGE: 'jumptotech/lab-ansible:latest',
+        CICD_SANDBOX_IMAGE: 'jumptotech/lab-cicd:latest',
       }),
       networks: { database: null, default: null, kind: null },
       volumes: [
@@ -174,6 +178,7 @@ describe('each unsafe variation is a FAIL', () => {
     ['a single-label public host, which the edge refuses', 'gates.tls-edge', (c) => setOrigin(c, 'https://localhost')],
     ['NetworkPolicy off', 'gates.network-policy', (c) => (c.services!.api!.environment!.NETWORK_POLICY_ENABLED = 'false')],
     ['the attestation waived', 'gates.network-policy', (c) => (c.services!.api!.environment!.NETWORK_POLICY_ATTESTATION_REQUIRED = 'false')],
+    ['a sandbox image .env cannot reach', 'images.sandbox', (c) => delete c.services!.api!.environment!.TERRAFORM_SANDBOX_IMAGE],
     ['the compose capacity default', 'capacity.beta-contract', (c) => (c.services!.api!.environment!.MAX_ACTIVE_SESSIONS = '20')],
     ['two labs per student', 'capacity.beta-contract', (c) => (c.services!.api!.environment!.MAX_ACTIVE_SESSIONS_PER_STUDENT = '2')],
     ['a __Host- session cookie, which breaks the /auth transaction cookie', 'gates.oidc-client', (c) => (c.services!.api!.environment!.AUTH_COOKIE_NAME = '__Host-jtt')],
