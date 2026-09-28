@@ -956,6 +956,48 @@ jobs:
           docker ps -aq --filter label=jumptotech.io/tls-edge-test | xargs -r docker rm -f || true
           docker network ls -q --filter label=jumptotech.io/tls-edge-test | xargs -r docker network rm || true
 
+  # --- Browser UX suite (Playwright, no stack) ------------------------------
+  #
+  # The production web bundle in real Chromium against the in-test fake
+  # platform (e2e/ux/support/platform.ts): races, reloads, keyboard and focus,
+  # student switches, injected failures, layout at six sizes and a semantic
+  # accessibility audit, each on cue. No Docker, no API, no secrets. The
+  # preview server's proxies point at a closed port, so nothing reaches a
+  # network. What the real services do is browser-e2e's job, below.
+  browser-ux:
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser UX suite
+        run: npm run test:e2e:ux
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-ux-${{ github.run_id }}
+          path: |
+            e2e/playwright-report-ux
+            e2e/test-results-ux
+          retention-days: 7
+
   # --- Real-browser E2E (Playwright) -----------------------------------------
   #
   # The only job that drives the product through a real browser. It starts the
