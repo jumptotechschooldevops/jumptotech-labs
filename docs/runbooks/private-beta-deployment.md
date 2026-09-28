@@ -31,7 +31,7 @@ The deployment tooling's own self-tests pass at `ac1b775`:
 | Capacity contract 5 / 1 refused otherwise (`capacity.beta-contract`); attach race closed | **D1/D3** identity provider, client registration, **restriction to the five accounts**, sign-up off |
 | Ownership labels, owner-scoped reaper, orphan cleanup, NetworkPolicy + attestation gate, PodSecurity | **D4** host name and DNS `A` record; **D5** certificate authority, ACME client, renewal schedule |
 | Backup, verify, restore (`--verify-only`, `--into`, `--replace`), drill; refuses a re-created empty database; production refuses a newer schema (#80) | **D6** alert destination (webhook) and the person who receives it |
-| 61 alert rules with runbooks; indicators and objectives ([beta-slo-indicators.md](../beta-slo-indicators.md)) | **D7** off-host backup destination, encryption key held off the host, retention, who may restore |
+| Alert rules, each with a runbook; indicators and objectives ([beta-slo-indicators.md](../beta-slo-indicators.md)) | **D7** off-host backup destination, encryption key held off the host, retention, who may restore |
 | Preflight, config check, smoke, diagnostics, beta-validate, capacity probes, recovery drills | **D8** accepting the host's capacity measurements; **D9** where `.env` and the TLS key are recoverable from; **D10** who holds SSH and `docker` |
 | Lab access entitlements (`ACCESS_POLICY=entitlement` by default in production) and `ops access` | Granting the five students access after they first sign in (an operator action, §3.3) |
 
@@ -226,9 +226,13 @@ make production-preflight ARGS="--backup-dir /srv/jumptotech/backups/postgres --
 ```
 
 The preflight parses `.env` as data and prints each secret as `NAME: present` or
-`MISSING` (never a value). It FAILs on any missing name in the §3.1/§3.2 lists,
-a `.env` not `0600`, a shell export shadowing `.env`, or a `DOCKER_SOCKET_GID`
-that does not match the socket.
+`MISSING` (never a value). It FAILs on a missing secret from §3.1 (those in `.env`),
+a missing `PUBLIC_ORIGIN`, `ALLOWED_ORIGINS`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`,
+`OIDC_AUDIENCE`, `RUNTIME_OWNER_ID`, `MAX_ACTIVE_SESSIONS`,
+`MAX_ACTIVE_SESSIONS_PER_STUDENT`, `BACKUP_STATUS_DIR` or `DOCKER_SOCKET_GID`, a
+`.env` not `0600`, or a `DOCKER_SOCKET_GID` that does not match the socket. It
+only WARNs on a shell export shadowing `.env` and on an unset or stale
+`JTT_COMMIT`; it does not check `JTT_VERSION` or `LAB_LAUNCHES_PAUSED`.
 
 ---
 
@@ -514,6 +518,7 @@ No students active.
 git rev-parse HEAD > previous-commit
 cp -p .env .env.previous
 make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence/upgrade-<new>/before"
+PREFLIGHT_ARGS="--backup-dir /srv/jumptotech/backups/postgres --report /srv/jumptotech/evidence/preflight-$(date -u +%Y%m%dT%H%M%SZ).txt"
 git fetch origin
 git diff --name-only HEAD <new> -- services/progress/migrations .env.example 'docker-compose*.yml' infrastructure/docker
 export BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status
@@ -521,13 +526,27 @@ scripts/db-backup.sh --label pre-migration        # always, migration or not
 scripts/db-restore.sh --verify-only <printed archive>
 git checkout <new> && npm ci
 # set JTT_COMMIT=$(git rev-parse HEAD) in .env; make sandbox-build if a sandbox Dockerfile changed
-make production-config-check && make production-preflight ARGS="…"
+make production-config-check && make production-preflight ARGS="$PREFLIGHT_ARGS"
 prod up -d --build --wait --wait-timeout 900      # non-zero exit = failed deployment → §7.2
 make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence/upgrade-<new>/after"
 ```
 
 A migration file in the `git diff` output means the database changes shape at
 the next api start, and the only way back is §7.2 B.
+
+**What a rollback does not undo by itself: images.** Nothing is pulled from a
+registry; every image is built on this host. `prod up --build` rebuilds the
+api, terminal, sandboxd and web images from whichever commit is checked out, so
+rolling the checkout back rolls them back too (from base images Docker has
+cached; `--pull` is never used). The sandbox images are different: `make
+sandbox-build` overwrites `jumptotech/lab-*:latest` in place, and the api starts
+whatever those tags hold. If an upgrade ran `make sandbox-build`, a rollback must
+run it again from the previous checkout, or the previous api starts the new
+sandboxes. To avoid that, give each release its own tags: set all
+four `LINUX_`, `TERRAFORM_`, `ANSIBLE_` and `CICD_SANDBOX_IMAGE` in `.env` to
+`jumptotech/lab-<track>:<short commit>` before `make sandbox-build` (it refuses
+a partial set); `.env.previous` then names the previous release's images, which
+are still on the host, and the preflight's `images.*` checks that each exists.
 
 ### 7.2 Roll back
 
@@ -536,8 +555,9 @@ the next api start, and the only way back is §7.2 B.
 ```bash
 git checkout "$(cat previous-commit)" && npm ci
 cp -p .env.previous .env                          # restores the previous JTT_COMMIT
+make sandbox-build                                # only if the upgrade ran it: see below
 prod up -d --build --wait --wait-timeout 900
-make production-preflight ARGS="…"
+make production-preflight ARGS="$PREFLIGHT_ARGS"
 make private-beta-smoke ARGS="--report-dir /srv/jumptotech/evidence/rollback"   # release.commit PASS on the previous commit
 ```
 
@@ -547,8 +567,11 @@ versions it does not ship (`prod logs api`); with `restart: unless-stopped` it
 keeps retrying. That refusal (#80) is the rollback boundary. The rollback is:
 
 1. Announce maintenance: work written since the `pre-migration` backup is lost.
-2. `git checkout "$(cat previous-commit)" && npm ci`; `cp -p .env.previous .env`.
-3. `prod stop api`.
+2. `git checkout "$(cat previous-commit)" && npm ci`; `cp -p .env.previous .env`;
+   `make sandbox-build` if the upgrade ran it (§7.1).
+3. `prod stop api`, and in this shell
+   `export BACKUP_DIR=/srv/jumptotech/backups/postgres BACKUP_STATUS_DIR=/srv/jumptotech/backups/status`
+   (without them the next step writes into the checkout, where the api does not look).
 4. `scripts/db-backup.sh --label pre-restore` (keeps the newer data too).
 5. `scripts/db-restore.sh --verify-only <pre-migration archive>`, then
    `scripts/db-restore.sh --replace jumptotech_labs <pre-migration archive>` (type the name to confirm).
@@ -568,15 +591,17 @@ What it does: under `NODE_ENV=production` the api refuses a database whose
 migration ledger records a version this release does not ship; setting it to
 `true` makes the api start anyway (with a warning), running older code against
 a schema that code was never tested with. `npm run db:migrate` refuses the same
-unless it is `true`.
+unless it is `true`. With `DATABASE_AUTO_MIGRATE=false` the api applies nothing
+but checks the same boundary at start: it refuses a newer schema the same way,
+and refuses a database missing a migration it ships until `npm run db:migrate`
+has run.
 
 **It is not a rollback strategy. Leave it unset.** Use it only when **all** of these hold:
 
 - the §7.2 B restore is impossible or unacceptable (no usable `pre-migration`
   archive, or losing the data written since would be worse);
 - someone has read every migration the older code does not ship and judged the
-  older code safe on it (every migration to date, 001–006, is additive: new
-  tables, columns, indexes, one backfill, a widened `CHECK`, and no drop);
+  older code safe on it (every migration to date, 001–007, is additive: new tables, columns, indexes, one backfill, a widened `CHECK`, a sequence-defaulted column, and no drop. Rolling back across 007 this way also returns every terminal shell to one shared uid: the pre-007 terminal has no per-session uid (SEC-ARCH-2), so this route gives up that isolation until the release matches again);
 - it is recorded as an incident decision, with who decided and why.
 
 Then remove it the moment code and schema match again. **Never** use it when:
@@ -697,5 +722,5 @@ Tick every line on the day, in order, with the evidence in `/srv/jumptotech/evid
 Known limits the beta runs with (not stop conditions): one host and no
 failover; a Start or Reset in flight during an api restart holds that student's
 slot for up to 10 minutes (deploy with no students active); the terminal token
-outlives sign-out for up to an hour; the shared terminal uid is being changed
-by another workstream.
+outlives sign-out for up to an hour. Each session's shell runs as its own uid
+(SEC-ARCH-2, migration 007) since `bcaf902`.
