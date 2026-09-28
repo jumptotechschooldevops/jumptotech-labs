@@ -440,6 +440,13 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
         error && typeof error === 'object' && 'code' in error
           ? String((error as { code: unknown }).code)
           : 'unknown';
+      // Refused because this api is shutting down: nothing was admitted, like
+      // the pause switch above, and like it not a start outcome.
+      if (error instanceof SessionError && code === 'LAB_LAUNCHES_PAUSED') {
+        deps.obs?.info('lab.start.paused', { labId: def.id, code, reason: 'process_stopping' });
+        sessionErrorResponse(res, error);
+        return;
+      }
       /*
        * Anything that is not a session-domain refusal — the session store
        * throwing because PostgreSQL is gone, most of all — is `platform_error`,

@@ -142,6 +142,7 @@ export const noLimit: RequestHandler = (_req, _res, next) => next();
 const STATUS_BY_CODE: Record<string, number> = {
   PROVIDER_UNAVAILABLE: 503,
   LAB_CAPACITY_REACHED: 503,
+  LAB_LAUNCHES_PAUSED: 503,
   // The caller's own quota, not the platform being unavailable.
   STUDENT_SESSION_LIMIT_REACHED: 429,
   SESSION_NOT_FOUND: 404,
