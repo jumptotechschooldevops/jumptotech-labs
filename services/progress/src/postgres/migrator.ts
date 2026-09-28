@@ -158,6 +158,79 @@ export async function migrate(
   });
 }
 
+/**
+ * Check, without changing anything, that this release can run on the schema it
+ * finds. The api calls it when DATABASE_AUTO_MIGRATE is off, where `migrate`
+ * never runs and nothing else would notice either side of the boundary:
+ *
+ *   - a version this release does not ship: a newer release migrated it. The
+ *     same refusal, and the same override, as `migrate`;
+ *   - a version this release ships and the database lacks: the migration step
+ *     the operator took on did not run, and this code would fail on its first
+ *     query against a missing column instead of at start;
+ *   - a shipped version whose file was edited after it was applied.
+ *
+ * Read-only: no lock, no DDL — it does not even create the ledger.
+ */
+export async function verifySchema(
+  db: Pick<PostgresDatabase, 'session'>,
+  options: MigrateOptions = {},
+): Promise<MigrationReport> {
+  const log = options.logger ?? (() => undefined);
+  const migrations = await loadMigrations(options.dir ?? MIGRATIONS_DIR);
+  const allowNewerSchema = options.allowNewerSchema === true;
+
+  return db.session(async (client) => {
+    const ledger = await client.query<{ ledger: string | null }>(
+      "SELECT to_regclass('schema_migrations')::text AS ledger",
+    );
+    const rows =
+      ledger.rows[0]?.ledger == null
+        ? []
+        : (await client.query<AppliedRow>('SELECT version, checksum FROM schema_migrations')).rows;
+    const applied = new Map(rows.map((row) => [row.version, row.checksum]));
+
+    const shipped = new Set(migrations.map((migration) => migration.version));
+    const unknown = [...applied.keys()].filter((version) => !shipped.has(version)).sort();
+    if (unknown.length > 0) {
+      if (!allowNewerSchema) {
+        throw new MigrationError(
+          `The database records migration(s) this release does not ship: ${unknown.join(', ')}. ` +
+            'It was migrated by a newer release, and this code was not written for that schema.',
+          'Deploy the release that matches the database, or restore the pre-upgrade backup ' +
+            '(docs/runbooks/postgres-backup-restore.md §6.4). To run this release against the newer ' +
+            'schema anyway — an explicit rollback decision — set DATABASE_ALLOW_NEWER_SCHEMA=true.',
+        );
+      }
+      log(
+        `WARNING: running against a newer schema (DATABASE_ALLOW_NEWER_SCHEMA): ` +
+          `this release does not ship ${unknown.join(', ')}`,
+      );
+    }
+
+    const pending: string[] = [];
+    const skipped: string[] = [];
+    for (const migration of migrations) {
+      const known = applied.get(migration.version);
+      if (known === undefined) pending.push(migration.version);
+      else if (known !== migration.checksum) {
+        throw new MigrationError(
+          `Migration ${migration.filename} was modified after it was applied.`,
+          'Migrations are immutable once applied. Revert the edit and add a new migration instead.',
+        );
+      } else skipped.push(migration.version);
+    }
+    if (pending.length > 0) {
+      throw new MigrationError(
+        `DATABASE_AUTO_MIGRATE is off and the database lacks migration(s) this release needs: ${pending.join(', ')}.`,
+        'Run `npm run db:migrate` against this database first, or set DATABASE_AUTO_MIGRATE=true.',
+      );
+    }
+
+    return { applied: [], skipped, unknown, initialized: false, ledgerStartedAt: null };
+  });
+}
+
 async function applyPending(
   client: SqlExecutor,
   migrations: Migration[],
