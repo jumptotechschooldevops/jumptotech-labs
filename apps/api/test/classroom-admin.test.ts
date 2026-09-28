@@ -60,6 +60,7 @@ interface Harness {
   store: InMemorySessionStore;
   events: InMemorySessionEventStore;
   k8s: FakeKubernetes;
+  runtime: FakeContainerRuntime;
   audit: AuthAuditEvent[];
 }
 
@@ -127,7 +128,7 @@ function harness(env: Record<string, string> = {}): Harness {
     sessionEvents: events,
     authAudit: (event) => audit.push(event),
   });
-  return { app, users, store, events, k8s, audit };
+  return { app, users, store, events, k8s, runtime, audit };
 }
 
 async function withRole(h: Harness, name: string, role: 'INSTRUCTOR' | 'ADMIN'): Promise<string> {
@@ -375,6 +376,24 @@ describe('what an instructor can find out', () => {
     expect(row(broken).lastCheck).toMatchObject({ outcome: 'error', code: 'ENVIRONMENT_UNREACHABLE' });
     expect(row(broken).attention[0]).toMatchObject({ code: 'CHECK_ERROR', severity: 'problem' });
     expect(JSON.stringify(res.body)).not.toContain('172.18.0.5');
+  });
+
+  it('shows a failed start as failed, its slot released, without claiming a confirmed cleanup', async () => {
+    const original = h.runtime.create.bind(h.runtime);
+    h.runtime.create = async () => {
+      throw new Error('docker: Error response from daemon: no space left on device');
+    };
+    const res = await request(h.app).post('/api/labs/LINUX-001/start').set('Authorization', as('amy'));
+    expect(res.status).toBe(503);
+    h.runtime.create = original;
+
+    const classroom = await request(h.app).get('/api/admin/classroom').set('Authorization', as('teacher'));
+    expect(classroom.body.data.capacity.active).toBe(0);
+    const [failed] = classroom.body.data.recent;
+    expect(failed).toMatchObject({ status: 'FAILED', cleanup: 'automatic', occupiesSlot: false });
+    expect(failed.state.label).toBe('Failed to start');
+    expect(classroom.body.data.problems[0]).toMatchObject({ operation: 'start', outcome: 'failed', text: 'Lab failed to start' });
+    expect(JSON.stringify(classroom.body)).not.toContain('no space left');
   });
 
   it('shows one lab’s timeline by Support ID, even after its live record is gone', async () => {

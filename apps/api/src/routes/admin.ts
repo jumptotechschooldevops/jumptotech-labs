@@ -194,9 +194,15 @@ export function createAdminRoutes(deps: AdminRoutesDeps): Router {
       lastReset: latest.reset
         ? { at: latest.reset.occurredAt, outcome: latest.reset.outcome, ...(latest.reset.code ? { code: latest.reset.code } : {}), text: describeEvent(latest.reset).text }
         : null,
+      /*
+       * ENDED and EXPIRED are recorded only once the provider confirmed the
+       * sandbox gone. FAILED is different: the failed start's teardown is
+       * best-effort, and the reaper reclaims anything it left. The slot is
+       * free either way, but "confirmed" would claim more than is known.
+       */
       cleanup: isTerminalStatus(session.status)
         ? session.status === 'FAILED'
-          ? 'not-needed'
+          ? 'automatic'
           : 'confirmed'
         : session.status === 'ENDING' || session.status === 'EXPIRING'
           ? 'in-progress'
