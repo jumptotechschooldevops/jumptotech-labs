@@ -331,6 +331,89 @@ export function sessionRecovery(
       expect((await w.read(session.sessionId)).status).toBe('ACTIVE');
     });
 
+    // ------------------------ 1b'. a process that knows it is shutting down
+
+    /*
+     * Reliability audit 2026-09-28. A deploy or restart gives the api seconds
+     * between SIGTERM and exit; a start takes up to minutes. Measured on a
+     * compose stack: the row stayed CREATING behind "Preparing…", holding the
+     * student's one slot, until the ten-minute abandoned-start grace ran out.
+     * The stopping process knows its own starts are dying and hands them over.
+     */
+    it('a shutdown mid-Start hands the start to the next sweep at once, and the late start keeps nothing', async () => {
+      const w = await world();
+      const dying = w.provider.holdNextCreate();
+      const starting = w.a.manager.start('LINUX-001');
+      starting.catch(() => undefined);
+      await dying.entered;
+      const row = await w.onlySession();
+      expect(row.status).toBe('CREATING');
+
+      expect(await w.a.manager.interruptInFlight()).toEqual({ starts: 1, resets: 0 });
+      expect(await w.read(row.sessionId)).toMatchObject({ status: 'EXPIRING', statusReason: ABANDONED_START_REASON });
+      // Handed over, not released: the slot is held until the sandbox is gone.
+      expect(await w.b.manager.activeCount()).toBe(1);
+      // The stopping instance admits nothing new, and writes nothing for it.
+      await expect(w.a.manager.start('LINUX-001')).rejects.toMatchObject({ code: 'LAB_LAUNCHES_PAUSED' });
+      expect(await w.store.list()).toHaveLength(1);
+
+      // One sweep interval later — not ten minutes — the next process's reaper
+      // finishes it, counted as the abandoned start it is.
+      w.clock.now += MINUTE;
+      const sweep = await w.reaper.sweep();
+      expect(sweep.errors).toEqual([]);
+      expect(sweep.removed).toEqual([row.sandboxRef]);
+      expect(sweep.reasons[row.sandboxRef]).toBe('abandoned');
+      expect(await w.read(row.sessionId)).toMatchObject({ status: 'EXPIRED', statusReason: ABANDONED_START_REASON });
+      expect(await w.b.manager.activeCount()).toBe(0);
+      expect(w.recoveries).toEqual(['abandoned_start']);
+      expect(w.ended).toEqual(['failed']);
+      expect(w.closed.map((e) => e.status)).toEqual(['EXPIRED']);
+
+      // Had the process lived long enough to finish building, it would find
+      // its claim gone and remove what it built.
+      dying.release();
+      await expect(starting).rejects.toMatchObject({ code: 'SESSION_NOT_ACTIVE' });
+      expect(w.runtime.containers.has(row.sandboxRef)).toBe(false);
+      expect(await w.reaper.sweep()).toMatchObject({ removed: [], errors: [], pending: [] });
+    });
+
+    it('a shutdown mid-Reset leaves the session DEGRADED at once, so the student can reset again or end', async () => {
+      const w = await world();
+      const { session } = await w.a.manager.start('LINUX-001');
+      const id = session.sessionId;
+      const dying = w.provider.holdNextReset();
+      const resetting = w.a.manager.reset(id);
+      resetting.catch(() => undefined);
+      await dying.entered;
+      expect((await w.read(id)).status).toBe('RESETTING');
+
+      expect(await w.a.manager.interruptInFlight()).toEqual({ starts: 0, resets: 1 });
+      expect(await w.read(id)).toMatchObject({ status: 'DEGRADED', statusReason: expect.stringMatching(/interrupted/) });
+      await expect(w.a.manager.reset(id)).rejects.toMatchObject({ code: 'SESSION_NOT_ACTIVE' });
+
+      // The next process serves the student's next Reset straight away.
+      const rebuilt = await w.b.manager.reset(id);
+      expect(rebuilt.result.ok).toBe(true);
+      expect((await w.read(id)).status).toBe('ACTIVE');
+    });
+
+    it('a shutdown never touches another instance’s start, or a start that already finished', async () => {
+      const w = await world();
+      const { session: done } = await w.a.manager.start('LINUX-001');
+      const elsewhere = w.provider.holdNextCreate();
+      const starting = w.b.manager.start('LINUX-001');
+      await elsewhere.entered;
+
+      expect(await w.a.manager.interruptInFlight()).toEqual({ starts: 0, resets: 0 });
+      expect((await w.read(done.sessionId)).status).toBe('ACTIVE');
+      const theirs = (await w.store.list()).find((s) => s.sessionId !== done.sessionId)!;
+      expect(theirs.status).toBe('CREATING');
+
+      elsewhere.release();
+      expect((await starting).session.status).toBe('ACTIVE');
+    });
+
     it('a start that finishes while the sweep is busy elsewhere is not torn down as abandoned', async () => {
       const w = await world();
 

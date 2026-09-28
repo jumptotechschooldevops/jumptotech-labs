@@ -263,9 +263,12 @@ export class OidcBrowserClient {
       } catch {
         // The provider's error text may echo request parameters, so it is never
         // included in what the caller sees.
-        throw new AuthError('AUTH_MISCONFIGURED', `Could not reach the identity provider to ${what}.`);
+        throw new AuthError('AUTH_PROVIDER_UNAVAILABLE', `Could not reach the identity provider to ${what}.`);
       }
 
+      if (response.status >= 500) {
+        throw new AuthError('AUTH_PROVIDER_UNAVAILABLE', `The identity provider failed (HTTP ${response.status}) to ${what}.`);
+      }
       if (!response.ok) {
         throw new AuthError('AUTH_INVALID_TOKEN', `The identity provider refused to ${what}.`);
       }
@@ -273,12 +276,9 @@ export class OidcBrowserClient {
       try {
         return (await response.json()) as Record<string, unknown>;
       } catch {
-        throw new AuthError(
-          'AUTH_MISCONFIGURED',
-          controller.signal.aborted
-            ? `The identity provider did not finish replying in time to ${what}.`
-            : `The identity provider's response to ${what} was not JSON.`,
-        );
+        throw controller.signal.aborted
+          ? new AuthError('AUTH_PROVIDER_UNAVAILABLE', `The identity provider did not finish replying in time to ${what}.`)
+          : new AuthError('AUTH_MISCONFIGURED', `The identity provider's response to ${what} was not JSON.`);
       }
     } finally {
       clearTimeout(timer);

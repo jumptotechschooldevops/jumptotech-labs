@@ -219,6 +219,17 @@ function evaluate(config: ResolvedCompose, dockerSocketGid: number | undefined):
 
 const hex = (bytes = 24): string => randomBytes(bytes).toString('hex');
 
+/** The uncommented NAME=value lines of .env.example, as `make secrets` copies them. */
+function envExampleValues(): Record<string, string> {
+  const text = readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
+  const values: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const match = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line.trim());
+    if (match) values[match[1]!] = match[2]!;
+  }
+  return values;
+}
+
 function completeBetaEnvironment(): Record<string, string> {
   return {
     RUNTIME_OWNER_ID: 'production-config-self-test',
@@ -247,6 +258,12 @@ interface Scenario {
   expectFail: string[];
   /** When given, exactly these check ids must WARN — so a clean configuration also proves it warns about nothing. */
   expectWarn?: string[];
+  /**
+   * Start from .env.example, as `make secrets` does on a fresh host, then apply
+   * the complete beta settings: a shipped example default that production
+   * refuses is a deployment that stops at the config check.
+   */
+  fromExample?: boolean;
   /** Values the api container must receive, as compose resolves them. */
   expectApi?: Record<string, string>;
 }
@@ -254,6 +271,13 @@ interface Scenario {
 function scenarios(base: Record<string, string>): Scenario[] {
   return [
     { name: 'a complete five-student beta configuration passes', change: {}, dockerSocketGid: 998, expectFail: [], expectWarn: [] },
+    {
+      name: 'a .env made from .env.example by `make secrets`, plus the runbook §3.2 settings, passes',
+      change: {},
+      fromExample: true,
+      dockerSocketGid: 998,
+      expectFail: [],
+    },
     {
       // The compose default admits 20 labs; the terminal's default holds 16 shells.
       name: 'the capacity default (20) is refused, and is past the terminal default (16)',
@@ -387,7 +411,7 @@ function selfTest(): number {
   let failures = 0;
   try {
     for (const [index, scenario] of scenarios(base).entries()) {
-      const values: Record<string, string> = { ...base };
+      const values: Record<string, string> = { ...(scenario.fromExample ? envExampleValues() : {}), ...base };
       for (const [name, value] of Object.entries(scenario.change)) {
         if (value === null) delete values[name];
         else values[name] = value;

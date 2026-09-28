@@ -57,7 +57,10 @@ export class AuthError extends Error {
       | 'AUTH_REQUIRED'
       | 'AUTH_INVALID_TOKEN'
       | 'AUTH_EXPIRED'
-      | 'AUTH_MISCONFIGURED',
+      | 'AUTH_MISCONFIGURED'
+      // The identity provider did not answer, or answered 5xx: an outage on
+      // its side, not a mistake in this deployment's configuration.
+      | 'AUTH_PROVIDER_UNAVAILABLE',
     message: string,
     readonly remediation?: string,
   ) {

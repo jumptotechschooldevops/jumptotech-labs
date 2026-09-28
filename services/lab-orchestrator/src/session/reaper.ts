@@ -443,7 +443,11 @@ export class SessionReaper {
         continue;
       }
 
-      const reason: SweepReason = expired ? 'expired' : 'idle';
+      // A start handed over by a process that was shutting down
+      // (`SessionManager.interruptInFlight`), or one this reaper already
+      // presumed dead: either way an abandoned start, not an idle lab.
+      const abandonedStart = inFlight && session.statusReason === ABANDONED_START_REASON;
+      const reason: SweepReason = abandonedStart ? 'abandoned' : expired ? 'expired' : 'idle';
       const detail = inFlight
         ? (session.statusReason ?? 'resuming an interrupted teardown')
         : expired
@@ -457,8 +461,12 @@ export class SessionReaper {
       // spend minutes on earlier teardowns first, and a student who pressed
       // Stay active or typed in the meantime has been told the lab stays.
       const fence = !inFlight && !expired ? { lastActivityAt: session.lastActivityAt } : undefined;
-      await this.#finish(result, session, reason, () =>
-        this.options.sessions.expire(session.sessionId, detail, fence),
+      await this.#finish(
+        result,
+        session,
+        reason,
+        () => this.options.sessions.expire(session.sessionId, detail, fence),
+        abandonedStart ? 'abandoned_start' : undefined,
       );
     }
   }

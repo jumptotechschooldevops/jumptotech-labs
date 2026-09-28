@@ -70,6 +70,31 @@ groups:
             state_mismatch and no_transaction are the browser round trip.
           runbook_url: docs/runbooks/RB-14-auth.md
 
+      # Reliability audit 2026-09-28. The identity provider is down, timing out
+      # or answering 5xx, so new sign-ins cannot complete. Students already
+      # signed in keep working: browser sessions live in PostgreSQL and are
+      # never checked against the provider. Before this, discovery failing at
+      # /auth/login was reported as AUTH_MISCONFIGURED and counted nowhere, so
+      # nothing fired. Two in 10 minutes, held 2 minutes, so one dropped request
+      # does not page.
+      - alert: IdentityProviderUnreachable
+        expr: |
+          sum(increase(jtt_auth_login_total{outcome="provider_unavailable"}[10m]))
+            + sum(increase(jtt_auth_callback_total{outcome="provider_unavailable"}[10m]))
+            >= 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'New sign-ins are failing: the identity provider is not responding'
+          description: >-
+            {{ $value | printf "%.0f" }} sign-in attempts in 10 minutes could not
+            reach the identity provider (discovery or token endpoint unreachable,
+            timed out, or HTTP 5xx). Students already signed in are not affected.
+            Check the provider's status page first; this deployment's
+            configuration is not the cause unless it changed.
+          runbook_url: docs/runbooks/RB-14-auth.md
+
       # BETA-P0-015's admission gate, as a signal. Without it, a missing or
       # expired attestation looks exactly like the cluster being down
       # (ProviderUnavailable). Critical: the Kubernetes track admits no student,
