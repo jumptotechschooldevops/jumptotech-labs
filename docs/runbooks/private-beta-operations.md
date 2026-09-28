@@ -381,8 +381,11 @@ that is the incident.
 
 ### 7.1 Ending one student's lab for them
 
-When a student cannot end a broken lab themselves, has left one running, or
-holds a `DEGRADED` or stuck `CREATING` session:
+An ADMIN can do this from the browser: the classroom view's lab page, **End
+this student's lab…** ([instructor-guide.md §4](instructor-guide.md#4-ending-a-students-lab)).
+It is the same teardown as below, recorded with the account that asked. From
+the host, when a student cannot end a broken lab themselves, has left one
+running, or holds a `DEGRADED` or stuck `CREATING` session:
 
 ```bash
 ops sessions                       # find it: lab, status, age, idle time
