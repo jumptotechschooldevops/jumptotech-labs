@@ -374,6 +374,7 @@ export class DockerCliClient implements DockerEnginePort {
     if (spec.init) argv.push('--init');
     if (spec.readOnly) argv.push('--read-only');
     if (spec.memory) argv.push('--memory', spec.memory);
+    if (spec.memorySwap) argv.push('--memory-swap', spec.memorySwap);
     if (spec.cpus) argv.push('--cpus', spec.cpus);
     if (spec.pidsLimit !== undefined) argv.push('--pids-limit', String(spec.pidsLimit));
     if (spec.entrypoint) argv.push('--entrypoint', spec.entrypoint.join(' '));
