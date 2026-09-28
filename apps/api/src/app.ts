@@ -444,6 +444,14 @@ export function createApp(deps: CreateAppDeps): Express {
         list: async () => ('list' in users && typeof users.list === 'function' ? await users.list() : []),
       }),
       deps.config.accessPolicy ?? 'open',
+      () => new Date(),
+      {
+        ...(deps.config.accessPlans ? { plans: deps.config.accessPlans } : {}),
+        ...(deps.config.lifetimes?.maxActiveSessionsPerStudent !== undefined
+          ? { deploymentSessionLimit: deps.config.lifetimes.maxActiveSessionsPerStudent }
+          : {}),
+        trackOfLab: (labId) => (deps.registry.has(labId) ? deps.registry.get(labId).track : undefined),
+      },
     );
   const sessionGuard = createSessionGuard(deps.sessions, audit, access);
   const sessionEvents = deps.sessionEvents ?? new InMemorySessionEventStore();

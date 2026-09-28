@@ -112,6 +112,26 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
   switch (code) {
     case 'ACCESS_NOT_ACTIVE':
       return accessRefusal((error.details as { accessState?: unknown } | undefined)?.accessState);
+    case 'LAB_NOT_IN_PLAN': {
+      // The track id comes from the lab catalog; only a short slug is shown.
+      const track = (error.details as { track?: unknown } | undefined)?.track;
+      const named = typeof track === 'string' && /^[a-z0-9-]{1,32}$/.test(track) ? `the ${track} track` : 'this track';
+      return {
+        kind: 'access',
+        title: 'This lab is not included in your plan',
+        message: `Your lab access is active, but your plan does not include ${named}. Labs in the tracks your plan includes still work.`,
+        guidance: 'If you think this is wrong, contact JumpToTech support and quote the reference below.',
+        retryable: false,
+      };
+    }
+    case 'ACCESS_PLAN_UNAVAILABLE':
+      return {
+        kind: 'access',
+        title: 'Your lab access could not be confirmed',
+        message: 'Your account has access, but its plan could not be confirmed, so labs cannot be used right now. Your progress is kept.',
+        guidance: 'Please contact JumpToTech support and quote the reference below.',
+        retryable: false,
+      };
     case 'LAB_CAPACITY_REACHED':
       return {
         kind: 'capacity',

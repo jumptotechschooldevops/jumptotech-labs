@@ -45,6 +45,7 @@
  * was told (`--by`), their reason, and the before and after of status and
  * window. It never carries a token, a cookie or anything a student typed.
  */
+import { effectiveSessionLimit, PlanCatalog, planIncludesTrack, type Plan } from './plans.js';
 
 /** What an operator decided. Stored. */
 export const ENTITLEMENT_STATUSES = ['ACTIVE', 'SUSPENDED', 'REVOKED'] as const;
@@ -74,6 +75,19 @@ export type AccessScope = typeof PLATFORM_SCOPE;
  */
 export type GrantedVia = 'operator';
 
+/**
+ * What kind of access a grant is — a label for people, not a permission.
+ * What the holder may *use* is the plan (`plans.ts`); what the kind changes is
+ * only how the grant is described, and one rule: a trial is started once per
+ * account, through `access trial`, for the configured length.
+ *
+ *   STANDARD  ordinary access (the only kind before kinds existed)
+ *   BETA      a private-beta participant
+ *   TRIAL     a time-limited trial
+ */
+export const GRANT_KINDS = ['STANDARD', 'BETA', 'TRIAL'] as const;
+export type GrantKind = (typeof GRANT_KINDS)[number];
+
 export interface Entitlement {
   userId: string;
   scope: AccessScope;
@@ -83,17 +97,26 @@ export interface Entitlement {
   /** ISO 8601, UTC; null = no end date, and only ever set on purpose. */
   expiresAt: string | null;
   grantedVia: GrantedVia;
+  kind: GrantKind;
+  /** A plan id from `ACCESS_PLANS_FILE`; null = no plan (every track, the deployment's limits). */
+  planId: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export const ACCESS_ACTIONS = ['GRANT', 'SUSPEND', 'RESTORE', 'REVOKE'] as const;
+/**
+ * `TRIAL` starts a trial: a grant of kind TRIAL whose window the configured
+ * length decides, allowed once per account. It is recorded as a grant.
+ */
+export const ACCESS_ACTIONS = ['GRANT', 'TRIAL', 'SUSPEND', 'RESTORE', 'REVOKE'] as const;
 export type AccessAction = (typeof ACCESS_ACTIONS)[number];
 
 export interface EntitlementSnapshot {
   status: EntitlementStatus;
   startsAt: string;
   expiresAt: string | null;
+  kind: GrantKind;
+  planId: string | null;
 }
 
 /** One administrative change, as recorded. Append-only. */
@@ -162,6 +185,11 @@ export class AccessError extends Error {
       | 'NO_ENTITLEMENT'
       | 'ENTITLEMENT_SUSPENDED'
       | 'ENTITLEMENT_REVOKED'
+      | 'INVALID_KIND'
+      | 'INVALID_PLAN'
+      | 'TRIALS_DISABLED'
+      | 'TRIAL_ALREADY_USED'
+      | 'ALREADY_ACTIVE'
       | 'INVALID_REQUEST',
     message: string,
   ) {
@@ -238,6 +266,30 @@ export interface GrantRequest {
   startsAt?: string;
   /** Required and explicit: an instant, or null for "no end date". */
   expiresAt: string | null;
+  /** Omitted: the current row's kind, or STANDARD for a first grant. */
+  kind?: GrantKind;
+  /** Omitted: the current row's plan. null: no plan. */
+  planId?: string | null;
+}
+
+/** A trial's terms, from configuration (`TRIAL_DURATION_DAYS`, `TRIAL_PLAN`). */
+export interface TrialRequest {
+  durationDays: number;
+  planId: string | null;
+}
+
+/** Facts about the account a mutation is planned against, read under the same lock. */
+export interface MutationContext {
+  /** Whether this account has ever been on a trial. */
+  hadTrial: boolean;
+}
+
+export function assertKind(value: unknown): GrantKind {
+  const raw = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  if (!(GRANT_KINDS as readonly string[]).includes(raw)) {
+    throw new AccessError('INVALID_KIND', `--kind is one of ${GRANT_KINDS.map((k) => k.toLowerCase()).join(', ')}.`);
+  }
+  return raw as GrantKind;
 }
 
 /** What a mutation decided, before anything is written. */
@@ -265,8 +317,36 @@ export function planMutation(
   action: AccessAction,
   nowIso: string,
   grant?: GrantRequest,
+  trial?: TrialRequest,
+  context: MutationContext = { hadTrial: false },
 ): MutationPlan {
   switch (action) {
+    case 'TRIAL': {
+      if (!trial) throw new AccessError('TRIALS_DISABLED', 'Trials are off: TRIAL_DURATION_DAYS is not set.');
+      if (current?.status === 'SUSPENDED') {
+        throw new AccessError(
+          'ENTITLEMENT_SUSPENDED',
+          'This access is suspended. `access restore` lifts the suspension; a trial does not override it.',
+        );
+      }
+      // Once per account, ever: a trial that could be started again would be
+      // an unlimited free plan with extra steps.
+      if (context.hadTrial) {
+        throw new AccessError('TRIAL_ALREADY_USED', 'This account has already had a trial. A grant is the way to give more access.');
+      }
+      if (evaluateAccess(current, Date.parse(nowIso)).active) {
+        throw new AccessError(
+          'ALREADY_ACTIVE',
+          'This account already has active access; a trial would replace it. Nothing was changed.',
+        );
+      }
+      const expiresAt = new Date(Date.parse(nowIso) + trial.durationDays * 86_400_000).toISOString();
+      return {
+        kind: 'write',
+        action,
+        next: { status: 'ACTIVE', startsAt: nowIso, expiresAt, kind: 'TRIAL', planId: trial.planId },
+      };
+    }
     case 'GRANT': {
       if (!grant) throw new AccessError('EXPIRY_REQUIRED', 'A grant needs --until <instant> or --no-expiry.');
       if (current?.status === 'SUSPENDED') {
@@ -275,6 +355,26 @@ export function planMutation(
           'This access is suspended. `access restore` lifts the suspension; a grant does not override it.',
         );
       }
+      /*
+       * A trial is started by `access trial` — once, for the configured
+       * length — and a grant may only ever *change* an existing one, by saying
+       * --kind trial on purpose. Otherwise a grant would be a second way to
+       * start trials without either rule. A grant on a trial that does not
+       * name a kind is refused rather than guessed: extending the trial and
+       * converting it are different decisions.
+       */
+      // A revoked trial is over: re-granting it as a trial would be a second trial.
+      if (grant.kind === 'TRIAL' && (current?.kind !== 'TRIAL' || current.status === 'REVOKED')) {
+        throw new AccessError('INVALID_KIND', 'Start a trial with `access trial`; --kind trial only changes an existing trial.');
+      }
+      if (grant.kind === undefined && current?.kind === 'TRIAL' && current.status !== 'REVOKED') {
+        throw new AccessError(
+          'INVALID_KIND',
+          'This account is on a trial. Say --kind standard or --kind beta to convert it, or --kind trial to change the trial itself.',
+        );
+      }
+      const kind: GrantKind = grant.kind ?? (current && current.status !== 'REVOKED' ? current.kind : 'STANDARD');
+      const planId = grant.planId !== undefined ? grant.planId : (current?.planId ?? null);
       const keepStart = current?.status === 'ACTIVE' && grant.startsAt === undefined;
       const startsAt = grant.startsAt ?? (keepStart ? current.startsAt : nowIso);
       if (grant.expiresAt !== null && Date.parse(grant.expiresAt) <= Date.parse(startsAt)) {
@@ -284,12 +384,14 @@ export function planMutation(
       if (grant.expiresAt !== null && Date.parse(grant.expiresAt) <= Date.parse(nowIso)) {
         throw new AccessError('INVALID_WINDOW', `--until is in the past (now ${nowIso}).`);
       }
-      const next: EntitlementSnapshot = { status: 'ACTIVE', startsAt, expiresAt: grant.expiresAt };
+      const next: EntitlementSnapshot = { status: 'ACTIVE', startsAt, expiresAt: grant.expiresAt, kind, planId };
       if (
         current &&
         current.status === 'ACTIVE' &&
         current.startsAt === next.startsAt &&
-        current.expiresAt === next.expiresAt
+        current.expiresAt === next.expiresAt &&
+        current.kind === next.kind &&
+        current.planId === next.planId
       ) {
         return { kind: 'unchanged', action };
       }
@@ -317,7 +419,13 @@ export function planMutation(
 }
 
 export function snapshot(entitlement: Entitlement): EntitlementSnapshot {
-  return { status: entitlement.status, startsAt: entitlement.startsAt, expiresAt: entitlement.expiresAt };
+  return {
+    status: entitlement.status,
+    startsAt: entitlement.startsAt,
+    expiresAt: entitlement.expiresAt,
+    kind: entitlement.kind,
+    planId: entitlement.planId,
+  };
 }
 
 export interface MutationInput {
@@ -326,6 +434,8 @@ export interface MutationInput {
   actor: string;
   reason: string;
   grant?: GrantRequest;
+  /** For TRIAL: the configured terms. */
+  trial?: TrialRequest;
 }
 
 export interface MutationResult {
@@ -387,7 +497,8 @@ export class InMemoryAccessStore implements AccessStore {
       }
       const at = now().toISOString();
       const before = this.#rows.get(input.userId) ?? null;
-      const plan = planMutation(before, input.action, at, input.grant);
+      const hadTrial = this.#events.some((event) => event.userId === input.userId && event.after.kind === 'TRIAL');
+      const plan = planMutation(before, input.action, at, input.grant, input.trial, { hadTrial });
       if (plan.kind === 'unchanged') return { changed: false, before, after: before!, event: null };
       const after: Entitlement = {
         userId: input.userId,
@@ -463,50 +574,140 @@ export class InMemoryAccessStore implements AccessStore {
  */
 export type AccessPolicy = 'open' | 'entitlement';
 
+/** Why an ACTIVE entitlement still does not cover this lab. */
+export type PlanRefusal = 'LAB_NOT_IN_PLAN' | 'PLAN_UNAVAILABLE';
+
 export type AccessDecision =
-  | { allowed: true; via: 'open' | 'entitlement' }
-  | { allowed: false; state: Exclude<AccessState, 'ACTIVE'> };
+  | {
+      allowed: true;
+      via: 'open' | 'entitlement';
+      /** The plan the access is on; null for no plan, and always null under `open`. */
+      plan: Plan | null;
+      /** Labs this holder may run at once; undefined = the session manager's own limit. */
+      sessionLimit: number | undefined;
+    }
+  | { allowed: false; state: Exclude<AccessState, 'ACTIVE'> }
+  | { allowed: false; state: 'ACTIVE'; refusal: PlanRefusal; planId: string; track?: string };
+
+/** What the lab-use check knows about the lab, when there is one. */
+export interface LabContext {
+  /** The lab's track, which a plan may or may not include. */
+  track?: string;
+  /** Or the lab's id, for a route that knows only the session's lab: resolved with `trackOfLab`. */
+  labId?: string;
+}
+
+export interface AccessControlOptions {
+  /** Plans from `ACCESS_PLANS_FILE`. Absent: none. */
+  plans?: PlanCatalog;
+  /** `MAX_ACTIVE_SESSIONS_PER_STUDENT`, which a plan may lower but never raise. */
+  deploymentSessionLimit?: number;
+  /** Where a plan referring to a plan no longer configured is reported. */
+  onUnknownPlan?: (planId: string) => void;
+  /** The lab catalog's answer to "which track is this lab in?". */
+  trackOfLab?: (labId: string) => string | undefined;
+}
 
 /** The question every lab-use route asks, answered in one place. */
 export class AccessControl {
+  readonly plans: PlanCatalog;
+  readonly #deploymentSessionLimit: number | undefined;
+  readonly #onUnknownPlan: (planId: string) => void;
+  readonly #trackOfLab: (labId: string) => string | undefined;
+
   constructor(
     private readonly store: AccessStore,
     readonly policy: AccessPolicy,
     private readonly now: () => Date = () => new Date(),
-  ) {}
-
-  /**
-   * May this account use labs right now?
-   *
-   * Under `open` no store is read. Under `entitlement` a store that cannot be
-   * read throws, and the route's error handler answers 500: access that cannot
-   * be checked is not granted.
-   */
-  async decide(userId: string): Promise<AccessDecision> {
-    if (this.policy === 'open') return { allowed: true, via: 'open' };
-    const evaluation = evaluateAccess(await this.store.get(userId), this.now().getTime());
-    if (evaluation.active) return { allowed: true, via: 'entitlement' };
-    return { allowed: false, state: evaluation.state as Exclude<AccessState, 'ACTIVE'> };
+    options: AccessControlOptions = {},
+  ) {
+    this.plans = options.plans ?? new PlanCatalog();
+    this.#deploymentSessionLimit = options.deploymentSessionLimit;
+    this.#onUnknownPlan = options.onUnknownPlan ?? (() => {});
+    this.#trackOfLab = options.trackOfLab ?? (() => undefined);
   }
 
-  /** The student's own view: their state and window, nothing an operator wrote. */
-  async describe(userId: string): Promise<{
-    policy: AccessPolicy;
-    state: AccessState;
-    active: boolean;
-    startsAt: string | null;
-    expiresAt: string | null;
-  }> {
+  /**
+   * May this account use labs right now — and, given the lab, this lab?
+   *
+   * Under `open` no store is read and no plan applies. Under `entitlement` a
+   * store that cannot be read throws, and the route's error handler answers
+   * 500: access that cannot be checked is not granted.
+   *
+   * An entitlement on a plan the configuration no longer defines is refused
+   * (`PLAN_UNAVAILABLE`), not treated as "no plan": no plan means every track,
+   * and removing a plan from the file must never widen what its holders get.
+   */
+  async decide(userId: string, lab: LabContext = {}): Promise<AccessDecision> {
+    if (this.policy === 'open') {
+      return { allowed: true, via: 'open', plan: null, sessionLimit: this.#deploymentSessionLimit };
+    }
     const entitlement = await this.store.get(userId);
     const evaluation = evaluateAccess(entitlement, this.now().getTime());
+    if (!evaluation.active) return { allowed: false, state: evaluation.state as Exclude<AccessState, 'ACTIVE'> };
+
+    let plan: Plan | null = null;
+    if (entitlement!.planId !== null) {
+      const found = this.plans.get(entitlement!.planId);
+      if (!found) {
+        this.#onUnknownPlan(entitlement!.planId);
+        return { allowed: false, state: 'ACTIVE', refusal: 'PLAN_UNAVAILABLE', planId: entitlement!.planId };
+      }
+      plan = found;
+    }
+    const track = lab.track ?? (lab.labId !== undefined ? this.#trackOfLab(lab.labId) : undefined);
+    if (track !== undefined && !planIncludesTrack(plan, track)) {
+      return { allowed: false, state: 'ACTIVE', refusal: 'LAB_NOT_IN_PLAN', planId: plan!.id, track };
+    }
+    return {
+      allowed: true,
+      via: 'entitlement',
+      plan,
+      sessionLimit: effectiveSessionLimit(this.#deploymentSessionLimit, plan),
+    };
+  }
+
+  /** The student's own view: their state, window and plan, nothing an operator wrote. */
+  async describe(userId: string): Promise<AccessDescription> {
+    const entitlement = await this.store.get(userId);
+    const evaluation = evaluateAccess(entitlement, this.now().getTime());
+    const open = this.policy === 'open';
+    const plan = !open && entitlement?.planId ? (this.plans.get(entitlement.planId) ?? null) : null;
     return {
       policy: this.policy,
       state: evaluation.state,
-      active: this.policy === 'open' ? true : evaluation.active,
+      active: open ? true : evaluation.active,
       startsAt: entitlement?.startsAt ?? null,
       expiresAt: entitlement?.expiresAt ?? null,
+      kind: entitlement?.kind ?? null,
+      plan: plan ? planView(plan) : null,
+      maxConcurrentSessions:
+        (open ? this.#deploymentSessionLimit : effectiveSessionLimit(this.#deploymentSessionLimit, plan)) ?? null,
     };
   }
+}
+
+export interface AccessDescription {
+  policy: AccessPolicy;
+  state: AccessState;
+  active: boolean;
+  startsAt: string | null;
+  expiresAt: string | null;
+  /** STANDARD, BETA or TRIAL; null without an entitlement. */
+  kind: GrantKind | null;
+  /** The plan, as the student may see it. Null: no plan (every track), or the `open` policy. */
+  plan: { id: string; name: string; description: string | null; tracks: 'all' | string[] } | null;
+  /** Labs they may run at once, after any plan; null = no per-student limit. */
+  maxConcurrentSessions: number | null;
+}
+
+function planView(plan: Plan): NonNullable<AccessDescription['plan']> {
+  return {
+    id: plan.id,
+    name: plan.name,
+    description: plan.description,
+    tracks: plan.tracks === 'all' ? 'all' : [...plan.tracks],
+  };
 }
 
 /** The actions that *use* a lab, and therefore need access. */
@@ -530,6 +731,28 @@ export function accessDeniedBody(state: Exclude<AccessState, 'ACTIVE'>) {
     message: ACCESS_DENIED_MESSAGES[state],
     details: { accessState: state },
   };
+}
+
+/** The refusal for any denied decision: not active, or active but not for this lab. */
+export function accessRefusalBody(decision: Extract<AccessDecision, { allowed: false }>) {
+  if (!('refusal' in decision)) return accessDeniedBody(decision.state);
+  if (decision.refusal === 'LAB_NOT_IN_PLAN') {
+    return {
+      code: 'LAB_NOT_IN_PLAN',
+      message: `Your plan does not include the ${decision.track} track.`,
+      details: { track: decision.track, planId: decision.planId },
+    };
+  }
+  return {
+    code: 'ACCESS_PLAN_UNAVAILABLE',
+    message: 'Your lab access could not be confirmed. Please contact support.',
+    details: { planId: decision.planId },
+  };
+}
+
+/** The audit/log word for a denial: the access state, or why an active plan did not cover the lab. */
+export function refusalState(decision: Extract<AccessDecision, { allowed: false }>): string {
+  return 'refusal' in decision ? decision.refusal : decision.state;
 }
 
 const ACCESS_DENIED_MESSAGES: Record<Exclude<AccessState, 'ACTIVE'>, string> = {

@@ -30,7 +30,7 @@ import { asyncRoute, sendError, sendOk } from '../http.js';
 import { progressErrorResponse, resolveStudent } from '../identity.js';
 import { record } from '../progress.js';
 import { toAttemptPayload } from './me.js';
-import { accessDeniedBody } from '../access/entitlements.js';
+import { accessRefusalBody, refusalState } from '../access/entitlements.js';
 import { requestId } from '../auth/middleware.js';
 import { recordSafely, type SessionEventInput } from '../classroom/session-events.js';
 import {
@@ -363,22 +363,27 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
      * takes no capacity. The reply names the state (NONE, EXPIRED, …) so the
      * page can say what to do; it never carries an operator's reason.
      */
+    let sessionLimit: number | undefined;
     if (deps.access) {
-      const entitled = await deps.access.decide(owner.userId);
+      const entitled = await deps.access.decide(owner.userId, { track: def.track });
       if (!entitled.allowed) {
-        recordStart(def, 'access_denied', { code: 'ACCESS_NOT_ACTIVE' });
-        await startEvent(def.id, owner.userId, { outcome: 'refused', code: 'ACCESS_NOT_ACTIVE' });
+        const body = accessRefusalBody(entitled);
+        recordStart(def, 'access_denied', { code: body.code });
+        await startEvent(def.id, owner.userId, { outcome: 'refused', code: body.code });
         deps.authAudit?.({
           requestId: requestId(req),
           authenticatedUserId: owner.userId,
           action: 'session:start',
           authorizationResult: 'denied-access',
-          accessState: entitled.state,
+          accessState: refusalState(entitled),
           timestamp: new Date().toISOString(),
         });
-        sendError(res, 403, accessDeniedBody(entitled.state));
+        sendError(res, 403, body);
         return;
       }
+      // A plan may lower how many labs this student runs at once; the session
+      // manager still applies the deployment's own limits inside its lock.
+      sessionLimit = entitled.sessionLimit;
     }
 
     /*
@@ -428,7 +433,10 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
     const startedAt = Date.now();
     let started;
     try {
-      started = await sessions.start(def.id, owner.userId, { onAdmitted: openAttempt });
+      started = await sessions.start(def.id, owner.userId, {
+        onAdmitted: openAttempt,
+        ...(sessionLimit !== undefined ? { ownerSessionLimit: sessionLimit } : {}),
+      });
     } catch (error) {
       /*
        * The outcome label is a closed enum derived from the error *code*, never

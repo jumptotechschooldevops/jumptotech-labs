@@ -143,6 +143,12 @@ export const LOG_EVENTS = [
   'session_events.purged',
   // A staff member ended a student's lab from the classroom view.
   'classroom.session_ended',
+
+  // --- commercial access (docs/commercial-access.md §10) ----------------------
+  // The plans and trial terms this process loaded, at startup.
+  'config.access_plans',
+  // An entitlement names a plan the configuration no longer defines; lab use is refused.
+  'access.plan_unknown',
 ] as const;
 
 export type LogEvent = (typeof LOG_EVENTS)[number];

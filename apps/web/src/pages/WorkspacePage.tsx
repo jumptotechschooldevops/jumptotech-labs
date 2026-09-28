@@ -123,6 +123,8 @@ const TERMINAL_TEXT: Record<string, string> = {
   CONNECTION_LOST: 'Connection to the terminal was lost.',
   // Not retried: nothing a reconnect does changes it (docs/commercial-access.md).
   ACCESS_NOT_ACTIVE: 'Your lab access is not active, so the terminal cannot open. Your progress is saved.',
+  LAB_NOT_IN_PLAN: 'Your plan does not include this lab, so the terminal cannot open. Your progress is saved.',
+  ACCESS_PLAN_UNAVAILABLE: 'Your lab access could not be confirmed, so the terminal cannot open. Your progress is saved.',
   INPUT_RATE_EXCEEDED: 'Disconnected — more was pasted or typed at once than the terminal accepts. Reconnect to carry on.',
 };
 

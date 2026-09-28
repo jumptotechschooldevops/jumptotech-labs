@@ -38,6 +38,7 @@ import {
   type DatabaseTransportMode,
 } from '@jumptotech/progress';
 import type { AccessPolicy } from './access/entitlements.js';
+import { plansFromEnv, trialFromEnv, type PlanCatalog, type TrialConfig } from './access/plans.js';
 import { DEFAULT_AUTH_SESSION_TTL_SECONDS } from './auth/browser-session.js';
 import {
   MAX_AUTH_SESSION_TTL_SECONDS,
@@ -175,6 +176,13 @@ export interface ApiConfig {
    * `entitlement` under NODE_ENV=production unless set; `open` otherwise.
    */
   accessPolicy: AccessPolicy;
+  /**
+   * Plans (`ACCESS_PLANS_FILE`) and trial terms (`TRIAL_DURATION_DAYS`,
+   * `TRIAL_PLAN`) — docs/commercial-access.md §10. Optional so a config built
+   * by hand in a test means "no plans, trials off".
+   */
+  accessPlans?: PlanCatalog;
+  trial?: TrialConfig;
   sessionRetentionMinutes: number;
   nodeEnv: string;
   /**
@@ -796,6 +804,7 @@ export function loadProgressConfig(env: NodeJS.ProcessEnv = process.env): Progre
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
+  const accessPlans = plansFromEnv(env);
   const secret = env.TERMINAL_SESSION_SECRET ?? '';
   if (secret.length < 8) {
     throw new Error(
@@ -1109,6 +1118,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     reaperIntervalSeconds: intFromEnv(env, 'CLEANUP_INTERVAL_SECONDS', 60, MAX_TIMER_SECONDS),
     launchesPaused: boolFromEnv(env, 'LAB_LAUNCHES_PAUSED', false),
     accessPolicy: accessPolicyFromEnv(env),
+    accessPlans,
+    trial: trialFromEnv(env, accessPlans),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',
     dockerEnabled,

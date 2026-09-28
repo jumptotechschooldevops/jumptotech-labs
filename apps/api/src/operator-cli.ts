@@ -41,7 +41,11 @@ export const USAGE = `usage: operator-cli <command> [--json]
   access find --email <address>
   access show <user-id>  access, why, recent history and running labs
   access grant <user-id> (--until <instant> | --no-expiry) [--from <instant>]
+               [--kind standard|beta|trial] [--plan <plan-id> | --no-plan]
                --by <operator> --reason <text>
+  access trial <user-id> --by <operator> --reason <text>
+                         start a trial of TRIAL_DURATION_DAYS, once per account
+  access plans           the configured plans (ACCESS_PLANS_FILE) and trial terms
   access suspend <user-id> --by <operator> --reason <text> [--end-sessions --yes]
   access restore <user-id> --by <operator> --reason <text>
   access revoke  <user-id> --by <operator> --reason <text> [--end-sessions --yes]
@@ -55,7 +59,7 @@ export const USAGE = `usage: operator-cli <command> [--json]
 
 The socket path is OPERATOR_SOCKET_PATH, set in the api container by the compose files.`;
 
-export type AccessVerb = 'grant' | 'suspend' | 'restore' | 'revoke';
+export type AccessVerb = 'grant' | 'trial' | 'suspend' | 'restore' | 'revoke';
 
 export type Command =
   | { kind: 'status' }
@@ -65,6 +69,7 @@ export type Command =
   | { kind: 'access-list'; state?: string }
   | { kind: 'access-find'; email: string }
   | { kind: 'access-show'; userId: string }
+  | { kind: 'access-plans' }
   | { kind: 'access-change'; verb: AccessVerb; userId: string; body: Record<string, unknown> }
   | { kind: 'role-show'; userId: string }
   | { kind: 'role-set'; userId: string; body: { role: string; by: string; reason: string } };
@@ -74,7 +79,9 @@ const ACCESS_VALUE_OPTIONS: Record<string, readonly string[]> = {
   list: ['--state'],
   find: ['--email'],
   show: [],
-  grant: ['--until', '--from', '--by', '--reason'],
+  plans: [],
+  grant: ['--until', '--from', '--kind', '--plan', '--by', '--reason'],
+  trial: ['--by', '--reason'],
   suspend: ['--by', '--reason'],
   restore: ['--by', '--reason'],
   revoke: ['--by', '--reason'],
@@ -83,7 +90,9 @@ const ACCESS_FLAG_OPTIONS: Record<string, readonly string[]> = {
   list: ['--json'],
   find: ['--json'],
   show: ['--json'],
-  grant: ['--json', '--no-expiry'],
+  plans: ['--json'],
+  grant: ['--json', '--no-expiry', '--no-plan'],
+  trial: ['--json'],
   suspend: ['--json', '--end-sessions', '--yes'],
   restore: ['--json'],
   revoke: ['--json', '--end-sessions', '--yes'],
@@ -92,7 +101,7 @@ const ACCESS_FLAG_OPTIONS: Record<string, readonly string[]> = {
 export function parseAccessArgs(argv: readonly string[]): { command: Command; json: boolean } | { error: string } {
   const [verb, ...rest] = argv;
   if (!verb || !(verb in ACCESS_VALUE_OPTIONS)) {
-    return { error: verb ? `unknown access command ${verb}` : 'access needs a command: list, find, show, grant, suspend, restore, revoke' };
+    return { error: verb ? `unknown access command ${verb}` : 'access needs a command: list, find, show, plans, grant, trial, suspend, restore, revoke' };
   }
   const valued = ACCESS_VALUE_OPTIONS[verb]!;
   const flagged = ACCESS_FLAG_OPTIONS[verb]!;
@@ -124,6 +133,10 @@ export function parseAccessArgs(argv: readonly string[]): { command: Command; js
     if (words.length > 0 || !values['--email']) return { error: 'access find needs --email <address>' };
     return { command: { kind: 'access-find', email: values['--email'] }, json };
   }
+  if (verb === 'plans') {
+    if (words.length > 0) return { error: 'access plans takes no argument' };
+    return { command: { kind: 'access-plans' }, json };
+  }
   if (words.length !== 1) return { error: `access ${verb} needs exactly one <user-id>` };
   const userId = words[0]!;
   if (verb === 'show') return { command: { kind: 'access-show', userId }, json };
@@ -139,6 +152,10 @@ export function parseAccessArgs(argv: readonly string[]): { command: Command; js
     if (noExpiry) body.noExpiry = true;
     else body.until = values['--until'];
     if (values['--from'] !== undefined) body.from = values['--from'];
+    if (values['--kind'] !== undefined) body.kind = values['--kind'];
+    if (values['--plan'] !== undefined && flags.has('--no-plan')) return { error: 'give --plan <id> or --no-plan, not both' };
+    if (values['--plan'] !== undefined) body.plan = values['--plan'];
+    if (flags.has('--no-plan')) body.noPlan = true;
   }
   if (flags.has('--end-sessions')) {
     if (!flags.has('--yes')) {
@@ -254,6 +271,8 @@ function pathFor(command: Command): { method: 'GET' | 'POST'; path: string; body
       return { method: 'GET', path: `/v1/access/find?email=${encodeURIComponent(command.email)}` };
     case 'access-show':
       return { method: 'GET', path: `/v1/access/${encodeURIComponent(command.userId)}` };
+    case 'access-plans':
+      return { method: 'GET', path: '/v1/access/plans' };
     case 'access-change':
       return {
         method: 'POST',
@@ -358,12 +377,27 @@ function accessWindow(account: AccountAccessView): string {
   return e.expiresAt ? `until ${e.expiresAt}` : 'no end date';
 }
 
+function accessLabel(account: AccountAccessView): string {
+  const e = account.entitlement;
+  if (!e) return '-';
+  return `${e.kind}${e.planId ? `/${e.planId}` : ''}`;
+}
+
 export function formatAccounts(policy: string, accounts: readonly AccountAccessView[]): string {
   const header = `policy: ${policy}${policy === 'open' ? ' — every signed-in account may use labs' : ''}`;
   if (accounts.length === 0) return `${header}\nno accounts`;
-  const rows = [['USER ID', 'EMAIL', 'NAME', 'ROLE', 'STATE', 'WINDOW', 'FIRST SIGN-IN']];
+  const rows = [['USER ID', 'EMAIL', 'NAME', 'ROLE', 'STATE', 'KIND/PLAN', 'WINDOW', 'FIRST SIGN-IN']];
   for (const a of accounts) {
-    rows.push([a.userId, a.email ?? '-', a.displayName ?? '-', a.role, a.state, accessWindow(a), a.firstSignInAt]);
+    rows.push([
+      a.userId,
+      a.email ?? '-',
+      a.displayName ?? '-',
+      a.role,
+      a.state,
+      accessLabel(a),
+      accessWindow(a),
+      a.firstSignInAt,
+    ]);
   }
   return `${header}\n${table(rows)}`;
 }
@@ -374,12 +408,34 @@ interface AccessHistoryEntry {
   by: string;
   reason: string;
   before: { status: string; expiresAt: string | null } | null;
-  after: { status: string; startsAt: string; expiresAt: string | null };
+  after: { status: string; startsAt: string; expiresAt: string | null; kind?: string; planId?: string | null };
 }
 
 function historyLine(h: AccessHistoryEntry): string {
   const until = h.after.expiresAt ?? 'no end date';
-  return `${h.at}  ${h.action.padEnd(7)} by ${h.by}: ${h.before?.status ?? 'NONE'} → ${h.after.status} (${h.after.startsAt} … ${until}) — ${h.reason}`;
+  const label = h.after.kind ? ` ${h.after.kind}${h.after.planId ? `/${h.after.planId}` : ''}` : '';
+  return `${h.at}  ${h.action.padEnd(7)} by ${h.by}: ${h.before?.status ?? 'NONE'} → ${h.after.status}${label} (${h.after.startsAt} … ${until}) — ${h.reason}`;
+}
+
+export function formatPlans(data: {
+  plans: Array<{ id: string; name: string; tracks: 'all' | string[]; maxConcurrentSessions: number | null }>;
+  trial: { enabled: boolean; durationDays?: number; planId?: string | null; note?: string };
+}): string {
+  const rows = [['PLAN', 'NAME', 'TRACKS', 'LABS AT ONCE']];
+  for (const p of data.plans) {
+    rows.push([
+      p.id,
+      p.name,
+      p.tracks === 'all' ? 'all' : p.tracks.join(','),
+      p.maxConcurrentSessions === null ? 'deployment limit' : `≤ ${p.maxConcurrentSessions} (and the deployment limit)`,
+    ]);
+  }
+  return [
+    data.plans.length === 0 ? 'plans: none configured (ACCESS_PLANS_FILE unset) — a grant covers every track' : table(rows),
+    data.trial.enabled
+      ? `trials: ${data.trial.durationDays} days${data.trial.planId ? ` on plan ${data.trial.planId}` : ', no plan'}, once per account`
+      : `trials: off — ${data.trial.note ?? ''}`,
+  ].join('\n');
 }
 
 export function formatAccountDetail(data: {
@@ -401,6 +457,7 @@ export function formatAccountDetail(data: {
     `policy:         ${data.policy}`,
     `access:         ${a.state}${a.canUseLabs ? ' — may use labs' : ' — may NOT use labs'}`,
     ...(e ? [`window:         ${e.startsAt} … ${e.expiresAt ?? 'no end date'} (${e.grantedVia}, updated ${e.updatedAt})`] : []),
+    ...(e ? [`kind / plan:    ${e.kind} / ${e.planId ?? 'no plan (every track)'}`] : []),
     'why:',
     ...data.diagnosis.map((line) => `  - ${line}`),
     `running labs:   ${data.liveSessions.length === 0 ? 'none' : ''}`,
@@ -462,6 +519,9 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
       break;
     case 'access-show':
       process.stdout.write(`${formatAccountDetail(data as unknown as Parameters<typeof formatAccountDetail>[0])}\n`);
+      break;
+    case 'access-plans':
+      process.stdout.write(`${formatPlans(data as unknown as Parameters<typeof formatPlans>[0])}\n`);
       break;
     case 'access-change':
       process.stdout.write(

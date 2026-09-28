@@ -233,6 +233,11 @@ services:
       # Lab access (docs/commercial-access.md): open | entitlement. Empty follows
       # NODE_ENV — entitlement under production, open otherwise.
       ACCESS_POLICY: ${ACCESS_POLICY:-}
+      # Plans and trials (docs/commercial-access.md §10). Empty: no plans, and
+      # trials off — their length is a business decision with no default.
+      ACCESS_PLANS_JSON: ${ACCESS_PLANS_JSON:-}
+      TRIAL_DURATION_DAYS: ${TRIAL_DURATION_DAYS:-}
+      TRIAL_PLAN: ${TRIAL_PLAN:-}
       CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-60}
       SESSION_RETENTION_MINUTES: ${SESSION_RETENTION_MINUTES:-15}
       # The operator socket (apps/api/src/operator.ts): `ops status`, `ops

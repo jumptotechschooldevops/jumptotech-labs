@@ -47,6 +47,7 @@ import {
 } from './classroom/session-events.js';
 import { CleanupEventListener } from './classroom/cleanup-events.js';
 import { AccessControl, InMemoryAccessStore } from './access/entitlements.js';
+import { PlanCatalog } from './access/plans.js';
 import { PostgresAccessStore } from './access/postgres-store.js';
 
 async function main(): Promise<void> {
@@ -223,7 +224,33 @@ async function main(): Promise<void> {
   const accessStore = learning.database
     ? new PostgresAccessStore(learning.database)
     : new InMemoryAccessStore({ list: async () => (users instanceof InMemoryUserRepository ? users.list() : []) });
-  const access = new AccessControl(accessStore, config.accessPolicy);
+  /*
+   * Plans name tracks; a plan naming a track the catalog does not have is a
+   * typo that would sell something nobody can open, so it stops the start.
+   */
+  const accessPlans = config.accessPlans ?? new PlanCatalog();
+  accessPlans.assertTracksExist(new Set(registry.tracks().map((t) => t.track)));
+  const access = new AccessControl(accessStore, config.accessPolicy, () => new Date(), {
+    plans: accessPlans,
+    ...(config.lifetimes.maxActiveSessionsPerStudent !== undefined
+      ? { deploymentSessionLimit: config.lifetimes.maxActiveSessionsPerStudent }
+      : {}),
+    trackOfLab: (labId) => (registry.has(labId) ? registry.get(labId).track : undefined),
+    onUnknownPlan: (planId) =>
+      logger.error(
+        'access.plan_unknown',
+        { planId, reason: 'plan_not_configured' },
+        `an entitlement names plan ${planId}, which ACCESS_PLANS_FILE does not define: lab use is refused until it is`,
+      ),
+  });
+  if (accessPlans.size > 0 || config.trial?.durationDays) {
+    logger.info(
+      'config.access_plans',
+      { count: accessPlans.size },
+      `access plans: ${accessPlans.list().map((p) => p.id).join(', ') || 'none'}; ` +
+        `trials: ${config.trial?.durationDays ? `${config.trial.durationDays} days` : 'off'}`,
+    );
+  }
   logger.info(
     'config.loaded',
     { accessPolicy: config.accessPolicy },
@@ -557,7 +584,12 @@ async function main(): Promise<void> {
           retentionSeconds: config.sessionRetentionMinutes * 60,
           reaperLastSuccessMs: () => reaperLastSuccessMs,
           reaperIntervalSeconds: config.reaperIntervalSeconds,
-          access: { store: accessStore, policy: config.accessPolicy },
+          access: {
+            store: accessStore,
+            policy: config.accessPolicy,
+            plans: accessPlans,
+            trial: config.trial ?? { durationDays: null, planId: null },
+          },
           users,
         }),
       })

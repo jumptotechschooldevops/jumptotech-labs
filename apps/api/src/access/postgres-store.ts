@@ -43,20 +43,30 @@ interface EntitlementRow {
   starts_at: Date;
   expires_at: Date | null;
   granted_via: Entitlement['grantedVia'];
+  kind: Entitlement['kind'];
+  plan_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
 
-/** How each action is stored: past tense (see migration 006). */
+/**
+ * How each action is stored: past tense (see migration 006). A trial is
+ * recorded as what it is — a grant, whose `after_kind` is TRIAL — so the
+ * stored vocabulary needs no new word.
+ */
 const STORED_ACTION: Record<AccessEvent['action'], string> = {
   GRANT: 'GRANTED',
+  TRIAL: 'GRANTED',
   SUSPEND: 'SUSPENDED',
   RESTORE: 'RESTORED',
   REVOKE: 'REVOKED',
 };
-const ACTION_FROM_STORED = Object.fromEntries(
-  Object.entries(STORED_ACTION).map(([action, stored]) => [stored, action]),
-) as Record<string, AccessEvent['action']>;
+const ACTION_FROM_STORED: Record<string, AccessEvent['action']> = {
+  GRANTED: 'GRANT',
+  SUSPENDED: 'SUSPEND',
+  RESTORED: 'RESTORE',
+  REVOKED: 'REVOKE',
+};
 
 interface EventRow {
   event_id: string;
@@ -71,6 +81,10 @@ interface EventRow {
   after_status: Entitlement['status'];
   after_starts_at: Date;
   after_expires_at: Date | null;
+  before_kind: Entitlement['kind'] | null;
+  before_plan_id: string | null;
+  after_kind: Entitlement['kind'];
+  after_plan_id: string | null;
   occurred_at: Date;
 }
 
@@ -85,6 +99,8 @@ interface AccountRow {
   e_starts_at: Date | null;
   e_expires_at: Date | null;
   e_granted_via: Entitlement['grantedVia'] | null;
+  e_kind: Entitlement['kind'] | null;
+  e_plan_id: string | null;
   e_created_at: Date | null;
   e_updated_at: Date | null;
 }
@@ -103,6 +119,8 @@ function toEntitlement(row: EntitlementRow): Entitlement {
     startsAt: iso(row.starts_at),
     expiresAt: isoOrNull(row.expires_at),
     grantedVia: row.granted_via,
+    kind: row.kind,
+    planId: row.plan_id,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
@@ -119,8 +137,20 @@ function toEvent(row: EventRow): AccessEvent {
     before:
       row.before_status === null
         ? null
-        : { status: row.before_status, startsAt: iso(row.before_starts_at!), expiresAt: isoOrNull(row.before_expires_at) },
-    after: { status: row.after_status, startsAt: iso(row.after_starts_at), expiresAt: isoOrNull(row.after_expires_at) },
+        : {
+            status: row.before_status,
+            startsAt: iso(row.before_starts_at!),
+            expiresAt: isoOrNull(row.before_expires_at),
+            kind: row.before_kind ?? 'STANDARD',
+            planId: row.before_plan_id,
+          },
+    after: {
+      status: row.after_status,
+      startsAt: iso(row.after_starts_at),
+      expiresAt: isoOrNull(row.after_expires_at),
+      kind: row.after_kind,
+      planId: row.after_plan_id,
+    },
     occurredAt: iso(row.occurred_at),
   };
 }
@@ -143,18 +173,21 @@ function toAccount(row: AccountRow): AccountAccess {
             startsAt: iso(row.e_starts_at!),
             expiresAt: isoOrNull(row.e_expires_at),
             grantedVia: row.e_granted_via!,
+            kind: row.e_kind!,
+            planId: row.e_plan_id,
             createdAt: iso(row.e_created_at!),
             updatedAt: iso(row.e_updated_at!),
           },
   };
 }
 
-const ENTITLEMENT_COLUMNS = 'user_id, scope, status, starts_at, expires_at, granted_via, created_at, updated_at';
+const ENTITLEMENT_COLUMNS =
+  'user_id, scope, status, starts_at, expires_at, granted_via, kind, plan_id, created_at, updated_at';
 
 const ACCOUNT_SELECT = `
   SELECT u.user_id, u.issuer, u.email, u.display_name, u.role, u.created_at,
          e.status AS e_status, e.starts_at AS e_starts_at, e.expires_at AS e_expires_at,
-         e.granted_via AS e_granted_via, e.created_at AS e_created_at, e.updated_at AS e_updated_at
+         e.granted_via AS e_granted_via, e.kind AS e_kind, e.plan_id AS e_plan_id, e.created_at AS e_created_at, e.updated_at AS e_updated_at
     FROM users u
     LEFT JOIN access_entitlements e ON e.user_id = u.user_id AND e.scope = 'platform'`;
 
@@ -187,29 +220,40 @@ export class PostgresAccessStore implements AccessStore {
         [input.userId],
       );
       const before = current.rows[0] ? toEntitlement(current.rows[0]) : null;
+      // Read under the same lock: two trials racing for one account see each other.
+      const trial = await tx.query<{ had: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM access_events WHERE user_id = $1 AND after_kind = 'TRIAL') AS had`,
+        [input.userId],
+      );
       // The clock is read under the lock, so "now" is the moment this change
       // is ordered at, not when the request arrived.
       const at = now().toISOString();
-      const plan = planMutation(before, input.action, at, input.grant);
+      const plan = planMutation(before, input.action, at, input.grant, input.trial, {
+        hadTrial: trial.rows[0]?.had === true,
+      });
       if (plan.kind === 'unchanged') return { changed: false, before, after: before!, event: null };
 
       const written = await tx.query<EntitlementRow>(
-        `INSERT INTO access_entitlements (user_id, scope, status, starts_at, expires_at, granted_via, created_at, updated_at)
-              VALUES ($1, 'platform', $2, $3, $4, 'operator', $5, $5)
+        `INSERT INTO access_entitlements (user_id, scope, status, starts_at, expires_at, granted_via, kind, plan_id,
+                                          created_at, updated_at)
+              VALUES ($1, 'platform', $2, $3, $4, 'operator', $5, $6, $7, $7)
          ON CONFLICT (user_id, scope) DO UPDATE
                SET status = EXCLUDED.status,
                    starts_at = EXCLUDED.starts_at,
                    expires_at = EXCLUDED.expires_at,
+                   kind = EXCLUDED.kind,
+                   plan_id = EXCLUDED.plan_id,
                    updated_at = EXCLUDED.updated_at
          RETURNING ${ENTITLEMENT_COLUMNS}`,
-        [input.userId, plan.next.status, plan.next.startsAt, plan.next.expiresAt, at],
+        [input.userId, plan.next.status, plan.next.startsAt, plan.next.expiresAt, plan.next.kind, plan.next.planId, at],
       );
       const prior: EntitlementSnapshot | null = before ? snapshot(before) : null;
       const event = await tx.query<EventRow>(
         `INSERT INTO access_events (user_id, scope, action, actor, reason,
-                                    before_status, before_starts_at, before_expires_at,
-                                    after_status, after_starts_at, after_expires_at, occurred_at)
-              VALUES ($1, 'platform', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                                    before_status, before_starts_at, before_expires_at, before_kind, before_plan_id,
+                                    after_status, after_starts_at, after_expires_at, after_kind, after_plan_id,
+                                    occurred_at)
+              VALUES ($1, 'platform', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          RETURNING *`,
         [
           input.userId,
@@ -219,9 +263,13 @@ export class PostgresAccessStore implements AccessStore {
           prior?.status ?? null,
           prior?.startsAt ?? null,
           prior?.expiresAt ?? null,
+          prior?.kind ?? null,
+          prior?.planId ?? null,
           plan.next.status,
           plan.next.startsAt,
           plan.next.expiresAt,
+          plan.next.kind,
+          plan.next.planId,
           at,
         ],
       );

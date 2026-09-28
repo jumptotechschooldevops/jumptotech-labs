@@ -105,6 +105,8 @@ export interface LogFields {
   accessState?: string;
   /** `open` or `entitlement` — ACCESS_POLICY, at startup. */
   accessPolicy?: string;
+  /** A plan id from ACCESS_PLANS_FILE: configuration, never personal data. */
+  planId?: string;
 
   // --- errors ---------------------------------------------------------------
   err?: unknown;
@@ -134,7 +136,7 @@ const ALLOWED_FIELDS = [
   'step', 'op', 'scope', 'endpoint', 'requirementType', 'denyReason', 'operation', 'migrationVersion',
   'outcome', 'reason', 'result', 'code', 'status', 'count', 'durationMs',
   'route', 'method',
-  'securityEvent', 'authorizationResult', 'action', 'accessState', 'accessPolicy',
+  'securityEvent', 'authorizationResult', 'action', 'accessState', 'accessPolicy', 'planId',
   'err',
   'service', 'version', 'commit', 'port', 'store', 'authMode', 'labsLoaded', 'durable',
 ] as const;

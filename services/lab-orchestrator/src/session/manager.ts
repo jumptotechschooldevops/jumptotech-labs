@@ -356,6 +356,12 @@ export interface StartHooks {
    * that throws is logged and ignored: bookkeeping must never stop a lab.
    */
   onAdmitted?(session: LabSession): Promise<void> | void;
+  /**
+   * A stricter per-student limit for this start — the student's plan. Applied
+   * as the lower of it and `maxActiveSessionsPerStudent`, inside the same
+   * capacity lock: a caller can narrow the deployment's limit, never widen it.
+   */
+  ownerSessionLimit?: number;
 }
 
 export interface TeardownResult {
@@ -628,7 +634,7 @@ export class SessionManager {
      * test catches.
      */
     if (this.#stopping) throw restarting('start');
-    const session = await this.#insertSession(lab, provider, ownerUserId);
+    const session = await this.#insertSession(lab, provider, ownerUserId, hooks.ownerSessionLimit);
     this.#emit((m) => m.onTransition?.('none', 'CREATING'));
 
     this.#startsInFlight.set(session.sessionId, session.statusChangedAt);
@@ -748,7 +754,13 @@ export class SessionManager {
     lab: LoadedLabDefinition,
     provider: LabProvider,
     ownerUserId?: string,
+    ownerSessionLimit?: number,
   ): Promise<LabSession> {
+    const deploymentLimit = this.#lifetimes.maxActiveSessionsPerStudent;
+    const perOwnerLimit =
+      ownerSessionLimit !== undefined && Number.isInteger(ownerSessionLimit) && ownerSessionLimit >= 1
+        ? Math.min(ownerSessionLimit, deploymentLimit ?? ownerSessionLimit)
+        : deploymentLimit;
     const createdAtMs = this.#now();
     const createdAt = new Date(createdAtMs).toISOString();
     const expiresAt = new Date(
@@ -788,9 +800,7 @@ export class SessionManager {
       };
       const decision = await this.#store.createWithinLimits(candidate, {
         maxOccupying: this.#lifetimes.maxActiveSessions,
-        ...(this.#lifetimes.maxActiveSessionsPerStudent !== undefined
-          ? { maxOccupyingPerOwner: this.#lifetimes.maxActiveSessionsPerStudent }
-          : {}),
+        ...(perOwnerLimit !== undefined ? { maxOccupyingPerOwner: perOwnerLimit } : {}),
       });
       if (decision.admitted) return candidate;
 
@@ -803,7 +813,7 @@ export class SessionManager {
        * student's own numbers — nothing about how busy anyone else is.
        */
       if (decision.refusedBy === 'owner') {
-        const limit = this.#lifetimes.maxActiveSessionsPerStudent ?? decision.ownerOccupying;
+        const limit = perOwnerLimit ?? decision.ownerOccupying;
         this.#emit((m) => m.onStudentLimitRejected?.(lab.track));
         this.#log(
           `start refused for lab=${lab.id}: per-student limit reached (${decision.ownerOccupying}/${limit})`,
