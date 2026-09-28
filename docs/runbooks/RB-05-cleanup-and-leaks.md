@@ -141,6 +141,13 @@ Related recoveries that need no operator:
 - A session left `RESETTING` by a process that died is moved to `DEGRADED` after
   the reset-recovery grace period (10 minutes by default). It is never reported
   `ACTIVE`; the student resets again or ends it.
+- An `ACTIVE` session whose container the runtime reports `exited` or `dead` on
+  two consecutive sweeps (after a host restart, every lab container is: they run
+  `--restart no`) is moved to `DEGRADED` — "needs a reset" in the browser —
+  once it has been ACTIVE for 2 minutes
+  (`jtt_reaper_recoveries_total{reason="sandbox_lost"}`). Nothing is deleted;
+  Reset rebuilds it, End releases the slot, idle expiry still applies. A sandbox
+  that is *absent* (runtime data lost) is not acted on: use `ops end <id> --yes`.
 - A sandbox whose session row is already `ENDED`, `EXPIRED` or `FAILED` — built
   by a start or reset that lost its session to a teardown — is removed on the
   next sweep as `orphaned`, through the session's own provider destroy, so the
