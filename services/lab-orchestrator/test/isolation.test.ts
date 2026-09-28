@@ -93,10 +93,12 @@ describe('LimitRange (story test 12)', () => {
     const limit = (limitRangeManifest(POLICY).spec as { limits: Array<Record<string, unknown>> })
       .limits[0]!;
 
+    // ephemeral-storage too (red-team O4): the quota constrains it as well,
+    // so without a default an unqualified Pod would be refused.
     expect(limit.type).toBe('Container');
-    expect(limit.defaultRequest).toEqual({ cpu: '50m', memory: '64Mi' });
-    expect(limit.default).toEqual({ cpu: '500m', memory: '512Mi' });
-    expect(limit.max).toEqual({ cpu: '1', memory: '1Gi' });
+    expect(limit.defaultRequest).toEqual({ cpu: '50m', memory: '64Mi', 'ephemeral-storage': '64Mi' });
+    expect(limit.default).toEqual({ cpu: '500m', memory: '512Mi', 'ephemeral-storage': '256Mi' });
+    expect(limit.max).toEqual({ cpu: '1', memory: '1Gi', 'ephemeral-storage': '1Gi' });
   });
 
   it('is configurable', () => {
