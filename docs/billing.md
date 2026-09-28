@@ -197,6 +197,23 @@ payment credential (asserted against `information_schema` in
 card data: checkout and payment-method management are the provider's hosted
 pages.
 
+### 8.1 Migrations and the rollback boundary
+
+Migration 010 (and 009 before it) is additive for existing data; it is proven
+on a fresh database, over rows written before it, twice in a row, and from a
+second process (`access-persistence-integration.test.ts`,
+`billing-persistence-integration.test.ts`). A previous release refuses to start
+on the migrated schema unless `DATABASE_ALLOW_NEWER_SCHEMA` is set
+([postgres-backup-restore.md §6.4](runbooks/postgres-backup-restore.md)). With
+that override, know what the older code does not understand:
+
+- **Before 009**, plans do not exist: an entitlement on a plan is read as every
+  track. Rolling back widens planned access until the release is restored.
+- **Before 010**, an account has one row: an account with both an operator row
+  and a billing row may be read from either. Billing is test-only and off in
+  production, so no production database holds a billing row today; once it
+  does, restore from the pre-migration backup instead of rolling back.
+
 ## 9. Integrating a real provider
 
 Not done, and not to be done without the decisions in §7. What it takes:

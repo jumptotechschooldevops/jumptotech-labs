@@ -556,6 +556,19 @@ describe('the subscription lifecycle', () => {
     expect(await h.billingStore.customerOf('test', first.userId)).toBeTruthy();
   });
 
+  it('a plan change is the provider moving the subscription to another price; the plan follows on the next request', async () => {
+    const h = compose();
+    const { subscriptionRef, userId } = await h.subscribe('pia', 'fixture-monthly');
+    expect((await h.start('pia', 'DOCKER-001')).body.error?.code).not.toBe('LAB_NOT_IN_PLAN');
+    await h.endAll('pia');
+    // Proration and invoices are the provider's; the platform only reads the result.
+    h.provider.silently(subscriptionRef, (s) => ({ ...s, priceRef: 'price_test_linux' }));
+    await h.deliverAll([h.provider.setCancelAtPeriodEnd(subscriptionRef, false)]);
+    expect((await h.accessStore.grants(userId))[0]).toMatchObject({ planId: 'fixture-linux' });
+    expect((await h.start('pia', 'DOCKER-001')).body.error.code).toBe('LAB_NOT_IN_PLAN');
+    expect((await h.start('pia', 'LINUX-001')).status).toBe(200);
+  });
+
   it('a provider trial is a TRIAL row, and counts as the account\'s one trial', async () => {
     const h = compose();
     const { userId } = await h.subscribe('rae', 'fixture-monthly', { trialDays: 14 });
