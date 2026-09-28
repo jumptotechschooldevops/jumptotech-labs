@@ -88,6 +88,25 @@ describe('HintPanel', () => {
    * hangs hint tracking off it: the lab page forwards each event to the API,
    * which records it against the student's attempt.
    */
+  it('moves focus to the last hint when revealing it removes the button that had focus', () => {
+    render(<HintPanel hints={HINTS} />);
+    reveal(2);
+    const button = screen.getByRole('button', { name: /show hint 3/i });
+    button.focus();
+    fireEvent.click(button);
+
+    expect(screen.queryByRole('button', { name: /show/i })).toBeNull();
+    // Not <body>: a keyboard user carries on from the hint they just opened.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.closest('li')?.textContent).toContain(HINTS[2]!.text);
+  });
+
+  it('leaves focus alone when the student was not on the button', () => {
+    render(<HintPanel hints={[HINTS[0]!]} />);
+    fireEvent.click(screen.getByRole('button', { name: /show a hint/i }));
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it('reports each reveal so usage can be persisted', () => {
     const onReveal = vi.fn();
     render(<HintPanel hints={HINTS} onReveal={onReveal} />);

@@ -195,7 +195,13 @@ function Elapsed({ since }: { since: number }) {
     return () => clearInterval(interval);
   }, []);
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
-  return <span className="overlay__elapsed">{seconds}s</span>;
+  // It sits inside the preparing card's live region; left live, a screen reader
+  // would announce "12s", "13s", "14s"… every second while the lab starts.
+  return (
+    <span className="overlay__elapsed" aria-live="off">
+      {seconds}s
+    </span>
+  );
 }
 
 /**
@@ -1214,6 +1220,19 @@ function FinalSummary({
 }) {
   const passed = attempt?.status === 'PASSED';
   const next = useNextLabAfter(lab.id, passed && !otherRunning);
+
+  /*
+   * The summary replaces the workspace in one render — the End dialog, and the
+   * End button it would hand focus back to, go with it — so a keyboard or
+   * screen-reader user was left on <body>, at the top of the page. Start them
+   * at the outcome instead. Only when focus really was lost: a summary reached
+   * any other way leaves focus where the student put it.
+   */
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) headingRef.current?.focus();
+  }, []);
   const title = gone
     ? 'This lab environment no longer exists'
     : session && session.status === 'EXPIRED' && removedForInactivity(session)
@@ -1234,7 +1253,7 @@ function FinalSummary({
   return (
     <div className="workspace__final">
       <section className="panel final" aria-labelledby="final-heading">
-        <h2 id="final-heading" className="panel__title">
+        <h2 id="final-heading" className="panel__title" ref={headingRef} tabIndex={-1}>
           {title}
         </h2>
         <p className="panel__text">{description}</p>

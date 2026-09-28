@@ -439,6 +439,20 @@ describe('End lab', () => {
     expect(screen.getByRole('link', { name: 'Back to labs' })).toBeTruthy();
   });
 
+  it('puts keyboard focus on the outcome, since the dialog and the End button that had it are gone', async () => {
+    apiMock.endLab.mockResolvedValue({ message: 'ok', session: sessionInfo({ status: 'ENDED' }), steps: [] });
+    await renderConnected();
+    const end = button('End lab');
+    end.focus();
+    fireEvent.click(end);
+    const confirm = within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' });
+    confirm.focus();
+    fireEvent.click(confirm);
+
+    const heading = await screen.findByRole('heading', { name: 'Lab ended' });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+  });
+
   it('shows an End that is still cleaning up as shutting down, not as failed, and offers no second End', async () => {
     apiMock.endLab.mockRejectedValue(
       new ApiRequestError(503, {
@@ -471,6 +485,15 @@ describe('after the lab has ended', () => {
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End lab' }));
     await screen.findByRole('heading', { name: 'Lab ended' });
   }
+
+  it('keeps the ticking elapsed time out of the preparing card\'s announcements', async () => {
+    await endLab();
+    apiMock.startLab.mockReturnValue(new Promise(() => undefined));
+    fireEvent.click(screen.getByRole('button', { name: 'Launch a fresh environment' }));
+    const card = (await screen.findByText('Preparing your lab environment…')).closest('[role="status"]')!;
+    const elapsed = card.querySelector('.overlay__elapsed')!;
+    expect(elapsed.getAttribute('aria-live')).toBe('off');
+  });
 
   it('shows the new environment preparing when the student launches again — not the old summary', async () => {
     await endLab();
