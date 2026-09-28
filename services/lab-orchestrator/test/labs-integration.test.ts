@@ -476,6 +476,30 @@ spec:
 
   // --------------------------------------- 27–29. cross-session isolation
 
+  it('stores the session guardrails as written: ingress `from` and LimitRange defaults', async () => {
+    // The client's models rename `from` and `default`; applied as plain
+    // manifests they were dropped, and the stored "allow same-namespace"
+    // policy was `ingress: [{}]` — allow from every namespace.
+    const session = await start('K8S-001');
+    const kubectl = await studentKubectl(session);
+
+    const policies = await kubectl('get', 'networkpolicies', '-o', 'json');
+    expect(policies.code, policies.stderr).toBe(0);
+    const items = (JSON.parse(policies.stdout) as { items: Array<{ metadata: { name: string }; spec: { ingress?: object[] } }> }).items;
+    const sameNamespace = items.find((p) => p.metadata.name.endsWith('allow-same-namespace'));
+    expect(sameNamespace?.spec.ingress).toEqual([{ from: [{ podSelector: {} }] }]);
+    for (const policy of items) {
+      for (const rule of policy.spec.ingress ?? []) expect(Object.keys(rule).length, policy.metadata.name).toBeGreaterThan(0);
+    }
+
+    const limits = await kubectl('get', 'limitranges', '-o', 'json');
+    expect(limits.code, limits.stderr).toBe(0);
+    const [item] = (JSON.parse(limits.stdout) as { items: Array<{ spec: { limits: Array<{ default: object }> } }> }).items;
+    expect(item!.spec.limits[0]!.default).toEqual(DEFAULT_SESSION_POLICY.limitRange.default);
+
+    await manager.end(session.sessionId);
+  }, 420_000);
+
   it('K8S-002 session A cannot affect session B (test requirement 27)', async () => {
     const a = await start('K8S-002');
     const b = await start('K8S-002');
