@@ -97,6 +97,19 @@ describe('container runtime create — resource ceilings', () => {
     expect(ran()).toBe(false);
   });
 
+  it('bounds the container log, whatever the daemon default (red-team O2)', async () => {
+    // A student can write to PID 1's stdout; measured 5 MB in one command into
+    // an unrotated json-file log on the host's Docker disk.
+    const { cli, calls } = runtime();
+    await cli.create(spec({}));
+    const run = calls.find((argv) => argv[0] === 'run')!;
+    expect(run[run.indexOf('--log-driver') + 1]).toBe('json-file');
+    const opts = run.flatMap((arg, i) => (arg === '--log-opt' ? [run[i + 1]] : []));
+    expect(opts).toEqual(['max-size=1m', 'max-file=1']);
+    // Before the image: after it, these would be the container's own argv.
+    expect(run.indexOf('--log-driver')).toBeLessThan(run.indexOf(spec({}).image));
+  });
+
   it('passes a valid set of ceilings through unchanged', async () => {
     const { cli, calls } = runtime();
     await cli.create(spec({ cpus: '2', memory: '2g', pidsLimit: 512 }));

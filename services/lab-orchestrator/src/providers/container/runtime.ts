@@ -250,6 +250,12 @@ export interface DockerCliOptions {
   run?: (argv: string[], options: { timeoutMs: number; stdin?: string; maxBufferBytes?: number }) => Promise<ContainerExecResult>;
 }
 
+/**
+ * The most a sandbox's container log may hold on the host. PID 1 writes a few
+ * lines at start; everything else there is a student writing to it on purpose.
+ */
+export const SANDBOX_LOG_MAX_SIZE = '1m';
+
 export class DockerCliRuntime implements ContainerRuntimePort {
   readonly name = 'docker';
   readonly #binary: string;
@@ -328,6 +334,18 @@ export class DockerCliRuntime implements ContainerRuntimePort {
       spec.memory,
       '--pids-limit',
       String(spec.pidsLimit),
+      // The container log is disk on the host's Docker data root, and nothing
+      // reads it — shells are `docker exec` children, whose output is not
+      // logged. It was unbounded (the daemon's json-file default), and PID 1's
+      // stdout is writable by the student: `> /proc/1/fd/1` wrote 5 MB into it
+      // in one command, and would keep going until End or a full disk. Named
+      // explicitly, not inherited, so a daemon default cannot widen it.
+      '--log-driver',
+      'json-file',
+      '--log-opt',
+      `max-size=${SANDBOX_LOG_MAX_SIZE}`,
+      '--log-opt',
+      'max-file=1',
       '--restart',
       'no',
     ];
