@@ -50,11 +50,22 @@ export const apiMock = {
   getTestCheckout: vi.fn(),
   completeTestCheckout: vi.fn(),
   simulateSubscription: vi.fn(),
+  classroom: {
+    overview: vi.fn(),
+    session: vi.fn(),
+    searchStudents: vi.fn(),
+    student: vi.fn(),
+    labs: vi.fn(),
+    endSession: vi.fn(),
+  },
 };
 
 /** Defaults for a signed-in student with nothing running and nothing done. */
 export function resetApiMock() {
-  for (const fn of Object.values(apiMock)) fn.mockReset();
+  for (const value of Object.values(apiMock)) {
+    if ('mockReset' in value) value.mockReset();
+    else for (const fn of Object.values(value)) fn.mockReset();
+  }
   apiMock.listLabs.mockResolvedValue({ labs: LABS, tracks: TRACKS, providers: [], count: LABS.length });
   apiMock.getProgress.mockResolvedValue(progressSnapshot());
   apiMock.getAccess.mockResolvedValue({

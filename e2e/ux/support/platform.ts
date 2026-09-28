@@ -86,6 +86,8 @@ export class FakePlatform {
   readonly students = new Map<string, Student>();
   /** Who the identity provider signs in as next. */
   nextSignIn: Student | null = null;
+  /** The next sign-in does not finish: the provider sends the student back with this reason. */
+  signInFailure: 'cancelled' | 'expired' | 'unavailable' | 'failed' | null = null;
   /** Subjects whose sign-in has been ended server-side (expired, revoked). */
   readonly revoked = new Set<string>();
   /** The student the request being answered belongs to. */
@@ -353,11 +355,20 @@ export class FakePlatform {
     }
     if (call === 'GET /auth/login') {
       // The identity provider round trip, collapsed: sign in, set the cookie, go back.
+      const returnTo = url.searchParams.get('returnTo') ?? '/';
+      if (this.signInFailure) {
+        // What the API does when the provider's round trip does not finish:
+        // back into the app, at the same page, with the reason (routes/auth.ts).
+        const failure = this.signInFailure;
+        this.signInFailure = null;
+        const back = new URL(returnTo, 'http://app.invalid');
+        back.searchParams.set('signin', failure);
+        return route.fulfill({ status: 302, headers: { location: `${back.pathname}${back.search}${back.hash}` } });
+      }
       const student = this.nextSignIn;
       if (!student) return this.error(route, 400, 'AUTH_REFUSED', 'Nobody to sign in as');
       this.students.set(student.subject, student);
       this.revoked.delete(student.subject);
-      const returnTo = url.searchParams.get('returnTo') ?? '/';
       return route.fulfill({
         status: 200,
         contentType: 'text/html',

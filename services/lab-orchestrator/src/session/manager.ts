@@ -1287,6 +1287,30 @@ export class SessionManager {
   }
 
   /**
+   * The runtime reports this ACTIVE session's container stopped — the reaper's
+   * reconciliation (`SessionReaper`, stopped sandboxes). ACTIVE → DEGRADED,
+   * fenced on the status stamp the reaper read, so a reset or teardown that
+   * moved the row meanwhile wins. Nothing is deleted: the student resets to
+   * rebuild it or ends it, and idle expiry still reclaims it (activity is not
+   * stamped).
+   */
+  async markSandboxStopped(observed: LabSession): Promise<LabSession | null> {
+    if (observed.status !== 'ACTIVE') return null;
+    const degraded = await this.#transition(
+      observed.sessionId,
+      ['ACTIVE'],
+      'DEGRADED',
+      { statusReason: 'The lab environment stopped running, for example because the server restarted.' },
+      { statusChangedAt: observed.statusChangedAt },
+    );
+    if (degraded) {
+      this.#emit((m) => m.onTransition?.('ACTIVE', 'DEGRADED'));
+      this.#log(`session ${observed.sessionId} DEGRADED: its sandbox stopped running`);
+    }
+    return degraded;
+  }
+
+  /**
    * The refusal for a reset that did not hold its claim, describing the session
    * as it is now.
    *
