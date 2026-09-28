@@ -304,6 +304,15 @@ describe('monitoring joins production without becoming reachable', () => {
     expect(prometheus).toMatch(/ports: !override\n\s+- "127\.0\.0\.1:\$\{GRAFANA_PORT:-3001\}:3000"\n/);
   });
 
+  it('keeps the Prometheus lifecycle API off in development too, where peers can reach it', () => {
+    // Red-team O11: dev Prometheus listens on 0.0.0.0 inside its namespace, so
+    // a student shell in the terminal container could POST /-/quit.
+    const prometheus = block(overlay, 'prometheus');
+    expect(prometheus).toContain('- --web.listen-address=0.0.0.0:9090');
+    expect(prometheus).not.toContain('--web.enable-lifecycle');
+    expect(prometheus).not.toContain('--web.enable-admin-api');
+  });
+
   it('runs Alertmanager and Grafana in Prometheus\'s namespace, which joins only the default network', () => {
     for (const service of ['alertmanager', 'grafana']) {
       expect(block(overlay, service), service).toContain('network_mode: service:prometheus');

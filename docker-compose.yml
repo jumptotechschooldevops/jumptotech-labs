@@ -155,6 +155,9 @@ services:
       API_PORT: 4000
       LAB_PROVIDER: ${LAB_PROVIDER:-kind}
       LAB_CLUSTER_NAME: ${LAB_CLUSTER_NAME:-jumptotech-labs}
+      # Empty means kind-${LAB_CLUSTER_NAME}. The mounted kubeconfig's
+      # current-context is never used; a missing context is refused.
+      LAB_KUBE_CONTEXT: ${LAB_KUBE_CONTEXT:-}
       KUBECONFIG: /etc/jumptotech/kubeconfig.yaml
       LABS_DIR: /app/labs
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}

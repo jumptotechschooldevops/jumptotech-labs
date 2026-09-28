@@ -96,9 +96,10 @@ export interface SandboxComposition {
 export function buildSandboxComposition(options: BuildSandboxCompositionOptions): SandboxComposition {
   const k8s =
     options.k8s ??
-    new KubernetesClient(
-      options.config.kubeconfigPath ? { kubeconfigPath: options.config.kubeconfigPath } : {},
-    );
+    new KubernetesClient({
+      ...(options.config.kubeconfigPath ? { kubeconfigPath: options.config.kubeconfigPath } : {}),
+      context: options.config.kubeContext,
+    });
 
   //
   // `buildDockerEngines`, not a `DockerCliFactory` built here — the same lesson
@@ -123,6 +124,7 @@ export function buildSandboxComposition(options: BuildSandboxCompositionOptions)
     clusterName: options.config.clusterName,
     runtimeOwner: options.config.sandbox.runtimeOwner,
     ...(options.config.kubeconfigPath ? { kubeconfigPath: options.config.kubeconfigPath } : {}),
+    kubeContext: options.config.kubeContext,
     k8s,
     waitForRequirements: waitFor,
     // BETA-P0-015: forced on in production by `loadNetworkPolicyConfig`.

@@ -157,7 +157,7 @@ async function harness(options: { now?: () => number } = {}): Promise<Harness> {
 
   // The Kubernetes client is only constructed so the app can be assembled; no
   // test in this file touches a cluster.
-  const k8s = new KubernetesClient({});
+  const k8s = new KubernetesClient({ context: config.kubeContext });
   return { app: createApp({ registry, sessions, k8s, config }), sessions, providers };
 }
 

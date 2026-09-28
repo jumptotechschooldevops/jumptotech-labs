@@ -8,11 +8,16 @@
 import { spawn } from 'node:child_process';
 import type { KubectlRunner } from './network-enforcement-probe.js';
 
-export function spawnKubectl(options: { kubeconfig?: string; binary?: string } = {}): KubectlRunner {
+export function spawnKubectl(
+  options: { kubeconfig?: string; binary?: string; context?: string } = {},
+): KubectlRunner {
   return (args, runOptions = {}) =>
     new Promise((resolve) => {
       const env = options.kubeconfig ? { ...process.env, KUBECONFIG: options.kubeconfig } : process.env;
-      const child = spawn(options.binary ?? 'kubectl', args, { env, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+      // `--context` on every call: without it kubectl uses the kubeconfig's
+      // current-context, which on an operator's machine can be any cluster.
+      const argv = options.context ? ['--context', options.context, ...args] : [...args];
+      const child = spawn(options.binary ?? 'kubectl', argv, { env, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       const timer = setTimeout(() => {

@@ -136,6 +136,33 @@ describe('ownership is stamped on creation, not trusted', () => {
   });
 });
 
+describe('a sandbox may only be created on no network or a per-session lab network', () => {
+  // assertSandboxNetwork inside the runtime only refuses `host` and
+  // `container:<name>`; every other bridge name passes it. This scope holds the
+  // caller to the contract the API actually uses — `none` or a jtt-net-* ref —
+  // so a caller with the runtime secret cannot land a sandbox on the platform's
+  // own `jumptotech-sandboxes` bridge (the DinD daemons and terminal), on the
+  // default `bridge` with its route out, or on `kind`.
+  it('refuses a shared or platform network and never calls the runtime', async () => {
+    for (const network of ['jumptotech-sandboxes', 'bridge', 'kind', 'host', 'labs-database', 'container:jtt-lab-aabbccdd1122']) {
+      const fake = fakeRuntime({});
+      await expect(
+        run('create', { spec: { ...SPEC, name: 'jtt-lab-aabbccdd1122', network } }, fake.runtime),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(fake.calls, network).toEqual([]);
+    }
+  });
+
+  it('admits none and a per-session lab network', async () => {
+    for (const network of ['none', 'jtt-net-aabbccdd1122']) {
+      const fake = fakeRuntime({});
+      await run('create', { spec: { ...SPEC, name: 'jtt-lab-aabbccdd1122', network } }, fake.runtime);
+      const created = fake.calls.find((c) => c.op === 'create')!.arg as { network: string };
+      expect(created.network, network).toBe(network);
+    }
+  });
+});
+
 describe('nothing belonging to another deployment can be touched', () => {
   const foreign = 'jtt-lab-ffffffffffff';
 
