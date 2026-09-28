@@ -77,8 +77,7 @@ test.describe('the terminal', () => {
 });
 
 test.describe('the API', () => {
-  // Known defect on main, fixed in its own PR: the unreachable screen does not say what to do.
-  test.fixme('unreachable when the app opens: says so, says what to do, and Try again recovers', async ({ page, platform }) => {
+  test('unreachable when the app opens: says so, says what to do, and Try again recovers', async ({ page, platform }) => {
     await platform.signIn(page.context(), `http://127.0.0.1:${process.env.E2E_UX_PORT ?? 4790}`, { subject: 'ux|alice', displayName: 'Alice Student' });
     let down = true;
     await page.route('**/auth/session', (route) => (down ? route.abort('connectionrefused') : route.fallback()));

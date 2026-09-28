@@ -104,9 +104,13 @@ Follow production-host-readiness.md §21. What decides the route back:
 - `prod up --wait` exiting non-zero **is** the health failure. The smoke's
   `release.commit` then confirms which commit each service reports.
 
-Every migration to date (001–006) is additive — new tables, columns and indexes,
-a backfill of one new column, and a widened `CHECK`. None drops or rewrites data,
-so the data-loss risk of a rollback is only what was written after the backup.
+Every migration to date (001–007) is additive — new tables, columns and indexes,
+a backfill of one new column, a widened `CHECK`, and a sequence-defaulted
+`shell_uid` column (007). None drops or rewrites data, so the data-loss risk of
+a rollback is only what was written after the backup. Running pre-007 code on a
+007 schema with `DATABASE_ALLOW_NEWER_SCHEMA=true` works (the column fills
+itself), but that terminal runs every student's shell as one shared uid: the
+per-session isolation of SEC-ARCH-2 is gone until the release matches again.
 
 ### 4.3 Database lost or corrupt; host intact
 

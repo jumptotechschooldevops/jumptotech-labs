@@ -64,14 +64,14 @@ task:
 
     **Add an `image` job** to `.github/workflows/ci.yml` that:
 
-    * declares `needs: build`, so it only runs when the build job succeeded —
-      there is no point building an image around code that failed its tests;
-    * checks the repository out first — every job starts on a fresh runner
-      with nothing on it, so a job that builds from the Dockerfile needs its
-      own copy of the code;
-    * runs `docker build` in a step;
-    * takes the image name from a workflow-level `env` value called
-      `IMAGE_NAME` rather than repeating a literal in every step.
+      * declares `needs: build`, so it only runs when the build job succeeded —
+        there is no point building an image around code that failed its tests;
+      * checks the repository out first — every job starts on a fresh runner
+        with nothing on it, so a job that builds from the Dockerfile needs its
+        own copy of the code;
+      * runs `docker build` in a step;
+      * takes the image name from a workflow-level `env` value called
+        `IMAGE_NAME` rather than repeating a literal in every step.
 
     What is verified: the Dockerfile exists and has content, and the workflow
     declares the job, the dependency, the build command, and the variable. The

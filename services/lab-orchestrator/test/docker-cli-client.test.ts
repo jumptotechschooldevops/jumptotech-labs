@@ -137,6 +137,19 @@ describe('commands are argv arrays, never command lines', () => {
     expect(argv.indexOf('alpine:3.20')).toBeLessThan(argv.indexOf('sleep'));
     expect(argv.slice(argv.indexOf('alpine:3.20') + 1)).toEqual(['sleep', '3600']);
   });
+
+  it('passes --memory-swap only when asked, beside --memory', async () => {
+    const { run, calls } = runner(() => ({ stdout: 'id\n' }));
+    const client = new DockerCliClient({ run });
+    await client.runContainer({ name: 'a', image: 'docker:27-dind', detach: true, memory: '2g', memorySwap: '2g' });
+    await client.runContainer({ name: 'b', image: 'alpine:3.20', detach: true, memory: '64m' });
+
+    const bounded = calls[0]?.argv ?? [];
+    expect(bounded[bounded.indexOf('--memory-swap') + 1]).toBe('2g');
+    expect(bounded.indexOf('--memory-swap')).toBeLessThan(bounded.indexOf('docker:27-dind'));
+    // Student-lab containers keep Docker's semantics unless a caller chooses.
+    expect(calls[1]?.argv ?? []).not.toContain('--memory-swap');
+  });
 });
 
 describe('a session client can only ever address its own sandbox', () => {
