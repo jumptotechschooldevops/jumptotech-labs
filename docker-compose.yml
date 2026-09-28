@@ -374,25 +374,30 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # BETA-P0-010. The image starts as root only long enough to drop to the
-    # `student` account inside the process (services/terminal/src/process-identity.ts).
-    # That in-process uid change is what makes the kernel mark the service
-    # non-dumpable, so a student shell — the same account — cannot read this
-    # service's environment or memory, where TERMINAL_SESSION_SECRET,
-    # INTERNAL_SERVICE_SECRET and SANDBOXD_ATTACH_SECRET live. Both capabilities
-    # are cleared by the drop itself; the running service holds none.
+    # SEC-ARCH-2. The image launches the service with `setpriv` as its own
+    # non-root account (jtt-terminal, 1002) holding exactly these three as
+    # *ambient* capabilities, and nothing else. It runs each session's shell as
+    # that session's own uid (from the api; services/terminal/src/shell-identity.ts),
+    # holding none: SETUID and SETGID to start it as that uid, CHOWN to hand the
+    # session its credentials and workspace and take them back at End. No shell
+    # shares the service's uid, so none can read its environment or memory
+    # (TERMINAL_SESSION_SECRET, INTERNAL_SERVICE_SECRET, SANDBOXD_ATTACH_SECRET),
+    # and no shell shares another's. The service refuses to start otherwise.
     cap_add:
       - SETUID
       - SETGID
+      - CHOWN
     # Student shells create files; give them a bounded, non-persistent HOME.
     tmpfs:
-      # Student shells write here. Larger than the Kubernetes-only stack needed:
-      # a Docker student's build context lives under TERMINAL_WORKSPACE_ROOT.
-      - /home/student:size=256m,mode=0700,uid=1001,gid=1001
+      # The service's, 0711: a shell reaches its own workspace or home by name
+      # and cannot list anyone else's. Larger than the Kubernetes-only stack
+      # needed: a Docker student's build context lives under TERMINAL_WORKSPACE_ROOT.
+      - /home/student:size=256m,mode=0711,uid=1002,gid=1002
       - /tmp:size=64m,mode=1777
-      # Per-session kubeconfigs and Docker client certificates (0600) live here
-      # and vanish with the container.
-      - /run/jumptotech:size=8m,mode=0700,uid=1001,gid=1001
+      # Per-session kubeconfigs and Docker client certificates live here, each
+      # 0600 to its own session's uid, and vanish with the container. The
+      # directory is the service's, 0711: nobody can list it.
+      - /run/jumptotech:size=8m,mode=0711,uid=1002,gid=1002
     pids_limit: 256
     mem_limit: 512m
     environment:

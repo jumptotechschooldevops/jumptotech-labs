@@ -15,7 +15,7 @@ KUBECONFIG_HOST := $(CURDIR)/infrastructure/kind/generated/kubeconfig-host.yaml
 # for it either.
 COMPOSE := docker compose -f docker-compose.yml -f docker-compose.runtime.yml
 
-.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate production-preflight production-config-check private-beta-smoke host-capacity-sample private-beta-diagnostics test-private-beta-diagnostics test-production-host typecheck clean
+.PHONY: help setup secrets secrets-check observability-token observability-up observability-down observability-check cluster-up cluster-down sandbox-build sandbox-clean status up up-kubernetes-only rebuild verify-api-image down logs test test-integration test-sandbox test-db test-terminal-container test-terminal-isolation test-sandboxd-container db-up db-migrate db-status db-shell db-backup db-backup-verify test-db-backup db-restore-drill tls-install tls-check test-tls-edge beta-validate production-preflight production-config-check private-beta-smoke host-capacity-sample private-beta-diagnostics test-private-beta-diagnostics test-production-host typecheck clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -272,6 +272,29 @@ test-terminal-container: ## Run the terminal integration suite inside a containe
 		-v "$(CURDIR)/infrastructure:/app/infrastructure" \
 		jumptotech/terminal-test \
 		npx tsx test-support/strict-vitest.ts test/terminal-integration.test.ts test/pty-input-queue-integration.test.ts --root services/terminal
+
+test-terminal-isolation: ## SEC-ARCH-2: prove per-session shell uids on a real kernel, launched as production launches the terminal
+	@echo "==> building the terminal test image (same base + native build as the shipped image)"
+	@docker build -q -f infrastructure/docker/terminal-test.Dockerfile -t jumptotech/terminal-test . >/dev/null
+	@# The terminal service's hardening from docker-compose.yml, and the launch
+	@# line from terminal.Dockerfile: the suite refuses to run unless the
+	@# service's production identity checks pass inside it.
+	@docker run --rm --init \
+		--cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add CHOWN \
+		--security-opt no-new-privileges:true \
+		--pids-limit 512 \
+		--tmpfs /home/student:size=64m,mode=0711,uid=1002,gid=1002 \
+		--tmpfs /run/jumptotech:size=8m,mode=0711,uid=1002,gid=1002 \
+		--tmpfs /tmp:size=256m,mode=1777 \
+		-e RUN_INTEGRATION_TESTS=1 -e JTT_SHELL_ISOLATION_TEST=1 -e HOME=/tmp \
+		-v "$(CURDIR)/services:/src/services:ro" \
+		-v "$(CURDIR)/test-support:/src/test-support:ro" \
+		jumptotech/terminal-test \
+		sh -c 'cp -R /src/services/. /app/services/ && cp -R /src/test-support /app/ \
+			&& chown -R 1002:1002 /app/services /app/test-support \
+			&& exec /usr/bin/setpriv --reuid=1002 --regid=1002 --clear-groups \
+				--inh-caps=-all,+setuid,+setgid,+chown --ambient-caps=-all,+setuid,+setgid,+chown -- \
+				npx tsx test-support/strict-vitest.ts test/shell-isolation-container-integration.test.ts --root services/terminal'
 
 # The Linux sandbox image the suite creates its containers from. Built here from
 # the canonical Dockerfile rather than assumed: a fresh runner has no

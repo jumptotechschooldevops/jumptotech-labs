@@ -18,8 +18,9 @@
  *   - the kubeconfig body is never logged, never echoed to the socket, and
  *     never returned to the browser.
  */
+import { handTree, removeTree, type SessionOwner } from './shell-identity.js';
 import { randomBytes } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, chown, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -39,6 +40,8 @@ export type TerminalContextResponse =
       serviceAccountName: string;
       expiresAt: string;
       env?: Record<string, string>;
+      /** The session's own shell uid (SEC-ARCH-2). Validated where used: `ownerFor`. */
+      shellUid?: number;
     }
   | {
       kind: 'container-exec';
@@ -80,6 +83,8 @@ export interface DockerCredentialsResponse {
   workspaceFiles?: Array<{ path: string; content: string }>;
   env?: Record<string, string>;
   expiresAt: string;
+  /** The session's own shell uid (SEC-ARCH-2). Validated where used: `ownerFor`. */
+  shellUid?: number;
 }
 
 export class CredentialsUnavailableError extends Error {
@@ -257,14 +262,36 @@ export async function writeSessionKubeconfig(
   dir: string,
   sessionId: string,
   kubeconfig: string,
+  /** The session's own uid (SEC-ARCH-2); `null` where shells share this service's. */
+  owner: SessionOwner | null = null,
 ): Promise<string> {
   const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
   if (safe.length === 0) throw new Error('refusing to write credentials for an unnamed session');
 
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await credentialsRoot(dir, owner);
   const file = path.join(dir, `${safe}-${attachNonce()}.kubeconfig`);
   await writeFile(file, kubeconfig, { mode: 0o600 });
+  if (owner) {
+    try {
+      await chown(file, owner.uid, owner.gid);
+    } catch (error) {
+      await rm(file, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
   return file;
+}
+
+/**
+ * The directory every session's credentials live in.
+ *
+ * With a shell uid per session it is this service's, `0711`: a shell can open
+ * the one file it was given the path of, and cannot list anyone else's. Without
+ * one (development) it stays `0700`, as it always was.
+ */
+async function credentialsRoot(dir: string, owner: SessionOwner | null): Promise<void> {
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  if (owner) await chmod(dir, 0o711);
 }
 
 /**
@@ -301,27 +328,41 @@ export async function writeSessionDockerCerts(
   dir: string,
   sessionId: string,
   credentials: Pick<DockerCredentialsResponse, 'ca' | 'clientCert' | 'clientKey'>,
+  /** The session's own uid (SEC-ARCH-2), and this service's, to take it back. */
+  identity: { owner: SessionOwner; service: SessionOwner } | null = null,
 ): Promise<string> {
   const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
   if (safe.length === 0) throw new Error('refusing to write credentials for an unnamed session');
 
+  await credentialsRoot(dir, identity?.owner ?? null);
   const certDir = path.join(dir, `${safe}-${attachNonce()}.docker`);
   await mkdir(certDir, { recursive: true, mode: 0o700 });
   try {
     await writeFile(path.join(certDir, 'ca.pem'), credentials.ca, { mode: 0o600 });
     await writeFile(path.join(certDir, 'cert.pem'), credentials.clientCert, { mode: 0o600 });
     await writeFile(path.join(certDir, 'key.pem'), credentials.clientKey, { mode: 0o600 });
+    // Files first, the directory last: the session reaches none of it until
+    // all of it is theirs.
+    if (identity) await handTree(certDir, identity.owner);
   } catch (error) {
     // The caller learns the directory only from a successful return, so its
     // cleanup cannot remove a half-written one: this is the only owner.
-    await removeSessionDockerCerts(certDir);
+    await removeSessionDockerCerts(certDir, identity?.service ?? null);
     throw error;
   }
   return certDir;
 }
 
-/** Remove a session's Docker certificate directory. Safe to call twice. */
-export async function removeSessionDockerCerts(dir: string | undefined): Promise<void> {
+/**
+ * Remove a session's Docker certificate directory. Safe to call twice.
+ *
+ * With a shell uid per session the directory is the session's, `0700`, so it
+ * is taken back (`service`) before it can be emptied.
+ */
+export async function removeSessionDockerCerts(
+  dir: string | undefined,
+  service: SessionOwner | null = null,
+): Promise<void> {
   if (!dir) return;
-  await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  await removeTree(dir, service).catch(() => undefined);
 }

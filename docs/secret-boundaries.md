@@ -56,22 +56,63 @@ Additionally, in every environment:
   includes `OIDC_CLIENT_SECRET` and `POSTGRES_PASSWORD`, registered for
   exact-value redaction first, because a provider decides their shape.
 
-### The terminal's process identity
+### The terminal's process identity (SEC-ARCH-2, was BETA-P0-010)
 
-Kubernetes- and Docker-track shells are PTYs spawned by the terminal service, in
-its container, as `student` (uid 1001). The image used to start the service as
-that same account, and Linux lets a same-uid process read a dumpable process'
-`/proc/<pid>/environ` and open its `/proc/<pid>/mem`. Every such student could
-read `TERMINAL_SESSION_SECRET`, `INTERNAL_SERVICE_SECRET` and
-`SANDBOXD_ATTACH_SECRET`. Verified in a container before the fix; see §4.
+Kubernetes- and Docker-track shells are PTYs the terminal service spawns in its
+own container. Two leaks followed from that, in turn:
 
-The image now starts as root with `cap_drop: ALL` plus `SETUID` and `SETGID`, and
-the service drops to 1001 before anything else
-([`services/terminal/src/process-identity.ts`](../services/terminal/src/process-identity.ts)).
-The uid change makes the kernel mark the process non-dumpable, which closes both
-files to other uid-1001 processes, and clears both capabilities. In production
-the service refuses to start without `TERMINAL_DROP_TO_UID`, or when it did not
-start as root and so could not drop.
+- **BETA-P0-010.** The image started the service as `student` (1001), the same
+  account as every shell, and Linux lets a same-uid process read a dumpable
+  process' `/proc/<pid>/environ` and `/proc/<pid>/mem`. Every shell could read
+  `TERMINAL_SESSION_SECRET`, `INTERNAL_SERVICE_SECRET` and
+  `SANDBOXD_ATTACH_SECRET`. That fix dropped the whole service to 1001 inside
+  the process, which marked it non-dumpable.
+- **SEC-ARCH-2.** Every shell still ran as that one uid. One student could list
+  `/run/jumptotech`, read another's kubeconfig or Docker client key, write into
+  their workspace, and signal their processes and the service. A `nohup`ed
+  process outlived its session. Proven live in the release gate soak.
+
+Now every session's shell runs as a uid of its own:
+
+```text
+container: root only to exec setpriv; cap_drop ALL + SETUID SETGID CHOWN; no-new-privileges
+  └─ setpriv → terminal service: uid jtt-terminal (1002), SETUID/SETGID/CHOWN as ambient caps
+       └─ prlimit --nproc → setpriv → env -C <home> → bash
+            uid = the session's shell uid (1900000000+, assigned by the api per session)
+            no capabilities, no supplementary groups, no_new_privs
+```
+
+- **Allocation.** The api assigns the uid when the session row is created:
+  `lab_sessions.shell_uid`, `DEFAULT nextval` of a `NO CYCLE` sequence, with
+  `UNIQUE` and a range `CHECK` (migration 007;
+  [`shell-identity.ts`](../services/lab-orchestrator/src/session/shell-identity.ts)).
+  - It is distinct for every session and stable across restarts.
+  - It is never reused, and never chosen by a client.
+  - It reaches the terminal only on the owner-checked credential exchange.
+  - A local-shell session without a valid uid gets no shell.
+- **Terminal.** [`services/terminal/src/shell-identity.ts`](../services/terminal/src/shell-identity.ts)
+  starts every shell through `setpriv`.
+  - `setpriv` clears the inheritable and ambient sets. Without that, a uid
+    change between two non-root uids keeps them, and the shell would hold
+    `CAP_SETUID`. This was proven by removing the clearing: the shell then
+    became root.
+  - A session's kubeconfig or Docker key is `0600`, and its home or workspace
+    `0700`, all owned by the session's uid, under service-owned `0711` roots
+    that nobody can list.
+  - At End every process of the uid is killed (`kill -9 -1` run *as* that uid)
+    and proven gone, and its files are taken back and removed.
+- **Startup gate.** In production the terminal refuses to start in any of these
+  cases:
+  - it runs as root;
+  - it lacks SETUID, SETGID or CHOWN;
+  - it holds any capability beyond those three;
+  - `no_new_privs` is not set;
+  - its uid lies in the shell range.
+
+The service's own secrets stay closed to every shell: no shell shares its uid, so
+the kernel refuses `/proc/<pid>/environ`, `/proc/<pid>/mem` and signals. The
+proof runs on a real kernel, under the production launch, in
+`make test-terminal-isolation` (CI: `terminal-integration`).
 
 ## 3. Development
 
@@ -109,11 +150,16 @@ start as root and so could not drop.
 Manual, and worth repeating on a release candidate:
 
 ```bash
-# The environ probe, against the real image: a uid-1001 process with a clean
-# environment must find no readable environ carrying a secret.
+# Per-session shell identities, and the service's secrets closed to every
+# shell, on a real kernel under the production launch (SEC-ARCH-2):
+make test-terminal-isolation
+
+# The environ probe, against the real image: a process with a session shell uid
+# and a clean environment must find no readable environ carrying a secret.
 docker build -f infrastructure/docker/terminal.Dockerfile -t jumptotech/terminal:probe .
-# run it with cap_drop ALL + SETUID/SETGID and the compose tmpfs mounts, then:
-docker exec -u 1001:1001 <container> env -i PATH=/usr/bin:/bin sh -c \
+# run it as docker-compose.yml does (cap_drop ALL + SETUID/SETGID/CHOWN,
+# no-new-privileges, the 0711 tmpfs mounts owned by 1002), then:
+docker exec -u 1900000999:1900000999 <container> env -i PATH=/usr/bin:/bin sh -c \
   'for d in /proc/[0-9]*; do tr "\0" "\n" < $d/environ 2>/dev/null | grep -q "^TERMINAL_SESSION_SECRET=." && echo "LEAK ${d#/proc/}"; done; true'
 
 # The bundle, built with sentinel secrets in the environment:
@@ -123,18 +169,25 @@ grep -r sentinel- /tmp/web-dist && echo LEAK
 
 ## 5. Remaining risks and deferred decisions
 
-- **A student shell can still signal the terminal service.** It shares uid 1001,
-  so `kill` works and one student can end every shell on that terminal instance.
-  The full fix gives shells a uid the service does not have (the "Phase 11B"
-  model), which changes ownership of workspaces and per-session credentials.
-- **Root helper processes keep `SETUID`/`SETGID`.** The image runs TypeScript
-  through `tsx`, so `docker-init`, the `tsx` CLI parent and its `esbuild` service
-  start before the drop and stay root. None of them runs student input, and a
-  uid-1001 shell cannot signal, trace or read them (verified), but they are
-  capability-holding processes a compiled image would not have.
-- **All shells on one terminal share uid 1001**, so one student can read another
-  live student's per-session kubeconfig or Docker client key if they can find its
-  path. Per-session credentials, not platform secrets, but a cross-student gap.
+- **Shells no longer share a uid with each other or with the service
+  (SEC-ARCH-2).**
+  - Closed:
+    - one student reading another's kubeconfig, Docker key or workspace;
+    - signalling another's processes or the service;
+    - a process outliving its session.
+  - What remains is shared by design:
+    - **`/tmp`** is one directory (mode `1777`), so a file a student
+      deliberately leaves there world-readable can be read by another. Homes
+      and workspaces are `0700`.
+    - **The container's pid limit** is shared too. Each shell's own
+      `RLIMIT_NPROC` bounds one student, but `pids_limit` bounds everyone
+      together.
+- **Root and capability-holding helpers.**
+  - The container's init (`docker-init`) is root and holds the container's
+    capabilities. It runs no student input.
+  - The service, and the `esbuild` helper `tsx` starts, run as `jtt-terminal`
+    holding SETUID, SETGID and CHOWN. No shell can signal, trace or read them.
+  - A compiled image would have no `esbuild` helper.
 - **`TERMINAL_SESSION_SECRET` is symmetric.** The terminal holds the key that
   mints tokens, not only one that verifies them. The API re-checks ownership on
   every credential fetch, which bounds this; asymmetric signing would remove it.

@@ -174,7 +174,7 @@ pressure alarms, not sizing: a host that passes them may still be too small.
 | `exposure.database` | postgres unpublished; `database` network internal, members api and postgres only |
 | `exposure.observability` | Prometheus/Alertmanager on `127.0.0.1` in one namespace; no lifecycle API; Grafana anonymous and basic auth off |
 | `privilege.docker-socket` | only sandboxd mounts the socket |
-| `privilege.containers` | no compose service privileged, host-networked, or given capabilities (except the terminal's SETUID/SETGID drop) |
+| `privilege.containers` | no compose service privileged, host-networked, or given capabilities (except the terminal's SETUID/SETGID/CHOWN, which run each session's shell as its own uid — SEC-ARCH-2) |
 | `runtime.docker-socket-gid` | sandboxd joins the socket's group |
 | `gates.node-env` | `NODE_ENV=production` pinned for api, terminal, sandboxd |
 | `gates.authentication` | `AUTH_MODE=oidc` pinned; development student header off |

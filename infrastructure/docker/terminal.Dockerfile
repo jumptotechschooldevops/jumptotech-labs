@@ -90,8 +90,12 @@ RUN set -eux; \
     apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*
 
-# Dedicated shell user, distinct from `node`, with its own writable HOME.
-RUN useradd --create-home --home-dir /home/student --shell /bin/bash --uid 1001 student
+# The service's own account (SEC-ARCH-2). It is not a student: every session's
+# shell runs as a uid of its own that the api assigns (1900000000 and up), and
+# no account needs to exist for it. No login shell, no home.
+RUN groupadd --system --gid 1002 jtt-terminal \
+ && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin \
+      --uid 1002 --gid 1002 jtt-terminal
 
 WORKDIR /app
 
@@ -113,30 +117,25 @@ COPY services/terminal        services/terminal
 # Dockerfile to this, driven by the lockfile.
 COPY --from=build /app/services/observability/node_modules ./services/observability/node_modules
 
-# The service and the PTYs it spawns run as this account. The account owns
-# nothing in /app, so a student cannot modify the service that is hosting them.
+# Neither the service nor any shell owns anything in /app, so a student cannot
+# modify the service that is hosting them.
 RUN chown -R root:root /app && chmod -R a-w /app
 
-ENV HOME=/home/student \
+# HOME is the service's, not a student's: each shell gets a home of its own.
+ENV HOME=/tmp \
     NODE_ENV=production \
     TERMINAL_PORT=4001 \
     TERMINAL_WORKDIR=/home/student \
-    TERMINAL_WORKSPACE_ROOT=/home/student/workspaces \
-    TERMINAL_DROP_TO_UID=1001 \
-    TERMINAL_DROP_TO_GID=1001
+    TERMINAL_WORKSPACE_ROOT=/home/student/workspaces
 
-# BETA-P0-010: deliberately no `USER student`.
-#
-# The process starts as root and drops to `student` itself before doing anything
-# else (services/terminal/src/process-identity.ts). Started directly as
-# `student`, every student shell — the same account — could read this service's
-# secrets from /proc/<pid>/environ. A uid change made *inside* the process is
-# what makes the kernel close that. Run it with `cap_drop: ALL` plus SETUID and
-# SETGID only; the drop clears both, and a production start as any uid other
-# than root is refused rather than run unprotected.
-#
-# WORKDIR is /app rather than the student's HOME: that HOME is a 0700 tmpfs
-# owned by `student`, and root without DAC capabilities cannot enter it.
+# SEC-ARCH-2: deliberately no `USER`. The container starts as root only so that
+# `setpriv` (CMD below) can launch the service as `jtt-terminal` holding exactly
+# SETUID, SETGID and CHOWN as ambient capabilities — run it with `cap_drop: ALL`
+# plus those three and `no-new-privileges`. The service then starts each
+# session's shell as that session's own uid, holding nothing
+# (services/terminal/src/shell-identity.ts), and refuses to start in production
+# as root, without those capabilities, with any other, or without
+# no_new_privs.
 USER root
 WORKDIR /app
 EXPOSE 4001
@@ -150,4 +149,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=300s --retries=5 \
 
 # One process, so SIGTERM from tini reaches the shutdown handler: the tsx CLI
 # ran it as a child and ended it before the handler ran (api.Dockerfile).
-CMD ["node", "--import", "tsx", "/app/services/terminal/src/index.ts"]
+# `setpriv` execs node in its own place, so that stays true.
+CMD ["/usr/bin/setpriv", "--reuid=jtt-terminal", "--regid=jtt-terminal", "--clear-groups", \
+     "--inh-caps=-all,+setuid,+setgid,+chown", "--ambient-caps=-all,+setuid,+setgid,+chown", "--", \
+     "node", "--import", "tsx", "/app/services/terminal/src/index.ts"]

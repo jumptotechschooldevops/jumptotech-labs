@@ -10,23 +10,24 @@ import {
 } from '@jumptotech/observability';
 
 import { loadTerminalConfig } from './config.js';
-import { dropServiceIdentity } from './process-identity.js';
+import { detectShellIsolation } from './shell-identity.js';
 import { createTerminalServer } from './server.js';
 
 function main(): void {
   const config = loadTerminalConfig();
 
   /*
-   * First, before a listener or a shell exists — BETA-P0-010.
+   * First, before a listener or a shell exists — SEC-ARCH-2 (was BETA-P0-010).
    *
-   * Student shells run as the account this drops to. Dropping *inside* this
-   * process is what closes its environment and memory — where the three secrets
-   * above now live — to those shells. See process-identity.ts.
+   * This process is launched as its own non-root account holding exactly
+   * SETUID, SETGID and CHOWN, and runs each session's shell as that session's
+   * own uid. Its environment and memory — where the secrets above live — are
+   * closed to every shell, because no shell shares its uid; and no shell shares
+   * another's. Production refuses to start any other way. See shell-identity.ts.
    */
-  const identity = dropServiceIdentity({
-    uid: config.dropToUid,
-    gid: config.dropToGid,
+  const isolation = detectShellIsolation({
     production: isProductionEnv(process.env),
+    maxProcesses: config.shellMaxProcesses,
   });
 
   const logger = createLogger({
@@ -49,18 +50,19 @@ function main(): void {
     OBSERVABILITY_SCRAPE_TOKEN: config.observability.scrapeToken,
   });
 
-  if (identity.kind === 'dropped') {
+  if (isolation.mode === 'per-session') {
     logger.info(
       'config.loaded',
-      { reason: 'service_identity_dropped' },
-      `dropped to ${identity.uid}:${identity.gid}; student shells cannot read this process' environment`,
+      { reason: 'shell_identity_per_session' },
+      `running as ${isolation.serviceUid}:${isolation.serviceGid}; each session's shell runs as its own uid ` +
+        `(at most ${isolation.maxProcesses} processes), never this one`,
     );
   } else {
     logger.warn(
       'config.loaded',
-      { reason: `service_identity_${identity.reason.replace(/-/g, '_')}` },
-      'service identity unchanged — DEVELOPMENT ONLY: a shell running as this account could read ' +
-        "this process' environment; production refuses to start this way",
+      { reason: 'shell_identity_shared' },
+      `shells share this service's uid (${isolation.reason}) — DEVELOPMENT ONLY: a shell could read ` +
+        "this process' environment and every other shell's files; production refuses to start this way",
     );
   }
   for (const name of config.developmentSecretFallbacks ?? []) {
@@ -102,15 +104,7 @@ function main(): void {
     1,
   );
 
-  if (process.getuid?.() === 0) {
-    logger.warn(
-      'config.loaded',
-      { reason: 'running_as_root' },
-      'still running as root — student shells inherit this process’ user; the provided image starts as root and drops to `student` (TERMINAL_DROP_TO_UID)',
-    );
-  }
-
-  const server = createTerminalServer(config, { logger, terminal, common });
+  const server = createTerminalServer(config, { logger, terminal, common }, isolation);
 
   let started = false;
 

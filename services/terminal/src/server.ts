@@ -53,6 +53,15 @@ import {
 } from '@jumptotech/lab-orchestrator/output-flow';
 import { reportSessionActivity } from './activity.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
+import {
+  ShellIdentityError,
+  detectShellIsolation,
+  killSessionProcesses,
+  ownerFor,
+  sessionShellCommand,
+  type SessionOwner,
+  type ShellIsolation,
+} from './shell-identity.js';
 import { AttachBudget } from './attach-budget.js';
 import { InputBudget } from './input-budget.js';
 import { brokerShell, localShell, ShellStartError, type Shell } from './shell.js';
@@ -158,7 +167,25 @@ export function createTerminalServer(
     terminal: TerminalMetrics;
     common: CommonMetrics;
   },
+  /**
+   * How local shells are isolated — SEC-ARCH-2. `index.ts` decides it once, in
+   * production mode, and passes it in; anything else (tests, a laptop) gets
+   * what this process can actually do, which is `shared` without capabilities.
+   */
+  isolation: ShellIsolation = detectShellIsolation({
+    production: false,
+    maxProcesses: config.shellMaxProcesses,
+  }),
 ): Server {
+  /** This service's own identity, when sessions have theirs: what reclaimed files return to. */
+  const service: SessionOwner | null =
+    isolation.mode === 'per-session' ? { uid: isolation.serviceUid, gid: isolation.serviceGid } : null;
+  /**
+   * sessionId → the uid its shells ran as, for as long as it may have
+   * processes or files here. `/internal/terminate` needs it after the socket
+   * is gone: a `nohup`ed process outlives its shell.
+   */
+  const shellOwners = new Map<string, SessionOwner>();
   if (observability) {
     obs = observability.logger;
     terminalMetrics = observability.terminal;
@@ -207,6 +234,7 @@ export function createTerminalServer(
   const workspaces = new SessionWorkspaces({
     root: config.workspaceRoot,
     secret: config.sessionSecret,
+    ...(service ? { service } : {}),
   });
 
   const httpServer = createServer((req, res) => {
@@ -224,7 +252,7 @@ export function createTerminalServer(
     // Internal control: the API closes a shell when its session ends, and
     // replaces one when a container reset recreates the sandbox underneath it.
     if (req.url === '/internal/terminate' && req.method === 'POST') {
-      handleControl(req, res, (sessionId) => Promise.resolve({ terminated: closeSession(sessionId) }));
+      handleControl(req, res, async (sessionId) => ({ terminated: await terminateSession(sessionId) }));
       return;
     }
     if (req.url === '/internal/reattach' && req.method === 'POST') {
@@ -464,6 +492,35 @@ export function createTerminalServer(
   }
 
   /** Close the shell belonging to one session, and cancel any attach in flight. Idempotent. */
+  /**
+   * The session is over (End, expiry, the reaper): close its shell, then
+   * everything else it had here — SEC-ARCH-2.
+   *
+   * Closing the shell ends bash, not what bash started: a `nohup`ed or
+   * `setsid` process survived every session before this, holding whatever it
+   * had read. With a uid per session, every process of that uid is killed and
+   * proven gone, and its workspace or home is removed. Nobody else's process
+   * can be touched: `kill -9 -1` runs *as* the session's uid.
+   */
+  async function terminateSession(sessionId: string): Promise<boolean> {
+    const closed = closeSession(sessionId);
+    const owner = shellOwners.get(sessionId);
+    if (!owner) return closed;
+    const survivors = await killSessionProcesses(owner);
+    if (survivors.length > 0) {
+      // Never reused, so nobody inherits them; but an operator must know.
+      obs.error('terminal.connection.closed', {
+        sessionId,
+        outcome: 'processes_survived',
+        count: survivors.length,
+      });
+    } else {
+      shellOwners.delete(sessionId);
+    }
+    await workspaces.destroy(sessionId);
+    return true;
+  }
+
   function closeSession(sessionId: string): boolean {
     const attaching = attachClaims.delete(sessionId);
     const ws = bySessionId.get(sessionId);
@@ -1077,13 +1134,15 @@ export function createTerminalServer(
     let plan: SpawnPlan;
     let kubeconfigPath: string | undefined;
     let dockerCertDir: string | undefined;
+    /** The uid this session's local shell runs as; `null` for a broker shell, or in development. */
+    let owner: SessionOwner | null = null;
     /** True when the PTY lives in `sandboxd` rather than in this process. */
     let viaBroker = false;
 
     /** Undo whatever this attempt wrote, on any path that does not start a shell. */
     const discardCredentials = async (): Promise<void> => {
       await removeSessionKubeconfig(kubeconfigPath);
-      await removeSessionDockerCerts(dockerCertDir);
+      await removeSessionDockerCerts(dockerCertDir, service);
     };
 
     try {
@@ -1125,23 +1184,36 @@ export function createTerminalServer(
             (viaBroker ? ' via the runtime broker' : ''),
         );
       } else if (context.kind === 'docker-daemon') {
-        dockerCertDir = await writeSessionDockerCerts(config.credentialsDir, claims.sid, context);
+        owner = ownerFor(isolation, context.shellUid);
+        dockerCertDir = await writeSessionDockerCerts(
+          config.credentialsDir,
+          claims.sid,
+          context,
+          owner && service ? { owner, service } : null,
+        );
         // The workspace is where `docker build` finds its context, so it has to
         // exist — and hold the lab's baseline files — before the shell opens.
         // Only what is missing: this runs on every attach, and a reconnect must
         // not put back the baseline over the student's work (Reset restores it).
-        const workspaceDir = await workspaces.seed(claims.sid, context.workspaceFiles ?? [], 'fill');
+        await workspaces.seed(claims.sid, context.workspaceFiles ?? [], 'fill');
+        const workspaceDir = await workspaces.claimFor(claims.sid, owner);
         plan = dockerSpawnPlan(context, dockerCertDir, workspaceDir, planOptions);
         log(
           `session ${claims.sid}: issued sandbox-scoped Docker credentials (sandbox=${context.sandboxRef} host=${context.dockerHost} expires=${context.expiresAt})`,
         );
       } else {
+        owner = ownerFor(isolation, context.shellUid);
         kubeconfigPath = await writeSessionKubeconfig(
           config.credentialsDir,
           claims.sid,
           context.kubeconfig,
+          owner,
         );
-        plan = kubernetesSpawnPlan(context, kubeconfigPath, planOptions);
+        // A home of the session's own: `~/.kube/cache`, shell history and
+        // anything else a student writes there used to be one directory every
+        // Kubernetes student shared.
+        const home = await workspaces.claimFor(claims.sid, owner);
+        plan = kubernetesSpawnPlan(context, kubeconfigPath, { ...planOptions, workDir: home });
         log(
           `session ${claims.sid}: issued namespace-scoped credentials (ns=${context.namespace} sa=${context.serviceAccountName} expires=${context.expiresAt})`,
         );
@@ -1150,7 +1222,9 @@ export function createTerminalServer(
       const code =
         error instanceof CredentialsUnavailableError
           ? error.code
-          : error instanceof TerminalContextError || error instanceof WorkspacePathError
+          : error instanceof TerminalContextError ||
+              error instanceof WorkspacePathError ||
+              error instanceof ShellIdentityError
             ? error.code
             : 'CREDENTIALS_UNAVAILABLE';
       const msg = error instanceof Error ? error.message : String(error);
@@ -1211,8 +1285,15 @@ export function createTerminalServer(
         }
         term = attachment.shell;
       } else {
+        // As the session's own uid, holding nothing (SEC-ARCH-2); remembered
+        // first, so a terminate that races this spawn still finds its processes.
+        if (owner && isolation.mode === 'per-session') shellOwners.set(claims.sid, owner);
+        const spawn =
+          owner && isolation.mode === 'per-session'
+            ? sessionShellCommand(owner, isolation.maxProcesses, plan)
+            : plan;
         term = localShell(
-          { command: plan.command, args: plan.args, cwd: plan.cwd, env: plan.env },
+          { command: spawn.command, args: spawn.args, cwd: spawn.cwd, env: plan.env },
           { cols: clampCols(cols), rows: clampRows(rows) },
         );
       }
@@ -1393,7 +1474,7 @@ export function createTerminalServer(
     // not: it holds the student's own work, and it is removed when the *session*
     // ends, not when a socket drops — a reconnect must not lose their Dockerfile.
     void removeSessionKubeconfig(session.kubeconfigPath);
-    void removeSessionDockerCerts(session.dockerCertDir);
+    void removeSessionDockerCerts(session.dockerCertDir, service);
     obs.info('terminal.connection.closed', {
       sessionId: session.claims.sid,
       count: sessions.size,

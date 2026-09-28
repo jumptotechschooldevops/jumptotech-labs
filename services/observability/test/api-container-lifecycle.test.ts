@@ -72,9 +72,16 @@ describe('a stopped api shuts down, rather than being killed', () => {
     ['terminal', 'services/terminal/src/index.ts'],
     ['sandboxd', 'services/sandboxd/src/index.ts'],
   ])('%s runs as one node process, so SIGTERM reaches its own shutdown handler', (service, entry) => {
-    const cmd = /^CMD (\[.*\])$/m.exec(code(read(`infrastructure/docker/${service}.Dockerfile`)));
+    const dockerfile = code(read(`infrastructure/docker/${service}.Dockerfile`)).replace(/\\\n\s*/g, ' ');
+    const cmd = /^CMD (\[.*\])\s*$/m.exec(dockerfile);
     expect(cmd, `${service}.Dockerfile has an exec-form CMD`).not.toBeNull();
-    const argv = JSON.parse(cmd![1]!) as string[];
+    let argv = JSON.parse(cmd![1]!) as string[];
+    // The terminal is launched through `setpriv` (SEC-ARCH-2), which execs node
+    // in its own place: still one process, and the signal still reaches it.
+    if (service === 'terminal') {
+      expect(argv[0]).toBe('/usr/bin/setpriv');
+      argv = argv.slice(argv.indexOf('--') + 1);
+    }
     // Under `npx`, npm receives the signal and exits without passing it on;
     // under the tsx CLI, the child was ended before its handler ran.
     expect(argv.slice(0, 3)).toEqual(['node', '--import', 'tsx']);
