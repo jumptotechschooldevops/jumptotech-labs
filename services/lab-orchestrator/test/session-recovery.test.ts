@@ -414,6 +414,80 @@ export function sessionRecovery(
       expect((await starting).session.status).toBe('ACTIVE');
     });
 
+    // ----------------------- 1b''. a container that stopped under an ACTIVE row
+
+    /*
+     * Reliability audit 2026-09-28, host-restart drill: lab containers run
+     * `--restart no`, so after a host restart every one is stopped while its row
+     * still says ACTIVE. The terminal could not attach, Check answered
+     * ENVIRONMENT_UNREACHABLE, and the student's one slot stayed taken until
+     * idle expiry. The reaper now makes such a session DEGRADED — never deletes.
+     */
+    const stop = (w: Awaited<ReturnType<typeof world>>, ref: string, state = 'exited') => {
+      (w.runtime.containers.get(ref)!.info as { state: string }).state = state;
+    };
+
+    it('an ACTIVE session whose container stopped becomes DEGRADED on the second sweep, and Reset rebuilds it', async () => {
+      const w = await world();
+      const { session } = await w.a.manager.start('LINUX-001');
+      w.clock.now += 3 * MINUTE;
+      stop(w, session.sandboxRef!);
+
+      // One sighting is not enough: it could be a container mid-recreate.
+      expect((await w.reaper.sweep()).recovered).toEqual([]);
+      expect((await w.read(session.sessionId)).status).toBe('ACTIVE');
+
+      w.clock.now += MINUTE;
+      const sweep = await w.reaper.sweep();
+      expect(sweep.recovered).toEqual([session.sessionId]);
+      expect(sweep.removed).toEqual([]);
+      expect(await w.read(session.sessionId)).toMatchObject({
+        status: 'DEGRADED',
+        statusReason: expect.stringMatching(/stopped running/),
+      });
+      expect(w.recoveries).toEqual(['sandbox_lost']);
+      // Nothing was deleted, and the slot is still the student's.
+      expect(w.runtime.containers.has(session.sandboxRef!)).toBe(true);
+      expect(await w.b.manager.activeCount()).toBe(1);
+
+      // The student resets: a fresh container, ACTIVE again.
+      const rebuilt = await w.b.manager.reset(session.sessionId);
+      expect(rebuilt.result.ok).toBe(true);
+      expect((await w.read(session.sessionId)).status).toBe('ACTIVE');
+      expect(w.runtime.containers.get(session.sandboxRef!)!.info.state).toBe('running');
+      expect((await w.reaper.sweep()).recovered).toEqual([]);
+    });
+
+    it('leaves a running container, a just-started session and a paused container alone', async () => {
+      const w = await world();
+      const { session: running } = await w.a.manager.start('LINUX-001');
+      const { session: paused } = await w.a.manager.start('LINUX-001');
+      w.clock.now += 3 * MINUTE;
+      stop(w, paused.sandboxRef!, 'paused');
+      const { session: fresh } = await w.a.manager.start('LINUX-001');
+      stop(w, fresh.sandboxRef!);
+
+      for (let i = 0; i < 3; i += 1) {
+        w.clock.now += MINUTE / 2;
+        expect((await w.reaper.sweep()).recovered).toEqual([]);
+      }
+      for (const s of [running, paused, fresh]) expect((await w.read(s.sessionId)).status).toBe('ACTIVE');
+    });
+
+    it('a row that moved between the two sweeps is not overridden', async () => {
+      const w = await world();
+      const { session } = await w.a.manager.start('LINUX-001');
+      w.clock.now += 3 * MINUTE;
+      stop(w, session.sandboxRef!);
+      expect((await w.reaper.sweep()).recovered).toEqual([]);
+
+      // The student pressed Reset in between; the container is fine again.
+      await w.a.manager.reset(session.sessionId);
+      w.clock.now += MINUTE;
+      expect((await w.reaper.sweep()).recovered).toEqual([]);
+      expect((await w.read(session.sessionId)).status).toBe('ACTIVE');
+    });
+
     it('a start that finishes while the sweep is busy elsewhere is not torn down as abandoned', async () => {
       const w = await world();
 

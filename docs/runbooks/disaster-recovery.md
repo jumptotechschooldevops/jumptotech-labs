@@ -84,8 +84,8 @@ After an incident the operator must be able to answer three questions:
 | postgres, api, web, terminal, sandboxd, prometheus, alertmanager, grafana | return by themselves (`restart: unless-stopped`) unless an operator had stopped them; api waits for a healthy database | none; confirm with the operations §2 health check |
 | kind node `jumptotech-labs-control-plane` | restart policy `on-failure:1`, **not measured** after a reboot | if absent: `docker start jumptotech-labs-control-plane`, then `prod up -d --wait --wait-timeout 900` (production-host-readiness.md §17) |
 | NetworkPolicy attestation | not measured whether it still validates | smoke `k8s.attestation`; re-prove per RB-18 if not |
-| Running sandboxes | restart from their image, or not at all; files inside are lost | students start labs again |
-| Students' sessions | rows survive in PostgreSQL; shells drop | the reaper expires sessions at their deadlines; a student can End and Start |
+| Running sandboxes | stay **stopped** (`--restart no`); what the student wrote is in the stopped container until Reset or End removes it | none |
+| Students' sessions | rows survive in PostgreSQL, still ACTIVE, over stopped containers: the terminal cannot attach and Check answers `ENVIRONMENT_UNREACHABLE`. The reaper marks each **DEGRADED** ("needs a reset") on its second sweep once the platform is back (`jtt_reaper_recoveries_total{reason="sandbox_lost"}`) | tell students to press **Reset** (rebuilds the lab) or **End**; both were measured to work (reliability audit 2026-09-28) |
 | Cron | runs again at its next slot | none |
 
 **REAL-HOST VALIDATION REQUIRED** (drill D-6/D-7 of production-host-readiness.md §17).
