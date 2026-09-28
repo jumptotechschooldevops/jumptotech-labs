@@ -20,7 +20,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { BrokerDockerEngines } from '../src/docker/broker-engines.js';
 import { BrokerRuntime } from '../src/providers/container/broker-runtime.js';
-import { describeTransportFailure } from '../src/broker-transport.js';
+import { describeTransportFailure, transportContext } from '../src/broker-transport.js';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -60,19 +60,19 @@ describe('an unreachable broker is reported with the transport reason', () => {
   it('BrokerRuntime names a refused connection', async () => {
     const client = new BrokerRuntime({ baseUrl: await refusedUrl(), secret: 's', timeoutMs: 5_000 });
     const message = await failure(client.list('jumptotech.io/managed=true'));
-    expect(message).toMatch(/^the runtime broker is unreachable: fetch failed \(ECONNREFUSED\)$/);
+    expect(message).toMatch(/^the runtime broker is unreachable: fetch failed \(ECONNREFUSED\) during 'list' after \d+ ms$/);
   });
 
   it('BrokerRuntime names a connection dropped mid-request', async () => {
     const client = new BrokerRuntime({ baseUrl: await resettingBroker(), secret: 's', timeoutMs: 5_000 });
     const message = await failure(client.list('jumptotech.io/managed=true'));
-    expect(message).toMatch(/^the runtime broker is unreachable: fetch failed \([A-Z_]+\)$/);
+    expect(message).toMatch(/^the runtime broker is unreachable: fetch failed \([A-Z_]+\) during 'list' after \d+ ms$/);
   });
 
   it('the Docker broker client names a refused connection', async () => {
     const engines = new BrokerDockerEngines({ baseUrl: await refusedUrl(), secret: 's', timeoutMs: 5_000 });
     const message = await failure(engines.host.version());
-    expect(message).toMatch(/^the runtime broker is unreachable: fetch failed \(ECONNREFUSED\)$/);
+    expect(message).toMatch(/^the runtime broker is unreachable: fetch failed \(ECONNREFUSED\) during '[A-Za-z]+' after \d+ ms$/);
   });
 
   it('never carries the address in the cause message', async () => {
@@ -99,5 +99,20 @@ describe('describeTransportFailure', () => {
   it('ignores a code that is not a plain token', () => {
     const inner = Object.assign(new Error('x'), { code: 'connect to 10.0.0.1 failed' });
     expect(describeTransportFailure(new TypeError('fetch failed', { cause: inner }))).toBe('fetch failed');
+  });
+});
+
+describe('transportContext', () => {
+  it('names the operation and how long after sending it failed', () => {
+    expect(transportContext('exec', Date.now() - 1_500)).toMatch(/^ during 'exec' after 1[5-9]\d\d ms$/);
+  });
+
+  it('reports a verb that is not a plain token as unknown', () => {
+    expect(transportContext('exec; rm -rf /', Date.now())).toMatch(/^ during 'unknown' after \d+ ms$/);
+    expect(transportContext('', Date.now())).toMatch(/^ during 'unknown' after \d+ ms$/);
+  });
+
+  it('never reports a negative duration', () => {
+    expect(transportContext('ping', Date.now() + 60_000)).toBe(" during 'ping' after 0 ms");
   });
 });

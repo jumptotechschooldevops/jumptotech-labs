@@ -346,6 +346,23 @@ export function describeTransportFailure(error: unknown): string {
 }
 
 /**
+ * Which broker request failed, and how long after it was sent.
+ *
+ * `describeTransportFailure` says *why*; this says *where*. A five-student
+ * burst on a loaded host lost Starts to `fetch failed (ECONNRESET)` minutes
+ * after the sandbox was created, with no failed operation on the broker side,
+ * and the message could not say which request was reset. The elapsed time
+ * separates the two ways a reset happens: at once (a pooled keep-alive socket
+ * the broker had already closed) or after the broker held the request for a
+ * while (a connection torn down mid-operation). The verb is a fixed token from
+ * code, never request input; anything else is reported as `unknown`.
+ */
+export function transportContext(op: string, startedAt: number): string {
+  const verb = /^[A-Za-z]{1,32}$/.test(op) ? op : 'unknown';
+  return ` during '${verb}' after ${Math.max(0, Date.now() - startedAt)} ms`;
+}
+
+/**
  * A `fetch` for one broker.
  *
  * Plain `http://` uses the global `fetch`. `https://` goes through

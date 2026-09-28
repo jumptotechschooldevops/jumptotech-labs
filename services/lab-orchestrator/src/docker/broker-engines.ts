@@ -39,7 +39,7 @@
  * it.
  */
 import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
-import { brokerFetch, describeTransportFailure } from '../broker-transport.js';
+import { brokerFetch, describeTransportFailure, transportContext } from '../broker-transport.js';
 import {
   DockerUnreachableError,
   type CreateNetworkSpec,
@@ -126,6 +126,7 @@ class BrokerCall {
   async call<T>(op: string, payload: Record<string, unknown>): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const startedAt = Date.now();
 
     let response: Response;
     try {
@@ -149,8 +150,9 @@ class BrokerCall {
        */
       clearTimeout(timer);
       if (controller.signal.aborted) throw this.#late(op);
-      const message = describeTransportFailure(error);
-      throw new DockerUnreachableError(`the runtime broker is unreachable: ${message}`);
+      throw new DockerUnreachableError(
+        `the runtime broker is unreachable: ${describeTransportFailure(error)}${transportContext(op, startedAt)}`,
+      );
     }
 
     // The deadline covers the body too — see `BrokerRuntime.#call`.
