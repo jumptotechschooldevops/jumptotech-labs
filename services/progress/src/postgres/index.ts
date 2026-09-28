@@ -16,6 +16,7 @@ export { PostgresDatabase, type SqlExecutor, type QueryResult } from './database
 export { PostgresProgressRepository } from './repository.js';
 export {
   migrate,
+  verifySchema,
   loadMigrations,
   MigrationError,
   MIGRATIONS_DIR,

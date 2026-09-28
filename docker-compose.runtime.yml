@@ -177,6 +177,13 @@ services:
       TERRAFORM_PROVIDER_ENABLED: "true"
       ANSIBLE_PROVIDER_ENABLED: "true"
       CICD_PROVIDER_ENABLED: "true"
+      # The images those tracks start. The api reads all four; the base file
+      # passes only the Linux one, so without these a pinned tag in .env reached
+      # `make sandbox-build` and the preflight but never this service, which went
+      # on starting its built-in `:latest` — docs/runbooks/private-beta-deployment.md §7.
+      TERRAFORM_SANDBOX_IMAGE: ${TERRAFORM_SANDBOX_IMAGE:-jumptotech/lab-terraform:latest}
+      ANSIBLE_SANDBOX_IMAGE: ${ANSIBLE_SANDBOX_IMAGE:-jumptotech/lab-ansible:latest}
+      CICD_SANDBOX_IMAGE: ${CICD_SANDBOX_IMAGE:-jumptotech/lab-cicd:latest}
       # The Docker track, brokered. This service still gets no socket: with
       # SANDBOX_BROKER_URL set, `buildDockerEngines` hands the provider a
       # `BrokerDockerEngines`, whose every method is either a named broker
