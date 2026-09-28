@@ -317,6 +317,60 @@ describe('signing in and out', () => {
   });
 });
 
+// ---------------------------------------------- a sign-in that did not finish
+
+describe('coming back from a sign-in that did not complete', () => {
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('says the sign-in was cancelled, and takes the reason out of the address bar', async () => {
+    window.history.replaceState(null, '', '/?signin=cancelled#/labs/LINUX-001');
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_OUT) });
+
+    const notice = await screen.findByRole('alert');
+    expect(notice.textContent).toContain('Sign-in was cancelled');
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    // A reload must not report it again; the page the student was going to is kept.
+    expect(window.location.search).toBe('');
+    expect(window.location.hash).toBe('#/labs/LINUX-001');
+  });
+
+  it.each([
+    ['expired', 'That sign-in did not finish'],
+    ['unavailable', 'Sign-in is unavailable right now'],
+    ['failed', 'Sign-in did not complete'],
+    ['something-new', 'Sign-in did not complete'],
+  ])('explains ?signin=%s in plain words', async (reason, title) => {
+    window.history.replaceState(null, '', `/?signin=${reason}`);
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_OUT) });
+
+    expect((await screen.findByRole('alert')).textContent).toContain(title);
+  });
+
+  it('clears the notice once the student presses Sign in again', async () => {
+    window.history.replaceState(null, '', '/?signin=expired');
+    const signInImpl = vi.fn();
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_OUT), signInImpl });
+
+    await screen.findByRole('alert');
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(signInImpl).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the app, with no notice, to a browser that is signed in after all', async () => {
+    // Back to a spent sign-in page after signing in: the cookie from the first one still works.
+    window.history.replaceState(null, '', '/?signin=expired');
+    renderGate({ loadSession: () => Promise.resolve(SIGNED_IN) });
+
+    expect(await screen.findByText('the catalog')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(window.location.search).toBe('');
+  });
+});
+
 // ------------------------------------------------------------- expiry path
 
 describe('an expired session', () => {

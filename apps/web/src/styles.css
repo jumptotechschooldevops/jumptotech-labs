@@ -2271,6 +2271,11 @@ main:focus {
 .auth-gate__unconfigured p {
   margin: 0;
 }
+/* Why the sign-in the student just came back from did not complete. */
+.auth-gate__notice {
+  max-width: 52ch;
+  text-align: left;
+}
 
 /* --- motion ----------------------------------------------------------------------------------- */
 
