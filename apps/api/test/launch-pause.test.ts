@@ -161,4 +161,22 @@ describe('LAB_LAUNCHES_PAUSED', () => {
     expect((await request(resumed.app).get('/health')).body.data.sessions.launchesPaused).toBe(false);
     expect(await resumed.counter('jtt_lab_launches_paused')).toBe(0);
   });
+
+  /*
+   * Reliability audit 2026-09-28: the same refusal, from a process that is
+   * shutting down (`SessionManager.interruptInFlight`, called on SIGTERM). The
+   * student is told what a pause tells them; nothing is admitted or counted, so
+   * a deploy does not page `LabStartFailureRateElevated`.
+   */
+  it('an api that is shutting down refuses new starts as paused, and counts no start outcome', async () => {
+    const stopping = compose();
+    expect(await stopping.sessions.interruptInFlight()).toEqual({ starts: 0, resets: 0 });
+
+    const refused = await request(stopping.app).post('/api/labs/K8S-002/start').set(as('bob'));
+    expect(refused.status).toBe(503);
+    expect(refused.body.error).toMatchObject({ code: 'LAB_LAUNCHES_PAUSED', message: expect.stringMatching(/restarting/) });
+    expect((await request(stopping.app).get('/api/sessions').set(as('bob'))).body.data.sessions).toHaveLength(0);
+    expect(await stopping.counter('jtt_lab_start_outcome_total')).toBe(0);
+    expect(stopping.lines.some((line) => line.includes('lab.start.paused') && line.includes('process_stopping'))).toBe(true);
+  });
 });

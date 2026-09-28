@@ -89,6 +89,27 @@ function notActive(status: SessionStatus): SessionError {
   );
 }
 
+/**
+ * Refused because this process is shutting down (`interruptInFlight`).
+ *
+ * A start is refused with the pause switch's code, which the web already
+ * words as "paused for maintenance, running labs keep working"; a reset as
+ * not ready, which it words as "busy, try again when Ready". Both are true.
+ */
+function restarting(operation: 'start' | 'reset'): SessionError {
+  return operation === 'start'
+    ? new SessionError(
+        'LAB_LAUNCHES_PAUSED',
+        'The platform is restarting, so new labs cannot start for a moment.',
+        'Labs that are already running keep working. Try again in a minute.',
+      )
+    : new SessionError(
+        'SESSION_NOT_ACTIVE',
+        'The platform is restarting, so this lab cannot be reset for a moment.',
+        'Your lab is unchanged. Try Reset again in a minute.',
+      );
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -382,6 +403,13 @@ export class SessionManager {
   readonly #availabilityCheckTimeoutMs: number;
   readonly #log: (message: string) => void;
   readonly #metrics: SessionMetricsHooks;
+  /**
+   * The starts and resets this process is building right now, each with the
+   * status stamp of its own claim — what `interruptInFlight` fences on.
+   */
+  readonly #startsInFlight = new Map<string, string>();
+  readonly #resetsInFlight = new Map<string, string>();
+  #stopping = false;
 
   constructor(options: SessionManagerOptions) {
     if (!options.providers && !options.provider) {
@@ -459,6 +487,65 @@ export class SessionManager {
       );
     }
     return provider;
+  }
+
+  /**
+   * This process is shutting down: refuse new starts and resets, and hand the
+   * ones it is still building to the reaper now rather than in ten minutes.
+   *
+   * The api has seconds between SIGTERM and exit, and a start or reset takes
+   * up to minutes, so a deploy or restart cuts them off. Their rows were left
+   * CREATING or RESETTING, and the reaper can only tell a dead operation from
+   * a slow one by waiting out its grace period (`abandonedStartGraceMs`,
+   * `resetRecoveryGraceMs`): ten minutes behind "Preparing…" or "Resetting…",
+   * holding the student's one slot, after every restart that met a Start.
+   *
+   * This process does know its own are dying. Each is released exactly as
+   * the reaper would release it once presumed dead — a start to EXPIRING with
+   * the abandoned-start reason, which the next sweep (in whichever process
+   * runs it) tears down at once; a reset to DEGRADED, which the student can
+   * reset again or end. Every write is fenced on that operation's own claim
+   * stamp, so another instance's work, or a row that moved on meanwhile, is
+   * never touched. If the operation finishes before the process exits, it
+   * finds its claim gone and discards what it built, as after any takeover.
+   *
+   * Returns how many were handed over. Never throws: shutdown must go on.
+   */
+  async interruptInFlight(): Promise<{ starts: number; resets: number }> {
+    this.#stopping = true;
+    const handed = { starts: 0, resets: 0 };
+    const starts = [...this.#startsInFlight].map(async ([sessionId, stamp]) => {
+      try {
+        const claimed = await this.#transition(
+          sessionId,
+          ['CREATING'],
+          'EXPIRING',
+          { statusReason: ABANDONED_START_REASON },
+          { statusChangedAt: stamp },
+        );
+        if (!claimed) return;
+        handed.starts += 1;
+        this.#emit((m) => m.onTransition?.('CREATING', 'EXPIRING'));
+        this.#log(`session ${sessionId} EXPIRING: its start was interrupted by a shutdown; the reaper tears it down`);
+      } catch (error) {
+        this.#log(`session ${sessionId}: could not hand an interrupted start to the reaper — ${describeError(error)}`);
+      }
+    });
+    const resets = [...this.#resetsInFlight].map(async ([sessionId, stamp]) => {
+      try {
+        const degraded = await this.#degrade(
+          sessionId,
+          'The last reset was interrupted by a platform restart.',
+          { statusChangedAt: stamp },
+          true,
+        );
+        if (degraded) handed.resets += 1;
+      } catch (error) {
+        this.#log(`session ${sessionId}: could not release an interrupted reset — ${describeError(error)}`);
+      }
+    });
+    await Promise.all([...starts, ...resets]);
+    return handed;
   }
 
   // ----------------------------------------------------------------- start
@@ -540,9 +627,25 @@ export class SessionManager {
      * start can pass through, which is exactly what the simultaneous-starts
      * test catches.
      */
+    if (this.#stopping) throw restarting('start');
     const session = await this.#insertSession(lab, provider, ownerUserId);
     this.#emit((m) => m.onTransition?.('none', 'CREATING'));
 
+    this.#startsInFlight.set(session.sessionId, session.statusChangedAt);
+    try {
+      return await this.#buildAdmitted(lab, provider, session, hooks);
+    } finally {
+      this.#startsInFlight.delete(session.sessionId);
+    }
+  }
+
+  /** The rest of `start`, once the session holds its slot. */
+  async #buildAdmitted(
+    lab: LoadedLabDefinition,
+    provider: LabProvider,
+    session: LabSession,
+    hooks: StartHooks,
+  ): Promise<StartSessionResult> {
     if (hooks.onAdmitted) {
       try {
         await hooks.onAdmitted(session);
@@ -1029,6 +1132,7 @@ export class SessionManager {
   async reset(sessionId: string): Promise<{ session: LabSession; result: ResetResult }> {
     const session = await this.require(sessionId);
     if (!RESETTABLE_STATUSES.includes(session.status)) throw notActive(session.status);
+    if (this.#stopping) throw restarting('reset');
     const context = this.#contextFor(this.#registry.get(session.labId), session);
 
     // Pressing Reset is activity. Stamped only when the reset ends, a reset
@@ -1038,7 +1142,21 @@ export class SessionManager {
     });
     if (!claimed) throw await this.#resetConflict(sessionId);
     const fence: TransitionGuard = { statusChangedAt: claimed.statusChangedAt };
+    this.#resetsInFlight.set(sessionId, claimed.statusChangedAt);
+    try {
+      return await this.#rebuild(session, context, fence);
+    } finally {
+      this.#resetsInFlight.delete(sessionId);
+    }
+  }
 
+  /** The rest of `reset`, once it holds the RESETTING claim `fence` names. */
+  async #rebuild(
+    session: LabSession,
+    context: LabSessionContext,
+    fence: TransitionGuard,
+  ): Promise<{ session: LabSession; result: ResetResult }> {
+    const { sessionId } = session;
     let result: ResetResult;
     try {
       result = await this.#providerFor(session).reset(context);
