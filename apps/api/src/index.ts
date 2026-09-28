@@ -470,6 +470,7 @@ async function main(): Promise<void> {
     browserAuth: { users, authSessions, client: browserClient, idTokenVerifier },
     access,
     sessionEvents,
+    reaperLastSuccessMs: () => reaperLastSuccessMs,
     observability: {
       logger,
       metrics: {

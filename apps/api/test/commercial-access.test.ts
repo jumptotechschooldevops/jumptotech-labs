@@ -302,16 +302,18 @@ describe('ACCESS_POLICY=entitlement: a signed-in account is not an entitled one'
     await signIn(h, 'mallory');
     const mine = await h.userId('mallory');
 
-    // No browser route mutates access: every plausible shape is a 404.
-    for (const [method, url] of [
-      ['post', '/api/me/access'],
-      ['post', '/api/me/access/grant'],
-      ['post', `/api/access/${mine}/grant`],
-      ['post', `/api/admin/access/${mine}/grant`],
-      ['get', '/api/access'],
+    // No browser route mutates access: every plausible shape is a 404 — except
+    // under /api/admin, where the classroom view's role check refuses a student
+    // 403 before any route is matched, whether the path exists or not.
+    for (const [method, url, status] of [
+      ['post', '/api/me/access', 404],
+      ['post', '/api/me/access/grant', 404],
+      ['post', `/api/access/${mine}/grant`, 404],
+      ['post', `/api/admin/access/${mine}/grant`, 403],
+      ['get', '/api/access', 404],
     ] as const) {
       const res = await request(h.app)[method](url).set(as('mallory')).send({ until: '2099-01-01T00:00:00Z', by: 'mallory' });
-      expect(res.status, `${method} ${url}`).toBe(404);
+      expect(res.status, `${method} ${url}`).toBe(status);
     }
 
     // Fields on a Start body are not read: mass assignment has nothing to assign to.

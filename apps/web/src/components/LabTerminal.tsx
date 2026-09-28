@@ -87,6 +87,29 @@ const THEME = {
   white: '#d7e0f2',
 } as const;
 
+/**
+ * Whether a connection that just became ready may move keyboard focus into the
+ * terminal.
+ *
+ * Usually yes: a student who pressed Launch, Reconnect or Try again wants to
+ * type. But `ready` also arrives by itself — an automatic reconnect, the first
+ * connect of a slow attach — and by then the student may be somewhere else on
+ * purpose: in "End this lab?", whose focus trap stops working once focus has
+ * left it, or typing in a field. Those keep their focus.
+ */
+function mayTakeFocus(container: HTMLElement | null): boolean {
+  const active = document.activeElement;
+  if (!active || active === document.body) return true;
+  if (container?.contains(active)) return true;
+  if (active.closest('[aria-modal="true"]')) return false;
+  return !(
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLTextAreaElement ||
+    active instanceof HTMLSelectElement ||
+    (active instanceof HTMLElement && active.isContentEditable)
+  );
+}
+
 export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(function LabTerminal(
   { grant, connectKey = 0, onEvent },
   ref,
@@ -289,7 +312,7 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
               if (socket!.readyState === WebSocket.OPEN) socket!.send(JSON.stringify({ type: 'ping' }));
             }, 30_000);
             eventRef.current({ status: 'connected' });
-            term.focus();
+            if (mayTakeFocus(containerRef.current)) term.focus();
             break;
 
           case 'reattached':

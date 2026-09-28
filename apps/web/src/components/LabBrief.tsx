@@ -15,7 +15,7 @@ import { hrefFor } from '../lib/router';
 import { formatMinutes, skillLabel } from '../lib/format';
 import type { CheckResult, LabDetail, LabHint } from '../lib/types';
 import { HintPanel } from './HintPanel';
-import { InlineText, Paragraphs } from './RichText';
+import { InlineText, RichText } from './RichText';
 import { DifficultyBadge } from './ui';
 
 /**
@@ -82,7 +82,7 @@ export function LabBrief({
         <p className="brief__lead">
           <InlineText text={lab.task.summary} />
         </p>
-        <Paragraphs text={lab.task.description} className="brief__body" />
+        <RichText text={lab.task.description} className="brief__body" />
       </section>
 
       <section className="brief__section" aria-labelledby={`${lab.id}-checks`}>
@@ -131,7 +131,7 @@ export function LabBrief({
           <h2 className="brief__heading" id={`${lab.id}-story`}>
             Scenario
           </h2>
-          <Paragraphs text={lab.story} className="brief__story" />
+          <RichText text={lab.story} className="brief__story" />
         </section>
       ) : null}
 

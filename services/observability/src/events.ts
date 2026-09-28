@@ -141,6 +141,8 @@ export const LOG_EVENTS = [
   // describes went ahead regardless.
   'session_event.write_failed',
   'session_events.purged',
+  // A staff member ended a student's lab from the classroom view.
+  'classroom.session_ended',
 
   // --- commercial access (docs/commercial-access.md §10) ----------------------
   // The plans and trial terms this process loaded, at startup.

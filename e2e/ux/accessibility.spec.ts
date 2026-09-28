@@ -61,8 +61,7 @@ test('the workspace passes the audit in each state a student meets', async ({ pa
   await expectClean(page, 'ended summary with the next lab');
 });
 
-// Known defect on main, fixed in its own PR: an expired sign-in and an unreachable API are not explained.
-test.fixme('the sign-in gate passes the audit: signed out, expired and unreachable', async ({ page, platform }) => {
+test('the sign-in gate passes the audit: signed out, expired and unreachable', async ({ page, platform }) => {
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
   await expectClean(page, 'signed out');
@@ -102,8 +101,7 @@ test('lab state is announced: the status line, the terminal line and the verdict
   await expect(page.locator('.active-lab')).toContainText(', Ready');
 });
 
-// Known defect on main, fixed in its own PR: the preparing card's elapsed seconds tick inside a live region.
-test.fixme('nothing ticking inside a live region: a starting lab is announced once, not every second', async ({ page, platform }) => {
+test('nothing ticking inside a live region: a starting lab is announced once, not every second', async ({ page, platform }) => {
   await page.clock.install();
   await openSignedIn(page, platform, undefined, '#/labs/LINUX-001');
   const start = platform.hold('start');
