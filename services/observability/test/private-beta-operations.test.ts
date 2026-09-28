@@ -439,6 +439,14 @@ describe('the private-beta operator dashboard', () => {
 
   it.each([
     ['firing alerts', 'ALERTS{'],
+    // Reliability audit 2026-09-28: the indicators themselves, against their
+    // objectives (docs/beta-slo-indicators.md), not only their alerts.
+    ['the start success indicator', 'jtt:lab_start_failure:ratio10m'],
+    ['the provisioning latency indicator', 'jtt:lab_provision_duration:p95_15m'],
+    ['the terminal attach indicator', 'jtt:terminal_connection_failure:ratio10m'],
+    ['the API availability indicator', 'jtt:http_error:ratio10m{service="api"}'],
+    ['the API latency indicator', 'jtt:http_duration:p95_10m{service="api"}'],
+    ['the verification indicator', 'jtt:verification_error:ratio10m'],
     ['service health', 'up{job=~"api|terminal|sandboxd"}'],
     ['API readiness', 'jtt_readyz_ok'],
     ['PostgreSQL', 'jtt_db_up'],
