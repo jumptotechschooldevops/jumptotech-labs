@@ -155,6 +155,7 @@ served on port 80, and `labs/`, mounted into the api. Fixed in the script and in
 | 004_auth_sessions | creates `auth_sessions` | no | yes | additive |
 | 005_session_recovery | adds `status_changed_at` (backfilled, NOT NULL with default), widens the status `CHECK` to include `DEGRADED` | no data removed; the CHECK is dropped and re-added in the same transaction | yes | pre-005 code inserts work (default); it may meet `DEGRADED` rows it does not know |
 | 006_access_entitlements (after this audit) | creates `access_entitlements`, `access_events`, index `users_by_lower_email` | no | yes | additive; pre-006 code ignores the tables, and with D2 the production api refuses to start on it unless `DATABASE_ALLOW_NEWER_SCHEMA=true` |
+| 007_session_shell_uid (SEC-ARCH-2, after this audit) | creates `lab_session_shell_uid_seq` (1900000000–1900999999, `NO CYCLE`) and adds `lab_sessions.shell_uid` (`NOT NULL`, `DEFAULT nextval`, range `CHECK`, `UNIQUE`); existing rows get distinct values | no | yes | pre-007 code inserts work (the default assigns the uid) and ignores the column; with D2 the production api refuses to start on it unless `DATABASE_ALLOW_NEWER_SCHEMA=true`. A terminal that runs shells per uid needs a post-007 api, so roll the terminal back with it |
 
 Ordering by numeric prefix; names validated; immutability enforced by checksum;
 concurrent starts serialised by an advisory lock; repeat execution is a no-op; a

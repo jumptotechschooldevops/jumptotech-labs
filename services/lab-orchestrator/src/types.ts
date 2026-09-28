@@ -261,6 +261,12 @@ export type TerminalContext =
       expiresAt: string;
       /** Extra environment for the shell. Never secrets. */
       env?: Record<string, string>;
+      /**
+       * The uid this session's shell runs as — SEC-ARCH-2. Set by the session
+       * manager from the stored row, never by a provider; see
+       * `session/shell-identity.ts`.
+       */
+      shellUid?: number;
     }
   /** A PTY attached to this session's sandbox container (Linux/Terraform). */
   | {
@@ -310,6 +316,8 @@ export type TerminalContext =
       env?: Record<string, string>;
       /** ISO-8601 expiry. Bounded by the session's own deadline. */
       expiresAt: string;
+      /** As for `kubernetes`: the session's own shell uid, from the stored row. */
+      shellUid?: number;
     };
 
 /** True when this session's shell drives its own private Docker daemon. */

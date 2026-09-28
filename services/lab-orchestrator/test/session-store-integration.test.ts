@@ -34,6 +34,7 @@ import {
 import { sessionLifecycleRaces } from './session-lifecycle-races.test.js';
 import { sessionRecovery } from './session-recovery.test.js';
 import { perStudentCapacity } from './session-per-student-capacity.test.js';
+import { sessionShellIdentity } from './session-shell-identity.test.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const enabled = process.env.RUN_DB_TESTS === '1' && typeof url === 'string' && url.length > 0;
@@ -82,6 +83,53 @@ if (!enabled) {
 
   // The same contract the in-memory store satisfies, against real SQL.
   sessionStoreContract('PostgresSessionStore', fresh);
+
+  // SEC-ARCH-2: the shell uid comes from migration 007's sequence, UNIQUE and
+  // CHECK. "Reopening" is a second store over the same database, which is all
+  // an api restart is to a session row.
+  sessionShellIdentity('PostgresSessionStore', async () => ({
+    store: await fresh(),
+    reopen: () => new PostgresSessionStore(database),
+  }));
+
+  describe('PostgresSessionStore — the shell uid is the database’s to choose', () => {
+    it('refuses a session when the range is spent, rather than wrapping', async () => {
+      const store = await fresh();
+      const { rows } = await database.query<{ last_value: string; is_called: boolean }>(
+        'SELECT last_value, is_called FROM lab_session_shell_uid_seq',
+      );
+      try {
+        await database.query("SELECT setval('lab_session_shell_uid_seq', 1900999999, true)");
+        await expect(store.create(seat('spn', 0))).rejects.toThrow();
+        expect(await store.list()).toHaveLength(0);
+      } finally {
+        // Put the sequence back where it was, so later suites keep allocating.
+        await database.query('SELECT setval($1, $2, $3)', [
+          'lab_session_shell_uid_seq',
+          rows[0]!.last_value,
+          rows[0]!.is_called,
+        ]);
+      }
+    });
+
+    it('rejects a hand-written row with a uid outside the range or already taken', async () => {
+      const store = await fresh();
+      await store.create(seat('hnd', 0));
+      const [taken] = await store.list();
+      const insert = (sessionId: string, uid: number) =>
+        database.query(
+          `INSERT INTO lab_sessions (session_id, lab_id, provider, sandbox_kind, sandbox_ref, namespace,
+             service_account_name, status, environment_id, created_at, last_activity_at, expires_at,
+             idle_timeout_seconds, idle_warning_seconds, shell_uid)
+           VALUES ($1, 'LINUX-001', 'linux', 'container', $2, $2, 'student', 'CREATING', '', now(), now(),
+             now() + interval '1 hour', 1200, 300, $3)`,
+          [sessionId, `jtt-lab-${sessionId.slice(-12)}`, uid],
+        );
+      await expect(insert('sess-0000hnd00001', 1001)).rejects.toThrow(/lab_sessions_shell_uid_range/);
+      await expect(insert('sess-0000hnd00002', 0)).rejects.toThrow(/lab_sessions_shell_uid_range/);
+      await expect(insert('sess-0000hnd00003', taken!.shellUid!)).rejects.toThrow(/lab_sessions_shell_uid_unique/);
+    });
+  });
 
   // BETA-P0-006: the manager's lifecycle races, decided by PostgreSQL. Each
   // "instance" reaches the row through its own pooled connections.
@@ -137,8 +185,11 @@ if (!enabled) {
       const created = session({ status: 'ACTIVE', environmentId: 'kind:x/y#LINUX-001' });
       await writer.create(created);
 
+      const assigned = (await writer.get(created.sessionId))!.shellUid;
       const afterRestart = new PostgresSessionStore(database);
-      expect(await afterRestart.get(created.sessionId)).toEqual(created);
+      // The same row — including the shell uid its INSERT was given (SEC-ARCH-2).
+      expect(await afterRestart.get(created.sessionId)).toEqual({ ...created, shellUid: assigned });
+      expect(assigned).toBeGreaterThanOrEqual(1_900_000_000);
     });
 
     it('lets a second instance resolve and advance a session the first started', async () => {

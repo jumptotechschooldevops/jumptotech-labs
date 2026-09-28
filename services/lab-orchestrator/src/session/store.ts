@@ -11,6 +11,7 @@
  * exists — the cluster is. The reaper reconciles the two, which is what makes
  * an API restart survivable even though this store is not.
  */
+import { SHELL_UID_MAX, SHELL_UID_MIN, ShellUidExhaustedError } from './shell-identity.js';
 import {
   acceptsActivity,
   occupiesCapacity,
@@ -187,10 +188,33 @@ export interface SessionStore {
 
 export class InMemorySessionStore implements SessionStore {
   readonly #bySessionId = new Map<string, LabSession>();
+  /** The next shell uid to assign. Only ever increases: see `shell-identity.ts`. */
+  #nextShellUid: number;
+
+  /**
+   * `firstShellUid` exists so a test can reach the end of the range without
+   * creating a million sessions. Nothing outside tests passes it.
+   */
+  constructor(options: { firstShellUid?: number } = {}) {
+    this.#nextShellUid = options.firstShellUid ?? SHELL_UID_MIN;
+  }
 
   async create(session: LabSession): Promise<void> {
     this.#assertInsertable(session);
-    this.#bySessionId.set(session.sessionId, { ...session });
+    this.#bySessionId.set(session.sessionId, this.#withShellUid(session));
+  }
+
+  /**
+   * The row as stored: the caller's session with a uid this store chose.
+   *
+   * Whatever `shellUid` the caller supplied is discarded, exactly as the
+   * durable store ignores it — the column is filled by its sequence default.
+   */
+  #withShellUid(session: LabSession): LabSession {
+    if (this.#nextShellUid > SHELL_UID_MAX) throw new ShellUidExhaustedError();
+    const shellUid = this.#nextShellUid;
+    this.#nextShellUid += 1;
+    return { ...session, shellUid };
   }
 
   /**
@@ -237,6 +261,7 @@ export class InMemorySessionStore implements SessionStore {
       sandboxRef: _ignoredRef,
       provider: _ignoredProvider,
       sandboxKind: _ignoredKind,
+      shellUid: _ignoredShellUid,
       ...safe
     } = patch;
     const next: LabSession = { ...current, ...safe };
@@ -363,7 +388,7 @@ export class InMemorySessionStore implements SessionStore {
     const decision = decideCapacity(session, limits, occupied, ownerOccupied);
     if (!decision.admitted) return decision;
     this.#assertInsertable(session);
-    this.#bySessionId.set(session.sessionId, { ...session });
+    this.#bySessionId.set(session.sessionId, this.#withShellUid(session));
     return decision;
   }
 }

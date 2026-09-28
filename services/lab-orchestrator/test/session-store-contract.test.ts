@@ -59,7 +59,9 @@ export function sessionStoreContract(
       const created = session();
       await store.create(created);
 
-      expect(await store.get(created.sessionId)).toEqual(created);
+      // Everything the caller gave back unchanged, plus the shell uid the store
+      // assigned (SEC-ARCH-2) — `session-shell-identity.test.ts` pins that one.
+      expect(await store.get(created.sessionId)).toEqual({ ...created, shellUid: expect.any(Number) });
     });
 
     it('refuses a duplicate session id', async () => {
@@ -231,7 +233,7 @@ export function sessionStoreContract(
       const created = session({ status: 'DEGRADED', lastActivityAt: '2026-08-25T11:00:00.000Z', idleTimeoutSeconds: 600 });
       await store.create(created);
 
-      expect(await store.get(created.sessionId)).toEqual(created);
+      expect(await store.get(created.sessionId)).toEqual({ ...created, shellUid: expect.any(Number) });
       expect(await store.countOccupying()).toBe(1);
       expect(await store.touchActivity(created.sessionId, HOUR_LATER)).toBeNull();
       expect((await store.listExpirable(NOW)).map((s) => s.sessionId)).toEqual([created.sessionId]);
