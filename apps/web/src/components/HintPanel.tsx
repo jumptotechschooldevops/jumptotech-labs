@@ -27,6 +27,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { LabHint } from '../lib/types';
+import { RichText } from './RichText';
 
 export interface HintPanelProps {
   hints: LabHint[];
@@ -77,7 +78,9 @@ export function HintPanel({ hints, onReveal, alreadyRevealed = 0 }: HintPanelPro
         {hints.slice(0, revealed).map((hint) => (
           <li key={hint.level} className="hints__item">
             <span className="hints__level">Hint {hint.level}</span>
-            <p className="hints__text">{hint.text}</p>
+            <div className="hints__body">
+              <RichText text={hint.text} className="hints__text" />
+            </div>
           </li>
         ))}
       </ol>
