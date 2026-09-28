@@ -28,7 +28,7 @@ import {
   sessionInfo,
   verification,
 } from '../../../apps/web/test/payloads.js';
-import type { AttemptSummary, SessionInfo } from '../../../apps/web/src/lib/types.js';
+import type { AttemptSummary, LabDetail, SessionInfo } from '../../../apps/web/src/lib/types.js';
 
 export interface Student {
   /** OIDC subject; also what the fake identity provider signs in as. */
@@ -110,6 +110,8 @@ export class FakePlatform {
   refuseTokens = 0;
   /** Lab titles to serve instead of the builders' short ones (long titles are the layout risk). */
   readonly titles = new Map<string, string>();
+  /** Lab detail fields to serve instead of the builder's (a description with lists, code and a table). */
+  readonly details = new Map<string, Partial<LabDetail>>();
 
   private gates = new Map<Action, Gate>();
   private failures = new Map<Action, Array<ApiFailure | 'abort'>>();
@@ -343,7 +345,15 @@ export class FakePlatform {
       if (await this.failure(route, 'lab')) return;
       const summary = LABS.find((lab) => lab.id === labMatch[1]);
       if (!summary) return this.error(route, 404, 'LAB_NOT_FOUND', 'No such lab');
-      return this.ok(route, labDetail({ id: summary.id, title: this.titles.get(summary.id) ?? summary.title, track: summary.track }));
+      return this.ok(
+        route,
+        labDetail({
+          id: summary.id,
+          title: this.titles.get(summary.id) ?? summary.title,
+          track: summary.track,
+          ...this.details.get(summary.id),
+        }),
+      );
     }
     if (call === 'GET /api/me/access') {
       // An open deployment: every signed-in student may use labs (docs/commercial-access.md).
