@@ -247,6 +247,8 @@ describe('the caller cannot choose what runs', () => {
     expect(spec.image).toBe(POLICY.image);
     expect(spec.network).toBe(POLICY.network);
     expect(spec.memory).toBe(POLICY.memory);
+    // The memory ceiling includes swap: no growth past it on a host with swap.
+    expect(spec.memorySwap).toBe(POLICY.memory);
     expect(spec.privileged).toBe(true);
     expect(spec.command).toBeUndefined();
     // Only the session's own data volume, and no bind mount is expressible.

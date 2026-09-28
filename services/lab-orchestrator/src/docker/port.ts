@@ -255,6 +255,11 @@ export interface RunContainerSpec {
   privileged?: boolean;
   /** `--memory`, e.g. `2g`. */
   memory?: string;
+  /**
+   * `--memory-swap`: memory plus swap. Unset, Docker allows twice `memory` on a
+   * host with swap, so a ceiling meant to be real passes the same value as `memory`.
+   */
+  memorySwap?: string;
   /** `--cpus`, e.g. `1.5`. */
   cpus?: string;
   /** `--pids-limit`. */
