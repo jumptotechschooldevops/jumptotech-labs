@@ -791,3 +791,25 @@ in 6.4 min on a clean stack, 0 containers left. After later web-only commits,
 13/15 and then 0/2 (five-students, isolation) at load 18–20, with the kept
 stack's logs showing PostgreSQL connection timeouts (`db.down`) caused by the
 shared Docker VM, not the change (report §3). Not yet in CI.
+
+## 19. The browser UX suite (no stack) — 2026-09-28
+
+`npm run test:e2e:ux` builds the production web bundle, serves it with
+`vite preview`, and drives it in real Chromium against an in-test fake
+platform (`e2e/ux/support/platform.ts`) that answers `/api`, `/auth` and the
+`/terminal` WebSocket from memory. The preview server's proxies point at a
+closed port, so a request the fake does not know fails the test instead of
+reaching another stack on the machine. No Docker, no database, no secrets; 55
+tests in about a minute. CI runs it as the `browser-ux` job.
+
+It covers what the stack suite cannot put on cue: a check that answers after
+End, a terminal that is refused three times, a sign-in that expires mid-lab,
+double clicks, reloads and Back in every workspace state, keyboard-only use
+and focus, five students in one browser, injected API and terminal failures,
+layout at six window sizes, and a semantic accessibility audit of every page.
+The payload builders are shared with the web unit tests
+(`apps/web/test/payloads.ts`), so both describe the API in the same shapes.
+
+It first ran on `feat/overnight-browser-quality` (2026-09-21). Against main
+`bcaf902` it passed 45 of 55; the 10 that failed are real defects on main,
+marked `test.fixme` with the defect named, and each fix PR re-enables its own.

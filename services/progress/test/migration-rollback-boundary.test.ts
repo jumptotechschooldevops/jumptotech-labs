@@ -14,7 +14,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MigrationError, loadMigrations, migrate } from '../src/postgres/migrator.js';
+import { MigrationError, loadMigrations, migrate, verifySchema } from '../src/postgres/migrator.js';
 import type { QueryResult, SqlExecutor } from '../src/postgres/database.js';
 
 async function migrationsDir(files: Record<string, string>): Promise<string> {
@@ -159,5 +159,86 @@ describe('a database initialised from nothing', () => {
     expect(report.initialized).toBe(false);
     expect(report.applied).toEqual(['002_two']);
     expect(report.ledgerStartedAt?.toISOString()).toBe('2026-01-02T03:04:05.000Z');
+  });
+});
+
+/**
+ * The same boundary with DATABASE_AUTO_MIGRATE=false (production-deployment
+ * audit). The api used to only ping the database on that path, so an older
+ * release started on a newer schema without a word, and a newer release started
+ * on a schema missing its migrations and failed on its first query instead.
+ */
+describe('verifying the schema without migrating', () => {
+  /** `recorded` null: the ledger table does not exist. */
+  function readOnlyDatabase(recorded: Array<{ version: string; checksum: string }> | null) {
+    const statements: string[] = [];
+    const client: SqlExecutor = {
+      async query<R>(text: string): Promise<QueryResult<R>> {
+        const sql = text.trim().replace(/\s+/g, ' ');
+        statements.push(sql);
+        if (sql.includes('to_regclass')) {
+          return { rows: [{ ledger: recorded === null ? null : 'schema_migrations' }] as R[], rowCount: 1 } as QueryResult<R>;
+        }
+        if (sql.startsWith('SELECT version, checksum FROM schema_migrations')) {
+          return { rows: (recorded ?? []) as R[], rowCount: recorded?.length ?? 0 } as QueryResult<R>;
+        }
+        throw new Error(`unexpected statement: ${sql}`);
+      },
+    };
+    return { statements, database: { session: <T>(work: (c: SqlExecutor) => Promise<T>) => work(client) } };
+  }
+
+  it('accepts a database that holds exactly what this release ships, and changes nothing', async () => {
+    const dir = await migrationsDir(FILES);
+    const shipped = await loadMigrations(dir);
+    const { database, statements } = readOnlyDatabase(shipped.map((m) => ({ version: m.version, checksum: m.checksum })));
+    const report = await verifySchema(database, { dir });
+    expect(report).toMatchObject({ applied: [], skipped: ['001_one', '002_two'], unknown: [] });
+    // Only reads: no lock, no ledger creation, no DDL.
+    expect(statements.every((s) => s.startsWith('SELECT'))).toBe(true);
+    expect(statements.join('\n')).not.toMatch(/advisory|CREATE|BEGIN/);
+  });
+
+  it('refuses a database a newer release migrated, unless the rollback is explicit', async () => {
+    const dir = await migrationsDir(FILES);
+    const shipped = await loadMigrations(dir);
+    const recorded = [
+      ...shipped.map((m) => ({ version: m.version, checksum: m.checksum })),
+      { version: '003_three', checksum: 'f'.repeat(64) },
+    ];
+    await expect(verifySchema(readOnlyDatabase(recorded).database, { dir })).rejects.toThrow(/003_three/);
+    const report = await verifySchema(readOnlyDatabase(recorded).database, { dir, allowNewerSchema: true });
+    expect(report.unknown).toEqual(['003_three']);
+  });
+
+  it('refuses a database missing a migration this release needs, naming it and db:migrate', async () => {
+    const dir = await migrationsDir(FILES);
+    const shipped = await loadMigrations(dir);
+    const { database } = readOnlyDatabase([{ version: '001_one', checksum: shipped[0]!.checksum }]);
+    const error = await verifySchema(database, { dir, allowNewerSchema: true }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(MigrationError);
+    if (!(error instanceof MigrationError)) return;
+    expect(error.message).toMatch(/002_two/);
+    expect(error.remediation).toMatch(/db:migrate/);
+  });
+
+  it('refuses an empty database with no ledger rather than creating one', async () => {
+    const dir = await migrationsDir(FILES);
+    const { database, statements } = readOnlyDatabase(null);
+    await expect(verifySchema(database, { dir })).rejects.toThrow(/001_one, 002_two/);
+    expect(statements).toHaveLength(1);
+  });
+
+  it('refuses a migration edited after it was applied', async () => {
+    const dir = await migrationsDir(FILES);
+    const shipped = await loadMigrations(dir);
+    const { database } = readOnlyDatabase([
+      { version: '001_one', checksum: '0'.repeat(64) },
+      { version: '002_two', checksum: shipped[1]!.checksum },
+    ]);
+    await expect(verifySchema(database, { dir })).rejects.toThrow(/001_one\.sql was modified/);
   });
 });

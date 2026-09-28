@@ -51,7 +51,8 @@
     "e2e:up": "bash e2e/stack.sh up",
     "e2e:down": "bash e2e/stack.sh down",
     "test:e2e": "bash e2e/stack.sh run",
-    "test:e2e:running": "playwright test --config e2e/playwright.config.ts"
+    "test:e2e:running": "playwright test --config e2e/playwright.config.ts",
+    "test:e2e:ux": "npm run build --workspace @jumptotech/web && playwright test --config e2e/playwright.ux.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
