@@ -437,6 +437,24 @@ this deployment's secret values before packaging and deletes the bundle if it
 finds one. Send the archive, never `.env`, `docker inspect`,
 `docker compose config` or raw logs.
 
+### 7.4 Making someone an instructor or an administrator
+
+Every account signs in as `STUDENT`; a sign-in never changes a role. An
+`INSTRUCTOR` can read the classroom view (`#/classroom`); an `ADMIN` can also
+end a student's lab from it. To change a role:
+
+```bash
+ops access find --email teacher@example.com     # the account's <user-id>; it must have signed in once
+ops role show <user-id>
+ops role set <user-id> INSTRUCTOR --by <you> --reason "teaches cohort 3"
+```
+
+The api applies it on that account's next request; the Classroom link appears
+when they reload the page. `ops role set <user-id> STUDENT …` takes it away.
+Each change is logged as `ops.operator.role_changed` (the account, before and
+after, and in the message who and why) and counted
+(`jtt_operator_actions_total{action="role_set"}`). Never change roles with SQL.
+
 ## 8. DECISION REQUIRED
 
 | Decision | Until it is made |

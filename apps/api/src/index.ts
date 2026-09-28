@@ -524,6 +524,7 @@ async function main(): Promise<void> {
           reaperLastSuccessMs: () => reaperLastSuccessMs,
           reaperIntervalSeconds: config.reaperIntervalSeconds,
           access: { store: accessStore, policy: config.accessPolicy },
+          users,
         }),
       })
     : null;

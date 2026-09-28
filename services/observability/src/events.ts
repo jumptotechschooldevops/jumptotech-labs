@@ -131,6 +131,8 @@ export const LOG_EVENTS = [
   'ops.operator_socket.failed',
   'ops.operator.request',
   'ops.operator.session_ended',
+  // An account's role changed — STUDENT, INSTRUCTOR or ADMIN — by an operator.
+  'ops.operator.role_changed',
   // A grant, suspend, restore or revoke of a student's lab access (docs/commercial-access.md).
   'ops.operator.access_changed',
 ] as const;
