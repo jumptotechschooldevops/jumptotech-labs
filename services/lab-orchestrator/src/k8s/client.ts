@@ -175,7 +175,11 @@ type ResourceHandlers = {
 export interface KubernetesClientOptions {
   /** Path to a kubeconfig file. Falls back to in-cluster / default rules. */
   kubeconfigPath?: string;
-  /** Context name to select from the kubeconfig. */
+  /**
+   * Context to use, whatever the kubeconfig's current-context says. When the
+   * kubeconfig has no such context the client refuses every request rather
+   * than falling back to the current one.
+   */
   context?: string;
   /** Deadline for one API request (default `DEFAULT_KUBERNETES_REQUEST_TIMEOUT_MS`). */
   requestTimeoutMs?: number;
@@ -205,11 +209,15 @@ type KubeRequestContext = Parameters<k8s.KubeConfig['applySecurityAuthentication
  * passes through. A caller's own signal, where one was set, is left alone.
  */
 class DeadlineKubeConfig extends k8s.KubeConfig {
+  /** Set when the requested context is absent: every request fails here, before any network. */
+  refusal: string | undefined;
+
   constructor(private readonly requestTimeoutMs: number) {
     super();
   }
 
   override async applySecurityAuthentication(context: KubeRequestContext): Promise<void> {
+    if (this.refusal) throw new KubernetesUnreachableError(this.refusal);
     await super.applySecurityAuthentication(context);
     if (!context.getSignal()) context.setSignal(AbortSignal.timeout(this.requestTimeoutMs));
   }
@@ -311,7 +319,21 @@ export class KubernetesClient implements KubernetesPort {
     } else {
       kc.loadFromDefault();
     }
-    if (options.context) kc.setCurrentContext(options.context);
+    // A named context is a requirement, not a preference. `loadFromDefault`
+    // honours whatever `kubectl config use-context` last chose, and a
+    // developer's ~/.kube/config routinely holds real clusters beside kind; a
+    // missing context used to leave that current-context in force, so a Start
+    // created lab namespaces and minted student tokens there. Now nothing is
+    // sent anywhere: the cluster below is unroutable and every request is
+    // refused before it is authenticated.
+    if (options.context && !kc.getContextObject(options.context)) {
+      kc.refusal =
+        `kubeconfig has no context '${options.context}'; refusing to fall back to ` +
+        `its current context. Create the cluster (npm run cluster:up) or set LAB_KUBE_CONTEXT.`;
+      kc.loadFromClusterAndUser({ name: 'refused', server: 'https://kube-context-refused.invalid', skipTLSVerify: false }, { name: 'refused' });
+    } else if (options.context) {
+      kc.setCurrentContext(options.context);
+    }
 
     const cluster = kc.getCurrentCluster();
     this.#serverUrl = cluster?.server ?? '<unknown>';

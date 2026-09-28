@@ -121,6 +121,12 @@ export interface ApiConfig {
   provider: string;
   clusterName: string;
   kubeconfigPath: string | undefined;
+  /**
+   * The only kubeconfig context the api will use: `LAB_KUBE_CONTEXT`, else
+   * `kind-<LAB_CLUSTER_NAME>` (the name kind gives it). Never the kubeconfig's
+   * current-context, which on a developer machine can be a real cluster.
+   */
+  kubeContext: string;
   allowedOrigins: string[];
   terminalSessionSecret: string;
   terminalSessionTtlSeconds: number;
@@ -554,6 +560,16 @@ function listFromEnv(env: NodeJS.ProcessEnv, name: string, fallback: string[]): 
     .split(/[\s,]+/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+/**
+ * The only kubeconfig context the platform uses (red-team O10):
+ * `LAB_KUBE_CONTEXT`, else `kind-<LAB_CLUSTER_NAME>`, the name `kind` gives the
+ * context it writes. Never the kubeconfig's current-context, which on a
+ * developer's machine may be a real cluster.
+ */
+export function resolveKubeContext(env: NodeJS.ProcessEnv = process.env): string {
+  return env.LAB_KUBE_CONTEXT?.trim() || `kind-${env.LAB_CLUSTER_NAME ?? 'jumptotech-labs'}`;
 }
 
 /**
@@ -1023,6 +1039,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     provider: env.LAB_PROVIDER ?? 'kind',
     clusterName: env.LAB_CLUSTER_NAME ?? 'jumptotech-labs',
     kubeconfigPath: env.KUBECONFIG || undefined,
+    kubeContext: resolveKubeContext(env),
     allowedOrigins,
     terminalSessionSecret: secret,
     terminalSessionTtlSeconds: intFromEnv(env, 'TERMINAL_SESSION_TTL_SECONDS', 3600),

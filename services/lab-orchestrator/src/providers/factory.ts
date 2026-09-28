@@ -33,6 +33,12 @@ export interface ProviderFactoryOptions {
    */
   runtimeOwner: string;
   kubeconfigPath?: string;
+  /**
+   * The kubeconfig context every Kubernetes call must use. Required by the api;
+   * when the kubeconfig lacks it, the client refuses instead of using the
+   * current-context (see `KubernetesClientOptions.context`).
+   */
+  kubeContext?: string;
   /** Injected in tests to avoid touching a real cluster. */
   k8s?: KubernetesPort;
   /** Confirms a lab's declared initial state actually materialised. */
@@ -54,9 +60,10 @@ export function createLabProvider(options: ProviderFactoryOptions): LabProvider 
 
   const k8s =
     options.k8s ??
-    new KubernetesClient(
-      options.kubeconfigPath ? { kubeconfigPath: options.kubeconfigPath } : {},
-    );
+    new KubernetesClient({
+      ...(options.kubeconfigPath ? { kubeconfigPath: options.kubeconfigPath } : {}),
+      ...(options.kubeContext ? { context: options.kubeContext } : {}),
+    });
 
   switch (options.provider) {
     case 'kind':
@@ -65,6 +72,7 @@ export function createLabProvider(options: ProviderFactoryOptions): LabProvider 
         clusterName: options.clusterName,
         runtimeOwner: options.runtimeOwner,
         ...(options.kubeconfigPath ? { kubeconfigPath: options.kubeconfigPath } : {}),
+        ...(options.kubeContext ? { kubeContext: options.kubeContext } : {}),
         ...(options.waitForRequirements ? { waitForRequirements: options.waitForRequirements } : {}),
         ...(options.networkPolicyAttestation
           ? { networkPolicyAttestation: options.networkPolicyAttestation }

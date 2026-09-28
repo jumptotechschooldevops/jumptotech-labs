@@ -2908,7 +2908,7 @@ async function buildApp(registry: LabRegistry): Promise<Express> {
   // A cluster is never touched: no lab in this sweep is a Kubernetes lab.
   const { k8s, engines, workspace, providers, ansible } = buildSandboxComposition({
     config,
-    k8s: new KubernetesClient({}),
+    k8s: new KubernetesClient({ context: config.kubeContext }),
     containerRuntime: runtime,
   });
   const sessions = new SessionManager({

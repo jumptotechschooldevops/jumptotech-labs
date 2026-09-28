@@ -7,6 +7,8 @@
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -471,5 +473,76 @@ describe('the Docker engine a deployment gets', () => {
     await expect(brokered.host.pullImage('alpine')).rejects.toThrow(/not a brokered Docker operation/);
     await expect(brokered.host.listImages()).rejects.toThrow(/not a brokered Docker operation/);
     await expect(brokered.host.removeNetwork('x')).rejects.toThrow(/not a brokered Docker operation/);
+  });
+});
+
+// Red-team O10. A host-run api (`npm run dev:api`) has no KUBECONFIG, so the
+// client read ~/.kube/config and used its current-context — on the machine this
+// was found on, one of several real EKS clusters. The endpoint below is the one
+// a student's kubeconfig is built from, so it is what a Start would have handed
+// a student shell.
+describe('buildSandboxComposition — Kubernetes context', () => {
+  const PRODUCTION = 'https://prod-eks.example.invalid';
+  const KIND = 'https://127.0.0.1:1';
+  let dir: string;
+  let kubeconfig: string;
+  const saved = process.env.KUBECONFIG;
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'jtt-api-context-'));
+    kubeconfig = path.join(dir, 'config');
+    writeFileSync(
+      kubeconfig,
+      [
+        'apiVersion: v1',
+        'kind: Config',
+        'current-context: prod-eks-cluster',
+        'clusters:',
+        `  - {name: prod-eks-cluster, cluster: {server: "${PRODUCTION}"}}`,
+        `  - {name: kind-jumptotech-labs, cluster: {server: "${KIND}"}}`,
+        'users:',
+        '  - {name: tester, user: {token: not-a-real-token}}',
+        'contexts:',
+        '  - {name: prod-eks-cluster, context: {cluster: prod-eks-cluster, user: tester}}',
+        '  - {name: kind-jumptotech-labs, context: {cluster: kind-jumptotech-labs, user: tester}}',
+        '',
+      ].join('\n'),
+      { mode: 0o600 },
+    );
+    return () => {
+      rmSync(dir, { recursive: true, force: true });
+      if (saved === undefined) delete process.env.KUBECONFIG;
+      else process.env.KUBECONFIG = saved;
+    };
+  });
+
+  function realClient(env: Partial<NodeJS.ProcessEnv>) {
+    const config = testConfig(env);
+    const engines = new FakeDockerEngines({ images: ['docker:27-dind'] });
+    return { config, ...buildSandboxComposition({ config, engines, containerRuntime: new FakeContainerRuntime() }) };
+  }
+
+  it('defaults to kind-<LAB_CLUSTER_NAME>, and LAB_KUBE_CONTEXT overrides it', () => {
+    expect(testConfig().kubeContext).toBe('kind-jumptotech-labs');
+    expect(testConfig({ LAB_CLUSTER_NAME: 'jtt-wt-docker' }).kubeContext).toBe('kind-jtt-wt-docker');
+    expect(testConfig({ LAB_KUBE_CONTEXT: 'staging' }).kubeContext).toBe('staging');
+  });
+
+  it('uses the kind context with no KUBECONFIG, whatever is current', () => {
+    process.env.KUBECONFIG = kubeconfig; // what ~/.kube/config is to a host-run api
+    const { k8s } = realClient({});
+    expect(k8s.clusterEndpoint().server).toBe(KIND);
+  });
+
+  it('uses the kind context from an explicit KUBECONFIG too', () => {
+    const { k8s } = realClient({ KUBECONFIG: kubeconfig });
+    expect(k8s.clusterEndpoint().server).toBe(KIND);
+  });
+
+  it('refuses, rather than falling back to the current context, when kind is absent', async () => {
+    process.env.KUBECONFIG = kubeconfig;
+    const { k8s } = realClient({ LAB_CLUSTER_NAME: 'never-created' });
+    expect(k8s.clusterEndpoint().server).not.toBe(PRODUCTION);
+    await expect(k8s.ping()).rejects.toThrow(/no context 'kind-never-created'/);
   });
 });
