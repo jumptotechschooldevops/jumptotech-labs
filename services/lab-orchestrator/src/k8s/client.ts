@@ -1035,10 +1035,18 @@ export class KubernetesClient implements KubernetesPort {
     for (const object of objects) {
       // The namespace is imposed here, never taken from the manifest, so a lab
       // definition cannot write into another session's sandbox.
-      const spec = {
-        ...object,
-        metadata: { ...object.metadata, namespace },
-      } as k8s.KubernetesObject;
+      //
+      // Through `loadYaml` first, which turns wire-format JSON into the
+      // client's model shape. The object API serialises from that shape, and
+      // the models rename fields whose wire names are reserved words:
+      // `LimitRangeItem.default` is `_default`, `NetworkPolicyIngressRule.from`
+      // is `_from`. A plain manifest's `default` and `from` were silently
+      // dropped, so every session's "allow same-namespace" ingress rule reached
+      // the API server as `{}` — allow from everywhere — and the LimitRange's
+      // defaults fell back to its maximums.
+      const spec = k8s.loadYaml<k8s.KubernetesObject>(
+        JSON.stringify({ ...object, metadata: { ...object.metadata, namespace } }),
+      );
 
       try {
         await applyWithConflictRetry({
