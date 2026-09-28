@@ -200,10 +200,16 @@ export class SessionError extends Error {
 
 // ---------------------------------------------------------------- policy
 
-/** Container CPU/memory pair. */
+/** Container CPU/memory pair, and local disk. */
 export interface ComputeAmounts {
   cpu: string;
   memory: string;
+  /**
+   * Node-local disk: the container's writable layer, its logs and disk-backed
+   * `emptyDir` volumes. The kubelet evicts a Pod that exceeds it (measured on
+   * kind). It does not cover PersistentVolumeClaims.
+   */
+  'ephemeral-storage'?: string;
 }
 
 /**
@@ -425,6 +431,12 @@ export const DEFAULT_SESSION_POLICY: SessionPolicy = {
     'requests.memory': '2Gi',
     'limits.cpu': '4',
     'limits.memory': '4Gi',
+    // Node disk (red-team O4). Without these a student Pod could write to its
+    // own filesystem or an emptyDir until the node — the host disk every
+    // session and the platform share — was full. 15 Pods at the default limit
+    // below fit inside the ceiling.
+    'requests.ephemeral-storage': '2Gi',
+    'limits.ephemeral-storage': '4Gi',
     // Cost safety: a lab may never ask the cloud for an address.
     'services.loadbalancers': '0',
     'services.nodeports': '0',
@@ -432,9 +444,9 @@ export const DEFAULT_SESSION_POLICY: SessionPolicy = {
   },
   limitRange: {
     name: 'jumptotech-session-limits',
-    defaultRequest: { cpu: '50m', memory: '64Mi' },
-    default: { cpu: '500m', memory: '512Mi' },
-    max: { cpu: '1', memory: '1Gi' },
+    defaultRequest: { cpu: '50m', memory: '64Mi', 'ephemeral-storage': '64Mi' },
+    default: { cpu: '500m', memory: '512Mi', 'ephemeral-storage': '256Mi' },
+    max: { cpu: '1', memory: '1Gi', 'ephemeral-storage': '1Gi' },
   },
   network: {
     name: 'jumptotech-session-isolation',

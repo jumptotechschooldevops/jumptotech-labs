@@ -19,4 +19,17 @@ describe('session quota configuration', () => {
     expect(quota['count/secrets']).toBe('50');
     expect(quota.pods).toBe('30');
   });
+
+  it('bounds node-local disk per container and per namespace (red-team O4)', () => {
+    const policy = loadSessionPolicy({ NODE_ENV: 'production' });
+    expect(policy.quota['requests.ephemeral-storage']).toBe('2Gi');
+    expect(policy.quota['limits.ephemeral-storage']).toBe('4Gi');
+    expect(policy.limitRange.defaultRequest['ephemeral-storage']).toBe('64Mi');
+    expect(policy.limitRange.default['ephemeral-storage']).toBe('256Mi');
+    expect(policy.limitRange.max?.['ephemeral-storage']).toBe('1Gi');
+
+    const tuned = loadSessionPolicy({ QUOTA_LIMITS_EPHEMERAL_STORAGE: '8Gi', LIMITS_MAX_EPHEMERAL_STORAGE: '2Gi' });
+    expect(tuned.quota['limits.ephemeral-storage']).toBe('8Gi');
+    expect(tuned.limitRange.max?.['ephemeral-storage']).toBe('2Gi');
+  });
 });
