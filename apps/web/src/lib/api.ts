@@ -23,6 +23,14 @@ import type {
   TrackSummary,
   VerificationResult,
 } from './types';
+import type {
+  ClassroomOverview,
+  LabAvailabilityResponse,
+  SessionDetailResponse,
+  StaffEndResponse,
+  StudentDetailResponse,
+  StudentSearchResponse,
+} from './classroomTypes';
 import { announceAuthExpired } from './auth';
 import { describeApiTarget, resolveApiBase } from './urls';
 
@@ -220,6 +228,26 @@ export const api = {
     request<{ student: StudentIdentity; attempt: AttemptDetail }>(
       `/api/me/attempts/${encodeURIComponent(attemptId)}`,
     ),
+
+  /*
+   * The classroom view (INSTRUCTOR and ADMIN). The server decides who may read
+   * it from the account's stored role; the browser only hides the link.
+   */
+  classroom: {
+    overview: () => request<ClassroomOverview>('/api/admin/classroom'),
+    session: (sessionId: string) =>
+      request<SessionDetailResponse>(`/api/admin/sessions/${encodeURIComponent(sessionId)}`),
+    searchStudents: (query: string) =>
+      request<StudentSearchResponse>(`/api/admin/students?q=${encodeURIComponent(query)}`),
+    student: (userId: string) => request<StudentDetailResponse>(`/api/admin/students/${encodeURIComponent(userId)}`),
+    labs: () => request<LabAvailabilityResponse>('/api/admin/labs'),
+    /** Ends another student's lab. The Support ID is repeated as the confirmation. */
+    endSession: (sessionId: string) =>
+      request<StaffEndResponse>(`/api/admin/sessions/${encodeURIComponent(sessionId)}/end`, {
+        method: 'POST',
+        body: JSON.stringify({ confirmSessionId: sessionId }),
+      }),
+  },
 };
 
 export { API_URL };

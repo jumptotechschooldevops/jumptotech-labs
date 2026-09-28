@@ -160,6 +160,14 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
      * control. The terminal bar tells students this.
      */
     term.attachCustomKeyEventHandler((event) => !(event.key === 'Tab' && event.shiftKey));
+    /*
+     * …and must land outside it. Chromium makes a scrollable container a tab
+     * stop of its own, and xterm's viewport scrolls as soon as there is
+     * scrollback, so Shift+Tab moved focus from the terminal's input to its
+     * viewport — still the terminal — and a keyboard user was trapped once
+     * enough output had scrolled by. Out of the tab order; still scrollable.
+     */
+    containerRef.current.querySelector('.xterm-viewport')?.setAttribute('tabindex', '-1');
 
     requestAnimationFrame(() => {
       try {

@@ -7,13 +7,14 @@
 import { render, type RenderResult } from '@testing-library/react';
 import { StudentApp } from '../src/App';
 import { AuthProvider } from '../src/lib/AuthContext';
+import type { AuthSession } from '../src/lib/auth';
 import { TEST_SESSION } from './auth-harness';
 
-export function renderApp(hash = '#/'): RenderResult {
+export function renderApp(hash = '#/', session: AuthSession = TEST_SESSION): RenderResult {
   window.history.replaceState(null, '', `/${hash}`);
   return render(
     <AuthProvider
-      loadSession={() => Promise.resolve(TEST_SESSION)}
+      loadSession={() => Promise.resolve(session)}
       signOutImpl={() => Promise.resolve({ signedOut: true })}
       signInImpl={() => undefined}
     >
