@@ -238,9 +238,9 @@ Its backup line:
 
 - **The off-host copy is not in it yet.** Add `BACKUP_COPY_HOOK=<your executable>`
   to the line once the destination is decided (§5.5, DECISION REQUIRED). A hook
-  path that is not an executable file refuses the run before it starts, and a
-  run refused before it starts records nothing: only `BackupStale` (26 h) would
-  notice. Run the line by hand once after adding a hook, and confirm
+  path that is not an executable file refuses the run before it starts; that
+  refusal is recorded as a failed run, so `BackupLastRunFailed` fires that night
+  (`db-backup.sh` sets its failure trap before it reads its configuration). Run the line by hand once after adding a hook, and confirm
   `db-backup.last-success` was written.
 
 - `jtt-ops` must be able to run `docker`. That is root-equivalent, so choose the
@@ -251,7 +251,8 @@ Its backup line:
   `BACKUP_STATUS_DIR` (default `backups/status`; set the same path in `.env`),
   and `BackupStale`, `BackupMissedTwice`, `BackupLastRunFailed` and
   `BackupVerifyFailed` read it — [RB-16](RB-16-backups.md). A run refused before
-  it starts (an invalid `BACKUP_DIR`, say) records nothing; freshness still catches it.
+  it starts (an invalid `BACKUP_DIR`, say) is recorded as a failed run too, as
+  long as `BACKUP_STATUS_DIR` itself is usable; if it is not, freshness still catches it.
 
 ### 5.4 Retention
 
