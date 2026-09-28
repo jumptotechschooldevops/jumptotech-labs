@@ -104,7 +104,7 @@ Follow production-host-readiness.md §21. What decides the route back:
 - `prod up --wait` exiting non-zero **is** the health failure. The smoke's
   `release.commit` then confirms which commit each service reports.
 
-Every migration to date (001–005) is additive — new tables, columns and indexes,
+Every migration to date (001–006) is additive — new tables, columns and indexes,
 a backfill of one new column, and a widened `CHECK`. None drops or rewrites data,
 so the data-loss risk of a rollback is only what was written after the backup.
 

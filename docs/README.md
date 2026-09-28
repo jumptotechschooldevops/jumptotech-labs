@@ -71,6 +71,7 @@ fails the build for one that does not:
 | Subject | Authority |
 |---|---|
 | a new host: prerequisites, preflight, deployment, smoke, upgrade, rollback | [development/production-host-readiness.md](development/production-host-readiness.md) |
+| the private beta on one host, in order: sizing, external setup, secrets, commands, validation, go-live checklist, stop conditions | [runbooks/private-beta-deployment.md](runbooks/private-beta-deployment.md) |
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
 | the alert runbooks RB-01…RB-21 and their index | [runbooks/README.md](runbooks/README.md) |
