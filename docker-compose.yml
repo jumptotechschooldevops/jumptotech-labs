@@ -115,9 +115,16 @@ services:
     healthcheck:
       # The api waits for this: migrations run at startup, and racing initdb
       # would fail the first boot for no reason.
+      #
+      # Over TCP, not the socket. On a new volume the image initialises it
+      # with a temporary server that listens on the socket only, then stops
+      # it: a socket check reported healthy during that gap (measured: socket
+      # ready +58.5 s, gone +61.5 s, TCP ready +64.7 s), and the runbook's
+      # restore onto a new volume failed in it. Only the real server listens
+      # on TCP (scripts/db-lib.sh jtt_wait_ready, scripts/wait-for-postgres.mjs).
       test:
         - CMD-SHELL
-        - pg_isready -U "${POSTGRES_USER:-jumptotech}" -d "${POSTGRES_DB:-jumptotech_labs}"
+        - pg_isready -h 127.0.0.1 -p 5432 -U "${POSTGRES_USER:-jumptotech}" -d "${POSTGRES_DB:-jumptotech_labs}"
       interval: 5s
       timeout: 3s
       retries: 12

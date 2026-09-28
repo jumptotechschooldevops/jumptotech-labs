@@ -188,6 +188,21 @@ if command -v shasum >/dev/null 2>&1; then exec shasum -a 256 "$@"; fi
 exec /usr/bin/sha256sum "$@"
 FAKE
 
+# TCP readiness: the real server, not the first-start initialiser (db-lib.sh
+# jtt_wait_ready). FAKE_PG_STARTING=N answers "no response" N times first;
+# FAKE_PG_INITIALISING=1 never answers.
+cat >"$fakebin/pg_isready" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+{ printf 'pg_isready'; printf ' %s' "$@"; printf '\n'; } >>"$FAKE_LOG"
+[ -n "${FAKE_PG_INITIALISING-}" ] && exit 2
+count_file="$(dirname "$FAKE_LOG")/pg_isready.count"
+calls=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+echo "$calls" >"$count_file"
+[ "$calls" -gt "${FAKE_PG_STARTING:-0}" ] || exit 2
+exit 0
+FAKE
+
 chmod 700 "$fakebin"/*
 
 # --- harness ------------------------------------------------------------------------
@@ -216,6 +231,7 @@ new_case() {
   export JTT_DB_CONTAINER=fake-postgres FAKE_DATABASES="postgres jumptotech_labs"
   unset FAKE_PS_IDS FAKE_RUNNING FAKE_MOUNT_SOURCE FAKE_SERVER_DOWN FAKE_SESSIONS \
     FAKE_CREATE_FAIL FAKE_SWAP_FAIL FAKE_PG_DUMP_FAIL FAKE_PG_DUMP_GARBAGE \
+    FAKE_PG_STARTING FAKE_PG_INITIALISING JTT_DB_READY_TIMEOUT_SECONDS \
     FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG FAKE_ARCHIVE_TRUNCATED FAKE_LEDGER_READ_FAIL FAKE_LEDGER_NEWER \
     BACKUP_ACCEPT_NEW_DATABASE \
     BACKUP_LABEL BACKUP_RETENTION_DAYS BACKUP_RETENTION_MIN_KEEP BACKUP_COPY_HOOK
@@ -333,6 +349,17 @@ export FAKE_SERVER_DOWN=1
 backup
 expect 'unreachable server: refused' says 'cannot run a query'
 expect 'unreachable server: leaves nothing in BACKUP_DIR' nothing_written
+
+# Reliability audit 2026-09-28: a new volume's first start runs a temporary,
+# socket-only server; the runbook's restore ran against it and failed with
+# "the database system is shutting down". Both scripts wait for TCP, bounded.
+new_case
+export FAKE_PG_STARTING=2
+backup
+expect 'a server still initialising: backup waits for it, then succeeds' succeeded
+expect 'a server still initialising: says it is waiting' says 'waiting for PostgreSQL'
+expect 'readiness is asked over TCP inside the container, not the socket' logged '^pg_isready -q -h 127.0.0.1 -p 5432$'
+
 
 new_case
 FAKE_MOUNT_SOURCE=$(cd "$case_dir" && pwd -P)
@@ -562,6 +589,14 @@ printf '%064d  a.dump\n' 0 >"$case_dir/a.dump.sha256"
 restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
 expect 'checksum mismatch: refused before the server is contacted' server_untouched
 expect 'checksum mismatch: says so' says 'does not match its .sha256 sidecar'
+
+new_case
+given_archive
+export FAKE_PG_INITIALISING=1 JTT_DB_READY_TIMEOUT_SECONDS=2
+restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
+expect 'a server that never finishes starting: restore refused within the bound' failed
+expect 'a server that never finishes starting: names the cause' says 'not accepting TCP connections'
+expect 'a server that never finishes starting: changes nothing' no_change
 
 new_case
 given_archive
