@@ -74,6 +74,7 @@ fails the build for one that does not:
 | the private beta on one host, in order: sizing, external setup, secrets, commands, validation, go-live checklist, stop conditions | [runbooks/private-beta-deployment.md](runbooks/private-beta-deployment.md) |
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
+| what fails, what students see, what recovers by itself: failure domains, journeys, failure matrix, measured RPO/RTO, restart order, retention | [reliability-failure-model.md](reliability-failure-model.md) |
 | running an incident: severity, roles, status and class messages, the postmortem template | [runbooks/incident-management.md](runbooks/incident-management.md) |
 | the alert runbooks RB-01…RB-21 and their index | [runbooks/README.md](runbooks/README.md) |
 | backup and restore of PostgreSQL | [runbooks/postgres-backup-restore.md](runbooks/postgres-backup-restore.md) |
@@ -143,6 +144,7 @@ Dated; not maintained after their pass. Newest first within each group.
 | [security/redteam-wave2-2026-09-27.md](security/redteam-wave2-2026-09-27.md) | 2026-09-27 |
 | [security/redteam-audit-2026-09-27.md](security/redteam-audit-2026-09-27.md) | 2026-09-27 |
 | [releases/performance-capacity-certification-2026-09-27.md](releases/performance-capacity-certification-2026-09-27.md) | 2026-09-27 |
+| [releases/reliability-dr-audit-2026-09-28.md](releases/reliability-dr-audit-2026-09-28.md) | 2026-09-28 |
 | [releases/launch-readiness-20h-report.md](releases/launch-readiness-20h-report.md) | 2026-09-27 |
 | [releases/app-security-multi-tenant-audit.md](releases/app-security-multi-tenant-audit.md) | 2026-09-27 |
 | [releases/overnight-disaster-recovery-audit.md](releases/overnight-disaster-recovery-audit.md) | 2026-09-21/22 |
