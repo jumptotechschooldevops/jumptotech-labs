@@ -28,7 +28,7 @@ import {
   sessionInfo,
   verification,
 } from '../../../apps/web/test/payloads.js';
-import type { AttemptSummary, SessionInfo } from '../../../apps/web/src/lib/types.js';
+import type { AttemptSummary, BillingOffer, BillingView, LabAccess, SessionInfo } from '../../../apps/web/src/lib/types.js';
 
 export interface Student {
   /** OIDC subject; also what the fake identity provider signs in as. */
@@ -110,6 +110,48 @@ export class FakePlatform {
   refuseTokens = 0;
   /** Lab titles to serve instead of the builders' short ones (long titles are the layout risk). */
   readonly titles = new Map<string, string>();
+
+  /*
+   * Commercial access (docs/commercial-access.md, docs/billing.md). An open
+   * deployment by default, with billing off — what every other spec assumes.
+   * A spec about access or billing sets these; Start refuses while `access`
+   * is not active, as the real api does.
+   */
+  access: LabAccess = { policy: 'open', state: 'NONE', active: true, startsAt: null, expiresAt: null };
+  billing: BillingView = { enabled: false, offers: [], subscription: null, canManageBilling: false, canSubscribe: false };
+  /** Test checkouts "paid" at the fake provider, waiting for its webhook (`confirmPayment`). */
+  readonly paidCheckouts = new Set<string>();
+  private readonly checkouts = new Map<string, { offer: BillingOffer; status: 'open' | 'completed' }>();
+
+  /** The provider's webhook arrives: the paid checkout becomes a subscription, and access follows. */
+  confirmPayment(until: string): void {
+    if (this.paidCheckouts.size === 0) throw new Error('nothing was paid for');
+    this.paidCheckouts.clear();
+    this.access = {
+      policy: 'entitlement',
+      state: 'ACTIVE',
+      active: true,
+      startsAt: new Date().toISOString(),
+      expiresAt: until,
+      kind: 'SUBSCRIPTION',
+      source: 'billing',
+      plan: null,
+      maxConcurrentSessions: 1,
+    };
+    this.billing = {
+      ...this.billing,
+      subscription: {
+        status: 'ACTIVE',
+        planId: null,
+        planName: null,
+        currentPeriodEnd: until,
+        cancelAtPeriodEnd: false,
+        accessUntil: until,
+      },
+      canManageBilling: true,
+      canSubscribe: false,
+    };
+  }
 
   private gates = new Map<Action, Gate>();
   private failures = new Map<Action, Array<ApiFailure | 'abort'>>();
@@ -345,10 +387,33 @@ export class FakePlatform {
       if (!summary) return this.error(route, 404, 'LAB_NOT_FOUND', 'No such lab');
       return this.ok(route, labDetail({ id: summary.id, title: this.titles.get(summary.id) ?? summary.title, track: summary.track }));
     }
-    if (call === 'GET /api/me/access') {
-      // An open deployment: every signed-in student may use labs (docs/commercial-access.md).
-      return this.ok(route, { access: { policy: 'open', state: 'NONE', active: true, startsAt: null, expiresAt: null } });
+    if (call === 'GET /api/me/access') return this.ok(route, { access: this.access });
+
+    // --- billing (test mode, docs/billing.md) -------------------------------------
+    if (call === 'GET /api/billing') {
+      return this.ok(route, { billing: this.billing, legal: { termsUrl: null, privacyUrl: null, refundUrl: null } });
     }
+    if (call === 'POST /api/billing/checkout' && this.billing.enabled) {
+      const { offerId } = (request.postDataJSON() ?? {}) as { offerId?: string };
+      const offer = this.billing.offers.find((candidate) => candidate.id === offerId);
+      if (!offer) return this.error(route, 400, 'OFFER_NOT_FOUND', 'That offer does not exist.');
+      const ref = nextId('cs_test');
+      this.checkouts.set(ref, { offer, status: 'open' });
+      return this.ok(route, { url: `${url.origin}/#/account/test-checkout/${ref}` });
+    }
+    const testCheckout = /^\/api\/billing\/test\/checkouts\/([A-Za-z0-9_.:-]+)(\/complete)?$/.exec(path);
+    if (testCheckout && this.billing.enabled) {
+      const found = this.checkouts.get(testCheckout[1]!);
+      if (!found) return this.error(route, 404, 'CHECKOUT_NOT_FOUND', 'No such checkout.');
+      if (testCheckout[2] && method === 'POST') {
+        // Paid at the provider. Access changes only when its webhook arrives.
+        found.status = 'completed';
+        this.paidCheckouts.add(testCheckout[1]!);
+        return this.ok(route, { mode: 'test', outcomes: ['applied', 'applied'] });
+      }
+      if (!testCheckout[2] && method === 'GET') return this.ok(route, { mode: 'test', checkout: found });
+    }
+
     if (call === 'GET /api/me/progress') {
       await this.gateFor('progress');
       if (await this.failure(route, 'progress')) return;
@@ -394,6 +459,15 @@ export class FakePlatform {
     if (startMatch && method === 'POST') {
       await this.gateFor('start');
       if (await this.failure(route, 'start')) return;
+      if (!this.access.active) {
+        const messages: Record<string, string> = {
+          NONE: 'Your account does not have lab access yet.',
+          EXPIRED: 'Your lab access has ended.',
+        };
+        return this.error(route, 403, 'ACCESS_NOT_ACTIVE', messages[this.access.state] ?? 'Your lab access is not active.', {
+          accessState: this.access.state,
+        });
+      }
       const running = this.liveSessions()[0];
       if (running) {
         return this.error(route, 409, 'STUDENT_SESSION_LIMIT_REACHED', 'You already have a lab running.', {
