@@ -129,3 +129,22 @@ test('a reload while the terminal is still connecting connects once, to the same
   await expectTerminalConnected(page);
   await expect.poll(() => platform.openSockets.size).toBe(1);
 });
+
+test('a student who types exit or presses Ctrl+D is told the lab is still there, and Reconnect gives a new shell', async ({ page, platform }) => {
+  await openSignedIn(page, platform);
+  await launch(page);
+
+  await page.locator('.terminal-surface').click();
+  await page.keyboard.press('Control+D');
+
+  await expect(terminalState(page)).toHaveText(
+    'Terminal: The shell exited — your lab and files are still there. Press Reconnect for a new shell.',
+  );
+  await expect(page.locator('.xterm-rows')).toContainText('Your lab is still running and your files are kept.');
+  // The lab itself did not end: no summary, and the actions are still there.
+  await expect(page.getByRole('button', { name: 'Verify' })).toBeEnabled();
+
+  await page.getByRole('button', { name: 'Reconnect' }).click();
+  await expectTerminalConnected(page);
+  expect(platform.count(/^POST \/api\/labs\/.*\/start$/)).toBe(1);
+});

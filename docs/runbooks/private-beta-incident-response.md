@@ -606,6 +606,9 @@ condition above is met, when a security alert fires (RB-08), or when data may be
 lost. Who is on call is DECISION REQUIRED (operations §8). Until that is
 decided, escalate to whoever deployed the stack.
 
+Severity, who leads, what to tell students and the postmortem template are in
+[incident-management.md](incident-management.md).
+
 After every incident that affected students, write down:
 
 - when it started, when it was noticed, and when it was resolved;

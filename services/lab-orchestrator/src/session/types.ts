@@ -177,6 +177,8 @@ export interface LabSession {
 export type SessionErrorCode =
   | 'PROVIDER_UNAVAILABLE'
   | 'LAB_CAPACITY_REACHED'
+  // Starts are refused while the process shuts down (`interruptInFlight`).
+  | 'LAB_LAUNCHES_PAUSED'
   | 'STUDENT_SESSION_LIMIT_REACHED'
   | 'SESSION_NOT_FOUND'
   | 'SESSION_NOT_ACTIVE'

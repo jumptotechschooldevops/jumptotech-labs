@@ -250,6 +250,12 @@ export class FakePlatform {
         await ws.close({ code: 4401, reason: 'First message must be an auth frame.' });
         return;
       }
+      if (frame.type === 'input' && frame.data && (frame.data.includes('\u0004') || /(^|\r)exit\r/.test(frame.data))) {
+        // Ctrl+D or `exit`: the shell ends, the session does not (terminal server, close 1000).
+        ws.send(JSON.stringify({ type: 'exit', exitCode: 0 }));
+        await ws.close({ code: 1000, reason: 'shell exited' });
+        return;
+      }
       if (frame.type === 'input' && frame.data) {
         // An echoing shell: enough for "what the student types reaches it".
         ws.send(JSON.stringify({ type: 'output', data: frame.data.replace(/\r/g, '\r\nstudent@jumptotech-lab:~$ ') }));

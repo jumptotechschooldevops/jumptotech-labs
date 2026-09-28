@@ -223,7 +223,7 @@ groups:
         expr: sum(increase(jtt_auth_attempts_total{outcome!~"success|AUTH_REQUIRED"}[10m])) or vector(0)
 
       - record: jtt:auth_callback_failures:increase15m
-        expr: sum(increase(jtt_auth_callback_total{outcome!="success"}[15m])) or vector(0)
+        expr: sum(increase(jtt_auth_callback_total{outcome!~"success|provider_unavailable"}[15m])) or vector(0)
 
   # --- deployment operations (BETA-P0-018) -------------------------------------
   #

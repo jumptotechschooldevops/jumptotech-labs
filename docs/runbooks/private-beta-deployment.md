@@ -45,10 +45,11 @@ The deployment tooling's own self-tests pass at `ac1b775`:
 |---|---|---|
 | OS | Linux, amd64. CI proves `ubuntu-latest` (Ubuntu 24.04 LTS); arm64 builds but is not CI-proven | production-host-readiness §5.1 |
 | Docker | Docker Engine, **rootful**, socket at exactly `/var/run/docker.sock`, enabled at boot (`systemctl is-enabled docker`) | §5.1; drill D-7 |
-| Compose | Docker Compose v2 with `!reset` / `!override` support (v2.24.4 or later); `make production-config-check` renders the files and fails on an older one | §5.1 |
+| Compose | Docker Compose v2 with `!reset` / `!override` support (v2.24.4 or later); `make production-config-check` renders the files and fails on an older one. The current plugin from download.docker.com (v5.5.1 on 2026-09-28) renders the production stack correctly | §5.1; fresh-host dry run |
 | kind / kubectl | kind **v0.31.0**, kubectl **v1.34.2**, node image `kindest/node:v1.34.0` (preflight WARNs on others) | `production-preflight.sh`, `infrastructure/kind/cluster.yaml` |
 | Node.js | 22 (`.nvmrc`), then `npm ci` | preflight `tools.node` |
 | Tools | git, openssl, curl, jq, iproute2 (`ss`), coreutils `timeout`, `dig`, `nc` | §5.1, §15 step 18 |
+| Build tools | `python3`, `make`, `g++` (`build-essential`). `npm ci` compiles `node-pty` on every Linux host: it ships prebuilt binaries for macOS and Windows only. Without them `npm ci` fails (`gyp ERR! find Python`), and so does every Node-based check after it. CI's runner image has them preinstalled, which hid this | fresh-host dry run, 2026-09-28 |
 | Clock | NTP-synchronized (OIDC tolerates 5 s of skew) | §8.1 |
 | Ports | 80 and 443 free on the host | preflight |
 | Egress | Docker Hub, `registry.npmjs.org`, `download.docker.com`, `dl.k8s.io`; the identity provider; the ACME CA; the backup and alert destinations | §7.1 |
@@ -262,7 +263,19 @@ ops() { prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-c
 
 **A. Fresh host → dependencies**
 
-1. Install Docker Engine (rootful) with the Compose plugin, Node 22, kind v0.31.0, kubectl v1.34.2 and the §1.1 tools; `sudo systemctl enable --now docker`; enable NTP.
+1. Install Docker Engine (rootful) with the Compose plugin, Node 22, kind v0.31.0, kubectl v1.34.2 and the §1.1 tools; `sudo systemctl enable --now docker`; enable NTP. On Ubuntu 24.04 amd64 (the apt, Docker-repository and Node steps were run on a clean `ubuntu:24.04` on 2026-09-28; the kind and kubectl URLs are upstream's, and the preflight checks their versions):
+   ```bash
+   sudo apt-get update && sudo apt-get install -y git curl ca-certificates jq openssl iproute2 gnupg dnsutils netcat-openbsd xz-utils build-essential python3
+   sudo install -m 0755 -d /etc/apt/keyrings
+   sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" | sudo tee /etc/apt/sources.list.d/docker.list
+   sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+   curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | awk '/linux-x64.tar.xz/ {print $2}'   # the file name to download
+   curl -fsSL https://nodejs.org/dist/latest-v22.x/<that file> | sudo tar -xJ -C /usr/local --strip-components=1
+   sudo curl -fsSLo /usr/local/bin/kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
+   sudo curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.34.2/bin/linux/amd64/kubectl
+   sudo chmod 0755 /usr/local/bin/kind /usr/local/bin/kubectl
+   ```
 2. `sudo useradd -m jtt-ops && sudo usermod -aG docker jtt-ops`; log in again as `jtt-ops`.
 3. Firewall (§2.1) at the provider or in `DOCKER-USER`. **EXTERNAL.**
 

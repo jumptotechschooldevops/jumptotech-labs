@@ -240,9 +240,11 @@ describe('the private-beta alert set', () => {
   it('stays at a size an operator reads, rather than growing without review', () => {
     // 57 after BETA-P0-018; 60 on main at 001bcf1; 62 with the two
     // alert-delivery alerts (platform.yml); 63 with the disaster-recovery
-    // audit's DatabaseRecreatedSinceLastBackup (database.yml). Adding alerts
-    // is fine; do it on purpose.
-    expect(ALERTS.length).toBeLessThanOrEqual(63);
+    // audit's DatabaseRecreatedSinceLastBackup (database.yml); 64 with the
+    // reliability audit's IdentityProviderUnreachable (security.yml), without
+    // which nothing fired while nobody could sign in. Adding alerts is fine;
+    // do it on purpose.
+    expect(ALERTS.length).toBeLessThanOrEqual(64);
   });
 });
 

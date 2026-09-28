@@ -188,6 +188,20 @@ describe('before launch', () => {
     expect(screen.queryByRole('button', { name: /Launch/ })).toBeNull();
   });
 
+  it('lets the student check again, in place, when the platform was only busy for a moment', async () => {
+    apiMock.getLab
+      .mockResolvedValueOnce(labDetail({ availability: { available: false, reason: 'probe timed out' } }))
+      .mockResolvedValueOnce(labDetail({ availability: { available: true } }));
+    await renderDetail();
+    expect(screen.getByText('This lab cannot be started right now')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+
+    expect(await screen.findByRole('button', { name: 'Launch lab' })).toBeTruthy();
+    expect(screen.queryByText('This lab cannot be started right now')).toBeNull();
+    expect(apiMock.getLab).toHaveBeenCalledTimes(2);
+  });
+
   it('never shows a student the provider probe\'s own reason, which names hosts and addresses', async () => {
     // What the kind provider really reports when the cluster is down, and a
     // Docker daemon error: operator words for the log and `ops status`.

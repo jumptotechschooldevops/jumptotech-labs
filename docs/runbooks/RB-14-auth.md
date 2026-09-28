@@ -1,7 +1,8 @@
 # RB-14 — Authentication failing
 
 **Alerts:** `AuthFailureSpike` (warning), `JwksFetchFailing` (warning),
-`AuthRejectionsAbnormal` (warning), `OidcSignInFailures` (warning)
+`AuthRejectionsAbnormal` (warning), `OidcSignInFailures` (warning),
+`IdentityProviderUnreachable` (warning, §0)
 
 Commands use `prod` and `q` from [private-beta-operations.md §1](private-beta-operations.md).
 
@@ -24,6 +25,26 @@ user cancelled, or the provider refused), `no_code`, `not_configured`.
 **Blast radius:** nobody can sign in. Existing browser sessions keep working
 until they expire (`AUTH_SESSION_TTL_SECONDS`, default 12h), so this often
 starts quietly.
+
+## 0. `IdentityProviderUnreachable` — the provider is down, not us
+
+Two or more sign-ins in 10 minutes could not reach the identity provider:
+discovery at `/auth/login`, or the token endpoint at `/auth/callback`, did not
+answer, timed out, or answered HTTP 5xx. Students see *"The sign-in service is
+not responding"* (`AUTH_PROVIDER_UNAVAILABLE`, 503, `Retry-After: 60`).
+
+- **Who is affected:** only students signing in now. Anyone already signed in
+  keeps working: browser sessions live in PostgreSQL and are never checked
+  against the provider. Tell the class not to sign out (incident-management.md §5).
+- **Check:** the provider's own status page; then, from the host,
+  `prod exec -T api node -e "fetch(process.env.OIDC_ISSUER.replace(/\/?$/,'/')+'.well-known/openid-configuration',{signal:AbortSignal.timeout(5000)}).then(r=>console.log(r.status),e=>console.log('unreachable',e.cause?.code??e.message))"`
+  — `unreachable ENOTFOUND` is DNS, `ECONNREFUSED`/`UND_ERR_CONNECT_TIMEOUT`
+  the network or the provider, `5xx` the provider.
+- **Do not** change `OIDC_*` settings or restart the api to "fix" it: nothing on
+  our side is wrong, and an api restarted during the outage cannot even fetch
+  discovery until the provider is back.
+- **Recovered when** a new sign-in completes; the alert clears 10 minutes after
+  the last failure.
 
 ## 1. Confirm it is real
 
@@ -48,12 +69,15 @@ fires on a busy morning that is working fine.
 | `AUTH_REQUIRED` | No credential at all. Normal for a signed-out browser, and for a cookie whose server-side session is gone |
 | `AUTH_EXPIRED` | The session or token has expired: working as designed |
 | `AUTH_INVALID_TOKEN` | A credential was presented and did not verify: a bad signature, a malformed header, or the provider refusing a code exchange |
-| `AUTH_MISCONFIGURED` | The api cannot reach or use the identity provider (discovery, keys, token endpoint): §4 |
+| `AUTH_MISCONFIGURED` | The identity provider answered with something this deployment cannot use (wrong issuer, 4xx discovery, unusable document or keys): §4 |
+| `AUTH_PROVIDER_UNAVAILABLE` | The identity provider did not answer, timed out, or answered 5xx: its outage, §0 |
 | `AUTH_UNAVAILABLE` | The platform, not the caller: the database behind sign-ins did not answer, and the request got 503. RB-02 |
 
 `jtt_auth_callback_total{outcome}` for the sign-in round trip: `success`,
 `not_configured`, `provider_refused`, `no_transaction`, `state_mismatch`,
-`no_code`, `verification_failed`. A burst of `state_mismatch` or
+`no_code`, `verification_failed`, `provider_unavailable` (§0; not counted by
+`OidcSignInFailures`). `jtt_auth_login_total{outcome}` for `/auth/login`:
+`redirected`, `provider_unavailable`, `misconfigured`, `not_configured`, `failed`. A burst of `state_mismatch` or
 `no_transaction` with no matching sign-in attempts is **security-relevant**, not
 merely an error: RB-08.
 

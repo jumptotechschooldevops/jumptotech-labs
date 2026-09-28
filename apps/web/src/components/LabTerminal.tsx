@@ -339,7 +339,10 @@ export const LabTerminal = forwardRef<LabTerminalHandle, LabTerminalProps>(funct
           }
 
           case 'exit':
+            // `exit` and Ctrl+D are the usual way here, and a beginner reads a
+            // closed shell as a broken lab. Say what is kept and what to press.
             term.writeln(`\r\n\x1b[33mThe shell exited (code ${String(msg.exitCode ?? '?')}).\x1b[0m`);
+            term.writeln('\x1b[33mYour lab is still running and your files are kept. Press Reconnect for a new shell.\x1b[0m');
             serverCode = serverCode ?? 'SHELL_EXITED';
             break;
 
