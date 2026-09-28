@@ -35,12 +35,385 @@
   },
   "panels": [
     {
+      "id": 50,
+      "type": "row",
+      "title": "0 · Service indicators against the beta objectives (docs/beta-slo-indicators.md)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 51,
+      "type": "stat",
+      "title": "Lab starts that succeeded (10 min)",
+      "description": "Indicator 1. Objective: at most 10 % of starts fail. Refusals that are not failures (capacity, the student's own limit, access) are excluded. 100 % with no starts. Alerts LabStartFailureRateElevated / LabStartsFailingHard, RB-03.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "1 - max(jtt:lab_start_failure:ratio10m)",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.9
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 52,
+      "type": "stat",
+      "title": "Provisioning p95, slowest provider (15 min)",
+      "description": "Indicator 2. Objective: p95 at most 60 s per provider. Empty when nothing started. Alert ProvisioningSlow, RB-10.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "max(jtt:lab_provision_duration:p95_15m)",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 53,
+      "type": "stat",
+      "title": "Terminal attaches that succeeded (10 min)",
+      "description": "Indicator 4. Objective: at most 20 % of attach attempts fail (established and superseded are successes). Alert TerminalConnectionFailures, RB-12.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "1 - max(jtt:terminal_connection_failure:ratio10m)",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.8
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 54,
+      "type": "stat",
+      "title": "API requests without a 5xx (10 min)",
+      "description": "Indicator 6. Objective: at least 98 % of API requests answer without a server error. Alert ApiErrorRateHigh, RB-11.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "1 - max(jtt:http_error:ratio10m{service=\"api\"})",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.98
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 55,
+      "type": "stat",
+      "title": "API p95 latency (10 min)",
+      "description": "Indicator 6. Objective: p95 at most 1 s (Start, Check, Reset and End excluded; they have their own). Alert ApiLatencyHigh, RB-11.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "max(jtt:http_duration:p95_10m{service=\"api\"})",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 56,
+      "type": "stat",
+      "title": "Checks that returned a verdict (10 min)",
+      "description": "Indicator 5. Objective: at most 5 % of Check Solution runs end in a platform error (pass and fail are both verdicts). Alert VerificationErrorRate, RB-13.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "jtt-prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "jtt-prometheus"
+          },
+          "expr": "1 - max(jtt:verification_error:ratio10m)",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
       "id": 1,
       "type": "row",
       "title": "1 · Is the platform usable right now?",
       "gridPos": {
         "x": 0,
-        "y": 0,
+        "y": 5,
         "w": 24,
         "h": 1
       },
@@ -58,7 +431,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 1,
+        "y": 6,
         "w": 4,
         "h": 4
       },
@@ -116,7 +489,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 1,
+        "y": 6,
         "w": 4,
         "h": 4
       },
@@ -175,7 +548,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 1,
+        "y": 6,
         "w": 4,
         "h": 4
       },
@@ -238,7 +611,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 1,
+        "y": 6,
         "w": 4,
         "h": 4
       },
@@ -310,7 +683,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 1,
+        "y": 6,
         "w": 4,
         "h": 4
       },
@@ -383,7 +756,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 1,
+        "y": 6,
         "w": 4,
         "h": 4
       },
@@ -451,7 +824,7 @@
       "title": "2 · HTTPS edge and certificate (BETA-P0-017 checks, run by the API)",
       "gridPos": {
         "x": 0,
-        "y": 5,
+        "y": 10,
         "w": 24,
         "h": 1
       },
@@ -469,7 +842,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 6,
+        "y": 11,
         "w": 4,
         "h": 4
       },
@@ -533,7 +906,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 6,
+        "y": 11,
         "w": 4,
         "h": 4
       },
@@ -613,7 +986,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 6,
+        "y": 11,
         "w": 4,
         "h": 4
       },
@@ -694,7 +1067,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 6,
+        "y": 11,
         "w": 4,
         "h": 4
       },
@@ -758,7 +1131,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 6,
+        "y": 11,
         "w": 8,
         "h": 4
       },
@@ -789,7 +1162,7 @@
       "title": "3 · Capacity (beta: MAX_ACTIVE_SESSIONS=5, MAX_ACTIVE_SESSIONS_PER_STUDENT=1)",
       "gridPos": {
         "x": 0,
-        "y": 10,
+        "y": 15,
         "w": 24,
         "h": 1
       },
@@ -806,7 +1179,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 11,
+        "y": 16,
         "w": 4,
         "h": 4
       },
@@ -861,7 +1234,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 11,
+        "y": 16,
         "w": 4,
         "h": 4
       },
@@ -916,7 +1289,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 11,
+        "y": 16,
         "w": 4,
         "h": 4
       },
@@ -979,7 +1352,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 11,
+        "y": 16,
         "w": 4,
         "h": 4
       },
@@ -1033,7 +1406,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 11,
+        "y": 16,
         "w": 4,
         "h": 4
       },
@@ -1093,7 +1466,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 11,
+        "y": 16,
         "w": 4,
         "h": 4
       },
@@ -1152,7 +1525,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 15,
+        "y": 20,
         "w": 12,
         "h": 8
       },
@@ -1211,7 +1584,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 15,
+        "y": 20,
         "w": 12,
         "h": 8
       },
@@ -1256,7 +1629,7 @@
       "title": "4 · Session lifecycle: starts, resets, ends",
       "gridPos": {
         "x": 0,
-        "y": 23,
+        "y": 28,
         "w": 24,
         "h": 1
       },
@@ -1273,7 +1646,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 24,
+        "y": 29,
         "w": 8,
         "h": 8
       },
@@ -1323,7 +1696,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 24,
+        "y": 29,
         "w": 8,
         "h": 8
       },
@@ -1373,7 +1746,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 24,
+        "y": 29,
         "w": 8,
         "h": 8
       },
@@ -1418,7 +1791,7 @@
       "title": "5 · Cleanup and recovery (the reaper)",
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 37,
         "w": 24,
         "h": 1
       },
@@ -1436,7 +1809,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 33,
+        "y": 38,
         "w": 4,
         "h": 4
       },
@@ -1500,7 +1873,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 33,
+        "y": 38,
         "w": 4,
         "h": 4
       },
@@ -1559,7 +1932,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 33,
+        "y": 38,
         "w": 4,
         "h": 4
       },
@@ -1621,7 +1994,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 33,
+        "y": 38,
         "w": 12,
         "h": 4
       },
@@ -1675,7 +2048,7 @@
       "title": "6 · Isolation, security and sign-in",
       "gridPos": {
         "x": 0,
-        "y": 37,
+        "y": 42,
         "w": 24,
         "h": 1
       },
@@ -1693,7 +2066,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 43,
         "w": 4,
         "h": 4
       },
@@ -1766,7 +2139,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 38,
+        "y": 43,
         "w": 4,
         "h": 4
       },
@@ -1829,7 +2202,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 38,
+        "y": 43,
         "w": 4,
         "h": 4
       },
@@ -1888,7 +2261,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 38,
+        "y": 43,
         "w": 12,
         "h": 4
       },
@@ -1938,7 +2311,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 47,
         "w": 24,
         "h": 6
       },
@@ -2001,7 +2374,7 @@
       "title": "7 · Backups (BETA-P0-013 scripts; RPO 24 hours)",
       "gridPos": {
         "x": 0,
-        "y": 48,
+        "y": 53,
         "w": 24,
         "h": 1
       },
@@ -2019,7 +2392,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 49,
+        "y": 54,
         "w": 4,
         "h": 4
       },
@@ -2082,7 +2455,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 49,
+        "y": 54,
         "w": 4,
         "h": 4
       },
@@ -2155,7 +2528,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 49,
+        "y": 54,
         "w": 4,
         "h": 4
       },
@@ -2215,7 +2588,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 49,
+        "y": 54,
         "w": 4,
         "h": 4
       },
@@ -2287,7 +2660,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 49,
+        "y": 54,
         "w": 4,
         "h": 4
       },
@@ -2342,7 +2715,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 49,
+        "y": 54,
         "w": 4,
         "h": 4
       },
@@ -2410,7 +2783,7 @@
       "title": "8 · Host pressure (read by the API from /proc and statfs)",
       "gridPos": {
         "x": 0,
-        "y": 53,
+        "y": 58,
         "w": 24,
         "h": 1
       },
@@ -2427,7 +2800,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 54,
+        "y": 59,
         "w": 4,
         "h": 4
       },
@@ -2490,7 +2863,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 54,
+        "y": 59,
         "w": 8,
         "h": 4
       },
@@ -2552,7 +2925,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 54,
+        "y": 59,
         "w": 4,
         "h": 4
       },
@@ -2615,7 +2988,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 54,
+        "y": 59,
         "w": 8,
         "h": 4
       },

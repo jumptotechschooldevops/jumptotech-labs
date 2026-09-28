@@ -31,6 +31,11 @@ public launch.
 | 9 | **Session lifecycle.** "Nothing hangs half-done." | `jtt_sessions_oldest_status_age_seconds{status}` | CREATING ≤ 600 s, RESETTING ≤ 900 s, ENDING/EXPIRING ≤ 1200 s, DEGRADED ≤ 2400 s | `SessionStuckProvisioning`, `SessionResetStuck`, `SessionTeardownStuck`, `SessionDegradedNotReclaimed` (warning) | RB-17 |
 | 10 | **Recoverability.** "Their work survives a disaster." | `jtt:backup_age:seconds{operation="backup"}`; `jtt_backup_last_success_offhost` | a verified backup ≤ 26 h old, copied off the host | `BackupStale` (warning), `BackupMissedTwice` (critical), `BackupLastRunFailed`, `BackupVerifyFailed` | RB-16 |
 
+Row 0 of the operator dashboard (Grafana, *JTT — Private Beta Operations*)
+shows indicators 1, 2, 4, 5 and 6 as current values coloured against these
+objectives, so "are we inside the objective right now" is one look rather than
+a query. The alerts above remain what pages.
+
 Two alerts protect the signal itself rather than a student: `AlertNotificationsFailing`
 and `AlertmanagerUnreachable` (private-beta-operations.md). If either fires,
 every row above is unobserved until it is fixed.
