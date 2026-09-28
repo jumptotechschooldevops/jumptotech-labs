@@ -123,6 +123,7 @@ D2, not a default.
 | kind / kubectl | v0.31.0 / v1.34.2; node image `kindest/node:v1.34.0` | CI pins; `infrastructure/kind/cluster.yaml` |
 | Node.js | 22 + `npm ci` | `.nvmrc`; host tooling is Node |
 | Tools | git, openssl, curl, jq, iproute2 (`ss`), coreutils `timeout` | `make secrets`, smoke, preflight, the runbooks' log and `/health` reading |
+| Build tools | `python3`, `make`, `g++` | `npm ci` compiles `node-pty` on Linux (no Linux prebuilds); a clean `ubuntu:24.04` without them fails `npm ci` |
 | Registry and download access at build and first start | Docker Hub, `registry.npmjs.org`, `download.docker.com`, `dl.k8s.io` | Dockerfiles; lab images pulled on first start |
 | Checkout readable by container users | files other-readable, directories other-executable | uids 1000 (api, sandboxd), 65534 (Prometheus, Alertmanager), 472 (Grafana), 101 (nginx) read bind mounts |
 | Clock | NTP-synchronized | OIDC allows 5 s skew; certificates and the attestation are time-bound |
