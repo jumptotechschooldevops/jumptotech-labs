@@ -115,7 +115,8 @@ const TERMINAL_TEXT: Record<string, string> = {
   SESSION_ENDED: 'Disconnected — this terminal was opened in another tab or window.',
   IDLE_TIMEOUT: 'Disconnected after a period of inactivity.',
   SESSION_EXPIRED: 'Disconnected — the terminal reached its time limit.',
-  SHELL_EXITED: 'The shell exited.',
+  // `exit` or Ctrl+D. The environment is untouched; Reconnect starts a new shell in it.
+  SHELL_EXITED: 'The shell exited — your lab and files are still there. Press Reconnect for a new shell.',
   CAPACITY: 'The terminal service is busy right now.',
   UNAUTHORIZED: 'The terminal’s access expired.',
   CREDENTIALS_UNAVAILABLE: 'The terminal could not attach to your environment.',
