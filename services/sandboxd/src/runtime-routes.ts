@@ -143,6 +143,28 @@ export async function runRuntimeOperation(
         throw new RuntimeRequestError(400, 'BAD_REQUEST', "'spec' must be an object");
       }
       /*
+       * The network a runtime sandbox may join is decided here, not taken on
+       * trust. `assertSandboxNetwork` (in the runtime itself) only refuses
+       * `host` and `container:<name>`; every other bridge name — the platform's
+       * own `jumptotech-sandboxes` where the DinD daemons and the terminal sit,
+       * Docker's default `bridge` with its route to the outside, the `kind`
+       * network, a `<project>-database` — passes it. The API only ever asks
+       * this scope for a sandbox on `none` or on a per-session `jtt-net-*`
+       * bridge it just created (the Docker track's DinD is built through the
+       * separate `docker` scope, on this broker's own configured network, and
+       * does not come through here). So a caller holding the runtime secret is
+       * held to that same contract: anything else is refused before the daemon
+       * is asked, which keeps a compromised API from landing a sandbox on a
+       * network that reaches another session's runtime or the host's.
+       */
+      if (spec.network !== 'none' && !isContainerNetworkRef(spec.network)) {
+        throw new RuntimeRequestError(
+          400,
+          'BAD_REQUEST',
+          "'spec.network' must be 'none' or a per-session lab network",
+        );
+      }
+      /*
        * The owner stamp is applied *here*, not taken on trust. A caller cannot
        * create a sandbox this broker would then refuse to reap, and cannot
        * create one wearing another deployment's owner.
