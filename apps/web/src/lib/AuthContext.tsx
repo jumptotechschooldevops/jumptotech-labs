@@ -32,8 +32,10 @@ import {
   fetchAuthSession,
   signIn as startSignIn,
   signOut as endSession,
+  takeSignInFailure,
   type AuthIdentity,
   type AuthSession,
+  type SignInFailure,
 } from './auth';
 
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous' | 'unavailable';
@@ -52,6 +54,8 @@ export interface AuthState {
    * a first visit: both are ordinary signed-out states.
    */
   expired: boolean;
+  /** Why the sign-in this browser just came back from did not complete. */
+  signInFailure: SignInFailure | null;
   refresh: () => Promise<void>;
   signIn: (returnTo?: string) => void;
   signOut: () => Promise<void>;
@@ -80,6 +84,7 @@ export function AuthProvider({
   /** The status as last rendered, so a refresh can tell "signed out" from "no longer signed in". */
   const statusRef = useRef<AuthStatus>(status);
   statusRef.current = status;
+  const [signInFailure, setSignInFailure] = useState<SignInFailure | null>(() => takeSignInFailure());
   /** Guards against a late response from a superseded refresh overwriting a newer one. */
   const generation = useRef(0);
 
@@ -187,6 +192,14 @@ export function AuthProvider({
     }
   }, [signOutImpl, refresh]);
 
+  const signIn = useCallback(
+    (returnTo?: string) => {
+      setSignInFailure(null);
+      signInImpl(returnTo);
+    },
+    [signInImpl],
+  );
+
   const value = useMemo<AuthState>(
     () => ({
       status,
@@ -195,11 +208,12 @@ export function AuthProvider({
       mode: session?.mode ?? 'oidc',
       error,
       expired,
+      signInFailure,
       refresh,
-      signIn: signInImpl,
+      signIn,
       signOut,
     }),
-    [status, session, error, expired, refresh, signInImpl, signOut],
+    [status, session, error, expired, signInFailure, refresh, signIn, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
