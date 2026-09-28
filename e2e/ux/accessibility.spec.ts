@@ -102,8 +102,7 @@ test('lab state is announced: the status line, the terminal line and the verdict
   await expect(page.locator('.active-lab')).toContainText(', Ready');
 });
 
-// Known defect on main, fixed in its own PR: the preparing card's elapsed seconds tick inside a live region.
-test.fixme('nothing ticking inside a live region: a starting lab is announced once, not every second', async ({ page, platform }) => {
+test('nothing ticking inside a live region: a starting lab is announced once, not every second', async ({ page, platform }) => {
   await page.clock.install();
   await openSignedIn(page, platform, undefined, '#/labs/LINUX-001');
   const start = platform.hold('start');
