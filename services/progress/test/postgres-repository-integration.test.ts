@@ -23,7 +23,7 @@
 import { describe, expect, it } from 'vitest';
 import { PostgresDatabase } from '../src/postgres/database.js';
 import { PostgresProgressRepository } from '../src/postgres/repository.js';
-import { MigrationError, migrate, loadMigrations } from '../src/postgres/migrator.js';
+import { MigrationError, migrate, loadMigrations, verifySchema } from '../src/postgres/migrator.js';
 import { describeProgressRepository } from './repository-contract.js';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -69,6 +69,39 @@ if (!enabled) {
   });
 
   describe('migrations', () => {
+    it('verifySchema accepts the migrated schema and refuses an empty one, reading only', async () => {
+      const db = connect();
+      try {
+        await migrate(db);
+        const report = await verifySchema(db);
+        expect(report.skipped).toContain('001_progress');
+        expect(report.unknown).toEqual([]);
+
+        // A schema with no ledger at all: the api with DATABASE_AUTO_MIGRATE=false
+        // must refuse it, and must not create the ledger while finding out.
+        const empty = {
+          session: <T>(work: Parameters<PostgresDatabase['session']>[0]) =>
+            db.session(async (client) => {
+              await client.query('CREATE SCHEMA IF NOT EXISTS jtt_verify_empty');
+              await client.query('SET search_path TO jtt_verify_empty');
+              try {
+                return (await work(client)) as T;
+              } finally {
+                await client.query('RESET search_path');
+              }
+            }),
+        } as Pick<PostgresDatabase, 'session'>;
+        await expect(verifySchema(empty)).rejects.toThrow(/lacks migration\(s\).*001_progress/);
+        const { rows } = await db.query<{ ledger: string | null }>(
+          "SELECT to_regclass('jtt_verify_empty.schema_migrations')::text AS ledger",
+        );
+        expect(rows[0]?.ledger).toBeNull();
+        await db.query('DROP SCHEMA jtt_verify_empty');
+      } finally {
+        await db.close();
+      }
+    });
+
     it('is idempotent: a second run applies nothing', async () => {
       const db = connect();
       try {

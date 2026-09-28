@@ -122,7 +122,7 @@ socket.
 |---|---|---|---|
 | 8 | HTTP authorization | **PASS** | guard on every `:sessionId` route; `authorization.test.ts`, `five-student-adversarial.test.ts`, new `role-boundaries.test.ts` |
 | 9 | WebSocket authorization | **PASS** | HMAC token; `sid` and `uid` from the verified token only; re-auth refused; origin allow-list; `terminal-ownership.test.ts` ×2, `concurrent-attach.test.ts` |
-| 10 | Terminal ownership | **PASS (app layer)**; **FAIL (host uid, SEC-ARCH-2)** | `internal.ts` re-checks `uid` against the live owner on every attach and reattach; release gate §6 |
+| 10 | Terminal ownership | **PASS (app layer)**; host uid SEC-ARCH-2 **CLOSED** by #117/#123 (§14) | `internal.ts` re-checks `uid` against the live owner on every attach and reattach; release gate §6 |
 | 11 | Session create | **PASS** | owner server-assigned; per-owner limit atomic under the capacity advisory lock (`postgres-store.ts createWithinLimits`); `student-session-limit.test.ts` |
 | 12 | Session read | **PASS** | 404 for non-owner; list is owner-scoped in SQL (#71 reviewed) |
 | 13 | Session delete | **PASS** | owner or ADMIN only; anonymous 401 |
@@ -183,7 +183,8 @@ Also probed:
 **P0 — none in the application layer.**
 
 **P0 for an untrusted cohort / P1 for the trusted private beta — shared uid
-1001 on the terminal host (SEC-ARCH-2, known).**
+1001 on the terminal host (SEC-ARCH-2, known). CLOSED 2026-09-28 by #117 and
+#123; see §14.**
 - Kubernetes- and Docker-track shells are spawned by the terminal service
   after it drops to uid 1001. Per-session credentials are 0600 files owned by
   uid 1001 in `/run/jumptotech`.
@@ -270,8 +271,9 @@ All four squash-merged when `MERGEABLE`/`CLEAN`.
 - **Application layer: PASS.** Five identities each hold another's live ids
   and every cross move fails without side effects (`five-student-adversarial`);
   roles are pinned (#85).
-- **Host layer: FAIL for untrusted students** (SEC-ARCH-2). Acceptable only
-  for the trusted private-beta cohort, as the release gate already states.
+- **Host layer:** FAIL for untrusted students at the time of this audit
+  (SEC-ARCH-2). **CLOSED** since by #117/#123: five concurrent students get
+  five distinct shell uids, proven on a real kernel (§14).
 
 ## 13. Blockers
 
@@ -279,7 +281,106 @@ All four squash-merged when `MERGEABLE`/`CLEAN`.
   opening to a cohort; they remove the two ways one student could keep shared
   runtime infrastructure busy.
 - **Public release / untrusted cohort:**
-  1. per-session uid for terminal shells (SEC-ARCH-2);
+  1. ~~per-session uid for terminal shells (SEC-ARCH-2)~~ — done, #117/#123 (§14);
   2. `__Host-` cookies (P2-1), if the host shares a registrable domain;
   3. edge rate and connection limits (P2-6);
   4. idle timeout on browser sessions (P2-2).
+
+## 14. SEC-ARCH-2 — per-session shell identities (follow-up, 2026-09-28)
+
+**Status: CLOSED** for Kubernetes- and Docker-track shells, merged in #117 (`fbc16f4`) and #123 (`bcaf902`). Container-track shells were never affected: each runs in its own sandbox container.
+
+### The original finding
+
+Kubernetes- and Docker-track shells are PTYs the terminal service spawns in its own container. Every one ran as uid 1001, the account the whole service had dropped to under BETA-P0-010. The release-gate soak proved the resulting cross-student read live (§6 there). From any such shell a student could:
+
+- list `/run/jumptotech`, read another student's kubeconfig or Docker client key, and act in their namespace or daemon;
+- read `/proc/<pid>/environ` of another student's shell to find those paths, and `/proc/<pid>/cwd` to find their workspace;
+- write into another student's workspace, and so change the work Check grades;
+- `kill` another student's processes, or the terminal service itself;
+- leave a `setsid`/`nohup` process running past End, where it could read the next session's files (red-team O1);
+- leave `.bash_history` and files in the one shared Kubernetes HOME for the next student (red-team I8).
+
+### Threat model
+
+- **Attacker:** a student with an ordinary shell in their own session, who knows or can guess other sessions' identifiers.
+- **Boundary:** another session's files, processes and credentials, and the terminal service's own memory and secrets.
+- **Out of scope here:** container escape, the host kernel, and the sandboxes themselves, which have their own isolation.
+- **Requirements:**
+  - stable for the life of a session;
+  - distinct for concurrent sessions;
+  - survives api restart and recovery;
+  - no collision for five simultaneous students;
+  - no inheritance after cleanup;
+  - no weakening of non-root execution;
+  - no privileged containers, no Docker socket, no host filesystem;
+  - fail closed.
+
+### Implementation
+
+**Allocation (#117).**
+- `lab_sessions.shell_uid` is `BIGINT NOT NULL DEFAULT nextval('lab_session_shell_uid_seq')`, with a range `CHECK` (1900000000–1900999999) and `UNIQUE` (migration 007). The sequence is `NO CYCLE`.
+- PostgreSQL assigns the uid inside the INSERT, so:
+  - it is distinct under concurrency;
+  - it is stable across restarts, because it lives on the row;
+  - it is never reused, and an exhausted range makes Start fail rather than wrap;
+  - rows written by a pre-007 instance during a rollout still get one.
+- The in-memory store uses a monotonic counter.
+- Both stores discard a caller-supplied `shellUid`, and no patch or transition changes it.
+- `SessionManager.getTerminalContext` puts the stored uid on `kubernetes` and `docker-daemon` bindings only, on the owner-checked credential exchange. A local-shell session without a valid uid gets `CREDENTIALS_UNAVAILABLE`.
+
+**Terminal (#123).**
+- The image launches the service with `setpriv` as `jtt-terminal` (1002). Its ambient capabilities are exactly SETUID, SETGID and CHOWN; compose adds `CHOWN`.
+- Each shell runs as `prlimit --nproc` → `setpriv --reuid/--regid <session uid> --clear-groups --inh-caps=-all --ambient-caps=-all --no-new-privs` → `env -C <home>` → bash.
+- Credentials are `0600`, and homes and workspaces `0700`, owned by the session uid, under service-owned `0711` roots.
+- Kubernetes shells get a per-session home.
+- Verifier reads and Reset restores reclaim the tree for their duration, so no path check can be raced.
+- End (`/internal/terminate`) runs `kill -9 -1` *as* the session uid, proves via `/proc` that nothing of it survives, and reclaims and deletes its files.
+- Production refuses to start in any of these cases:
+  - the service is root;
+  - it lacks one of the three capabilities;
+  - it holds any other capability;
+  - `no_new_privs` is not set;
+  - its own uid is in the shell range.
+
+**A hazard found and closed along the way.** A child that changes uid between two non-root uids *keeps* its ambient capabilities. So spawning shells with node-pty's or libuv's own `uid` option would have given every student `CAP_SETUID`. Every shell therefore goes through `setpriv` with the ambient and inheritable sets cleared. Removing that clearing (mutation check, real kernel) left the shell with `CapEff c1`, and `setpriv --reuid=0 true` **succeeded**.
+
+### Evidence
+
+| Requirement | Evidence | Result |
+|---|---|---|
+| A and B get distinct effective uids, with zero capabilities | `make test-terminal-isolation` (real kernel, production launch and rules) | PASS |
+| A cannot read B's private files (kubeconfig, key, home, workspace) | same | PASS |
+| A cannot write B's private files | same | PASS |
+| A cannot list the credential or workspace roots | same | PASS |
+| A cannot signal B's processes or read their `/proc/*/environ` | same | PASS |
+| No shell can read the service's `environ` or `mem`, or signal it | same | PASS |
+| No shell can reach uid 0 or another session's uid | same | PASS |
+| Reconnect keeps the uid and home | same | PASS |
+| A restarted api hands out the same uid | `shell-uid-binding.test.ts`; Postgres contract "same uid after a restart" | PASS |
+| End kills everything of the uid (a `setsid` escapee included) and removes a `000`-locked home; others untouched | `make test-terminal-isolation` | PASS |
+| Never reused after End | store contract, in-memory and PostgreSQL | PASS |
+| Concurrent creation never collides | 12 concurrent admissions on real PostgreSQL | PASS |
+| A client cannot choose its uid | Start body (`shell-uid-binding`); auth frame (`test-terminal-isolation`) | PASS |
+| Invalid uids are refused | `isValidShellUid`; api fail-closed (mutation-checked); terminal refuses uid 1001 and spawns nothing | PASS |
+| Five concurrent students: distinct, working, isolated | `test-terminal-isolation` | PASS |
+| One student's fork bomb is bounded | `RLIMIT_NPROC` per uid, `test-terminal-isolation` | PASS |
+| Lab tools work as the session uid | `kubectl` and its cache, `docker` CLI, umask `0022`; `test-terminal-isolation` | PASS |
+| Existing rows get distinct uids on upgrade | `session-shell-uid-migration-integration.test.ts` | PASS |
+| Shipped image starts in production, fails closed when misconfigured | manual: healthy as `1002:1002`; refuses without `CHOWN`; refuses without `no-new-privileges` | PASS |
+| Full five-student rehearsal through the live stack with Kubernetes or Docker labs | not run here (see below) | NOT RUN |
+
+**CI.** #117: 14/14 checks pass. #123: 14/14 pass. On #123, `terminal-integration` ran `make test-terminal-isolation` on the runner's kernel with 13/13 passing. The first `gates` run failed because the production config gate's capability allow-list did not yet name `CHOWN`; it was fixed in the PR.
+
+### Residual risks
+
+- **`/tmp` is shared** (`1777`). A file a student *deliberately* leaves there world-readable can be read by another student. Homes, workspaces and credentials are private.
+- **The container `pids_limit` is shared.** Each shell uid's `RLIMIT_NPROC` (default 128) bounds one student, but a container-wide limit bounds everyone together.
+- **The service holds SETUID, SETGID and CHOWN** as a non-root account. A compromise of the terminal service can impersonate any session's shell. It could already reach every session's credentials, since it fetches them.
+- **Leftover processes if a terminate is lost.** The api calls `/internal/terminate` best-effort. If that call is lost, a session's escaped processes live until the terminal restarts. They can reach nothing of any other session, because uids are never reused, but they cost resources.
+- **Uids overlap across unrelated deployments on one kernel.** Two stacks on one host can hand out the same uid. Their containers do not share files or pid namespaces, but per-uid kernel limits are shared.
+- **Not run here.** The five-student live-stack rehearsal (`make beta-validate`) against Kubernetes or Docker labs was not run. Other agents hold the local kind clusters and ports. The catalog sweeps run solutions through the student kubeconfig and the runtime, not through the terminal.
+
+### Result
+
+**SEC-ARCH-2 is CLOSED** as a cross-student risk for the local-shell tracks. §8's "P0 for an untrusted cohort" item and §13's first public-release blocker are resolved by #117 and #123.

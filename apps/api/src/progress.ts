@@ -21,6 +21,7 @@ import {
   ProgressService,
   describeDatabase,
   migrate,
+  verifySchema,
   type ProgressRepository,
   type StudentIdentityResolver,
 } from '@jumptotech/progress';
@@ -121,8 +122,14 @@ export async function buildProgressRuntime(
         report.ledgerStartedAt === null ? null : Math.floor(report.ledgerStartedAt.getTime() / 1000),
     });
   } else {
-    await database.ping();
-    log('DATABASE_AUTO_MIGRATE is off — run `npm run db:migrate` before starting');
+    // Nothing is applied here, but the rollback boundary still holds: a schema
+    // a newer release migrated, or one missing a migration this release needs,
+    // stops the start exactly as `migrate` would.
+    const report = await verifySchema(database, {
+      logger: (message) => log(`migration ${message}`),
+      allowNewerSchema: settings.allowNewerSchema ?? true,
+    });
+    log(`DATABASE_AUTO_MIGRATE is off — schema verified (${report.skipped.length} migration(s) present)`);
   }
 
   const repository: ProgressRepository = new PostgresProgressRepository(database);

@@ -247,6 +247,8 @@ interface Scenario {
   expectFail: string[];
   /** When given, exactly these check ids must WARN — so a clean configuration also proves it warns about nothing. */
   expectWarn?: string[];
+  /** Values the api container must receive, as compose resolves them. */
+  expectApi?: Record<string, string>;
 }
 
 function scenarios(base: Record<string, string>): Scenario[] {
@@ -330,6 +332,23 @@ function scenarios(base: Record<string, string>): Scenario[] {
       change: { PUBLIC_ORIGIN: origin, ALLOWED_ORIGINS: origin, OIDC_REDIRECT_URI: `${origin}/auth/callback` },
       expectFail: ['gates.tls-edge'],
     })),
+    {
+      // Per-release tags (private-beta-deployment.md §7): the ones the api starts.
+      name: 'pinned sandbox image tags reach the api',
+      change: {
+        LINUX_SANDBOX_IMAGE: 'jumptotech/lab-linux:release-check',
+        TERRAFORM_SANDBOX_IMAGE: 'jumptotech/lab-terraform:release-check',
+        ANSIBLE_SANDBOX_IMAGE: 'jumptotech/lab-ansible:release-check',
+        CICD_SANDBOX_IMAGE: 'jumptotech/lab-cicd:release-check',
+      },
+      expectFail: [],
+      expectApi: {
+        LINUX_SANDBOX_IMAGE: 'jumptotech/lab-linux:release-check',
+        TERRAFORM_SANDBOX_IMAGE: 'jumptotech/lab-terraform:release-check',
+        ANSIBLE_SANDBOX_IMAGE: 'jumptotech/lab-ansible:release-check',
+        CICD_SANDBOX_IMAGE: 'jumptotech/lab-cicd:release-check',
+      },
+    },
     { name: 'a terminal with fewer shells than seats is refused', change: { TERMINAL_MAX_SESSIONS: '4' }, expectFail: ['capacity.shell-ceilings'] },
     {
       name: 'a second trusted origin is a warning that names it',
@@ -400,6 +419,10 @@ function selfTest(): number {
           for (const id of warned.filter((id) => !scenario.expectWarn!.includes(id))) {
             problems.push(`${id} warned unexpectedly: ${results.find((r) => r.id === id)!.detail}`);
           }
+        }
+        for (const [name, expected] of Object.entries(scenario.expectApi ?? {})) {
+          const actual = resolution.config.services?.api?.environment?.[name];
+          if (actual !== expected) problems.push(`api ${name} is ${actual ?? 'unset'}, not ${expected}`);
         }
         const printed = results.map(formatResult).join('\n');
         secretLeak = SECRET_NAMES.some((name) => values[name] && values[name]!.length >= 6 && printed.includes(values[name]!));
