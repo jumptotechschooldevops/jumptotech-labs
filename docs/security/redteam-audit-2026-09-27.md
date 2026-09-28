@@ -72,7 +72,11 @@ recorded from the design).
   `kube-system` secrets were all **Forbidden**. Pod network A → B timed out
   (A's default-deny egress). From a student pod only the API service
   (anonymous 403) and cluster DNS answer. Other kind-network hosts, the Docker
-  gateway, the internet and `169.254.169.254` are filtered. On the node:
+  gateway, the internet and `169.254.169.254` are filtered. A selector-less
+  Service with hand-written Endpoints (CVE-2021-25740 class) pointing at
+  another student's pod, or at a filtered kind-network host, was **blocked**
+  both by ClusterIP and by name: egress policy sees the post-DNAT
+  destination. On the node:
   kubelet 401, etcd requires a client certificate, apiserver 403, kube-proxy
   healthz on 10256 is the only readable endpoint (non-sensitive).
 - **Docker, proved in CI on every PR:** `docker-integration.test.ts`
