@@ -261,11 +261,21 @@ setup manifest says why its node agent is deliberately ordinary.
 
 Unchanged by this story, and a separate, larger risk. A Docker-track session is
 a `docker:dind` container created by `sandboxd` with `--privileged`, because
-the inner daemon must create cgroups, mount filesystems and program iptables. A
-student who escapes a container *inside* their sandbox is in a privileged
-container on the host, one step from the host kernel. The broker narrows who can
-create such a container (only `sandboxd`, only from a session id); it does not
-change what one is. See README → Docker sandbox security and
+the inner daemon must create cgroups, mount filesystems and program iptables.
+The student holds that inner daemon's client certificate by design, and the
+inner daemon runs with every privilege the outer container has. Reaching the
+host kernel therefore needs **no escape and no vulnerability**: whatever the
+student asks their own daemon to run inherits the outer container's host-level
+privileges (red-team O3, docs/security/redteam-audit-2026-09-27.md). Treat a
+Docker-track student as able to act as root on the Docker host. The broker
+narrows who can create such a container (only `sandboxd`, only from a session
+id); it does not change what one is.
+
+- **Private beta (five known students):** accepted risk, on a host that runs
+  nothing else of value and whose credentials a student could read.
+- **Public or untrusted cohort:** blocker. The Docker track must stay off
+  (`DOCKER_TRACK_ENABLED=false`) until each sandbox runs in its own VM or a
+  sandboxed runtime. See README → Docker sandbox security and
 docs/runtime-architecture.md §7. The production answer is a VM or sandboxed
 runtime per sandbox, not Pod Security.
 
