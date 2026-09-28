@@ -46,7 +46,7 @@ export interface ClassroomRow {
   secondsUntilIdle: number;
   lastCheck: OperationSummary | null;
   lastReset: OperationSummary | null;
-  cleanup: 'not-started' | 'in-progress' | 'confirmed' | 'not-needed';
+  cleanup: 'not-started' | 'in-progress' | 'confirmed' | 'automatic';
   attention: Attention[];
   /** ADMIN only. */
   operator?: { sandboxRef: string; namespace?: string; statusReason?: string };

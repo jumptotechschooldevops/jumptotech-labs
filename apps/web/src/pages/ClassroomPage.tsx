@@ -219,7 +219,7 @@ function SessionsTable({ rows, caption, finished = false }: { rows: ClassroomRow
               </td>
               <td>{finished ? formatMoment(row.endedAt ?? row.statusChangedAt) : ago(row.startedAt)}</td>
               {finished ? (
-                <td>{row.cleanup === 'confirmed' ? 'Confirmed' : row.cleanup === 'not-needed' ? 'Nothing to clean' : 'In progress'}</td>
+                <td>{row.cleanup === 'confirmed' ? 'Confirmed' : row.cleanup === 'automatic' ? 'Slot released' : 'In progress'}</td>
               ) : (
                 <td>{ago(row.lastActivityAt)}</td>
               )}

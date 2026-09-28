@@ -161,8 +161,8 @@ export function ClassroomSessionPage({ sessionId }: { sessionId: string }) {
                 ? 'Confirmed — the environment is gone'
                 : row.cleanup === 'in-progress'
                   ? 'In progress — the platform retries until the environment is gone'
-                  : row.cleanup === 'not-needed'
-                    ? 'Nothing to clean up'
+                  : row.cleanup === 'automatic'
+                    ? 'Slot released — anything the failed start left is removed automatically'
                     : 'Not started — the lab is still in use'}
             </dd>
             {data.environment ? (
