@@ -39,6 +39,13 @@ import { buildApiObservability, jwksFetchMetricHook, sessionMetricsHooks } from 
 import { installRuntimeCollectors } from './observability-collectors.js';
 import { installOperationsCollectors } from './operations.js';
 import { createOperatorHandler, startOperatorSocket } from './operator.js';
+import {
+  InMemorySessionEventStore,
+  PostgresSessionEventStore,
+  SESSION_EVENT_RETENTION_DAYS,
+  type SessionEventStore,
+} from './classroom/session-events.js';
+import { CleanupEventListener } from './classroom/cleanup-events.js';
 import { AccessControl, InMemoryAccessStore } from './access/entitlements.js';
 import { PostgresAccessStore } from './access/postgres-store.js';
 
@@ -310,6 +317,27 @@ async function main(): Promise<void> {
   }, config.reaperIntervalSeconds * 1000);
   authSessionSweeper.unref();
 
+  /*
+   * What happened to each lab, for the classroom view (migration 008). Durable
+   * with the sessions it describes; purged after SESSION_EVENT_RETENTION_DAYS
+   * on the same timer, so the table cannot only grow.
+   */
+  const sessionEvents: SessionEventStore = learning.database
+    ? new PostgresSessionEventStore(learning.database)
+    : new InMemorySessionEventStore();
+  const sessionEventSweeper = setInterval(() => {
+    const before = new Date(Date.now() - SESSION_EVENT_RETENTION_DAYS * 86_400_000).toISOString();
+    void sessionEvents
+      .purgeOlderThan(before)
+      .then((purged) => {
+        if (purged > 0) logger.info('session_events.purged', { count: purged });
+      })
+      .catch((error: unknown) => {
+        logger.error('session_events.purged', { outcome: 'failed', err: error });
+      });
+  }, config.reaperIntervalSeconds * 1000);
+  sessionEventSweeper.unref();
+
   const sessions = new SessionManager({
     registry,
     providers,
@@ -318,9 +346,13 @@ async function main(): Promise<void> {
     lifetimes: config.lifetimes,
     namespaceSecret: config.namespaceSecret,
     terminal,
-    listener: new AttemptClosingListener(
-      learning.progress,
-      logger.legacy('progress.write_failed', 'warn'),
+    // The attempt is closed first; then the cleanup is recorded for the
+    // classroom view, even if closing the attempt failed.
+    listener: new CleanupEventListener(
+      sessionEvents,
+      async (sessionId) => (await sessionStore.get(sessionId))?.ownerUserId,
+      logger,
+      new AttemptClosingListener(learning.progress, logger.legacy('progress.write_failed', 'warn')),
     ),
     logger: logger.legacy('session.transition'),
     metrics: sessionMetricsHooks(metrics.sessions),
@@ -410,6 +442,7 @@ async function main(): Promise<void> {
     identityResolver,
     browserAuth: { users, authSessions, client: browserClient, idTokenVerifier },
     access,
+    sessionEvents,
     observability: {
       logger,
       metrics: {
@@ -587,6 +620,7 @@ async function main(): Promise<void> {
       reaper.stop();
       attemptSweeper.stop();
       clearInterval(authSessionSweeper);
+      clearInterval(sessionEventSweeper);
       observabilityServer.close();
       operatorSocket?.close();
       server.close(() => {

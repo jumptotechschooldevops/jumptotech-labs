@@ -59,6 +59,7 @@ import { resolveTerminalWsBaseForClient } from '../public-origin.js';
 import { toAttemptPayload } from './me.js';
 import type { AccessControl } from '../access/entitlements.js';
 import type { AuthAuditLogger } from '../auth/middleware.js';
+import { recordSafely, type SessionEventInput, type SessionEventStore } from '../classroom/session-events.js';
 
 /** The metric groups the browser-facing routers write to. */
 export interface RouteMetrics {
@@ -126,6 +127,12 @@ export interface SessionRoutesDeps {
   sandboxWriteLimiter?: RequestHandler;
   /** The per-student budget for Check. Optional, like the one above. */
   checkLimiter?: RequestHandler;
+  /**
+   * What happened to each lab, for the classroom view (migration 008). Written
+   * best-effort through `recordSafely`: a lost event never fails an operation.
+   * Optional so routers composed directly in tests need none.
+   */
+  sessionEvents?: SessionEventStore;
 }
 
 /** Stand-in when no limiter is composed. */
@@ -387,6 +394,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   const { registry, sessions, k8s, engines, ansible, workspace, progress } = deps;
   const log = deps.logger ?? (() => undefined);
   const router = Router();
+
+  /** One operation on a session, for the classroom view. Never throws. */
+  const event = (session: LabSession, actorUserId: string, fields: Pick<SessionEventInput, 'operation' | 'outcome' | 'code' | 'durationMs'>) =>
+    recordSafely(deps.sessionEvents, obs, {
+      sessionId: session.sessionId,
+      labId: session.labId,
+      ...(session.ownerUserId ? { ownerUserId: session.ownerUserId } : {}),
+      actorUserId,
+      ...fields,
+    });
   /*
    * Every session route goes through this.
    *
@@ -580,6 +597,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     try {
       ({ session } = await sessions.requireActive(req.params.sessionId));
     } catch (error) {
+      await event(allowed.session, allowed.user.userId, {
+        operation: 'check',
+        outcome: 'refused',
+        code: error instanceof SessionError ? error.code : 'INTERNAL_ERROR',
+      });
       sessionErrorResponse(res, error);
       return;
     }
@@ -593,14 +615,25 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       return;
     }
     checksInFlight.add(session.sessionId);
+    const checkStartedAt = Date.now();
     try {
-      await runCheck(res, session);
+      await runCheck(res, session, allowed.user.userId);
+    } catch (error) {
+      // Nothing graded: the platform broke under the check. The central
+      // handler answers 500; the classroom sees a Check that errored.
+      await event(session, allowed.user.userId, {
+        operation: 'check',
+        outcome: 'error',
+        code: 'INTERNAL_ERROR',
+        durationMs: Date.now() - checkStartedAt,
+      });
+      throw error;
     } finally {
       checksInFlight.delete(session.sessionId);
     }
   }));
 
-  async function runCheck(res: Response, session: LabSession): Promise<void> {
+  async function runCheck(res: Response, session: LabSession, actorUserId: string): Promise<void> {
     const lab = registry.get(session.labId);
     // Checking is activity from the moment it starts: stamped only when it
     // finished, a check that ran across the idle deadline could be expired by
@@ -640,6 +673,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
         // What the session had become: RESETTING, DEGRADED, ENDING, … or gone.
         reason: now?.status ?? 'removed',
       });
+      await event(session, actorUserId, {
+        operation: 'check',
+        outcome: 'refused',
+        code: 'SESSION_CHANGED_DURING_CHECK',
+        durationMs: Date.now() - verifyStartedAt,
+      });
       sendError(res, 409, {
         code: 'SESSION_NOT_ACTIVE',
         message: 'The lab environment changed while it was being checked, so that result was not recorded.',
@@ -659,6 +698,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
      * class starts; the alert is on `error` alone.
      */
     const verdict = result.error ? 'error' : result.passed ? 'pass' : 'fail';
+    await event(session, actorUserId, {
+      operation: 'check',
+      outcome: verdict,
+      ...(result.error ? { code: result.error.code } : {}),
+      durationMs: Date.now() - verifyStartedAt,
+    });
     deps.metrics?.verification.checks.inc({
       track: lab.track,
       lab_id: lab.id,
@@ -785,9 +830,17 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
 
   // POST /api/sessions/:sessionId/reset ------------------------------------
   router.post('/:sessionId/reset', deps.sandboxWriteLimiter ?? noLimit, asyncRoute(async (req, res) => {
-    if (!(await guard(req, res, 'session:reset'))) return;
+    const allowed = await guard(req, res, 'session:reset');
+    if (!allowed) return;
+    const resetStartedAt = Date.now();
     try {
       const { session, result } = await sessions.reset(String(req.params.sessionId));
+      await event(session, allowed.user.userId, {
+        operation: 'reset',
+        outcome: result.ok ? 'ok' : 'failed',
+        ...(result.ok ? {} : { code: result.error?.code ?? 'RESET_FAILED' }),
+        durationMs: Date.now() - resetStartedAt,
+      });
       recordReset(result.ok ? 'success' : 'failed', {
         provider: session.provider,
         labId: session.labId,
@@ -849,6 +902,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       recordReset(code === undefined || code === 'SESSION_RESET_FAILED' ? 'failed' : 'rejected', {
         ...(code ? { code } : {}),
       });
+      await event(allowed.session, allowed.user.userId, {
+        operation: 'reset',
+        outcome: code === undefined || code === 'SESSION_RESET_FAILED' ? 'failed' : 'refused',
+        code: code ?? 'INTERNAL_ERROR',
+        durationMs: Date.now() - resetStartedAt,
+      });
       sessionErrorResponse(res, error);
     }
   }));
@@ -861,9 +920,19 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
   // one therefore travel the same path and cannot record different things.
   // Nothing is deleted from history either way.
   router.delete('/:sessionId', asyncRoute(async (req, res) => {
-    if (!(await guard(req, res, 'session:end'))) return;
+    const allowed = await guard(req, res, 'session:end');
+    if (!allowed) return;
+    const endStartedAt = Date.now();
     try {
       const { session, destroy } = await sessions.end(String(req.params.sessionId));
+      // `pending`: the sandbox is not confirmed gone yet. The reaper finishes
+      // it, and the cleanup event that follows says when.
+      await event(session, allowed.user.userId, {
+        operation: 'end',
+        outcome: destroy.namespaceGone ? 'ok' : 'pending',
+        ...(destroy.error?.code ? { code: destroy.error.code } : {}),
+        durationMs: Date.now() - endStartedAt,
+      });
       recordEnd(destroy.namespaceGone ? 'success' : 'pending', {
         provider: session.provider,
         labId: session.labId,
@@ -899,6 +968,12 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     } catch (error) {
       const code = error instanceof SessionError ? error.code : undefined;
       recordEnd(code === undefined ? 'failed' : 'rejected', { ...(code ? { code } : {}) });
+      await event(allowed.session, allowed.user.userId, {
+        operation: 'end',
+        outcome: code === undefined ? 'failed' : 'refused',
+        code: code ?? 'INTERNAL_ERROR',
+        durationMs: Date.now() - endStartedAt,
+      });
       sessionErrorResponse(res, error);
     }
   }));

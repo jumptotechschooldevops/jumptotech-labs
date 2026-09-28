@@ -133,6 +133,12 @@ export const LOG_EVENTS = [
   'ops.operator.session_ended',
   // A grant, suspend, restore or revoke of a student's lab access (docs/commercial-access.md).
   'ops.operator.access_changed',
+
+  // --- session events: the classroom view's record (migration 008) ----------
+  // A session event (migration 008) could not be written; the operation it
+  // describes went ahead regardless.
+  'session_event.write_failed',
+  'session_events.purged',
 ] as const;
 
 export type LogEvent = (typeof LOG_EVENTS)[number];
