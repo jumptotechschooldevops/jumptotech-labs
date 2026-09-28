@@ -69,11 +69,20 @@ export const PLATFORM_SCOPE = 'platform' as const;
 export type AccessScope = typeof PLATFORM_SCOPE;
 
 /**
- * How an entitlement came to exist. Only `operator` today — a person ran the
- * CLI. A payment integration would add its own value (docs/commercial-access.md
- * §9), so a support engineer can always tell a manual grant from a paid one.
+ * Where an entitlement row comes from — its *source*. An account has at most
+ * one row per source:
+ *
+ *   operator  a person ran the CLI (docs/commercial-access.md §6)
+ *   billing   a verified billing-provider event (docs/billing.md): the row is
+ *             kept in line with the account's subscriptions, never edited by
+ *             hand
+ *
+ * The rows are independent: cancelling a subscription never touches a manual
+ * beta grant, and revoking a manual grant never cancels anything paid. The one
+ * account-wide decision is suspension (`evaluateAccount`).
  */
-export type GrantedVia = 'operator';
+export const GRANT_SOURCES = ['operator', 'billing'] as const;
+export type GrantedVia = (typeof GRANT_SOURCES)[number];
 
 /**
  * What kind of access a grant is — a label for people, not a permission.
@@ -85,8 +94,10 @@ export type GrantedVia = 'operator';
  *   BETA      a private-beta participant
  *   TRIAL     a time-limited trial
  */
-export const GRANT_KINDS = ['STANDARD', 'BETA', 'TRIAL'] as const;
+export const GRANT_KINDS = ['STANDARD', 'BETA', 'TRIAL', 'SUBSCRIPTION'] as const;
 export type GrantKind = (typeof GRANT_KINDS)[number];
+/** The kinds an operator may write. SUBSCRIPTION is billing's alone (migration 010 enforces it too). */
+export const OPERATOR_KINDS = ['STANDARD', 'BETA', 'TRIAL'] as const;
 
 export interface Entitlement {
   userId: string;
@@ -108,7 +119,7 @@ export interface Entitlement {
  * `TRIAL` starts a trial: a grant of kind TRIAL whose window the configured
  * length decides, allowed once per account. It is recorded as a grant.
  */
-export const ACCESS_ACTIONS = ['GRANT', 'TRIAL', 'SUSPEND', 'RESTORE', 'REVOKE'] as const;
+export const ACCESS_ACTIONS = ['GRANT', 'TRIAL', 'SUSPEND', 'RESTORE', 'REVOKE', 'SYNC'] as const;
 export type AccessAction = (typeof ACCESS_ACTIONS)[number];
 
 export interface EntitlementSnapshot {
@@ -124,6 +135,8 @@ export interface AccessEvent {
   eventId: string;
   userId: string;
   scope: AccessScope;
+  /** Which row changed: the operator's, or billing's. */
+  source: GrantedVia;
   action: AccessAction;
   /** Who the operator said they were (`--by`). Attribution, not authentication: see §5 of the doc. */
   actor: string;
@@ -142,7 +155,10 @@ export interface AccountAccess {
   role: string;
   /** When the account was first provisioned, i.e. the first sign-in. */
   createdAt: string;
+  /** The operator's row, if any — what `grant`, `trial` and `revoke` change. */
   entitlement: Entitlement | null;
+  /** Every row the account has, one per source. */
+  grants: Entitlement[];
 }
 
 export interface AccessEvaluation {
@@ -168,6 +184,37 @@ export function evaluateAccess(entitlement: Entitlement | null, nowMs: number): 
     return { state: 'EXPIRED', active: false };
   }
   return { state: 'ACTIVE', active: true };
+}
+
+/**
+ * The account's state across all its rows, and which row answers for it.
+ *
+ *   1. Any SUSPENDED row: the account is SUSPENDED. Suspension is an operator's
+ *      account-wide decision, and a row billing adds later is born suspended.
+ *   2. Otherwise, any row whose window is open: ACTIVE. If several are, the
+ *      one that answers (its plan applies) is, in order: an operator's
+ *      non-trial row — a person's explicit decision, such as a comped plan —
+ *      then a paid subscription, then a trial of either source; ties go to
+ *      the later end.
+ *   3. Otherwise the most recently changed row's state (SCHEDULED, EXPIRED,
+ *      REVOKED); NONE without rows.
+ */
+export function evaluateAccount(
+  grants: readonly Entitlement[],
+  nowMs: number,
+): AccessEvaluation & { effective: Entitlement | null } {
+  if (grants.length === 0) return { state: 'NONE', active: false, effective: null };
+  const suspended = grants.find((grant) => grant.status === 'SUSPENDED');
+  if (suspended) return { state: 'SUSPENDED', active: false, effective: suspended };
+  const active = grants.filter((grant) => evaluateAccess(grant, nowMs).active);
+  if (active.length > 0) {
+    const rank = (grant: Entitlement) => (grant.kind === 'TRIAL' ? 0 : grant.grantedVia === 'operator' ? 2 : 1);
+    const end = (grant: Entitlement) => (grant.expiresAt === null ? Number.POSITIVE_INFINITY : Date.parse(grant.expiresAt));
+    const [best] = [...active].sort((a, b) => rank(b) - rank(a) || end(b) - end(a));
+    return { state: 'ACTIVE', active: true, effective: best! };
+  }
+  const [latest] = [...grants].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  return { ...evaluateAccess(latest!, nowMs), effective: latest! };
 }
 
 // --- input validation ---------------------------------------------------------
@@ -286,10 +333,24 @@ export interface MutationContext {
 
 export function assertKind(value: unknown): GrantKind {
   const raw = typeof value === 'string' ? value.trim().toUpperCase() : '';
-  if (!(GRANT_KINDS as readonly string[]).includes(raw)) {
-    throw new AccessError('INVALID_KIND', `--kind is one of ${GRANT_KINDS.map((k) => k.toLowerCase()).join(', ')}.`);
+  if (!(OPERATOR_KINDS as readonly string[]).includes(raw)) {
+    throw new AccessError('INVALID_KIND', `--kind is one of ${OPERATOR_KINDS.map((k) => k.toLowerCase()).join(', ')}.`);
   }
   return raw as GrantKind;
+}
+
+/**
+ * What billing says a row should be, from the account's subscriptions
+ * (`billing/lifecycle.ts`). `active: false` — nothing paid entitles the account
+ * any more — closes the row's window rather than revoking it: REVOKED is an
+ * operator's word, and a closed window stays closed through a later `restore`.
+ */
+export interface SyncRequest {
+  active: boolean;
+  startsAt: string;
+  expiresAt: string;
+  kind: 'SUBSCRIPTION' | 'TRIAL';
+  planId: string | null;
 }
 
 /** What a mutation decided, before anything is written. */
@@ -415,7 +476,157 @@ export function planMutation(
       if (!current) throw new AccessError('NO_ENTITLEMENT', 'There is no access to revoke.');
       if (current.status === 'REVOKED') return { kind: 'unchanged', action };
       return { kind: 'write', action, next: { ...snapshot(current), status: 'REVOKED' } };
+    case 'SYNC':
+      throw new AccessError('INVALID_REQUEST', 'SYNC is planned for the whole account (planAccountMutation).');
   }
+}
+
+/** One row a mutation writes. */
+export interface RowChange {
+  source: GrantedVia;
+  before: Entitlement | null;
+  action: AccessAction;
+  next: EntitlementSnapshot;
+}
+
+/**
+ * A mutation, planned against every row the account has.
+ *
+ *   grant, trial, revoke   the operator's row only. A grant or trial is refused
+ *                          while the account is suspended through any row, and
+ *                          a trial while any row is active.
+ *   suspend                every ACTIVE row → SUSPENDED: the account, not a row.
+ *   restore                every SUSPENDED row → ACTIVE, each with its window.
+ *   sync (billing only)    billing's row brought in line with the provider. It
+ *                          stays (or is born) SUSPENDED while the account is;
+ *                          "no longer entitled" closes its window at `now`.
+ *
+ * An empty list is "already in effect": nothing to write, nothing to record.
+ */
+export function planAccountMutation(
+  rows: readonly Entitlement[],
+  input: MutationInput,
+  nowIso: string,
+  context: MutationContext = { hadTrial: false },
+): RowChange[] {
+  const source: GrantedVia = input.source ?? 'operator';
+  const bySource = (wanted: GrantedVia) => rows.find((row) => row.grantedVia === wanted) ?? null;
+  const suspended = rows.filter((row) => row.status === 'SUSPENDED');
+  const nowMs = Date.parse(nowIso);
+
+  if (input.action === 'SYNC') {
+    if (source !== 'billing' || !input.sync) {
+      throw new AccessError('INVALID_REQUEST', 'Only billing synchronises a row, and it must say what to.');
+    }
+    const sync = input.sync;
+    if (Date.parse(sync.expiresAt) <= Date.parse(sync.startsAt)) {
+      throw new AccessError('INVALID_WINDOW', 'A billing period must end after it starts.');
+    }
+    const current = bySource('billing');
+    let next: EntitlementSnapshot;
+    if (sync.active) {
+      next = {
+        status: suspended.length > 0 ? 'SUSPENDED' : 'ACTIVE',
+        startsAt: sync.startsAt,
+        expiresAt: sync.expiresAt,
+        kind: sync.kind,
+        planId: sync.planId,
+      };
+    } else {
+      if (!current) return [];
+      // Close the window at the earlier of the period's end and now, so it
+      // covers no instant from now on — including this one, when a period is
+      // cancelled at its very first instant: the start is moved back to the
+      // row's own start (or just before now) rather than the end past now.
+      // The status is left as it is: SUSPENDED stays visible, and ACTIVE with
+      // a closed window reads EXPIRED.
+      const startMs = Math.min(Date.parse(current.startsAt), Date.parse(sync.startsAt), nowMs - 1);
+      const endMs = Math.max(startMs + 1, Math.min(Date.parse(sync.expiresAt), nowMs));
+      next = {
+        status: current.status,
+        startsAt: new Date(startMs).toISOString(),
+        expiresAt: new Date(endMs).toISOString(),
+        kind: sync.kind,
+        planId: sync.planId,
+      };
+    }
+    if (current && sameSnapshot(snapshot(current), next)) return [];
+    return [{ source: 'billing', before: current, action: 'SYNC', next }];
+  }
+
+  if (source !== 'operator') {
+    throw new AccessError('INVALID_REQUEST', 'Billing changes access only by synchronising its own row.');
+  }
+
+  switch (input.action) {
+    case 'GRANT':
+    case 'TRIAL': {
+      const heldElsewhere = suspended.some((row) => row.grantedVia !== 'operator');
+      if (heldElsewhere) {
+        throw new AccessError(
+          'ENTITLEMENT_SUSPENDED',
+          'This account is suspended. `access restore` lifts the suspension; a grant does not override it.',
+        );
+      }
+      if (input.action === 'TRIAL' && rows.some((row) => row.grantedVia !== 'operator' && evaluateAccess(row, nowMs).active)) {
+        throw new AccessError('ALREADY_ACTIVE', 'This account already has active paid access; a trial would add nothing.');
+      }
+      const current = bySource('operator');
+      const plan = planMutation(current, input.action, nowIso, input.grant, input.trial, context);
+      return plan.kind === 'unchanged' ? [] : [{ source: 'operator', before: current, action: plan.action, next: plan.next }];
+    }
+    case 'REVOKE': {
+      const current = bySource('operator');
+      if (!current && bySource('billing')) {
+        throw new AccessError(
+          'NO_ENTITLEMENT',
+          'This account has no operator access to revoke; its access is a paid subscription. Cancel it in the billing ' +
+            'provider, or `access suspend` to stop lab use now.',
+        );
+      }
+      const plan = planMutation(current, 'REVOKE', nowIso);
+      return plan.kind === 'unchanged' ? [] : [{ source: 'operator', before: current, action: 'REVOKE', next: plan.next }];
+    }
+    case 'SUSPEND': {
+      if (rows.length === 0) throw new AccessError('NO_ENTITLEMENT', 'There is no access to suspend.');
+      const active = rows.filter((row) => row.status === 'ACTIVE');
+      if (active.length === 0) {
+        if (suspended.length > 0) return [];
+        throw new AccessError('ENTITLEMENT_REVOKED', 'This access is already revoked.');
+      }
+      return active.map((row) => ({
+        source: row.grantedVia,
+        before: row,
+        action: 'SUSPEND' as const,
+        next: { ...snapshot(row), status: 'SUSPENDED' as const },
+      }));
+    }
+    case 'RESTORE': {
+      if (rows.length === 0) throw new AccessError('NO_ENTITLEMENT', 'There is no access to restore.');
+      if (suspended.length === 0) {
+        if (rows.some((row) => row.status === 'ACTIVE')) return [];
+        throw new AccessError('ENTITLEMENT_REVOKED', 'Revoked access is not restored; grant it again.');
+      }
+      return suspended.map((row) => ({
+        source: row.grantedVia,
+        before: row,
+        action: 'RESTORE' as const,
+        next: { ...snapshot(row), status: 'ACTIVE' as const },
+      }));
+    }
+    default:
+      throw new AccessError('INVALID_REQUEST', `Unknown action ${String(input.action)}.`);
+  }
+}
+
+function sameSnapshot(a: EntitlementSnapshot, b: EntitlementSnapshot): boolean {
+  return (
+    a.status === b.status &&
+    a.startsAt === b.startsAt &&
+    a.expiresAt === b.expiresAt &&
+    a.kind === b.kind &&
+    a.planId === b.planId
+  );
 }
 
 export function snapshot(entitlement: Entitlement): EntitlementSnapshot {
@@ -436,13 +647,22 @@ export interface MutationInput {
   grant?: GrantRequest;
   /** For TRIAL: the configured terms. */
   trial?: TrialRequest;
+  /** Which row: `operator` (the default) or `billing`. Only billing may SYNC. */
+  source?: GrantedVia;
+  /** For SYNC: what billing says the row should be. */
+  sync?: SyncRequest;
 }
 
 export interface MutationResult {
   changed: boolean;
+  /** The row of the input's source, before and after (null if it does not exist). */
   before: Entitlement | null;
-  after: Entitlement;
+  after: Entitlement | null;
+  /** The first event written; `events` has all of them (suspend and restore touch every row). */
   event: AccessEvent | null;
+  events: AccessEvent[];
+  /** Every row of the account after the change. */
+  grants: Entitlement[];
 }
 
 /**
@@ -453,7 +673,10 @@ export interface MutationResult {
  * racing on one student are serialised rather than interleaved.
  */
 export interface AccessStore {
+  /** The operator's row. */
   get(userId: string): Promise<Entitlement | null>;
+  /** Every row the account has, one per source. */
+  grants(userId: string): Promise<Entitlement[]>;
   mutate(input: MutationInput, now: () => Date): Promise<MutationResult>;
   events(userId: string, limit: number): Promise<AccessEvent[]>;
   /** Every account, with its entitlement if any. Bounded by `limit`. */
@@ -484,8 +707,22 @@ export class InMemoryAccessStore implements AccessStore {
 
   constructor(private readonly directory: AccountDirectory) {}
 
+  static #key(userId: string, source: GrantedVia): string {
+    return `${userId}|${source}`;
+  }
+
   async get(userId: string): Promise<Entitlement | null> {
-    return this.#rows.get(userId) ?? null;
+    return this.#rows.get(InMemoryAccessStore.#key(userId, 'operator')) ?? null;
+  }
+
+  async grants(userId: string): Promise<Entitlement[]> {
+    return this.#grantsOf(userId);
+  }
+
+  #grantsOf(userId: string): Entitlement[] {
+    return GRANT_SOURCES.map((source) => this.#rows.get(InMemoryAccessStore.#key(userId, source))).filter(
+      (row): row is Entitlement => row !== undefined,
+    );
   }
 
   mutate(input: MutationInput, now: () => Date): Promise<MutationResult> {
@@ -496,33 +733,47 @@ export class InMemoryAccessStore implements AccessStore {
         throw new AccessError('USER_NOT_FOUND', 'No account has that id. The student must sign in once first.');
       }
       const at = now().toISOString();
-      const before = this.#rows.get(input.userId) ?? null;
+      const rows = this.#grantsOf(input.userId);
       const hadTrial = this.#events.some((event) => event.userId === input.userId && event.after.kind === 'TRIAL');
-      const plan = planMutation(before, input.action, at, input.grant, input.trial, { hadTrial });
-      if (plan.kind === 'unchanged') return { changed: false, before, after: before!, event: null };
-      const after: Entitlement = {
-        userId: input.userId,
-        scope: PLATFORM_SCOPE,
-        ...plan.next,
-        grantedVia: 'operator',
-        createdAt: before?.createdAt ?? at,
-        updatedAt: at,
+      const changes = planAccountMutation(rows, input, at, { hadTrial });
+      const source = input.source ?? 'operator';
+      const before = rows.find((row) => row.grantedVia === source) ?? null;
+      const events: AccessEvent[] = [];
+      for (const change of changes) {
+        const written: Entitlement = {
+          userId: input.userId,
+          scope: PLATFORM_SCOPE,
+          ...change.next,
+          grantedVia: change.source,
+          createdAt: change.before?.createdAt ?? at,
+          updatedAt: at,
+        };
+        this.#rows.set(InMemoryAccessStore.#key(input.userId, change.source), written);
+        this.#nextEvent += 1;
+        const event: AccessEvent = {
+          eventId: String(this.#nextEvent),
+          userId: input.userId,
+          scope: PLATFORM_SCOPE,
+          source: change.source,
+          action: change.action,
+          actor: input.actor,
+          reason: input.reason,
+          before: change.before ? snapshot(change.before) : null,
+          after: change.next,
+          occurredAt: at,
+        };
+        this.#events.push(event);
+        events.push(event);
+      }
+      const grants = this.#grantsOf(input.userId);
+      return {
+        changed: changes.length > 0,
+        before,
+        after: grants.find((row) => row.grantedVia === source) ?? null,
+        event: events[0] ?? null,
+        events,
+        grants,
       };
-      this.#rows.set(input.userId, after);
-      this.#nextEvent += 1;
-      const event: AccessEvent = {
-        eventId: String(this.#nextEvent),
-        userId: input.userId,
-        scope: PLATFORM_SCOPE,
-        action: plan.action,
-        actor: input.actor,
-        reason: input.reason,
-        before: before ? snapshot(before) : null,
-        after: plan.next,
-        occurredAt: at,
-      };
-      this.#events.push(event);
-      return { changed: true, before, after, event };
     });
     this.#chain = run.catch(() => undefined);
     return run;
@@ -556,7 +807,8 @@ export class InMemoryAccessStore implements AccessStore {
       displayName: account.displayName ?? null,
       role: account.role,
       createdAt: account.createdAt ?? new Date(0).toISOString(),
-      entitlement: this.#rows.get(account.userId) ?? null,
+      entitlement: this.#rows.get(InMemoryAccessStore.#key(account.userId, 'operator')) ?? null,
+      grants: this.#grantsOf(account.userId),
     };
   }
 }
@@ -642,9 +894,9 @@ export class AccessControl {
     if (this.policy === 'open') {
       return { allowed: true, via: 'open', plan: null, sessionLimit: this.#deploymentSessionLimit };
     }
-    const entitlement = await this.store.get(userId);
-    const evaluation = evaluateAccess(entitlement, this.now().getTime());
+    const evaluation = evaluateAccount(await this.store.grants(userId), this.now().getTime());
     if (!evaluation.active) return { allowed: false, state: evaluation.state as Exclude<AccessState, 'ACTIVE'> };
+    const entitlement = evaluation.effective;
 
     let plan: Plan | null = null;
     if (entitlement!.planId !== null) {
@@ -669,8 +921,8 @@ export class AccessControl {
 
   /** The student's own view: their state, window and plan, nothing an operator wrote. */
   async describe(userId: string): Promise<AccessDescription> {
-    const entitlement = await this.store.get(userId);
-    const evaluation = evaluateAccess(entitlement, this.now().getTime());
+    const evaluation = evaluateAccount(await this.store.grants(userId), this.now().getTime());
+    const entitlement = evaluation.effective;
     const open = this.policy === 'open';
     const plan = !open && entitlement?.planId ? (this.plans.get(entitlement.planId) ?? null) : null;
     return {
@@ -680,6 +932,7 @@ export class AccessControl {
       startsAt: entitlement?.startsAt ?? null,
       expiresAt: entitlement?.expiresAt ?? null,
       kind: entitlement?.kind ?? null,
+      source: entitlement?.grantedVia ?? null,
       plan: plan ? planView(plan) : null,
       maxConcurrentSessions:
         (open ? this.#deploymentSessionLimit : effectiveSessionLimit(this.#deploymentSessionLimit, plan)) ?? null,
@@ -693,8 +946,10 @@ export interface AccessDescription {
   active: boolean;
   startsAt: string | null;
   expiresAt: string | null;
-  /** STANDARD, BETA or TRIAL; null without an entitlement. */
+  /** STANDARD, BETA, TRIAL or SUBSCRIPTION; null without an entitlement. */
   kind: GrantKind | null;
+  /** Which row answers: an operator's grant, or billing's. */
+  source: GrantedVia | null;
   /** The plan, as the student may see it. Null: no plan (every track), or the `open` policy. */
   plan: { id: string; name: string; description: string | null; tracks: 'all' | string[] } | null;
   /** Labs they may run at once, after any plan; null = no per-student limit. */

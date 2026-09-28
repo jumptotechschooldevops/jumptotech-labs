@@ -385,6 +385,17 @@ function scenarios(base: Record<string, string>): Scenario[] {
     // docs/commercial-access.md: allowed, but the one setting that admits every signed-in account.
     { name: 'ACCESS_POLICY=open is a warning', change: { ACCESS_POLICY: 'open' }, expectFail: [], expectWarn: ['access.policy'] },
     { name: 'an ACCESS_POLICY the api does not know is refused', change: { ACCESS_POLICY: 'closed' }, expectFail: ['loader.api'] },
+    // docs/commercial-access.md §10: a plan without an explicit track list is refused, not read as "every track".
+    {
+      name: 'a plan document the api cannot accept is refused',
+      change: { ACCESS_PLANS_JSON: `'{"plans":[{"id":"beta","name":"Beta"}]}'` },
+      expectFail: ['loader.api'],
+    },
+    { name: 'a valid plan document and trial length are accepted', change: { ACCESS_PLANS_JSON: `'{"plans":[{"id":"beta","name":"Beta","tracks":"all"}]}'`, TRIAL_DURATION_DAYS: '14', TRIAL_PLAN: 'beta' }, expectFail: [] },
+    // docs/billing.md: the only provider is a simulator the api refuses in
+    // production, and compose does not pass billing settings at all — so an
+    // .env edit cannot switch billing on for a production host.
+    { name: 'BILLING_PROVIDER in .env does not reach the production api', change: { BILLING_PROVIDER: 'test' }, expectFail: [] },
     // Compose passes no EDGE_PROBE_ENABLED to the api, so the probe keeps its
     // production default; the contract still warns if a compose edit ever does.
     { name: 'EDGE_PROBE_ENABLED=false in .env cannot switch the TLS alerts off', change: { EDGE_PROBE_ENABLED: 'false' }, expectFail: [], expectWarn: [] },

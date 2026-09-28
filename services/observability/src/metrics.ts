@@ -1375,3 +1375,80 @@ export function setCollector(
 
 export { assertLabelPolicy };
 export { client as promClient };
+
+/**
+ * How a billing-provider webhook ended — docs/billing.md.
+ *
+ *   applied            verified, processed, state changed (or confirmed)
+ *   duplicate          an event id already processed: acknowledged, nothing done
+ *   stale              older than the state already stored: recorded, not applied
+ *   ignored            verified but not ours to act on (an event type we do not
+ *                      use, a checkout this platform did not start)
+ *   invalid_signature  refused before anything was read: missing, wrong or expired signature
+ *   malformed          signed, but not a shape this platform understands
+ *   unmapped           a subscription for no known account, or a price no offer
+ *                      names — answered 500 so the provider retries after the fix
+ *   failed             anything else — answered 500, retried by the provider
+ */
+export const BILLING_WEBHOOK_OUTCOMES = [
+  'applied',
+  'duplicate',
+  'stale',
+  'ignored',
+  'invalid_signature',
+  'malformed',
+  'unmapped',
+  'failed',
+] as const;
+
+/** A call this platform made to the billing provider. */
+export const BILLING_PROVIDER_OPS = ['checkout', 'portal', 'subscription'] as const;
+
+export interface BillingMetrics {
+  webhooks: Counter;
+  providerRequests: Counter;
+  reconcileDrift: Gauge;
+  reconcileLastRun: Gauge;
+}
+
+/**
+ * Billing — commercial observability (docs/billing.md). Every series is
+ * zero-initialised, so the alerts read a real 0 from the first scrape rather
+ * than an absent series. No label carries an account, an email, an amount or a
+ * provider identifier.
+ */
+export function createBillingMetrics(registry: Registry, provider: string): BillingMetrics {
+  const common = { registers: [registry] };
+  const webhooks = new client.Counter({
+    name: 'jtt_billing_webhooks_total',
+    help: 'Billing-provider webhooks received, by outcome.',
+    labelNames: ['provider', 'outcome'],
+    ...common,
+  });
+  for (const outcome of BILLING_WEBHOOK_OUTCOMES) webhooks.inc({ provider, outcome }, 0);
+  const providerRequests = new client.Counter({
+    name: 'jtt_billing_provider_requests_total',
+    help: 'Calls this platform made to the billing provider, by operation and outcome (ok, failed).',
+    labelNames: ['provider', 'op', 'outcome'],
+    ...common,
+  });
+  for (const op of BILLING_PROVIDER_OPS) {
+    for (const outcome of ['ok', 'failed']) providerRequests.inc({ provider, op, outcome }, 0);
+  }
+  return {
+    webhooks,
+    providerRequests,
+    reconcileDrift: new client.Gauge({
+      name: 'jtt_billing_reconcile_drift',
+      help: 'Subscriptions whose stored state disagreed with the provider at the last reconciliation.',
+      labelNames: ['provider'],
+      ...common,
+    }),
+    reconcileLastRun: new client.Gauge({
+      name: 'jtt_billing_reconcile_last_run_timestamp_seconds',
+      help: 'When the last billing reconciliation finished, as Unix time; 0 = never since start.',
+      labelNames: ['provider'],
+      ...common,
+    }),
+  };
+}

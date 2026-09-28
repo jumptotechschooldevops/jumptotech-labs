@@ -42,6 +42,8 @@ import {
   createOperationsMetrics,
   createProviderMetrics,
   createRegistry,
+  createBillingMetrics,
+  type BillingMetrics,
   createReaperMetrics,
   createSessionMetrics,
   createVerificationMetrics,
@@ -73,6 +75,8 @@ export interface ApiMetrics {
   auth: AuthMetrics;
   reaper: ReaperMetrics;
   operations: OperationsMetrics;
+  /** Present when billing is configured (docs/billing.md). */
+  billing?: BillingMetrics;
 }
 
 export interface ApiObservability {
@@ -114,7 +118,7 @@ export function buildApiObservability(config: ApiConfig): ApiObservability {
    * self-test below cover them without refusing a legitimate provider secret.
    */
   const databasePassword = databasePasswordOf(config.progress.database).value;
-  registerSecretValues([config.auth.browserFlow?.clientSecret, databasePassword]);
+  registerSecretValues([config.auth.browserFlow?.clientSecret, databasePassword, config.billing?.webhookSecret]);
 
   assertSecretsAreRedactable({
     TERMINAL_SESSION_SECRET: config.terminalSessionSecret,
@@ -146,6 +150,7 @@ export function buildApiObservability(config: ApiConfig): ApiObservability {
     auth: createAuthMetrics(registry),
     reaper: createReaperMetrics(registry),
     operations: createOperationsMetrics(registry),
+    ...(config.billing ? { billing: createBillingMetrics(registry, config.billing.provider) } : {}),
   };
 
   /*

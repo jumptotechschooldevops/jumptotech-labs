@@ -380,7 +380,7 @@ function accessWindow(account: AccountAccessView): string {
 function accessLabel(account: AccountAccessView): string {
   const e = account.entitlement;
   if (!e) return '-';
-  return `${e.kind}${e.planId ? `/${e.planId}` : ''}`;
+  return `${e.grantedVia === 'billing' ? 'paid:' : ''}${e.kind}${e.planId ? `/${e.planId}` : ''}`;
 }
 
 export function formatAccounts(policy: string, accounts: readonly AccountAccessView[]): string {
@@ -407,6 +407,7 @@ interface AccessHistoryEntry {
   action: string;
   by: string;
   reason: string;
+  source?: string;
   before: { status: string; expiresAt: string | null } | null;
   after: { status: string; startsAt: string; expiresAt: string | null; kind?: string; planId?: string | null };
 }
@@ -414,7 +415,8 @@ interface AccessHistoryEntry {
 function historyLine(h: AccessHistoryEntry): string {
   const until = h.after.expiresAt ?? 'no end date';
   const label = h.after.kind ? ` ${h.after.kind}${h.after.planId ? `/${h.after.planId}` : ''}` : '';
-  return `${h.at}  ${h.action.padEnd(7)} by ${h.by}: ${h.before?.status ?? 'NONE'} → ${h.after.status}${label} (${h.after.startsAt} … ${until}) — ${h.reason}`;
+  const source = h.source === 'billing' ? ' [billing]' : '';
+  return `${h.at}  ${h.action.padEnd(7)} by ${h.by}${source}: ${h.before?.status ?? 'NONE'} → ${h.after.status}${label} (${h.after.startsAt} … ${until}) — ${h.reason}`;
 }
 
 export function formatPlans(data: {
@@ -458,6 +460,15 @@ export function formatAccountDetail(data: {
     `access:         ${a.state}${a.canUseLabs ? ' — may use labs' : ' — may NOT use labs'}`,
     ...(e ? [`window:         ${e.startsAt} … ${e.expiresAt ?? 'no end date'} (${e.grantedVia}, updated ${e.updatedAt})`] : []),
     ...(e ? [`kind / plan:    ${e.kind} / ${e.planId ?? 'no plan (every track)'}`] : []),
+    ...(a.grants && a.grants.length > 1
+      ? [
+          'rows:',
+          ...a.grants.map(
+            (g) =>
+              `  ${g.grantedVia.padEnd(8)} ${g.status.padEnd(9)} ${g.kind}${g.planId ? `/${g.planId}` : ''}  ${g.startsAt} … ${g.expiresAt ?? 'no end date'}`,
+          ),
+        ]
+      : []),
     'why:',
     ...data.diagnosis.map((line) => `  - ${line}`),
     `running labs:   ${data.liveSessions.length === 0 ? 'none' : ''}`,

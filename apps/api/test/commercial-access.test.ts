@@ -203,6 +203,7 @@ describe('ACCESS_POLICY=entitlement: a signed-in account is not an entitled one'
       startsAt: null,
       expiresAt: null,
       kind: null,
+      source: null,
       plan: null,
       maxConcurrentSessions: null,
     });

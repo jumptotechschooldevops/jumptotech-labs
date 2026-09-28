@@ -151,6 +151,25 @@ export const LOG_EVENTS = [
   'config.access_plans',
   // An entitlement names a plan the configuration no longer defines; lab use is refused.
   'access.plan_unknown',
+
+  // --- billing (docs/billing.md) ----------------------------------------------
+  // A webhook verified and processed (outcome: applied, duplicate, stale, ignored).
+  'billing.webhook_processed',
+  // A webhook refused before anything was read: bad or missing signature, or not understood.
+  'billing.webhook_rejected',
+  // A verified webhook whose processing failed; answered 500 so the provider retries.
+  'billing.webhook_failed',
+  // A completed checkout this platform did not start for that account.
+  'billing.checkout_unknown',
+  // A provider customer or subscription that would move between accounts. Nothing applied.
+  'billing.ownership_conflict',
+  // A checkout or portal session created for a student, or a provider call that failed.
+  'billing.checkout_created',
+  'billing.provider_failed',
+  // `ops billing reconcile`: what it found and changed.
+  'billing.reconciled',
+  // The billing configuration this process loaded, at startup.
+  'config.billing',
 ] as const;
 
 export type LogEvent = (typeof LOG_EVENTS)[number];
