@@ -75,6 +75,8 @@ export const LOG_EVENTS = [
   'terminal.terminate.requested',
   // A socket typed faster than a shell can take; it was closed (input-budget.ts).
   'terminal.input.rate_exceeded',
+  // The terminal could not tell the api a student typed (activity.ts).
+  'terminal.activity.report_failed',
 
   // --- verification ----------------------------------------------------------
   'verify.passed',

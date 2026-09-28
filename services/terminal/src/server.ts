@@ -341,7 +341,7 @@ export function createTerminalServer(
           res.end(JSON.stringify({ ok: true, data }));
         },
         (error: unknown) => {
-          log(`control action for ${sessionId} failed — ${describeError(error)}`);
+          log(`control action for ${sessionId} failed — ${describeError(error)}`, 'terminal.terminate.requested', 'warn');
           res.writeHead(500, { 'content-type': 'application/json' });
           res.end(
             JSON.stringify({ ok: false, error: { code: 'CONTROL_FAILED', message: 'Action failed.' } }),
@@ -569,7 +569,7 @@ export function createTerminalServer(
       if (!config.sandboxBrokerEnabled && !config.containerExecEnabled) return false;
       plan = containerSpawnPlan(context, planOptionsFor(session.claims.labId));
     } catch (error) {
-      log(`session ${sessionId}: reattach could not resolve a binding — ${describeError(error)}`);
+      log(`session ${sessionId}: reattach could not resolve a binding — ${describeError(error)}`, 'terminal.reattach.failed', 'warn');
       return false;
     }
 
@@ -621,7 +621,7 @@ export function createTerminalServer(
         );
       }
     } catch (error) {
-      log(`session ${sessionId}: reattach failed — ${describeError(error)}`);
+      log(`session ${sessionId}: reattach failed — ${describeError(error)}`, 'terminal.reattach.failed', 'warn');
       send(ws, {
         type: 'error',
         code: 'SANDBOX_UNAVAILABLE',
@@ -637,7 +637,7 @@ export function createTerminalServer(
 
     if (!stillLive()) {
       term.kill();
-      log(`session ${sessionId}: reattach abandoned — the socket closed while the new shell was opened`);
+      log(`session ${sessionId}: reattach abandoned — the socket closed while the new shell was opened`, 'terminal.reattach.failed');
       return false;
     }
 
@@ -650,7 +650,7 @@ export function createTerminalServer(
       sandboxRef: plan.sandboxRef,
       namespace: plan.sandboxRef,
     });
-    log(`session ${sessionId}: reattached to ${plan.sandboxRef}`);
+    log(`session ${sessionId}: reattached to ${plan.sandboxRef}`, 'terminal.reattach.succeeded');
     return true;
   }
 
@@ -768,7 +768,7 @@ export function createTerminalServer(
        * exited (code 0)" and the workspace, rightly, did not reconnect.
        */
       if (endedBy !== undefined) {
-        log(`session ${sessions.get(ws)?.claims.sid ?? '?'}: shell lost — ${endedBy}`);
+        log(`session ${sessions.get(ws)?.claims.sid ?? '?'}: shell lost — ${endedBy}`, 'terminal.connection.closed', 'warn');
         send(ws, {
           type: 'error',
           code: 'SANDBOX_UNAVAILABLE',
@@ -1117,7 +1117,7 @@ export function createTerminalServer(
     /** Refuse an attach whose session was closed, or re-attached elsewhere, while it waited. */
     const abandonSuperseded = (): void => {
       terminalMetrics?.connections.inc({ outcome: 'superseded' });
-      log(`session ${claims.sid}: attach abandoned — the session was closed or attached again meanwhile`);
+      log(`session ${claims.sid}: attach abandoned — the session was closed or attached again meanwhile`, 'terminal.connection.closed');
       send(ws, {
         type: 'error',
         code: 'SESSION_ENDED',
@@ -1182,6 +1182,7 @@ export function createTerminalServer(
         log(
           `session ${claims.sid}: attaching to sandbox container ${plan.sandboxRef} as ${context.user}` +
             (viaBroker ? ' via the runtime broker' : ''),
+          'terminal.connection.opened',
         );
       } else if (context.kind === 'docker-daemon') {
         owner = ownerFor(isolation, context.shellUid);
@@ -1200,6 +1201,7 @@ export function createTerminalServer(
         plan = dockerSpawnPlan(context, dockerCertDir, workspaceDir, planOptions);
         log(
           `session ${claims.sid}: issued sandbox-scoped Docker credentials (sandbox=${context.sandboxRef} host=${context.dockerHost} expires=${context.expiresAt})`,
+          'terminal.connection.opened',
         );
       } else {
         owner = ownerFor(isolation, context.shellUid);
@@ -1216,6 +1218,7 @@ export function createTerminalServer(
         plan = kubernetesSpawnPlan(context, kubeconfigPath, { ...planOptions, workDir: home });
         log(
           `session ${claims.sid}: issued namespace-scoped credentials (ns=${context.namespace} sa=${context.serviceAccountName} expires=${context.expiresAt})`,
+          'terminal.connection.opened',
         );
       }
     } catch (error) {
@@ -1300,7 +1303,7 @@ export function createTerminalServer(
     } catch (error) {
       const code = error instanceof ShellStartError ? error.code : 'PTY_SPAWN_FAILED';
       const message = error instanceof Error ? error.message : String(error);
-      log(`failed to start shell for ${claims.sid}: ${code} — ${message}`);
+      log(`failed to start shell for ${claims.sid}: ${code} — ${message}`, 'terminal.connection.rejected', 'warn');
       releaseClaim();
       await discardCredentials();
       send(ws, {
@@ -1379,6 +1382,7 @@ export function createTerminalServer(
     });
     log(
       `session ${claims.sid} started (lab=${claims.labId} ${plan.sandboxKind}=${plan.sandboxRef})`,
+      'terminal.connection.opened',
     );
     return true;
   }
@@ -1430,7 +1434,7 @@ export function createTerminalServer(
       sessionId,
       ownerUserId: session.claims.uid,
     }).catch((error: unknown) => {
-      log(`session ${sessionId}: activity report failed — ${describeError(error)}`);
+      log(`session ${sessionId}: activity report failed — ${describeError(error)}`, 'terminal.activity.report_failed', 'warn');
     });
   }
 
@@ -1500,8 +1504,12 @@ function send(ws: WebSocket, message: ServerMessage): void {
  * sentence keep working; the redactor runs over the message on the way out, so
  * an un-migrated line still cannot leak.
  */
-function log(message: string): void {
-  obs.info('terminal.connection.opened', {}, message);
+function log(
+  message: string,
+  event: Parameters<typeof obs.info>[0],
+  level: 'info' | 'warn' = 'info',
+): void {
+  obs[level](event, {}, message);
 }
 
 /** Message text for a thrown value, for logs only. Never sent to a browser. */
