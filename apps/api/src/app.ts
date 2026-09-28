@@ -65,6 +65,8 @@ import { AccessControl, InMemoryAccessStore } from './access/entitlements.js';
 import { InMemorySessionEventStore, type SessionEventStore } from './classroom/session-events.js';
 import type { BillingProcessor } from './billing/processor.js';
 import { createBillingWebhookRoutes } from './billing/routes.js';
+import { createBillingAccountRoutes } from './billing/account-routes.js';
+import type { BillingService } from './billing/service.js';
 
 /**
  * The learning-history half of the graph.
@@ -83,6 +85,8 @@ export interface ProgressDeps {
 
 export interface BillingDeps {
   processor: BillingProcessor;
+  /** The student-facing surface (`GET /api/billing`, checkout, portal). */
+  service?: BillingService;
 }
 
 export interface CreateAppDeps {
@@ -548,6 +552,18 @@ export function createApp(deps: CreateAppDeps): Express {
    */
   app.use('/api/me/learning-paths', browserCors, learningPathLimiter);
   app.use('/api/me', browserCors, originGuard, authenticated, createMeRoutes(routes));
+  // Always mounted: with billing off it answers `enabled: false`, so the
+  // account page has one shape to read.
+  app.use(
+    '/api/billing',
+    browserCors,
+    originGuard,
+    authenticated,
+    createBillingAccountRoutes({
+      ...(deps.billing?.service ? { service: deps.billing.service } : {}),
+      legal: deps.config.legal ?? { termsUrl: null, privacyUrl: null, refundUrl: null },
+    }),
+  );
   app.use('/internal', createInternalRoutes({ ...deps, access }));
 
   app.use((_req, res) => {

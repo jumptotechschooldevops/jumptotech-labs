@@ -60,6 +60,28 @@ provider's hosted checkout ── card details go here, never to JumpToTech
 AccessControl.decide — the student can start labs on their next request
 ```
 
+The student's side of it is the **account page** (`#/account`, linked from
+their name in the header) and three routes, each about the signed-in caller
+only:
+
+| Route | What it does |
+|---|---|
+| `GET /api/billing` | Offers (name, description, `priceLabel`, plan — never the provider's price id), the caller's subscription as a product status (§5), whether they can manage billing or subscribe, and the legal links. With billing off: `enabled: false` and nothing else |
+| `POST /api/billing/checkout` `{offerId}` | Starts a checkout for the caller → `{url}` of the provider's hosted page. Refused: an unknown offer (400), an account already subscribed (409 `ALREADY_SUBSCRIBED` — change it in the portal), a suspended account (409 `ACCOUNT_SUSPENDED`), more than 5 checkouts in an hour (429), the provider down (503). **Any other body field — a customer, plan, price or user id — is refused (400)** |
+| `POST /api/billing/portal` | The provider's hosted portal for the caller's own customer → `{url}`: payment methods, invoices, cancellation. 404 `NO_BILLING_ACCOUNT` without one |
+
+The page follows a provider URL only if it is `http(s)`. Back from checkout it
+says the payment "is being confirmed" and re-reads for a few seconds — it never
+announces success the server has not seen.
+
+With the `test` provider only, the provider's hosted pages are simulated at
+`#/account/test-checkout/<ref>` ("Simulate a successful payment") and
+`#/account/test-portal` (cancel at period end, resume, cancel now, renew, fail
+a renewal, recover), backed by `/api/billing/test/…` routes that exist only
+with that provider, act only on the caller's own checkout or subscription, and
+deliver the simulator's **signed** webhooks to the same processor a real
+delivery reaches.
+
 The account is never taken from the browser. The checkout is created for the
 authenticated caller and carries their internal user id as the provider's
 client reference; a webhook naming an account is believed only if this
@@ -181,6 +203,8 @@ that price, and the offer naming it decides the plan from the next request.
 | Precedence between a manual grant and a subscription with a different plan | The operator's grant answers (§6) — change it if the business wants otherwise |
 | What happens to a running lab when a payment fails | The same as any access end: refused from the next request ([commercial-access.md §5](commercial-access.md#5-what-access-controls)) |
 | Trials through the provider vs. operator trials | Both count as the account's one trial |
+| Terms of Service, Privacy Policy, refund and cancellation policy | Not written here, and not claimed. `LEGAL_TERMS_URL`, `LEGAL_PRIVACY_URL`, `LEGAL_REFUND_URL` link to them once published; unset, the account page shows none |
+| Selling to a suspended account | Refused (`ACCOUNT_SUSPENDED`): nobody is charged for access they cannot use |
 
 ## 8. Data held
 
@@ -244,5 +268,7 @@ Not done, and not to be done without the decisions in §7. What it takes:
 | Suite | Proves |
 |---|---|
 | `apps/api/test/billing-webhooks.test.ts` | the whole flow over HTTP; a success URL grants nothing; bad, missing, forged and replayed signatures; oversized and malformed bodies; duplicates (sequential and concurrent); out-of-order delivery; failure then retry; unknown accounts and prices retried; renewal, leeway, failed payment with and without grace, cancel at period end and at once, reactivation, provider trials; manual grants and suspension alongside billing; ownership; no card data stored or logged |
+| `apps/api/test/billing-account.test.ts` | the student routes: billing off; a checkout grants nothing until the webhook; smuggled customer/plan/price/user fields refused; one account never reaches another's checkout, portal or subscription; already subscribed, suspended, rate bound, provider down, foreign origin; the lifecycle in product words; legal links |
+| `apps/web/test/account-page.test.tsx` | the page: access in product words and never blamed on payment; offers and checkout; a non-http(s) provider link is not followed; "being confirmed", never "subscribed", on return; legal links; the test-mode pages |
 | `apps/api/test/billing-config.test.ts` | off by default; test provider refused in production; required decisions with no default; offers without amounts; every provider status mapped to a product status |
 | `apps/api/test/billing-persistence-integration.test.ts` | migration 010 on PostgreSQL; one transaction per webhook; concurrent duplicates across two connections; rollback then retry; ordering in SQL; the schema's own refusals; no payment-detail column (`make test-db`) |

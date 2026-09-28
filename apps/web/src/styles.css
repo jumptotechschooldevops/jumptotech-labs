@@ -2633,3 +2633,95 @@ main:focus {
 .auth-gate__banner {
   margin: 0.75rem 1rem 0;
 }
+
+/* --- Account page (docs/billing.md) ---------------------------------------- */
+
+a.user-menu__identity {
+  text-decoration: none;
+}
+
+a.user-menu__identity:hover,
+a.user-menu__identity:focus-visible {
+  text-decoration: underline;
+}
+
+.facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.facts > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) 1fr;
+  gap: var(--space-3);
+}
+
+.facts dt {
+  color: var(--text-dim);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.offers {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  margin-top: var(--space-4);
+}
+
+.offer {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.offer__name {
+  margin: 0;
+}
+
+.offer__price {
+  font-weight: 600;
+}
+
+.offer__features {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.offer .btn {
+  margin-top: auto;
+  align-self: flex-start;
+}
+
+.legal-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  list-style: none;
+  padding: 0;
+  font-size: 13px;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.muted {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+@media (max-width: 560px) {
+  .facts > div {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+}

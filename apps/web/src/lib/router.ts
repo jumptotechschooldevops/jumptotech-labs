@@ -17,6 +17,9 @@
  *   #/paths/devops-engineer    one learning path: its stages, in order
  *   #/paths/devops-engineer/stages/linux   one stage: skills, labs, next step
  *   #/progress                 saved progress and attempt history
+ *   #/account                  who you are, your lab access, plan and billing
+ *   #/account/test-checkout/cs_test_…   the test provider's simulated checkout
+ *   #/account/test-portal      the test provider's simulated billing portal
  *   #/help                     how labs work
  * ```
  *
@@ -44,6 +47,9 @@ export type Route =
   | { name: 'path'; pathId: string }
   | { name: 'stage'; pathId: string; stageId: string }
   | { name: 'progress' }
+  | { name: 'account'; checkout?: 'returned' | 'canceled' }
+  | { name: 'testCheckout'; checkoutRef: string }
+  | { name: 'testPortal' }
   | { name: 'help' }
   | { name: 'notFound' };
 
@@ -71,6 +77,15 @@ export function parseRoute(hash: string): Route {
   if (path === '/tracks') return { name: 'tracks' };
   if (path === '/paths') return { name: 'paths' };
   if (path === '/progress') return { name: 'progress' };
+  if (path === '/account') {
+    // Where the provider sends the browser back. Only a hint for the page's
+    // wording: access comes from the server, never from this parameter.
+    const checkout = new URLSearchParams(queryPart).get('checkout');
+    return checkout === 'returned' || checkout === 'canceled' ? { name: 'account', checkout } : { name: 'account' };
+  }
+  if (path === '/account/test-portal') return { name: 'testPortal' };
+  const testCheckout = /^\/account\/test-checkout\/([A-Za-z0-9_.:-]{1,255})$/.exec(path);
+  if (testCheckout) return { name: 'testCheckout', checkoutRef: testCheckout[1]! };
   if (path === '/help') return { name: 'help' };
 
   const workspace = new RegExp(`^/labs/${LAB_ID}/workspace$`).exec(path);
@@ -116,6 +131,12 @@ export function hrefFor(route: Route): string {
       return `#/paths/${encodeURIComponent(route.pathId)}/stages/${encodeURIComponent(route.stageId)}`;
     case 'progress':
       return '#/progress';
+    case 'account':
+      return route.checkout ? `#/account?checkout=${route.checkout}` : '#/account';
+    case 'testCheckout':
+      return `#/account/test-checkout/${encodeURIComponent(route.checkoutRef)}`;
+    case 'testPortal':
+      return '#/account/test-portal';
     case 'help':
       return '#/help';
     case 'notFound':

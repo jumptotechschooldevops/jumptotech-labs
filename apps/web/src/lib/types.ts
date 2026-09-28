@@ -241,13 +241,56 @@ export interface LabAccess {
   active: boolean;
   startsAt: string | null;
   expiresAt: string | null;
-  /** STANDARD, BETA or TRIAL; null without an entitlement (or from an older api). */
-  kind?: 'STANDARD' | 'BETA' | 'TRIAL' | null;
+  /** STANDARD, BETA, TRIAL or SUBSCRIPTION; null without an entitlement (or from an older api). */
+  kind?: 'STANDARD' | 'BETA' | 'TRIAL' | 'SUBSCRIPTION' | null;
+  /** Which grant answers: an operator's, or a paid subscription's. */
+  source?: 'operator' | 'billing' | null;
   /** The plan this access is on; null for no plan (every track). */
   plan?: { id: string; name: string; description: string | null; tracks: 'all' | string[] } | null;
   /** Labs this student may run at once; null = no per-student limit. */
   maxConcurrentSessions?: number | null;
 }
+
+/**
+ * The caller's own billing — GET /api/billing (docs/billing.md). Product
+ * states only: never a raw provider status, a price reference or a customer id.
+ */
+export type CommercialStatus = 'NONE' | 'TRIAL' | 'ACTIVE' | 'CANCELING' | 'PAYMENT_PROBLEM' | 'PAUSED' | 'ENDED';
+
+export interface BillingOffer {
+  id: string;
+  name: string;
+  description: string | null;
+  /** Display text exactly as the operator configured it. The provider's price is what is charged. */
+  priceLabel: string | null;
+  interval: 'month' | 'year' | null;
+  features: string[];
+  plan: { id: string; name: string; tracks: 'all' | string[] } | null;
+}
+
+export interface BillingView {
+  enabled: boolean;
+  mode?: 'test';
+  offers: BillingOffer[];
+  subscription: {
+    status: CommercialStatus;
+    planId: string | null;
+    planName: string | null;
+    currentPeriodEnd: string;
+    cancelAtPeriodEnd: boolean;
+    accessUntil: string | null;
+  } | null;
+  canManageBilling: boolean;
+  canSubscribe: boolean;
+}
+
+export interface LegalLinks {
+  termsUrl: string | null;
+  privacyUrl: string | null;
+  refundUrl: string | null;
+}
+
+export type TestSubscriptionAction = 'renew' | 'fail-renewal' | 'recover' | 'cancel-at-period-end' | 'resume' | 'cancel-now';
 
 /** A lab's standing for this student. Never a boolean. */
 export type LabProgressStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';

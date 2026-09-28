@@ -44,6 +44,14 @@ export function formatMoment(iso: string | null | undefined): string {
   });
 }
 
+/** `2026-12-31T23:59:59Z` → `31 Dec 2026`. For dates a student plans around, so with the year. */
+export function formatDay(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 /** `beginner` → `Beginner`. Unknown values are shown as they are, capitalised. */
 export function difficultyLabel(difficulty: string): string {
   return difficulty ? difficulty.charAt(0).toUpperCase() + difficulty.slice(1) : '';

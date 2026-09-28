@@ -39,7 +39,7 @@ import {
 } from '@jumptotech/progress';
 import type { AccessPolicy } from './access/entitlements.js';
 import { plansFromEnv, trialFromEnv, type PlanCatalog, type TrialConfig } from './access/plans.js';
-import { billingFromEnv, type BillingConfig } from './billing/config.js';
+import { billingFromEnv, legalFromEnv, type BillingConfig, type LegalLinks } from './billing/config.js';
 import { DEFAULT_AUTH_SESSION_TTL_SECONDS } from './auth/browser-session.js';
 import {
   MAX_AUTH_SESSION_TTL_SECONDS,
@@ -186,6 +186,8 @@ export interface ApiConfig {
   trial?: TrialConfig;
   /** Billing (`BILLING_PROVIDER`, docs/billing.md). null or absent: off. */
   billing?: BillingConfig | null;
+  /** Published legal documents, linked from the account page (`LEGAL_*_URL`). */
+  legal?: LegalLinks;
   sessionRetentionMinutes: number;
   nodeEnv: string;
   /**
@@ -1125,6 +1127,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     accessPlans,
     trial: trialFromEnv(env, accessPlans),
     billing: billingFromEnv(env, accessPlans),
+    legal: legalFromEnv(env),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',
     dockerEnabled,

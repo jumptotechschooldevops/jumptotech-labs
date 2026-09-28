@@ -144,6 +144,8 @@ export class BillingError extends Error {
       | 'UNMAPPED_PRICE'
       | 'UNMAPPED_SUBSCRIPTION'
       | 'OWNERSHIP_CONFLICT'
+      | 'ACCOUNT_SUSPENDED'
+      | 'TOO_MANY_CHECKOUTS'
       | 'INVALID_REQUEST',
     message: string,
   ) {

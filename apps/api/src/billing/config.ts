@@ -167,3 +167,40 @@ export function billingFromEnv(env: NodeJS.ProcessEnv, plans: PlanCatalog): Bill
     },
   };
 }
+
+/**
+ * Where the Terms of Service, Privacy Policy and refund/cancellation policy
+ * are published — links only. The platform does not write, host or claim any
+ * of them; unset, the account page shows none and says they are not yet
+ * published (docs/billing.md §7).
+ */
+export interface LegalLinks {
+  termsUrl: string | null;
+  privacyUrl: string | null;
+  refundUrl: string | null;
+}
+
+function legalUrl(env: NodeJS.ProcessEnv, name: string): string | null {
+  const raw = env[name]?.trim();
+  if (!raw) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new BillingConfigError(`${name} must be an absolute https:// URL.`);
+  }
+  const local = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  if (parsed.protocol !== 'https:' && !(local && parsed.protocol === 'http:')) {
+    throw new BillingConfigError(`${name} must be an https:// URL.`);
+  }
+  if (parsed.username || parsed.password) throw new BillingConfigError(`${name} must not carry credentials.`);
+  return parsed.toString();
+}
+
+export function legalFromEnv(env: NodeJS.ProcessEnv): LegalLinks {
+  return {
+    termsUrl: legalUrl(env, 'LEGAL_TERMS_URL'),
+    privacyUrl: legalUrl(env, 'LEGAL_PRIVACY_URL'),
+    refundUrl: legalUrl(env, 'LEGAL_REFUND_URL'),
+  };
+}
