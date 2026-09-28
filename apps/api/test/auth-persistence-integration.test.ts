@@ -596,4 +596,33 @@ if (!enabled) {
       }
     });
   });
+
+  /*
+   * The classroom view's directory reads (routes/admin.ts): owners of many
+   * sessions in one query, and "find the student called …" — where `%` and `_`
+   * must be characters, not wildcards, and a non-UUID id must not fail the read.
+   */
+  describe('PostgresUserRepository as a directory', () => {
+    it('finds many users in one read and ignores ids that are not UUIDs', async () => {
+      const users = new PostgresUserRepository(db, 'oidc');
+      const amy = await users.upsert({ issuer: 'https://issuer.example.com/', subject: 'amy', email: 'amy@example.com', displayName: 'Amy Park' });
+      const ben = await users.upsert({ issuer: 'https://issuer.example.com/', subject: 'ben', displayName: 'Ben Ode' });
+      const found = await users.findByIds([amy.userId, ben.userId, amy.userId, 'usr-00000001', "'; --"]);
+      expect(found.map((user) => user.userId).sort()).toEqual([amy.userId, ben.userId].sort());
+      expect(await users.findByIds([])).toEqual([]);
+    });
+
+    it('searches name and email case-insensitively, bounded, with % and _ taken literally', async () => {
+      const users = new PostgresUserRepository(db, 'oidc');
+      await users.upsert({ issuer: 'https://issuer.example.com/', subject: 'a', email: 'amy@example.com', displayName: 'Amy Park' });
+      await users.upsert({ issuer: 'https://issuer.example.com/', subject: 'b', email: 'x_y@example.com', displayName: 'Ben' });
+      await users.upsert({ issuer: 'https://issuer.example.com/', subject: 'c', email: 'c@example.com', displayName: '100% Cara' });
+      expect((await users.search('AMY', 20)).map((user) => user.displayName)).toEqual(['Amy Park']);
+      expect((await users.search('park', 20)).map((user) => user.email)).toEqual(['amy@example.com']);
+      expect((await users.search('%', 20)).map((user) => user.displayName)).toEqual(['100% Cara']);
+      expect((await users.search('_', 20)).map((user) => user.displayName)).toEqual(['Ben']);
+      expect((await users.search('\\', 20))).toEqual([]);
+      expect(await users.search('example', 2)).toHaveLength(2);
+    });
+  });
 }

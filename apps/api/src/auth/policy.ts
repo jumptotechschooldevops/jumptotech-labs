@@ -37,7 +37,20 @@ export type Action =
   | 'session:terminal'
   | 'session:start'
   | 'progress:read'
-  | 'admin:users';
+  | 'admin:users'
+  /**
+   * The classroom view (docs/runbooks/instructor-guide.md): every student's
+   * live lab, its state and what happened to it — identifiers, states, codes
+   * and times, never a terminal, a credential or an answer. What INSTRUCTOR
+   * already had per session through `session:read`, across the class at once.
+   */
+  | 'classroom:read'
+  /**
+   * The operator's detail on a classroom row: the sandbox handle, the
+   * Kubernetes namespace and the raw status reason. For whoever would go to the
+   * host with it — ADMIN — and noise to everyone else.
+   */
+  | 'classroom:operator-detail';
 
 /** The session facts a decision needs. Deliberately not the whole record. */
 export interface SessionSubject {
@@ -80,6 +93,8 @@ const SELF_ACTIONS: readonly Action[] = ['session:start', 'progress:read'];
 
 const ROLE_ONLY_ACTIONS: Record<Action, readonly Role[] | undefined> = {
   'admin:users': ['ADMIN'],
+  'classroom:read': ['INSTRUCTOR', 'ADMIN'],
+  'classroom:operator-detail': ['ADMIN'],
   'session:read': undefined,
   'session:check': undefined,
   'session:reset': undefined,
