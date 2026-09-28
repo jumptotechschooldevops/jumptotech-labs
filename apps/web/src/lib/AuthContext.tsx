@@ -46,6 +46,12 @@ export interface AuthState {
   mode: 'oidc' | 'development';
   /** Set when the last refresh failed to reach the API. */
   error: string | null;
+  /**
+   * True when this tab was signed in and a re-check found it no longer is —
+   * the sign-in expired or was ended elsewhere. Not set by Sign out, and not on
+   * a first visit: both are ordinary signed-out states.
+   */
+  expired: boolean;
   refresh: () => Promise<void>;
   signIn: (returnTo?: string) => void;
   signOut: () => Promise<void>;
@@ -70,6 +76,10 @@ export function AuthProvider({
   const [session, setSession] = useState<AuthSession | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
   const [error, setError] = useState<string | null>(null);
+  const [expired, setExpired] = useState(false);
+  /** The status as last rendered, so a refresh can tell "signed out" from "no longer signed in". */
+  const statusRef = useRef<AuthStatus>(status);
+  statusRef.current = status;
   /** Guards against a late response from a superseded refresh overwriting a newer one. */
   const generation = useRef(0);
 
@@ -79,6 +89,8 @@ export function AuthProvider({
       const next = await loadSession();
       if (generation.current !== mine) return;
       setSession(next);
+      if (next.authenticated) setExpired(false);
+      else if (statusRef.current === 'authenticated') setExpired(true);
       setStatus(next.authenticated ? 'authenticated' : 'anonymous');
       setError(null);
     } catch (cause) {
@@ -150,6 +162,17 @@ export function AuthProvider({
     generation.current += 1;
     setSession((current) => (current ? { ...current, authenticated: false } : current));
     setStatus('anonymous');
+    setExpired(false);
+
+    /*
+     * Forget where this student was. Sign-in returns to the current address, so
+     * on a shared computer the next student would otherwise land on the page the
+     * last one left — their lab's workspace, their learning stage. An expired
+     * sign-in keeps its place on purpose: the same student signs back in.
+     */
+    if (typeof window !== 'undefined' && window.location.hash) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    }
 
     /*
      * Complete the provider's single logout when it publishes one.
@@ -171,11 +194,12 @@ export function AuthProvider({
       signInAvailable: session?.signInAvailable ?? false,
       mode: session?.mode ?? 'oidc',
       error,
+      expired,
       refresh,
       signIn: signInImpl,
       signOut,
     }),
-    [status, session, error, refresh, signInImpl, signOut],
+    [status, session, error, expired, refresh, signInImpl, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

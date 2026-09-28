@@ -61,8 +61,7 @@ test('the workspace passes the audit in each state a student meets', async ({ pa
   await expectClean(page, 'ended summary with the next lab');
 });
 
-// Known defect on main, fixed in its own PR: an expired sign-in and an unreachable API are not explained.
-test.fixme('the sign-in gate passes the audit: signed out, expired and unreachable', async ({ page, platform }) => {
+test('the sign-in gate passes the audit: signed out, expired and unreachable', async ({ page, platform }) => {
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
   await expectClean(page, 'signed out');

@@ -15,8 +15,7 @@ async function storage(page: Page) {
   return page.evaluate(() => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage) }));
 }
 
-// Known defect on main, fixed in its own PR: sign-out keeps the previous student's page in the address.
-test.fixme('after Alice signs out, Bob signing in on the same browser sees nothing of hers', async ({ page, platform }) => {
+test('after Alice signs out, Bob signing in on the same browser sees nothing of hers', async ({ page, platform }) => {
   await openSignedIn(page, platform, ALICE);
   await launch(page);
   await page.getByRole('button', { name: 'Show a hint' }).click();
@@ -46,8 +45,7 @@ test.fixme('after Alice signs out, Bob signing in on the same browser sees nothi
   expect(await storage(page)).toEqual({ local: [], session: [] });
 });
 
-// Known defect on main, fixed in its own PR: an expired sign-in shows the first-visit welcome.
-test.fixme('a sign-in that expires mid-lab says so, and signing back in returns to the same running lab', async ({ page, platform }) => {
+test('a sign-in that expires mid-lab says so, and signing back in returns to the same running lab', async ({ page, platform }) => {
   await openSignedIn(page, platform, ALICE);
   await launch(page);
   const sessionId = platform.current(ALICE.subject).session.sessionId;

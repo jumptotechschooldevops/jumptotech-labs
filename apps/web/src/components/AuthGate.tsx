@@ -30,6 +30,10 @@ export function AuthGate({ children }: AuthGateProps) {
         <p className="auth-gate__status auth-gate__status--error" role="alert">
           Cannot reach the labs API.
         </p>
+        <p className="auth-gate__lede">
+          Check your internet connection, then press Try again. If the platform is restarting, this can take a
+          minute. A lab you have running is not affected.
+        </p>
         {/* The cause, not a guess at it — an operator reads this too. */}
         {auth.error ? <p className="auth-gate__detail">{auth.error}</p> : null}
         <button type="button" className="btn btn--ghost" onClick={() => void auth.refresh()}>
@@ -43,10 +47,25 @@ export function AuthGate({ children }: AuthGateProps) {
     return (
       <main className="auth-gate">
         <h1 className="auth-gate__title">JumpToTech Labs</h1>
-        <p className="auth-gate__lede">
-          Sign in to start a lab. Every sandbox belongs to one student, and your progress
-          follows your account.
-        </p>
+        {auth.expired ? (
+          /*
+           * The student was working a moment ago and every page just vanished.
+           * Say why, and that nothing they did was lost; the generic welcome
+           * below reads as if they had never signed in.
+           */
+          <div className="notice notice--warning auth-gate__expired" role="alert">
+            <p className="notice__title">Your sign-in has expired</p>
+            <p className="notice__message">
+              Sign in again to carry on where you were. Your saved progress is not affected, and a lab you had
+              running keeps running until it times out.
+            </p>
+          </div>
+        ) : (
+          <p className="auth-gate__lede">
+            Sign in to start a lab. Every sandbox belongs to one student, and your progress
+            follows your account.
+          </p>
+        )}
 
         {auth.signInAvailable ? (
           <button type="button" className="btn btn--primary btn--lg" onClick={() => auth.signIn()}>
