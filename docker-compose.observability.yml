@@ -109,7 +109,12 @@ services:
       # Local retention only. Long-term storage (Thanos, Mimir) is explicitly
       # out of scope; 15 days is comfortably longer than any incident review.
       - --storage.tsdb.retention.time=15d
-      - --web.enable-lifecycle
+      # No --web.enable-lifecycle, here as in production. Development listens on
+      # every interface of the namespace (so the loopback host port below
+      # works), which puts it in reach of every container on `default` — the
+      # terminal, where Kubernetes-track students have a shell, among them. With
+      # the lifecycle API on, `curl -X POST prometheus:9090/-/quit` from there
+      # stopped monitoring (measured). Reload rules with `kill -s HUP`.
       - --web.listen-address=0.0.0.0:9090
     volumes:
       - type: bind
