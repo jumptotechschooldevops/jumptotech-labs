@@ -26,7 +26,7 @@
  * the two to drift and would suggest the remote check is optional.
  */
 import { currentRequestId, REQUEST_ID_HEADER } from '@jumptotech/observability';
-import { brokerFetch, describeTransportFailure } from '../../broker-transport.js';
+import { brokerFetch, describeTransportFailure, transportContext } from '../../broker-transport.js';
 import type {
   ContainerExecRequest,
   ContainerExecResult,
@@ -138,6 +138,7 @@ export class BrokerRuntime implements ContainerRuntimePort {
   async #call<T>(op: string, payload: Record<string, unknown>): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const startedAt = Date.now();
 
     let response: Response;
     try {
@@ -162,8 +163,9 @@ export class BrokerRuntime implements ContainerRuntimePort {
     } catch (error) {
       clearTimeout(timer);
       if (controller.signal.aborted) throw this.#late(op);
-      const message = describeTransportFailure(error);
-      throw new ContainerRuntimeError(`the runtime broker is unreachable: ${message}`);
+      throw new ContainerRuntimeError(
+        `the runtime broker is unreachable: ${describeTransportFailure(error)}${transportContext(op, startedAt)}`,
+      );
     }
 
     /*
