@@ -138,6 +138,7 @@ Dated; not maintained after their pass. Newest first within each group.
 | Record | Date |
 |---|---|
 | [releases/lab-certification-2026-09-27.md](releases/lab-certification-2026-09-27.md) | 2026-09-27 |
+| [security/redteam-wave2-2026-09-27.md](security/redteam-wave2-2026-09-27.md) | 2026-09-27 |
 | [security/redteam-audit-2026-09-27.md](security/redteam-audit-2026-09-27.md) | 2026-09-27 |
 | [releases/performance-capacity-certification-2026-09-27.md](releases/performance-capacity-certification-2026-09-27.md) | 2026-09-27 |
 | [releases/launch-readiness-20h-report.md](releases/launch-readiness-20h-report.md) | 2026-09-27 |
