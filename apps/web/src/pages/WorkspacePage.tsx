@@ -1132,6 +1132,19 @@ export function WorkspacePage({ labId }: { labId: string }) {
             </div>
 
             <VerificationPanel state={verify} alreadyCompleted={attempt?.status === 'PASSED'} />
+
+            {/*
+              What the student reads out when something is wrong. The
+              instructor pastes it into the classroom view to find this lab;
+              it grants nothing on its own — every request is still checked
+              against who is asking.
+            */}
+            {session ? (
+              <p className="workspace__support">
+                Support ID <code data-testid="workspace-support-id">{session.sessionId}</code>
+                <span> — if something is wrong, give this to your instructor.</span>
+              </p>
+            ) : null}
           </section>
         </div>
       )}

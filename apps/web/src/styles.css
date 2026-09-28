@@ -2633,3 +2633,194 @@ main:focus {
 .auth-gate__banner {
   margin: 0.75rem 1rem 0;
 }
+
+/* --- The classroom view (instructors and administrators) ---------------------
+ * An operations page, not a dashboard: tables, plain words, colour only for
+ * state. Built from the tokens above; nothing new to learn.
+ */
+.ops .ops-section {
+  margin-top: var(--space-4);
+}
+.ops-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.ops-stats .panel + .panel {
+  margin-top: 0;
+}
+@media (max-width: 900px) {
+  .ops-stats {
+    grid-template-columns: 1fr;
+  }
+}
+.ops-stat__label {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.ops-stat__value {
+  margin: var(--space-2) 0;
+  font-size: 2rem;
+  font-weight: 700;
+}
+.ops-stat__value--text {
+  font-size: 1.1rem;
+}
+.ops-stat__note,
+.ops-stat__reasons {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+.ops-stat--attention {
+  border-color: var(--warn-dim);
+  background: var(--warn-bg);
+}
+.ops-stat--problem {
+  border-color: var(--danger-dim);
+  background: var(--danger-bg);
+}
+.ops-stat__note--problem,
+.ops-problem {
+  color: var(--danger);
+}
+.ops-runtimes li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-1);
+}
+.ops-runtimes__detail {
+  font-size: 0.75rem;
+  color: var(--text-faint);
+}
+.ops-muted {
+  color: var(--text-faint);
+}
+.ops-lab {
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+.ops-find {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.ops-find__results li {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.ops-table-wrap {
+  overflow-x: auto;
+}
+.ops-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.ops-table th,
+.ops-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.ops-table th {
+  color: var(--text-dim);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ops-attention {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  font-size: 0.85rem;
+}
+.ops-attention__item {
+  padding: var(--space-2);
+  margin-bottom: var(--space-1);
+  border-left: 3px solid var(--warn);
+  background: var(--warn-bg);
+  border-radius: var(--radius-sm);
+}
+.ops-attention__item--problem {
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+}
+.ops-attention__next {
+  display: block;
+  color: var(--text-dim);
+}
+.ops-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ops-timeline__item {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0 var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.ops-timeline__item--problem .ops-timeline__text {
+  color: var(--danger);
+}
+.ops-timeline__when {
+  color: var(--text-faint);
+  font-size: 0.85rem;
+}
+.ops-timeline__meta {
+  grid-column: 2;
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
+.ops-freshness {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  font-size: 0.85rem;
+  color: var(--text-faint);
+}
+.ops-freshness__stale {
+  color: var(--warn);
+}
+.ops-operator {
+  margin-top: var(--space-3);
+  font-size: 0.85rem;
+}
+.ops-operator summary {
+  cursor: pointer;
+  color: var(--text-dim);
+}
+.ops-facts {
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-3);
+}
+.ops-facts dt {
+  color: var(--text-dim);
+}
+.ops-facts dd {
+  margin: 0;
+}
+.ops-actions {
+  margin-top: var(--space-4);
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.workspace__support {
+  margin: var(--space-2) 0 0;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+}
+.workspace__support code {
+  user-select: all;
+}

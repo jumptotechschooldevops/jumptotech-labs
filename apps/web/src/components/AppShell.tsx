@@ -18,6 +18,7 @@ import { sessionStatusText } from '../lib/format';
 import { FLAGSHIP_PATH_ID } from '../lib/learningPath';
 import { hrefFor, type Route } from '../lib/router';
 import { UserMenu } from './UserMenu';
+import { useAuth } from '../lib/AuthContext';
 
 const NAV: Array<{ label: string; route: Route; matches: Route['name'][] }> = [
   { label: 'Dashboard', route: { name: 'dashboard' }, matches: ['dashboard'] },
@@ -27,6 +28,13 @@ const NAV: Array<{ label: string; route: Route; matches: Route['name'][] }> = [
   { label: 'Progress', route: { name: 'progress' }, matches: ['progress'] },
   { label: 'Help', route: { name: 'help' }, matches: ['help'] },
 ];
+
+/** Shown to instructors and administrators only. The server decides what they may actually read. */
+const STAFF_NAV = {
+  label: 'Classroom',
+  route: { name: 'classroom' } as Route,
+  matches: ['classroom', 'classroomLabs', 'classroomSession', 'classroomStudent'] as Route['name'][],
+};
 
 function ActiveLabIndicator({ route }: { route: Route }) {
   const { entries, launching } = useActiveSession();
@@ -80,6 +88,9 @@ export function AppShell({
   variant?: 'page' | 'workspace';
   children: ReactNode;
 }) {
+  const auth = useAuth();
+  const role = auth.identity?.role;
+  const nav = role === 'INSTRUCTOR' || role === 'ADMIN' ? [...NAV, STAFF_NAV] : NAV;
   const mainRef = useRef<HTMLElement | null>(null);
   const firstRender = useRef(true);
 
@@ -118,7 +129,7 @@ export function AppShell({
 
         <nav className="appbar__nav" aria-label="Main">
           <ul>
-            {NAV.map((item) => (
+            {nav.map((item) => (
               <li key={item.label}>
                 <a
                   href={hrefFor(item.route)}

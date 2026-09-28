@@ -18,11 +18,19 @@
  *   #/paths/devops-engineer/stages/linux   one stage: skills, labs, next step
  *   #/progress                 saved progress and attempt history
  *   #/help                     how labs work
+ *
+ *   #/classroom                            the classroom view (INSTRUCTOR, ADMIN)
+ *   #/classroom/labs                       which labs can run here
+ *   #/classroom/sessions/sess-…            one student's lab, by Support ID
+ *   #/classroom/students/<user id>         one student
  * ```
  *
  * Nothing in a route is a credential. Lab and track ids are public catalog
- * identifiers; a session id never appears in a URL, because the workspace finds
- * the student's session by asking the API whose it is.
+ * identifiers; a student's own pages never put a session id in a URL, because
+ * the workspace finds the student's session by asking the API whose it is. The
+ * classroom pages do — it is the Support ID a student reads out — and knowing
+ * one grants nothing: every read and action is authorized server-side from the
+ * caller's stored role.
  */
 import { useEffect, useState } from 'react';
 
@@ -45,6 +53,10 @@ export type Route =
   | { name: 'stage'; pathId: string; stageId: string }
   | { name: 'progress' }
   | { name: 'help' }
+  | { name: 'classroom' }
+  | { name: 'classroomLabs' }
+  | { name: 'classroomSession'; sessionId: string }
+  | { name: 'classroomStudent'; userId: string }
   | { name: 'notFound' };
 
 const LAB_ID = '([A-Za-z0-9-]{1,16})';
@@ -52,6 +64,9 @@ const TRACK_ID = '([a-z0-9][a-z0-9-]{0,31})';
 /** Learning path and stage ids — the same shape the API validates. */
 const PATH_SLUG = '([a-z0-9][a-z0-9-]{1,47})';
 const FILTER_KEYS = ['track', 'q', 'level', 'status'] as const;
+/** The same shapes the API validates before it reads anything. */
+const SESSION_ID = '([A-Za-z0-9-]{8,64})';
+const USER_ID = '([A-Za-z0-9-]{1,64})';
 
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, '');
@@ -72,6 +87,12 @@ export function parseRoute(hash: string): Route {
   if (path === '/paths') return { name: 'paths' };
   if (path === '/progress') return { name: 'progress' };
   if (path === '/help') return { name: 'help' };
+  if (path === '/classroom') return { name: 'classroom' };
+  if (path === '/classroom/labs') return { name: 'classroomLabs' };
+  const classroomSession = new RegExp(`^/classroom/sessions/${SESSION_ID}$`).exec(path);
+  if (classroomSession) return { name: 'classroomSession', sessionId: classroomSession[1]! };
+  const classroomStudent = new RegExp(`^/classroom/students/${USER_ID}$`).exec(path);
+  if (classroomStudent) return { name: 'classroomStudent', userId: classroomStudent[1]! };
 
   const workspace = new RegExp(`^/labs/${LAB_ID}/workspace$`).exec(path);
   if (workspace) return { name: 'workspace', labId: workspace[1]!.toUpperCase() };
@@ -118,6 +139,14 @@ export function hrefFor(route: Route): string {
       return '#/progress';
     case 'help':
       return '#/help';
+    case 'classroom':
+      return '#/classroom';
+    case 'classroomLabs':
+      return '#/classroom/labs';
+    case 'classroomSession':
+      return `#/classroom/sessions/${encodeURIComponent(route.sessionId)}`;
+    case 'classroomStudent':
+      return `#/classroom/students/${encodeURIComponent(route.userId)}`;
     case 'notFound':
       return '#/';
   }
