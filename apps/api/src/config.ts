@@ -39,6 +39,7 @@ import {
 } from '@jumptotech/progress';
 import type { AccessPolicy } from './access/entitlements.js';
 import { plansFromEnv, trialFromEnv, type PlanCatalog, type TrialConfig } from './access/plans.js';
+import { billingFromEnv, type BillingConfig } from './billing/config.js';
 import { DEFAULT_AUTH_SESSION_TTL_SECONDS } from './auth/browser-session.js';
 import {
   MAX_AUTH_SESSION_TTL_SECONDS,
@@ -183,6 +184,8 @@ export interface ApiConfig {
    */
   accessPlans?: PlanCatalog;
   trial?: TrialConfig;
+  /** Billing (`BILLING_PROVIDER`, docs/billing.md). null or absent: off. */
+  billing?: BillingConfig | null;
   sessionRetentionMinutes: number;
   nodeEnv: string;
   /**
@@ -847,6 +850,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     SANDBOXD_ATTACH_SECRET: env.SANDBOXD_ATTACH_SECRET,
     OIDC_CLIENT_SECRET: env.OIDC_CLIENT_SECRET,
     POSTGRES_PASSWORD: env.POSTGRES_PASSWORD,
+    BILLING_WEBHOOK_SECRET: env.BILLING_WEBHOOK_SECRET,
   });
 
   const publicOrigin = env.PUBLIC_ORIGIN?.trim() || undefined;
@@ -1120,6 +1124,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     accessPolicy: accessPolicyFromEnv(env),
     accessPlans,
     trial: trialFromEnv(env, accessPlans),
+    billing: billingFromEnv(env, accessPlans),
     sessionRetentionMinutes: intFromEnv(env, 'SESSION_RETENTION_MINUTES', 15),
     nodeEnv: env.NODE_ENV ?? 'development',
     dockerEnabled,

@@ -49,6 +49,10 @@ import { CleanupEventListener } from './classroom/cleanup-events.js';
 import { AccessControl, InMemoryAccessStore } from './access/entitlements.js';
 import { PlanCatalog } from './access/plans.js';
 import { PostgresAccessStore } from './access/postgres-store.js';
+import { PostgresBillingStore } from './billing/postgres-store.js';
+import { BillingProcessor } from './billing/processor.js';
+import { InMemoryBillingStore, type BillingStore } from './billing/store.js';
+import { TestBillingProvider } from './billing/test-provider.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -251,6 +255,42 @@ async function main(): Promise<void> {
         `trials: ${config.trial?.durationDays ? `${config.trial.durationDays} days` : 'off'}`,
     );
   }
+  /*
+   * Billing — docs/billing.md. Off unless BILLING_PROVIDER is set; `test` is
+   * the only provider and is refused under production by the config loader.
+   * Its state lives beside the entitlements it changes, in one transaction.
+   */
+  let billing: { processor: BillingProcessor; provider: TestBillingProvider; store: BillingStore } | undefined;
+  if (config.billing) {
+    const provider = new TestBillingProvider({
+      webhookSecret: config.billing.webhookSecret,
+      appUrl: config.publicOrigin ?? config.allowedOrigins[0] ?? 'http://localhost:3000',
+    });
+    const store: BillingStore =
+      accessStore instanceof PostgresAccessStore && learning.database
+        ? new PostgresBillingStore(learning.database, accessStore)
+        : new InMemoryBillingStore(accessStore);
+    billing = {
+      provider,
+      store,
+      processor: new BillingProcessor({
+        provider,
+        store,
+        offers: config.billing.offers,
+        plans: accessPlans,
+        policy: config.billing.policy,
+        logger,
+        ...(metrics.billing ? { metrics: metrics.billing } : {}),
+      }),
+    };
+    logger.warn(
+      'config.billing',
+      { provider: provider.id, count: config.billing.offers.length },
+      `billing is ON in TEST mode (provider ${provider.id}, ${config.billing.offers.length} offer(s)): ` +
+        'simulated payments only, never real money; refused under NODE_ENV=production',
+    );
+  }
+
   logger.info(
     'config.loaded',
     { accessPolicy: config.accessPolicy },
@@ -470,6 +510,7 @@ async function main(): Promise<void> {
     browserAuth: { users, authSessions, client: browserClient, idTokenVerifier },
     access,
     sessionEvents,
+    ...(billing ? { billing } : {}),
     observability: {
       logger,
       metrics: {

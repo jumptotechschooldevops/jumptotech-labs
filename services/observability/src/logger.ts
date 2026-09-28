@@ -107,6 +107,8 @@ export interface LogFields {
   accessPolicy?: string;
   /** A plan id from ACCESS_PLANS_FILE: configuration, never personal data. */
   planId?: string;
+  /** A billing provider's event id: opaque, names no person, and is what the provider's dashboard searches by. */
+  eventRef?: string;
 
   // --- errors ---------------------------------------------------------------
   err?: unknown;
@@ -136,7 +138,7 @@ const ALLOWED_FIELDS = [
   'step', 'op', 'scope', 'endpoint', 'requirementType', 'denyReason', 'operation', 'migrationVersion',
   'outcome', 'reason', 'result', 'code', 'status', 'count', 'durationMs',
   'route', 'method',
-  'securityEvent', 'authorizationResult', 'action', 'accessState', 'accessPolicy', 'planId',
+  'securityEvent', 'authorizationResult', 'action', 'accessState', 'accessPolicy', 'planId', 'eventRef',
   'err',
   'service', 'version', 'commit', 'port', 'store', 'authMode', 'labsLoaded', 'durable',
 ] as const;

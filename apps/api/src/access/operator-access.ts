@@ -34,7 +34,7 @@ import {
   assertKind,
   assertReason,
   assertUserId,
-  evaluateAccess,
+  evaluateAccount,
   parseInstant,
   type AccessAction,
   type AccessEvent,
@@ -42,6 +42,7 @@ import {
   type AccessState,
   type AccessStore,
   type AccountAccess,
+  type Entitlement,
   type GrantRequest,
 } from './entitlements.js';
 import { PLAN_ID_SHAPE, PlanCatalog, type TrialConfig } from './plans.js';
@@ -66,19 +67,36 @@ export interface AccountAccessView {
   state: AccessState;
   /** Whether this account may use labs right now, under this deployment's policy. */
   canUseLabs: boolean;
-  entitlement: {
-    status: string;
-    startsAt: string;
-    expiresAt: string | null;
-    grantedVia: string;
-    kind: string;
-    planId: string | null;
-    updatedAt: string;
-  } | null;
+  /** The row that answers for the account's state: the operator's, or billing's (`evaluateAccount`). */
+  entitlement: GrantView | null;
+  /** Every row, one per source. */
+  grants: GrantView[];
+}
+
+export interface GrantView {
+  status: string;
+  startsAt: string;
+  expiresAt: string | null;
+  grantedVia: string;
+  kind: string;
+  planId: string | null;
+  updatedAt: string;
+}
+
+function grantView(grant: Entitlement): GrantView {
+  return {
+    status: grant.status,
+    startsAt: grant.startsAt,
+    expiresAt: grant.expiresAt,
+    grantedVia: grant.grantedVia,
+    kind: grant.kind,
+    planId: grant.planId,
+    updatedAt: grant.updatedAt,
+  };
 }
 
 export function toAccountView(account: AccountAccess, policy: AccessPolicy, nowMs: number): AccountAccessView {
-  const evaluation = evaluateAccess(account.entitlement, nowMs);
+  const evaluation = evaluateAccount(account.grants, nowMs);
   return {
     userId: account.userId,
     issuer: account.issuer,
@@ -88,17 +106,8 @@ export function toAccountView(account: AccountAccess, policy: AccessPolicy, nowM
     firstSignInAt: account.createdAt,
     state: evaluation.state,
     canUseLabs: policy === 'open' || evaluation.active,
-    entitlement: account.entitlement
-      ? {
-          status: account.entitlement.status,
-          startsAt: account.entitlement.startsAt,
-          expiresAt: account.entitlement.expiresAt,
-          grantedVia: account.entitlement.grantedVia,
-          kind: account.entitlement.kind,
-          planId: account.entitlement.planId,
-          updatedAt: account.entitlement.updatedAt,
-        }
-      : null,
+    entitlement: evaluation.effective ? grantView(evaluation.effective) : null,
+    grants: account.grants.map(grantView),
   };
 }
 
@@ -123,14 +132,23 @@ export function diagnose(view: AccountAccessView, policy: AccessPolicy, nowIso: 
     case 'SCHEDULED':
       return [`Granted, but the window opens at ${e!.startsAt} (now ${nowIso}). Grant again with an earlier --from to open it sooner.`];
     case 'EXPIRED':
-      return [`Access ended at ${e!.expiresAt} (now ${nowIso}). A new grant with a later --until extends it; history is kept.`];
+      return e!.grantedVia === 'billing'
+        ? [
+            `The paid subscription stopped covering lab use at ${e!.expiresAt} (now ${nowIso}). ` +
+              '`billing show <id>` says why (ended, payment problem); the provider decides, not a grant.',
+          ]
+        : [`Access ended at ${e!.expiresAt} (now ${nowIso}). A new grant with a later --until extends it; history is kept.`];
     case 'SUSPENDED':
-      return ['Suspended by an operator. `access restore` lifts it with the same window; see the history for who and why.'];
+      return [
+        'Suspended by an operator — account-wide, including any paid subscription. `access restore` lifts it with the ' +
+          'same windows; see the history for who and why.',
+      ];
     case 'REVOKED':
       return ['Revoked by an operator. Only a new grant brings it back; see the history for who and why.'];
     case 'ACTIVE':
       return [
-        e!.expiresAt ? `Active until ${e!.expiresAt}.` : 'Active, with no end date.',
+        (e!.expiresAt ? `Active until ${e!.expiresAt}` : 'Active, with no end date') +
+          (e!.grantedVia === 'billing' ? ', through a paid subscription (`billing show` for its state).' : '.'),
         `Kind ${e!.kind}; ${e!.planId ? `plan ${e!.planId} — a lab outside its tracks is refused LAB_NOT_IN_PLAN` : 'no plan — every track'}.`,
         'Access is not the problem: if this student cannot start a lab, run `ops status`, and `ops sessions` for a lab they already hold.',
       ];
@@ -258,6 +276,7 @@ function plansPayload(plans: PlanCatalog, trial: TrialConfig | undefined) {
 function eventView(event: AccessEvent) {
   return {
     at: event.occurredAt,
+    source: event.source,
     action: event.action,
     by: event.actor,
     reason: event.reason,
@@ -374,7 +393,7 @@ export async function handleAccessRequest(
       { userId, action, actor, reason, ...(grant ? { grant } : {}), ...(trial ? { trial } : {}) },
       () => new Date(deps.now()),
     );
-    const state = evaluateAccess(result.after, deps.now()).state;
+    const state = evaluateAccount(result.grants, deps.now()).state;
     deps.logger.info(
       'ops.operator.access_changed',
       { userId, action: action.toLowerCase(), outcome: result.changed ? 'changed' : 'unchanged', accessState: state },

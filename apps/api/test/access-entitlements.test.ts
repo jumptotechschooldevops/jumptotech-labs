@@ -282,11 +282,10 @@ describe('AccessControl', () => {
   });
 
   it('fails closed when the store cannot be read under the entitlement policy', async () => {
-    const store = {
-      get: async () => {
-        throw new Error('connect ECONNREFUSED');
-      },
-    } as unknown as InMemoryAccessStore;
+    const failing = async () => {
+      throw new Error('connect ECONNREFUSED');
+    };
+    const store = { get: failing, grants: failing } as unknown as InMemoryAccessStore;
     await expect(new AccessControl(store, 'entitlement').decide('usr-00000001')).rejects.toThrow(/ECONNREFUSED/);
   });
 });

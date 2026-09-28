@@ -277,11 +277,14 @@ if (!enabled) {
         );
 
         const report = await migrate(old);
-        expect(report.applied).toEqual(['009_access_plans_and_kinds']);
+        expect(report.applied[0]).toBe('009_access_plans_and_kinds');
+        // 010 (billing) widens the key and the kinds; the legacy row is an operator row.
+        expect(report.applied).toContain('010_billing');
         expect((await migrate(old)).applied).toEqual([]);
 
         const store = new PostgresAccessStore(old);
         expect(await store.get(user.userId)).toMatchObject({ status: 'ACTIVE', kind: 'STANDARD', planId: null, expiresAt: null });
+        expect(await store.grants(user.userId)).toEqual([expect.objectContaining({ grantedVia: 'operator' })]);
         const [event] = await store.events(user.userId, 1);
         expect(event).toMatchObject({ action: 'GRANT', reason: 'before 009', after: { kind: 'STANDARD', planId: null } });
         // And the access it grants is exactly what it was: every track.

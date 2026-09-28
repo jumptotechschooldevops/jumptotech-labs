@@ -14,7 +14,7 @@ socket (`apps/api/src/operator.ts`).
 - [6. Operator runbook](#6-operator-runbook)
 - [7. Who can change access, and the audit trail](#7-who-can-change-access-and-the-audit-trail)
 - [8. Diagnosing an access problem](#8-diagnosing-an-access-problem)
-- [9. The future payment boundary](#9-the-future-payment-boundary)
+- [9. The payment boundary](#9-the-payment-boundary)
 - [10. Plans, trials and limits](#10-plans-trials-and-limits)
 - [11. Data lifecycle](#11-data-lifecycle)
 - [12. Operator decisions required](#12-operator-decisions-required)
@@ -29,14 +29,15 @@ Six separate concepts, each stored separately. None implies another.
 | **Identity** | Who is this person, permanently? | `users` — `(issuer, subject)` is the identity; email and name are descriptive | First sign-in (created); every sign-in (email and name refreshed) |
 | **Authentication** | Did they prove it just now? | `auth_sessions` (a hash of the browser cookie), or a verified bearer token | Sign-in, sign-out, cookie expiry |
 | **Role** | What staff powers do they hold? | `users.role` — STUDENT, INSTRUCTOR, ADMIN | Database only; never a token claim |
-| **Entitlement** | May they *use labs*, and until when? | `access_entitlements` (one row per user and scope) | The operator socket only (§6) |
+| **Entitlement** | May they *use labs*, and until when? | `access_entitlements` (one row per user, scope and source) | The operator socket (§6), and verified billing events ([billing.md](billing.md)) |
 | **Plan** | *What* may they use: which tracks, how many labs at once? | Configuration (`ACCESS_PLANS_JSON` / `ACCESS_PLANS_FILE`); the entitlement names one by id | The deployment's `.env` (§10) |
 | **Lab session** | What are they running right now? | `lab_sessions` | Start, End, the reaper |
 | **Progress** | What have they done? | `students`, `lab_attempts`, `lab_progress`, `hint_usage` | Start, Check, hints |
 
 Not modelled, because nothing in the product needs them yet: organisations,
-cohorts, courses, per-lab sales, invitations, prices, subscriptions, payments.
-§9 and §10 say where each would attach. Plans (what a grant covers), kinds
+cohorts, courses, per-lab sales, invitations, prices. §9 and §10 say where
+each would attach. Subscriptions and payments are in [billing.md](billing.md),
+test mode only. Plans (what a grant covers), kinds
 (ordinary, private beta, trial) and trials were added in migration 009 (§10).
 
 ## 2. What changed
@@ -371,51 +372,35 @@ recent denials:
 prod logs --since 1h api | grep '"authorizationResult":"denied-access"' | grep '<user-id>'
 ```
 
-## 9. The future payment boundary
+## 9. The payment boundary
 
 **A payment provider changes entitlements. It never becomes authentication,
-and never bypasses authorization.**
+and never bypasses authorization.** It is built, in test mode only, and
+documented in [billing.md](billing.md): a provider boundary, a test provider,
+verified and idempotent webhooks, and the subscription lifecycle.
 
 ```text
-  payment provider ──webhook──► verify signature, dedupe the event id
-                                        │  (a new, separate component)
-                                        ▼
-                      the same mutation the operator socket calls:
-                      AccessStore.mutate({ userId, action: GRANT|SUSPEND|REVOKE,
-                                           actor, reason, grant: { startsAt?, expiresAt } })
-                                        │
-                                        ▼
-                         access_entitlements  +  access_events
-                                        │
-                                        ▼
-            AccessControl.decide(userId)  — unchanged, on every lab-use request
+  payment provider ──signed webhook──► verify, dedupe, order (billing/processor.ts)
+                                                │  one transaction
+                                                ▼
+                      AccessStore.mutate({ source: 'billing', action: SYNC, sync: … })
+                                                │
+                                                ▼
+                     access_entitlements (billing's row)  +  access_events
+                                                │
+                                                ▼
+            AccessControl.decide(userId) — every row of the account, on every lab-use request
 ```
 
-What already exists for it:
-
-- **One write path.** `AccessStore.mutate` (`apps/api/src/access/entitlements.ts`)
-  is atomic, serialised per user, idempotent for a repeated change, and writes
-  its own audit event. A webhook handler calls it; it does not write SQL.
-- **`granted_via`** says how a row came to exist; only `operator` exists today.
-  A payment integration adds its value (e.g. `payment`) in a new migration, so
-  support can always tell a manual grant from a paid one.
-- **Explicit windows.** A subscription period, a fixed-length cohort and a
-  trial are all a `[startsAt, expiresAt)`; nothing assumes a length.
+- **Sources.** An account has at most one row per source: `operator` (§6) and
+  `billing`. They never overwrite each other (billing.md §6).
+- **Suspension is account-wide.** `ops access suspend` suspends every row,
+  including billing's; billing events cannot lift it.
+- **Revocation is the operator's row only.** A paid subscription is cancelled
+  at the provider.
 - **Identity untouched.** Sign-in, `users`, `auth_sessions` and roles do not
-  change when payment does.
-
-What a payment integration must add (not built here):
-
-1. **Customer ↔ account mapping.** A provider knows a customer and an email;
-   the platform knows `(issuer, subject)`. Mapping by email is unsafe (§6.1).
-   The robust shape is: the signed-in student starts checkout, and the platform
-   passes its own internal user id as the provider's client reference, so the
-   verified webhook names the account directly.
-2. **Webhook verification** (signature, timestamp) and **event deduplication**
-   (a processed-event table keyed by the provider's event id).
-3. **An external reference** on the entitlement or event (subscription id) and
-   a `granted_via` value — a new migration.
-4. **Precedence rules** between manual and paid grants (§12).
+  change when payment does. A customer is bound to an account only through a
+  checkout this platform started for that account.
 
 ## 10. Plans, trials and limits
 
@@ -508,7 +493,7 @@ for accounting, and how it interacts with backups — is an operator decision
 | **Trial length, and whether trials exist at all** | Trials are off until `TRIAL_DURATION_DAYS` is set |
 | **Self-service trials** (a student starts their own) | Not built: only an operator starts one. A self-service start is an endpoint that grants access to anyone who can sign in, so it waits for a decision about who may sign in and about abuse (one person, many identities) |
 | **Cohort length, renewal rules** | None exist in code |
-| **Manual vs paid grant precedence** once payment exists | Only manual grants exist |
+| **Manual vs paid grant precedence** | Separate rows; the operator's non-trial row answers when both are active ([billing.md §6](billing.md#6-subscriptions-and-manual-grants-together)) |
 | **Account deletion / anonymisation, and retention** of users, progress, access history and backups | Everything is kept indefinitely; backups follow `BACKUP_RETENTION_DAYS` |
 | **Showing the access window to students** (e.g. "access until 31 Dec") | `GET /api/me/access` returns it; the page shows the state only |
 | **Sign out everywhere** when an account is compromised (`destroyAllForUser` exists, nothing calls it) | Not available to operators |

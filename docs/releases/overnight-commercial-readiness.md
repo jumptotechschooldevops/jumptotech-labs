@@ -334,7 +334,7 @@ serialised, idempotent, self-auditing). To add: customer↔account mapping via
 the platform's internal user id as the checkout client reference (never email);
 webhook verification and an event-dedupe table; a `granted_via` value and an
 external reference column (new migration); precedence rules. Details:
-[commercial-access.md §9](../commercial-access.md#9-the-future-payment-boundary).
+[commercial-access.md §9](../commercial-access.md#9-the-payment-boundary).
 
 ## 26. WHAT MUST EXIST BEFORE CHARGING STUDENTS
 

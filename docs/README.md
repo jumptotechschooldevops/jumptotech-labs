@@ -85,7 +85,8 @@ fails the build for one that does not:
 | rehearsed failures | [incident-exercises.md](incident-exercises.md) |
 | the private-beta release decision and its conditions | [releases/private-beta-release-gate.md](releases/private-beta-release-gate.md) |
 | what a deployment must record | [releases/production-host-evidence-template.md](releases/production-host-evidence-template.md) |
-| who may use labs: entitlements, the `ops access` commands, the payment boundary | [commercial-access.md](commercial-access.md) |
+| who may use labs: entitlements, plans, trials, the `ops access` commands | [commercial-access.md](commercial-access.md) |
+| billing: the provider boundary, verified webhooks, the subscription lifecycle (test mode only) | [billing.md](billing.md) |
 
 The alert runbooks, one per alert family:
 [RB-01](runbooks/RB-01-service-down.md) ·

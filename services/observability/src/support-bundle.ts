@@ -53,7 +53,7 @@ const STRUCTURED_KEYS = [
   'labId', 'track', 'provider', 'implementation', 'sandboxKind', 'sandboxRef',
   'step', 'op', 'scope', 'endpoint', 'requirementType', 'denyReason', 'operation', 'migrationVersion',
   'outcome', 'reason', 'result', 'code', 'status', 'count', 'durationMs',
-  'route', 'method', 'securityEvent', 'authorizationResult', 'action', 'accessState', 'accessPolicy', 'planId',
+  'route', 'method', 'securityEvent', 'authorizationResult', 'action', 'accessState', 'accessPolicy', 'planId', 'eventRef',
   'version', 'commit', 'port', 'store', 'authMode', 'labsLoaded', 'durable', 'truncated',
 ] as const;
 
@@ -68,6 +68,9 @@ const LIFECYCLE_EVENTS = new Set([
   'ops.operator.session_ended',
   'ops.operator.access_changed',
   'config.access_plans',
+  'config.billing',
+  'billing.webhook_processed',
+  'billing.reconciled',
   'ops.operator_socket.started',
   'observability.listener.started',
 ]);

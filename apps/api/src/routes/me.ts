@@ -262,6 +262,7 @@ export function createMeRoutes(deps: MeRoutesDeps): Router {
             startsAt: null,
             expiresAt: null,
             kind: null,
+            source: null,
             plan: null,
             maxConcurrentSessions: null,
           },
