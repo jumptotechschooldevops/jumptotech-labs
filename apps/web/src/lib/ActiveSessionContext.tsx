@@ -69,6 +69,8 @@ export interface ActiveSessionState {
   entries: ActiveSessionEntry[];
   /** The caller's own quota, when the deployment reports one. */
   limit: number | null;
+  /** The deadlines every lab runs under, when the api reports them. */
+  timeLimits: TimeLimits | null;
   refresh: () => Promise<void>;
   sessionForLab: (labId: string) => ActiveSessionEntry | undefined;
 
@@ -85,6 +87,11 @@ export interface ActiveSessionState {
 
   /** Record a newer copy of a session — from a poll, a check, a reset, an end. */
   adoptSession: (session: SessionInfo, attempt?: AttemptSummary | null) => void;
+}
+
+export interface TimeLimits {
+  maxSessionMinutes: number;
+  idleTimeoutMinutes: number;
 }
 
 const ActiveSessionContext = createContext<ActiveSessionState | null>(null);
@@ -108,6 +115,7 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<ApiError | null>(null);
   const [entries, setEntries] = useState<ActiveSessionEntry[]>([]);
   const [limit, setLimit] = useState<number | null>(null);
+  const [timeLimits, setTimeLimits] = useState<TimeLimits | null>(null);
 
   const [launching, setLaunching] = useState<LaunchState | null>(null);
   const [launchError, setLaunchError] = useState<{ labId: string; error: ApiError } | null>(null);
@@ -137,6 +145,12 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
       if (changes.current !== seen) return refresh();
       setEntries(result.sessions);
       setLimit(result.limits?.maxActiveSessionsPerStudent ?? null);
+      const { maxSessionMinutes, idleTimeoutMinutes } = result.limits ?? {};
+      setTimeLimits(
+        typeof maxSessionMinutes === 'number' && maxSessionMinutes > 0 && typeof idleTimeoutMinutes === 'number' && idleTimeoutMinutes > 0
+          ? { maxSessionMinutes, idleTimeoutMinutes }
+          : null,
+      );
       setError(null);
       setStatus('ready');
       // A grant for a session that is no longer ours is worth nothing; drop it.
@@ -287,6 +301,7 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
       error,
       entries,
       limit,
+      timeLimits,
       refresh,
       sessionForLab: (labId) => entries.find((entry) => entry.session.labId === labId),
       launching,
@@ -305,6 +320,7 @@ export function ActiveSessionProvider({ children }: { children: ReactNode }) {
       error,
       entries,
       limit,
+      timeLimits,
       refresh,
       launching,
       launchError,

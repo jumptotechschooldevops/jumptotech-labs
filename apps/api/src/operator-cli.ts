@@ -9,6 +9,7 @@
  *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts end <session-id> --yes
  *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts access <verb> …
  *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts role <verb> …
+ *   prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-cli.ts sign-out <user-id> --by … --reason …
  *
  * `access` manages lab access (docs/commercial-access.md): list, find, show,
  * grant, suspend, restore, revoke. Every change needs `--by` and `--reason`,
@@ -57,6 +58,12 @@ export const USAGE = `usage: operator-cli <command> [--json]
   role show <user-id>
   role set  <user-id> STUDENT|INSTRUCTOR|ADMIN --by <operator> --reason <text>
 
+  Sign-ins (docs/runbooks/identity-and-access.md). Access is unchanged: the
+  account may sign in again unless its access is suspended or revoked.
+
+  sign-out <user-id> --by <operator> --reason <text>
+                         end every browser sign-in this account holds
+
 The socket path is OPERATOR_SOCKET_PATH, set in the api container by the compose files.`;
 
 export type AccessVerb = 'grant' | 'trial' | 'suspend' | 'restore' | 'revoke';
@@ -72,7 +79,8 @@ export type Command =
   | { kind: 'access-plans' }
   | { kind: 'access-change'; verb: AccessVerb; userId: string; body: Record<string, unknown> }
   | { kind: 'role-show'; userId: string }
-  | { kind: 'role-set'; userId: string; body: { role: string; by: string; reason: string } };
+  | { kind: 'role-set'; userId: string; body: { role: string; by: string; reason: string } }
+  | { kind: 'sign-out'; userId: string; body: { by: string; reason: string } };
 
 /** Options that take a value, per access verb. */
 const ACCESS_VALUE_OPTIONS: Record<string, readonly string[]> = {
@@ -203,9 +211,32 @@ export function parseRoleArgs(argv: readonly string[]): { command: Command; json
   return { error: verb ? `unknown role command ${verb}` : 'role needs a command: show, set' };
 }
 
+export function parseSignOutArgs(argv: readonly string[]): { command: Command; json: boolean } | { error: string } {
+  const values: Record<string, string> = {};
+  const words: string[] = [];
+  let json = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--by' || arg === '--reason') {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith('--')) return { error: `${arg} needs a value` };
+      if (arg in values) return { error: `${arg} given twice` };
+      values[arg] = value;
+      i += 1;
+    } else if (arg.startsWith('--')) return { error: `unknown option ${arg} for sign-out` };
+    else words.push(arg);
+  }
+  if (words.length !== 1) return { error: 'sign-out needs exactly one <user-id> (from access find)' };
+  if (!values['--by']) return { error: 'sign-out needs --by <operator>: every change records who made it' };
+  if (!values['--reason']) return { error: 'sign-out needs --reason <text>: every change records why' };
+  return { command: { kind: 'sign-out', userId: words[0]!, body: { by: values['--by'], reason: values['--reason'] } }, json };
+}
+
 export function parseArgs(argv: readonly string[]): { command: Command; json: boolean } | { error: string } {
   if (argv[0] === 'access') return parseAccessArgs(argv.slice(1));
   if (argv[0] === 'role') return parseRoleArgs(argv.slice(1));
+  if (argv[0] === 'sign-out') return parseSignOutArgs(argv.slice(1));
   const json = argv.includes('--json');
   const recent = argv.includes('--recent');
   const yes = argv.includes('--yes');
@@ -283,6 +314,8 @@ function pathFor(command: Command): { method: 'GET' | 'POST'; path: string; body
       return { method: 'GET', path: `/v1/users/${encodeURIComponent(command.userId)}/role` };
     case 'role-set':
       return { method: 'POST', path: `/v1/users/${encodeURIComponent(command.userId)}/role`, body: command.body };
+    case 'sign-out':
+      return { method: 'POST', path: `/v1/users/${encodeURIComponent(command.userId)}/sign-out`, body: command.body };
     case 'status':
       return { method: 'GET', path: '/v1/status' };
     case 'sessions':
@@ -547,6 +580,12 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
         data.changed
           ? `changed: ${parsed.command.userId} is now ${String(data.after)} (was ${String(data.before)}). The api applies it to their next request; the Classroom link appears when they reload the page.\n`
           : `unchanged: ${parsed.command.userId} is already ${String(data.after)}.\n`,
+      );
+      break;
+    case 'sign-out':
+      process.stdout.write(
+        `signed out: ${String(data.signedOut)} browser sign-in(s) of ${parsed.command.userId} ended; each is refused from its next request.\n` +
+          `${String(data.note)}\n`,
       );
       break;
     case 'status':

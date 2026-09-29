@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createHmac } from 'node:crypto';
 import { InvalidSessionTokenError, issueSessionToken, verifySessionToken } from '../src/index.js';
 
 const SECRET = 'test-secret-that-is-long-enough';
@@ -97,5 +98,23 @@ describe('terminal session tokens', () => {
 
   it('refuses to issue with a weak secret', () => {
     expect(() => issue({ secret: 'short' })).toThrow(/at least 8 characters/);
+  });
+
+  it('carries the browser sign-in it was requested under, and only a stored-id shape', () => {
+    const signIn = 'a'.repeat(64);
+    expect(verifySessionToken(issue({ authSessionId: signIn }).token, SECRET).asid).toBe(signIn);
+    // Unbound (a bearer caller): the claim is absent, not empty.
+    expect('asid' in verifySessionToken(issue().token, SECRET)).toBe(false);
+    // A raw cookie value is not a stored id, so it can never be put in a token.
+    expect(() => issue({ authSessionId: 'q9R2x-cookie-value_not_a_hash' })).toThrow(/sign-in id/);
+  });
+
+  it('refuses a correctly signed token whose sign-in binding is malformed, rather than treating it as unbound', () => {
+    for (const asid of ['', 'A'.repeat(64), 'a'.repeat(63), 42, null]) {
+      const claims = { sid: SESSION_ID, uid: OWNER, asid, labId: 'K8S-001', namespace: NAMESPACE, iat: 0, exp: Math.floor(Date.now() / 1000) + 60 };
+      const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
+      const token = `${payload}.${createHmac('sha256', SECRET).update(payload).digest('base64url')}`;
+      expect(() => verifySessionToken(token, SECRET), String(asid)).toThrow(InvalidSessionTokenError);
+    }
   });
 });

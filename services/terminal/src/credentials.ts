@@ -111,8 +111,23 @@ export interface FetchOptions {
    * rather than silently reverting to token-only access.
    */
   ownerUserId: string;
+  /**
+   * The `asid` claim from the verified token, when it has one: the browser
+   * sign-in it was requested under. Forwarded so the API can refuse a token
+   * whose sign-in has ended (docs/authentication.md §3.6); like `ownerUserId`,
+   * a verified claim, never anything the socket sent.
+   */
+  authSession?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+}
+
+/** The claims forwarded to the API with every internal request: verified token claims, nothing else. */
+export function claimsBody(options: Pick<FetchOptions, 'ownerUserId' | 'authSession'>): string {
+  return JSON.stringify({
+    ownerUserId: options.ownerUserId,
+    ...(options.authSession !== undefined ? { authSession: options.authSession } : {}),
+  });
 }
 
 /**
@@ -202,9 +217,9 @@ async function fetchInternal(options: FetchOptions): Promise<Record<string, unkn
       {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-internal-secret': options.secret },
-        // The only field ever sent, and it is a claim this service verified the
-        // signature of rather than anything a socket supplied.
-        body: JSON.stringify({ ownerUserId: options.ownerUserId }),
+        // Only claims this service verified the signature of, never anything
+        // a socket supplied.
+        body: claimsBody(options),
         signal: controller.signal,
       },
     );

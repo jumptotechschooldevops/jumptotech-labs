@@ -34,6 +34,7 @@ import type { ApiConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { sessionErrorResponse } from './sessions.js';
 import { accessRefusalBody, type AccessControl } from '../access/entitlements.js';
+import type { AuthSessionStore } from '../auth/browser-session.js';
 
 export interface InternalRoutesDeps {
   sessions: SessionManager;
@@ -43,6 +44,12 @@ export interface InternalRoutesDeps {
    * compose unchanged; absent means the `open` policy.
    */
   access?: AccessControl;
+  /**
+   * Browser sign-ins, to re-check the one a terminal token was requested
+   * under (docs/authentication.md §3.6). Absent: a token that names one is
+   * refused, because its sign-in cannot be shown to be live.
+   */
+  authSessions?: Pick<AuthSessionStore, 'findLive'>;
 }
 
 function secretsMatch(presented: unknown, expected: string): boolean {
@@ -151,7 +158,8 @@ export function createInternalRoutes(deps: InternalRoutesDeps): Router {
    * caller maps.
    */
   async function requireOwnedSession(req: Request, res: Response): Promise<LabSession | null> {
-    const claimedOwner = (req.body as { ownerUserId?: unknown } | undefined)?.ownerUserId;
+    const body = req.body as { ownerUserId?: unknown; authSession?: unknown } | undefined;
+    const claimedOwner = body?.ownerUserId;
 
     if (typeof claimedOwner !== 'string' || claimedOwner.length === 0) {
       sendError(res, 400, {
@@ -175,6 +183,35 @@ export function createInternalRoutes(deps: InternalRoutesDeps): Router {
         message: 'That terminal token is not valid for this session.',
       });
       return null;
+    }
+
+    /*
+     * A terminal token does not outlive the sign-in it was requested under.
+     *
+     * The terminal service forwards the token's `asid` claim when it has one:
+     * the stored id of the browser sign-in that asked for it. Signing out
+     * deletes that record (so does `ops sign-out`, and expiry), and from then
+     * on the token opens no shell and keeps none alive — the terminal closes a
+     * socket whose activity report is refused. Before this, a token minted a
+     * minute before sign-out kept opening shells for the rest of its hour.
+     *
+     * The sign-in must also still be the owner's: a record is only ever
+     * created for one user, so a mismatch means a forged claim, and is refused
+     * the same way. A token with no claim (a bearer caller's) skips this and
+     * rests on the owner and access checks, as before.
+     */
+    const signIn = body?.authSession;
+    if (signIn !== undefined) {
+      const live =
+        typeof signIn === 'string' && deps.authSessions ? await deps.authSessions.findLive(signIn) : null;
+      if (!live || live.userId !== session.ownerUserId) {
+        sendError(res, 401, {
+          code: 'AUTH_SESSION_ENDED',
+          message: 'The sign-in this terminal was opened under has ended.',
+          remediation: 'Sign in again. Your lab is still running.',
+        });
+        return null;
+      }
     }
 
     /*

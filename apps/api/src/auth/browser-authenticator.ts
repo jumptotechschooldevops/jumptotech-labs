@@ -70,6 +70,16 @@ export class BrowserSessionAuthenticator {
   }
 
   async authenticate(cookieHeader: string | undefined): Promise<AuthenticatedUser | null> {
+    return (await this.authenticateSession(cookieHeader))?.user ?? null;
+  }
+
+  /**
+   * As `authenticate`, with the stored id of the sign-in that answered — what a
+   * terminal token is bound to, so that signing out ends it too.
+   */
+  async authenticateSession(
+    cookieHeader: string | undefined,
+  ): Promise<{ user: AuthenticatedUser; authSessionId: string } | null> {
     const cookieValue = this.cookieFrom(cookieHeader);
     if (!cookieValue) return null;
 
@@ -96,6 +106,6 @@ export class BrowserSessionAuthenticator {
       );
     }
 
-    return user;
+    return { user, authSessionId: record.authSessionId };
   }
 }

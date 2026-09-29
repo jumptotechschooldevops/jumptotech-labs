@@ -212,6 +212,7 @@ stack or touches another stack.
 | `capacity.launches` | WARN when `LAB_LAUNCHES_PAUSED` is on: the stack would start refusing every Start Lab |
 | `durability.volumes` | named volumes for postgres, prometheus, alertmanager, grafana |
 | `durability.healthchecks` | postgres, api, terminal, web |
+| `durability.database-first-boot` | the postgres check dials TCP (`pg_isready -h 127.0.0.1`), never the socket the image's initialiser answers on, and tolerates at least 180 s (start_period + interval × retries) before calling a first boot on a new volume unhealthy; the real server reached TCP at +63–65 s on a loaded host |
 | `durability.log-rotation` | every service's container logs rotate (json-file `max-size`; the overlays ship 10 MB × 5), so logs cannot grow until the disk the PostgreSQL volume shares is full |
 | `durability.restart-policy` | every service exactly `restart: unless-stopped` (PR #34); `always` is a FAIL because it would undo `prod stop web` |
 | `backup.status-dir` | absolute host directory, read-only in the api; WARN on the in-checkout default |
@@ -319,11 +320,11 @@ all, the provider must let only this deployment's client obtain tokens for
 `OIDC_AUDIENCE`, and that audience must be dedicated. This is wider than the
 "any account" gap above: it admits other clients, not only other accounts.
 
-**Sign-out does not revoke terminal access.** The terminal token minted for a
-running lab is bound to the lab session and user, not to the browser session,
-and lives up to `TERMINAL_SESSION_TTL_SECONDS` (1 h). A terminal WebSocket
-already open stays open after sign-out. Low risk for five trusted students on
-their own machines; recorded with D13.
+**Sign-out revokes terminal access** (fixed 2026-09-28; previously a terminal
+token outlived sign-out by up to `TERMINAL_SESSION_TTL_SECONDS`, 1 h). The token
+is bound to the browser sign-in that requested it; once that sign-in ends, no
+new shell opens and an open one closes on its next keystroke after an activity
+report (≤ 30 s of typing). See [authentication.md §3.6](../authentication.md).
 
 ## 9. TLS contract
 

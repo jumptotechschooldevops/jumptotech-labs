@@ -228,6 +228,32 @@ issuer publishes one, so the UI can complete a full single-logout. Deleting the
 record server-side is what makes the cookie worthless immediately — clearing it
 in the browser alone would leave a valid session id in anyone's proxy log.
 
+
+**Signing out also ends terminal authority** (2026-09-28 audit). A terminal
+token requested by a signed-in browser — at Start or `POST
+/api/sessions/:id/terminal` — carries an `asid` claim: the *stored* id of that
+sign-in (the SHA-256 of the cookie, never the cookie). The terminal service
+forwards it with the owner claim, and the internal credential and activity
+routes refuse the token with `401 AUTH_SESSION_ENDED` once that sign-in no
+longer exists — signed out, ended by `ops sign-out`, or past
+`AUTH_SESSION_TTL_SECONDS`. The effect:
+
+- a token can no longer open a shell after the browser that held it signed
+  out (before: up to `TERMINAL_SESSION_TTL_SECONDS`, 1 h);
+- a terminal already **open** is closed on the first keystroke after its sign-in
+  ends — the activity report sent at most every 30 s while the student types is
+  refused, and the terminal closes the socket (`UNAUTHORIZED`, 4401). The page
+  asks for a fresh token, which a signed-out browser cannot get, so it shows
+  the sign-in page. The same report closes a socket whose owner's lab access
+  was suspended or revoked (`ACCESS_NOT_ACTIVE`, 4403);
+- only that browser's tokens: another device's sign-in, and its terminals,
+  are untouched; the lab itself keeps running (signing out is not End).
+
+A token requested with a bearer credential has no sign-in and no `asid`; it
+rests on the owner and lab-access checks, as before. A shell that nobody types
+into is not closed until it idles out, but it also cannot be used without
+typing.
+
 ### 3.7 What the browser holds
 
 | Item | Where | Readable by page scripts |
@@ -237,7 +263,7 @@ in the browser alone would leave a valid session id in anyone's proxy log.
 | OIDC ID token | verified and discarded; only claims are persisted | **No** |
 | OIDC refresh token | not requested (`scope` has no `offline_access`) | **No** |
 | Client secret | API environment only | **No** |
-| Terminal session token | JavaScript memory, for the WebSocket handshake | Yes — unchanged, and now owner-bound (§3.5) |
+| Terminal session token | JavaScript memory, for the WebSocket handshake | Yes — owner-bound (§3.5) and bound to this sign-in (§3.6) |
 | Display name / email | JavaScript memory, for rendering | Yes — descriptive only |
 
 Nothing is written to `localStorage` or `sessionStorage` by the auth layer.

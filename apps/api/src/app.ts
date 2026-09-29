@@ -588,7 +588,7 @@ export function createApp(deps: CreateAppDeps): Express {
       sandboxWriteLimiter,
     }),
   );
-  app.use('/internal', createInternalRoutes({ ...deps, access }));
+  app.use('/internal', createInternalRoutes({ ...deps, access, authSessions }));
 
   app.use((_req, res) => {
     sendError(res, 404, { code: 'NOT_FOUND', message: 'No such endpoint' });
