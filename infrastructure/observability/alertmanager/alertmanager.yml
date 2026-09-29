@@ -68,7 +68,7 @@ inhibit_rules:
 
   - source_matchers: [alertname="DatabaseDown"]
     target_matchers:
-      - alertname=~"ApiErrorRateHigh|LabStartsFailingHard|LabStartFailureRateElevated|AuthFailureSpike|DatabasePoolSaturated|VerificationErrorRate"
+      - alertname=~"ApiErrorRateHigh|ApiLatencyHigh|LabStartsFailingHard|LabStartFailureRateElevated|AuthFailureSpike|DatabasePoolSaturated|VerificationErrorRate"
 
   # The api's readiness includes the database, and sandboxd's is the container
   # runtime: the dependency's own alert names the fix. Readiness is measured at
@@ -82,9 +82,11 @@ inhibit_rules:
 
   # BETA-P0-018. The session store, the reaper's listing and sign-in all live in
   # the database; every one of these is DatabaseDown seen from another angle.
+  # ReaperStalled and ApiLatencyHigh since the 2026-09-28 drill, where both
+  # paged next to DatabaseDown while PostgreSQL was stopped.
   - source_matchers: [alertname="DatabaseDown"]
     target_matchers:
-      - alertname=~"ReaperSweepErrorsPersisting|LabResetsFailing|SessionStuckProvisioning|SessionResetStuck|SessionTeardownStuck|SessionDegradedNotReclaimed|AuthRejectionsAbnormal|OidcSignInFailures"
+      - alertname=~"ReaperSweepErrorsPersisting|ReaperStalled|LabResetsFailing|SessionStuckProvisioning|SessionResetStuck|SessionTeardownStuck|SessionDegradedNotReclaimed|AuthRejectionsAbnormal|OidcSignInFailures"
 
   # Stuck teardowns and unrecovered resets are what a stopped reaper looks like.
   - source_matchers: [alertname="ReaperStalled"]

@@ -372,6 +372,16 @@ describe('monitoring joins production without becoming reachable', () => {
     );
   });
 
+  it('lets a database outage page as the database, not also as a stalled reaper or a slow api', () => {
+    // 2026-09-28 drill: PostgreSQL stopped -> DatabaseDown, ReaperStalled and
+    // ApiLatencyHigh together. The sweep lists sessions from the database.
+    const alertmanager = withoutComments(read('infrastructure/observability/alertmanager/alertmanager.yml'));
+    const targets = [...alertmanager.matchAll(/- source_matchers: \[alertname="DatabaseDown"\]\n\s+target_matchers:\n\s+- alertname=~"([^"]+)"/g)]
+      .flatMap((m) => m[1]!.split('|'));
+    expect(targets).toContain('ReaperStalled');
+    expect(targets).toContain('ApiLatencyHigh');
+  });
+
   it('lets a hung broker page as the broker, not also as a stalled reaper', () => {
     // 2026-09-28 drill: sandboxd paused -> ServiceDown{sandboxd} and then
     // ReaperStalled, both critical. The sweep lists sandboxes through the broker.
