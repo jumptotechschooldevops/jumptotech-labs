@@ -345,6 +345,23 @@ export function createSandboxd(deps: SandboxdDeps): Server {
             metrics?.runtimeOpDuration.observe({ op }, (Date.now() - startedAt) / 1000);
             if (status >= 500) {
               obs.error('sandbox.runtime.op', { op, outcome: 'failed', err: error });
+            } else {
+              /*
+               * A refusal is logged too. The daemon's own errors reach here as
+               * ContainerRuntimeError and so as a 400 — in the 2026-09-28 drill,
+               * "all predefined address pools have been fully subnetted" failed
+               * three students' starts, and this broker wrote nothing: the only
+               * trace was a `refused` count. Refusals are rare, and each one is
+               * a start, reset or teardown that did not happen.
+               */
+              obs.warn('sandbox.runtime.op', {
+                op,
+                outcome: 'refused',
+                status,
+                code: (body as { error?: { code?: string } }).error?.code ?? 'UNKNOWN',
+                durationMs: Date.now() - startedAt,
+                err: error,
+              });
             }
             sendJson(res, status, body);
           }
@@ -391,6 +408,16 @@ export function createSandboxd(deps: SandboxdDeps): Server {
             metrics?.dockerOps.inc({ op, outcome: status >= 500 ? 'failed' : 'refused' });
             if (status >= 500) {
               obs.error('sandbox.runtime.op', { op, outcome: 'failed', err: error });
+            } else {
+              // As for /v1/runtime: a refusal leaves a line, not only a count.
+              obs.warn('sandbox.runtime.op', {
+                op,
+                outcome: 'refused',
+                status,
+                code: (body as { error?: { code?: string } }).error?.code ?? 'UNKNOWN',
+                durationMs: Date.now() - startedAt,
+                err: error,
+              });
             }
             sendJson(res, status, body);
           }
