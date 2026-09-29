@@ -88,7 +88,8 @@ fails the build for one that does not:
 | capacity probes: measuring what the host holds | [development/capacity-probes.md](development/capacity-probes.md) |
 | diagnostics underneath the runbooks: request tracing, health endpoints | [incident-troubleshooting.md](incident-troubleshooting.md) |
 | rehearsed failures | [incident-exercises.md](incident-exercises.md) |
-| the private-beta release decision and its conditions | [releases/private-beta-release-gate.md](releases/private-beta-release-gate.md) |
+| what remains before each release — five-student beta, paid students, public — with status, evidence and owner per row | [releases/release-checklist.md](releases/release-checklist.md) |
+| the private-beta release decision's history: the 2026-09-15 gate and its dated re-validations | [releases/private-beta-release-gate.md](releases/private-beta-release-gate.md) |
 | what a deployment must record | [releases/production-host-evidence-template.md](releases/production-host-evidence-template.md) |
 | who may use labs: entitlements, plans, trials, the `ops access` commands | [commercial-access.md](commercial-access.md) |
 | billing: the provider boundary, verified webhooks, the subscription lifecycle (test mode only) | [billing.md](billing.md) |
@@ -176,6 +177,7 @@ Dated; not maintained after their pass. Newest first within each group.
 | [development/catalog-quality-audit.md](development/catalog-quality-audit.md) | 2026-09-16 |
 | [development/private-beta-security-audit.md](development/private-beta-security-audit.md) | 2026-09-16 |
 
-`releases/private-beta-release-gate.md` is both: its current verdict and
-conditions are authoritative, and its later numbered sections are dated records
-of each re-validation.
+`releases/private-beta-release-gate.md` is both: its conditions are
+authoritative, and its later numbered sections are dated records of each
+re-validation. The current verdict for each release is
+`releases/release-checklist.md`.
