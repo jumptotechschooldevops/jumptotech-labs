@@ -293,10 +293,13 @@ current configuration (a changed offer→plan mapping, leeway or grace shows up
 here).
 
 - **Report only** by default. The metric records what it found.
-- `--apply` (needs `--by` and `--reason`, logged) re-processes each drifted
+- `--apply` (needs `--by` and `--reason`) re-processes each drifted
   subscription **from the provider's current state, through the webhook
-  processor** — same ownership rules, ordering, transaction and audit record as
-  a delivery. Nothing is written by hand.
+  processor** — same ownership rules, ordering and transaction as a delivery.
+  Nothing is written by hand. The access history records the operator as the
+  actor and their reason, followed by the re-processed event. Each state is
+  applied as of the moment it was fetched, so a real webhook that arrives
+  during the run is newer and wins; the reconcile result is then `stale`.
 - A subscription the provider does not know is listed under "needs a person"
   and never changed: deleted at the provider, refunded, or another account's —
   a decision, not a fix.
