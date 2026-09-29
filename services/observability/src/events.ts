@@ -135,6 +135,7 @@ export const LOG_EVENTS = [
   'ops.operator.session_ended',
   // An account's role changed — STUDENT, INSTRUCTOR or ADMIN — by an operator.
   'ops.operator.role_changed',
+  'ops.operator.signed_out',
   // A grant, suspend, restore or revoke of a student's lab access (docs/commercial-access.md).
   'ops.operator.access_changed',
 

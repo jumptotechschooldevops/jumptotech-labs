@@ -45,6 +45,9 @@
  *   POST /v1/users/<id>/role        set it: {role, by, reason}. The only
  *                                   way an account becomes INSTRUCTOR or
  *                                   ADMIN — a sign-in never can (users.ts)
+ *   POST /v1/users/<id>/sign-out    end every browser sign-in the account
+ *                                   holds: {by, reason}. A stolen session
+ *                                   cookie stops working on its next request
  *
  * Nothing else: no raw SQL, no status edits, no terminal, no workspace, no
  * credentials. A session is reported by its identifiers, lab, status and
@@ -79,6 +82,7 @@ import {
 import { assertActor, assertReason, assertUserId } from './access/entitlements.js';
 import { isRole, ROLES } from './auth/identity.js';
 import type { UserRepository } from './auth/users.js';
+import type { AuthSessionStore } from './auth/browser-session.js';
 
 type OperatorAction =
   | 'status'
@@ -87,6 +91,7 @@ type OperatorAction =
   | 'end_session'
   | 'role_show'
   | 'role_set'
+  | 'sign_out'
   | AccessRouteResult['action'];
 type OperatorOutcome = 'ok' | 'rejected' | 'failed';
 
@@ -109,6 +114,11 @@ export interface OperatorDeps {
   access?: OperatorAccessDeps;
   /** Role management. Absent: `/v1/users/…` answers 404. */
   users?: Pick<UserRepository, 'findById' | 'setRole'>;
+  /**
+   * Browser sign-ins, for `sign-out`. Absent: `/v1/users/<id>/sign-out`
+   * answers 404 — the store is the only place a sign-in can be ended.
+   */
+  authSessions?: Pick<AuthSessionStore, 'destroyAllForUser'>;
   now?: () => number;
 }
 
@@ -364,6 +374,63 @@ export function createOperatorHandler(deps: OperatorDeps): (req: IncomingMessage
           send(res, served.status, { ok: true, data: served.payload });
           count(action, 'ok');
           deps.logger.info('ops.operator.request', { action, outcome: 'ok', ...(served.logFields ?? {}) });
+          return;
+        } else if (
+          parts[0] === 'v1' && parts[1] === 'users' && parts.length === 4 && parts[3] === 'sign-out' &&
+          method === 'POST' && deps.users && deps.authSessions
+        ) {
+          /*
+           * Sign an account out everywhere — a stolen session cookie, a shared
+           * machine left signed in, a student removed from the course.
+           *
+           * Before this the only way was `DELETE FROM auth_sessions` by hand:
+           * `destroyAllForUser` existed and nothing called it. Deleting the
+           * rows is what ends a sign-in (the cookie is only an index into
+           * them), so every browser holding one is refused on its next request.
+           * It does not change the account's access: a student signed out can
+           * sign in again, which is `access suspend`'s job to prevent.
+           */
+          action = 'sign_out';
+          let candidate = '';
+          try {
+            candidate = decodeURIComponent(parts[2] ?? '');
+          } catch {
+            // A malformed escape is a bad id.
+          }
+          const userId = assertUserId(candidate);
+          const body = await readJsonBody(req);
+          const extra = Object.keys(body).filter((key) => key !== 'by' && key !== 'reason');
+          if (extra.length > 0) {
+            count(action, 'rejected');
+            send(res, 400, { ok: false, error: { code: 'INVALID_REQUEST', message: `Unknown field(s): ${extra.map((key) => key.slice(0, 32)).join(', ')}.` } });
+            return;
+          }
+          const actor = assertActor(body.by);
+          const reason = assertReason(body.reason);
+          const user = await deps.users.findById(userId);
+          if (!user) {
+            count(action, 'rejected');
+            send(res, 404, { ok: false, error: { code: 'USER_NOT_FOUND', message: `no account ${userId}; find it with \`access find --email\`` } });
+            return;
+          }
+          const signedOut = await deps.authSessions.destroyAllForUser(userId);
+          deps.logger.warn(
+            'ops.operator.signed_out',
+            { userId, action: 'sign_out', result: String(signedOut) },
+            `${signedOut} browser sign-in(s) of ${userId} ended by ${actor}: ${reason}`,
+          );
+          send(res, 200, {
+            ok: true,
+            data: {
+              signedOut,
+              account: { userId: user.userId, email: user.email ?? null, displayName: user.displayName ?? null, role: user.role },
+              note:
+                'Every browser sign-in of this account is ended. The account may sign in again; `access suspend` stops it ' +
+                'using labs, and `--end-sessions --yes` ends labs already running.',
+            },
+          });
+          count(action, 'ok');
+          deps.logger.info('ops.operator.request', { action, outcome: 'ok', userId });
           return;
         } else if (parts[0] === 'v1' && parts[1] === 'users' && parts.length === 4 && parts[3] === 'role' && deps.users) {
           /*
