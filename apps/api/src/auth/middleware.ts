@@ -7,6 +7,7 @@
  */
 import type { NextFunction, Request, Response } from 'express';
 import type { LabSession, SessionManager } from '@jumptotech/lab-orchestrator';
+import { currentRequestId } from '@jumptotech/observability';
 import { AuthError, type AuthenticatedUser, type IdentityResolver } from './identity.js';
 import type { BrowserSessionAuthenticator } from './browser-authenticator.js';
 import { authorize, type Action } from './policy.js';
@@ -58,7 +59,18 @@ export function authzDecisionLabels(event: AuthAuditEvent): { action: string; re
   };
 }
 
+/**
+ * The request's correlation id, as every other line of this request logs it.
+ *
+ * `httpObservability` runs first and has already validated the inbound header
+ * or minted a UUID, and echoed it as the response's `x-request-id`. Reading the
+ * raw header instead stamped every audit line from a browser — which never
+ * sends one — `req-unknown`, so an `authz.decision` could not be joined to the
+ * request it decided. The header is the fallback only outside that context.
+ */
 export function requestId(req: Request): string {
+  const ambient = currentRequestId();
+  if (ambient) return ambient;
   const header = req.get('x-request-id');
   return header && /^[A-Za-z0-9._-]{1,128}$/.test(header) ? header : 'req-unknown';
 }

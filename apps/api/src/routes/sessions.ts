@@ -371,7 +371,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
    */
   function recordReset(
     outcome: (typeof LAB_RESET_OUTCOMES)[number],
-    fields: { provider?: string; labId?: string; sessionId?: string; code?: string },
+    fields: { provider?: string; labId?: string; sessionId?: string; code?: string; durationMs?: number; err?: unknown },
   ): void {
     if (fields.provider) deps.metrics?.sessions.labResets.inc({ provider: fields.provider, outcome });
     deps.metrics?.sessions.labResetOutcomes.inc({ outcome });
@@ -383,7 +383,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
 
   function recordEnd(
     outcome: (typeof LAB_END_OUTCOMES)[number],
-    fields: { provider?: string; labId?: string; sessionId?: string; code?: string },
+    fields: { provider?: string; labId?: string; sessionId?: string; code?: string; durationMs?: number; err?: unknown },
   ): void {
     deps.metrics?.sessions.labEndOutcomes.inc({ outcome });
     obs[outcome === 'success' ? 'info' : 'warn'](
@@ -900,8 +900,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       // SESSION_RESET_FAILED is a reset that ran and did not finish; every other
       // session-domain error refused it before any runtime work.
       const code = error instanceof SessionError ? error.code : undefined;
+      // Which session, and why, on the operator's line too — not only on the
+      // classroom event. Without them a thrown SESSION_RESET_FAILED logged a
+      // bare code that no Support ID could find. `provider` stays off: here it
+      // would also start counting refusals in the per-provider reset series.
       recordReset(code === undefined || code === 'SESSION_RESET_FAILED' ? 'failed' : 'rejected', {
+        labId: allowed.session.labId,
+        sessionId: allowed.session.sessionId,
         ...(code ? { code } : {}),
+        durationMs: Date.now() - resetStartedAt,
+        err: error,
       });
       await event(allowed.session, allowed.user.userId, {
         operation: 'reset',
@@ -968,7 +976,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       });
     } catch (error) {
       const code = error instanceof SessionError ? error.code : undefined;
-      recordEnd(code === undefined ? 'failed' : 'rejected', { ...(code ? { code } : {}) });
+      recordEnd(code === undefined ? 'failed' : 'rejected', {
+        provider: allowed.session.provider,
+        labId: allowed.session.labId,
+        sessionId: allowed.session.sessionId,
+        ...(code ? { code } : {}),
+        durationMs: Date.now() - endStartedAt,
+        err: error,
+      });
       await event(allowed.session, allowed.user.userId, {
         operation: 'end',
         outcome: code === undefined ? 'failed' : 'refused',

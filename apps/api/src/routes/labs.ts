@@ -471,7 +471,13 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
             : code === 'PROVIDER_UNAVAILABLE'
               ? 'provider_unavailable'
               : 'provision_failed';
-      recordStart(def, outcome, { durationMs: Date.now() - startedAt, code });
+      // The admitted session, when there was one, so the operator's line is
+      // found by the Support ID the student reads out.
+      recordStart(def, outcome, {
+        durationMs: Date.now() - startedAt,
+        code,
+        ...(admittedSessionId ? { sessionId: admittedSessionId } : {}),
+      });
       await startEvent(def.id, owner.userId, {
         // A refusal took no slot and built nothing; a failure was admitted and broke.
         outcome:
