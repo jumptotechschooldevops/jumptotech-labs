@@ -1,0 +1,168 @@
+# Regression tests for the billing alerts — docs/billing.md §10.
+#
+# The series are what the api publishes: every outcome zero-initialised at
+# startup, so `increase()` sees the first failure rather than an absent series.
+# `increase()` extrapolates to the window's edges, which is why the counts in
+# the summaries below are a little above the number of events injected.
+
+rule_files:
+  - ../alerts/billing.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ---------------------------------------------------------------- 1. healthy
+  - interval: 1m
+    name: applied and duplicate webhooks never alert
+    input_series:
+      - series: 'jtt_billing_webhooks_total{provider="test",outcome="applied"}'
+        values: '0+2x60'
+      - series: 'jtt_billing_webhooks_total{provider="test",outcome="duplicate"}'
+        values: '0+1x60'
+      - series: 'jtt_billing_webhooks_total{provider="test",outcome="failed"}'
+        values: '0x60'
+      - series: 'jtt_billing_webhooks_total{provider="test",outcome="invalid_signature"}'
+        values: '0x60'
+      - series: 'jtt_billing_provider_requests_total{provider="test",op="checkout",outcome="failed"}'
+        values: '0x60'
+      - series: 'jtt_billing_reconcile_drift{provider="test"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: BillingWebhooksFailing
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: BillingWebhookSignaturesRejected
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: BillingProviderFailing
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: BillingStateDrift
+        exp_alerts: []
+
+  # ------------------------------------------------- 2. one failed delivery
+  # A single failure at t=5m keeps the 30-minute increase above zero long
+  # enough for the 10-minute `for` to elapse, and clears once it leaves the window.
+  - interval: 1m
+    name: one failed webhook fires, then clears
+    input_series:
+      - series: 'jtt_billing_webhooks_total{provider="test",outcome="failed"}'
+        values: '0 0 0 0 0 1+0x70'
+      - series: 'jtt_billing_webhooks_total{provider="test",outcome="unmapped"}'
+        values: '0x75'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BillingWebhooksFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: BillingWebhooksFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'billing webhooks are failing to process (1 in 30 minutes)'
+              description: >-
+                The provider will retry each one. billing.webhook_failed in the api
+                log names the event id, type and code; fix the cause before the
+                provider's retries run out, then `ops billing reconcile`.
+              runbook_url: docs/runbooks/RB-22-billing.md
+      - eval_time: 45m
+        alertname: BillingWebhooksFailing
+        exp_alerts: []
+
+  # --------------------------------------------- 3. an unmapped price alerts too
+  - interval: 1m
+    name: an unmapped subscription is a failure to process
+    input_series:
+      - series: 'jtt_billing_webhooks_total{provider="test",outcome="unmapped"}'
+        values: '0 0 1+1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BillingWebhooksFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'billing webhooks are failing to process (19 in 30 minutes)'
+              description: >-
+                The provider will retry each one. billing.webhook_failed in the api
+                log names the event id, type and code; fix the cause before the
+                provider's retries run out, then `ops billing reconcile`.
+              runbook_url: docs/runbooks/RB-22-billing.md
+
+  # ------------------------------------------------- 4. signature rejections
+  - interval: 1m
+    name: a handful of bad signatures does not alert; a rotated secret does
+    input_series:
+      - series: 'jtt_billing_webhooks_total{provider="test",outcome="invalid_signature"}'
+        # 2 early rejections, then one a minute from t=30m (every delivery refused).
+        values: '0 1 2+0x28 3+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: BillingWebhookSignaturesRejected
+        exp_alerts: []
+      # Evaluated once the 30-minute window holds only the steady rejections:
+      # with the flat stretch inside it, Prometheus 2 (production, CI) says 15
+      # and Prometheus 3 says 16, so a local promtool 3 passed what CI failed.
+      - eval_time: 61m
+        alertname: BillingWebhookSignaturesRejected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: '30 billing webhooks refused for their signature in 30 minutes'
+              description: >-
+                Either BILLING_WEBHOOK_SECRET no longer matches the provider's
+                signing secret (every real delivery is being refused), or the
+                endpoint is being probed. billing.webhook_rejected carries the code.
+              runbook_url: docs/runbooks/RB-22-billing.md
+
+  # ------------------------------------------------------ 5. provider failing
+  - interval: 1m
+    name: repeated provider failures alert
+    input_series:
+      - series: 'jtt_billing_provider_requests_total{provider="test",op="checkout",outcome="failed"}'
+        values: '0 1+1x30'
+      - series: 'jtt_billing_provider_requests_total{provider="test",op="portal",outcome="failed"}'
+        values: '0x31'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BillingProviderFailing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: BillingProviderFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'calls to the billing provider are failing (15 in 30 minutes)'
+              description: >-
+                billing.provider_failed names the operation. Check the provider's
+                status page and the api's outbound network before anything else.
+              runbook_url: docs/runbooks/RB-22-billing.md
+
+  # ----------------------------------------------------------- 6. drift
+  - interval: 1m
+    name: drift left after reconciliation alerts; drift fixed clears it
+    input_series:
+      - series: 'jtt_billing_reconcile_drift{provider="test"}'
+        values: '2x30 0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BillingStateDrift
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: BillingStateDrift
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'billing and access disagree for 2 subscription(s)'
+              description: >-
+                `ops billing reconcile` lists them. Re-process with --apply; a
+                subscription the provider no longer knows needs a person.
+              runbook_url: docs/runbooks/RB-22-billing.md
+      - eval_time: 45m
+        alertname: BillingStateDrift
+        exp_alerts: []

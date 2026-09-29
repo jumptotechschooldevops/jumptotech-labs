@@ -47,7 +47,8 @@ export interface WebhookReply {
 
 /** One line for the access history: the event, never its payload. */
 function reasonFor(event: BillingEvent): string {
-  return `billing event ${event.eventType} ${event.eventId}`.slice(0, 500);
+  const what = `billing event ${event.eventType} ${event.eventId}`;
+  return (event.requestedBy ? `${event.requestedBy.reason} (${what})` : what).slice(0, 500);
 }
 
 export class BillingProcessor {
@@ -230,7 +231,7 @@ export class BillingProcessor {
             userId,
             source: 'billing',
             action: 'SYNC',
-            actor: `billing.${provider.id}`,
+            actor: event.requestedBy?.actor ?? `billing.${provider.id}`,
             reason: reasonFor(event),
             sync: desired,
           },

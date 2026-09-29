@@ -242,9 +242,10 @@ describe('the private-beta alert set', () => {
     // alert-delivery alerts (platform.yml); 63 with the disaster-recovery
     // audit's DatabaseRecreatedSinceLastBackup (database.yml); 64 with the
     // reliability audit's IdentityProviderUnreachable (security.yml), without
-    // which nothing fired while nobody could sign in. Adding alerts is fine;
-    // do it on purpose.
-    expect(ALERTS.length).toBeLessThanOrEqual(64);
+    // which nothing fired while nobody could sign in; 68 with the four billing
+    // alerts (billing.yml, RB-22), which cannot fire while billing is off, as
+    // it is for the private beta. Adding alerts is fine; do it on purpose.
+    expect(ALERTS.length).toBeLessThanOrEqual(68);
   });
 });
 

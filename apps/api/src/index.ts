@@ -648,6 +648,7 @@ async function main(): Promise<void> {
             trial: config.trial ?? { durationDays: null, planId: null },
           },
           users,
+          ...(billing ? { billing: billing.service } : {}),
         }),
       })
     : null;

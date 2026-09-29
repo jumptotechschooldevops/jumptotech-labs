@@ -11,11 +11,18 @@ import type { BillingMetrics, Logger } from '@jumptotech/observability';
 import { evaluateAccount, type AccessStore } from '../access/entitlements.js';
 import type { PlanCatalog } from '../access/plans.js';
 import type { BillingPolicy } from './config.js';
-import { commercialStatus, entitlementFor, primarySubscription, type CommercialStatus } from './lifecycle.js';
+import {
+  commercialStatus,
+  desiredEntitlement,
+  entitlementFor,
+  primarySubscription,
+  type CommercialStatus,
+  type StoredSubscription,
+} from './lifecycle.js';
 import type { BillingProcessor } from './processor.js';
 import type { BillingStore } from './store.js';
 import { TestBillingProvider, type SignedWebhook } from './test-provider.js';
-import { BillingError, type BillingProvider, type Offer } from './types.js';
+import { BillingError, type BillingProvider, type Offer, type SubscriptionSnapshot } from './types.js';
 
 /** How many checkouts one account may start per hour — each is a provider object and a row. */
 export const MAX_CHECKOUTS_PER_HOUR = 5;
@@ -48,6 +55,29 @@ export interface AccountBillingView {
   /** A checkout may be started: offers exist, nothing already entitles, the account is not suspended. */
   canSubscribe: boolean;
 }
+
+/** One disagreement reconciliation found. Ids and product terms only. */
+export interface Drift {
+  subscriptionRef: string;
+  userId: string;
+  /** What disagrees: a field of the subscription, the provider not knowing it, or billing's entitlement row. */
+  field: 'status' | 'period' | 'cancelAtPeriodEnd' | 'endedAt' | 'price' | 'plan' | 'missing_at_provider' | 'entitlement';
+  stored: string;
+  provider: string;
+}
+
+export interface ReconcileReport {
+  provider: string;
+  checked: number;
+  drift: Drift[];
+  /** With --apply: what re-processing each drifted subscription did. */
+  applied: Array<{ subscriptionRef: string; outcome: string }>;
+  /** Drift reconciliation cannot fix by itself — the provider does not know the subscription. */
+  manual: Drift[];
+}
+
+/** At most this many subscriptions per reconciliation run: a bounded, repeatable job. */
+export const RECONCILE_LIMIT = 1000;
 
 export type TestAction = 'renew' | 'fail-renewal' | 'recover' | 'cancel-at-period-end' | 'resume' | 'cancel-now';
 export const TEST_ACTIONS: readonly TestAction[] = ['renew', 'fail-renewal', 'recover', 'cancel-at-period-end', 'resume', 'cancel-now'];
@@ -201,6 +231,135 @@ export class BillingService {
     }
   }
 
+  // --- the operator's view (docs/billing.md §4) ------------------------------------
+
+  /** One account's billing, as support needs it: references, product states, recent events. */
+  async operatorShow(userId: string) {
+    const subscriptions = await this.#d.store.subscriptionsOf(userId);
+    const refs = new Set(subscriptions.map((s) => s.subscriptionRef));
+    const events = (await this.#d.store.recentEvents(this.#d.provider.id, 500)).filter(
+      (event) => event.subscriptionRef !== null && refs.has(event.subscriptionRef),
+    );
+    const grants = await this.#d.access.grants(userId);
+    return {
+      provider: this.#d.provider.id,
+      mode: this.#d.provider.mode,
+      userId,
+      customerRef: await this.#d.store.customerOf(this.#d.provider.id, userId),
+      account: await this.view(userId),
+      billingEntitlement: grants.find((grant) => grant.grantedVia === 'billing') ?? null,
+      subscriptions: subscriptions.map((s) => ({ ...s, productStatus: commercialStatus(s) })),
+      recentEvents: events.slice(0, 20),
+    };
+  }
+
+  /** Every stored subscription, newest first, in product terms. */
+  async operatorList(limit = 200) {
+    const subscriptions = await this.#d.store.subscriptions(this.#d.provider.id, limit);
+    return subscriptions.map((s) => ({
+      subscriptionRef: s.subscriptionRef,
+      userId: s.userId,
+      productStatus: commercialStatus(s),
+      planId: s.planId,
+      currentPeriodEnd: s.currentPeriodEnd,
+      cancelAtPeriodEnd: s.cancelAtPeriodEnd,
+      updatedAt: s.updatedAt,
+    }));
+  }
+
+  /**
+   * Compare what this platform stored with what the provider says now, and
+   * billing's entitlement rows with what their subscriptions imply.
+   *
+   * Report-only by default. With `apply`, each drifted subscription is
+   * re-processed from the provider's current state through the webhook
+   * processor — the same verification-free-but-otherwise-identical path: the
+   * same ownership rules, ordering, transaction and audit record. Nothing is
+   * written by hand, and a subscription the provider no longer knows is only
+   * reported: whether that means "refunded and deleted" or "a bug" is a
+   * person's call.
+   */
+  async reconcile(options: { apply: boolean; by?: string; reason?: string }): Promise<ReconcileReport> {
+    const provider = this.#d.provider;
+    const stored = await this.#d.store.subscriptions(provider.id, RECONCILE_LIMIT);
+    const drift: Drift[] = [];
+    const manual: Drift[] = [];
+    // Each snapshot keeps the time it was asked for: it is applied as provider
+    // state *as of then*, so a real webhook that arrives between the fetch and
+    // the apply is newer and wins, and the snapshot is recorded as stale.
+    const toApply = new Map<string, { snapshot: SubscriptionSnapshot; fetchedAt: number }>();
+
+    for (const s of stored) {
+      const fetchedAt = this.#now();
+      const current = await this.#call('subscription', () => provider.getSubscription(s.subscriptionRef));
+      if (!current) {
+        const item: Drift = { subscriptionRef: s.subscriptionRef, userId: s.userId, field: 'missing_at_provider', stored: s.status, provider: 'absent' };
+        drift.push(item);
+        manual.push(item);
+        continue;
+      }
+      const found = compareSubscription(s, current, this.#d.offers);
+      drift.push(...found);
+      if (found.length > 0) toApply.set(s.subscriptionRef, { snapshot: current, fetchedAt });
+    }
+
+    // Billing's row against what the account's subscriptions imply now —
+    // catches a change of offer→plan mapping or of the configured leeway/grace.
+    const users = [...new Set(stored.map((s) => s.userId))];
+    for (const userId of users) {
+      const subscriptions = stored.filter((s) => s.userId === userId);
+      const desired = desiredEntitlement(subscriptions, this.#d.policy);
+      const row = (await this.#d.access.grants(userId)).find((grant) => grant.grantedVia === 'billing') ?? null;
+      if (!desired || !row) continue;
+      const nowMs = this.#now();
+      const rowActive = row.status === 'ACTIVE' && (row.expiresAt === null || Date.parse(row.expiresAt) > nowMs);
+      const desiredActive = desired.active && Date.parse(desired.expiresAt) > nowMs;
+      const differs =
+        rowActive !== desiredActive ||
+        (desiredActive && (row.expiresAt !== desired.expiresAt || row.planId !== desired.planId || row.kind !== desired.kind));
+      if (differs && row.status !== 'SUSPENDED') {
+        const primary = primarySubscription(subscriptions, this.#d.policy)!;
+        drift.push({
+          subscriptionRef: primary.subscriptionRef,
+          userId,
+          field: 'entitlement',
+          stored: `${row.status} ${row.kind}/${row.planId ?? '-'} until ${row.expiresAt ?? 'no end'}`,
+          provider: `${desiredActive ? 'ACTIVE' : 'ended'} ${desired.kind}/${desired.planId ?? '-'} until ${desired.expiresAt}`,
+        });
+        if (!toApply.has(primary.subscriptionRef)) {
+          const fetchedAt = this.#now();
+          const current = await this.#call('subscription', () => provider.getSubscription(primary.subscriptionRef));
+          if (current) toApply.set(primary.subscriptionRef, { snapshot: current, fetchedAt });
+        }
+      }
+    }
+
+    const applied: ReconcileReport['applied'] = [];
+    if (options.apply) {
+      const requestedBy = options.by && options.reason ? { actor: options.by, reason: options.reason } : undefined;
+      for (const [ref, { snapshot, fetchedAt }] of toApply) {
+        const result = await this.#d.processor.process({
+          kind: 'subscription',
+          eventId: `reconcile-${ref}-${this.#now()}`.slice(0, 255),
+          eventType: 'reconcile.subscription',
+          occurredAt: new Date(fetchedAt).toISOString(),
+          subscription: snapshot,
+          ...(requestedBy ? { requestedBy } : {}),
+        });
+        applied.push({ subscriptionRef: ref, outcome: result.outcome });
+      }
+    }
+
+    this.#d.metrics?.reconcileDrift.set({ provider: provider.id }, options.apply ? manual.length : drift.length);
+    this.#d.metrics?.reconcileLastRun.set({ provider: provider.id }, Math.floor(this.#now() / 1000));
+    this.#d.logger?.info(
+      'billing.reconciled',
+      { provider: provider.id, count: drift.length, outcome: options.apply ? 'applied' : 'report_only' },
+      `billing reconciliation: ${stored.length} checked, ${drift.length} drifted, ${applied.length} re-processed, ${manual.length} need a person`,
+    );
+    return { provider: provider.id, checked: stored.length, drift, applied, manual };
+  }
+
   // --- test mode only ------------------------------------------------------------
 
   #test(): TestBillingProvider {
@@ -257,4 +416,31 @@ export class BillingService {
     }
     return { outcomes };
   }
+}
+
+/** Field by field: the stored subscription against the provider's current one. */
+function compareSubscription(stored: StoredSubscription, current: SubscriptionSnapshot, offers: readonly Offer[]): Drift[] {
+  const base = { subscriptionRef: stored.subscriptionRef, userId: stored.userId };
+  const out: Drift[] = [];
+  if (stored.status !== current.status) out.push({ ...base, field: 'status', stored: stored.status, provider: current.status });
+  if (stored.currentPeriodStart !== current.currentPeriodStart || stored.currentPeriodEnd !== current.currentPeriodEnd) {
+    out.push({
+      ...base,
+      field: 'period',
+      stored: `${stored.currentPeriodStart} … ${stored.currentPeriodEnd}`,
+      provider: `${current.currentPeriodStart} … ${current.currentPeriodEnd}`,
+    });
+  }
+  if (stored.cancelAtPeriodEnd !== current.cancelAtPeriodEnd) {
+    out.push({ ...base, field: 'cancelAtPeriodEnd', stored: String(stored.cancelAtPeriodEnd), provider: String(current.cancelAtPeriodEnd) });
+  }
+  if (stored.endedAt !== current.endedAt) {
+    out.push({ ...base, field: 'endedAt', stored: stored.endedAt ?? 'none', provider: current.endedAt ?? 'none' });
+  }
+  if (stored.priceRef !== current.priceRef) out.push({ ...base, field: 'price', stored: stored.priceRef, provider: current.priceRef });
+  const plan = offers.find((offer) => offer.priceRef === current.priceRef)?.planId ?? null;
+  if (stored.priceRef === current.priceRef && stored.planId !== plan) {
+    out.push({ ...base, field: 'plan', stored: stored.planId ?? 'no plan', provider: plan ?? 'no plan' });
+  }
+  return out;
 }

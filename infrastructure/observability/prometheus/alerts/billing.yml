@@ -1,0 +1,75 @@
+# Billing alerts — docs/billing.md §10.
+#
+# Every series here exists only when BILLING_PROVIDER is set (the api creates
+# them zero-initialised then), so on the private beta — billing off — none of
+# these can fire. Each asks one question an operator must answer before a
+# paying student notices: are payments reaching access?
+#
+# Windows are longer than the `for` durations, so a single bad delivery keeps
+# the condition true for long enough to fire (the lab-start lesson recorded in
+# tests/lab-start-alerts.test.yml).
+
+groups:
+  - name: billing
+    rules:
+      # A verified webhook the api could not process. The provider retries,
+      # so one failure is not yet lost money — but until it is processed,
+      # somebody who paid may have no access (or somebody who cancelled still
+      # does). `unmapped` is the configuration kind: a price no offer names,
+      # or a subscription for no known account.
+      - alert: BillingWebhooksFailing
+        expr: sum(increase(jtt_billing_webhooks_total{outcome=~"failed|unmapped"}[30m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'billing webhooks are failing to process ({{ $value | printf "%.0f" }} in 30 minutes)'
+          description: >-
+            The provider will retry each one. billing.webhook_failed in the api
+            log names the event id, type and code; fix the cause before the
+            provider's retries run out, then `ops billing reconcile`.
+          runbook_url: docs/runbooks/RB-22-billing.md
+
+      # Deliveries whose signature does not verify. After a secret rotation
+      # every delivery fails this way; otherwise somebody is posting to the
+      # endpoint. Either way nothing was applied.
+      - alert: BillingWebhookSignaturesRejected
+        expr: sum(increase(jtt_billing_webhooks_total{outcome="invalid_signature"}[30m])) >= 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $value | printf "%.0f" }} billing webhooks refused for their signature in 30 minutes'
+          description: >-
+            Either BILLING_WEBHOOK_SECRET no longer matches the provider's
+            signing secret (every real delivery is being refused), or the
+            endpoint is being probed. billing.webhook_rejected carries the code.
+          runbook_url: docs/runbooks/RB-22-billing.md
+
+      # Calls to the provider — checkout, portal, reconciliation — failing.
+      # Students cannot subscribe or manage billing while this holds.
+      - alert: BillingProviderFailing
+        expr: sum(increase(jtt_billing_provider_requests_total{outcome="failed"}[30m])) >= 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'calls to the billing provider are failing ({{ $value | printf "%.0f" }} in 30 minutes)'
+          description: >-
+            billing.provider_failed names the operation. Check the provider's
+            status page and the api's outbound network before anything else.
+          runbook_url: docs/runbooks/RB-22-billing.md
+
+      # The last reconciliation left disagreements it could not fix by itself
+      # (after --apply), or found ones nobody has applied yet (report only).
+      - alert: BillingStateDrift
+        expr: max(jtt_billing_reconcile_drift) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'billing and access disagree for {{ $value | humanize }} subscription(s)'
+          description: >-
+            `ops billing reconcile` lists them. Re-process with --apply; a
+            subscription the provider no longer knows needs a person.
+          runbook_url: docs/runbooks/RB-22-billing.md
