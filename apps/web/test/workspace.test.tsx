@@ -307,7 +307,9 @@ describe('hints', () => {
     expect(apiMock.recordHint).not.toHaveBeenCalled();
 
     // The next reveal is the next hint, and only that one is recorded.
-    fireEvent.click(hints.getByRole('button', { name: /Show hint 3/ }));
+    // Named with a pause between the two parts, not "Show hint 31 left".
+    // (jsdom spaces inline elements apart; browsers do not, so the comma is what counts.)
+    fireEvent.click(hints.getByRole('button', { name: /^Show hint 3\s*,\s*1 left$/ }));
     expect(hints.getByText('Hint 3')).toBeTruthy();
     await waitFor(() => expect(apiMock.recordHint).toHaveBeenCalledTimes(1));
     expect(apiMock.recordHint).toHaveBeenCalledWith(SESSION_ID, 3);
@@ -1059,7 +1061,9 @@ describe('inactivity', () => {
     apiMock.recordActivity.mockResolvedValue({ session: sessionInfo({ idleWarning: false }) });
     await renderConnected();
 
-    expect(screen.getByText(/removed in about 3 minutes/)).toBeTruthy();
+    expect(screen.getByText('in about 3 minutes')).toBeTruthy();
+    // The count ticks every minute; only the warning itself is announced.
+    expect(screen.getByText('in about 3 minutes').getAttribute('aria-live')).toBe('off');
     fireEvent.click(screen.getByRole('button', { name: 'Stay active' }));
 
     await waitFor(() => expect(screen.queryByText(/Are you still working/)).toBeNull());

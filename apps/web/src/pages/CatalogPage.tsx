@@ -14,7 +14,7 @@
  * kilobytes of metadata that never touches a cluster; a request per keystroke
  * would add latency and gain nothing.
  */
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useActiveSession } from '../lib/ActiveSessionContext';
 import { useCatalog } from '../lib/CatalogContext';
 import { describeError } from '../lib/errors';
@@ -108,11 +108,16 @@ export function CatalogPage({ initialFilters = {} }: { initialFilters?: CatalogF
   }, [visible]);
 
   const filtered = Boolean(track || level || status || query.trim());
+  const searchInput = useRef<HTMLInputElement>(null);
   const clearFilters = () => {
     setQuery('');
     setTrack('');
     setLevel('');
     setStatus('');
+    // Both Clear filters buttons unmount once nothing is filtered, and focus
+    // would fall to the top of the page. The search box is where a keyboard
+    // user starts again.
+    searchInput.current?.focus();
   };
 
   return (
@@ -154,6 +159,7 @@ export function CatalogPage({ initialFilters = {} }: { initialFilters?: CatalogF
                 Search
               </label>
               <input
+                ref={searchInput}
                 id={searchId}
                 type="search"
                 className="input"
