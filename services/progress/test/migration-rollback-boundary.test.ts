@@ -10,11 +10,13 @@
  * Proven against a scripted SQL session, not a server: what matters is which
  * statements run, and in what order, before the runner refuses.
  */
+import { readFileSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { MigrationError, loadMigrations, migrate, verifySchema } from '../src/postgres/migrator.js';
+import { MIGRATIONS_DIR, MigrationError, loadMigrations, migrate, verifySchema } from '../src/postgres/migrator.js';
 import type { QueryResult, SqlExecutor } from '../src/postgres/database.js';
 
 async function migrationsDir(files: Record<string, string>): Promise<string> {
@@ -240,5 +242,47 @@ describe('verifying the schema without migrating', () => {
       { version: '002_two', checksum: shipped[1]!.checksum },
     ]);
     await expect(verifySchema(database, { dir })).rejects.toThrow(/001_one\.sql was modified/);
+  });
+});
+
+/**
+ * The runbooks tell an operator when the previous release may run on a newer
+ * schema with DATABASE_ALLOW_NEWER_SCHEMA=true. That guidance went stale once:
+ * it still said "every migration to date, 001–007, is additive" after 010
+ * re-keyed access_entitlements, on which every pre-010 access change fails.
+ * Each shipped migration must be classified here, and the runbooks must say
+ * the same, so a new migration cannot land without someone deciding it.
+ */
+describe('the rollback guidance in the runbooks', () => {
+  // Older code runs on these (DATABASE_ALLOW_NEWER_SCHEMA=true is a choice)...
+  const ADDITIVE_THROUGH = '009';
+  // ...and not on these: rolling back across one means restoring the pre-migration archive.
+  const OLDER_CODE_CANNOT_RUN = ['010'];
+
+  const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+  const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8').replace(/\s+/g, ' ');
+
+  it('classifies every migration this release ships', async () => {
+    const versions = (await loadMigrations(MIGRATIONS_DIR)).map((m) => m.version.slice(0, 3));
+    const unclassified = versions.filter((v) => v > ADDITIVE_THROUGH && !OLDER_CODE_CANNOT_RUN.includes(v));
+    expect(
+      unclassified,
+      'decide whether the previous release can run on each new migration, then update this list and ' +
+        'docs/runbooks/disaster-recovery.md §4.2, docs/runbooks/private-beta-deployment.md §7.3 and ' +
+        'docs/development/production-host-readiness.md §21.2',
+    ).toEqual([]);
+  });
+
+  it.each([
+    'docs/runbooks/disaster-recovery.md',
+    'docs/runbooks/private-beta-deployment.md',
+    'docs/development/production-host-readiness.md',
+  ])('%s states the same classification', (file) => {
+    const text = read(file);
+    expect(text).toContain(`001–${ADDITIVE_THROUGH}`);
+    for (const version of OLDER_CODE_CANNOT_RUN) {
+      expect(text).toMatch(new RegExp(`\\b${version}\\b[^.]*(not safe for older code|older code cannot run on)|[Nn]ot across ${version}\\b`));
+    }
+    expect(text).not.toMatch(/001–00[0-8]\b/);
   });
 });

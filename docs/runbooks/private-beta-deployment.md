@@ -631,7 +631,7 @@ has run.
 - the §7.2 B restore is impossible or unacceptable (no usable `pre-migration`
   archive, or losing the data written since would be worse);
 - someone has read every migration the older code does not ship and judged the
-  older code safe on it (every migration to date, 001–007, is additive: new tables, columns, indexes, one backfill, a widened `CHECK`, a sequence-defaulted column, and no drop. Rolling back across 007 this way also returns every terminal shell to one shared uid: the pre-007 terminal has no per-session uid (SEC-ARCH-2), so this route gives up that isolation until the release matches again);
+  older code safe on it. 001–009 are additive: new tables, columns, indexes, one backfill, a widened `CHECK`, sequence-defaulted and defaulted columns, and no drop. Rolling back across 007 this way also returns every terminal shell to one shared uid: the pre-007 terminal has no per-session uid (SEC-ARCH-2), so this route gives up that isolation until the release matches again. **010 is not safe for older code:** it re-creates the `access_entitlements` primary key as `(user_id, scope, granted_via)`, and every access change before 010 (grant, trial, suspend, restore, revoke) is written with `ON CONFLICT (user_id, scope)`, which no longer matches a constraint, so each one fails. Across 010, restore the `pre-migration` archive (§7.2 B);
 - it is recorded as an incident decision, with who decided and why.
 
 Then remove it the moment code and schema match again. **Never** use it when:
