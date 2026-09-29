@@ -184,6 +184,32 @@ sandboxes` is that provider's backend (RB-06, RB-09). A session reference is a
 teardown the provider will not confirm: 4d, and
 [RB-17](RB-17-session-lifecycle.md) for the session's own state.
 
+## 4f. Diagnose — Docker-track data volumes left behind
+
+A Docker-track sandbox keeps its inner daemon's `/var/lib/docker` in a named
+volume, `<sandbox>-data`, which sandboxd removes right after the container. If
+that one call fails, the teardown still succeeds and **nothing retries it**:
+the container is gone, so no later teardown reaches the volume. Each one holds
+a whole image store, so this shows up as disk (RB-19), not as a leak count.
+
+```promql
+sum(increase(jtt_sandboxd_docker_ops_total{op="removeSandbox",outcome="volume_leaked"}[24h]))
+```
+
+```bash
+prod logs --since 24h sandboxd | grep '"outcome":"volume_leaked"'
+# Volumes this deployment created, by session. Compare with `ops sessions`.
+docker volume ls --filter label=jumptotech.io/managed=true \
+  --filter label=jumptotech.io/runtime-owner="$RUNTIME_OWNER_ID" \
+  --format '{{.Name}} {{.Label "jumptotech.io/session-id"}}'
+```
+
+Remove **only** a volume named in a `volume_leaked` line, or one whose
+session `ops session <id>` shows as ended, and whose `-data` name has no
+container: `docker ps -a --filter name=<sandbox>` returns nothing. Then
+`docker volume rm <sandbox>-data`. Never `docker volume prune`: it removes other
+stacks' volumes, PostgreSQL's among them.
+
 ## 5. Fix
 
 Per section 4. A leak caused by an API restart mid-provision resolves on its
