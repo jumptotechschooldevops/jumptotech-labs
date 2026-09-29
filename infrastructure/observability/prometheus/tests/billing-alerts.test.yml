@@ -102,13 +102,16 @@ tests:
       - eval_time: 25m
         alertname: BillingWebhookSignaturesRejected
         exp_alerts: []
-      - eval_time: 45m
+      # Evaluated once the 30-minute window holds only the steady rejections:
+      # with the flat stretch inside it, Prometheus 2 (production, CI) says 15
+      # and Prometheus 3 says 16, so a local promtool 3 passed what CI failed.
+      - eval_time: 61m
         alertname: BillingWebhookSignaturesRejected
         exp_alerts:
           - exp_labels:
               severity: warning
             exp_annotations:
-              summary: '16 billing webhooks refused for their signature in 30 minutes'
+              summary: '30 billing webhooks refused for their signature in 30 minutes'
               description: >-
                 Either BILLING_WEBHOOK_SECRET no longer matches the provider's
                 signing secret (every real delivery is being refused), or the
