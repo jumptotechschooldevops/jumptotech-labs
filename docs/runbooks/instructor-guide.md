@@ -5,6 +5,9 @@ do I check?" using the **classroom view** at `#/classroom` in JumpToTech Labs.
 You shouldn't need a terminal on the server, Docker, `kubectl` or SQL for
 anything here. Where you would, this guide says **escalate**.
 
+Before a class, work through [first-class.md](first-class.md): the day-before,
+30-minute and 5-minute checklists, and what to tell students.
+
 DevOps has its own documents: [operator-guide.md](operator-guide.md) (the
 map), [private-beta-operations.md](private-beta-operations.md) and
 [private-beta-incident-response.md](private-beta-incident-response.md).
