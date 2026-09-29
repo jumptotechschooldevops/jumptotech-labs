@@ -511,6 +511,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       count: entries.length,
       limits: {
         maxActiveSessionsPerStudent: deps.config.lifetimes.maxActiveSessionsPerStudent ?? null,
+        // The deadlines every lab runs under, so a lab page can say so before
+        // Start rather than call a 60-minute estimate "not a deadline".
+        maxSessionMinutes: Math.floor(deps.config.lifetimes.maxSessionSeconds / 60),
+        idleTimeoutMinutes: Math.floor(deps.config.lifetimes.idleTimeoutSeconds / 60),
       },
     });
   }));
