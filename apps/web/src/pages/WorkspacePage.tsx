@@ -126,6 +126,8 @@ const TERMINAL_TEXT: Record<string, string> = {
   LAB_NOT_IN_PLAN: 'Your plan does not include this lab, so the terminal cannot open. Your progress is saved.',
   ACCESS_PLAN_UNAVAILABLE: 'Your lab access could not be confirmed, so the terminal cannot open. Your progress is saved.',
   INPUT_RATE_EXCEEDED: 'Disconnected — more was pasted or typed at once than the terminal accepts. Reconnect to carry on.',
+  ATTACH_RATE_LIMITED: 'The terminal was reconnected too many times in a short while. Wait a few seconds, then press Reconnect.',
+  SANDBOX_NOT_RUNNING: 'Your lab environment is not running. If Reconnect does not help, press Reset, or End the lab and start it again.',
 };
 
 /**

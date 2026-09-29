@@ -263,6 +263,25 @@ describe('starting a lab records an attempt', () => {
     expect(progress.body.data.overall.completed).toBe(0);
     expect(progress.body.data.overall.inProgress).toBe(1);
   });
+
+  it('never keeps a driver error as the reason in the student’s history', async () => {
+    const { app, sessions } = buildApp();
+    // Admitted (so an attempt is open), then the session store itself throws:
+    // not a SessionError, so there are no words of ours for it.
+    sessions.start = async (_labId, _owner, hooks) => {
+      await hooks?.onAdmitted?.({ sessionId: 'sess-driver-error' } as never);
+      throw new Error('connect ECONNREFUSED 10.20.30.40:5432');
+    };
+
+    const failed = await request(app).post('/api/labs/LINUX-001/start');
+    expect(failed.status).toBeGreaterThanOrEqual(500);
+
+    const attempts = await request(app).get('/api/me/attempts');
+    const [attempt] = attempts.body.data.attempts;
+    expect(attempt).toMatchObject({ labId: 'LINUX-001', status: 'FAILED' });
+    expect(JSON.stringify(attempts.body)).not.toMatch(/ECONNREFUSED|10\.20\.30\.40|5432/);
+    expect(attempt.statusReason).toBe('The platform could not start the lab environment.');
+  });
 });
 
 // --- check solution (test requirements 3–4) ---------------------------------

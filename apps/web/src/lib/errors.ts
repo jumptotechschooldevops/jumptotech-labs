@@ -214,6 +214,43 @@ function known(code: string, error: ApiError, context: ErrorContext): Known | nu
         message: 'There is no track with that name.',
         retryable: false,
       };
+    case 'LEARNING_PATH_NOT_FOUND':
+    case 'INVALID_LEARNING_PATH_ID':
+      // The api's remediation names an endpoint ("GET /api/learning-paths").
+      return {
+        kind: 'not-found',
+        title: 'Learning path not found',
+        message: 'There is no learning path with that name. It may have been renamed or removed.',
+        guidance: 'Go to the list of learning paths to find it.',
+        retryable: false,
+      };
+    case 'ATTEMPT_NOT_FOUND':
+      return {
+        kind: 'not-found',
+        title: 'Attempt not found',
+        message: 'That lab attempt is not in your history.',
+        guidance: 'Open Progress in the menu to see your attempts.',
+        retryable: false,
+      };
+    case 'NOT_FOUND':
+    case 'INVALID_PATH':
+      // The page asked the api for something it does not serve: most often a
+      // browser still running the site from before an update.
+      return {
+        kind: 'not-found',
+        title: FALLBACK_TITLE[context],
+        message: 'The platform did not recognise this request. The site may have just been updated.',
+        guidance: 'Reload the page. If it keeps happening, tell your instructor and quote the reference below.',
+        retryable: false,
+      };
+    case 'FORBIDDEN':
+      return {
+        kind: 'access',
+        title: 'Not available for your account',
+        message: 'Your account cannot open this. Your labs and progress are not affected.',
+        guidance: 'Go back to your dashboard.',
+        retryable: false,
+      };
     case 'SESSION_NOT_FOUND':
     case 'INVALID_SESSION_ID':
       return {
