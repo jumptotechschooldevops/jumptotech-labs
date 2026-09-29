@@ -372,6 +372,15 @@ describe('monitoring joins production without becoming reachable', () => {
     );
   });
 
+  it('lets a hung broker page as the broker, not also as a stalled reaper', () => {
+    // 2026-09-28 drill: sandboxd paused -> ServiceDown{sandboxd} and then
+    // ReaperStalled, both critical. The sweep lists sandboxes through the broker.
+    const alertmanager = withoutComments(read('infrastructure/observability/alertmanager/alertmanager.yml'));
+    const rule = /- source_matchers: \[alertname=~"SandboxdRuntimeDown\|ServiceDown", job=~"sandboxd\|"\]\n\s+target_matchers:\n\s+- alertname=~"([^"]+)"/.exec(alertmanager);
+    expect(rule, 'the broker-outage inhibit rule').not.toBeNull();
+    expect(rule![1]!.split('|')).toContain('ReaperStalled');
+  });
+
   it('sends the always-firing Watchdog only to the heartbeat receiver, ahead of every other route', () => {
     // A dead host sends nothing; only an external service that notices the
     // heartbeat stop can report it (RB-20). The Watchdog must never page a

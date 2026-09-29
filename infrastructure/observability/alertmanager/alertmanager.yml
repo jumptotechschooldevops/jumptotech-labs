@@ -118,9 +118,14 @@ inhibit_rules:
 
   # BETA-P0-018. Resets rebuild sandboxes, and container teardowns go through
   # the broker, so a missing runtime explains both.
+  #
+  # ReaperStalled too: the sweep lists every provider's sandboxes through the
+  # broker, so a hung broker stalls the whole sweep (2026-09-28 drill: sandboxd
+  # paused, ServiceDown{sandboxd} at +3 min and ReaperStalled at +4 min, both
+  # critical, one cause). It resumes on its own once the broker answers.
   - source_matchers: [alertname=~"SandboxdRuntimeDown|ServiceDown", job=~"sandboxd|"]
     target_matchers:
-      - alertname=~"LabResetsFailing|SessionStuckProvisioning|SessionTeardownStuck|ReaperSweepErrorsPersisting"
+      - alertname=~"LabResetsFailing|SessionStuckProvisioning|SessionTeardownStuck|ReaperSweepErrorsPersisting|ReaperStalled"
 
   # A missing or expired attestation is why the Kubernetes provider reports
   # unavailable; the attestation alert is the one that names the fix.
