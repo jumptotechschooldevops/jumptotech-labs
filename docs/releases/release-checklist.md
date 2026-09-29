@@ -7,7 +7,7 @@ is not, and who must do it.
 
 | | |
 |---|---|
-| **Last verified against** | `origin/main` `74ea285` (Quality gates run `36419866411`: all 12 jobs green; CodeQL green), 2026-09-28 |
+| **Last verified against** | `origin/main` `74ea285` (Quality gates run `36419866411`: all 12 jobs green; CodeQL green), 2026-09-28. Rows A-31, B-9, B-10 and C-9 re-checked on `f98e897` (after #173 and #175), 2026-09-29 |
 | **Open PRs that change a row** | #163 (rollback across migration 010; row A-14), #155 / #156 (account page, billing operations; tier B), #145 (classroom browser E2E; B-12) |
 | **Detailed record behind it** | the final launch-readiness record (`docs/releases/final-launch-readiness-2026-09-28.md`, #164) and the reports in [../README.md](../README.md) → Records |
 
@@ -70,7 +70,7 @@ Blocking = "yes" means students are not invited until it is PASS.
 | A-28 | Lab catalog | PASS | All 117 labs are solved by some CI suite on `74ea285` ([lab-certification-2026-09-27.md](lab-certification-2026-09-27.md)) | Deploy §5.9: one browser flow per track, including DOCKER-004 | yes (the walk) | Operator | yes (the walk) |
 | A-29 | Grants for the five | REQUIRES PRODUCTION-HOST EVIDENCE | `ACCESS_POLICY=entitlement` by default in production | After each first sign-in: `ops access find --email <e>`, `ops access grant <id> --until <end> --kind beta --by <you> --reason "private beta cohort 1"` (deploy §5.8) | yes | Operator | yes |
 | A-30 | Five-person rehearsal | REQUIRES PRODUCTION-HOST EVIDENCE | — | [production-host-readiness.md §13.2](../development/production-host-readiness.md) R0–R14, with five trusted testers, on the production stack | yes | Owner + four helpers | yes |
-| A-31 | Session security | PASS WITH BETA ACCEPTED RISK | 12 h absolute sign-in, no idle timeout; a terminal token outlives sign-out by up to 1 h; no `__Host-` prefix, deliberately (DR-09: the transaction cookie is `Path=/auth`) | `ops access revoke <id> --by <you> --reason … --end-sessions --yes` ends a student's labs at once | no | — | no |
+| A-31 | Session security | PASS WITH BETA ACCEPTED RISK | 12 h absolute sign-in, no idle timeout; no `__Host-` prefix, deliberately (DR-09: the transaction cookie is `Path=/auth`). Since #175, a terminal token is bound to the browser sign-in that minted it: sign-out, sign-in expiry and `ops sign-out` refuse it (`AUTH_SESSION_ENDED`) and close an open shell at its next activity report (at most every 30 s of typing). Since #173, `ops sign-out` ends every sign-in of an account | `ops sign-out <user-id> --by <you> --reason …` signs a student out everywhere; `ops access revoke <id> --by <you> --reason … --end-sessions --yes` also ends their labs | no | — | no |
 | A-33 | Student journey: sign-in → catalog → Start → terminal → Check → Reset → End → progress → sign-out → return | PASS | CI `browser-ux` (the production bundle, every screen and error state) and `browser-e2e` (a real LINUX-001 through the stack); [student-experience-audit-2026-09-28.md](student-experience-audit-2026-09-28.md). A static pass on 2026-09-28 mapped every api error code to the web's words: each has student words. It found one wrong message, fixed by the PR that added this page: an End the provider could not finish answered with the provider's `ENVIRONMENT_UNREACHABLE`, which the web shows as "Verification could not run — Try Verify again". | Rehearsal R9–R11 on the host | no | — | no |
 | A-32 | Edge rate limits | PASS WITH BETA ACCEPTED RISK | No nginx `limit_req` / `limit_conn`; the api has per-user sign-in, attach, Check and write budgets | — | no | — | no |
 
@@ -132,8 +132,8 @@ day a stranger can pay, tier C applies.
 | B-6 | Terminal memory for a paying class | BLOCKER until A-5 is measured | See A-5. At more than five students, the shared `/home/student` tmpfs (256m for every Docker/Kubernetes shell) is also a shared disk budget. | A per-session tmpfs or a separate memory budget | yes | Engineer | yes |
 | B-7 | Deploy during a class | BLOCKER for paid, accepted for the beta | No drain: the terminal exits 3 s after SIGTERM and every shell drops; a Start in flight is handed to the reaper (#147). No `stop_grace_period` on api or terminal. | Until built: deploy with no students active (deploy §7.1) and announce it | no | Engineer | yes |
 | B-8 | Support path | BLOCKER | A Support ID exists (#135); there is no support address, response target or status page | — | no | Owner | yes |
-| B-9 | Account lifecycle | BLOCKER | No account delete or data export; sign-out does not end other devices (`destroyAllForUser` has no caller) | — | no | Engineer | yes |
-| B-10 | Idle sign-out and token lifetime | BLOCKER for paid | See A-31. A paying student on a shared computer stays signed in for 12 h. | An idle timeout; sign-out that revokes terminal grants | no | Engineer | yes |
+| B-9 | Account lifecycle | BLOCKER | No account delete or data export. Sign-out everywhere exists for operators only (`ops sign-out`, #173); a student cannot end their own other sign-ins | — | no | Engineer | yes |
+| B-10 | Idle sign-out | BLOCKER for paid | See A-31. A paying student on a shared computer who never signs out stays signed in for 12 h. Sign-out now revokes terminal authority (#175). | A browser idle timeout | no | Engineer | yes |
 | B-11 | Restore objective | BLOCKER | No PITR, no second host; RPO is up to 24 h (daily backup) | Decide RPO/RTO; add WAL archiving or a more frequent backup; prove a restore onto a replacement host ([disaster-recovery.md](../runbooks/disaster-recovery.md)) | yes | Owner decides; engineer builds | yes |
 | B-12 | Instructor workflow proven in a browser | BLOCKER until merged | #145 (instructor and admin run a class of five in real browsers) is open and not in required CI | Merge #145; make it a required check | no | Owner | yes |
 | B-13 | Operator identity and audit | BLOCKER | `ops … --by <name>` is self-declared; role changes are logged, not stored as rows | — | no | Engineer | no for one operator, yes for staff |
@@ -156,7 +156,7 @@ Everything in B, plus the rows below. None of them blocks A.
 | C-6 | Docker-track egress | BLOCKER | `jumptotech-sandboxes` is an ordinary bridge: open internet egress (mining, scanning, abuse) | Egress policy per lab; default deny | yes |
 | C-7 | Edge rate and connection limits | BLOCKER | No `limit_req`, `limit_conn` in `infrastructure/docker/nginx/` | nginx limits, plus a CDN or WAF in front | yes |
 | C-8 | Sign-up policy | BLOCKER | Any IdP account creates a user row (`auth/users.ts`); no email or domain allow-list; entitlement is the only gate | Decide sign-up, email verification, and payment-before-lab | yes |
-| C-9 | `__Host-` cookies, idle timeout, sign-out everywhere | BLOCKER | See A-31, B-9, B-10 | Revisit DR-09 (move the transaction cookie to `Path=/`), then `__Host-` | yes |
+| C-9 | `__Host-` cookies, idle timeout, self-service sign-out everywhere | BLOCKER | See A-31, B-9, B-10 | Revisit DR-09 (move the transaction cookie to `Path=/`), then `__Host-` | yes |
 | C-10 | Session-scoped sandboxd attach credential | BLOCKER | The attach secret is service-wide | A per-session credential | yes |
 | C-11 | Cohorts for instructors | BLOCKER | An instructor sees every student | Rosters / cohorts | yes |
 | C-12 | Production Kubernetes substrate | BLOCKER | kind on one host; CNI / substrate decision open | Managed or multi-node cluster with an enforcing CNI; re-run the enforcement probe there | yes |
