@@ -117,7 +117,7 @@ export function localShell(
      * master is the terminal hangup: the kernel signals the shell and its
      * foreground group, with no permission check.
      */
-    kill: () => term.destroy(),
+    kill: () => closePty(term),
     pause: () => term.pause(),
     resume: () => term.resume(),
     pendingInputBytes: () => ptyPendingInputBytes(term),
@@ -128,6 +128,16 @@ export function localShell(
       onExit = listener;
     },
   };
+}
+
+/**
+ * `destroy()` is on node-pty's Unix implementation but not on its `IPty`
+ * type. Without it (no Unix PTY), fall back to the signal.
+ */
+function closePty(term: pty.IPty): void {
+  const unix = term as pty.IPty & { destroy?: () => void };
+  if (typeof unix.destroy === 'function') unix.destroy();
+  else term.kill();
 }
 
 export interface BrokerShellOptions {
