@@ -141,6 +141,44 @@ be trusted, or the student wants to start over):
 Tell the class, and move to a lab type that still works if the classroom shows
 one.
 
+### The operator's screen during class
+
+Keep two things open, and nothing else unless one of them changes:
+
+1. **The alert channel** (or `alerts`). A critical alert is the signal to act;
+   everything else is context.
+2. **Grafana → JTT — Private Beta Operations, rows 0 and 1.** Twelve tiles, read
+   top to bottom:
+
+| Tile | Healthy | If not, read |
+|---|---|---|
+| Lab starts that succeeded (10 min) | 100% | [incident C](private-beta-incident-response.md#c-a-student-cannot-start-a-lab) |
+| Provisioning p95, slowest provider | under 60 s | [E](private-beta-incident-response.md#e-a-lab-is-stuck-starting) |
+| Terminal attaches that succeeded | 100% | [F](private-beta-incident-response.md#f-the-terminal-disconnected) |
+| API requests without a 5xx · API p95 | ~100% · under 1 s | RB-11 |
+| Checks that returned a verdict | 100% | [H](private-beta-incident-response.md#h-verify-does-not-work) |
+| Critical / warning alerts firing | 0 | the alert's runbook link |
+| Services scraped | 3 | [J](private-beta-incident-response.md#j-the-api-needs-a-restart), [K](private-beta-incident-response.md#k-the-terminal-service-needs-a-restart), RB-06 |
+| API ready · PostgreSQL · Container runtime | 1 · 1 · 1 | [N](private-beta-incident-response.md#n-postgresql-is-unavailable), [Q](private-beta-incident-response.md#q-the-docker-daemon-is-failing) |
+
+Then, once or twice an hour, the four that change slowly:
+
+```bash
+q 'jtt:sessions_headroom:count'                # slots left; 0 means the next Start is refused
+q 'jtt:host_filesystem_available:ratio'        # above 0.2
+q 'jtt:host_memory_available:ratio'            # above 0.2
+q 'jtt:reaper_seconds_since_success'           # under 120: Ends are being cleaned up
+```
+
+**Two readings that are not what they look like** (both measured in the
+2026-09-28 observability drill):
+
+- A burst of **resolved** notifications followed by `ServiceDown{job="api"}` is
+  the api going away, not everything recovering.
+- After any restart of the api, terminal or sandboxd, `ServiceDown` for it
+  fires while it starts. On a busy host that can take several minutes. Wait for
+  it to resolve before you restart again.
+
 ## 6. After class
 
 | # | Who | Do | Looking for |
