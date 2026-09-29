@@ -942,7 +942,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       });
       if (!destroy.namespaceGone) {
         sendError(res, 503, {
-          code: destroy.error?.code ?? 'DESTROY_FAILED',
+          // Always DESTROY_FAILED to the student. The provider's own code
+          // (ENVIRONMENT_UNREACHABLE, PROVIDER_UNAVAILABLE) is in the event and
+          // the metric above; sent here, the web reads it as a Verify failure
+          // or a track outage and tells a student who pressed End to act.
+          code: 'DESTROY_FAILED',
           message: STUDENT_MESSAGE_BY_CODE.DESTROY_FAILED!,
           // No time is promised: the reaper finishes an unfinished End after a
           // grace period and then retries every sweep until the provider
