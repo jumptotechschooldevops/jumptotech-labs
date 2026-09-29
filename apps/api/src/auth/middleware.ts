@@ -17,6 +17,12 @@ declare module 'express-serve-static-core' {
   interface Request {
     /** Set by `authenticate`. Never set from anything the client sent. */
     user?: AuthenticatedUser;
+    /**
+     * The stored id of the browser sign-in that authenticated this request;
+     * unset for a bearer credential. Set by `authenticate` from the server-side
+     * record the cookie named — never from anything the client sent.
+     */
+    authSessionId?: string;
   }
 }
 
@@ -104,8 +110,9 @@ export function authenticate(
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const source = req.get('cookie') ? 'cookie' : req.get('authorization') ? 'header' : 'none';
     try {
-      const fromCookie = browser ? await browser.authenticate(req.get('cookie')) : null;
-      req.user = fromCookie ?? (await resolver.resolve(req.get('authorization')));
+      const fromCookie = browser ? await browser.authenticateSession(req.get('cookie')) : null;
+      req.user = fromCookie?.user ?? (await resolver.resolve(req.get('authorization')));
+      if (fromCookie) req.authSessionId = fromCookie.authSessionId;
       onAttempt({ source, outcome: 'success' });
       next();
     } catch (error) {

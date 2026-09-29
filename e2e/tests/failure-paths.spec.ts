@@ -19,8 +19,10 @@ import {
   LINUX_001_SOLUTION,
   expectTerminalConnected,
   mySessions,
+  probeTerminalSocket,
   runInTerminal,
   signIn,
+  terminalToken,
   uniqueStudent,
 } from './support/student.js';
 
@@ -88,6 +90,49 @@ test('anonymous and forged sessions get nothing; sign-out revokes the cookie ser
     await page.goto('/');
     await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
   });
+});
+
+test('sign-out ends terminal authority: a token minted before it opens no shell, and the tab asks to sign in', async ({ page, context }) => {
+  const student = uniqueStudent('outterm');
+  try {
+    await signIn(page, student);
+    await page.goto(`/#/labs/${LAB_ID}`);
+    await page.getByRole('button', { name: 'Launch lab' }).click();
+    await expect(page.locator('.workspace__status')).toContainText('Ready', { timeout: 180_000 });
+    await expectTerminalConnected(page);
+    expect(await runInTerminal(page, 'echo alive')).toBe('alive');
+
+    // A terminal grant taken while signed in: what a copied or intercepted
+    // token would be. Until 2026-09-28 it kept opening shells for its hour.
+    const [session] = await mySessions(context);
+    const grant = await terminalToken(context, session!.sessionId);
+    expect(grant.status).toBe(200);
+
+    await test.step('another tab of the same browser signs out', async () => {
+      const other = await context.newPage();
+      await other.goto('/');
+      await other.getByRole('button', { name: 'Sign out' }).click();
+      await expect(other.getByRole('button', { name: 'Sign in' })).toBeVisible();
+      await other.close();
+    });
+
+    await test.step('the pre-sign-out token is refused by the terminal service', async () => {
+      const probe = await probeTerminalSocket(page, grant.token!, 'echo should-not-run', 'should-not-run');
+      expect(probe.ready).toBe(false);
+      expect(probe.errors).toContain('UNAUTHORIZED');
+      expect(probe.closeCode).toBe(4401);
+      expect(probe.output).not.toContain('should-not-run');
+    });
+
+    await test.step('the first tab loses its terminal and asks the student to sign in again', async () => {
+      await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible({ timeout: 60_000 });
+      await expect(page.locator('.terminal-surface')).toHaveCount(0);
+    });
+  } finally {
+    // Signed in again (same account) only to clean up the lab it started.
+    await signIn(page, student).catch(() => undefined);
+    await endAllSessions(context);
+  }
 });
 
 test('a second lab while one is running is refused clearly (one lab per student)', async ({ page, context }) => {

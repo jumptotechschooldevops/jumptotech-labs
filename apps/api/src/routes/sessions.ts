@@ -342,6 +342,9 @@ export function issueTerminalGrant(
   const { token } = issueSessionToken({
     sessionId: session.sessionId,
     ownerUserId,
+    // Bound to the browser sign-in asking for it, so signing out ends it
+    // (docs/authentication.md §3.6). Unset for a bearer caller.
+    ...(req.authSessionId ? { authSessionId: req.authSessionId } : {}),
     labId: session.labId,
     namespace: session.namespace,
     secret: config.terminalSessionSecret,

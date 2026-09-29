@@ -178,8 +178,10 @@ Under `open`, `GET /api/me/access` says `policy: open, active: true`.
 (OPERATOR DECISION, §12). Everything that uses it is refused from the next
 request; it keeps its slot until it idles out (it can no longer be kept alive)
 or its absolute lifetime ends, or an operator ends it (`--end-sessions`, §6.5).
-A terminal WebSocket that is already open stays open until it disconnects or
-idles out; no new one can be opened.
+A terminal WebSocket that is already open is closed on the student's next
+keystroke after its terminal reports activity (at most every 30 s): the API
+refuses the report with the access refusal and the terminal ends the socket
+(`ACCESS_NOT_ACTIVE`, close 4403). No new one can be opened.
 
 ## 6. Operator runbook
 
@@ -501,7 +503,9 @@ for accounting, and how it interacts with backups — is an operator decision
 ## 13. Known limits
 
 - A student already inside a lab when access ends keeps an open terminal until
-  it disconnects or idles out (§5). Use `--end-sessions --yes` when that matters.
+  their next keystroke after its next activity report (at most 30 s of typing),
+  or until it idles out if they stop (§5). Use `--end-sessions --yes` when that
+  matters.
 - A Start that passed the access check a moment before a revocation completes
   still starts (one lab, then refused on every use). The check and the start are
   not one transaction.
