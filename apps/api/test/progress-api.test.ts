@@ -849,6 +849,70 @@ describe('when the progress store is unavailable', () => {
     expect((await request(app).delete(`/api/sessions/${sessionId}`)).status).toBe(200);
   });
 
+  it('records a pass on a lab whose attempt could not be opened when it started', async () => {
+    // The store blipped during Start: the lab ran, but no attempt was written.
+    // Once the store is back, Verify must be able to save the completion —
+    // the student was told to press it again, and it used to answer "could
+    // not be saved" for the rest of the lab.
+    const { app, runtime, progress } = buildApp();
+    const real = progress.startAttempt.bind(progress);
+    let failNext = true;
+    progress.startAttempt = async (input) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error('connection terminated unexpectedly');
+      }
+      return real(input);
+    };
+
+    const started = await request(app).post('/api/labs/LINUX-001/start');
+    expect(started.status).toBe(200);
+    expect(started.body.data.attempt).toBeUndefined();
+    const { sessionId, sandboxRef } = started.body.data.session as { sessionId: string; sandboxRef: string };
+    completeLinuxLab(runtime, sandboxRef);
+
+    const check = await request(app).post(`/api/sessions/${sessionId}/check`);
+    expect(check.status).toBe(200);
+    expect(check.body.data.passed).toBe(true);
+    expect(check.body.data.attempt).toMatchObject({ labId: 'LINUX-001', status: 'PASSED', checkCount: 1 });
+    expect(check.body.data.newlyCompleted).toBe(true);
+
+    // A second check lands on the same attempt rather than opening another.
+    const again = await request(app).post(`/api/sessions/${sessionId}/check`);
+    expect(again.body.data.attempt).toMatchObject({
+      attemptId: check.body.data.attempt.attemptId,
+      checkCount: 2,
+    });
+    expect(again.body.data.newlyCompleted).toBe(false);
+
+    const summary = await request(app).get('/api/me/progress');
+    const linux = summary.body.data.tracks.find((t: { track: string }) => t.track === 'linux');
+    expect(linux.labs.find((l: { labId: string }) => l.labId === 'LINUX-001').status).toBe('COMPLETED');
+  });
+
+  it('records a pass when only binding the attempt to the session failed at start', async () => {
+    const { app, runtime, progress } = buildApp();
+    const real = progress.bindSession.bind(progress);
+    let failNext = true;
+    progress.bindSession = async (attemptId, sessionId) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error('connection terminated unexpectedly');
+      }
+      return real(attemptId, sessionId);
+    };
+
+    const started = await request(app).post('/api/labs/LINUX-001/start');
+    expect(started.status).toBe(200);
+    const { sessionId, sandboxRef } = started.body.data.session as { sessionId: string; sandboxRef: string };
+    completeLinuxLab(runtime, sandboxRef);
+
+    const check = await request(app).post(`/api/sessions/${sessionId}/check`);
+    expect(check.body.data.passed).toBe(true);
+    expect(check.body.data.attempt).toMatchObject({ status: 'PASSED' });
+    expect(check.body.data.newlyCompleted).toBe(true);
+  });
+
   it('says so on a read rather than serving an empty dashboard', async () => {
     const { app } = buildApp({ repository: new BrokenProgressRepository() });
 
