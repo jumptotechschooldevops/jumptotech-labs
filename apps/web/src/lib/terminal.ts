@@ -65,6 +65,12 @@ const TERMINAL_NOTICE: Record<string, string> = {
   BROKER_UNREACHABLE: 'The terminal could not start a shell in your environment.',
   PTY_SPAWN_FAILED: 'The terminal could not start a shell in your environment.',
   FRAME_TOO_LARGE: 'That was too much to send at once, so it was not sent.',
+  INPUT_RATE_EXCEEDED: 'More was pasted or typed at once than the terminal accepts.',
+  SANDBOX_NOT_RUNNING: 'Your lab environment is not running.',
+  // Refusals the terminal bar explains; "interrupted" here contradicted it.
+  ACCESS_NOT_ACTIVE: 'The terminal cannot open because your lab access is not active.',
+  LAB_NOT_IN_PLAN: 'The terminal cannot open because your plan does not include this lab.',
+  ACCESS_PLAN_UNAVAILABLE: 'The terminal cannot open because your lab access could not be confirmed.',
 };
 
 export function terminalNotice(code: string | undefined): string {

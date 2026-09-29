@@ -357,7 +357,13 @@ export interface MySessionsResponse {
   sessions: ActiveSessionEntry[];
   count: number;
   /** The caller's own quota. `null` when the deployment sets none. */
-  limits: { maxActiveSessionsPerStudent: number | null };
+  limits: {
+    maxActiveSessionsPerStudent: number | null;
+    /** Every lab environment closes this long after Start. Absent from an older api. */
+    maxSessionMinutes?: number;
+    /** …or after this long without activity. */
+    idleTimeoutMinutes?: number;
+  };
 }
 
 /** `POST /api/sessions/:id/terminal` — a fresh token for a session the caller owns. */

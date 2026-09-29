@@ -176,6 +176,20 @@ describe('VerificationPanel', () => {
     expect(screen.getByText(/could not be saved/)).toBeTruthy();
   });
 
+  it('does not say "could not be saved" about a completion saved on an earlier check', () => {
+    // The lab was completed before; this re-check's write failed, so it has no
+    // attempt. The completion is stored, and asking the student to Verify
+    // "before you end the lab" would make them think it is not.
+    render(
+      <VerificationPanel
+        state={{ kind: 'result', result: verification(true), newlyCompleted: false }}
+        alreadyCompleted
+      />,
+    );
+    expect(screen.getByText(/already recorded as completed/)).toBeTruthy();
+    expect(screen.queryByText(/could not be saved/)).toBeNull();
+  });
+
   it('reports a failure check by check, with what the verifier saw and where to look next', () => {
     render(<VerificationPanel state={{ kind: 'result', result: verification(false), newlyCompleted: false }} />);
     expect(screen.getByText('Not complete yet — 1 of 2 checks passing')).toBeTruthy();
