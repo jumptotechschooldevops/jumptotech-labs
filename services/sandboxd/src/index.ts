@@ -28,6 +28,7 @@ import { distinctContainerSessions, ownedContainers } from './container-accounti
 import { DockerOps } from './docker-ops.js';
 import { loadSandboxdConfig } from './config.js';
 import { DockerSandboxInspector } from './inspector.js';
+import { applyKeepAlivePolicy } from './keep-alive.js';
 import { createSandboxd } from './server.js';
 
 const config = loadSandboxdConfig();
@@ -110,6 +111,8 @@ const server = createSandboxd({
   common,
   ...(docker ? { docker } : {}),
 });
+// An idle keep-alive socket outlives the client's use of it (keep-alive.ts).
+applyKeepAlivePolicy(server);
 
 /**
  * The last runtime probe, shared by `/readyz` and `jtt_sandboxd_runtime_up`.
