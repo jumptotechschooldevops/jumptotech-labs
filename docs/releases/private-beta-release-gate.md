@@ -596,3 +596,17 @@ runbooks, and four alerts (`ScopeDenialDetected`, `SandboxLeakSuspected`,
 `TerminalPtyDrift`, alert delivery). New open decision: D15, bearer tokens on
 `/api/*`. **No production host exists; no gate in §13.2 moved.** Students may
 not be invited. (An unmerged branch also appends a §16; renumber on merge.)
+
+## 17. Final integration and launch pass — 2026-09-28
+
+`main` at `74ea285` (#62–#162 since §16); record:
+[final-launch-readiness-2026-09-28.md](final-launch-readiness-2026-09-28.md).
+Every report was reconciled against the code, and the record classifies each
+residual A–E. No class-A code defect was found. The one class-A finding was in
+the rollback runbooks: they called every migration additive, and 010 is not
+(fixed in #163). #156 was fixed and made mergeable; #145 and #155 are ready.
+All 117 labs remain certified on `74ea285`. **No production host exists.** The
+class-B list in the record's §5.B is the remaining gate: host, firewall, DNS,
+TLS, an IdP restricted to five, alert receivers, off-host backup, the on-host
+five-student and capacity runs, and branch protection on `main`. Students may
+not be invited until it is done.
