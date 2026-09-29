@@ -1141,6 +1141,8 @@ export const OPERATOR_ACTIONS = [
   // Roles (docs/runbooks/private-beta-operations.md §7.4).
   'role_show',
   'role_set',
+  // Ending an account's browser sign-ins (docs/runbooks/identity-and-access.md).
+  'sign_out',
 ] as const;
 /** How an operator request ended: served, refused (bad input, unknown session), or failed. */
 export const OPERATOR_OUTCOMES = ['ok', 'rejected', 'failed'] as const;
